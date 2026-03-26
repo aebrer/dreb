@@ -1947,12 +1947,10 @@ export class InteractiveMode {
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
 			if (this.loadingAnimation) {
-				abortBackgroundAgents();
-				this.updateBackgroundAgentStatus();
+				this.cancelBackgroundAgents();
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			} else if (getRunningBackgroundAgents().length > 0) {
-				abortBackgroundAgents();
-				this.updateBackgroundAgentStatus();
+				this.cancelBackgroundAgents();
 			} else if (this.session.isBashRunning) {
 				this.session.abortBash();
 			} else if (this.isBashMode) {
@@ -2525,6 +2523,35 @@ export class InteractiveMode {
 		}
 		this.footer.invalidate();
 		this.ui.requestRender();
+	}
+
+	/** Cancel all running background agents and notify the model. */
+	private cancelBackgroundAgents(): void {
+		const running = getRunningBackgroundAgents();
+		if (running.length === 0) return;
+
+		const cancelled = running.map((a) => `${a.agentId} (${a.agentType})`).join(", ");
+		abortBackgroundAgents();
+		this.updateBackgroundAgentStatus();
+
+		// Inform the model that background agents were cancelled by the user
+		const message = {
+			role: "user" as const,
+			content: [
+				{
+					type: "text" as const,
+					text: `<background-agent-cancelled>\nThe user cancelled ${running.length} background agent(s): ${cancelled}.\nTheir results will not be delivered.\n</background-agent-cancelled>`,
+				},
+			],
+			timestamp: Date.now(),
+		};
+		if (this.agent.state.isStreaming) {
+			this.agent.followUp(message);
+		} else {
+			this.agent.prompt(message).catch(() => {
+				this.agent.followUp(message);
+			});
+		}
 	}
 
 	/** Extract text content from a user message */
