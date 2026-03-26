@@ -182,6 +182,7 @@ async function spawnSubagent(
 		let killTimer: ReturnType<typeof setTimeout> | null = null;
 		const collectedMessages: Array<{ role: string; content: any[] }> = [];
 		let stderrChunks: string[] = [];
+		const plainStdoutLines: string[] = [];
 		let lastToolName = "";
 
 		// Drain stderr concurrently to avoid pipe deadlock
@@ -209,8 +210,9 @@ async function spawnSubagent(
 						onProgress(`${lastToolName} done`);
 					}
 				} catch {
-					// Non-JSON lines (plain-text session header emitted before JSONL events) are expected.
-					// Log lines that look like JSON but failed to parse — those indicate real problems.
+					// Capture non-JSON lines — on failure these often contain the real error
+					// (e.g. startup errors printed before JSONL mode begins)
+					plainStdoutLines.push(line.trim());
 					if (line.trim().startsWith("{")) {
 						console.error(`[subagent] Failed to parse JSONL event: ${line.slice(0, 200)}`);
 					}
@@ -256,13 +258,23 @@ async function spawnSubagent(
 			}
 			const output = outputParts.join("\n\n");
 
+			// Build error message from best available source: stderr, plain stdout lines, or generic
+			let errorMessage: string | null = null;
+			if (exitCode !== 0) {
+				const stderrTrimmed = stderr.trim();
+				const plainOutput = plainStdoutLines.join("\n").trim();
+				errorMessage = stderrTrimmed.slice(0, 500)
+					|| plainOutput.slice(0, 500)
+					|| `Subagent exited with code ${exitCode}`;
+			}
+
 			resolvePromise({
 				agent: agentConfig.name,
 				task,
 				exitCode,
 				output,
 				stderr: stderr.slice(0, 2000), // cap stderr
-				errorMessage: exitCode !== 0 ? (stderr.trim().slice(0, 500) || `Subagent exited with code ${exitCode}`) : null,
+				errorMessage,
 			});
 		});
 	});
