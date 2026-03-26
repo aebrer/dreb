@@ -54,22 +54,72 @@ function resolvePromptInput(input: string | undefined, description: string): str
 	return input;
 }
 
-function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
-	const candidates = ["AGENTS.md", "CLAUDE.md"];
+function stripHtmlComments(content: string): string {
+	return content.replace(/<!--[\s\S]*?-->/g, "");
+}
+
+function loadContextFilesFromDir(dir: string): Array<{ path: string; content: string }> {
+	const candidates = [
+		"AGENTS.md",
+		"CLAUDE.md",
+		join(".claude", "CLAUDE.md"),
+		join(".dreb", "CONTEXT.md"),
+	];
+	const results: Array<{ path: string; content: string }> = [];
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
 		if (existsSync(filePath)) {
 			try {
-				return {
+				results.push({
 					path: filePath,
-					content: readFileSync(filePath, "utf-8"),
-				};
+					content: stripHtmlComments(readFileSync(filePath, "utf-8")),
+				});
 			} catch (error) {
 				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
 			}
 		}
 	}
-	return null;
+	return results;
+}
+
+function loadRulesFromDir(
+	dir: string,
+	contextFiles: Array<{ path: string; content: string }>,
+	seenPaths: Set<string>,
+	depth: number = 0,
+): void {
+	if (depth > 10) return;
+	let entries;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch (error) {
+		console.error(chalk.yellow(`Warning: Could not read rules directory ${dir}: ${error}`));
+		return;
+	}
+	for (const entry of entries) {
+		const fullPath = join(dir, entry.name);
+		if (entry.isDirectory() && !entry.isSymbolicLink()) {
+			loadRulesFromDir(fullPath, contextFiles, seenPaths, depth + 1);
+		} else if (entry.isFile() && entry.name.endsWith(".md") && !seenPaths.has(fullPath)) {
+			try {
+				const content = readFileSync(fullPath, "utf-8");
+				// Skip path-scoped rules (paths: in frontmatter) — not yet implemented, just skip
+				if (content.startsWith("---")) {
+					const endIdx = content.indexOf("---", 3);
+					if (endIdx !== -1) {
+						const frontmatter = content.slice(3, endIdx);
+						if (/^\s*paths\s*:/m.test(frontmatter)) {
+							continue;
+						}
+					}
+				}
+				seenPaths.add(fullPath);
+				contextFiles.push({ path: fullPath, content: stripHtmlComments(content) });
+			} catch (error) {
+				console.error(chalk.yellow(`Warning: Could not read rule ${fullPath}: ${error}`));
+			}
+		}
+	}
 }
 
 function loadProjectContextFiles(
@@ -81,32 +131,63 @@ function loadProjectContextFiles(
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
 
-	const globalContext = loadContextFileFromDir(resolvedAgentDir);
-	if (globalContext) {
-		contextFiles.push(globalContext);
-		seenPaths.add(globalContext.path);
+	// 1. User-level context files (global, loaded first — project files follow and can override)
+	const userLevelPaths = [
+		join(resolvedAgentDir, "AGENTS.md"),
+		join(resolvedAgentDir, "CLAUDE.md"),
+		join(homedir(), ".claude", "CLAUDE.md"),
+		join(homedir(), ".dreb", "CONTEXT.md"),
+	];
+	for (const filePath of userLevelPaths) {
+		if (existsSync(filePath)) {
+			try {
+				const content = stripHtmlComments(readFileSync(filePath, "utf-8"));
+				if (!seenPaths.has(filePath)) {
+					seenPaths.add(filePath);
+					contextFiles.push({ path: filePath, content });
+				}
+			} catch (error) {
+				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
+			}
+		}
 	}
 
+	// 2. Walk upward from cwd to root, collecting all context files per directory (ordered root-first via unshift)
 	const ancestorContextFiles: Array<{ path: string; content: string }> = [];
-
 	let currentDir = resolvedCwd;
 	const root = resolve("/");
 
 	while (true) {
-		const contextFile = loadContextFileFromDir(currentDir);
-		if (contextFile && !seenPaths.has(contextFile.path)) {
-			ancestorContextFiles.unshift(contextFile);
-			seenPaths.add(contextFile.path);
+		const dirFiles = loadContextFilesFromDir(currentDir);
+		const newFiles = dirFiles.filter((f) => !seenPaths.has(f.path));
+		for (const file of newFiles) {
+			seenPaths.add(file.path);
 		}
+		ancestorContextFiles.unshift(...newFiles);
 
 		if (currentDir === root) break;
-
 		const parentDir = resolve(currentDir, "..");
 		if (parentDir === currentDir) break;
 		currentDir = parentDir;
 	}
 
 	contextFiles.push(...ancestorContextFiles);
+
+	// 3. Rules directories (unconditional rules loaded now)
+	const rulesSearchDirs = [
+		join(resolvedCwd, ".dreb", "rules"),
+		join(resolvedCwd, ".claude", "rules"),
+		join(resolvedCwd, CONFIG_DIR_NAME, "rules"),
+	];
+	for (const rulesDir of rulesSearchDirs) {
+		if (existsSync(rulesDir)) {
+			try {
+				loadRulesFromDir(rulesDir, contextFiles, seenPaths);
+			} catch (error) {
+				console.error(chalk.yellow(`Warning: Could not read rules from ${rulesDir}: ${error}`));
+			}
+		}
+	}
 
 	return contextFiles;
 }
