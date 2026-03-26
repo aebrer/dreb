@@ -211,7 +211,7 @@ ${chalk.bold("Options:")}
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching
   --no-tools                     Disable all built-in tools
-  --tools <tools>                Comma-separated list of tools to enable (default: read,bash,edit,write,grep,find,ls,web_search,web_fetch,subagent)
+  --tools <tools>                Comma-separated list of tools to enable (default: all)
                                  Available: read, bash, edit, write, grep, find, ls, web_search, web_fetch, subagent
   --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh
   --extension, -e <path>         Load an extension file (can be used multiple times)

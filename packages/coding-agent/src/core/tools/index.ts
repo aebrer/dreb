@@ -97,8 +97,13 @@ export {
 	webFetchToolDefinition,
 } from "./web.js";
 export {
+	type BackgroundAgentInfo,
 	createSubagentTool,
 	createSubagentToolDefinition,
+	getBackgroundAgents,
+	getRunningBackgroundAgents,
+	pruneBackgroundAgents,
+	type SubagentResult,
 	type SubagentToolDetails,
 	type SubagentToolInput,
 	type SubagentToolOptions,

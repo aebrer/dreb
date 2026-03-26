@@ -2318,9 +2318,13 @@ export class AgentSession {
 							if (this.agent.state.isStreaming) {
 								this.agent.followUp(message);
 							} else {
-								this.agent.prompt(message).catch(() => {
-									// If prompt fails (e.g. no model), fall back to followUp
-									this.agent.followUp(message);
+								this.agent.prompt(message).catch((promptErr) => {
+									console.error(`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`);
+									try {
+										this.agent.followUp(message);
+									} catch (followUpErr) {
+										console.error(`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`);
+									}
 								});
 							}
 						},

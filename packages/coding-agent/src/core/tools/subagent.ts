@@ -95,12 +95,14 @@ function loadAgentsFromDir(dir: string, agents: Map<string, AgentTypeConfig>): v
 				if (config) {
 					agents.set(config.name, config);
 				}
-			} catch {
-				// Skip unreadable agent files
+			} catch (err) {
+				console.error(`[subagent] Could not read agent file ${join(dir, file)}: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		}
-	} catch {
-		// Skip unreadable directory
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+			console.error(`[subagent] Could not read agents directory ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 }
 
@@ -108,7 +110,7 @@ function loadAgentsFromDir(dir: string, agents: Map<string, AgentTypeConfig>): v
 // Subagent process spawning
 // ---------------------------------------------------------------------------
 
-interface SubagentResult {
+export interface SubagentResult {
 	agent: string;
 	task: string;
 	exitCode: number;
@@ -123,6 +125,8 @@ interface SubagentResult {
 const DREB_SCRIPT = process.argv[1] || "dreb";
 const NODE_EXEC = process.execPath;
 
+// Thin wrapper — reserved for future PATH-based binary discovery.
+// For now always returns the captured argv[1].
 function findDrebBinary(): string {
 	return DREB_SCRIPT;
 }
@@ -174,6 +178,8 @@ async function spawnSubagent(
 			return;
 		}
 
+		let settled = false;
+		let killTimer: ReturnType<typeof setTimeout> | null = null;
 		const collectedMessages: Array<{ role: string; content: any[] }> = [];
 		let stderrChunks: string[] = [];
 		let lastToolName = "";
@@ -182,9 +188,11 @@ async function spawnSubagent(
 		proc.stderr?.on("data", (chunk: Buffer) => {
 			stderrChunks.push(chunk.toString());
 		});
+		proc.stderr?.on("error", () => {}); // prevent unhandled stream error
 
 		// Parse JSONL events from stdout
 		if (proc.stdout) {
+			proc.stdout.on("error", () => {}); // prevent unhandled stream error crash
 			attachJsonlLineReader(proc.stdout, (line) => {
 				if (!line.trim()) return;
 				try {
@@ -201,7 +209,11 @@ async function spawnSubagent(
 						onProgress(`${lastToolName} done`);
 					}
 				} catch {
-					// Ignore unparseable lines (e.g. session header)
+					// Non-JSON lines (plain-text session header emitted before JSONL events) are expected.
+					// Log lines that look like JSON but failed to parse — those indicate real problems.
+					if (line.trim().startsWith("{")) {
+						console.error(`[subagent] Failed to parse JSONL event: ${line.slice(0, 200)}`);
+					}
 				}
 			});
 		}
@@ -209,18 +221,24 @@ async function spawnSubagent(
 		// Handle abort signal
 		const onAbort = () => {
 			proc.kill("SIGTERM");
-			setTimeout(() => {
+			killTimer = setTimeout(() => {
 				if (!proc.killed) proc.kill("SIGKILL");
 			}, 5000);
 		};
 		signal?.addEventListener("abort", onAbort, { once: true });
 
 		proc.on("error", (err) => {
+			if (settled) return;
+			settled = true;
+			if (killTimer) clearTimeout(killTimer);
 			signal?.removeEventListener("abort", onAbort);
 			rejectPromise(new Error(`Subagent process error: ${err.message}`));
 		});
 
 		proc.on("close", (code) => {
+			if (settled) return;
+			settled = true;
+			if (killTimer) clearTimeout(killTimer);
 			signal?.removeEventListener("abort", onAbort);
 			const exitCode = code ?? 1;
 			const stderr = stderrChunks.join("");
@@ -256,6 +274,27 @@ async function spawnSubagent(
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
+const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
+
+/**
+ * Resolve a per-task cwd relative to the parent cwd.
+ * Rejects absolute paths to prevent directory escape.
+ */
+function clampCwd(defaultCwd: string, itemCwd?: string): string {
+	if (!itemCwd) return defaultCwd;
+	if (itemCwd.startsWith("/")) {
+		// Absolute paths would bypass the parent cwd entirely via resolve()
+		console.error(`[subagent] Rejected absolute cwd "${itemCwd}" — must be relative to parent cwd`);
+		return defaultCwd;
+	}
+	const resolved = resolve(defaultCwd, itemCwd);
+	if (!resolved.startsWith(defaultCwd)) {
+		// Path escapes parent via ../ traversal
+		console.error(`[subagent] Rejected cwd "${itemCwd}" — resolves outside parent cwd`);
+		return defaultCwd;
+	}
+	return resolved;
+}
 
 async function executeSingle(
 	agents: Map<string, AgentTypeConfig>,
@@ -303,9 +342,8 @@ async function executeParallel(
 
 	const results: SubagentResult[] = [];
 	let completed = 0;
-	let running = 0;
 
-	// Simple semaphore via queue
+	// Worker-pool pattern: spawn MAX_CONCURRENCY coroutines, each pulling from the shared queue
 	const queue = [...tasks];
 	const promises: Promise<void>[] = [];
 
@@ -313,16 +351,21 @@ async function executeParallel(
 		while (queue.length > 0) {
 			if (signal?.aborted) return;
 			const item = queue.shift()!;
-			running++;
-			const result = await executeSingle(
-				agents,
-				item.agent,
-				item.task,
-				item.cwd ? resolve(defaultCwd, item.cwd) : defaultCwd,
-				signal,
-			);
+			const itemCwd = clampCwd(defaultCwd, item.cwd);
+			let result: SubagentResult;
+			try {
+				result = await executeSingle(agents, item.agent, item.task, itemCwd, signal, onProgress);
+			} catch (err) {
+				result = {
+					agent: item.agent || "general-purpose",
+					task: item.task,
+					exitCode: 1,
+					output: "",
+					stderr: "",
+					errorMessage: `Subagent spawn failed: ${err instanceof Error ? err.message : String(err)}`,
+				};
+			}
 			results.push(result);
-			running--;
 			completed++;
 			onProgress?.(`${completed}/${tasks.length} complete`);
 		}
@@ -358,8 +401,9 @@ async function executeChain(
 			agents,
 			step.agent,
 			task,
-			step.cwd ? resolve(defaultCwd, step.cwd) : defaultCwd,
+			clampCwd(defaultCwd, step.cwd),
 			signal,
+			onProgress,
 		);
 		results.push(result);
 
@@ -380,13 +424,45 @@ function generateAgentId(): string {
 	return randomBytes(6).toString("hex");
 }
 
-// Track running background agents for cleanup on abort
-const backgroundAgents = new Map<string, ChildProcess>();
+// ---------------------------------------------------------------------------
+// Background agent registry — queryable by TUI / Telegram frontends
+// ---------------------------------------------------------------------------
+
+export interface BackgroundAgentInfo {
+	agentId: string;
+	agentType: string;
+	taskSummary: string;
+	startedAt: number;
+	status: "running" | "completed" | "failed";
+}
+
+const backgroundAgentRegistry = new Map<string, BackgroundAgentInfo>();
+
+/** Get a snapshot of all tracked background agents (running and recently completed). */
+export function getBackgroundAgents(): BackgroundAgentInfo[] {
+	return [...backgroundAgentRegistry.values()];
+}
+
+/** Get only currently running background agents. */
+export function getRunningBackgroundAgents(): BackgroundAgentInfo[] {
+	return [...backgroundAgentRegistry.values()].filter((a) => a.status === "running");
+}
+
+/** Remove completed/failed entries older than the given age (ms). Default: 5 minutes. */
+export function pruneBackgroundAgents(maxAgeMs = 5 * 60 * 1000): void {
+	const now = Date.now();
+	for (const [id, info] of backgroundAgentRegistry) {
+		if (info.status !== "running" && now - info.startedAt > maxAgeMs) {
+			backgroundAgentRegistry.delete(id);
+		}
+	}
+}
 
 export interface SubagentToolOptions {
 	/**
-	 * Called when a background subagent completes. The caller should inject the
-	 * result as a follow-up message into the agent conversation.
+	 * Called when a background subagent completes. Delivers the result to the
+	 * parent agent — either as a follow-up if the agent is mid-turn, or by
+	 * starting a new turn if the agent is idle.
 	 */
 	onBackgroundComplete?: (agentId: string, result: SubagentResult) => void;
 }
@@ -403,11 +479,12 @@ const taskItemSchema = Type.Object({
 
 const subagentSchema = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'general-purpose')" })),
-	task: Type.Optional(Type.String({ description: "Task prompt (single mode)" })),
-	tasks: Type.Optional(Type.Array(taskItemSchema, { description: "Array of tasks to run in parallel (max 8)" })),
+	task: Type.Optional(Type.String({ description: "Task prompt (single mode)", minLength: 1 })),
+	tasks: Type.Optional(Type.Array(taskItemSchema, { description: "Array of tasks to run in parallel (max 8)", minItems: 1, maxItems: MAX_PARALLEL_TASKS })),
 	chain: Type.Optional(
 		Type.Array(taskItemSchema, {
 			description: "Sequential pipeline — each step can use {previous} for prior output",
+			minItems: 1,
 		}),
 	),
 	background: Type.Optional(
@@ -518,7 +595,7 @@ export function createSubagentToolDefinition(
 		promptGuidelines: [
 			"Use `subagent` to delegate focused, independent tasks to child agents",
 			"Available agent types can be discovered from ~/.dreb/agents/ and .dreb/agents/ markdown files",
-			"Built-in agents: 'general-purpose' (all tools, default) and 'Explore' (read-only, fast research)",
+			"Built-in agents: 'general-purpose' (all tools, default) and 'Explore' (exploration-only: read/grep/find/ls/bash)",
 			"Use parallel mode for independent tasks that can run concurrently",
 			"Use chain mode when each step depends on the previous step's output (reference with {previous})",
 			"Set background=true to fire-and-forget — you'll be notified when the agent completes",
@@ -528,6 +605,14 @@ export function createSubagentToolDefinition(
 
 		async execute(_toolCallId, params: SubagentToolInput, signal, onUpdate) {
 			const agents = discoverAgentTypes(cwd);
+
+			// Cap task length to prevent E2BIG from oversized argv
+			if (params.task && params.task.length > MAX_TASK_LENGTH) {
+				return {
+					content: [{ type: "text", text: `Error: task prompt too long (${params.task.length} chars, max ${MAX_TASK_LENGTH}). Shorten the prompt.` }],
+					details: undefined,
+				};
+			}
 
 			// Determine mode
 			const modeCount =
@@ -564,14 +649,22 @@ export function createSubagentToolDefinition(
 						? `${params.tasks.length} parallel tasks`
 						: `${params.chain!.length}-step chain`;
 
-				// Fire off the work asynchronously — don't await
+				// Register in the background agent registry
+				backgroundAgentRegistry.set(agentId, {
+					agentId,
+					agentType: agentName,
+					taskSummary,
+					startedAt: Date.now(),
+					status: "running",
+				});
+
 				const runBackground = async () => {
 					try {
 						let result: SubagentResult;
 						if (params.task) {
-							result = await executeSingle(agents, params.agent, params.task, cwd);
+							result = await executeSingle(agents, params.agent, params.task, cwd, signal ?? undefined);
 						} else if (params.tasks) {
-							const results = await executeParallel(agents, params.tasks, cwd);
+							const results = await executeParallel(agents, params.tasks, cwd, signal ?? undefined);
 							const resultText = results.map((r, i) => `### Task ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 							const failed = results.filter((r) => r.exitCode !== 0);
 							result = {
@@ -583,7 +676,7 @@ export function createSubagentToolDefinition(
 								errorMessage: failed.length > 0 ? `${failed.length} of ${results.length} tasks failed` : null,
 							};
 						} else {
-							const results = await executeChain(agents, params.chain!, cwd);
+							const results = await executeChain(agents, params.chain!, cwd, signal ?? undefined);
 							const resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 							const failed = results.filter((r) => r.exitCode !== 0);
 							result = {
@@ -592,11 +685,16 @@ export function createSubagentToolDefinition(
 								exitCode: failed.length > 0 ? 1 : 0,
 								output: resultText,
 								stderr: "",
-								errorMessage: failed.length > 0 ? `Chain stopped: step ${results.length} failed` : null,
+								errorMessage: failed.length > 0 ? `Chain stopped at step ${results.length} of ${params.chain!.length}: ${results[results.length - 1]?.errorMessage}` : null,
 							};
 						}
+						// Update registry before notifying
+						const entry = backgroundAgentRegistry.get(agentId);
+						if (entry) entry.status = result.exitCode === 0 ? "completed" : "failed";
 						onBackgroundComplete(agentId, result);
 					} catch (err) {
+						const entry = backgroundAgentRegistry.get(agentId);
+						if (entry) entry.status = "failed";
 						onBackgroundComplete(agentId, {
 							agent: params.agent || "general-purpose",
 							task: params.task || taskSummary,
@@ -607,7 +705,12 @@ export function createSubagentToolDefinition(
 						});
 					}
 				};
-				runBackground();
+				runBackground().catch((err) => {
+					// Last-resort handler — if onBackgroundComplete itself throws
+					console.error(`[subagent] Unhandled background agent error (${agentId}): ${err instanceof Error ? err.message : String(err)}`);
+					const entry = backgroundAgentRegistry.get(agentId);
+					if (entry) entry.status = "failed";
+				});
 
 				return {
 					content: [
@@ -649,7 +752,7 @@ export function createSubagentToolDefinition(
 
 			return {
 				content: [{ type: "text", text: truncation.content }],
-				details: Object.keys(details).length > 1 ? details : undefined,
+				details,
 			};
 		},
 

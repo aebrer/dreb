@@ -30,8 +30,11 @@ import {
 	createWriteTool,
 	editTool,
 	findTool,
+	getBackgroundAgents,
+	getRunningBackgroundAgents,
 	grepTool,
 	lsTool,
+	pruneBackgroundAgents,
 	readOnlyTools,
 	readTool,
 	subagentTool,
@@ -124,6 +127,10 @@ export {
 	createFindTool,
 	createLsTool,
 	createSubagentTool,
+	// Background agent registry
+	getBackgroundAgents,
+	getRunningBackgroundAgents,
+	pruneBackgroundAgents,
 };
 
 // Helper Functions
