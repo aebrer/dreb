@@ -117,12 +117,14 @@ interface SubagentResult {
 	errorMessage: string | null;
 }
 
+// Capture at module load before process.title overwrites argv memory on Linux.
+// After process.title = "dreb" (in cli.ts), the original argv area is overwritten
+// and process.argv[1] may return corrupted data in async contexts.
+const DREB_SCRIPT = process.argv[1] || "dreb";
+const NODE_EXEC = process.execPath;
+
 function findDrebBinary(): string {
-	// Use process.argv[1] to find the running script, then resolve the CLI
-	// This works whether installed globally, locally via npm, or via symlink
-	const selfPath = process.argv[1];
-	if (selfPath) return selfPath;
-	return "dreb";
+	return DREB_SCRIPT;
 }
 
 async function spawnSubagent(
@@ -149,7 +151,7 @@ async function spawnSubagent(
 	return new Promise<SubagentResult>((resolvePromise, rejectPromise) => {
 		let proc: ChildProcess;
 		try {
-			proc = spawn(process.execPath, [drebBin, ...args], {
+			proc = spawn(NODE_EXEC, [drebBin, ...args], {
 				cwd,
 				stdio: ["ignore", "pipe", "pipe"],
 				env: { ...process.env },
