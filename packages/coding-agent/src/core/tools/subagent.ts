@@ -136,6 +136,19 @@ async function spawnSubagent(
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
 
+	// Validate cwd exists — spawn() throws a misleading ENOENT blaming the
+	// binary when the cwd is invalid, making the real cause hard to diagnose
+	if (!existsSync(cwd)) {
+		return {
+			agent: agentConfig.name,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: "",
+			errorMessage: `Working directory does not exist: ${cwd}`,
+		};
+	}
+
 	const args: string[] = ["--mode", "json", "--no-session"];
 	if (agentConfig.model) {
 		args.push("--model", agentConfig.model);
