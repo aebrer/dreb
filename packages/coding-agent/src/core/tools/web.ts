@@ -16,7 +16,7 @@ import { truncateHead, DEFAULT_MAX_BYTES, formatSize, type TruncationResult } fr
 // ---------------------------------------------------------------------------
 
 const FETCH_TIMEOUT_MS = 30_000;
-const MAX_CONTENT_BYTES = 100_000;
+const MAX_CONTENT_LENGTH = 100_000;
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 const fetchCache = new Map<string, { content: WebFetchResult; timestamp: number }>();
@@ -25,7 +25,6 @@ interface WebFetchResult {
 	url: string;
 	title: string;
 	content: string;
-	contentLength: number;
 	fetchedAt: string;
 }
 
@@ -69,64 +68,88 @@ const FETCH_HEADERS = {
 	Accept: "text/html,application/xhtml+xml,text/plain,application/pdf",
 };
 
+// Block fetches to private/internal networks to prevent SSRF
+const BLOCKED_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
+
+function isPrivateHost(hostname: string): boolean {
+	if (BLOCKED_HOSTNAMES.has(hostname)) return true;
+	// IPv4 private ranges
+	const ipv4Match = hostname.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+	if (ipv4Match) {
+		const [, first, second] = ipv4Match.map(Number);
+		if (first === 10) return true; // 10.0.0.0/8
+		if (first === 172 && second >= 16 && second <= 31) return true; // 172.16.0.0/12
+		if (first === 192 && second === 168) return true; // 192.168.0.0/16
+		if (first === 169 && second === 254) return true; // link-local 169.254.0.0/16
+	}
+	// IPv6 loopback and link-local
+	if (hostname.startsWith("[") && (hostname.includes("::1") || hostname.toLowerCase().startsWith("[fe80:"))) return true;
+	return false;
+}
+
+function buildResponse(response: Response): Promise<{ body: string | Buffer; contentType: string }> {
+	const ct = response.headers.get("content-type") || "";
+	if (ct.includes("application/pdf")) {
+		return response.arrayBuffer().then((buf) => ({ body: Buffer.from(buf), contentType: ct }));
+	}
+	return response.text().then((text) => ({ body: text, contentType: ct }));
+}
+
 async function httpFetch(
 	url: string,
-): Promise<{ body: string | Buffer; contentType: string; statusCode: number }> {
+): Promise<{ body: string | Buffer; contentType: string }> {
 	const originalHost = new URL(url).hostname;
+	if (isPrivateHost(originalHost)) {
+		throw new Error(`Blocked: ${originalHost} is a private/internal address`);
+	}
 
-	// First request — manual redirect to enforce same-host only
-	const response = await fetch(url, {
-		method: "GET",
-		headers: FETCH_HEADERS,
-		redirect: "manual",
-		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-	});
-
-	// Handle redirects: same-host follows, cross-host returns info to agent
-	if (response.status >= 300 && response.status < 400) {
-		const location = response.headers.get("location");
-		if (!location) {
-			throw new Error(`HTTP ${response.status}: redirect with no Location header`);
-		}
-		const redirectUrl = new URL(location, url);
-		if (redirectUrl.hostname !== originalHost) {
-			return {
-				body: `Cross-host redirect detected.\nOriginal: ${url}\nRedirects to: ${redirectUrl.href}\n\nThe redirect target is on a different host. Fetch the new URL directly if you want to follow it.`,
-				contentType: "text/plain",
-				statusCode: 302,
-			};
-		}
-		// Same-host — follow with auto-redirect for remaining hops
-		const followResponse = await fetch(redirectUrl.href, {
+	// Manual redirect loop to enforce same-host on every hop
+	let currentUrl = url;
+	const maxRedirects = 10;
+	for (let i = 0; i <= maxRedirects; i++) {
+		const response = await fetch(currentUrl, {
 			method: "GET",
 			headers: FETCH_HEADERS,
-			redirect: "follow",
+			redirect: "manual",
 			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 		});
-		const ct = followResponse.headers.get("content-type") || "";
-		if (ct.includes("application/pdf")) {
-			return { body: Buffer.from(await followResponse.arrayBuffer()), contentType: ct, statusCode: followResponse.status };
+
+		if (response.status >= 300 && response.status < 400) {
+			const location = response.headers.get("location");
+			if (!location) {
+				throw new Error(`HTTP ${response.status}: redirect with no Location header`);
+			}
+			const redirectUrl = new URL(location, currentUrl);
+			if (redirectUrl.hostname !== originalHost) {
+				return {
+					body: `Cross-host redirect detected.\nOriginal: ${url}\nRedirects to: ${redirectUrl.href}\n\nThe redirect target is on a different host. Fetch the new URL directly if you want to follow it.`,
+					contentType: "text/plain",
+				};
+			}
+			if (isPrivateHost(redirectUrl.hostname)) {
+				throw new Error(`Blocked: redirect to private/internal address ${redirectUrl.hostname}`);
+			}
+			currentUrl = redirectUrl.href;
+			continue;
 		}
-		return { body: await followResponse.text(), contentType: ct, statusCode: followResponse.status };
-	}
 
-	if (!response.ok) {
-		const errorBody = await response.text();
-		throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 200)}`);
-	}
+		if (!response.ok) {
+			const errorBody = await response.text();
+			throw new Error(`HTTP ${response.status}: ${errorBody.slice(0, 200)}`);
+		}
 
-	const contentType = response.headers.get("content-type") || "";
-	if (contentType.includes("application/pdf")) {
-		return { body: Buffer.from(await response.arrayBuffer()), contentType, statusCode: response.status };
+		return buildResponse(response);
 	}
-	return { body: await response.text(), contentType, statusCode: response.status };
+	throw new Error(`Too many redirects (${maxRedirects})`);
 }
 
 // -- PDF text extraction (basic) ---------------------------------------------
 
 function extractPdfText(buffer: Buffer): string {
-	// Basic PDF text extraction — handles simple text-based PDFs
-	// Extracts text from BT...ET blocks (PDF text objects)
+	// Minimal PDF text extraction — only works on uncompressed PDFs with literal
+	// string objects in BT/ET text blocks. Most production PDFs use FlateDecode
+	// compression and will fall through to the failure message.
+	// latin1 preserves raw byte values 0-255 as code points for safe regex matching.
 	const raw = buffer.toString("latin1");
 	const textChunks: string[] = [];
 
@@ -188,6 +211,9 @@ async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
 		redirect: "follow",
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 	});
+	if (!response.ok) {
+		throw new Error(`DuckDuckGo search failed: HTTP ${response.status}`);
+	}
 	const html = await response.text();
 	const results: SearchResult[] = [];
 
@@ -225,6 +251,9 @@ async function searchSearXNG(query: string, baseUrl: string): Promise<SearchResu
 		headers: { Accept: "application/json" },
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 	});
+	if (!response.ok) {
+		throw new Error(`SearXNG search failed: HTTP ${response.status}`);
+	}
 	const data = (await response.json()) as { results?: Array<{ title: string; url: string; content?: string }> };
 	return (data.results || []).slice(0, 10).map((r) => ({
 		title: r.title,
@@ -243,6 +272,9 @@ async function searchBrave(query: string, apiKey: string): Promise<SearchResult[
 		},
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
 	});
+	if (!response.ok) {
+		throw new Error(`Brave search failed: HTTP ${response.status}`);
+	}
 	const data = (await response.json()) as {
 		web?: { results?: Array<{ title: string; url: string; description?: string }> };
 	};
@@ -267,7 +299,10 @@ interface DrebConfig {
 	};
 }
 
+const VALID_BACKENDS = ["ddg", "searxng", "brave"] as const;
+
 function loadDrebConfig(): DrebConfig {
+	// Config file precedence: project-local > home directory. First valid file wins.
 	const candidates = [
 		join(process.cwd(), CONFIG_DIR_NAME, "config.json"),
 		join(process.cwd(), ".dreb", "config.json"),
@@ -278,8 +313,9 @@ function loadDrebConfig(): DrebConfig {
 		if (existsSync(configPath)) {
 			try {
 				return JSON.parse(readFileSync(configPath, "utf-8")) as DrebConfig;
-			} catch {
-				// Malformed config — skip
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				console.error(`Warning: failed to parse config at ${configPath}: ${msg}`);
 			}
 		}
 	}
@@ -289,10 +325,15 @@ function loadDrebConfig(): DrebConfig {
 function getSearchConfig(): WebSearchConfig {
 	const fileConfig = loadDrebConfig();
 	// Environment variables override config file
-	const backend =
-		(process.env.DREB_SEARCH_BACKEND as WebSearchConfig["backend"]) ||
-		(fileConfig.search?.backend as WebSearchConfig["backend"]) ||
-		"ddg";
+	const rawBackend = process.env.DREB_SEARCH_BACKEND || fileConfig.search?.backend;
+	let backend: WebSearchConfig["backend"] = "ddg";
+	if (rawBackend) {
+		if ((VALID_BACKENDS as readonly string[]).includes(rawBackend)) {
+			backend = rawBackend as WebSearchConfig["backend"];
+		} else {
+			console.error(`Warning: unrecognized search backend "${rawBackend}", falling back to ddg. Valid: ${VALID_BACKENDS.join(", ")}`);
+		}
+	}
 	return {
 		backend,
 		searxngUrl: process.env.DREB_SEARXNG_URL || fileConfig.search?.searxng_url || "http://localhost:8888",
@@ -361,7 +402,16 @@ export function createWebSearchToolDefinition(
 		promptSnippet: "Search the web for information",
 		parameters: webSearchSchema,
 		async execute(_toolCallId, { query }: { query: string }) {
-			const results = await executeSearch(query);
+			let results: SearchResult[];
+			try {
+				results = await executeSearch(query);
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				return {
+					content: [{ type: "text", text: `Search failed for "${query}": ${msg}` }],
+					details: undefined,
+				};
+			}
 			if (results.length === 0) {
 				return {
 					content: [{ type: "text", text: `No results found for: ${query}` }],
@@ -449,7 +499,7 @@ function formatFetchResult(
 	const details = result.details;
 	if (details?.truncatedContent || details?.truncation?.truncated) {
 		const warnings: string[] = [];
-		if (details.truncatedContent) warnings.push(`${MAX_CONTENT_BYTES / 1000}KB content limit`);
+		if (details.truncatedContent) warnings.push(`~${Math.round(MAX_CONTENT_LENGTH / 1024)}KB content limit`);
 		if (details.truncation?.truncated) warnings.push(`${formatSize(DEFAULT_MAX_BYTES)} output limit`);
 		text += `\n${theme.fg("warning", `[Truncated: ${warnings.join(", ")}]`)}`;
 	}
@@ -462,7 +512,7 @@ export function createWebFetchToolDefinition(
 	return {
 		name: "web_fetch",
 		label: "web_fetch",
-		description: `Fetch a URL and return its text content. Extracts readable text from HTML pages. Supports PDF text extraction. Content truncated to ${MAX_CONTENT_BYTES / 1000}KB. Results cached for 15 minutes.`,
+		description: `Fetch a URL and return its text content. Extracts readable text from HTML pages. Supports PDF text extraction. Content truncated to ~${Math.round(MAX_CONTENT_LENGTH / 1024)}KB. Results cached for 15 minutes.`,
 		promptSnippet: "Fetch a URL and extract its text content",
 		parameters: webFetchSchema,
 		async execute(_toolCallId, { url }: { url: string }) {
@@ -484,15 +534,18 @@ export function createWebFetchToolDefinition(
 				};
 			}
 
-			// Check cache (15-minute TTL)
+			// Check cache (15-minute TTL, evict stale entries)
 			const cached = fetchCache.get(url);
-			if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-				const r = cached.content;
-				const output = `${r.title}\n${r.url}\nFetched: ${r.fetchedAt} (cached)\n\n${r.content}`;
-				return {
-					content: [{ type: "text", text: output }],
-					details: undefined,
-				};
+			if (cached) {
+				if (Date.now() - cached.timestamp < CACHE_TTL_MS) {
+					const r = cached.content;
+					const output = `${r.title}\n${r.url}\nFetched: ${r.fetchedAt} (cached)\n\n${r.content}`;
+					return {
+						content: [{ type: "text", text: output }],
+						details: undefined,
+					};
+				}
+				fetchCache.delete(url);
 			}
 
 			// Fetch (with same-host redirect enforcement)
@@ -538,14 +591,13 @@ export function createWebFetchToolDefinition(
 				};
 			}
 
-			// Truncate to prevent context overflow
-			if (text.length > MAX_CONTENT_BYTES) {
-				text = text.slice(0, MAX_CONTENT_BYTES) + "\n\n[Content truncated at 100KB]";
+			// Truncate to prevent context overflow (~100K characters)
+			if (text.length > MAX_CONTENT_LENGTH) {
+				text = text.slice(0, MAX_CONTENT_LENGTH) + `\n\n[Content truncated at ~${Math.round(MAX_CONTENT_LENGTH / 1024)}KB]`;
 				details.truncatedContent = true;
 			}
 
-			// Cache result
-			const fetchResult: WebFetchResult = { url, title, content: text, contentLength: text.length, fetchedAt };
+			const fetchResult: WebFetchResult = { url, title, content: text, fetchedAt };
 			fetchCache.set(url, { content: fetchResult, timestamp: Date.now() });
 
 			const output = `${title}\n${url}\nFetched: ${fetchedAt}\n\n${text}`;
