@@ -191,8 +191,8 @@ async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
 	const html = await response.text();
 	const results: SearchResult[] = [];
 
-	// Parse DuckDuckGo HTML results
-	const resultBlocks = html.split(/class="result__body"/);
+	// Parse DuckDuckGo HTML results — split on result block class
+	const resultBlocks = html.split(/class="result results_links/);
 	for (const block of resultBlocks.slice(1, 11)) {
 		const titleMatch = block.match(/class="result__a"[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/);
 		const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/(?:a|td|div)/);
@@ -210,6 +210,10 @@ async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
 				results.push({ title, url, snippet });
 			}
 		}
+	}
+	if (results.length === 0 && html.length > 1000) {
+		// Got a substantial response but parsed 0 results — DDG HTML structure may have changed
+		console.error("Warning: DDG returned HTML but 0 results were parsed. The HTML structure may have changed.");
 	}
 	return results;
 }
