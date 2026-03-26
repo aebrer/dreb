@@ -82,6 +82,17 @@ This tells us what 20% of features cover 80% of usage, and informs what to keep 
 - **Claude Code** — proprietary (all rights reserved), but we can read the public repo to generate spec and inform our own implementations
 - **Session file data** — our own usage patterns are ours to mine
 
+## Frontend-aware system prompts
+
+Since the harness is a library and frontends are thin clients, the system prompt can be tailored per interface. The frontend tells the engine what kind of context it's operating in, and the system prompt adapts:
+
+- **Telegram** — concise responses, no plan mode (doesn't render), mobile-friendly formatting, avoid large code blocks
+- **TUI** — full output, diffs, interactive flows, plan mode is fine
+- **Web** — rich rendering, expandable sections, maybe artifact-style output
+- **RPC/SDK** — minimal prompt overhead, structured output preferred
+
+This means constraints that are really about the interface (like "don't use plan mode") stay in the frontend layer where they belong, rather than being baked into the engine.
+
 ## Open questions
 
 - What's the Claude Code session file format? How much can we extract?
