@@ -82,8 +82,11 @@ function isPrivateHost(hostname: string): boolean {
 		if (first === 192 && second === 168) return true; // 192.168.0.0/16
 		if (first === 169 && second === 254) return true; // link-local 169.254.0.0/16
 	}
-	// IPv6 loopback and link-local
-	if (hostname.startsWith("[") && (hostname.includes("::1") || hostname.toLowerCase().startsWith("[fe80:"))) return true;
+	// IPv6 loopback, link-local, and ULA (fc00::/7)
+	if (hostname.startsWith("[")) {
+		const lh = hostname.toLowerCase();
+		if (lh.includes("::1") || lh.startsWith("[fe80:") || lh.startsWith("[fc") || lh.startsWith("[fd")) return true;
+	}
 	return false;
 }
 
@@ -120,14 +123,15 @@ async function httpFetch(
 				throw new Error(`HTTP ${response.status}: redirect with no Location header`);
 			}
 			const redirectUrl = new URL(location, currentUrl);
+			// Block private IPs before revealing them in cross-host messages
+			if (isPrivateHost(redirectUrl.hostname)) {
+				throw new Error(`Blocked: redirect to private/internal address`);
+			}
 			if (redirectUrl.hostname !== originalHost) {
 				return {
 					body: `Cross-host redirect detected.\nOriginal: ${url}\nRedirects to: ${redirectUrl.href}\n\nThe redirect target is on a different host. Fetch the new URL directly if you want to follow it.`,
 					contentType: "text/plain",
 				};
-			}
-			if (isPrivateHost(redirectUrl.hostname)) {
-				throw new Error(`Blocked: redirect to private/internal address ${redirectUrl.hostname}`);
 			}
 			currentUrl = redirectUrl.href;
 			continue;
