@@ -86,22 +86,30 @@ function loadRulesFromDir(
 	dir: string,
 	contextFiles: Array<{ path: string; content: string }>,
 	seenPaths: Set<string>,
+	depth: number = 0,
 ): void {
-	const entries = readdirSync(dir, { withFileTypes: true });
+	if (depth > 10) return;
+	let entries;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch (error) {
+		console.error(chalk.yellow(`Warning: Could not read rules directory ${dir}: ${error}`));
+		return;
+	}
 	for (const entry of entries) {
 		const fullPath = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			loadRulesFromDir(fullPath, contextFiles, seenPaths);
+		if (entry.isDirectory() && !entry.isSymbolicLink()) {
+			loadRulesFromDir(fullPath, contextFiles, seenPaths, depth + 1);
 		} else if (entry.isFile() && entry.name.endsWith(".md") && !seenPaths.has(fullPath)) {
 			try {
 				const content = readFileSync(fullPath, "utf-8");
-				// Skip path-scoped rules (they have paths: frontmatter) — those are deferred
+				// Skip path-scoped rules (paths: in frontmatter) — not yet implemented, just skip
 				if (content.startsWith("---")) {
 					const endIdx = content.indexOf("---", 3);
 					if (endIdx !== -1) {
 						const frontmatter = content.slice(3, endIdx);
-						if (frontmatter.includes("paths:")) {
-							continue; // Deferred: loaded when agent accesses matching files
+						if (/^\s*paths\s*:/m.test(frontmatter)) {
+							continue;
 						}
 					}
 				}
@@ -123,7 +131,7 @@ function loadProjectContextFiles(
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
 
-	// 1. User-level context files (global, lowest precedence)
+	// 1. User-level context files (global, loaded first — project files follow and can override)
 	const userLevelPaths = [
 		join(resolvedAgentDir, "AGENTS.md"),
 		join(resolvedAgentDir, "CLAUDE.md"),
@@ -144,19 +152,18 @@ function loadProjectContextFiles(
 		}
 	}
 
-	// 2. Walk upward from cwd to root, collecting all context files per directory
+	// 2. Walk upward from cwd to root, collecting all context files per directory (ordered root-first via unshift)
 	const ancestorContextFiles: Array<{ path: string; content: string }> = [];
 	let currentDir = resolvedCwd;
 	const root = resolve("/");
 
 	while (true) {
 		const dirFiles = loadContextFilesFromDir(currentDir);
-		for (const file of dirFiles) {
-			if (!seenPaths.has(file.path)) {
-				seenPaths.add(file.path);
-				ancestorContextFiles.unshift(file);
-			}
+		const newFiles = dirFiles.filter((f) => !seenPaths.has(f.path));
+		for (const file of newFiles) {
+			seenPaths.add(file.path);
 		}
+		ancestorContextFiles.unshift(...newFiles);
 
 		if (currentDir === root) break;
 		const parentDir = resolve(currentDir, "..");
