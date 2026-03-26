@@ -1,0 +1,3 @@
+venv/
+analysis/parsed_sessions.json
+analysis/plots/
