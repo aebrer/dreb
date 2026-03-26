@@ -61,11 +61,11 @@ Before building anything, mine Claude Code session files (`~/.claude/`) to under
 
 This tells us what 20% of features cover 80% of usage.
 
-## What we can steal
+## What we can learn from / borrow
 
-- **Claude Code** (MIT) — tool implementations, especially Edit with fuzzy matching
-- **Other open source harnesses** — pi.ai, aider, etc.
-- **Session file data** — our own usage patterns
+- **Claude Code** — proprietary (all rights reserved), but we can study the patterns and approach from the public repo
+- **Open source harnesses** — aider (GPL), and various MIT-licensed alternatives — can borrow code where licenses allow
+- **Session file data** — our own usage patterns are ours to mine
 
 ## Open questions
 

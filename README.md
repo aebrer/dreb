@@ -13,7 +13,7 @@ Agentic coding tools like Claude Code and Codex are great, but they lock you int
 - **Provider agnostic** — Support coding subscriptions (Claude Max, Codex, etc.), cloud APIs (OpenRouter, z.ai, Google, etc.), and local/self-hosted models (ollama, vllm). No dependence on any single provider's API.
 - **Library, not an app** — The harness exposes its own API. Frontends (CLI, Telegram, web, whatever) are thin clients. This means existing projects like [Carcin](https://github.com/aebrer/carcin) can become test surfaces that validate the API is solid.
 - **Only the features we need** — Analyze actual usage patterns from existing session files to figure out which tools and features matter, then build those. No bloat.
-- **Shamelessly steal** — Claude Code is MIT-licensed. Other open source coding harnesses exist. Lift what works, especially tricky stuff like the Edit tool's fuzzy matching.
+- **Learn from existing tools** — Claude Code is proprietary (not open source despite being on GitHub), but we can study its patterns. Other actually-open-source harnesses (aider, etc.) exist to learn from and borrow code where licenses allow.
 - **Eventually local** — Local model support via ollama/vllm (which expose OpenAI-compatible endpoints) should fall out naturally from provider abstraction.
 
 ## Planned approach
