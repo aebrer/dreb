@@ -2295,19 +2295,34 @@ export class AgentSession {
 					bash: { commandPrefix: shellCommandPrefix },
 					subagent: {
 						onBackgroundComplete: (agentId, result) => {
-							const summary = result.exitCode === 0
-								? result.output.slice(0, 2000)
-								: `Error: ${result.errorMessage || "unknown"}`;
-							this.agent.followUp({
-								role: "user",
+							const parts: string[] = [];
+							if (result.exitCode !== 0) {
+								parts.push(`Error: ${result.errorMessage || "unknown"}`);
+							}
+							if (result.output) {
+								parts.push(result.output.slice(0, 4000));
+							}
+							const summary = parts.join("\n\n") || "(no output)";
+							const message = {
+								role: "user" as const,
 								content: [
 									{
-										type: "text",
+										type: "text" as const,
 										text: `<background-agent-complete>\nBackground agent ${agentId} (${result.agent}) completed.\n\n${summary}\n</background-agent-complete>`,
 									},
 								],
 								timestamp: Date.now(),
-							});
+							};
+							// If agent is mid-turn, queue as follow-up (delivered when turn ends).
+							// If idle, start a new turn with prompt() so it's processed immediately.
+							if (this.agent.state.isStreaming) {
+								this.agent.followUp(message);
+							} else {
+								this.agent.prompt(message).catch(() => {
+									// If prompt fails (e.g. no model), fall back to followUp
+									this.agent.followUp(message);
+								});
+							}
 						},
 					},
 				});

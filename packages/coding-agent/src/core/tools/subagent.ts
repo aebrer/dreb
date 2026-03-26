@@ -567,34 +567,35 @@ export function createSubagentToolDefinition(
 				// Fire off the work asynchronously — don't await
 				const runBackground = async () => {
 					try {
-						let resultText: string;
+						let result: SubagentResult;
 						if (params.task) {
-							const result = await executeSingle(agents, params.agent, params.task, cwd);
-							resultText = formatSingleResult(result);
-							onBackgroundComplete(agentId, result);
+							result = await executeSingle(agents, params.agent, params.task, cwd);
 						} else if (params.tasks) {
 							const results = await executeParallel(agents, params.tasks, cwd);
-							resultText = results.map((r, i) => `### Task ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
-							onBackgroundComplete(agentId, {
+							const resultText = results.map((r, i) => `### Task ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
+							const failed = results.filter((r) => r.exitCode !== 0);
+							result = {
 								agent: "parallel",
 								task: taskSummary,
-								exitCode: results.some((r) => r.exitCode !== 0) ? 1 : 0,
+								exitCode: failed.length > 0 ? 1 : 0,
 								output: resultText,
 								stderr: "",
-								errorMessage: null,
-							});
+								errorMessage: failed.length > 0 ? `${failed.length} of ${results.length} tasks failed` : null,
+							};
 						} else {
 							const results = await executeChain(agents, params.chain!, cwd);
-							resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
-							onBackgroundComplete(agentId, {
+							const resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
+							const failed = results.filter((r) => r.exitCode !== 0);
+							result = {
 								agent: "chain",
 								task: taskSummary,
-								exitCode: results.some((r) => r.exitCode !== 0) ? 1 : 0,
+								exitCode: failed.length > 0 ? 1 : 0,
 								output: resultText,
 								stderr: "",
-								errorMessage: null,
-							});
+								errorMessage: failed.length > 0 ? `Chain stopped: step ${results.length} failed` : null,
+							};
 						}
+						onBackgroundComplete(agentId, result);
 					} catch (err) {
 						onBackgroundComplete(agentId, {
 							agent: params.agent || "general-purpose",
