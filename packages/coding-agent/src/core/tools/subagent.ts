@@ -459,6 +459,8 @@ export function pruneBackgroundAgents(maxAgeMs = 5 * 60 * 1000): void {
 }
 
 export interface SubagentToolOptions {
+	/** Called when a background subagent starts. Used by TUI to show status indicators. */
+	onBackgroundStart?: (agentId: string, agentType: string, taskSummary: string) => void;
 	/**
 	 * Called when a background subagent completes. Delivers the result to the
 	 * parent agent — either as a follow-up if the agent is mid-turn, or by
@@ -581,6 +583,7 @@ export function createSubagentToolDefinition(
 	cwd: string,
 	options?: SubagentToolOptions,
 ): ToolDefinition<typeof subagentSchema, SubagentToolDetails | undefined> {
+	const onBackgroundStart = options?.onBackgroundStart;
 	const onBackgroundComplete = options?.onBackgroundComplete;
 
 	return {
@@ -649,7 +652,7 @@ export function createSubagentToolDefinition(
 						? `${params.tasks.length} parallel tasks`
 						: `${params.chain!.length}-step chain`;
 
-				// Register in the background agent registry
+				// Register in the background agent registry and notify
 				backgroundAgentRegistry.set(agentId, {
 					agentId,
 					agentType: agentName,
@@ -657,6 +660,7 @@ export function createSubagentToolDefinition(
 					startedAt: Date.now(),
 					status: "running",
 				});
+				onBackgroundStart?.(agentId, agentName, taskSummary);
 
 				const runBackground = async () => {
 					try {

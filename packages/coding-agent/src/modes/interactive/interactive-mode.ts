@@ -47,6 +47,7 @@ import {
 	VERSION,
 } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
+import { getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -2495,7 +2496,29 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 			}
+
+			case "background_agent_start":
+			case "background_agent_end": {
+				this.updateBackgroundAgentStatus();
+				break;
+			}
 		}
+	}
+
+	/** Update the footer status line with running background agent count. */
+	private updateBackgroundAgentStatus(): void {
+		const running = getRunningBackgroundAgents();
+		if (running.length === 0) {
+			this.footerDataProvider.setExtensionStatus("bg-agents", undefined);
+		} else {
+			const types = running.map((a) => a.agentType);
+			const label = running.length === 1
+				? `1 background agent (${types[0]})`
+				: `${running.length} background agents (${types.join(", ")})`;
+			this.footerDataProvider.setExtensionStatus("bg-agents", theme.fg("accent", `⟳ ${label}`));
+		}
+		this.footer.invalidate();
+		this.ui.requestRender();
 	}
 
 	/** Extract text content from a user message */

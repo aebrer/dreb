@@ -121,7 +121,9 @@ export type AgentSessionEvent =
 			errorMessage?: string;
 	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
-	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
+	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
+	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -2294,7 +2296,12 @@ export class AgentSession {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix },
 					subagent: {
+						onBackgroundStart: (agentId, agentType, taskSummary) => {
+							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary });
+						},
 						onBackgroundComplete: (agentId, result) => {
+							this._emit({ type: "background_agent_end", agentId, agentType: result.agent, success: result.exitCode === 0 });
+
 							const parts: string[] = [];
 							if (result.exitCode !== 0) {
 								parts.push(`Error: ${result.errorMessage || "unknown"}`);
