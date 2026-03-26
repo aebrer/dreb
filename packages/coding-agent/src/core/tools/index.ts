@@ -81,6 +81,21 @@ export {
 	writeTool,
 	writeToolDefinition,
 } from "./write.js";
+export {
+	createWebSearchTool,
+	createWebSearchToolDefinition,
+	type WebSearchConfig,
+	type WebSearchToolDetails,
+	type WebSearchToolInput,
+	webSearchTool,
+	webSearchToolDefinition,
+	createWebFetchTool,
+	createWebFetchToolDefinition,
+	type WebFetchToolDetails,
+	type WebFetchToolInput,
+	webFetchTool,
+	webFetchToolDefinition,
+} from "./web.js";
 
 import type { AgentTool } from "@dreb/agent-core";
 import type { ToolDefinition } from "../extensions/types.js";
@@ -103,6 +118,16 @@ import {
 	readToolDefinition,
 } from "./read.js";
 import { createWriteTool, createWriteToolDefinition, writeTool, writeToolDefinition } from "./write.js";
+import {
+	createWebSearchTool,
+	createWebSearchToolDefinition,
+	webSearchTool,
+	webSearchToolDefinition,
+	createWebFetchTool,
+	createWebFetchToolDefinition,
+	webFetchTool,
+	webFetchToolDefinition,
+} from "./web.js";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
@@ -118,6 +143,8 @@ export const allTools = {
 	grep: grepTool,
 	find: findTool,
 	ls: lsTool,
+	web_search: webSearchTool,
+	web_fetch: webFetchTool,
 };
 
 export const allToolDefinitions = {
@@ -128,6 +155,8 @@ export const allToolDefinitions = {
 	grep: grepToolDefinition,
 	find: findToolDefinition,
 	ls: lsToolDefinition,
+	web_search: webSearchToolDefinition,
+	web_fetch: webFetchToolDefinition,
 };
 
 export type ToolName = keyof typeof allTools;
@@ -164,6 +193,8 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		grep: createGrepToolDefinition(cwd),
 		find: createFindToolDefinition(cwd),
 		ls: createLsToolDefinition(cwd),
+		web_search: createWebSearchToolDefinition(cwd),
+		web_fetch: createWebFetchToolDefinition(cwd),
 	};
 }
 
@@ -189,5 +220,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		grep: createGrepTool(cwd),
 		find: createFindTool(cwd),
 		ls: createLsTool(cwd),
+		web_search: createWebSearchTool(cwd),
+		web_fetch: createWebFetchTool(cwd),
 	};
 }

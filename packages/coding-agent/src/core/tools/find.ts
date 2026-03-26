@@ -3,7 +3,6 @@ import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { spawnSync } from "child_process";
 import { existsSync } from "fs";
-import { globSync } from "glob";
 import path from "path";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { ensureTool } from "../../utils/tools-manager.js";
@@ -205,22 +204,10 @@ export function createFindToolDefinition(
 							"--max-results",
 							String(effectiveLimit),
 						];
-						// Include .gitignore files from the search tree.
-						const gitignoreFiles = new Set<string>();
-						const rootGitignore = path.join(searchPath, ".gitignore");
-						if (existsSync(rootGitignore)) gitignoreFiles.add(rootGitignore);
-						try {
-							const nestedGitignores = globSync("**/.gitignore", {
-								cwd: searchPath,
-								dot: true,
-								absolute: true,
-								ignore: ["**/node_modules/**", "**/.git/**"],
-							});
-							for (const file of nestedGitignores) gitignoreFiles.add(file);
-						} catch {
-							// ignore
-						}
-						for (const gitignorePath of gitignoreFiles) args.push("--ignore-file", gitignorePath);
+						// fd respects .gitignore natively with proper directory scoping.
+						// Manual --ignore-file collection was removed because fd applies
+						// those patterns globally, causing venv/.gitignore files containing
+						// bare "*" to suppress all results. See issue #17.
 						args.push(pattern, searchPath);
 
 						const result = spawnSync(fdPath, args, { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
