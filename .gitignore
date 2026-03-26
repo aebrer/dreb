@@ -1,3 +1,6 @@
 venv/
 analysis/parsed_sessions.json
 analysis/plots/
+node_modules/
+dist/
+*.tsbuildinfo
