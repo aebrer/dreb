@@ -437,6 +437,7 @@ export interface BackgroundAgentInfo {
 }
 
 const backgroundAgentRegistry = new Map<string, BackgroundAgentInfo>();
+const backgroundAbortControllers = new Map<string, AbortController>();
 
 /** Get a snapshot of all tracked background agents (running and recently completed). */
 export function getBackgroundAgents(): BackgroundAgentInfo[] {
@@ -448,12 +449,25 @@ export function getRunningBackgroundAgents(): BackgroundAgentInfo[] {
 	return [...backgroundAgentRegistry.values()].filter((a) => a.status === "running");
 }
 
+/** Abort all running background agents. */
+export function abortBackgroundAgents(): void {
+	for (const [id, controller] of backgroundAbortControllers) {
+		controller.abort();
+		const entry = backgroundAgentRegistry.get(id);
+		if (entry && entry.status === "running") {
+			entry.status = "failed";
+		}
+	}
+	backgroundAbortControllers.clear();
+}
+
 /** Remove completed/failed entries older than the given age (ms). Default: 5 minutes. */
 export function pruneBackgroundAgents(maxAgeMs = 5 * 60 * 1000): void {
 	const now = Date.now();
 	for (const [id, info] of backgroundAgentRegistry) {
 		if (info.status !== "running" && now - info.startedAt > maxAgeMs) {
 			backgroundAgentRegistry.delete(id);
+			backgroundAbortControllers.delete(id);
 		}
 	}
 }
@@ -652,7 +666,8 @@ export function createSubagentToolDefinition(
 						? `${params.tasks.length} parallel tasks`
 						: `${params.chain!.length}-step chain`;
 
-				// Register in the background agent registry and notify
+				// Register in the background agent registry with a dedicated AbortController
+				const bgAbort = new AbortController();
 				backgroundAgentRegistry.set(agentId, {
 					agentId,
 					agentType: agentName,
@@ -660,15 +675,17 @@ export function createSubagentToolDefinition(
 					startedAt: Date.now(),
 					status: "running",
 				});
+				backgroundAbortControllers.set(agentId, bgAbort);
 				onBackgroundStart?.(agentId, agentName, taskSummary);
 
+				const bgSignal = bgAbort.signal;
 				const runBackground = async () => {
 					try {
 						let result: SubagentResult;
 						if (params.task) {
-							result = await executeSingle(agents, params.agent, params.task, cwd, signal ?? undefined);
+							result = await executeSingle(agents, params.agent, params.task, cwd, bgSignal);
 						} else if (params.tasks) {
-							const results = await executeParallel(agents, params.tasks, cwd, signal ?? undefined);
+							const results = await executeParallel(agents, params.tasks, cwd, bgSignal);
 							const resultText = results.map((r, i) => `### Task ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 							const failed = results.filter((r) => r.exitCode !== 0);
 							result = {
@@ -680,7 +697,7 @@ export function createSubagentToolDefinition(
 								errorMessage: failed.length > 0 ? `${failed.length} of ${results.length} tasks failed` : null,
 							};
 						} else {
-							const results = await executeChain(agents, params.chain!, cwd, signal ?? undefined);
+							const results = await executeChain(agents, params.chain!, cwd, bgSignal);
 							const resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 							const failed = results.filter((r) => r.exitCode !== 0);
 							result = {
@@ -695,10 +712,12 @@ export function createSubagentToolDefinition(
 						// Update registry before notifying
 						const entry = backgroundAgentRegistry.get(agentId);
 						if (entry) entry.status = result.exitCode === 0 ? "completed" : "failed";
+						backgroundAbortControllers.delete(agentId);
 						onBackgroundComplete(agentId, result);
 					} catch (err) {
 						const entry = backgroundAgentRegistry.get(agentId);
 						if (entry) entry.status = "failed";
+						backgroundAbortControllers.delete(agentId);
 						onBackgroundComplete(agentId, {
 							agent: params.agent || "general-purpose",
 							task: params.task || taskSummary,

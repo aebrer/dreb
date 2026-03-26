@@ -47,7 +47,7 @@ import {
 	VERSION,
 } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
-import { getRunningBackgroundAgents } from "../../core/tools/subagent.js";
+import { abortBackgroundAgents, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -1947,7 +1947,12 @@ export class InteractiveMode {
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
 			if (this.loadingAnimation) {
+				abortBackgroundAgents();
+				this.updateBackgroundAgentStatus();
 				this.restoreQueuedMessagesToEditor({ abort: true });
+			} else if (getRunningBackgroundAgents().length > 0) {
+				abortBackgroundAgents();
+				this.updateBackgroundAgentStatus();
 			} else if (this.session.isBashRunning) {
 				this.session.abortBash();
 			} else if (this.isBashMode) {
@@ -2515,7 +2520,8 @@ export class InteractiveMode {
 			const label = running.length === 1
 				? `1 background agent (${types[0]})`
 				: `${running.length} background agents (${types.join(", ")})`;
-			this.footerDataProvider.setExtensionStatus("bg-agents", theme.fg("accent", `⟳ ${label}`));
+			const interrupt = keyText("app.interrupt");
+			this.footerDataProvider.setExtensionStatus("bg-agents", theme.fg("accent", `⟳ ${label}`) + theme.fg("muted", ` (${interrupt} to cancel)`));
 		}
 		this.footer.invalidate();
 		this.ui.requestRender();
