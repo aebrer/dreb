@@ -4,74 +4,89 @@
 
 This came out of a conversation about long-term sustainability — making sure we can keep our agentic coding workflow going regardless of what happens with any single provider. The core tool-use loop is simpler than people think. The hard parts are in the polish.
 
-## Difficulty breakdown
+## Why pi-mono as a foundation
 
-### Easy (days)
-- **Core tool loop**: send messages with tool definitions → model returns tool calls → execute → feed results back → repeat
-- **Basic tools**: file read/write/edit, shell exec, glob, grep — straightforward to implement
-- **Provider adapter skeleton**: thin interface, `send_message(messages, tools) -> response`
+After evaluating build-from-scratch vs. fork, the fork wins on pure pragmatism:
 
-### Medium (weeks)
-- **Context window management** — compression, summarization, smart truncation when hitting limits
-- **Permission system** — sandboxing, approval flows
-- **Streaming + cancellation** — responsive UX, especially important over Telegram
-- **Memory/skills/project instructions** — equivalent of CLAUDE.md loading and memory system
+- **15+ provider adapters already written** — including OAuth flows for coding subscriptions (Claude Max, Codex, GitHub Copilot, Gemini CLI). Writing these from scratch is weeks of tedious work.
+- **Core tool loop is solid** — parallel tool execution, streaming, context management, session persistence with branching.
+- **Extension system** — custom tools, providers, and commands can be added without modifying core code. Most of what makes our workflow *ours* (memory, skills, specific tools) can live in extensions.
+- **Multiple frontend modes** — CLI, RPC (stdin/stdout protocol), SDK, web UI, Slack bot. The RPC mode is exactly how Carcin could talk to the harness.
+- **MIT licensed** — no restrictions on forking, modifying, or distributing.
+- **Clean TypeScript codebase** — modular packages (`pi-ai`, `pi-agent-core`, `pi-coding-agent`, `pi-tui`, `pi-web-ui`, `pi-mom`), each independently useful.
 
-### Hard
-- **Edit tool quality** — diff-based editing with fuzzy matching and conflict resolution. Naive string replacement breaks constantly. Can steal from Claude Code (MIT).
-- **Prompt engineering per provider** — the system prompt that makes a model good at coding is a huge amount of accumulated tuning. Different per provider.
-- **Subscription/session auth** — each coding subscription (Claude Max, Codex, etc.) has its own auth flow. OAuth where available, but not all providers support it yet.
+### What pi-mono gives us for free
 
-## Architecture
+| Problem | pi-mono solution |
+|---------|-----------------|
+| Provider OAuth | Built-in for Claude Max, Codex, Copilot, Gemini CLI, etc. |
+| Tool execution | Parallel + sequential, streaming progress, before/after hooks |
+| Edit tool | Already implemented with conflict handling |
+| Context management | Compaction (manual + auto on overflow), JSONL session persistence |
+| Multiple frontends | CLI, RPC, SDK, web components, Slack |
+| Extensibility | Extensions discover from `~/.pi/` and `.pi/`, no fork needed for most customization |
 
-The harness is a library. It exposes its own API. Frontends are thin clients.
+### What we still need to build
 
-This means Carcin (Telegram bot) becomes a frontend client of dreb, not the engine itself. Having Carcin as a test surface ensures our own API is solid — if it works well over Telegram, it'll work well anywhere.
+- **Memory system** — pi uses `AGENTS.md`/`.pi/SYSTEM.md` but doesn't have persistent cross-session memory like our current setup
+- **Skills system** — pi has skills but the pattern differs from ours
+- **Telegram frontend** — pi has Slack (`pi-mom`), so the pattern exists to follow for a Telegram equivalent
+- **Dependency audit and vendoring** — trim the dep tree, vendor what we keep
+- **Our own opinions** — prompt tuning, default behaviors, UX preferences
 
-Other potential frontends: CLI, web UI, API server for other integrations.
+## Supply chain rationale
 
-## Provider abstraction
+A coding harness has access to your filesystem, shell, and auth tokens. It's the highest-trust software you run besides your OS. The [litellm incident](https://docs.litellm.ai/blog/security-update-march-2026) (March 2026 — compromised PyPI maintainer creds via a poisoned security scanner in CI/CD, malicious `.pth` file exfiltrating credentials, 3.4M downloads/day affected) demonstrates that "widely used open source" is a bigger target, not a security guarantee.
 
-The key interface is simple:
+Hard fork means:
+- Snapshot at a known-good commit, it's ours from that point
+- No `npm install` / `npm update` pulling in unaudited changes
+- An attacker has to compromise *our* repo specifically (hopefully not worth targeting)
+- Dependencies can be vendored and trimmed
+- Moving a few weeks behind upstream is not a sacrifice — it's the cost of confidence
+
+## Architecture (inherited from pi-mono, to be customized)
 
 ```
-Provider.send_message(messages, tools) -> response
+pi-mono packages (renamed/forked as dreb):
+
+┌─────────────┐
+│   pi-ai      │  LLM abstraction — provider adapters, auth, streaming
+└──────┬───────┘
+       │
+┌──────▼───────┐
+│ pi-agent-core │  Tool loop, execution, events, session persistence
+└──────┬───────┘
+       │
+┌──────▼───────┐     ┌──────────────┐     ┌──────────────┐
+│ pi-coding-   │     │   pi-mom      │     │  dreb-tg     │
+│ agent (CLI)  │     │  (Slack bot)  │     │  (Telegram)  │
+└──────────────┘     └──────────────┘     └──────────────┘
+                                           ▲
+                                           │ Carcin becomes
+                                           │ a frontend client
 ```
-
-Each provider adapter handles:
-- Auth (API key, OAuth, session token — whatever the provider uses)
-- Message format translation (minor differences)
-- Tool schema translation (mostly compatible across providers)
-- Streaming
-
-Provider categories:
-- **Coding subscriptions**: Claude Max, Codex, etc. — use existing subscription auth (OAuth where supported)
-- **Cloud APIs**: OpenRouter, z.ai, Google, etc. — API keys
-- **Local/self-hosted**: ollama, vllm — OpenAI-compatible endpoints, no auth needed
-
-Note: The goal is to use existing coding subscriptions (which you're already paying for) rather than paying separately for raw API access. Providers are interchangeable — that's the whole point.
 
 ## First step: analyze what we actually use
 
-Before building anything, mine Claude Code session files (`~/.claude/`) to understand:
+Before forking and stripping, mine Claude Code session files (`~/.claude/`) to understand:
 - Which tools get used and how often
 - Average context window usage and how often compression kicks in
 - Which "features" (skills, memory, subagents, etc.) actually get used vs. exist but are ignored
 - Typical session lengths and patterns
 
-This tells us what 20% of features cover 80% of usage.
+This tells us what 20% of features cover 80% of usage, and informs what to keep vs. strip from the fork.
 
-## What we can learn from / borrow
+## What we can also learn from
 
-- **Claude Code** — proprietary (all rights reserved), but we can study the patterns and approach from the public repo
-- **Open source harnesses** — aider (GPL), and various MIT-licensed alternatives — can borrow code where licenses allow
+- **Claude Code** — proprietary (all rights reserved), but we can read the public repo to generate spec and inform our own implementations
 - **Session file data** — our own usage patterns are ours to mine
 
 ## Open questions
 
 - What's the Claude Code session file format? How much can we extract?
-- How do coding subscriptions actually auth? OAuth? Session cookies?
-- Can we start with a naive Edit tool and iterate, or is fuzzy matching table stakes?
-- Context compression: roll our own summarizer or use the model itself?
-- Permission system: needed from day one or add later?
-- Memory/skills: port the existing system or design something better?
+- pi-mono is TypeScript — are we comfortable maintaining that long-term, or do we want to eventually port critical pieces to Python?
+- Which pi-mono packages do we actually need? Can we drop `pi-pods`, `pi-mom`, `pi-web-ui` immediately?
+- How much of pi-mono's dep tree can we vendor vs. trim?
+- Memory/skills: port our existing system as a pi extension, or redesign?
+- Renaming: do we rename the packages (e.g. `@dreb/ai`, `@dreb/agent`) or keep internal names and just rebrand the CLI?
