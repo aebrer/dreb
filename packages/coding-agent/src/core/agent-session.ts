@@ -2293,6 +2293,23 @@ export class AgentSession {
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix },
+					subagent: {
+						onBackgroundComplete: (agentId, result) => {
+							const summary = result.exitCode === 0
+								? result.output.slice(0, 2000)
+								: `Error: ${result.errorMessage || "unknown"}`;
+							this.agent.followUp({
+								role: "user",
+								content: [
+									{
+										type: "text",
+										text: `<background-agent-complete>\nBackground agent ${agentId} (${result.agent}) completed.\n\n${summary}\n</background-agent-complete>`,
+									},
+								],
+								timestamp: Date.now(),
+							});
+						},
+					},
 				});
 
 		this._baseToolDefinitions = new Map(

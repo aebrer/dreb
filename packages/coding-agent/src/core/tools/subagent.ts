@@ -1,6 +1,7 @@
 import type { AgentTool } from "@dreb/agent-core";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
+import { randomBytes } from "node:crypto";
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -357,6 +358,25 @@ async function executeChain(
 }
 
 // ---------------------------------------------------------------------------
+// Background execution
+// ---------------------------------------------------------------------------
+
+function generateAgentId(): string {
+	return randomBytes(6).toString("hex");
+}
+
+// Track running background agents for cleanup on abort
+const backgroundAgents = new Map<string, ChildProcess>();
+
+export interface SubagentToolOptions {
+	/**
+	 * Called when a background subagent completes. The caller should inject the
+	 * result as a follow-up message into the agent conversation.
+	 */
+	onBackgroundComplete?: (agentId: string, result: SubagentResult) => void;
+}
+
+// ---------------------------------------------------------------------------
 // Tool schema and definition
 // ---------------------------------------------------------------------------
 
@@ -374,6 +394,9 @@ const subagentSchema = Type.Object({
 		Type.Array(taskItemSchema, {
 			description: "Sequential pipeline — each step can use {previous} for prior output",
 		}),
+	),
+	background: Type.Optional(
+		Type.Boolean({ description: "Run in background — returns immediately, notifies on completion" }),
 	),
 });
 
@@ -464,21 +487,26 @@ function formatSingleResult(result: SubagentResult): string {
 
 export function createSubagentToolDefinition(
 	cwd: string,
+	options?: SubagentToolOptions,
 ): ToolDefinition<typeof subagentSchema, SubagentToolDetails | undefined> {
+	const onBackgroundComplete = options?.onBackgroundComplete;
+
 	return {
 		name: "subagent",
 		label: "subagent",
 		description:
 			"Delegate tasks to specialized subagents that run independently. " +
 			"Supports single task, parallel (up to 8, max 4 concurrent), " +
-			"and chain (sequential pipeline with {previous} substitution) modes.",
-		promptSnippet: "Delegate tasks to independent subagents",
+			"and chain (sequential pipeline with {previous} substitution) modes. " +
+			"Set background=true to return immediately and get notified on completion.",
+		promptSnippet: "Delegate tasks to independent subagents (supports background execution)",
 		promptGuidelines: [
 			"Use `subagent` to delegate focused, independent tasks to child agents",
 			"Available agent types can be discovered from ~/.dreb/agents/ and .dreb/agents/ markdown files",
 			"Built-in agents: 'general-purpose' (all tools, default) and 'Explore' (read-only, fast research)",
 			"Use parallel mode for independent tasks that can run concurrently",
 			"Use chain mode when each step depends on the previous step's output (reference with {previous})",
+			"Set background=true to fire-and-forget — you'll be notified when the agent completes",
 			"Subagents have their own context window — provide enough context in the task prompt",
 		],
 		parameters: subagentSchema,
@@ -504,6 +532,79 @@ export function createSubagentToolDefinition(
 				};
 			}
 
+			// Background mode: spawn and return immediately
+			if (params.background) {
+				if (!onBackgroundComplete) {
+					return {
+						content: [{ type: "text", text: "Background execution not available in this context (no completion handler registered)." }],
+						details: undefined,
+					};
+				}
+
+				const agentId = generateAgentId();
+				const agentName = params.agent || "general-purpose";
+				const taskSummary = params.task
+					? `single task for ${agentName}`
+					: params.tasks
+						? `${params.tasks.length} parallel tasks`
+						: `${params.chain!.length}-step chain`;
+
+				// Fire off the work asynchronously — don't await
+				const runBackground = async () => {
+					try {
+						let resultText: string;
+						if (params.task) {
+							const result = await executeSingle(agents, params.agent, params.task, cwd);
+							resultText = formatSingleResult(result);
+							onBackgroundComplete(agentId, result);
+						} else if (params.tasks) {
+							const results = await executeParallel(agents, params.tasks, cwd);
+							resultText = results.map((r, i) => `### Task ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
+							onBackgroundComplete(agentId, {
+								agent: "parallel",
+								task: taskSummary,
+								exitCode: results.some((r) => r.exitCode !== 0) ? 1 : 0,
+								output: resultText,
+								stderr: "",
+								errorMessage: null,
+							});
+						} else {
+							const results = await executeChain(agents, params.chain!, cwd);
+							resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
+							onBackgroundComplete(agentId, {
+								agent: "chain",
+								task: taskSummary,
+								exitCode: results.some((r) => r.exitCode !== 0) ? 1 : 0,
+								output: resultText,
+								stderr: "",
+								errorMessage: null,
+							});
+						}
+					} catch (err) {
+						onBackgroundComplete(agentId, {
+							agent: params.agent || "general-purpose",
+							task: params.task || taskSummary,
+							exitCode: 1,
+							output: "",
+							stderr: "",
+							errorMessage: err instanceof Error ? err.message : String(err),
+						});
+					}
+				};
+				runBackground();
+
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Background agent ${agentId} started (${taskSummary}). You will be notified when it completes.`,
+						},
+					],
+					details: { mode: "single", agentCount: 1 } as SubagentToolDetails,
+				};
+			}
+
+			// Foreground mode: run and wait for results
 			const progressCallback = onUpdate
 				? (msg: string) => onUpdate({ content: [{ type: "text", text: msg }] } as any)
 				: undefined;
@@ -512,17 +613,14 @@ export function createSubagentToolDefinition(
 			let details: SubagentToolDetails;
 
 			if (params.task) {
-				// Single mode
 				const result = await executeSingle(agents, params.agent, params.task, cwd, signal ?? undefined, progressCallback);
 				resultText = formatSingleResult(result);
 				details = { mode: "single", agentCount: 1 };
 			} else if (params.tasks) {
-				// Parallel mode
 				const results = await executeParallel(agents, params.tasks, cwd, signal ?? undefined, progressCallback);
 				resultText = results.map((r, i) => `### Task ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 				details = { mode: "parallel", agentCount: params.tasks.length };
 			} else {
-				// Chain mode
 				const results = await executeChain(agents, params.chain!, cwd, signal ?? undefined, progressCallback);
 				resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 				details = { mode: "chain", agentCount: params.chain!.length };
@@ -535,7 +633,7 @@ export function createSubagentToolDefinition(
 
 			return {
 				content: [{ type: "text", text: truncation.content }],
-				details: Object.keys(details).length > 1 ? details : undefined, // always has mode+agentCount
+				details: Object.keys(details).length > 1 ? details : undefined,
 			};
 		},
 
@@ -552,8 +650,8 @@ export function createSubagentToolDefinition(
 	};
 }
 
-export function createSubagentTool(cwd: string): AgentTool<typeof subagentSchema> {
-	return wrapToolDefinition(createSubagentToolDefinition(cwd));
+export function createSubagentTool(cwd: string, options?: SubagentToolOptions): AgentTool<typeof subagentSchema> {
+	return wrapToolDefinition(createSubagentToolDefinition(cwd, options));
 }
 
 export const subagentToolDefinition = createSubagentToolDefinition(process.cwd());
