@@ -26,6 +26,7 @@ import {
 	createLsTool,
 	createReadOnlyTools,
 	createReadTool,
+	createSubagentTool,
 	createWriteTool,
 	editTool,
 	findTool,
@@ -33,6 +34,7 @@ import {
 	lsTool,
 	readOnlyTools,
 	readTool,
+	subagentTool,
 	type Tool,
 	type ToolName,
 	withFileMutationQueue,
@@ -106,6 +108,7 @@ export {
 	grepTool,
 	findTool,
 	lsTool,
+	subagentTool,
 	codingTools,
 	readOnlyTools,
 	allTools as allBuiltInTools,
@@ -120,6 +123,7 @@ export {
 	createGrepTool,
 	createFindTool,
 	createLsTool,
+	createSubagentTool,
 };
 
 // Helper Functions
@@ -239,7 +243,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = "off";
 	}
 
-	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch"];
+	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch", "subagent"];
 	const initialActiveToolNames: ToolName[] = options.tools
 		? options.tools.map((t) => t.name).filter((n): n is ToolName => n in allTools)
 		: defaultActiveToolNames;

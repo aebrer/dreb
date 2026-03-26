@@ -211,8 +211,8 @@ ${chalk.bold("Options:")}
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching
   --no-tools                     Disable all built-in tools
-  --tools <tools>                Comma-separated list of tools to enable (default: read,bash,edit,write,grep,find,ls,web_search,web_fetch)
-                                 Available: read, bash, edit, write, grep, find, ls, web_search, web_fetch
+  --tools <tools>                Comma-separated list of tools to enable (default: read,bash,edit,write,grep,find,ls,web_search,web_fetch,subagent)
+                                 Available: read, bash, edit, write, grep, find, ls, web_search, web_fetch, subagent
   --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh
   --extension, -e <path>         Load an extension file (can be used multiple times)
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
@@ -309,13 +309,16 @@ ${chalk.bold("Environment Variables:")}
   PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
   PI_AI_ANTIGRAVITY_VERSION        - Override Antigravity User-Agent version (e.g., 1.23.0)
 
-${chalk.bold("Available Tools (default: read, bash, edit, write, grep, find, ls):")}
-  read   - Read file contents
-  bash   - Execute bash commands
-  edit   - Edit files with find/replace
-  write  - Write files (creates/overwrites)
-  grep   - Search file contents (read-only, off by default)
-  find   - Find files by glob pattern (read-only, off by default)
-  ls     - List directory contents (read-only, off by default)
+${chalk.bold("Available Tools (default: all):")}
+  read       - Read file contents
+  bash       - Execute bash commands
+  edit       - Edit files with find/replace
+  write      - Write files (creates/overwrites)
+  grep       - Search file contents
+  find       - Find files by glob pattern
+  ls         - List directory contents
+  web_search - Search the web
+  web_fetch  - Fetch URL content
+  subagent   - Delegate tasks to independent subagents
 `);
 }

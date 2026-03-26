@@ -96,6 +96,14 @@ export {
 	webFetchTool,
 	webFetchToolDefinition,
 } from "./web.js";
+export {
+	createSubagentTool,
+	createSubagentToolDefinition,
+	type SubagentToolDetails,
+	type SubagentToolInput,
+	subagentTool,
+	subagentToolDefinition,
+} from "./subagent.js";
 
 import type { AgentTool } from "@dreb/agent-core";
 import type { ToolDefinition } from "../extensions/types.js";
@@ -128,6 +136,12 @@ import {
 	webFetchTool,
 	webFetchToolDefinition,
 } from "./web.js";
+import {
+	createSubagentTool,
+	createSubagentToolDefinition,
+	subagentTool,
+	subagentToolDefinition,
+} from "./subagent.js";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
@@ -145,6 +159,7 @@ export const allTools = {
 	ls: lsTool,
 	web_search: webSearchTool,
 	web_fetch: webFetchTool,
+	subagent: subagentTool,
 };
 
 export const allToolDefinitions = {
@@ -157,6 +172,7 @@ export const allToolDefinitions = {
 	ls: lsToolDefinition,
 	web_search: webSearchToolDefinition,
 	web_fetch: webFetchToolDefinition,
+	subagent: subagentToolDefinition,
 };
 
 export type ToolName = keyof typeof allTools;
@@ -195,6 +211,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		ls: createLsToolDefinition(cwd),
 		web_search: createWebSearchToolDefinition(cwd),
 		web_fetch: createWebFetchToolDefinition(cwd),
+		subagent: createSubagentToolDefinition(cwd),
 	};
 }
 
@@ -222,5 +239,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		ls: createLsTool(cwd),
 		web_search: createWebSearchTool(cwd),
 		web_fetch: createWebFetchTool(cwd),
+		subagent: createSubagentTool(cwd),
 	};
 }
