@@ -139,6 +139,7 @@ async function spawnSubagent(
 	onProgress?: (event: string) => void,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
+	console.error(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
 
 	// Validate cwd exists — spawn() throws a misleading ENOENT blaming the
 	// binary when the cwd is invalid, making the real cause hard to diagnose
@@ -244,6 +245,7 @@ async function spawnSubagent(
 			signal?.removeEventListener("abort", onAbort);
 			const exitCode = code ?? 1;
 			const stderr = stderrChunks.join("");
+			console.error(`[subagent] close: agent=${agentConfig.name} exit=${exitCode} messages=${collectedMessages.length}${exitCode !== 0 ? ` stderr=${stderr.slice(0, 200)} stdout=${plainStdoutLines.join("|").slice(0, 200)}` : ""}`);
 
 			// Extract final text output from collected assistant messages
 			const outputParts: string[] = [];
