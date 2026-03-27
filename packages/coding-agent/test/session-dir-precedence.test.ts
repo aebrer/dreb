@@ -90,11 +90,11 @@ describe("sessionDir precedence", () => {
 		mocks.runPrintMode.mockClear();
 		mocks.selectSession.mockReset();
 
-		tempDir = join(tmpdir(), `pi-session-dir-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `dreb-session-dir-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		projectDir = join(tempDir, "project");
 		mkdirSync(agentDir, { recursive: true });
-		mkdirSync(join(projectDir, ".pi"), { recursive: true });
+		mkdirSync(join(projectDir, ".dreb"), { recursive: true });
 
 		originalCwd = process.cwd();
 		originalAgentDir = process.env[ENV_AGENT_DIR];
@@ -119,7 +119,7 @@ describe("sessionDir precedence", () => {
 	});
 
 	it("prefers settings sessionDir over the session_directory hook for new sessions", async () => {
-		writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ sessionDir: "./settings-sessions" }));
+		writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ sessionDir: "./settings-sessions" }));
 
 		const { main } = await import("../src/main.js");
 		await main(["--print", "test prompt"]);
@@ -129,7 +129,7 @@ describe("sessionDir precedence", () => {
 	});
 
 	it("prefers CLI --session-dir over settings and the session_directory hook", async () => {
-		writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ sessionDir: "./settings-sessions" }));
+		writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ sessionDir: "./settings-sessions" }));
 
 		const { main } = await import("../src/main.js");
 		await main(["--print", "--session-dir", "./cli-sessions", "test prompt"]);
@@ -139,7 +139,7 @@ describe("sessionDir precedence", () => {
 	});
 
 	it("uses settings sessionDir ahead of the session_directory hook for --resume", async () => {
-		writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ sessionDir: "./settings-sessions" }));
+		writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ sessionDir: "./settings-sessions" }));
 
 		const { SessionManager } = await import("../src/core/session-manager.js");
 		const listSpy = vi.spyOn(SessionManager, "list");

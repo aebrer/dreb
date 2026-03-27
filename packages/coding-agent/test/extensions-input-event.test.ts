@@ -13,7 +13,7 @@ describe("Input Event", () => {
 	let extensionsDir: string;
 
 	beforeEach(() => {
-		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-input-test-"));
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "dreb-input-test-"));
 		extensionsDir = path.join(tempDir, "extensions");
 		fs.mkdirSync(extensionsDir);
 		// Clean globalThis test vars

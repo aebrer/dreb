@@ -28,7 +28,7 @@ describe.skipIf(!API_KEY)("AgentSession forking", () => {
 
 	beforeEach(() => {
 		// Create temp directory for session files
-		tempDir = join(tmpdir(), `pi-branching-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `dreb-branching-test-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 

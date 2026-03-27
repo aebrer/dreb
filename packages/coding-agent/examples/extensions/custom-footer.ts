@@ -12,10 +12,10 @@ import type { AssistantMessage } from "@dreb/ai";
 import type { ExtensionAPI } from "@dreb/coding-agent";
 import { truncateToWidth, visibleWidth } from "@dreb/tui";
 
-export default function (pi: ExtensionAPI) {
+export default function (dreb: ExtensionAPI) {
 	let enabled = false;
 
-	pi.registerCommand("footer", {
+	dreb.registerCommand("footer", {
 		description: "Toggle custom footer",
 		handler: async (_args, ctx) => {
 			enabled = !enabled;

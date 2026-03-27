@@ -15,7 +15,7 @@ describe("package commands", () => {
 	let originalExitCode: typeof process.exitCode;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-package-commands-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `dreb-package-commands-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		projectDir = join(tempDir, "project");
 		packageDir = join(tempDir, "local-package");
@@ -78,7 +78,7 @@ describe("package commands", () => {
 
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stdout).toContain("Usage:");
-			expect(stdout).toContain("pi install <source> [-l]");
+			expect(stdout).toContain("dreb install <source> [-l]");
 			expect(errorSpy).not.toHaveBeenCalled();
 			expect(process.exitCode).toBeUndefined();
 		} finally {
@@ -95,7 +95,7 @@ describe("package commands", () => {
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stderr).toContain('Unknown option --unknown for "install".');
-			expect(stderr).toContain('Use "pi --help" or "pi install <source> [-l]".');
+			expect(stderr).toContain('Use "dreb --help" or "dreb install <source> [-l]".');
 			expect(process.exitCode).toBe(1);
 		} finally {
 			errorSpy.mockRestore();
@@ -110,7 +110,7 @@ describe("package commands", () => {
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			expect(stderr).toContain("Missing install source.");
-			expect(stderr).toContain("Usage: pi install <source> [-l]");
+			expect(stderr).toContain("Usage: dreb install <source> [-l]");
 			expect(stderr).not.toContain("at ");
 			expect(process.exitCode).toBe(1);
 		} finally {
@@ -120,22 +120,22 @@ describe("package commands", () => {
 
 	it("suggests the configured source when update input omits the npm prefix", async () => {
 		const settingsPath = join(agentDir, "settings.json");
-		writeFileSync(settingsPath, JSON.stringify({ packages: ["npm:pi-formatter"] }, null, 2));
+		writeFileSync(settingsPath, JSON.stringify({ packages: ["npm:dreb-formatter"] }, null, 2));
 
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
 		try {
-			await expect(main(["update", "pi-formatter"])).resolves.toBeUndefined();
+			await expect(main(["update", "dreb-formatter"])).resolves.toBeUndefined();
 
 			const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 			const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
-			expect(stderr).toContain("Did you mean npm:pi-formatter?");
-			expect(stdout).not.toContain("Updated pi-formatter");
+			expect(stderr).toContain("Did you mean npm:dreb-formatter?");
+			expect(stdout).not.toContain("Updated dreb-formatter");
 			expect(process.exitCode).toBe(1);
 
 			const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { packages?: string[] };
-			expect(settings.packages).toContain("npm:pi-formatter");
+			expect(settings.packages).toContain("npm:dreb-formatter");
 		} finally {
 			errorSpy.mockRestore();
 			logSpy.mockRestore();

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
-# Migrate sessions from ~/.pi/agent/*.jsonl to proper session directories.
+# Migrate sessions from ~/.dreb/agent/*.jsonl to proper session directories.
 # This fixes sessions created by the bug in v0.30.0 where sessions were
-# saved to ~/.pi/agent/ instead of ~/.pi/agent/sessions/<encoded-cwd>/.
+# saved to ~/.dreb/agent/ instead of ~/.dreb/agent/sessions/<encoded-cwd>/.
 #
 # Usage: ./migrate-sessions.sh [--dry-run]
 #
 
 set -e
 
-AGENT_DIR="${PI_AGENT_DIR:-$HOME/.pi/agent}"
+AGENT_DIR="${DREB_CODING_AGENT_DIR:-$HOME/.dreb/agent}"
 DRY_RUN=false
 
 if [[ "$1" == "--dry-run" ]]; then

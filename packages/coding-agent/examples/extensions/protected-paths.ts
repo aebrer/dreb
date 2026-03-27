@@ -7,10 +7,10 @@
 
 import type { ExtensionAPI } from "@dreb/coding-agent";
 
-export default function (pi: ExtensionAPI) {
+export default function (dreb: ExtensionAPI) {
 	const protectedPaths = [".env", ".git/", "node_modules/"];
 
-	pi.on("tool_call", async (event, ctx) => {
+	dreb.on("tool_call", async (event, ctx) => {
 		if (event.toolName !== "write" && event.toolName !== "edit") {
 			return undefined;
 		}

@@ -1,18 +1,18 @@
-> pi can create extensions. Ask it to build one for your use case.
+> dreb can create extensions. Ask it to build one for your use case.
 
 # Extensions
 
-Extensions are TypeScript modules that extend pi's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.
+Extensions are TypeScript modules that extend dreb's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.
 
-> **Placement for /reload:** Put extensions in `~/.pi/agent/extensions/` (global) or `.pi/extensions/` (project-local) for auto-discovery. Use `pi -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
+> **Placement for /reload:** Put extensions in `~/.dreb/agent/extensions/` (global) or `.dreb/extensions/` (project-local) for auto-discovery. Use `dreb -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
 
 **Key capabilities:**
-- **Custom tools** - Register tools the LLM can call via `pi.registerTool()`
+- **Custom tools** - Register tools the LLM can call via `dreb.registerTool()`
 - **Event interception** - Block or modify tool calls, inject context, customize compaction
 - **User interaction** - Prompt users via `ctx.ui` (select, confirm, input, notify)
 - **Custom UI components** - Full TUI components with keyboard input via `ctx.ui.custom()` for complex interactions
-- **Custom commands** - Register commands like `/mycommand` via `pi.registerCommand()`
-- **Session persistence** - Store state that survives restarts via `pi.appendEntry()`
+- **Custom commands** - Register commands like `/mycommand` via `dreb.registerCommand()`
+- **Session persistence** - Store state that survives restarts via `dreb.appendEntry()`
 - **Custom rendering** - Control how tool calls/results and messages appear in TUI
 
 **Example use cases:**
@@ -52,19 +52,19 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 
 ## Quick Start
 
-Create `~/.pi/agent/extensions/my-extension.ts`:
+Create `~/.dreb/agent/extensions/my-extension.ts`:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@dreb/coding-agent";
 import { Type } from "@sinclair/typebox";
 
-export default function (pi: ExtensionAPI) {
+export default function (dreb: ExtensionAPI) {
   // React to events
-  pi.on("session_start", async (_event, ctx) => {
+  dreb.on("session_start", async (_event, ctx) => {
     ctx.ui.notify("Extension loaded!", "info");
   });
 
-  pi.on("tool_call", async (event, ctx) => {
+  dreb.on("tool_call", async (event, ctx) => {
     if (event.toolName === "bash" && event.input.command?.includes("rm -rf")) {
       const ok = await ctx.ui.confirm("Dangerous!", "Allow rm -rf?");
       if (!ok) return { block: true, reason: "Blocked by user" };
@@ -72,7 +72,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Register a custom tool
-  pi.registerTool({
+  dreb.registerTool({
     name: "greet",
     label: "Greet",
     description: "Greet someone by name",
@@ -88,7 +88,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Register a command
-  pi.registerCommand("hello", {
+  dreb.registerCommand("hello", {
     description: "Say hello",
     handler: async (args, ctx) => {
       ctx.ui.notify(`Hello ${args || "world"}!`, "info");
@@ -100,7 +100,7 @@ export default function (pi: ExtensionAPI) {
 Test with `--extension` (or `-e`) flag:
 
 ```bash
-pi -e ./my-extension.ts
+dreb -e ./my-extension.ts
 ```
 
 ## Extension Locations
@@ -111,10 +111,10 @@ Extensions are auto-discovered from:
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/extensions/*.ts` | Global (all projects) |
-| `~/.pi/agent/extensions/*/index.ts` | Global (subdirectory) |
-| `.pi/extensions/*.ts` | Project-local |
-| `.pi/extensions/*/index.ts` | Project-local (subdirectory) |
+| `~/.dreb/agent/extensions/*.ts` | Global (all projects) |
+| `~/.dreb/agent/extensions/*/index.ts` | Global (subdirectory) |
+| `.dreb/extensions/*.ts` | Project-local |
+| `.dreb/extensions/*/index.ts` | Project-local (subdirectory) |
 
 Additional paths via `settings.json`:
 
@@ -131,16 +131,16 @@ Additional paths via `settings.json`:
 }
 ```
 
-To share extensions via npm or git as pi packages, see [packages.md](packages.md).
+To share extensions via npm or git as dreb packages, see [packages.md](packages.md).
 
 ## Available Imports
 
 | Package | Purpose |
 |---------|---------|
-| `@mariozechner/pi-coding-agent` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
+| `@dreb/coding-agent` | Extension types (`ExtensionAPI`, `ExtensionContext`, events) |
 | `@sinclair/typebox` | Schema definitions for tool parameters |
-| `@mariozechner/pi-ai` | AI utilities (`StringEnum` for Google-compatible enums) |
-| `@mariozechner/pi-tui` | TUI components for custom rendering |
+| `@dreb/ai` | AI utilities (`StringEnum` for Google-compatible enums) |
+| `@dreb/tui` | TUI components for custom rendering |
 
 npm dependencies work too. Add a `package.json` next to your extension (or in a parent directory), run `npm install`, and imports from `node_modules/` are resolved automatically.
 
@@ -151,11 +151,11 @@ Node.js built-ins (`node:fs`, `node:path`, etc.) are also available.
 An extension exports a default function that receives `ExtensionAPI`:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@dreb/coding-agent";
 
-export default function (pi: ExtensionAPI) {
+export default function (dreb: ExtensionAPI) {
   // Subscribe to events
-  pi.on("event_name", async (event, ctx) => {
+  dreb.on("event_name", async (event, ctx) => {
     // ctx.ui for user interaction
     const ok = await ctx.ui.confirm("Title", "Are you sure?");
     ctx.ui.notify("Done!", "success");
@@ -164,10 +164,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Register tools, commands, shortcuts, flags
-  pi.registerTool({ ... });
-  pi.registerCommand("name", { ... });
-  pi.registerShortcut("ctrl+x", { ... });
-  pi.registerFlag("my-flag", { ... });
+  dreb.registerTool({ ... });
+  dreb.registerCommand("name", { ... });
+  dreb.registerShortcut("ctrl+x", { ... });
+  dreb.registerFlag("my-flag", { ... });
 }
 ```
 
@@ -178,14 +178,14 @@ Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript wo
 **Single file** - simplest, for small extensions:
 
 ```
-~/.pi/agent/extensions/
+~/.dreb/agent/extensions/
 └── my-extension.ts
 ```
 
 **Directory with index.ts** - for multi-file extensions:
 
 ```
-~/.pi/agent/extensions/
+~/.dreb/agent/extensions/
 └── my-extension/
     ├── index.ts        # Entry point (exports default function)
     ├── tools.ts        # Helper module
@@ -195,7 +195,7 @@ Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript wo
 **Package with dependencies** - for extensions that need npm packages:
 
 ```
-~/.pi/agent/extensions/
+~/.dreb/agent/extensions/
 └── my-extension/
     ├── package.json    # Declares dependencies and entry points
     ├── package-lock.json
@@ -212,7 +212,7 @@ Extensions are loaded via [jiti](https://github.com/unjs/jiti), so TypeScript wo
     "zod": "^3.0.0",
     "chalk": "^5.0.0"
   },
-  "pi": {
+  "dreb": {
     "extensions": ["./src/index.ts"]
   }
 }
@@ -225,7 +225,7 @@ Run `npm install` in the extension directory, then imports from `node_modules/` 
 ### Lifecycle Overview
 
 ```
-pi starts (CLI only)
+dreb starts (CLI only)
   │
   ├─► session_directory (CLI startup only, no ctx)
   └─► session_start
@@ -288,7 +288,7 @@ See [session.md](session.md) for session storage internals and the SessionManage
 
 #### session_directory
 
-Fired by the `pi` CLI during startup session resolution, before the initial session manager is created.
+Fired by the `dreb` CLI during startup session resolution, before the initial session manager is created.
 
 This event is:
 - CLI-only. It is not emitted in SDK mode.
@@ -300,9 +300,9 @@ If multiple extensions return `sessionDir`, the last one wins.
 Combined precedence is: `--session-dir` CLI flag, then `sessionDir` in settings, then extension `session_directory` hooks.
 
 ```typescript
-pi.on("session_directory", async (event) => {
+dreb.on("session_directory", async (event) => {
   return {
-    sessionDir: `/tmp/pi-sessions/${encodeURIComponent(event.cwd)}`,
+    sessionDir: `/tmp/dreb-sessions/${encodeURIComponent(event.cwd)}`,
   };
 });
 ```
@@ -312,7 +312,7 @@ pi.on("session_directory", async (event) => {
 Fired on initial session load.
 
 ```typescript
-pi.on("session_start", async (_event, ctx) => {
+dreb.on("session_start", async (_event, ctx) => {
   ctx.ui.notify(`Session: ${ctx.sessionManager.getSessionFile() ?? "ephemeral"}`, "info");
 });
 ```
@@ -322,7 +322,7 @@ pi.on("session_start", async (_event, ctx) => {
 Fired when starting a new session (`/new`) or switching sessions (`/resume`).
 
 ```typescript
-pi.on("session_before_switch", async (event, ctx) => {
+dreb.on("session_before_switch", async (event, ctx) => {
   // event.reason - "new" or "resume"
   // event.targetSessionFile - session we're switching to (only for "resume")
 
@@ -332,7 +332,7 @@ pi.on("session_before_switch", async (event, ctx) => {
   }
 });
 
-pi.on("session_switch", async (event, ctx) => {
+dreb.on("session_switch", async (event, ctx) => {
   // event.reason - "new" or "resume"
   // event.previousSessionFile - session we came from
 });
@@ -343,14 +343,14 @@ pi.on("session_switch", async (event, ctx) => {
 Fired when forking via `/fork`.
 
 ```typescript
-pi.on("session_before_fork", async (event, ctx) => {
+dreb.on("session_before_fork", async (event, ctx) => {
   // event.entryId - ID of the entry being forked from
   return { cancel: true }; // Cancel fork
   // OR
   return { skipConversationRestore: true }; // Fork but don't rewind messages
 });
 
-pi.on("session_fork", async (event, ctx) => {
+dreb.on("session_fork", async (event, ctx) => {
   // event.previousSessionFile - previous session file
 });
 ```
@@ -360,7 +360,7 @@ pi.on("session_fork", async (event, ctx) => {
 Fired on compaction. See [compaction.md](compaction.md) for details.
 
 ```typescript
-pi.on("session_before_compact", async (event, ctx) => {
+dreb.on("session_before_compact", async (event, ctx) => {
   const { preparation, branchEntries, customInstructions, signal } = event;
 
   // Cancel:
@@ -376,7 +376,7 @@ pi.on("session_before_compact", async (event, ctx) => {
   };
 });
 
-pi.on("session_compact", async (event, ctx) => {
+dreb.on("session_compact", async (event, ctx) => {
   // event.compactionEntry - the saved compaction
   // event.fromExtension - whether extension provided it
 });
@@ -387,14 +387,14 @@ pi.on("session_compact", async (event, ctx) => {
 Fired on `/tree` navigation. See [tree.md](tree.md) for tree navigation concepts.
 
 ```typescript
-pi.on("session_before_tree", async (event, ctx) => {
+dreb.on("session_before_tree", async (event, ctx) => {
   const { preparation, signal } = event;
   return { cancel: true };
   // OR provide custom summary:
   return { summary: { summary: "...", details: {} } };
 });
 
-pi.on("session_tree", async (event, ctx) => {
+dreb.on("session_tree", async (event, ctx) => {
   // event.newLeafId, oldLeafId, summaryEntry, fromExtension
 });
 ```
@@ -404,7 +404,7 @@ pi.on("session_tree", async (event, ctx) => {
 Fired on exit (Ctrl+C, Ctrl+D, SIGTERM).
 
 ```typescript
-pi.on("session_shutdown", async (_event, ctx) => {
+dreb.on("session_shutdown", async (_event, ctx) => {
   // Cleanup, save state, etc.
 });
 ```
@@ -416,7 +416,7 @@ pi.on("session_shutdown", async (_event, ctx) => {
 Fired after user submits prompt, before agent loop. Can inject a message and/or modify the system prompt.
 
 ```typescript
-pi.on("before_agent_start", async (event, ctx) => {
+dreb.on("before_agent_start", async (event, ctx) => {
   // event.prompt - user's prompt text
   // event.images - attached images (if any)
   // event.systemPrompt - current system prompt
@@ -439,9 +439,9 @@ pi.on("before_agent_start", async (event, ctx) => {
 Fired once per user prompt.
 
 ```typescript
-pi.on("agent_start", async (_event, ctx) => {});
+dreb.on("agent_start", async (_event, ctx) => {});
 
-pi.on("agent_end", async (event, ctx) => {
+dreb.on("agent_end", async (event, ctx) => {
   // event.messages - messages from this prompt
 });
 ```
@@ -451,11 +451,11 @@ pi.on("agent_end", async (event, ctx) => {
 Fired for each turn (one LLM response + tool calls).
 
 ```typescript
-pi.on("turn_start", async (event, ctx) => {
+dreb.on("turn_start", async (event, ctx) => {
   // event.turnIndex, event.timestamp
 });
 
-pi.on("turn_end", async (event, ctx) => {
+dreb.on("turn_end", async (event, ctx) => {
   // event.turnIndex, event.message, event.toolResults
 });
 ```
@@ -468,16 +468,16 @@ Fired for message lifecycle updates.
 - `message_update` fires for assistant streaming updates.
 
 ```typescript
-pi.on("message_start", async (event, ctx) => {
+dreb.on("message_start", async (event, ctx) => {
   // event.message
 });
 
-pi.on("message_update", async (event, ctx) => {
+dreb.on("message_update", async (event, ctx) => {
   // event.message
   // event.assistantMessageEvent (token-by-token stream event)
 });
 
-pi.on("message_end", async (event, ctx) => {
+dreb.on("message_end", async (event, ctx) => {
   // event.message
 });
 ```
@@ -492,15 +492,15 @@ In parallel tool mode:
 - `tool_execution_end` is emitted in assistant source order, matching final tool result message order
 
 ```typescript
-pi.on("tool_execution_start", async (event, ctx) => {
+dreb.on("tool_execution_start", async (event, ctx) => {
   // event.toolCallId, event.toolName, event.args
 });
 
-pi.on("tool_execution_update", async (event, ctx) => {
+dreb.on("tool_execution_update", async (event, ctx) => {
   // event.toolCallId, event.toolName, event.args, event.partialResult
 });
 
-pi.on("tool_execution_end", async (event, ctx) => {
+dreb.on("tool_execution_end", async (event, ctx) => {
   // event.toolCallId, event.toolName, event.result, event.isError
 });
 ```
@@ -510,7 +510,7 @@ pi.on("tool_execution_end", async (event, ctx) => {
 Fired before each LLM call. Modify messages non-destructively. See [session.md](session.md) for message types.
 
 ```typescript
-pi.on("context", async (event, ctx) => {
+dreb.on("context", async (event, ctx) => {
   // event.messages - deep copy, safe to modify
   const filtered = event.messages.filter(m => !shouldPrune(m));
   return { messages: filtered };
@@ -522,7 +522,7 @@ pi.on("context", async (event, ctx) => {
 Fired after the provider-specific payload is built, right before the request is sent. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
 
 ```typescript
-pi.on("before_provider_request", (event, ctx) => {
+dreb.on("before_provider_request", (event, ctx) => {
   console.log(JSON.stringify(event.payload, null, 2));
 
   // Optional: replace payload
@@ -539,7 +539,7 @@ This is mainly useful for debugging provider serialization and cache behavior.
 Fired when the model changes via `/model` command, model cycling (`Ctrl+P`), or session restore.
 
 ```typescript
-pi.on("model_select", async (event, ctx) => {
+dreb.on("model_select", async (event, ctx) => {
   // event.model - newly selected model
   // event.previousModel - previous model (undefined if first selection)
   // event.source - "set" | "cycle" | "restore"
@@ -561,14 +561,14 @@ Use this to update UI elements (status bars, footers) or perform model-specific 
 
 Fired after `tool_execution_start`, before the tool executes. **Can block.** Use `isToolCallEventType` to narrow and get typed inputs.
 
-Before `tool_call` runs, pi waits for previously emitted Agent events to finish draining through `AgentSession`. This means `ctx.sessionManager` is up to date through the current assistant tool-calling message.
+Before `tool_call` runs, dreb waits for previously emitted Agent events to finish draining through `AgentSession`. This means `ctx.sessionManager` is up to date through the current assistant tool-calling message.
 
 In the default parallel tool execution mode, sibling tool calls from the same assistant message are preflighted sequentially, then executed concurrently. `tool_call` is not guaranteed to see sibling tool results from that same assistant message in `ctx.sessionManager`.
 
 ```typescript
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
+import { isToolCallEventType } from "@dreb/coding-agent";
 
-pi.on("tool_call", async (event, ctx) => {
+dreb.on("tool_call", async (event, ctx) => {
   // event.toolName - "bash", "read", "write", "edit", etc.
   // event.toolCallId
   // event.input - tool parameters
@@ -600,10 +600,10 @@ export type MyToolInput = Static<typeof myToolSchema>;
 Use `isToolCallEventType` with explicit type parameters:
 
 ```typescript
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
+import { isToolCallEventType } from "@dreb/coding-agent";
 import type { MyToolInput } from "my-extension";
 
-pi.on("tool_call", (event) => {
+dreb.on("tool_call", (event) => {
   if (isToolCallEventType<"my_tool", MyToolInput>("my_tool", event)) {
     event.input.action;  // typed
   }
@@ -620,9 +620,9 @@ Fired after tool execution finishes and before `tool_execution_end` plus the fin
 - Handlers can return partial patches (`content`, `details`, or `isError`); omitted fields keep their current values
 
 ```typescript
-import { isBashToolResult } from "@mariozechner/pi-coding-agent";
+import { isBashToolResult } from "@dreb/coding-agent";
 
-pi.on("tool_result", async (event, ctx) => {
+dreb.on("tool_result", async (event, ctx) => {
   // event.toolName, event.toolCallId, event.input
   // event.content, event.details, event.isError
 
@@ -642,9 +642,9 @@ pi.on("tool_result", async (event, ctx) => {
 Fired when user executes `!` or `!!` commands. **Can intercept.**
 
 ```typescript
-import { createLocalBashOperations } from "@mariozechner/pi-coding-agent";
+import { createLocalBashOperations } from "@dreb/coding-agent";
 
-pi.on("user_bash", (event, ctx) => {
+dreb.on("user_bash", (event, ctx) => {
   // event.command - the bash command
   // event.excludeFromContext - true if !! prefix
   // event.cwd - working directory
@@ -652,7 +652,7 @@ pi.on("user_bash", (event, ctx) => {
   // Option 1: Provide custom operations (e.g., SSH)
   return { operations: remoteBashOps };
 
-  // Option 2: Wrap pi's built-in local bash backend
+  // Option 2: Wrap dreb's built-in local bash backend
   const local = createLocalBashOperations();
   return {
     operations: {
@@ -681,7 +681,7 @@ Fired when user input is received, after extension commands are checked but befo
 5. Agent processing begins (`before_agent_start`, etc.)
 
 ```typescript
-pi.on("input", async (event, ctx) => {
+dreb.on("input", async (event, ctx) => {
   // event.text - raw input (before skill/template expansion)
   // event.images - attached images, if any
   // event.source - "interactive" (typed), "rpc" (API), or "extension" (via sendUserMessage)
@@ -755,7 +755,7 @@ Control flow helpers.
 
 ### ctx.shutdown()
 
-Request a graceful shutdown of pi.
+Request a graceful shutdown of dreb.
 
 - **Interactive mode:** Deferred until the agent becomes idle (after processing all queued steering and follow-up messages).
 - **RPC mode:** Deferred until the next idle state (after completing the current command response, when waiting for the next command).
@@ -764,7 +764,7 @@ Request a graceful shutdown of pi.
 Emits `session_shutdown` event to all extensions before exiting. Available in all contexts (event handlers, tools, commands, shortcuts).
 
 ```typescript
-pi.on("tool_call", (event, ctx) => {
+dreb.on("tool_call", (event, ctx) => {
   if (isFatal(event.input)) {
     ctx.shutdown();
   }
@@ -803,7 +803,7 @@ ctx.compact({
 Returns the current effective system prompt. This includes any modifications made by `before_agent_start` handlers for the current turn.
 
 ```typescript
-pi.on("before_agent_start", (event, ctx) => {
+dreb.on("before_agent_start", (event, ctx) => {
   const prompt = ctx.getSystemPrompt();
   console.log(`System prompt length: ${prompt.length}`);
 });
@@ -818,7 +818,7 @@ Command handlers receive `ExtensionCommandContext`, which extends `ExtensionCont
 Wait for the agent to finish streaming:
 
 ```typescript
-pi.registerCommand("my-cmd", {
+dreb.registerCommand("my-cmd", {
   handler: async (args, ctx) => {
     await ctx.waitForIdle();
     // Agent is now idle, safe to modify session
@@ -882,7 +882,7 @@ Options:
 Run the same reload flow as `/reload`.
 
 ```typescript
-pi.registerCommand("reload-runtime", {
+dreb.registerCommand("reload-runtime", {
   description: "Reload extensions, skills, prompts, and themes",
   handler: async (_args, ctx) => {
     await ctx.reload();
@@ -906,11 +906,11 @@ Tools run with `ExtensionContext`, so they cannot call `ctx.reload()` directly. 
 Example tool the LLM can call to trigger reload:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@dreb/coding-agent";
 import { Type } from "@sinclair/typebox";
 
-export default function (pi: ExtensionAPI) {
-  pi.registerCommand("reload-runtime", {
+export default function (dreb: ExtensionAPI) {
+  dreb.registerCommand("reload-runtime", {
     description: "Reload extensions, skills, prompts, and themes",
     handler: async (_args, ctx) => {
       await ctx.reload();
@@ -918,13 +918,13 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  dreb.registerTool({
     name: "reload_runtime",
     label: "Reload Runtime",
     description: "Reload extensions, skills, prompts, and themes",
     parameters: Type.Object({}),
     async execute() {
-      pi.sendUserMessage("/reload-runtime", { deliverAs: "followUp" });
+      dreb.sendUserMessage("/reload-runtime", { deliverAs: "followUp" });
       return {
         content: [{ type: "text", text: "Queued /reload-runtime as a follow-up command." }],
       };
@@ -935,17 +935,17 @@ export default function (pi: ExtensionAPI) {
 
 ## ExtensionAPI Methods
 
-### pi.on(event, handler)
+### dreb.on(event, handler)
 
 Subscribe to events. See [Events](#events) for event types and return values.
 
-### pi.registerTool(definition)
+### dreb.registerTool(definition)
 
 Register a custom tool callable by the LLM. See [Custom Tools](#custom-tools) for full details.
 
-`pi.registerTool()` works both during extension load and after startup. You can call it inside `session_start`, command handlers, or other event handlers. New tools are refreshed immediately in the same session, so they appear in `pi.getAllTools()` and are callable by the LLM without `/reload`.
+`dreb.registerTool()` works both during extension load and after startup. You can call it inside `session_start`, command handlers, or other event handlers. New tools are refreshed immediately in the same session, so they appear in `dreb.getAllTools()` and are callable by the LLM without `/reload`.
 
-Use `pi.setActiveTools()` to enable or disable tools (including dynamically added tools) at runtime.
+Use `dreb.setActiveTools()` to enable or disable tools (including dynamically added tools) at runtime.
 
 Use `promptSnippet` to opt a custom tool into a one-line entry in `Available tools`, and `promptGuidelines` to append tool-specific bullets to the default `Guidelines` section when the tool is active.
 
@@ -953,9 +953,9 @@ See [dynamic-tools.ts](../examples/extensions/dynamic-tools.ts) for a full examp
 
 ```typescript
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
+import { StringEnum } from "@dreb/ai";
 
-pi.registerTool({
+dreb.registerTool({
   name: "my_tool",
   label: "My Tool",
   description: "What this tool does",
@@ -982,12 +982,12 @@ pi.registerTool({
 });
 ```
 
-### pi.sendMessage(message, options?)
+### dreb.sendMessage(message, options?)
 
 Inject a custom message into the session.
 
 ```typescript
-pi.sendMessage({
+dreb.sendMessage({
   customType: "my-extension",
   content: "Message text",
   display: true,
@@ -1005,23 +1005,23 @@ pi.sendMessage({
   - `"nextTurn"` - Queued for next user prompt. Does not interrupt or trigger anything.
 - `triggerTurn: true` - If agent is idle, trigger an LLM response immediately. Only applies to `"steer"` and `"followUp"` modes (ignored for `"nextTurn"`).
 
-### pi.sendUserMessage(content, options?)
+### dreb.sendUserMessage(content, options?)
 
 Send a user message to the agent. Unlike `sendMessage()` which sends custom messages, this sends an actual user message that appears as if typed by the user. Always triggers a turn.
 
 ```typescript
 // Simple text message
-pi.sendUserMessage("What is 2+2?");
+dreb.sendUserMessage("What is 2+2?");
 
 // With content array (text + images)
-pi.sendUserMessage([
+dreb.sendUserMessage([
   { type: "text", text: "Describe this image:" },
   { type: "image", source: { type: "base64", mediaType: "image/png", data: "..." } },
 ]);
 
 // During streaming - must specify delivery mode
-pi.sendUserMessage("Focus on error handling", { deliverAs: "steer" });
-pi.sendUserMessage("And then summarize", { deliverAs: "followUp" });
+dreb.sendUserMessage("Focus on error handling", { deliverAs: "steer" });
+dreb.sendUserMessage("And then summarize", { deliverAs: "followUp" });
 ```
 
 **Options:**
@@ -1033,15 +1033,15 @@ When not streaming, the message is sent immediately and triggers a new turn. Whe
 
 See [send-user-message.ts](../examples/extensions/send-user-message.ts) for a complete example.
 
-### pi.appendEntry(customType, data?)
+### dreb.appendEntry(customType, data?)
 
 Persist extension state (does NOT participate in LLM context).
 
 ```typescript
-pi.appendEntry("my-state", { count: 42 });
+dreb.appendEntry("my-state", { count: 42 });
 
 // Restore on reload
-pi.on("session_start", async (_event, ctx) => {
+dreb.on("session_start", async (_event, ctx) => {
   for (const entry of ctx.sessionManager.getEntries()) {
     if (entry.type === "custom" && entry.customType === "my-state") {
       // Reconstruct from entry.data
@@ -1050,35 +1050,35 @@ pi.on("session_start", async (_event, ctx) => {
 });
 ```
 
-### pi.setSessionName(name)
+### dreb.setSessionName(name)
 
 Set the session display name (shown in session selector instead of first message).
 
 ```typescript
-pi.setSessionName("Refactor auth module");
+dreb.setSessionName("Refactor auth module");
 ```
 
-### pi.getSessionName()
+### dreb.getSessionName()
 
 Get the current session name, if set.
 
 ```typescript
-const name = pi.getSessionName();
+const name = dreb.getSessionName();
 if (name) {
   console.log(`Session: ${name}`);
 }
 ```
 
-### pi.setLabel(entryId, label)
+### dreb.setLabel(entryId, label)
 
 Set or clear a label on an entry. Labels are user-defined markers for bookmarking and navigation (shown in `/tree` selector).
 
 ```typescript
 // Set a label
-pi.setLabel(entryId, "checkpoint-before-refactor");
+dreb.setLabel(entryId, "checkpoint-before-refactor");
 
 // Clear a label
-pi.setLabel(entryId, undefined);
+dreb.setLabel(entryId, undefined);
 
 // Read labels via sessionManager
 const label = ctx.sessionManager.getLabel(entryId);
@@ -1086,14 +1086,14 @@ const label = ctx.sessionManager.getLabel(entryId);
 
 Labels persist in the session and survive restarts. Use them to mark important points (turns, checkpoints) in the conversation tree.
 
-### pi.registerCommand(name, options)
+### dreb.registerCommand(name, options)
 
 Register a command.
 
-If multiple extensions register the same command name, pi keeps them all and assigns numeric invocation suffixes in load order, for example `/review:1` and `/review:2`.
+If multiple extensions register the same command name, dreb keeps them all and assigns numeric invocation suffixes in load order, for example `/review:1` and `/review:2`.
 
 ```typescript
-pi.registerCommand("stats", {
+dreb.registerCommand("stats", {
   description: "Show session statistics",
   handler: async (args, ctx) => {
     const count = ctx.sessionManager.getEntries().length;
@@ -1105,9 +1105,9 @@ pi.registerCommand("stats", {
 Optional: add argument auto-completion for `/command ...`:
 
 ```typescript
-import type { AutocompleteItem } from "@mariozechner/pi-tui";
+import type { AutocompleteItem } from "@dreb/tui";
 
-pi.registerCommand("deploy", {
+dreb.registerCommand("deploy", {
   description: "Deploy to an environment",
   getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
     const envs = ["dev", "staging", "prod"];
@@ -1121,13 +1121,13 @@ pi.registerCommand("deploy", {
 });
 ```
 
-### pi.getCommands()
+### dreb.getCommands()
 
 Get the slash commands available for invocation via `prompt` in the current session. Includes extension commands, prompt templates, and skill commands.
 The list matches the RPC `get_commands` ordering: extensions first, then templates, then skills.
 
 ```typescript
-const commands = pi.getCommands();
+const commands = dreb.getCommands();
 const bySource = commands.filter((command) => command.source === "extension");
 const userScoped = commands.filter((command) => command.sourceInfo.scope === "user");
 ```
@@ -1154,16 +1154,16 @@ Use `sourceInfo` as the canonical provenance field. Do not infer ownership from 
 Built-in interactive commands (like `/model` and `/settings`) are not included here. They are handled only in interactive
 mode and would not execute if sent via `prompt`.
 
-### pi.registerMessageRenderer(customType, renderer)
+### dreb.registerMessageRenderer(customType, renderer)
 
 Register a custom TUI renderer for messages with your `customType`. See [Custom UI](#custom-ui).
 
-### pi.registerShortcut(shortcut, options)
+### dreb.registerShortcut(shortcut, options)
 
 Register a keyboard shortcut. See [keybindings.md](keybindings.md) for the shortcut format and built-in keybindings.
 
 ```typescript
-pi.registerShortcut("ctrl+shift+p", {
+dreb.registerShortcut("ctrl+shift+p", {
   description: "Toggle plan mode",
   handler: async (ctx) => {
     ctx.ui.notify("Toggled!");
@@ -1171,39 +1171,39 @@ pi.registerShortcut("ctrl+shift+p", {
 });
 ```
 
-### pi.registerFlag(name, options)
+### dreb.registerFlag(name, options)
 
 Register a CLI flag.
 
 ```typescript
-pi.registerFlag("plan", {
+dreb.registerFlag("plan", {
   description: "Start in plan mode",
   type: "boolean",
   default: false,
 });
 
 // Check value
-if (pi.getFlag("--plan")) {
+if (dreb.getFlag("--plan")) {
   // Plan mode enabled
 }
 ```
 
-### pi.exec(command, args, options?)
+### dreb.exec(command, args, options?)
 
 Execute a shell command.
 
 ```typescript
-const result = await pi.exec("git", ["status"], { signal, timeout: 5000 });
+const result = await dreb.exec("git", ["status"], { signal, timeout: 5000 });
 // result.stdout, result.stderr, result.code, result.killed
 ```
 
-### pi.getActiveTools() / pi.getAllTools() / pi.setActiveTools(names)
+### dreb.getActiveTools() / dreb.getAllTools() / dreb.setActiveTools(names)
 
 Manage active tools. This works for both built-in tools and dynamically registered tools.
 
 ```typescript
-const active = pi.getActiveTools();
-const all = pi.getAllTools();
+const active = dreb.getActiveTools();
+const all = dreb.getAllTools();
 // [{
 //   name: "read",
 //   description: "Read file contents...",
@@ -1213,49 +1213,49 @@ const all = pi.getAllTools();
 const names = all.map(t => t.name);
 const builtinTools = all.filter((t) => t.sourceInfo.source === "builtin");
 const extensionTools = all.filter((t) => t.sourceInfo.source !== "builtin" && t.sourceInfo.source !== "sdk");
-pi.setActiveTools(["read", "bash"]); // Switch to read-only
+dreb.setActiveTools(["read", "bash"]); // Switch to read-only
 ```
 
-`pi.getAllTools()` returns `name`, `description`, `parameters`, and `sourceInfo`.
+`dreb.getAllTools()` returns `name`, `description`, `parameters`, and `sourceInfo`.
 
 Typical `sourceInfo.source` values:
 - `builtin` for built-in tools
 - `sdk` for tools passed via `createAgentSession({ customTools })`
 - extension source metadata for tools registered by extensions
 
-### pi.setModel(model)
+### dreb.setModel(model)
 
 Set the current model. Returns `false` if no API key is available for the model. See [models.md](models.md) for configuring custom models.
 
 ```typescript
 const model = ctx.modelRegistry.find("anthropic", "claude-sonnet-4-5");
 if (model) {
-  const success = await pi.setModel(model);
+  const success = await dreb.setModel(model);
   if (!success) {
     ctx.ui.notify("No API key for this model", "error");
   }
 }
 ```
 
-### pi.getThinkingLevel() / pi.setThinkingLevel(level)
+### dreb.getThinkingLevel() / dreb.setThinkingLevel(level)
 
 Get or set the thinking level. Level is clamped to model capabilities (non-reasoning models always use "off").
 
 ```typescript
-const current = pi.getThinkingLevel();  // "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
-pi.setThinkingLevel("high");
+const current = dreb.getThinkingLevel();  // "off" | "minimal" | "low" | "medium" | "high" | "xhigh"
+dreb.setThinkingLevel("high");
 ```
 
-### pi.events
+### dreb.events
 
 Shared event bus for communication between extensions:
 
 ```typescript
-pi.events.on("my:event", (data) => { ... });
-pi.events.emit("my:event", { ... });
+dreb.events.on("my:event", (data) => { ... });
+dreb.events.emit("my:event", { ... });
 ```
 
-### pi.registerProvider(name, config)
+### dreb.registerProvider(name, config)
 
 Register or override a model provider dynamically. Useful for proxies, custom endpoints, or team-wide model configurations.
 
@@ -1263,7 +1263,7 @@ Calls made during the extension factory function are queued and applied once the
 
 ```typescript
 // Register a new provider with custom models
-pi.registerProvider("my-proxy", {
+dreb.registerProvider("my-proxy", {
   baseUrl: "https://proxy.example.com",
   apiKey: "PROXY_API_KEY",  // env var name or literal
   api: "anthropic-messages",
@@ -1281,12 +1281,12 @@ pi.registerProvider("my-proxy", {
 });
 
 // Override baseUrl for an existing provider (keeps all models)
-pi.registerProvider("anthropic", {
+dreb.registerProvider("anthropic", {
   baseUrl: "https://proxy.example.com"
 });
 
 // Register provider with OAuth support for /login
-pi.registerProvider("corporate-ai", {
+dreb.registerProvider("corporate-ai", {
   baseUrl: "https://ai.corp.com",
   api: "openai-responses",
   models: [...],
@@ -1321,17 +1321,17 @@ pi.registerProvider("corporate-ai", {
 
 See [custom-provider.md](custom-provider.md) for advanced topics: custom streaming APIs, OAuth details, model definition reference.
 
-### pi.unregisterProvider(name)
+### dreb.unregisterProvider(name)
 
 Remove a previously registered provider and its models. Built-in models that were overridden by the provider are restored. Has no effect if the provider was not registered.
 
 Like `registerProvider`, this takes effect immediately when called after the initial load phase, so a `/reload` is not required.
 
 ```typescript
-pi.registerCommand("my-setup-teardown", {
+dreb.registerCommand("my-setup-teardown", {
   description: "Remove the custom proxy provider",
   handler: async (_args, _ctx) => {
-    pi.unregisterProvider("my-proxy");
+    dreb.unregisterProvider("my-proxy");
   },
 });
 ```
@@ -1341,11 +1341,11 @@ pi.registerCommand("my-setup-teardown", {
 Extensions with state should store it in tool result `details` for proper branching support:
 
 ```typescript
-export default function (pi: ExtensionAPI) {
+export default function (dreb: ExtensionAPI) {
   let items: string[] = [];
 
   // Reconstruct state from session
-  pi.on("session_start", async (_event, ctx) => {
+  dreb.on("session_start", async (_event, ctx) => {
     items = [];
     for (const entry of ctx.sessionManager.getBranch()) {
       if (entry.type === "message" && entry.message.role === "toolResult") {
@@ -1356,7 +1356,7 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.registerTool({
+  dreb.registerTool({
     name: "my_tool",
     // ...
     async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -1372,11 +1372,11 @@ export default function (pi: ExtensionAPI) {
 
 ## Custom Tools
 
-Register tools the LLM can call via `pi.registerTool()`. Tools appear in the system prompt and can have custom rendering.
+Register tools the LLM can call via `dreb.registerTool()`. Tools appear in the system prompt and can have custom rendering.
 
 Use `promptSnippet` for a short one-line entry in the `Available tools` section in the default system prompt. If omitted, custom tools are left out of that section.
 
-Use `promptGuidelines` to add tool-specific bullets to the default system prompt `Guidelines` section. These bullets are included only while the tool is active (for example, after `pi.setActiveTools([...])`).
+Use `promptGuidelines` to add tool-specific bullets to the default system prompt `Guidelines` section. These bullets are included only while the tool is active (for example, after `dreb.setActiveTools([...])`).
 
 Note: Some models are idiots and include the @ prefix in tool path arguments. Built-in tools strip a leading @ before resolving paths. If your custom tool accepts a path, normalize a leading @ as well.
 
@@ -1389,7 +1389,7 @@ Pass the real target file path to `withFileMutationQueue()`, not the raw user ar
 Queue the entire mutation window on that target path. That includes read-modify-write logic, not just the final write.
 
 ```typescript
-import { withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import { withFileMutationQueue } from "@dreb/coding-agent";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
@@ -1414,10 +1414,10 @@ async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 
 ```typescript
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
-import { Text } from "@mariozechner/pi-tui";
+import { StringEnum } from "@dreb/ai";
+import { Text } from "@dreb/tui";
 
-pi.registerTool({
+dreb.registerTool({
   name: "my_tool",
   label: "My Tool",
   description: "What this tool does (shown to LLM)",
@@ -1442,8 +1442,8 @@ pi.registerTool({
       details: { progress: 50 },
     });
 
-    // Run commands via pi.exec (captured from extension closure)
-    const result = await pi.exec("some-command", [], { signal });
+    // Run commands via dreb.exec (captured from extension closure)
+    const result = await dreb.exec("some-command", [], { signal });
 
     // Return result
     return {
@@ -1470,7 +1470,7 @@ async execute(toolCallId, params) {
 }
 ```
 
-**Important:** Use `StringEnum` from `@mariozechner/pi-ai` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
+**Important:** Use `StringEnum` from `@dreb/ai` for string enums. `Type.Union`/`Type.Literal` doesn't work with Google's API.
 
 ### Overriding Built-in Tools
 
@@ -1478,13 +1478,13 @@ Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`,
 
 ```bash
 # Extension's read tool replaces built-in read
-pi -e ./tool-override.ts
+dreb -e ./tool-override.ts
 ```
 
 Alternatively, use `--no-tools` to start without any built-in tools:
 ```bash
 # No built-in tools, only extension tools
-pi --no-tools -e ./my-extension.ts
+dreb --no-tools -e ./my-extension.ts
 ```
 
 See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.ts) for a complete example that overrides `read` with logging and access control.
@@ -1496,20 +1496,20 @@ See [examples/extensions/tool-override.ts](../examples/extensions/tool-override.
 **Your implementation must match the exact result shape**, including the `details` type. The UI and session logic depend on these shapes for rendering and state tracking.
 
 Built-in tool implementations:
-- [read.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/read.ts) - `ReadToolDetails`
-- [bash.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/bash.ts) - `BashToolDetails`
-- [edit.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/edit.ts)
-- [write.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/write.ts)
-- [grep.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/grep.ts) - `GrepToolDetails`
-- [find.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/find.ts) - `FindToolDetails`
-- [ls.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/tools/ls.ts) - `LsToolDetails`
+- [read.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/read.ts) - `ReadToolDetails`
+- [bash.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/bash.ts) - `BashToolDetails`
+- [edit.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/edit.ts)
+- [write.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/write.ts)
+- [grep.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/grep.ts) - `GrepToolDetails`
+- [find.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/find.ts) - `FindToolDetails`
+- [ls.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/ls.ts) - `LsToolDetails`
 
 ### Remote Execution
 
 Built-in tools support pluggable operations for delegating to remote systems (SSH, containers, etc.):
 
 ```typescript
-import { createReadTool, createBashTool, type ReadOperations } from "@mariozechner/pi-coding-agent";
+import { createReadTool, createBashTool, type ReadOperations } from "@dreb/coding-agent";
 
 // Create tool with custom operations
 const remoteRead = createReadTool(cwd, {
@@ -1520,7 +1520,7 @@ const remoteRead = createReadTool(cwd, {
 });
 
 // Register, checking flag at execution time
-pi.registerTool({
+dreb.registerTool({
   ...remoteRead,
   async execute(id, params, signal, onUpdate, _ctx) {
     const ssh = getSshConfig();
@@ -1535,12 +1535,12 @@ pi.registerTool({
 
 **Operations interfaces:** `ReadOperations`, `WriteOperations`, `EditOperations`, `BashOperations`, `LsOperations`, `GrepOperations`, `FindOperations`
 
-For `user_bash`, extensions can reuse pi's local shell backend via `createLocalBashOperations()` instead of reimplementing local process spawning, shell resolution, and process-tree termination.
+For `user_bash`, extensions can reuse dreb's local shell backend via `createLocalBashOperations()` instead of reimplementing local process spawning, shell resolution, and process-tree termination.
 
 The bash tool also supports a spawn hook to adjust the command, cwd, or env before execution:
 
 ```typescript
-import { createBashTool } from "@mariozechner/pi-coding-agent";
+import { createBashTool } from "@dreb/coding-agent";
 
 const bashTool = createBashTool(cwd, {
   spawnHook: ({ command, cwd, env }) => ({
@@ -1570,7 +1570,7 @@ import {
   formatSize,        // Human-readable size (e.g., "50KB", "1.5MB")
   DEFAULT_MAX_BYTES, // 50KB
   DEFAULT_MAX_LINES, // 2000
-} from "@mariozechner/pi-coding-agent";
+} from "@dreb/coding-agent";
 
 async execute(toolCallId, params, signal, onUpdate, ctx) {
   const output = await runCommand();
@@ -1610,14 +1610,14 @@ See [examples/extensions/truncated-tool.ts](../examples/extensions/truncated-too
 One extension can register multiple tools with shared state:
 
 ```typescript
-export default function (pi: ExtensionAPI) {
+export default function (dreb: ExtensionAPI) {
   let connection = null;
 
-  pi.registerTool({ name: "db_connect", ... });
-  pi.registerTool({ name: "db_query", ... });
-  pi.registerTool({ name: "db_close", ... });
+  dreb.registerTool({ name: "db_connect", ... });
+  dreb.registerTool({ name: "db_query", ... });
+  dreb.registerTool({ name: "db_close", ... });
 
-  pi.on("session_shutdown", async () => {
+  dreb.on("session_shutdown", async () => {
     connection?.close();
   });
 }
@@ -1625,7 +1625,7 @@ export default function (pi: ExtensionAPI) {
 
 ### Custom Rendering
 
-Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
+Tools can provide `renderCall` and `renderResult` for custom TUI display. See [tui.md](tui.md) for the full component API and [tool-execution.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/modes/interactive/components/tool-execution.ts) for how tool rows are composed.
 
 Tool output is wrapped in a `Box` that handles padding and background. A defined `renderCall` or `renderResult` must return a `Component`. If a slot renderer is not defined, `tool-execution.ts` uses fallback rendering for that slot.
 
@@ -1643,7 +1643,7 @@ Use `context.state` for cross-slot shared state. Keep slot-local caches on the r
 Renders the tool call or header:
 
 ```typescript
-import { Text } from "@mariozechner/pi-tui";
+import { Text } from "@dreb/tui";
 
 renderCall(args, theme, context) {
   const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
@@ -1688,7 +1688,7 @@ If a slot intentionally has no visible content, return an empty `Component` such
 Use `keyHint()` to display keybinding hints that respect the active keybinding configuration:
 
 ```typescript
-import { keyHint } from "@mariozechner/pi-coding-agent";
+import { keyHint } from "@dreb/coding-agent";
 
 renderResult(result, { expanded }, theme, context) {
   let text = theme.fg("success", "✓ Done");
@@ -1838,7 +1838,7 @@ ctx.ui.setFooter((tui, theme) => ({
 ctx.ui.setFooter(undefined);  // Restore built-in footer
 
 // Terminal title
-ctx.ui.setTitle("pi - my-project");
+ctx.ui.setTitle("dreb - my-project");
 
 // Editor text
 ctx.ui.setEditorText("Prefill text");
@@ -1872,7 +1872,7 @@ ctx.ui.theme.fg("accent", "styled text");  // Access current theme
 For complex UI, use `ctx.ui.custom()`. This temporarily replaces the editor with your component until `done()` is called:
 
 ```typescript
-import { Text, Component } from "@mariozechner/pi-tui";
+import { Text, Component } from "@dreb/tui";
 
 const result = await ctx.ui.custom<boolean>((tui, theme, keybindings, done) => {
   const text = new Text("Press Enter to confirm, Escape to cancel", 1, 1);
@@ -1930,8 +1930,8 @@ See [tui.md](tui.md) for the full `OverlayOptions` API and [overlay-qa-tests.ts]
 Replace the main input editor with a custom implementation (vim mode, emacs mode, etc.):
 
 ```typescript
-import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { matchesKey } from "@mariozechner/pi-tui";
+import { CustomEditor, type ExtensionAPI } from "@dreb/coding-agent";
+import { matchesKey } from "@dreb/tui";
 
 class VimEditor extends CustomEditor {
   private mode: "normal" | "insert" = "insert";
@@ -1949,8 +1949,8 @@ class VimEditor extends CustomEditor {
   }
 }
 
-export default function (pi: ExtensionAPI) {
-  pi.on("session_start", (_event, ctx) => {
+export default function (dreb: ExtensionAPI) {
+  dreb.on("session_start", (_event, ctx) => {
     ctx.ui.setEditorComponent((_tui, theme, keybindings) =>
       new VimEditor(theme, keybindings)
     );
@@ -1971,9 +1971,9 @@ See [tui.md](tui.md) Pattern 7 for a complete example with mode indicator.
 Register a custom renderer for messages with your `customType`:
 
 ```typescript
-import { Text } from "@mariozechner/pi-tui";
+import { Text } from "@dreb/tui";
 
-pi.registerMessageRenderer("my-extension", (message, options, theme) => {
+dreb.registerMessageRenderer("my-extension", (message, options, theme) => {
   const { expanded } = options;
   let text = theme.fg("accent", `[${message.customType}] `);
   text += message.content;
@@ -1986,10 +1986,10 @@ pi.registerMessageRenderer("my-extension", (message, options, theme) => {
 });
 ```
 
-Messages are sent via `pi.sendMessage()`:
+Messages are sent via `dreb.sendMessage()`:
 
 ```typescript
-pi.sendMessage({
+dreb.sendMessage({
   customType: "my-extension",  // Matches registerMessageRenderer
   content: "Status update",
   display: true,               // Show in TUI
@@ -2020,7 +2020,7 @@ theme.strikethrough(text)
 For syntax highlighting in custom tool renderers:
 
 ```typescript
-import { highlightCode, getLanguageFromPath } from "@mariozechner/pi-coding-agent";
+import { highlightCode, getLanguageFromPath } from "@dreb/coding-agent";
 
 // Highlight code with explicit language
 const highlighted = highlightCode("const x = 1;", "typescript", theme);
@@ -2115,7 +2115,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `custom-provider-gitlab-duo/` | GitLab Duo integration | `registerProvider` with OAuth |
 | **Messages & Communication** |||
 | `message-renderer.ts` | Custom message rendering | `registerMessageRenderer`, `sendMessage` |
-| `event-bus.ts` | Inter-extension events | `pi.events` |
+| `event-bus.ts` | Inter-extension events | `dreb.events` |
 | **Session Metadata** |||
 | `session-name.ts` | Name sessions for selector | `setSessionName`, `getSessionName` |
 | `bookmark.ts` | Bookmark entries for /tree | `setLabel` |

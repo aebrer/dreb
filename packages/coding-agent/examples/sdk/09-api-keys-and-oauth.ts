@@ -6,8 +6,8 @@
 
 import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@dreb/coding-agent";
 
-// Default: AuthStorage uses ~/.pi/agent/auth.json
-// ModelRegistry loads built-in + custom models from ~/.pi/agent/models.json
+// Default: AuthStorage uses ~/.dreb/agent/auth.json
+// ModelRegistry loads built-in + custom models from ~/.dreb/agent/models.json
 const authStorage = AuthStorage.create();
 const modelRegistry = new ModelRegistry(authStorage);
 

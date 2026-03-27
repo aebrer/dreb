@@ -80,7 +80,7 @@ const GEMINI_CLI_HEADERS = {
 const DEFAULT_ANTIGRAVITY_VERSION = "1.18.4";
 
 function getAntigravityHeaders() {
-	const version = process.env.PI_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION;
+	const version = process.env.DREB_AI_ANTIGRAVITY_VERSION || DEFAULT_ANTIGRAVITY_VERSION;
 	return {
 		"User-Agent": `antigravity/${version} darwin/arm64`,
 	};
@@ -941,8 +941,8 @@ export function buildRequest(
 		model: model.id,
 		request,
 		...(isAntigravity ? { requestType: "agent" } : {}),
-		userAgent: isAntigravity ? "antigravity" : "pi-coding-agent",
-		requestId: `${isAntigravity ? "agent" : "pi"}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+		userAgent: isAntigravity ? "antigravity" : "dreb-coding-agent",
+		requestId: `${isAntigravity ? "agent" : "dreb"}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
 	};
 }
 
@@ -951,7 +951,7 @@ type ClampedThinkingLevel = Exclude<ThinkingLevel, "xhigh">;
 function getDisabledThinkingConfig(modelId: string): ThinkingConfig {
 	// Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
 	// do not support full thinking-off either. For Gemini 3 models, use the lowest supported
-	// thinkingLevel without includeThoughts so hidden thinking remains invisible to pi.
+	// thinkingLevel without includeThoughts so hidden thinking remains invisible to dreb.
 	if (isGemini3ProModel(modelId)) {
 		return { thinkingLevel: "LOW" as any };
 	}

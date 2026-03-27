@@ -117,7 +117,7 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 		}
 
 		const currentText = this.editor.getText();
-		const tmpFile = path.join(os.tmpdir(), `pi-extension-editor-${Date.now()}.md`);
+		const tmpFile = path.join(os.tmpdir(), `dreb-extension-editor-${Date.now()}.md`);
 
 		try {
 			fs.writeFileSync(tmpFile, currentText, "utf-8");

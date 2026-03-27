@@ -34,7 +34,7 @@ const loader = new DefaultResourceLoader({
 });
 await loader.reload();
 
-// Discover all skills from cwd/.pi/skills, ~/.pi/agent/skills, etc.
+// Discover all skills from cwd/.dreb/skills, ~/.dreb/agent/skills, etc.
 const { skills: allSkills, diagnostics } = loader.getSkills();
 console.log(
 	"Discovered skills:",

@@ -1,35 +1,8 @@
-<!-- OSS_WEEKEND_START -->
-# 🏖️ OSS Weekend
+dreb is a minimal terminal coding harness, forked from [pi-mono](https://github.com/badlogic/pi-mono). Adapt dreb to your workflows, not the other way around, without having to fork and modify dreb internals. Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Put your extensions, skills, prompt templates, and themes in [Packages](#packages) and share them with others via npm or git.
 
-**Issue tracker reopens Monday, March 30, 2026.**
+dreb ships with powerful defaults but skips features like sub agents and plan mode. Instead, you can ask dreb to build what you want or install a third party package that matches your workflow.
 
-OSS weekend runs Sunday, March 22, 2026 through Monday, March 30, 2026. New issues are auto-closed during this time. For support, join [Discord](https://discord.com/invite/3cU7Bz4UPx).
-<!-- OSS_WEEKEND_END -->
-
----
-
-<p align="center">
-  <a href="https://shittycodingagent.ai">
-    <img src="https://shittycodingagent.ai/logo.svg" alt="pi logo" width="128">
-  </a>
-</p>
-<p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://www.npmjs.com/package/@mariozechner/pi-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@mariozechner/pi-coding-agent?style=flat-square" /></a>
-  <a href="https://github.com/badlogic/pi-mono/actions/workflows/ci.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/badlogic/pi-mono/ci.yml?style=flat-square&branch=main" /></a>
-</p>
-<p align="center">
-  <a href="https://pi.dev">pi.dev</a> domain graciously donated by
-  <br /><br />
-  <a href="https://exe.dev"><img src="docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
-</p>
-
-Pi is a minimal terminal coding harness. Adapt pi to your workflows, not the other way around, without having to fork and modify pi internals. Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Put your extensions, skills, prompt templates, and themes in [Pi Packages](#pi-packages) and share them with others via npm or git.
-
-Pi ships with powerful defaults but skips features like sub agents and plan mode. Instead, you can ask pi to build what you want or install a third party pi package that matches your workflow.
-
-Pi runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps. See [openclaw/openclaw](https://github.com/openclaw/openclaw) for a real-world SDK integration.
-
+dreb runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps.
 ## Table of Contents
 
 - [Quick Start](#quick-start)
@@ -49,7 +22,7 @@ Pi runs in four modes: interactive, print or JSON, RPC for process integration, 
   - [Skills](#skills)
   - [Extensions](#extensions)
   - [Themes](#themes)
-  - [Pi Packages](#pi-packages)
+  - [Packages](#packages)
 - [Programmatic Usage](#programmatic-usage)
 - [Philosophy](#philosophy)
 - [CLI Reference](#cli-reference)
@@ -59,24 +32,24 @@ Pi runs in four modes: interactive, print or JSON, RPC for process integration, 
 ## Quick Start
 
 ```bash
-npm install -g @mariozechner/pi-coding-agent
+npm install -g @dreb/coding-agent
 ```
 
 Authenticate with an API key:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-pi
+dreb
 ```
 
 Or use your existing subscription:
 
 ```bash
-pi
+dreb
 /login  # Then select provider
 ```
 
-Then just talk to pi. By default, pi gives the model four tools: `read`, `write`, `edit`, and `bash`. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [pi packages](#pi-packages).
+Then just talk to dreb. By default, dreb gives the model four tools: `read`, `write`, `edit`, and `bash`. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -84,7 +57,7 @@ Then just talk to pi. By default, pi gives the model four tools: `read`, `write`
 
 ## Providers & Models
 
-For each built-in provider, pi maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
+For each built-in provider, dreb maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
 
 **Subscriptions:**
 - Anthropic Claude Pro/Max
@@ -115,7 +88,7 @@ For each built-in provider, pi maintains a list of tool-capable models, updated 
 
 See [docs/providers.md](docs/providers.md) for detailed setup instructions.
 
-**Custom providers & models:** Add providers via `~/.pi/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
+**Custom providers & models:** Add providers via `~/.dreb/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
 
 ---
 
@@ -163,15 +136,14 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/compact [prompt]` | Manually compact context, optional custom instructions |
 | `/copy` | Copy last assistant message to clipboard |
 | `/export [file]` | Export session to HTML file |
-| `/share` | Upload as private GitHub gist with shareable HTML link |
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files (themes hot-reload automatically) |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
-| `/quit`, `/exit` | Quit pi |
+| `/quit`, `/exit` | Quit dreb |
 
 ### Keyboard Shortcuts
 
-See `/hotkeys` for the full list. Customize via `~/.pi/agent/keybindings.json`. See [docs/keybindings.md](docs/keybindings.md).
+See `/hotkeys` for the full list. Customize via `~/.dreb/agent/keybindings.json`. See [docs/keybindings.md](docs/keybindings.md).
 
 **Commonly used:**
 
@@ -196,7 +168,7 @@ Submit messages while the agent is working:
 - **Escape** aborts and restores queued messages to editor
 - **Alt+Up** retrieves queued messages back to editor
 
-On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so pi can receive the follow-up shortcut.
+On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so dreb can receive the follow-up shortcut.
 
 Configure delivery in [settings](docs/settings.md): `steeringMode` and `followUpMode` can be `"one-at-a-time"` (default, waits for response) or `"all"` (delivers all queued at once). `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
 
@@ -208,14 +180,14 @@ Sessions are stored as JSONL files with a tree structure. Each entry has an `id`
 
 ### Management
 
-Sessions auto-save to `~/.pi/agent/sessions/` organized by working directory.
+Sessions auto-save to `~/.dreb/agent/sessions/` organized by working directory.
 
 ```bash
-pi -c                  # Continue most recent session
-pi -r                  # Browse and select from past sessions
-pi --no-session        # Ephemeral mode (don't save)
-pi --session <path>    # Use specific session file or ID
-pi --fork <path>       # Fork specific session file or ID into a new session
+dreb -c                  # Continue most recent session
+dreb -r                  # Browse and select from past sessions
+dreb --no-session        # Ephemeral mode (don't save)
+dreb --session <path>    # Use specific session file or ID
+dreb --fork <path>       # Fork specific session file or ID into a new session
 ```
 
 ### Branching
@@ -250,8 +222,8 @@ Use `/settings` to modify common options, or edit JSON files directly:
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/settings.json` | Global (all projects) |
-| `.pi/settings.json` | Project (overrides global) |
+| `~/.dreb/agent/settings.json` | Global (all projects) |
+| `.dreb/settings.json` | Project (overrides global) |
 
 See [docs/settings.md](docs/settings.md) for all options.
 
@@ -259,8 +231,8 @@ See [docs/settings.md](docs/settings.md) for all options.
 
 ## Context Files
 
-Pi loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
-- `~/.pi/agent/AGENTS.md` (global)
+dreb loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
+- `~/.dreb/agent/AGENTS.md` (global)
 - Parent directories (walking up from cwd)
 - Current directory
 
@@ -268,7 +240,7 @@ Use for project instructions, conventions, common commands. All matching files a
 
 ### System Prompt
 
-Replace the default system prompt with `.pi/SYSTEM.md` (project) or `~/.pi/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
+Replace the default system prompt with `.dreb/SYSTEM.md` (project) or `~/.dreb/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
 
 ---
 
@@ -279,19 +251,19 @@ Replace the default system prompt with `.pi/SYSTEM.md` (project) or `~/.pi/agent
 Reusable prompts as Markdown files. Type `/name` to expand.
 
 ```markdown
-<!-- ~/.pi/agent/prompts/review.md -->
+<!-- ~/.dreb/agent/prompts/review.md -->
 Review this code for bugs, security issues, and performance problems.
 Focus on: {{focus}}
 ```
 
-Place in `~/.pi/agent/prompts/`, `.pi/prompts/`, or a [pi package](#pi-packages) to share with others. See [docs/prompt-templates.md](docs/prompt-templates.md).
+Place in `~/.dreb/agent/prompts/`, `.dreb/prompts/`, or a [package](#packages) to share with others. See [docs/prompt-templates.md](docs/prompt-templates.md).
 
 ### Skills
 
 On-demand capability packages following the [Agent Skills standard](https://agentskills.io). Invoke via `/skill:name` or let the agent load them automatically.
 
 ```markdown
-<!-- ~/.pi/agent/skills/my-skill/SKILL.md -->
+<!-- ~/.dreb/agent/skills/my-skill/SKILL.md -->
 # My Skill
 Use this skill when the user asks about X.
 
@@ -300,19 +272,19 @@ Use this skill when the user asks about X.
 2. Then that
 ```
 
-Place in `~/.pi/agent/skills/`, `~/.agents/skills/`, `.pi/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [pi package](#pi-packages) to share with others. See [docs/skills.md](docs/skills.md).
+Place in `~/.dreb/agent/skills/`, `~/.agents/skills/`, `.dreb/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [package](#packages) to share with others. See [docs/skills.md](docs/skills.md).
 
 ### Extensions
 
 <p align="center"><img src="docs/images/doom-extension.png" alt="Doom Extension" width="600"></p>
 
-TypeScript modules that extend pi with custom tools, commands, keyboard shortcuts, event handlers, and UI components.
+TypeScript modules that extend dreb with custom tools, commands, keyboard shortcuts, event handlers, and UI components.
 
 ```typescript
-export default function (pi: ExtensionAPI) {
-  pi.registerTool({ name: "deploy", ... });
-  pi.registerCommand("stats", { ... });
-  pi.on("tool_call", async (event, ctx) => { ... });
+export default function (dreb: ExtensionAPI) {
+  dreb.registerTool({ name: "deploy", ... });
+  dreb.registerCommand("stats", { ... });
+  dreb.on("tool_call", async (event, ctx) => { ... });
 }
 ```
 
@@ -326,51 +298,51 @@ export default function (pi: ExtensionAPI) {
 - Git checkpointing and auto-commit
 - SSH and sandbox execution
 - MCP server integration
-- Make pi look like Claude Code
+- Make dreb look like Claude Code
 - Games while waiting (yes, Doom runs)
 - ...anything you can dream up
 
-Place in `~/.pi/agent/extensions/`, `.pi/extensions/`, or a [pi package](#pi-packages) to share with others. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/).
+Place in `~/.dreb/agent/extensions/`, `.dreb/extensions/`, or a [package](#packages) to share with others. See [docs/extensions.md](docs/extensions.md) and [examples/extensions/](examples/extensions/).
 
 ### Themes
 
-Built-in: `dark`, `light`. Themes hot-reload: modify the active theme file and pi immediately applies changes.
+Built-in: `dark`, `light`. Themes hot-reload: modify the active theme file and dreb immediately applies changes.
 
-Place in `~/.pi/agent/themes/`, `.pi/themes/`, or a [pi package](#pi-packages) to share with others. See [docs/themes.md](docs/themes.md).
+Place in `~/.dreb/agent/themes/`, `.dreb/themes/`, or a [package](#packages) to share with others. See [docs/themes.md](docs/themes.md).
 
-### Pi Packages
+### Packages
 
-Bundle and share extensions, skills, prompts, and themes via npm or git. Find packages on [npmjs.com](https://www.npmjs.com/search?q=keywords%3Api-package) or [Discord](https://discord.com/channels/1456806362351669492/1457744485428629628).
+Bundle and share extensions, skills, prompts, and themes via npm or git.
 
-> **Security:** Pi packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
+> **Security:** Packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
 
 ```bash
-pi install npm:@foo/pi-tools
-pi install npm:@foo/pi-tools@1.2.3      # pinned version
-pi install git:github.com/user/repo
-pi install git:github.com/user/repo@v1  # tag or commit
-pi install git:git@github.com:user/repo
-pi install git:git@github.com:user/repo@v1  # tag or commit
-pi install https://github.com/user/repo
-pi install https://github.com/user/repo@v1      # tag or commit
-pi install ssh://git@github.com/user/repo
-pi install ssh://git@github.com/user/repo@v1    # tag or commit
-pi remove npm:@foo/pi-tools
-pi uninstall npm:@foo/pi-tools          # alias for remove
-pi list
-pi update                               # skips pinned packages
-pi config                               # enable/disable extensions, skills, prompts, themes
+dreb install npm:@foo/my-tools
+dreb install npm:@foo/my-tools@1.2.3      # pinned version
+dreb install git:github.com/user/repo
+dreb install git:github.com/user/repo@v1  # tag or commit
+dreb install git:git@github.com:user/repo
+dreb install git:git@github.com:user/repo@v1  # tag or commit
+dreb install https://github.com/user/repo
+dreb install https://github.com/user/repo@v1      # tag or commit
+dreb install ssh://git@github.com/user/repo
+dreb install ssh://git@github.com/user/repo@v1    # tag or commit
+dreb remove npm:@foo/my-tools
+dreb uninstall npm:@foo/my-tools          # alias for remove
+dreb list
+dreb update                               # skips pinned packages
+dreb config                               # enable/disable extensions, skills, prompts, themes
 ```
 
-Packages install to `~/.pi/agent/git/` (git) or global npm. Use `-l` for project-local installs (`.pi/git/`, `.pi/npm/`). If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
+Packages install to `~/.dreb/agent/git/` (git) or global npm. Use `-l` for project-local installs (`.dreb/git/`, `.dreb/npm/`). If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
 
-Create a package by adding a `pi` key to `package.json`:
+Create a package by adding a `dreb` key to `package.json`:
 
 ```json
 {
-  "name": "my-pi-package",
-  "keywords": ["pi-package"],
-  "pi": {
+  "name": "my-dreb-package",
+  "keywords": ["dreb-package"],
+  "dreb": {
     "extensions": ["./extensions"],
     "skills": ["./skills"],
     "prompts": ["./prompts"],
@@ -379,7 +351,7 @@ Create a package by adding a `pi` key to `package.json`:
 }
 ```
 
-Without a `pi` manifest, pi auto-discovers from conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).
+Without a `dreb` manifest, dreb auto-discovers from conventional directories (`extensions/`, `skills/`, `prompts/`, `themes/`).
 
 See [docs/packages.md](docs/packages.md).
 
@@ -390,7 +362,7 @@ See [docs/packages.md](docs/packages.md).
 ### SDK
 
 ```typescript
-import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@mariozechner/pi-coding-agent";
+import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@dreb/coding-agent";
 
 const { session } = await createAgentSession({
   sessionManager: SessionManager.inMemory(),
@@ -408,7 +380,7 @@ See [docs/sdk.md](docs/sdk.md) and [examples/sdk/](examples/sdk/).
 For non-Node.js integrations, use RPC mode over stdin/stdout:
 
 ```bash
-pi --mode rpc
+dreb --mode rpc
 ```
 
 RPC mode uses strict LF-delimited JSONL framing. Clients must split records on `\n` only. Do not use generic line readers like Node `readline`, which also split on Unicode separators inside JSON payloads.
@@ -419,11 +391,11 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 
 ## Philosophy
 
-Pi is aggressively extensible so it doesn't have to dictate your workflow. Features that other tools bake in can be built with [extensions](#extensions), [skills](#skills), or installed from third-party [pi packages](#pi-packages). This keeps the core minimal while letting you shape pi to fit how you work.
+dreb is aggressively extensible so it doesn't have to dictate your workflow. Features that other tools bake in can be built with [extensions](#extensions), [skills](#skills), or installed from third-party [packages](#packages). This keeps the core minimal while letting you shape dreb to fit how you work.
 
-**No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. [Why?](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
+**No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. Why?
 
-**No sub-agents.** There's many ways to do this. Spawn pi instances via tmux, or build your own with [extensions](#extensions), or install a package that does it your way.
+**No sub-agents.** There's many ways to do this. Spawn dreb instances via tmux, or build your own with [extensions](#extensions), or install a package that does it your way.
 
 **No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions) inline with your environment and security requirements.
 
@@ -433,25 +405,23 @@ Pi is aggressively extensible so it doesn't have to dictate your workflow. Featu
 
 **No background bash.** Use tmux. Full observability, direct interaction.
 
-Read the [blog post](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/) for the full rationale.
-
 ---
 
 ## CLI Reference
 
 ```bash
-pi [options] [@files...] [messages...]
+dreb [options] [@files...] [messages...]
 ```
 
 ### Package Commands
 
 ```bash
-pi install <source> [-l]     # Install package, -l for project-local
-pi remove <source> [-l]      # Remove package
-pi uninstall <source> [-l]   # Alias for remove
-pi update [source]           # Update packages (skips pinned)
-pi list                      # List installed packages
-pi config                    # Enable/disable package resources
+dreb install <source> [-l]     # Install package, -l for project-local
+dreb remove <source> [-l]      # Remove package
+dreb uninstall <source> [-l]   # Alias for remove
+dreb update [source]           # Update packages (skips pinned)
+dreb list                      # List installed packages
+dreb config                    # Enable/disable package resources
 ```
 
 ### Modes
@@ -464,10 +434,10 @@ pi config                    # Enable/disable package resources
 | `--mode rpc` | RPC mode for process integration (see [docs/rpc.md](docs/rpc.md)) |
 | `--export <in> [out]` | Export session to HTML |
 
-In print mode, pi also reads piped stdin and merges it into the initial prompt:
+In print mode, dreb also reads piped stdin and merges it into the initial prompt:
 
 ```bash
-cat README.md | pi -p "Summarize this text"
+cat README.md | dreb -p "Summarize this text"
 ```
 
 ### Model Options
@@ -531,57 +501,56 @@ Combine `--no-*` with explicit flags to load exactly what you need, ignoring set
 Prefix files with `@` to include in the message:
 
 ```bash
-pi @prompt.md "Answer this"
-pi -p @screenshot.png "What's in this image?"
-pi @code.ts @test.ts "Review these files"
+dreb @prompt.md "Answer this"
+dreb -p @screenshot.png "What's in this image?"
+dreb @code.ts @test.ts "Review these files"
 ```
 
 ### Examples
 
 ```bash
 # Interactive with initial prompt
-pi "List all .ts files in src/"
+dreb "List all .ts files in src/"
 
 # Non-interactive
-pi -p "Summarize this codebase"
+dreb -p "Summarize this codebase"
 
 # Non-interactive with piped stdin
-cat README.md | pi -p "Summarize this text"
+cat README.md | dreb -p "Summarize this text"
 
 # Different model
-pi --provider openai --model gpt-4o "Help me refactor"
+dreb --provider openai --model gpt-4o "Help me refactor"
 
 # Model with provider prefix (no --provider needed)
-pi --model openai/gpt-4o "Help me refactor"
+dreb --model openai/gpt-4o "Help me refactor"
 
 # Model with thinking level shorthand
-pi --model sonnet:high "Solve this complex problem"
+dreb --model sonnet:high "Solve this complex problem"
 
 # Limit model cycling
-pi --models "claude-*,gpt-4o"
+dreb --models "claude-*,gpt-4o"
 
 # Read-only mode
-pi --tools read,grep,find,ls -p "Review the code"
+dreb --tools read,grep,find,ls -p "Review the code"
 
 # High thinking level
-pi --thinking high "Solve this complex problem"
+dreb --thinking high "Solve this complex problem"
 ```
 
 ### Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `PI_CODING_AGENT_DIR` | Override config directory (default: `~/.pi/agent`) |
-| `PI_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
-| `PI_SKIP_VERSION_CHECK` | Skip version check at startup |
-| `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
+| `DREB_CODING_AGENT_DIR` | Override config directory (default: `~/.dreb/agent`) |
+| `DREB_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
+| `DREB_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
 ---
 
 ## Contributing & Development
 
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines and [docs/development.md](docs/development.md) for setup, forking, and debugging.
+See [docs/development.md](docs/development.md) for setup, forking, and debugging.
 
 ---
 
@@ -591,6 +560,6 @@ MIT
 
 ## See Also
 
-- [@mariozechner/pi-ai](https://www.npmjs.com/package/@mariozechner/pi-ai): Core LLM toolkit
-- [@mariozechner/pi-agent](https://www.npmjs.com/package/@mariozechner/pi-agent): Agent framework
-- [@mariozechner/pi-tui](https://www.npmjs.com/package/@mariozechner/pi-tui): Terminal UI components
+- [@dreb/ai](https://www.npmjs.com/package/@dreb/ai): Core LLM toolkit
+- [@dreb/agent-core](https://www.npmjs.com/package/@dreb/agent-core): Agent framework
+- [@dreb/tui](https://www.npmjs.com/package/@dreb/tui): Terminal UI components

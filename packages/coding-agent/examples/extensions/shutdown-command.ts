@@ -2,26 +2,26 @@
  * Shutdown Command Extension
  *
  * Adds a /quit command that allows extensions to trigger clean shutdown.
- * Demonstrates how extensions can use ctx.shutdown() to exit pi cleanly.
+ * Demonstrates how extensions can use ctx.shutdown() to exit dreb cleanly.
  */
 
 import type { ExtensionAPI } from "@dreb/coding-agent";
 import { Type } from "@sinclair/typebox";
 
-export default function (pi: ExtensionAPI) {
-	// Register a /quit command that cleanly exits pi
-	pi.registerCommand("quit", {
-		description: "Exit pi cleanly",
+export default function (dreb: ExtensionAPI) {
+	// Register a /quit command that cleanly exits dreb
+	dreb.registerCommand("quit", {
+		description: "Exit dreb cleanly",
 		handler: async (_args, ctx) => {
 			ctx.shutdown();
 		},
 	});
 
 	// You can also create a tool that shuts down after completing work
-	pi.registerTool({
+	dreb.registerTool({
 		name: "finish_and_exit",
 		label: "Finish and Exit",
-		description: "Complete a task and exit pi",
+		description: "Complete a task and exit dreb",
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			// Do any final work here...
@@ -37,10 +37,10 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// You could also create a more complex tool with parameters
-	pi.registerTool({
+	dreb.registerTool({
 		name: "deploy_and_exit",
 		label: "Deploy and Exit",
-		description: "Deploy the application and exit pi",
+		description: "Deploy the application and exit dreb",
 		parameters: Type.Object({
 			environment: Type.String({ description: "Target environment (e.g., production, staging)" }),
 		}),
@@ -48,7 +48,7 @@ export default function (pi: ExtensionAPI) {
 			onUpdate?.({ content: [{ type: "text", text: `Deploying to ${params.environment}...` }], details: {} });
 
 			// Example deployment logic
-			// const result = await pi.exec("npm", ["run", "deploy", params.environment], { signal });
+			// const result = await dreb.exec("npm", ["run", "deploy", params.environment], { signal });
 
 			// On success, request graceful shutdown
 			onUpdate?.({ content: [{ type: "text", text: "Deployment complete, exiting..." }], details: {} });

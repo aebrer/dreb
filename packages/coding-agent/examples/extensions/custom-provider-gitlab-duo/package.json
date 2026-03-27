@@ -1,5 +1,5 @@
 {
-  "name": "pi-extension-custom-provider-gitlab-duo",
+  "name": "dreb-extension-custom-provider-gitlab-duo",
   "private": true,
   "version": "1.13.0",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "echo 'nothing to build'",
     "check": "echo 'nothing to check'"
   },
-  "pi": {
+  "dreb": {
     "extensions": [
       "./index.ts"
     ]

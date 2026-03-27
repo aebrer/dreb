@@ -159,7 +159,7 @@ function isWSL(env: NodeJS.ProcessEnv = process.env): boolean {
  * directly, so we use it as a fallback.
  */
 function readClipboardImageViaPowerShell(): ClipboardImage | null {
-	const tmpFile = join(tmpdir(), `pi-wsl-clip-${randomUUID()}.png`);
+	const tmpFile = join(tmpdir(), `dreb-wsl-clip-${randomUUID()}.png`);
 
 	try {
 		const winPathResult = runCommand("wslpath", ["-w", tmpFile], { timeoutMs: DEFAULT_LIST_TIMEOUT_MS });
@@ -175,14 +175,14 @@ function readClipboardImageViaPowerShell(): ClipboardImage | null {
 		const psScript = [
 			"Add-Type -AssemblyName System.Windows.Forms",
 			"Add-Type -AssemblyName System.Drawing",
-			"$path = $env:PI_WSL_CLIPBOARD_IMAGE_PATH",
+			"$path = $env:DREB_WSL_CLIPBOARD_IMAGE_PATH",
 			"$img = [System.Windows.Forms.Clipboard]::GetImage()",
 			"if ($img) { $img.Save($path, [System.Drawing.Imaging.ImageFormat]::Png); Write-Output 'ok' } else { Write-Output 'empty' }",
 		].join("; ");
 
 		const result = runCommand("powershell.exe", ["-NoProfile", "-Command", psScript], {
 			timeoutMs: DEFAULT_POWERSHELL_TIMEOUT_MS,
-			env: { ...process.env, PI_WSL_CLIPBOARD_IMAGE_PATH: winPath },
+			env: { ...process.env, DREB_WSL_CLIPBOARD_IMAGE_PATH: winPath },
 		});
 		if (!result.ok) {
 			return null;

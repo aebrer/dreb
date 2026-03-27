@@ -405,6 +405,9 @@ describe("Coding Agent Tools", () => {
 		});
 
 		it("should respect .gitignore", async () => {
+			// fd only respects .gitignore inside a git repo
+			const { execFileSync } = await import("node:child_process");
+			execFileSync("git", ["init"], { cwd: testDir, stdio: "ignore" });
 			writeFileSync(join(testDir, ".gitignore"), "ignored.txt\n");
 			writeFileSync(join(testDir, "ignored.txt"), "ignored");
 			writeFileSync(join(testDir, "kept.txt"), "kept");

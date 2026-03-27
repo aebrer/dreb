@@ -5,8 +5,8 @@
 import { Type } from "@dreb/ai";
 import type { ExtensionAPI } from "@dreb/coding-agent";
 
-export default function (pi: ExtensionAPI) {
-	pi.registerTool({
+export default function (dreb: ExtensionAPI) {
+	dreb.registerTool({
 		name: "hello",
 		label: "Hello",
 		description: "A simple greeting tool",

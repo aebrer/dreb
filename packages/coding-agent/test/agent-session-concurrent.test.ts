@@ -55,7 +55,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-concurrent-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `dreb-concurrent-test-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 

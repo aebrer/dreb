@@ -7,15 +7,15 @@
 
 import type { ExtensionAPI } from "@dreb/coding-agent";
 
-export default function (pi: ExtensionAPI) {
+export default function (dreb: ExtensionAPI) {
 	let turnCount = 0;
 
-	pi.on("session_start", async (_event, ctx) => {
+	dreb.on("session_start", async (_event, ctx) => {
 		const theme = ctx.ui.theme;
 		ctx.ui.setStatus("status-demo", theme.fg("dim", "Ready"));
 	});
 
-	pi.on("turn_start", async (_event, ctx) => {
+	dreb.on("turn_start", async (_event, ctx) => {
 		turnCount++;
 		const theme = ctx.ui.theme;
 		const spinner = theme.fg("accent", "●");
@@ -23,14 +23,14 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.setStatus("status-demo", spinner + text);
 	});
 
-	pi.on("turn_end", async (_event, ctx) => {
+	dreb.on("turn_end", async (_event, ctx) => {
 		const theme = ctx.ui.theme;
 		const check = theme.fg("success", "✓");
 		const text = theme.fg("dim", ` Turn ${turnCount} complete`);
 		ctx.ui.setStatus("status-demo", check + text);
 	});
 
-	pi.on("session_switch", async (event, ctx) => {
+	dreb.on("session_switch", async (event, ctx) => {
 		if (event.reason === "new") {
 			turnCount = 0;
 			const theme = ctx.ui.theme;
