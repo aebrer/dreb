@@ -2289,6 +2289,7 @@ export class AgentSession {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix },
 					subagent: {
+						parentProvider: this.model?.provider,
 						onBackgroundStart: (agentId, agentType, taskSummary) => {
 							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary });
 						},

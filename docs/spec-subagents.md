@@ -40,17 +40,20 @@ Parameters:
   agent:        string (optional)  # Agent type name (e.g. "Explore", "code-reviewer")
   task:         string (required in single mode)  # The task prompt
   cwd:          string (optional)  # Working directory, defaults to parent's cwd
+  model:        string (optional)  # Model override (e.g. "haiku", "opus")
 
   # --- Parallel mode (multiple subagents) ---
-  tasks:        array (optional)   # Array of {agent, task, cwd} objects
+  tasks:        array (optional)   # Array of {agent, task, cwd, model} objects
                                    # Max 8 tasks, run with concurrency limit of 4
 
   # --- Chain mode (sequential pipeline) ---
-  chain:        array (optional)   # Array of {agent, task} objects
+  chain:        array (optional)   # Array of {agent, task, model} objects
                                    # Each step can reference {previous} for prior output
                                    # Stops on first error
 
 Modes are mutually exclusive: provide task (single), tasks (parallel), or chain.
+
+Model precedence: per-invocation model > agent definition model > inherited from parent.
 ```
 
 ## Execution modes
@@ -61,12 +64,15 @@ Spawn one subagent, wait for completion, return result.
 ```
 Pseudocode:
 
-function execute_single(agent_name, task, cwd):
+function execute_single(agent_name, task, cwd, model_override=None):
     agent_config = load_agent_config(agent_name)  # from ~/.dreb/agents/ or .dreb/agents/
 
+    # Per-invocation model takes precedence over agent definition model
+    effective_model = model_override or agent_config.model
+
     args = ["--mode", "json", "--no-session"]
-    if agent_config.model:
-        args += ["--model", agent_config.model]
+    if effective_model:
+        args += ["--model", effective_model]
     if agent_config.tools:
         args += ["--tools", agent_config.tools]
     if agent_config.system_prompt:

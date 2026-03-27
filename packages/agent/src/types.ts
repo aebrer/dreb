@@ -294,7 +294,7 @@ export interface AgentContext {
  */
 export type AgentEvent =
 	// Agent lifecycle
-	| { type: "agent_start" }
+	| { type: "agent_start"; model?: { provider: string; id: string } }
 	| { type: "agent_end"; messages: AgentMessage[] }
 	// Turn lifecycle - a turn is one assistant response + any tool calls/results
 	| { type: "turn_start" }
