@@ -1,11 +1,11 @@
 # Settings
 
-Pi uses JSON settings files with project settings overriding global settings.
+dreb uses JSON settings files with project settings overriding global settings.
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/settings.json` | Global (all projects) |
-| `.pi/settings.json` | Project (current directory) |
+| `~/.dreb/agent/settings.json` | Global (all projects) |
+| `.dreb/settings.json` | Project (current directory) |
 
 Edit directly or use `/settings` for common options.
 
@@ -134,7 +134,7 @@ When a provider requests a retry delay longer than `maxDelayMs` (e.g., Google's 
 | `sessionDir` | string | - | Directory where session files are stored. Accepts absolute or relative paths. |
 
 ```json
-{ "sessionDir": ".pi/sessions" }
+{ "sessionDir": ".dreb/sessions" }
 ```
 
 When multiple sources specify a session directory, `--session-dir` CLI flag takes precedence, then `sessionDir` in settings.json, then extension hooks.
@@ -161,7 +161,7 @@ When multiple sources specify a session directory, `--session-dir` CLI flag take
 
 These settings define where to load extensions, skills, prompts, and themes from.
 
-Paths in `~/.pi/agent/settings.json` resolve relative to `~/.pi/agent`. Paths in `.pi/settings.json` resolve relative to `.pi`. Absolute paths and `~` are supported.
+Paths in `~/.dreb/agent/settings.json` resolve relative to `~/.dreb/agent`. Paths in `.dreb/settings.json` resolve relative to `.dreb`. Absolute paths and `~` are supported.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
@@ -180,7 +180,7 @@ String form loads all resources from a package:
 
 ```json
 {
-  "packages": ["pi-skills", "@org/my-extension"]
+  "packages": ["dreb-skills", "@org/my-extension"]
 }
 ```
 
@@ -190,7 +190,7 @@ Object form filters which resources to load:
 {
   "packages": [
     {
-      "source": "pi-skills",
+      "source": "dreb-skills",
       "skills": ["brave-search", "transcribe"],
       "extensions": []
     }
@@ -218,22 +218,22 @@ See [packages.md](packages.md) for package management details.
     "maxRetries": 3
   },
   "enabledModels": ["claude-*", "gpt-4o"],
-  "packages": ["pi-skills"]
+  "packages": ["dreb-skills"]
 }
 ```
 
 ## Project Overrides
 
-Project settings (`.pi/settings.json`) override global settings. Nested objects are merged:
+Project settings (`.dreb/settings.json`) override global settings. Nested objects are merged:
 
 ```json
-// ~/.pi/agent/settings.json (global)
+// ~/.dreb/agent/settings.json (global)
 {
   "theme": "dark",
   "compaction": { "enabled": true, "reserveTokens": 16384 }
 }
 
-// .pi/settings.json (project)
+// .dreb/settings.json (project)
 {
   "compaction": { "reserveTokens": 8192 }
 }

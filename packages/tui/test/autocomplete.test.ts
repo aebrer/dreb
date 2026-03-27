@@ -282,9 +282,9 @@ describe("CombinedAutocompleteProvider", () => {
 
 		test("includes hidden paths but excludes .git", async () => {
 			setupFolder(baseDir, {
-				dirs: [".pi", ".github", ".git"],
+				dirs: [".dreb", ".github", ".git"],
 				files: {
-					".pi/config.json": "{}",
+					".dreb/config.json": "{}",
 					".github/workflows/ci.yml": "name: ci",
 					".git/config": "[core]",
 				},
@@ -295,7 +295,7 @@ describe("CombinedAutocompleteProvider", () => {
 			const result = await getSuggestions(provider, [line], 0, line.length);
 
 			const values = result?.items.map((item) => item.value) ?? [];
-			assert.ok(values.includes("@.pi/"));
+			assert.ok(values.includes("@.dreb/"));
 			assert.ok(values.includes("@.github/"));
 			assert.ok(!values.some((value) => value === "@.git" || value.startsWith("@.git/")));
 		});

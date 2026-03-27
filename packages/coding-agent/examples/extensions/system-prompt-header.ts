@@ -5,13 +5,13 @@
  */
 import type { ExtensionAPI } from "@dreb/coding-agent";
 
-export default function (pi: ExtensionAPI) {
-	pi.on("agent_start", (_event, ctx) => {
+export default function (dreb: ExtensionAPI) {
+	dreb.on("agent_start", (_event, ctx) => {
 		const prompt = ctx.getSystemPrompt();
 		ctx.ui.setStatus("system-prompt", `System: ${prompt.length} chars`);
 	});
 
-	pi.on("session_shutdown", (_event, ctx) => {
+	dreb.on("session_shutdown", (_event, ctx) => {
 		ctx.ui.setStatus("system-prompt", undefined);
 	});
 }

@@ -164,12 +164,12 @@ Project skill`,
 
 			writeFileSync(
 				join(projectExtDir, "project.ts"),
-				`export default function(pi) {
-	pi.registerCommand("deploy", {
+				`export default function(dreb) {
+	dreb.registerCommand("deploy", {
 		description: "project deploy",
 		handler: async () => {},
 	});
-	pi.registerCommand("project-only", {
+	dreb.registerCommand("project-only", {
 		description: "project only",
 		handler: async () => {},
 	});
@@ -178,12 +178,12 @@ Project skill`,
 
 			writeFileSync(
 				join(userExtDir, "user.ts"),
-				`export default function(pi) {
-	pi.registerCommand("deploy", {
+				`export default function(dreb) {
+	dreb.registerCommand("deploy", {
 		description: "user deploy",
 		handler: async () => {},
 	});
-	pi.registerCommand("user-only", {
+	dreb.registerCommand("user-only", {
 		description: "user only",
 		handler: async () => {},
 	});
@@ -461,8 +461,8 @@ Content`,
 				`
 import type { ExtensionAPI } from "@dreb/coding-agent";
 import { Type } from "@sinclair/typebox";
-export default function(pi: ExtensionAPI) {
-  pi.registerTool({
+export default function(dreb: ExtensionAPI) {
+  dreb.registerTool({
     name: "duplicate-tool",
     description: "First",
     parameters: Type.Object({}),
@@ -476,8 +476,8 @@ export default function(pi: ExtensionAPI) {
 				`
 import type { ExtensionAPI } from "@dreb/coding-agent";
 import { Type } from "@sinclair/typebox";
-export default function(pi: ExtensionAPI) {
-  pi.registerTool({
+export default function(dreb: ExtensionAPI) {
+  dreb.registerTool({
     name: "duplicate-tool",
     description: "Second",
     parameters: Type.Object({}),
@@ -503,14 +503,14 @@ export default function(pi: ExtensionAPI) {
 				`
 import type { ExtensionAPI } from "@dreb/coding-agent";
 import { Type } from "@sinclair/typebox";
-export default function(pi: ExtensionAPI) {
-  pi.registerTool({
+export default function(dreb: ExtensionAPI) {
+  dreb.registerTool({
     name: "duplicate-tool",
     description: "global tool",
     parameters: Type.Object({}),
     execute: async () => ({ result: "global" }),
   });
-  pi.registerCommand("deploy", {
+  dreb.registerCommand("deploy", {
     description: "global command",
     handler: async () => {},
   });
@@ -522,14 +522,14 @@ export default function(pi: ExtensionAPI) {
 				`
 import type { ExtensionAPI } from "@dreb/coding-agent";
 import { Type } from "@sinclair/typebox";
-export default function(pi: ExtensionAPI) {
-  pi.registerTool({
+export default function(dreb: ExtensionAPI) {
+  dreb.registerTool({
     name: "duplicate-tool",
     description: "explicit tool",
     parameters: Type.Object({}),
     execute: async () => ({ result: "explicit" }),
   });
-  pi.registerCommand("deploy", {
+  dreb.registerCommand("deploy", {
     description: "explicit command",
     handler: async () => {},
   });

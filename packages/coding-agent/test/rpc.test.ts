@@ -16,11 +16,11 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 	let sessionDir: string;
 
 	beforeEach(() => {
-		sessionDir = join(tmpdir(), `pi-rpc-test-${Date.now()}`);
+		sessionDir = join(tmpdir(), `dreb-rpc-test-${Date.now()}`);
 		client = new RpcClient({
 			cliPath: join(__dirname, "..", "dist", "cli.js"),
 			cwd: join(__dirname, ".."),
-			env: { PI_CODING_AGENT_DIR: sessionDir },
+			env: { DREB_CODING_AGENT_DIR: sessionDir },
 			provider: "anthropic",
 			model: "claude-sonnet-4-5",
 		});

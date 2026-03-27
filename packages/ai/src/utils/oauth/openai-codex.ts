@@ -172,7 +172,7 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
 }
 
 async function createAuthorizationFlow(
-	originator: string = "pi",
+	originator: string = "dreb",
 ): Promise<{ verifier: string; state: string; url: string }> {
 	const { verifier, challenge } = await generatePKCE();
 	const state = createState();
@@ -295,7 +295,7 @@ function getAccountId(accessToken: string): string | null {
  * @param options.onManualCodeInput - Optional promise that resolves with user-pasted code.
  *                                    Races with browser callback - whichever completes first wins.
  *                                    Useful for showing paste input immediately alongside browser flow.
- * @param options.originator - OAuth originator parameter (defaults to "pi")
+ * @param options.originator - OAuth originator parameter (defaults to "dreb")
  */
 export async function loginOpenAICodex(options: {
 	onAuth: (info: { url: string; instructions?: string }) => void;

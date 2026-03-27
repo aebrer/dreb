@@ -9,8 +9,8 @@
 
 import type { ExtensionAPI } from "@dreb/coding-agent";
 
-export default function (pi: ExtensionAPI) {
-	pi.on("model_select", async (event, ctx) => {
+export default function (dreb: ExtensionAPI) {
+	dreb.on("model_select", async (event, ctx) => {
 		const { model, previousModel, source } = event;
 
 		// Format model identifiers

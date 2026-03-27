@@ -8,7 +8,7 @@
  * tools resolve paths relative to your cwd, not process.cwd().
  *
  * For custom tools, see 06-extensions.ts - custom tools are now registered
- * via the extensions system using pi.registerTool().
+ * via the extensions system using dreb.registerTool().
  */
 
 import {

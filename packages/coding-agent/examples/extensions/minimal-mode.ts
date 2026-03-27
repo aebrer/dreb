@@ -64,11 +64,11 @@ function getBuiltInTools(cwd: string) {
 	return tools;
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (dreb: ExtensionAPI) {
 	// =========================================================================
 	// Read Tool
 	// =========================================================================
-	pi.registerTool({
+	dreb.registerTool({
 		name: "read",
 		label: "read",
 		description:
@@ -115,7 +115,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Bash Tool
 	// =========================================================================
-	pi.registerTool({
+	dreb.registerTool({
 		name: "bash",
 		label: "bash",
 		description:
@@ -164,7 +164,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Write Tool
 	// =========================================================================
-	pi.registerTool({
+	dreb.registerTool({
 		name: "write",
 		label: "write",
 		description:
@@ -206,7 +206,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Edit Tool
 	// =========================================================================
-	pi.registerTool({
+	dreb.registerTool({
 		name: "edit",
 		label: "edit",
 		description:
@@ -251,7 +251,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Find Tool
 	// =========================================================================
-	pi.registerTool({
+	dreb.registerTool({
 		name: "find",
 		label: "find",
 		description:
@@ -309,7 +309,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Grep Tool
 	// =========================================================================
-	pi.registerTool({
+	dreb.registerTool({
 		name: "grep",
 		label: "grep",
 		description:
@@ -371,7 +371,7 @@ export default function (pi: ExtensionAPI) {
 	// =========================================================================
 	// Ls Tool
 	// =========================================================================
-	pi.registerTool({
+	dreb.registerTool({
 		name: "ls",
 		label: "ls",
 		description:

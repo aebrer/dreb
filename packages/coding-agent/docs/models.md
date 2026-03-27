@@ -1,6 +1,6 @@
 # Custom Models
 
-Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.pi/agent/models.json`.
+Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.dreb/agent/models.json`.
 
 ## Table of Contents
 
@@ -35,7 +35,7 @@ For local models (Ollama, LM Studio, vLLM), only `id` is required per model:
 
 The `apiKey` is required but Ollama ignores it, so any value works.
 
-Some OpenAI-compatible servers do not understand the `developer` role used for reasoning-capable models. For those providers, set `compat.supportsDeveloperRole` to `false` so pi sends the system prompt as a `system` message instead. If the server also does not support `reasoning_effort`, set `compat.supportsReasoningEffort` to `false` too.
+Some OpenAI-compatible servers do not understand the `developer` role used for reasoning-capable models. For those providers, set `compat.supportsDeveloperRole` to `false` so dreb sends the system prompt as a `system` message instead. If the server also does not support `reasoning_effort`, set `compat.supportsReasoningEffort` to `false` too.
 
 You can set `compat` at the provider level to apply to all models, or at the model level to override a specific model. This commonly applies to Ollama, vLLM, SGLang, and similar OpenAI-compatible servers.
 
@@ -264,7 +264,7 @@ For providers with partial OpenAI compatibility, use the `compat` field.
 | `supportsStore` | Provider supports `store` field |
 | `supportsDeveloperRole` | Use `developer` vs `system` role |
 | `supportsReasoningEffort` | Support for `reasoning_effort` parameter |
-| `reasoningEffortMap` | Map pi thinking levels to provider-specific `reasoning_effort` values |
+| `reasoningEffortMap` | Map dreb thinking levels to provider-specific `reasoning_effort` values |
 | `supportsUsageInStreaming` | Supports `stream_options: { include_usage: true }` (default: `true`) |
 | `maxTokensField` | Use `max_completion_tokens` or `max_tokens` |
 | `requiresToolResultName` | Include `name` on tool result messages |

@@ -45,8 +45,8 @@ interface RgDetails {
 	fullOutputPath?: string;
 }
 
-export default function (pi: ExtensionAPI) {
-	pi.registerTool({
+export default function (dreb: ExtensionAPI) {
+	dreb.registerTool({
 		name: "rg",
 		label: "ripgrep",
 		// Document the truncation limits in the tool description so the LLM knows

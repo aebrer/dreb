@@ -294,8 +294,8 @@ function getQwenBaseUrl(resourceUrl?: string): string {
 // Extension Entry Point
 // =============================================================================
 
-export default function (pi: ExtensionAPI) {
-	pi.registerProvider("qwen-cli", {
+export default function (dreb: ExtensionAPI) {
+	dreb.registerProvider("qwen-cli", {
 		baseUrl: QWEN_DEFAULT_BASE_URL,
 		apiKey: "QWEN_CLI_API_KEY",
 		api: "openai-completions",

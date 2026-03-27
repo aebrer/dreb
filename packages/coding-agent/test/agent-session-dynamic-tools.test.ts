@@ -34,9 +34,9 @@ describe("AgentSession dynamic tool registration", () => {
 			agentDir,
 			settingsManager,
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_start", () => {
-						pi.registerTool({
+				(dreb) => {
+					dreb.on("session_start", () => {
+						dreb.registerTool({
 							name: "dynamic_tool",
 							label: "Dynamic Tool",
 							description: "Tool registered from session_start",
@@ -143,9 +143,9 @@ describe("AgentSession dynamic tool registration", () => {
 			agentDir,
 			settingsManager,
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_start", () => {
-						pi.registerTool({
+				(dreb) => {
+					dreb.on("session_start", () => {
+						dreb.registerTool({
 							name: "hidden_tool",
 							label: "Hidden Tool",
 							description: "Description should not appear in available tools",

@@ -35,12 +35,12 @@ function getTextContent(message: AssistantMessage): string {
 		.join("\n");
 }
 
-export default function planModeExtension(pi: ExtensionAPI): void {
+export default function planModeExtension(dreb: ExtensionAPI): void {
 	let planModeEnabled = false;
 	let executionMode = false;
 	let todoItems: TodoItem[] = [];
 
-	pi.registerFlag("plan", {
+	dreb.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration)",
 		type: "boolean",
 		default: false,
@@ -79,29 +79,29 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		todoItems = [];
 
 		if (planModeEnabled) {
-			pi.setActiveTools(PLAN_MODE_TOOLS);
+			dreb.setActiveTools(PLAN_MODE_TOOLS);
 			ctx.ui.notify(`Plan mode enabled. Tools: ${PLAN_MODE_TOOLS.join(", ")}`);
 		} else {
-			pi.setActiveTools(NORMAL_MODE_TOOLS);
+			dreb.setActiveTools(NORMAL_MODE_TOOLS);
 			ctx.ui.notify("Plan mode disabled. Full access restored.");
 		}
 		updateStatus(ctx);
 	}
 
 	function persistState(): void {
-		pi.appendEntry("plan-mode", {
+		dreb.appendEntry("plan-mode", {
 			enabled: planModeEnabled,
 			todos: todoItems,
 			executing: executionMode,
 		});
 	}
 
-	pi.registerCommand("plan", {
+	dreb.registerCommand("plan", {
 		description: "Toggle plan mode (read-only exploration)",
 		handler: async (_args, ctx) => togglePlanMode(ctx),
 	});
 
-	pi.registerCommand("todos", {
+	dreb.registerCommand("todos", {
 		description: "Show current plan todo list",
 		handler: async (_args, ctx) => {
 			if (todoItems.length === 0) {
@@ -113,13 +113,13 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.registerShortcut(Key.ctrlAlt("p"), {
+	dreb.registerShortcut(Key.ctrlAlt("p"), {
 		description: "Toggle plan mode",
 		handler: async (ctx) => togglePlanMode(ctx),
 	});
 
 	// Block destructive bash commands in plan mode
-	pi.on("tool_call", async (event) => {
+	dreb.on("tool_call", async (event) => {
 		if (!planModeEnabled || event.toolName !== "bash") return;
 
 		const command = event.input.command as string;
@@ -132,7 +132,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	});
 
 	// Filter out stale plan mode context when not in plan mode
-	pi.on("context", async (event) => {
+	dreb.on("context", async (event) => {
 		if (planModeEnabled) return;
 
 		return {
@@ -156,7 +156,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	});
 
 	// Inject plan/execution context before agent starts
-	pi.on("before_agent_start", async () => {
+	dreb.on("before_agent_start", async () => {
 		if (planModeEnabled) {
 			return {
 				message: {
@@ -205,7 +205,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 	});
 
 	// Track progress after each turn
-	pi.on("turn_end", async (event, ctx) => {
+	dreb.on("turn_end", async (event, ctx) => {
 		if (!executionMode || todoItems.length === 0) return;
 		if (!isAssistantMessage(event.message)) return;
 
@@ -217,18 +217,18 @@ After completing a step, include a [DONE:n] tag in your response.`,
 	});
 
 	// Handle plan completion and plan mode UI
-	pi.on("agent_end", async (event, ctx) => {
+	dreb.on("agent_end", async (event, ctx) => {
 		// Check if execution is complete
 		if (executionMode && todoItems.length > 0) {
 			if (todoItems.every((t) => t.completed)) {
 				const completedList = todoItems.map((t) => `~~${t.text}~~`).join("\n");
-				pi.sendMessage(
+				dreb.sendMessage(
 					{ customType: "plan-complete", content: `**Plan Complete!** ✓\n\n${completedList}`, display: true },
 					{ triggerTurn: false },
 				);
 				executionMode = false;
 				todoItems = [];
-				pi.setActiveTools(NORMAL_MODE_TOOLS);
+				dreb.setActiveTools(NORMAL_MODE_TOOLS);
 				updateStatus(ctx);
 				persistState(); // Save cleared state so resume doesn't restore old execution mode
 			}
@@ -249,7 +249,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		// Show plan steps and prompt for next action
 		if (todoItems.length > 0) {
 			const todoListText = todoItems.map((t, i) => `${i + 1}. ☐ ${t.text}`).join("\n");
-			pi.sendMessage(
+			dreb.sendMessage(
 				{
 					customType: "plan-todo-list",
 					content: `**Plan Steps (${todoItems.length}):**\n\n${todoListText}`,
@@ -268,28 +268,28 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		if (choice?.startsWith("Execute")) {
 			planModeEnabled = false;
 			executionMode = todoItems.length > 0;
-			pi.setActiveTools(NORMAL_MODE_TOOLS);
+			dreb.setActiveTools(NORMAL_MODE_TOOLS);
 			updateStatus(ctx);
 
 			const execMessage =
 				todoItems.length > 0
 					? `Execute the plan. Start with: ${todoItems[0].text}`
 					: "Execute the plan you just created.";
-			pi.sendMessage(
+			dreb.sendMessage(
 				{ customType: "plan-mode-execute", content: execMessage, display: true },
 				{ triggerTurn: true },
 			);
 		} else if (choice === "Refine the plan") {
 			const refinement = await ctx.ui.editor("Refine the plan:", "");
 			if (refinement?.trim()) {
-				pi.sendUserMessage(refinement.trim());
+				dreb.sendUserMessage(refinement.trim());
 			}
 		}
 	});
 
 	// Restore state on session start/resume
-	pi.on("session_start", async (_event, ctx) => {
-		if (pi.getFlag("plan") === true) {
+	dreb.on("session_start", async (_event, ctx) => {
+		if (dreb.getFlag("plan") === true) {
 			planModeEnabled = true;
 		}
 
@@ -333,7 +333,7 @@ After completing a step, include a [DONE:n] tag in your response.`,
 		}
 
 		if (planModeEnabled) {
-			pi.setActiveTools(PLAN_MODE_TOOLS);
+			dreb.setActiveTools(PLAN_MODE_TOOLS);
 		}
 		updateStatus(ctx);
 	});

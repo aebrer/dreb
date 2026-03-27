@@ -4,8 +4,8 @@ import type { ExtensionAPI } from "@dreb/coding-agent";
 
 const baseDir = dirname(fileURLToPath(import.meta.url));
 
-export default function (pi: ExtensionAPI) {
-	pi.on("resources_discover", () => {
+export default function (dreb: ExtensionAPI) {
+	dreb.on("resources_discover", () => {
 		return {
 			skillPaths: [join(baseDir, "SKILL.md")],
 			promptPaths: [join(baseDir, "dynamic.md")],

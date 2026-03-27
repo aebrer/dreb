@@ -6,10 +6,10 @@
  * bubblewrap on Linux).
  *
  * Config files (merged, project takes precedence):
- * - ~/.pi/agent/sandbox.json (global)
- * - <cwd>/.pi/sandbox.json (project-local)
+ * - ~/.dreb/agent/sandbox.json (global)
+ * - <cwd>/.dreb/sandbox.json (project-local)
  *
- * Example .pi/sandbox.json:
+ * Example .dreb/sandbox.json:
  * ```json
  * {
  *   "enabled": true,
@@ -26,13 +26,13 @@
  * ```
  *
  * Usage:
- * - `pi -e ./sandbox` - sandbox enabled with default/config settings
- * - `pi -e ./sandbox --no-sandbox` - disable sandboxing
+ * - `dreb -e ./sandbox` - sandbox enabled with default/config settings
+ * - `dreb -e ./sandbox --no-sandbox` - disable sandboxing
  * - `/sandbox` - show current sandbox configuration
  *
  * Setup:
- * 1. Copy sandbox/ directory to ~/.pi/agent/extensions/
- * 2. Run `npm install` in ~/.pi/agent/extensions/sandbox/
+ * 1. Copy sandbox/ directory to ~/.dreb/agent/extensions/
+ * 2. Run `npm install` in ~/.dreb/agent/extensions/sandbox/
  *
  * Linux also requires: bubblewrap, socat, ripgrep
  */
@@ -73,7 +73,7 @@ const DEFAULT_CONFIG: SandboxConfig = {
 };
 
 function loadConfig(cwd: string): SandboxConfig {
-	const projectConfigPath = join(cwd, ".pi", "sandbox.json");
+	const projectConfigPath = join(cwd, ".dreb", "sandbox.json");
 	const globalConfigPath = join(getAgentDir(), "extensions", "sandbox.json");
 
 	let globalConfig: Partial<SandboxConfig> = {};
@@ -194,8 +194,8 @@ function createSandboxedBashOps(): BashOperations {
 	};
 }
 
-export default function (pi: ExtensionAPI) {
-	pi.registerFlag("no-sandbox", {
+export default function (dreb: ExtensionAPI) {
+	dreb.registerFlag("no-sandbox", {
 		description: "Disable OS-level sandboxing for bash commands",
 		type: "boolean",
 		default: false,
@@ -207,7 +207,7 @@ export default function (pi: ExtensionAPI) {
 	let sandboxEnabled = false;
 	let sandboxInitialized = false;
 
-	pi.registerTool({
+	dreb.registerTool({
 		...localBash,
 		label: "bash (sandboxed)",
 		async execute(id, params, signal, onUpdate, _ctx) {
@@ -222,13 +222,13 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.on("user_bash", () => {
+	dreb.on("user_bash", () => {
 		if (!sandboxEnabled || !sandboxInitialized) return;
 		return { operations: createSandboxedBashOps() };
 	});
 
-	pi.on("session_start", async (_event, ctx) => {
-		const noSandbox = pi.getFlag("no-sandbox") as boolean;
+	dreb.on("session_start", async (_event, ctx) => {
+		const noSandbox = dreb.getFlag("no-sandbox") as boolean;
 
 		if (noSandbox) {
 			sandboxEnabled = false;
@@ -280,7 +280,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_shutdown", async () => {
+	dreb.on("session_shutdown", async () => {
 		if (sandboxInitialized) {
 			try {
 				await SandboxManager.reset();
@@ -290,7 +290,7 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.registerCommand("sandbox", {
+	dreb.registerCommand("sandbox", {
 		description: "Show sandbox configuration",
 		handler: async (_args, ctx) => {
 			if (!sandboxEnabled) {

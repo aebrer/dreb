@@ -24,13 +24,13 @@ After evaluating build-from-scratch vs. fork, the fork wins on pure pragmatism:
 | Edit tool | Already implemented with conflict handling |
 | Context management | Compaction (manual + auto on overflow), JSONL session persistence |
 | Multiple frontends | CLI, RPC, SDK, web components, Slack |
-| Extensibility | Extensions discover from `~/.pi/` and `.pi/`, no fork needed for most customization |
+| Extensibility | Extensions discover from `~/.dreb/` and `.dreb/`, no fork needed for most customization |
 
 ### What we still need to build
 
-- **Memory system** — pi uses `AGENTS.md`/`.pi/SYSTEM.md` but doesn't have persistent cross-session memory like our current setup
-- **Skills system** — pi has skills but the pattern differs from ours
-- **Telegram frontend** — pi has Slack (`pi-mom`), so the pattern exists to follow for a Telegram equivalent
+- **Memory system** — pi-mono uses `AGENTS.md`/`.pi/SYSTEM.md` but doesn't have persistent cross-session memory like our current setup
+- **Skills system** — pi-mono has skills but the pattern differs from ours
+- **Telegram frontend** — pi-mono has Slack (`pi-mom`), so the pattern exists to follow for a Telegram equivalent
 - **Dependency audit and vendoring** — trim the dep tree, vendor what we keep
 - **Our own opinions** — prompt tuning, default behaviors, UX preferences
 
@@ -99,5 +99,5 @@ This means constraints that are really about the interface (like "don't use plan
 - pi-mono is TypeScript — are we comfortable maintaining that long-term, or do we want to eventually port critical pieces to Python?
 - Which pi-mono packages do we actually need? Can we drop `pi-pods`, `pi-mom`, `pi-web-ui` immediately?
 - How much of pi-mono's dep tree can we vendor vs. trim?
-- Memory/skills: port our existing system as a pi extension, or redesign?
+- Memory/skills: port our existing system as a dreb extension, or redesign?
 - Renaming: do we rename the packages (e.g. `@dreb/ai`, `@dreb/agent`) or keep internal names and just rebrand the CLI?

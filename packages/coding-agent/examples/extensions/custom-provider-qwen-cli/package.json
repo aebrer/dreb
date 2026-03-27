@@ -1,5 +1,5 @@
 {
-  "name": "pi-extension-custom-provider-qwen-cli",
+  "name": "dreb-extension-custom-provider-qwen-cli",
   "private": true,
   "version": "1.12.0",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "echo 'nothing to build'",
     "check": "echo 'nothing to check'"
   },
-  "pi": {
+  "dreb": {
     "extensions": [
       "./index.ts"
     ]
