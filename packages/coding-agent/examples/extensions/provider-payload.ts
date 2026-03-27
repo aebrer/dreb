@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@dreb/coding-agent";
 
 export default function (dreb: ExtensionAPI) {
-	const logFile = join(process.cwd(), ".pi", "provider-payload.log");
+	const logFile = join(process.cwd(), ".dreb", "provider-payload.log");
 
 	dreb.on("before_provider_request", (event) => {
 		appendFileSync(logFile, `${JSON.stringify(event.payload, null, 2)}\n\n`, "utf8");

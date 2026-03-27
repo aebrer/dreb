@@ -15,7 +15,7 @@ describe("package commands", () => {
 	let originalExitCode: typeof process.exitCode;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-package-commands-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `dreb-package-commands-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		projectDir = join(tempDir, "project");
 		packageDir = join(tempDir, "local-package");

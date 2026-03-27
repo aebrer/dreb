@@ -644,28 +644,8 @@ export class InteractiveMode {
 	 * Check npm registry for a newer version.
 	 */
 	private async checkForNewVersion(): Promise<string | undefined> {
-		// Not published to npm — skip version check
+		// Not published to npm yet
 		return undefined;
-
-		if (process.env.DREB_SKIP_VERSION_CHECK || process.env.DREB_OFFLINE) return undefined;
-
-		try {
-			const response = await fetch("https://registry.npmjs.org/@dreb/coding-agent/latest", {
-				signal: AbortSignal.timeout(10000),
-			});
-			if (!response.ok) return undefined;
-
-			const data = (await response.json()) as { version?: string };
-			const latestVersion = data.version;
-
-			if (latestVersion && latestVersion !== this.version) {
-				return latestVersion;
-			}
-
-			return undefined;
-		} catch {
-			return undefined;
-		}
 	}
 
 	private async checkForPackageUpdates(): Promise<string[]> {
@@ -2023,7 +2003,7 @@ export class InteractiveMode {
 			// Write to temp file
 			const tmpDir = os.tmpdir();
 			const ext = extensionForImageMimeType(image.mimeType) ?? "png";
-			const fileName = `pi-clipboard-${crypto.randomUUID()}.${ext}`;
+			const fileName = `dreb-clipboard-${crypto.randomUUID()}.${ext}`;
 			const filePath = path.join(tmpDir, fileName);
 			fs.writeFileSync(filePath, Buffer.from(image.bytes));
 

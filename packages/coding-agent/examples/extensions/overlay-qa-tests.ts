@@ -473,7 +473,7 @@ class StreamingOverflowComponent extends BaseOverlay {
 			echo ""
 			for i in $(seq 1 100); do
 				# Simulate long file paths with OSC 8 hyperlinks (clickable) - tests width overflow
-				DIR="/Users/nicobailon/Documents/development/pi-mono/packages/coding-agent/src/modes/interactive"
+				DIR="/Users/nicobailon/Documents/development/dreb/packages/coding-agent/src/modes/interactive"
 				FILE="\${DIR}/components/very-long-component-name-that-exceeds-width-\${i}.ts"
 				echo -e "\\033]8;;file://\${FILE}\\007▶ read: \${FILE}\\033]8;;\\007"
 

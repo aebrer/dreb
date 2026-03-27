@@ -74,7 +74,7 @@ See [spec-web-tools.md](spec-web-tools.md) for full specification.
 
 #### 4. Memory system
 
-**The gap:** Pi-mono uses `AGENTS.md` / `.dreb/SYSTEM.md` for project context but has no persistent cross-session memory with structured types (user, feedback, project, reference).
+**The gap:** Pi-mono uses `AGENTS.md` / `.pi/SYSTEM.md` for project context but has no persistent cross-session memory with structured types (user, feedback, project, reference).
 
 **What we need:**
 - File-based memory store (markdown files with frontmatter, like our current system)
@@ -128,7 +128,7 @@ See [spec-tool-search.md](spec-tool-search.md) for full specification.
 
 #### 9. Context file loading (CLAUDE.md + AGENTS.md)
 
-**The gap:** Pi-mono reads `AGENTS.md` and `.dreb/SYSTEM.md`. We have `CLAUDE.md` everywhere. Dreb should read both.
+**The gap:** Pi-mono reads `AGENTS.md` and `.pi/SYSTEM.md`. We have `CLAUDE.md` everywhere. Dreb should read both.
 
 See [spec-context-files.md](spec-context-files.md) for full specification.
 

@@ -75,7 +75,7 @@ function buildSSEPayload({
 
 describe("openai-codex streaming", () => {
 	it("streams SSE responses into AssistantMessageEventStream", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
@@ -186,7 +186,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("completes after response.completed even when the SSE body stays open", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 		const encoder = new TextEncoder();
@@ -245,7 +245,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("maps response.incomplete to stopReason length even when the SSE body stays open", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 		const encoder = new TextEncoder();
@@ -304,7 +304,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("sets conversation_id/session_id headers and prompt_cache_key when sessionId is provided", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
@@ -405,7 +405,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it.each(["gpt-5.3-codex", "gpt-5.4"])("clamps %s minimal reasoning effort to low", async (modelId) => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(
@@ -501,7 +501,7 @@ describe("openai-codex streaming", () => {
 	});
 
 	it("does not set conversation_id/session_id headers when sessionId is not provided", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 
 		const payload = Buffer.from(

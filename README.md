@@ -53,7 +53,7 @@ See the [brainstorming doc](docs/brainstorming.md) for the full rationale.
 
 **v1.0.0** — Core CLI is functional. Built-in tools, multi-provider support, sessions, extensions all work.
 
-Coming next: persistent memory, skills system, task tracking, context file loading. See `docs/spec-*.md` for the specs.
+Coming next: persistent memory, task tracking. See `docs/spec-*.md` for the specs.
 
 ## License
 

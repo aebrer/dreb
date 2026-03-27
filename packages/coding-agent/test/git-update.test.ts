@@ -355,7 +355,7 @@ describe("DefaultPackageManager git update", () => {
 			expect(executedCommands).toContain(
 				"git fetch --prune --no-tags origin +refs/heads/main:refs/remotes/origin/main",
 			);
-			expect(getFileContent(cachedDir, "pi-extensions/session-breakdown.ts")).toBe("// fresh");
+			expect(getFileContent(cachedDir, "dreb-extensions/session-breakdown.ts")).toBe("// fresh");
 		});
 
 		it("should not refresh pinned temporary git sources", async () => {
@@ -384,7 +384,7 @@ describe("DefaultPackageManager git update", () => {
 			await packageManager.resolveExtensionSources([`${gitSource}@main`], { temporary: true });
 
 			expect(executedCommands).toEqual([]);
-			expect(getFileContent(cachedDir, "pi-extensions/session-breakdown.ts")).toBe("// pinned");
+			expect(getFileContent(cachedDir, "dreb-extensions/session-breakdown.ts")).toBe("// pinned");
 		});
 	});
 

@@ -130,7 +130,8 @@ Path-scoped rules are re-injected as system reminders each time the agent reads 
 | `.claude/CLAUDE.md` | Yes | No | **Yes** |
 | `.claude/rules/*.md` | Yes | No | **Yes** |
 | `AGENTS.md` | No | Yes | **Yes** |
-| `.dreb/SYSTEM.md` | No | Yes | **Yes** (read, don't write) |
+| `.pi/SYSTEM.md` | No | Yes | No |
+| `.dreb/SYSTEM.md` | No | No | **Yes** (read, don't write) |
 | `.dreb/CONTEXT.md` | No | No | **Yes** |
 | `.dreb/rules/*.md` | No | No | **Yes** |
 | `~/.claude/CLAUDE.md` | Yes | No | **Yes** |

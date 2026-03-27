@@ -21,7 +21,7 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult
  */
 function getTempFilePath(): string {
 	const id = randomBytes(8).toString("hex");
-	return join(tmpdir(), `pi-bash-${id}.log`);
+	return join(tmpdir(), `dreb-bash-${id}.log`);
 }
 
 const bashSchema = Type.Object({
@@ -61,9 +61,9 @@ export interface BashOperations {
 }
 
 /**
- * Create bash operations using pi's built-in local shell execution backend.
+ * Create bash operations using dreb's built-in local shell execution backend.
  *
- * This is useful for extensions that intercept user_bash and still want pi's
+ * This is useful for extensions that intercept user_bash and still want dreb's
  * standard local shell behavior while wrapping or rewriting commands.
  */
 export function createLocalBashOperations(): BashOperations {
