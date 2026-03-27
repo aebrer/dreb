@@ -10,6 +10,8 @@ import { CONFIG_DIR_NAME } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import type { ModelRegistry } from "../model-registry.js";
+import { resolveCliModel } from "../model-resolver.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
@@ -335,6 +337,48 @@ async function spawnSubagent(
 // Execution modes
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve a model string against the registry. Returns the canonical provider/id
+ * model ID on success, or an error string on failure. When no modelRegistry is
+ * available, passes the string through unvalidated (backward compat).
+ */
+function resolveModelString(
+	modelStr: string,
+	parentProvider: string | undefined,
+	registry: ModelRegistry | undefined,
+): { ok: true; modelId: string; provider?: string } | { ok: false; error: string } {
+	if (!registry) {
+		return { ok: true, modelId: modelStr };
+	}
+
+	// If the model string contains "/" the user already specified a provider
+	const hasProvider = modelStr.includes("/");
+	const resolved = resolveCliModel({
+		cliProvider: hasProvider ? undefined : parentProvider,
+		cliModel: modelStr,
+		modelRegistry: registry,
+	});
+
+	if (resolved.error) {
+		return { ok: false, error: resolved.error };
+	}
+	if (!resolved.model) {
+		return { ok: false, error: `Model "${modelStr}" not found. Use --list-models to see available models.` };
+	}
+
+	// resolveCliModel has a fallback path that creates a synthetic model for any
+	// unknown ID when a provider is specified (designed for custom/self-hosted
+	// models like Ollama). For subagents this causes silent failures — reject it.
+	if (resolved.warning?.includes("Using custom model id.")) {
+		return {
+			ok: false,
+			error: `Model "${modelStr}" not found for provider "${resolved.model.provider}". Use --list-models to see available models.`,
+		};
+	}
+
+	return { ok: true, modelId: resolved.model.id, provider: resolved.model.provider };
+}
+
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
@@ -388,6 +432,7 @@ async function executeSingle(
 	onProgress?: (event: string) => void,
 	modelOverride?: string,
 	parentProvider?: string,
+	registry?: ModelRegistry,
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -413,9 +458,34 @@ async function executeSingle(
 		};
 	}
 	// Per-invocation model override takes precedence over agent definition model
-	const effectiveConfig = modelOverride ? { ...config, model: modelOverride } : config;
+	const modelStr = modelOverride || config.model;
+	let effectiveConfig = modelOverride ? { ...config, model: modelOverride } : config;
+	let resolvedProvider = parentProvider;
+
+	// Resolve and validate the model string against the registry before spawning.
+	// This catches typos and invalid model names immediately instead of failing
+	// silently in the child process. Also passes the canonical model ID to the
+	// child, avoiding fuzzy matching entirely.
+	if (modelStr) {
+		const resolved = resolveModelString(modelStr, parentProvider, registry);
+		if (!resolved.ok) {
+			return {
+				agent: name,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				errorMessage: resolved.error,
+			};
+		}
+		effectiveConfig = { ...effectiveConfig, model: resolved.modelId };
+		if (resolved.provider) {
+			resolvedProvider = resolved.provider;
+		}
+	}
+
 	onProgress?.(`Running ${name} agent...`);
-	return spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, parentProvider);
+	return spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider);
 }
 
 async function executeParallel(
@@ -425,6 +495,7 @@ async function executeParallel(
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
 	parentProvider?: string,
+	registry?: ModelRegistry,
 ): Promise<SubagentResult[]> {
 	if (tasks.length > MAX_PARALLEL_TASKS) {
 		return [
@@ -487,6 +558,7 @@ async function executeParallel(
 						onProgress,
 						item.model,
 						parentProvider,
+						registry,
 					);
 				} catch (err) {
 					result = {
@@ -522,6 +594,7 @@ async function executeChain(
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
 	parentProvider?: string,
+	registry?: ModelRegistry,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -567,6 +640,7 @@ async function executeChain(
 			onProgress,
 			step.model,
 			parentProvider,
+			registry,
 		);
 		results.push(result);
 
@@ -642,6 +716,8 @@ export interface SubagentToolOptions {
 	onBackgroundComplete?: (agentId: string, result: SubagentResult, cancelled: boolean) => void;
 	/** Parent session's provider (e.g. "anthropic"). Passed as --provider to child processes to constrain model resolution. */
 	parentProvider?: string;
+	/** Model registry for validating model names before spawning child processes. */
+	modelRegistry?: ModelRegistry;
 }
 
 // ---------------------------------------------------------------------------
@@ -778,6 +854,7 @@ export function createSubagentToolDefinition(
 	const onBackgroundStart = options?.onBackgroundStart;
 	const onBackgroundComplete = options?.onBackgroundComplete;
 	const parentProvider = options?.parentProvider;
+	const modelRegistry = options?.modelRegistry;
 
 	return {
 		name: "subagent",
@@ -886,6 +963,7 @@ export function createSubagentToolDefinition(
 								undefined,
 								modelOverride,
 								parentProvider,
+								modelRegistry,
 							);
 							const entry = backgroundAgentRegistry.get(agentId);
 							// Don't overwrite status if abort already set it to "failed"
@@ -1023,6 +1101,7 @@ export function createSubagentToolDefinition(
 								bgSignal,
 								undefined,
 								parentProvider,
+								modelRegistry,
 							);
 							const resultText = results
 								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
@@ -1110,6 +1189,7 @@ export function createSubagentToolDefinition(
 					progressCallback,
 					params.model,
 					parentProvider,
+					modelRegistry,
 				);
 				resultText = formatSingleResult(result);
 				details = { mode: "single", agentCount: 1 };
@@ -1121,6 +1201,7 @@ export function createSubagentToolDefinition(
 					signal ?? undefined,
 					progressCallback,
 					parentProvider,
+					modelRegistry,
 				);
 				resultText = results.map((r, i) => `### Task ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 				details = { mode: "parallel", agentCount: params.tasks.length };
@@ -1132,6 +1213,7 @@ export function createSubagentToolDefinition(
 					signal ?? undefined,
 					progressCallback,
 					parentProvider,
+					modelRegistry,
 				);
 				resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 				details = { mode: "chain", agentCount: params.chain!.length };
