@@ -46,7 +46,7 @@ const DEFAULT_MAX_TOKENS = 64;
 
 function parseArgs(argv: string[]): Args {
 	let turns = DEFAULT_TURNS;
-	let sessionPath = resolve(join(tmpdir(), `pi-sdk-codex-cache-probe-tool-loop-${Date.now()}.jsonl`));
+	let sessionPath = resolve(join(tmpdir(), `dreb-sdk-codex-cache-probe-tool-loop-${Date.now()}.jsonl`));
 	let transport: Transport = "sse";
 	let maxTokens = DEFAULT_MAX_TOKENS;
 

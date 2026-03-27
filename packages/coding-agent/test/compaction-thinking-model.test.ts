@@ -43,7 +43,7 @@ describe.skipIf(!HAS_ANTIGRAVITY_AUTH)("Compaction with thinking models (Antigra
 	});
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-thinking-compaction-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `dreb-thinking-compaction-test-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 
@@ -149,7 +149,7 @@ describe.skipIf(!HAS_ANTHROPIC_AUTH)("Compaction with thinking models (Anthropic
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-thinking-compaction-anthropic-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `dreb-thinking-compaction-anthropic-test-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 

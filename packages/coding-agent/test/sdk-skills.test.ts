@@ -13,7 +13,7 @@ describe("createAgentSession skills option", () => {
 	let skillsDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-sdk-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `dreb-sdk-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		skillsDir = join(tempDir, "skills", "test-skill");
 		mkdirSync(skillsDir, { recursive: true });
 
