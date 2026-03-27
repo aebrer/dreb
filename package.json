@@ -11,7 +11,8 @@
 	],
 	"scripts": {
 		"clean": "npm run clean --workspaces",
-		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
+		"sync-version": "bash scripts/sync-version.sh",
+		"build": "bash scripts/sync-version.sh && cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
 		"dev": "concurrently --names \"ai,agent,coding-agent,tui\" --prefix-colors \"cyan,yellow,red,magenta\" \"cd packages/ai && npm run dev\" \"cd packages/agent && npm run dev\" \"cd packages/coding-agent && npm run dev\" \"cd packages/tui && npm run dev\"",
 		"check": "biome check --write --error-on-warnings . && tsgo --noEmit",
 		"test": "npm run test --workspaces --if-present",
@@ -30,7 +31,7 @@
 	"engines": {
 		"node": ">=20.0.0"
 	},
-	"version": "0.0.3",
+	"version": "1.0.0",
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.5",
 		"@dreb/coding-agent": "^0.30.2",
