@@ -733,10 +733,10 @@ Events are streamed to stdout as JSON lines during agent operation. Events do NO
 
 ### agent_start
 
-Emitted when the agent begins processing a prompt.
+Emitted when the agent begins processing a prompt. Includes the resolved model.
 
 ```json
-{"type": "agent_start"}
+{"type": "agent_start", "model": {"provider": "anthropic", "id": "claude-sonnet-4-20250514"}}
 ```
 
 ### agent_end

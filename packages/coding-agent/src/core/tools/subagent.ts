@@ -323,7 +323,7 @@ async function spawnSubagent(
 			resolvePromise({
 				agent: agentConfig.name,
 				task,
-				model: resolvedModel || agentConfig.model,
+				model: resolvedModel ?? (exitCode === 0 ? agentConfig.model : undefined),
 				exitCode,
 				output,
 				stderr: stderr.slice(0, 2000), // cap stderr
@@ -338,9 +338,9 @@ async function spawnSubagent(
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a model string against the registry. Returns the canonical provider/id
- * model ID on success, or an error string on failure. When no modelRegistry is
- * available, passes the string through unvalidated (backward compat).
+ * Resolve a model string against the registry. Returns the canonical model ID
+ * on success, or an error string on failure. When no modelRegistry is available,
+ * passes the string through unvalidated (backward compat).
  */
 function resolveModelString(
 	modelStr: string,
@@ -366,9 +366,12 @@ function resolveModelString(
 		return { ok: false, error: `Model "${modelStr}" not found. Use --list-models to see available models.` };
 	}
 
-	// resolveCliModel has a fallback path that creates a synthetic model for any
-	// unknown ID when a provider is specified (designed for custom/self-hosted
-	// models like Ollama). For subagents this causes silent failures — reject it.
+	// FRAGILE: This string must match the warning text in model-resolver.ts
+	// buildFallbackModel path (line ~446). resolveCliModel creates a synthetic
+	// model for any unknown ID when a provider is specified (designed for
+	// custom/self-hosted models like Ollama). For subagents this causes silent
+	// failures — reject it.
+	// TODO: Replace with a structured flag like `isSyntheticFallback` on ResolveCliModelResult.
 	if (resolved.warning?.includes("Using custom model id.")) {
 		return {
 			ok: false,
@@ -1156,7 +1159,11 @@ export function createSubagentToolDefinition(
 								},
 								bgSignal.aborted,
 							);
-						} catch {}
+						} catch (notifyErr) {
+							console.error(
+								`[subagent] CRITICAL: Last-resort notification failed for background chain ${agentId}: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`,
+							);
+						}
 					});
 
 					return {
