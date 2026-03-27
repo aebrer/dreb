@@ -37,14 +37,7 @@ import {
 	visibleWidth,
 } from "@dreb/tui";
 import { spawn, spawnSync } from "child_process";
-import {
-	APP_NAME,
-	getAgentDir,
-	getAuthPath,
-	getDebugLogPath,
-	getUpdateInstruction,
-	VERSION,
-} from "../../config.js";
+import { APP_NAME, getAgentDir, getAuthPath, getDebugLogPath, getUpdateInstruction, VERSION } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {

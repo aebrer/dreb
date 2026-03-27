@@ -171,7 +171,6 @@ export const VERSION: string = pkg.version;
 // e.g., DREB_CODING_AGENT_DIR
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`;
 
-
 // =============================================================================
 // User Config Paths (~/.dreb/agent/*)
 // =============================================================================

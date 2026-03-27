@@ -183,7 +183,10 @@ export default function presetExtension(dreb: ExtensionAPI) {
 		const presetNames = Object.keys(presets);
 
 		if (presetNames.length === 0) {
-			ctx.ui.notify("No presets defined. Add presets to ~/.dreb/agent/presets.json or .dreb/presets.json", "warning");
+			ctx.ui.notify(
+				"No presets defined. Add presets to ~/.dreb/agent/presets.json or .dreb/presets.json",
+				"warning",
+			);
 			return;
 		}
 
@@ -283,7 +286,10 @@ export default function presetExtension(dreb: ExtensionAPI) {
 	async function cyclePreset(ctx: ExtensionContext): Promise<void> {
 		const presetNames = getPresetOrder();
 		if (presetNames.length === 0) {
-			ctx.ui.notify("No presets defined. Add presets to ~/.dreb/agent/presets.json or .dreb/presets.json", "warning");
+			ctx.ui.notify(
+				"No presets defined. Add presets to ~/.dreb/agent/presets.json or .dreb/presets.json",
+				"warning",
+			);
 			return;
 		}
 

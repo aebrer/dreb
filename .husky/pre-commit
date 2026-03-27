@@ -1,1 +1,2 @@
+npx biome check --error-on-warnings .
 bash test.sh
