@@ -79,7 +79,7 @@ import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import type { BashOperations } from "./tools/bash.js";
-import { createAllToolDefinitions } from "./tools/index.js";
+import { createAllToolDefinitions, getRunningBackgroundAgents } from "./tools/index.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
 // ============================================================================
@@ -2300,8 +2300,6 @@ export class AgentSession {
 							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary });
 						},
 						onBackgroundComplete: (agentId, result, cancelled) => {
-							this._emit({ type: "background_agent_end", agentId, agentType: result.agent, success: result.exitCode === 0 });
-
 							const parts: string[] = [];
 							if (cancelled) {
 								parts.push("This agent was cancelled by the user.");
@@ -2310,7 +2308,13 @@ export class AgentSession {
 								parts.push(`Error: ${result.errorMessage || "unknown"}`);
 							}
 							if (result.output) {
-								parts.push(result.output.slice(0, 4000));
+								parts.push(result.output);
+							}
+							// Append status of other running agents so the model has awareness
+							const stillRunning = getRunningBackgroundAgents();
+							if (stillRunning.length > 0) {
+								const runningList = stillRunning.map((a) => `  ${a.agentId} (${a.agentType}): ${a.taskSummary}`).join("\n");
+								parts.push(`Still running (${stillRunning.length}):\n${runningList}`);
 							}
 							const summary = parts.join("\n\n") || "(no output)";
 							const status = cancelled ? "cancelled" : "completed";
@@ -2332,20 +2336,26 @@ export class AgentSession {
 								this._emit({ type: "message_end", message });
 							} else {
 								// Normal completion — deliver and trigger a response
-								// Fallback: if agent started streaming between our check and prompt(), deliver as follow-up instead
+								// If the agent is already streaming, queue as follow-up instead of prompting
 								if (this.agent.state.isStreaming) {
 									this.agent.followUp(message);
 								} else {
+									// Fallback: if streaming started between the isStreaming check and this call, deliver as follow-up
 									this.agent.prompt(message).catch((promptErr) => {
 										console.error(`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`);
 										try {
 											this.agent.followUp(message);
 										} catch (followUpErr) {
 											console.error(`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`);
-											this._emit({ type: "background_agent_end", agentId, agentType: result.agent, success: false });
 										}
 									});
 								}
+							}
+							// Emit status event AFTER delivery — non-critical UI update that shouldn't block result delivery
+							try {
+								this._emit({ type: "background_agent_end", agentId, agentType: result.agent, success: result.exitCode === 0 });
+							} catch (emitErr) {
+								console.error(`[subagent] background_agent_end emit failed: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`);
 							}
 						},
 					},

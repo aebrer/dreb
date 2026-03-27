@@ -26,24 +26,28 @@ interface AgentTypeConfig {
 	systemPrompt: string;
 }
 
+const DEFAULT_AGENT = "Explore";
+
 const BUILTIN_AGENTS: Record<string, AgentTypeConfig> = {
-	"general-purpose": {
-		name: "general-purpose",
-		description: "General-purpose agent with all tools. Inherits parent model.",
-		systemPrompt: "",
-	},
 	Explore: {
 		name: "Explore",
-		description: "Fast codebase exploration — find files, search code, answer questions.",
+		description: "Codebase exploration — find files, search code, answer questions. Read-only.",
 		tools: "read,grep,find,ls,bash",
 		systemPrompt:
 			"You are a codebase exploration agent. Your job is to quickly find information in the codebase and report back concisely.\n\nRules:\n- Do NOT modify any files\n- Be thorough but concise in your findings\n- If you can't find what you're looking for, say so explicitly",
 	},
+	Critic: {
+		name: "Critic",
+		description: "Sandboxed analysis agent. No codebase access — can only read files in /tmp.",
+		tools: "read",
+		systemPrompt:
+			"You are a sandboxed analysis agent. You have NO access to the project codebase.\n\nRules:\n- You can ONLY read files under /tmp/\n- Do NOT attempt to access any files outside /tmp/\n- All input data will be provided in the task prompt or in /tmp/ files\n- Analyze, summarize, and reason about the data you are given",
+	},
 };
 
-function parseAgentFrontmatter(content: string): { config: AgentTypeConfig } | { error: string } {
+function parseAgentFrontmatter(content: string): { ok: true; config: AgentTypeConfig } | { ok: false; error: string } {
 	const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-	if (!fmMatch) return { error: "missing --- frontmatter delimiters" };
+	if (!fmMatch) return { ok: false, error: "missing --- frontmatter delimiters" };
 
 	const frontmatter = fmMatch[1];
 	const body = fmMatch[2].trim();
@@ -54,9 +58,10 @@ function parseAgentFrontmatter(content: string): { config: AgentTypeConfig } | {
 	};
 
 	const name = get("name");
-	if (!name) return { error: "missing required 'name' field in frontmatter" };
+	if (!name) return { ok: false, error: "missing required 'name' field in frontmatter" };
 
 	return {
+		ok: true,
 		config: {
 			name,
 			description: get("description") || "",
@@ -94,7 +99,7 @@ function loadAgentsFromDir(dir: string, agents: Map<string, AgentTypeConfig>): v
 			try {
 				const content = readFileSync(join(dir, file), "utf-8");
 				const parsed = parseAgentFrontmatter(content);
-				if ("error" in parsed) {
+				if (!parsed.ok) {
 					console.error(`[subagent] Skipping agent file ${join(dir, file)}: ${parsed.error}`);
 				} else {
 					agents.set(parsed.config.name, parsed.config);
@@ -310,7 +315,7 @@ const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
 /**
  * Resolve a per-task cwd relative to the parent cwd.
  * Rejects absolute paths and relative paths that escape the parent directory.
- * Returns an error string on rejection so callers can surface it to the model.
+ * Returns a result object with ok=false and an error string on rejection, so callers can surface it to the model.
  */
 function clampCwd(defaultCwd: string, itemCwd?: string): { ok: true; cwd: string } | { ok: false; error: string } {
 	if (!itemCwd) return { ok: true, cwd: defaultCwd };
@@ -332,7 +337,7 @@ async function executeSingle(
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
 ): Promise<SubagentResult> {
-	const name = agentName || "general-purpose";
+	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
 	if (!config) {
 		return {
@@ -388,14 +393,28 @@ async function executeParallel(
 
 	const runNext = async (): Promise<void> => {
 		while (queue.length > 0) {
-			if (signal?.aborted) return;
+			if (signal?.aborted) {
+				// Fill remaining slots with cancellation results so callers never see undefined
+				while (queue.length > 0) {
+					const remaining = queue.shift()!;
+					results[remaining.index] = {
+						agent: remaining.item.agent || DEFAULT_AGENT,
+						task: remaining.item.task,
+						exitCode: 1,
+						output: "",
+						stderr: "",
+						errorMessage: "Cancelled before execution started",
+					};
+				}
+				return;
+			}
 			const entry = queue.shift()!;
 			const { item, index } = entry;
 			const cwdResult = clampCwd(defaultCwd, item.cwd);
 			let result: SubagentResult;
 			if (!cwdResult.ok) {
 				result = {
-					agent: item.agent || "general-purpose",
+					agent: item.agent || DEFAULT_AGENT,
 					task: item.task,
 					exitCode: 1,
 					output: "",
@@ -407,7 +426,7 @@ async function executeParallel(
 					result = await executeSingle(agents, item.agent, item.task, cwdResult.cwd, signal, onProgress);
 				} catch (err) {
 					result = {
-						agent: item.agent || "general-purpose",
+						agent: item.agent || DEFAULT_AGENT,
 						task: item.task,
 						exitCode: 1,
 						output: "",
@@ -451,7 +470,7 @@ async function executeChain(
 		// Validate task length after {previous} substitution (can compound across steps)
 		if (task.length > MAX_TASK_LENGTH) {
 			results.push({
-				agent: step.agent || "general-purpose",
+				agent: step.agent || DEFAULT_AGENT,
 				task: task.slice(0, 200) + "...",
 				exitCode: 1,
 				output: "",
@@ -464,7 +483,7 @@ async function executeChain(
 		const cwdResult = clampCwd(defaultCwd, step.cwd);
 		if (!cwdResult.ok) {
 			results.push({
-				agent: step.agent || "general-purpose",
+				agent: step.agent || DEFAULT_AGENT,
 				task,
 				exitCode: 1,
 				output: "",
@@ -516,13 +535,13 @@ export interface BackgroundAgentInfo {
 const backgroundAgentRegistry = new Map<string, BackgroundAgentInfo>();
 const backgroundAbortControllers = new Map<string, AbortController>();
 
-/** Get a snapshot of all tracked background agents (running and recently completed). Returns clones. */
-export function getBackgroundAgents(): BackgroundAgentInfo[] {
+/** Get a snapshot of all tracked background agents (running and recently completed). Returns readonly clones. */
+export function getBackgroundAgents(): readonly Readonly<BackgroundAgentInfo>[] {
 	return [...backgroundAgentRegistry.values()].map((a) => ({ ...a }));
 }
 
-/** Get only currently running background agents. Returns clones. */
-export function getRunningBackgroundAgents(): BackgroundAgentInfo[] {
+/** Get only currently running background agents. Returns readonly clones. */
+export function getRunningBackgroundAgents(): readonly Readonly<BackgroundAgentInfo>[] {
 	return [...backgroundAgentRegistry.values()].filter((a) => a.status === "running").map((a) => ({ ...a }));
 }
 
@@ -561,13 +580,13 @@ export interface SubagentToolOptions {
 // ---------------------------------------------------------------------------
 
 const taskItemSchema = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Agent type name (e.g. 'Explore', 'general-purpose')" })),
+	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'Explore')" })),
 	task: Type.String({ description: "The task prompt for this subagent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory (defaults to parent's cwd)" })),
 });
 
 const subagentSchema = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'general-purpose')" })),
+	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'Explore')" })),
 	task: Type.Optional(Type.String({ description: "Task prompt (single mode)", minLength: 1 })),
 	tasks: Type.Optional(Type.Array(taskItemSchema, { description: "Array of tasks to run in parallel (max 8)", minItems: 1, maxItems: MAX_PARALLEL_TASKS })),
 	chain: Type.Optional(
@@ -610,7 +629,7 @@ function formatSubagentCall(
 		);
 	}
 
-	const agent = str(args?.agent) || "general-purpose";
+	const agent = str(args?.agent) || DEFAULT_AGENT;
 	const task = str(args?.task);
 	const taskPreview = task ? (task.length > 60 ? task.slice(0, 57) + "..." : task) : null;
 	return (
@@ -677,19 +696,20 @@ export function createSubagentToolDefinition(
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate tasks to specialized subagents that run independently. " +
+			"Delegate read-only exploration tasks to subagents that run independently. " +
 			"Supports single task, parallel (up to 8, max 4 concurrent), " +
 			"and chain (sequential pipeline with {previous} substitution) modes. " +
 			"Set background=true to return immediately and get notified on completion.",
-		promptSnippet: "Delegate tasks to independent subagents (prefer background=true)",
+		promptSnippet: "Delegate read-only exploration tasks to subagents (prefer background=true)",
 		promptGuidelines: [
 			"Use `subagent` to delegate focused, independent tasks to child agents",
 			"Available agent types can be discovered from ~/.dreb/agents/ and .dreb/agents/ markdown files",
-			"Built-in agents: 'general-purpose' (all tools, default) and 'Explore' (exploration-only: read/grep/find/ls/bash)",
+			"Built-in agents: 'Explore' (default) — read-only codebase exploration; 'Critic' — sandboxed analysis with only read access to /tmp, no codebase access",
 			"Use parallel mode for independent tasks that can run concurrently",
 			"Use chain mode when each step depends on the previous step's output (reference with {previous})",
 			"PREFER background=true for most subagent calls — it lets you continue working while agents run. You'll be notified when they complete. Only use foreground (background=false) when you need the result immediately before you can proceed.",
 			"Subagents have their own context window — provide enough context in the task prompt",
+			"Each background agent notifies independently when done — completion messages include a list of any still-running agents",
 		],
 		parameters: subagentSchema,
 
@@ -723,110 +743,148 @@ export function createSubagentToolDefinition(
 					};
 				}
 
-				const agentId = generateAgentId();
-				const agentName = params.agent || "general-purpose";
-				const taskSummary = params.task
-					? `single task for ${agentName}`
-					: params.tasks
-						? `${params.tasks.length} parallel tasks`
-						: `${params.chain!.length}-step chain`;
+				// Helper to launch a single background task with its own agent ID and lifecycle
+				const launchBackgroundTask = (agentName: string, task: string, taskLabel: string) => {
+					const agentId = generateAgentId();
+					const bgAbort = new AbortController();
+					backgroundAgentRegistry.set(agentId, {
+						agentId,
+						agentType: agentName,
+						taskSummary: taskLabel,
+						startedAt: Date.now(),
+						status: "running",
+					});
+					backgroundAbortControllers.set(agentId, bgAbort);
+					onBackgroundStart?.(agentId, agentName, taskLabel);
 
-				// Register in the background agent registry with a dedicated AbortController
-				const bgAbort = new AbortController();
-				backgroundAgentRegistry.set(agentId, {
-					agentId,
-					agentType: agentName,
-					taskSummary,
-					startedAt: Date.now(),
-					status: "running",
-				});
-				backgroundAbortControllers.set(agentId, bgAbort);
-				onBackgroundStart?.(agentId, agentName, taskSummary);
+					const bgSignal = bgAbort.signal;
 
-				const bgSignal = bgAbort.signal;
+					// Safe wrapper — prevents onBackgroundComplete errors from propagating
+					const safeNotify = (result: SubagentResult) => {
+						try {
+							onBackgroundComplete(agentId, result, bgSignal.aborted);
+						} catch (err) {
+							console.error(`[subagent] onBackgroundComplete threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}. Background result lost.`);
+						}
+					};
 
-				// Safe wrapper — ensures onBackgroundComplete never throws to the last-resort handler
-				const safeNotifyComplete = (id: string, result: SubagentResult) => {
-					try {
-						onBackgroundComplete(id, result, bgSignal.aborted);
-					} catch (err) {
-						console.error(`[subagent] onBackgroundComplete threw for agent ${id}: ${err instanceof Error ? err.message : String(err)}. Background result lost.`);
-					}
+					const run = async () => {
+						try {
+							const result = await executeSingle(agents, agentName === DEFAULT_AGENT ? undefined : agentName, task, cwd, bgSignal);
+							const entry = backgroundAgentRegistry.get(agentId);
+							if (entry) entry.status = result.exitCode === 0 ? "completed" : "failed";
+							backgroundAbortControllers.delete(agentId);
+							safeNotify(result);
+						} catch (err) {
+							const entry = backgroundAgentRegistry.get(agentId);
+							if (entry) entry.status = "failed";
+							backgroundAbortControllers.delete(agentId);
+							safeNotify({
+								agent: agentName,
+								task,
+								exitCode: 1,
+								output: "",
+								stderr: "",
+								errorMessage: err instanceof Error ? err.message : String(err),
+							});
+						}
+					};
+					run().catch((err) => {
+						console.error(`[subagent] Unhandled background agent error (${agentId}): ${err instanceof Error ? err.message : String(err)}`);
+						const entry = backgroundAgentRegistry.get(agentId);
+						if (entry && entry.status === "running") entry.status = "failed";
+						backgroundAbortControllers.delete(agentId);
+						try {
+							onBackgroundComplete(agentId, {
+								agent: agentName, task, exitCode: 1, output: "", stderr: "",
+								errorMessage: `Internal error: ${err instanceof Error ? err.message : String(err)}`,
+							}, bgSignal.aborted);
+						} catch { /* truly nothing left to do */ }
+					});
+
+					return agentId;
 				};
 
-				const runBackground = async () => {
-					try {
-						let result: SubagentResult;
-						if (params.task) {
-							result = await executeSingle(agents, params.agent, params.task, cwd, bgSignal);
-						} else if (params.tasks) {
-							const results = await executeParallel(agents, params.tasks, cwd, bgSignal);
-							const resultText = results.map((r, i) => `### Task ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
-							const failed = results.filter((r) => r.exitCode !== 0);
-							result = {
-								agent: "parallel",
-								task: taskSummary,
-								exitCode: failed.length > 0 ? 1 : 0,
-								output: resultText,
-								stderr: "",
-								errorMessage: failed.length > 0 ? `${failed.length} of ${results.length} tasks failed` : null,
-							};
-						} else {
+				if (params.task) {
+					// Single background task
+					const agentName = params.agent || DEFAULT_AGENT;
+					const agentId = launchBackgroundTask(agentName, params.task, `${agentName} task`);
+					return {
+						content: [{ type: "text", text: `Background agent ${agentId} started (${agentName}). You will be notified when it completes.` }],
+						details: { mode: "single", agentCount: 1 } as SubagentToolDetails,
+					};
+				} else if (params.tasks) {
+					// Parallel background tasks — each gets its own agent ID and notifies independently
+					const launched: string[] = [];
+					for (let i = 0; i < params.tasks.length; i++) {
+						const item = params.tasks[i];
+						const agentName = item.agent || DEFAULT_AGENT;
+						const agentId = launchBackgroundTask(agentName, item.task, `${agentName} task ${i + 1}/${params.tasks.length}`);
+						launched.push(agentId);
+					}
+					const listing = launched.map((id, i) => `  ${id}: ${params.tasks![i].task.slice(0, 80)}`).join("\n");
+					return {
+						content: [{ type: "text", text: `${launched.length} background agents started:\n${listing}\n\nEach will notify independently when complete.` }],
+						details: { mode: "parallel", agentCount: launched.length } as SubagentToolDetails,
+					};
+				} else {
+					// Chain mode — sequential, stays as one agent since steps depend on each other
+					const agentId = generateAgentId();
+					const agentName = params.chain![0].agent || DEFAULT_AGENT;
+					const taskSummary = `${params.chain!.length}-step chain`;
+					const bgAbort = new AbortController();
+					backgroundAgentRegistry.set(agentId, {
+						agentId, agentType: agentName, taskSummary, startedAt: Date.now(), status: "running",
+					});
+					backgroundAbortControllers.set(agentId, bgAbort);
+					onBackgroundStart?.(agentId, agentName, taskSummary);
+
+					const bgSignal = bgAbort.signal;
+					const safeNotify = (result: SubagentResult) => {
+						try { onBackgroundComplete(agentId, result, bgSignal.aborted); }
+						catch (err) { console.error(`[subagent] onBackgroundComplete threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`); }
+					};
+					const runChain = async () => {
+						try {
 							const results = await executeChain(agents, params.chain!, cwd, bgSignal);
 							const resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 							const failed = results.filter((r) => r.exitCode !== 0);
-							result = {
-								agent: "chain",
-								task: taskSummary,
+							const result: SubagentResult = {
+								agent: "chain", task: taskSummary,
 								exitCode: failed.length > 0 ? 1 : 0,
-								output: resultText,
-								stderr: "",
+								output: resultText, stderr: "",
 								errorMessage: failed.length > 0 ? `Chain stopped at step ${results.length} of ${params.chain!.length}: ${results[results.length - 1]?.errorMessage}` : null,
 							};
+							const entry = backgroundAgentRegistry.get(agentId);
+							if (entry) entry.status = result.exitCode === 0 ? "completed" : "failed";
+							backgroundAbortControllers.delete(agentId);
+							safeNotify(result);
+						} catch (err) {
+							const entry = backgroundAgentRegistry.get(agentId);
+							if (entry) entry.status = "failed";
+							backgroundAbortControllers.delete(agentId);
+							safeNotify({
+								agent: agentName, task: taskSummary, exitCode: 1, output: "", stderr: "",
+								errorMessage: err instanceof Error ? err.message : String(err),
+							});
 						}
-						// Update registry before notifying
+					};
+					runChain().catch((err) => {
+						console.error(`[subagent] Unhandled background chain error (${agentId}): ${err instanceof Error ? err.message : String(err)}`);
 						const entry = backgroundAgentRegistry.get(agentId);
-						if (entry) entry.status = result.exitCode === 0 ? "completed" : "failed";
+						if (entry && entry.status === "running") entry.status = "failed";
 						backgroundAbortControllers.delete(agentId);
-						safeNotifyComplete(agentId, result);
-					} catch (err) {
-						const entry = backgroundAgentRegistry.get(agentId);
-						if (entry) entry.status = "failed";
-						backgroundAbortControllers.delete(agentId);
-						safeNotifyComplete(agentId, {
-							agent: params.agent || "general-purpose",
-							task: params.task || taskSummary,
-							exitCode: 1,
-							output: "",
-							stderr: "",
-							errorMessage: err instanceof Error ? err.message : String(err),
-						});
-					}
-				};
-				runBackground().catch((err) => {
-					// Last-resort handler — safeNotifyComplete already wraps onBackgroundComplete,
-					// so this only fires for truly unexpected errors in runBackground itself
-					console.error(`[subagent] Unhandled background agent error (${agentId}): ${err instanceof Error ? err.message : String(err)}`);
-					const entry = backgroundAgentRegistry.get(agentId);
-					if (entry && entry.status === "running") entry.status = "failed";
-					backgroundAbortControllers.delete(agentId);
-				});
+						try { onBackgroundComplete(agentId, { agent: agentName, task: taskSummary, exitCode: 1, output: "", stderr: "", errorMessage: `Internal error: ${err instanceof Error ? err.message : String(err)}` }, bgSignal.aborted); } catch {}
+					});
 
-				const bgMode = params.tasks ? "parallel" : params.chain ? "chain" : "single";
-				const bgCount = params.tasks?.length ?? params.chain?.length ?? 1;
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Background agent ${agentId} started (${taskSummary}). You will be notified when it completes.`,
-						},
-					],
-					details: { mode: bgMode, agentCount: bgCount } as SubagentToolDetails,
-				};
-
+					return {
+						content: [{ type: "text", text: `Background chain ${agentId} started (${taskSummary}). You will be notified when it completes.` }],
+						details: { mode: "chain", agentCount: params.chain!.length } as SubagentToolDetails,
+					};
+				}
 			}
 
-			// Foreground mode: run and wait for results
+						// Foreground mode: run and wait for results
 			const progressCallback = onUpdate
 				? (msg: string) => onUpdate({ content: [{ type: "text", text: msg }] } as any)
 				: undefined;
