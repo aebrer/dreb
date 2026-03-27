@@ -543,7 +543,6 @@ dreb --thinking high "Solve this complex problem"
 |----------|-------------|
 | `DREB_CODING_AGENT_DIR` | Override config directory (default: `~/.dreb/agent`) |
 | `DREB_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
-| `DREB_SKIP_VERSION_CHECK` | Skip version check at startup |
 | `DREB_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
@@ -551,7 +550,7 @@ dreb --thinking high "Solve this complex problem"
 
 ## Contributing & Development
 
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines and [docs/development.md](docs/development.md) for setup, forking, and debugging.
+See [docs/development.md](docs/development.md) for setup, forking, and debugging.
 
 ---
 
@@ -562,5 +561,5 @@ MIT
 ## See Also
 
 - [@dreb/ai](https://www.npmjs.com/package/@dreb/ai): Core LLM toolkit
-- [@dreb/agent](https://www.npmjs.com/package/@dreb/agent): Agent framework
+- [@dreb/agent-core](https://www.npmjs.com/package/@dreb/agent-core): Agent framework
 - [@dreb/tui](https://www.npmjs.com/package/@dreb/tui): Terminal UI components

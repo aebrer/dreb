@@ -2,16 +2,16 @@
  * Shutdown Command Extension
  *
  * Adds a /quit command that allows extensions to trigger clean shutdown.
- * Demonstrates how extensions can use ctx.shutdown() to exit pi cleanly.
+ * Demonstrates how extensions can use ctx.shutdown() to exit dreb cleanly.
  */
 
 import type { ExtensionAPI } from "@dreb/coding-agent";
 import { Type } from "@sinclair/typebox";
 
 export default function (dreb: ExtensionAPI) {
-	// Register a /quit command that cleanly exits pi
+	// Register a /quit command that cleanly exits dreb
 	dreb.registerCommand("quit", {
-		description: "Exit pi cleanly",
+		description: "Exit dreb cleanly",
 		handler: async (_args, ctx) => {
 			ctx.shutdown();
 		},
@@ -21,7 +21,7 @@ export default function (dreb: ExtensionAPI) {
 	dreb.registerTool({
 		name: "finish_and_exit",
 		label: "Finish and Exit",
-		description: "Complete a task and exit pi",
+		description: "Complete a task and exit dreb",
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			// Do any final work here...
@@ -40,7 +40,7 @@ export default function (dreb: ExtensionAPI) {
 	dreb.registerTool({
 		name: "deploy_and_exit",
 		label: "Deploy and Exit",
-		description: "Deploy the application and exit pi",
+		description: "Deploy the application and exit dreb",
 		parameters: Type.Object({
 			environment: Type.String({ description: "Target environment (e.g., production, staging)" }),
 		}),

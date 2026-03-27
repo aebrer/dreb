@@ -14,7 +14,7 @@ npm run build
 Run from source:
 
 ```bash
-/path/to/pi-mono/pi-test.sh
+node /path/to/dreb/packages/coding-agent/dist/cli.js
 ```
 
 The script can be run from any directory. dreb keeps the caller's current working directory.

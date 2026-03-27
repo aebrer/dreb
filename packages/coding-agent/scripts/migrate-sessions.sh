@@ -9,7 +9,7 @@
 
 set -e
 
-AGENT_DIR="${DREB_AGENT_DIR:-$HOME/.dreb/agent}"
+AGENT_DIR="${DREB_CODING_AGENT_DIR:-$HOME/.dreb/agent}"
 DRY_RUN=false
 
 if [[ "$1" == "--dry-run" ]]; then

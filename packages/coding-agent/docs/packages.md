@@ -146,12 +146,12 @@ Example:
 ```json
 {
   "dependencies": {
-    "shitty-extensions": "^1.0.1"
+    "my-other-package": "^1.0.1"
   },
-  "bundledDependencies": ["shitty-extensions"],
+  "bundledDependencies": ["my-other-package"],
   "dreb": {
-    "extensions": ["extensions", "node_modules/shitty-extensions/extensions"],
-    "skills": ["skills", "node_modules/shitty-extensions/skills"]
+    "extensions": ["extensions", "node_modules/my-other-package/extensions"],
+    "skills": ["skills", "node_modules/my-other-package/skills"]
   }
 }
 ```

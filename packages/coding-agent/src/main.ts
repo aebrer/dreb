@@ -625,7 +625,6 @@ export async function main(args: string[]) {
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.DREB_OFFLINE);
 	if (offlineMode) {
 		process.env.DREB_OFFLINE = "1";
-		process.env.DREB_SKIP_VERSION_CHECK = "1";
 	}
 
 	if (await handlePackageCommand(args)) {
