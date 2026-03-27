@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * CLI entry point for the refactored coding agent.
- * Uses main.ts with AgentSession and new mode modules.
+ * CLI entry point for the coding agent.
+ * Uses main.ts with AgentSession and mode modules.
  *
- * Test with: npx tsx src/cli-new.ts [args...]
+ * Test with: npx tsx src/cli.ts [args...]
  */
 process.title = "dreb";
 process.emitWarning = (() => {}) as typeof process.emitWarning;

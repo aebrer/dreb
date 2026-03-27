@@ -2525,33 +2525,13 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	/** Cancel all running background agents and notify the model. */
+	/** Cancel all running background agents. The completion callback still fires with the result
+	 *  (including cancellation context), so no separate message is needed here. */
 	private cancelBackgroundAgents(): void {
 		const running = getRunningBackgroundAgents();
 		if (running.length === 0) return;
-
-		const cancelled = running.map((a) => `${a.agentId} (${a.agentType})`).join(", ");
 		abortBackgroundAgents();
 		this.updateBackgroundAgentStatus();
-
-		// Inform the model that background agents were cancelled by the user
-		const message = {
-			role: "user" as const,
-			content: [
-				{
-					type: "text" as const,
-					text: `<background-agent-cancelled>\nThe user cancelled ${running.length} background agent(s): ${cancelled}.\nTheir results will not be delivered.\n</background-agent-cancelled>`,
-				},
-			],
-			timestamp: Date.now(),
-		};
-		if (this.agent.state.isStreaming) {
-			this.agent.followUp(message);
-		} else {
-			this.agent.prompt(message).catch(() => {
-				this.agent.followUp(message);
-			});
-		}
 	}
 
 	/** Extract text content from a user message */

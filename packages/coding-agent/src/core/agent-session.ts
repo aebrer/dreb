@@ -2299,10 +2299,13 @@ export class AgentSession {
 						onBackgroundStart: (agentId, agentType, taskSummary) => {
 							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary });
 						},
-						onBackgroundComplete: (agentId, result) => {
+						onBackgroundComplete: (agentId, result, cancelled) => {
 							this._emit({ type: "background_agent_end", agentId, agentType: result.agent, success: result.exitCode === 0 });
 
 							const parts: string[] = [];
+							if (cancelled) {
+								parts.push("This agent was cancelled by the user.");
+							}
 							if (result.exitCode !== 0) {
 								parts.push(`Error: ${result.errorMessage || "unknown"}`);
 							}
@@ -2310,29 +2313,39 @@ export class AgentSession {
 								parts.push(result.output.slice(0, 4000));
 							}
 							const summary = parts.join("\n\n") || "(no output)";
+							const status = cancelled ? "cancelled" : "completed";
 							const message = {
 								role: "user" as const,
 								content: [
 									{
 										type: "text" as const,
-										text: `<background-agent-complete>\nBackground agent ${agentId} (${result.agent}) completed.\n\n${summary}\n</background-agent-complete>`,
+										text: `<background-agent-complete>\nBackground agent ${agentId} (${result.agent}) ${status}.\n\n${summary}\n</background-agent-complete>`,
 									},
 								],
 								timestamp: Date.now(),
 							};
-							// If agent is mid-turn, queue as follow-up (delivered when turn ends).
-							// If idle, start a new turn with prompt() so it's processed immediately.
-							if (this.agent.state.isStreaming) {
-								this.agent.followUp(message);
+							if (cancelled) {
+								// Cancelled by user (Esc) — add to context and render in chat,
+								// but do NOT trigger a response (the user hit Esc to stop, not to ask a question)
+								this.agent.appendMessage(message);
+								this._emit({ type: "message_start", message });
+								this._emit({ type: "message_end", message });
 							} else {
-								this.agent.prompt(message).catch((promptErr) => {
-									console.error(`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`);
-									try {
-										this.agent.followUp(message);
-									} catch (followUpErr) {
-										console.error(`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`);
-									}
-								});
+								// Normal completion — deliver and trigger a response
+								// Fallback: if agent started streaming between our check and prompt(), deliver as follow-up instead
+								if (this.agent.state.isStreaming) {
+									this.agent.followUp(message);
+								} else {
+									this.agent.prompt(message).catch((promptErr) => {
+										console.error(`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`);
+										try {
+											this.agent.followUp(message);
+										} catch (followUpErr) {
+											console.error(`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`);
+											this._emit({ type: "background_agent_end", agentId, agentType: result.agent, success: false });
+										}
+									});
+								}
 							}
 						},
 					},
