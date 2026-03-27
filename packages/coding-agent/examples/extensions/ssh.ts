@@ -5,8 +5,8 @@
  * When --ssh is provided, read/write/edit/bash run on the remote.
  *
  * Usage:
- *   pi -e ./ssh.ts --ssh user@host
- *   pi -e ./ssh.ts --ssh user@host:/remote/path
+ *   dreb -e ./ssh.ts --ssh user@host
+ *   dreb -e ./ssh.ts --ssh user@host:/remote/path
  *
  * Requirements:
  *   - SSH key-based auth (no password prompts)

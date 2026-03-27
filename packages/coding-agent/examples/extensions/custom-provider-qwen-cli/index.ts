@@ -5,7 +5,7 @@
  * Uses device code flow with PKCE for secure browser-based authentication.
  *
  * Usage:
- *   pi -e ./packages/coding-agent/examples/extensions/custom-provider-qwen-cli
+ *   dreb -e ./packages/coding-agent/examples/extensions/custom-provider-qwen-cli
  *   # Then /login qwen-cli, or set QWEN_CLI_API_KEY=...
  */
 
