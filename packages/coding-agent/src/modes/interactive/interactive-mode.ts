@@ -46,7 +46,6 @@ import {
 	VERSION,
 } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
-import { abortBackgroundAgents, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -64,6 +63,7 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
+import { abortBackgroundAgents, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
@@ -2492,11 +2492,15 @@ export class InteractiveMode {
 			this.footerDataProvider.setExtensionStatus("bg-agents", undefined);
 		} else {
 			const types = running.map((a) => a.agentType);
-			const label = running.length === 1
-				? `1 background agent (${types[0]})`
-				: `${running.length} background agents (${types.join(", ")})`;
+			const label =
+				running.length === 1
+					? `1 background agent (${types[0]})`
+					: `${running.length} background agents (${types.join(", ")})`;
 			const interrupt = keyText("app.interrupt");
-			this.footerDataProvider.setExtensionStatus("bg-agents", theme.fg("accent", `⟳ ${label}`) + theme.fg("muted", ` (${interrupt} to cancel)`));
+			this.footerDataProvider.setExtensionStatus(
+				"bg-agents",
+				theme.fg("accent", `⟳ ${label}`) + theme.fg("muted", ` (${interrupt} to cancel)`),
+			);
 		}
 		this.footer.invalidate();
 		this.ui.requestRender();

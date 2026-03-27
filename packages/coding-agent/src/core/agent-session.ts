@@ -15,14 +15,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type {
-	Agent,
-	AgentEvent,
-	AgentMessage,
-	AgentState,
-	AgentTool,
-	ThinkingLevel,
-} from "@dreb/agent-core";
+import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
 import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@dreb/ai";
 import { getDocsPath } from "../config.js";
@@ -2313,7 +2306,9 @@ export class AgentSession {
 							// Append status of other running agents so the model has awareness
 							const stillRunning = getRunningBackgroundAgents();
 							if (stillRunning.length > 0) {
-								const runningList = stillRunning.map((a) => `  ${a.agentId} (${a.agentType}): ${a.taskSummary}`).join("\n");
+								const runningList = stillRunning
+									.map((a) => `  ${a.agentId} (${a.agentType}): ${a.taskSummary}`)
+									.join("\n");
 								parts.push(`Still running (${stillRunning.length}):\n${runningList}`);
 							}
 							const summary = parts.join("\n\n") || "(no output)";
@@ -2336,7 +2331,9 @@ export class AgentSession {
 									this._emit({ type: "message_start", message });
 									this._emit({ type: "message_end", message });
 								} catch (err) {
-									console.error(`[subagent] Failed to deliver cancellation message for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`);
+									console.error(
+										`[subagent] Failed to deliver cancellation message for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
+									);
 								}
 							} else {
 								// Normal completion — deliver and trigger a response
@@ -2346,20 +2343,31 @@ export class AgentSession {
 								} else {
 									// Fallback: if streaming started between the isStreaming check and this call, deliver as follow-up
 									this.agent.prompt(message).catch((promptErr) => {
-										console.error(`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`);
+										console.error(
+											`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`,
+										);
 										try {
 											this.agent.followUp(message);
 										} catch (followUpErr) {
-											console.error(`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`);
+											console.error(
+												`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`,
+											);
 										}
 									});
 								}
 							}
 							// Emit status event AFTER delivery — non-critical UI update that shouldn't block result delivery
 							try {
-								this._emit({ type: "background_agent_end", agentId, agentType: result.agent, success: result.exitCode === 0 });
+								this._emit({
+									type: "background_agent_end",
+									agentId,
+									agentType: result.agent,
+									success: result.exitCode === 0,
+								});
 							} catch (emitErr) {
-								console.error(`[subagent] background_agent_end emit failed: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`);
+								console.error(
+									`[subagent] background_agent_end emit failed: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
+								);
 							}
 						},
 					},

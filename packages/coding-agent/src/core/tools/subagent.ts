@@ -1,18 +1,18 @@
-import type { AgentTool } from "@dreb/agent-core";
-import { Text } from "@dreb/tui";
-import { type Static, Type } from "@sinclair/typebox";
-import { randomBytes } from "node:crypto";
 import { type ChildProcess, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import type { AgentTool } from "@dreb/agent-core";
+import { Text } from "@dreb/tui";
+import { type Static, Type } from "@sinclair/typebox";
 import { CONFIG_DIR_NAME } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import { DEFAULT_MAX_BYTES, formatSize, truncateHead, type TruncationResult } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 // ---------------------------------------------------------------------------
 // Agent type system
@@ -106,12 +106,16 @@ function loadAgentsFromDir(dir: string, agents: Map<string, AgentTypeConfig>): v
 					agents.set(parsed.config.name, parsed.config);
 				}
 			} catch (err) {
-				console.error(`[subagent] Could not read agent file ${join(dir, file)}: ${err instanceof Error ? err.message : String(err)}`);
+				console.error(
+					`[subagent] Could not read agent file ${join(dir, file)}: ${err instanceof Error ? err.message : String(err)}`,
+				);
 			}
 		}
 	} catch (err) {
 		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-			console.error(`[subagent] Could not read agents directory ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+			console.error(
+				`[subagent] Could not read agents directory ${dir}: ${err instanceof Error ? err.message : String(err)}`,
+			);
 		}
 	}
 }
@@ -192,7 +196,7 @@ async function spawnSubagent(
 		let settled = false;
 		let killTimer: ReturnType<typeof setTimeout> | null = null;
 		const collectedMessages: Array<{ role: string; content: any[] }> = [];
-		let stderrChunks: string[] = [];
+		const stderrChunks: string[] = [];
 		let stderrSize = 0;
 		const MAX_STDERR_BYTES = 8192;
 		const plainStdoutLines: string[] = [];
@@ -246,9 +250,17 @@ async function spawnSubagent(
 
 		// Handle abort signal (guard kill() against ESRCH race if process already exited)
 		const onAbort = () => {
-			try { proc.kill("SIGTERM"); } catch { /* process already exited */ }
+			try {
+				proc.kill("SIGTERM");
+			} catch {
+				/* process already exited */
+			}
 			killTimer = setTimeout(() => {
-				try { if (!proc.killed) proc.kill("SIGKILL"); } catch { /* process already exited */ }
+				try {
+					if (!proc.killed) proc.kill("SIGKILL");
+				} catch {
+					/* process already exited */
+				}
 			}, 5000);
 		};
 		signal?.addEventListener("abort", onAbort, { once: true });
@@ -268,7 +280,9 @@ async function spawnSubagent(
 			signal?.removeEventListener("abort", onAbort);
 			const exitCode = code ?? 1;
 			const stderr = stderrChunks.join("");
-			console.error(`[subagent] close: agent=${agentConfig.name} exit=${exitCode} messages=${collectedMessages.length}${exitCode !== 0 ? ` stderr=${stderr.slice(0, 200)} stdout=${plainStdoutLines.join("|").slice(0, 200)}` : ""}`);
+			console.error(
+				`[subagent] close: agent=${agentConfig.name} exit=${exitCode} messages=${collectedMessages.length}${exitCode !== 0 ? ` stderr=${stderr.slice(0, 200)} stdout=${plainStdoutLines.join("|").slice(0, 200)}` : ""}`,
+			);
 
 			// Extract final text output from collected assistant messages
 			const outputParts: string[] = [];
@@ -288,9 +302,8 @@ async function spawnSubagent(
 			if (exitCode !== 0) {
 				const stderrTrimmed = stderr.trim();
 				const plainOutput = plainStdoutLines.join("\n").trim();
-				errorMessage = stderrTrimmed.slice(0, 500)
-					|| plainOutput.slice(0, 500)
-					|| `Subagent exited with code ${exitCode}`;
+				errorMessage =
+					stderrTrimmed.slice(0, 500) || plainOutput.slice(0, 500) || `Subagent exited with code ${exitCode}`;
 			}
 
 			resolvePromise({
@@ -323,7 +336,10 @@ async function bgAcquire(): Promise<void> {
 		return;
 	}
 	return new Promise<void>((resolve) => {
-		bgWaiters.push(() => { bgRunning++; resolve(); });
+		bgWaiters.push(() => {
+			bgRunning++;
+			resolve();
+		});
 	});
 }
 
@@ -344,7 +360,7 @@ function clampCwd(defaultCwd: string, itemCwd?: string): { ok: true; cwd: string
 		return { ok: false, error: `Rejected absolute cwd "${itemCwd}" — must be relative to parent cwd` };
 	}
 	const resolved = resolve(defaultCwd, itemCwd);
-	if (resolved !== defaultCwd && !resolved.startsWith(defaultCwd + "/")) {
+	if (resolved !== defaultCwd && !resolved.startsWith(`${defaultCwd}/`)) {
 		return { ok: false, error: `Rejected cwd "${itemCwd}" — resolves outside parent cwd` };
 	}
 	return { ok: true, cwd: resolved };
@@ -374,7 +390,7 @@ async function executeSingle(
 	if (task.length > MAX_TASK_LENGTH) {
 		return {
 			agent: name,
-			task: task.slice(0, 200) + "...",
+			task: `${task.slice(0, 200)}...`,
 			exitCode: 1,
 			output: "",
 			stderr: "",
@@ -492,7 +508,7 @@ async function executeChain(
 		if (task.length > MAX_TASK_LENGTH) {
 			results.push({
 				agent: step.agent || DEFAULT_AGENT,
-				task: task.slice(0, 200) + "...",
+				task: `${task.slice(0, 200)}...`,
 				exitCode: 1,
 				output: "",
 				stderr: "",
@@ -514,14 +530,7 @@ async function executeChain(
 			break;
 		}
 
-		const result = await executeSingle(
-			agents,
-			step.agent,
-			task,
-			cwdResult.cwd,
-			signal,
-			onProgress,
-		);
+		const result = await executeSingle(agents, step.agent, task, cwdResult.cwd, signal, onProgress);
 		results.push(result);
 
 		if (result.exitCode !== 0) {
@@ -609,7 +618,13 @@ const taskItemSchema = Type.Object({
 const subagentSchema = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'Explore')" })),
 	task: Type.Optional(Type.String({ description: "Task prompt (single mode)", minLength: 1 })),
-	tasks: Type.Optional(Type.Array(taskItemSchema, { description: "Array of tasks to run in parallel (max 8)", minItems: 1, maxItems: MAX_PARALLEL_TASKS })),
+	tasks: Type.Optional(
+		Type.Array(taskItemSchema, {
+			description: "Array of tasks to run in parallel (max 8)",
+			minItems: 1,
+			maxItems: MAX_PARALLEL_TASKS,
+		}),
+	),
 	chain: Type.Optional(
 		Type.Array(taskItemSchema, {
 			description: "Sequential pipeline — each step can use {previous} for prior output",
@@ -643,16 +658,12 @@ function formatSubagentCall(
 		);
 	}
 	if (args?.chain) {
-		return (
-			theme.fg("toolTitle", theme.bold("subagent")) +
-			" " +
-			theme.fg("accent", `chain (${args.chain.length} steps)`)
-		);
+		return `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", `chain (${args.chain.length} steps)`)}`;
 	}
 
 	const agent = str(args?.agent) || DEFAULT_AGENT;
 	const task = str(args?.task);
-	const taskPreview = task ? (task.length > 60 ? task.slice(0, 57) + "..." : task) : null;
+	const taskPreview = task ? (task.length > 60 ? `${task.slice(0, 57)}...` : task) : null;
 	return (
 		theme.fg("toolTitle", theme.bold("subagent")) +
 		" " +
@@ -738,18 +749,22 @@ export function createSubagentToolDefinition(
 			const agents = discoverAgentTypes(cwd);
 
 			// Determine mode
-			const modeCount =
-				(params.task ? 1 : 0) + (params.tasks ? 1 : 0) + (params.chain ? 1 : 0);
+			const modeCount = (params.task ? 1 : 0) + (params.tasks ? 1 : 0) + (params.chain ? 1 : 0);
 			if (modeCount === 0) {
 				return {
-					content: [{ type: "text", text: "Error: provide one of `task` (single), `tasks` (parallel), or `chain`." }],
+					content: [
+						{ type: "text", text: "Error: provide one of `task` (single), `tasks` (parallel), or `chain`." },
+					],
 					details: undefined,
 				};
 			}
 			if (modeCount > 1) {
 				return {
 					content: [
-						{ type: "text", text: "Error: modes are mutually exclusive — provide only one of `task`, `tasks`, or `chain`." },
+						{
+							type: "text",
+							text: "Error: modes are mutually exclusive — provide only one of `task`, `tasks`, or `chain`.",
+						},
 					],
 					details: undefined,
 				};
@@ -759,7 +774,12 @@ export function createSubagentToolDefinition(
 			if (params.background) {
 				if (!onBackgroundComplete) {
 					return {
-						content: [{ type: "text", text: "Background execution is not available in this session. Run without `background: true` instead." }],
+						content: [
+							{
+								type: "text",
+								text: "Background execution is not available in this session. Run without `background: true` instead.",
+							},
+						],
 						details: undefined,
 					};
 				}
@@ -786,14 +806,22 @@ export function createSubagentToolDefinition(
 						try {
 							onBackgroundComplete(agentId, result, bgSignal.aborted);
 						} catch (err) {
-							console.error(`[subagent] onBackgroundComplete threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}. Background result lost.`);
+							console.error(
+								`[subagent] onBackgroundComplete threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}. Background result lost.`,
+							);
 						}
 					};
 
 					const run = async () => {
 						await bgAcquire();
 						try {
-							const result = await executeSingle(agents, agentName === DEFAULT_AGENT ? undefined : agentName, task, resolvedCwd, bgSignal);
+							const result = await executeSingle(
+								agents,
+								agentName === DEFAULT_AGENT ? undefined : agentName,
+								task,
+								resolvedCwd,
+								bgSignal,
+							);
 							const entry = backgroundAgentRegistry.get(agentId);
 							// Don't overwrite status if abort already set it to "failed"
 							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
@@ -816,16 +844,30 @@ export function createSubagentToolDefinition(
 						}
 					};
 					run().catch((err) => {
-						console.error(`[subagent] Unhandled background agent error (${agentId}): ${err instanceof Error ? err.message : String(err)}`);
+						console.error(
+							`[subagent] Unhandled background agent error (${agentId}): ${err instanceof Error ? err.message : String(err)}`,
+						);
 						const entry = backgroundAgentRegistry.get(agentId);
 						if (entry && entry.status === "running") entry.status = "failed";
 						backgroundAbortControllers.delete(agentId);
 						try {
-							onBackgroundComplete(agentId, {
-								agent: agentName, task, exitCode: 1, output: "", stderr: "",
-								errorMessage: `Internal error: ${err instanceof Error ? err.message : String(err)}`,
-							}, bgSignal.aborted);
-						} catch (notifyErr) { console.error(`[subagent] CRITICAL: Last-resort notification failed for background agent ${agentId}: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`); }
+							onBackgroundComplete(
+								agentId,
+								{
+									agent: agentName,
+									task,
+									exitCode: 1,
+									output: "",
+									stderr: "",
+									errorMessage: `Internal error: ${err instanceof Error ? err.message : String(err)}`,
+								},
+								bgSignal.aborted,
+							);
+						} catch (notifyErr) {
+							console.error(
+								`[subagent] CRITICAL: Last-resort notification failed for background agent ${agentId}: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`,
+							);
+						}
 					});
 
 					return agentId;
@@ -836,7 +878,12 @@ export function createSubagentToolDefinition(
 					const agentName = params.agent || DEFAULT_AGENT;
 					const agentId = launchBackgroundTask(agentName, params.task, `${agentName} task`);
 					return {
-						content: [{ type: "text", text: `Background agent ${agentId} started (${agentName}). You will be notified when it completes.` }],
+						content: [
+							{
+								type: "text",
+								text: `Background agent ${agentId} started (${agentName}). You will be notified when it completes.`,
+							},
+						],
 						details: { mode: "single", agentCount: 1 } as SubagentToolDetails,
 					};
 				} else if (params.tasks) {
@@ -851,12 +898,22 @@ export function createSubagentToolDefinition(
 							console.error(`[subagent] ${cwdResult.error}`);
 							continue;
 						}
-						const agentId = launchBackgroundTask(agentName, item.task, `${agentName} task ${i + 1}/${params.tasks.length}`, cwdResult.cwd);
+						const agentId = launchBackgroundTask(
+							agentName,
+							item.task,
+							`${agentName} task ${i + 1}/${params.tasks.length}`,
+							cwdResult.cwd,
+						);
 						launched.push(agentId);
 					}
 					const listing = launched.map((id, i) => `  ${id}: ${params.tasks![i].task.slice(0, 80)}`).join("\n");
 					return {
-						content: [{ type: "text", text: `${launched.length} background agents started:\n${listing}\n\nEach will notify independently when complete.` }],
+						content: [
+							{
+								type: "text",
+								text: `${launched.length} background agents started:\n${listing}\n\nEach will notify independently when complete.`,
+							},
+						],
 						details: { mode: "parallel", agentCount: launched.length } as SubagentToolDetails,
 					};
 				} else {
@@ -866,26 +923,42 @@ export function createSubagentToolDefinition(
 					const taskSummary = `${params.chain!.length}-step chain`;
 					const bgAbort = new AbortController();
 					backgroundAgentRegistry.set(agentId, {
-						agentId, agentType: agentName, taskSummary, startedAt: Date.now(), status: "running",
+						agentId,
+						agentType: agentName,
+						taskSummary,
+						startedAt: Date.now(),
+						status: "running",
 					});
 					backgroundAbortControllers.set(agentId, bgAbort);
 					onBackgroundStart?.(agentId, agentName, taskSummary);
 
 					const bgSignal = bgAbort.signal;
 					const safeNotify = (result: SubagentResult) => {
-						try { onBackgroundComplete(agentId, result, bgSignal.aborted); }
-						catch (err) { console.error(`[subagent] onBackgroundComplete threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`); }
+						try {
+							onBackgroundComplete(agentId, result, bgSignal.aborted);
+						} catch (err) {
+							console.error(
+								`[subagent] onBackgroundComplete threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
+							);
+						}
 					};
 					const runChain = async () => {
 						try {
 							const results = await executeChain(agents, params.chain!, cwd, bgSignal);
-							const resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
+							const resultText = results
+								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
+								.join("\n\n---\n\n");
 							const failed = results.filter((r) => r.exitCode !== 0);
 							const result: SubagentResult = {
-								agent: "chain", task: taskSummary,
+								agent: "chain",
+								task: taskSummary,
 								exitCode: failed.length > 0 ? 1 : 0,
-								output: resultText, stderr: "",
-								errorMessage: failed.length > 0 ? `Chain stopped at step ${results.length} of ${params.chain!.length}: ${results[results.length - 1]?.errorMessage}` : null,
+								output: resultText,
+								stderr: "",
+								errorMessage:
+									failed.length > 0
+										? `Chain stopped at step ${results.length} of ${params.chain!.length}: ${results[results.length - 1]?.errorMessage}`
+										: null,
 							};
 							const entry = backgroundAgentRegistry.get(agentId);
 							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
@@ -896,27 +969,51 @@ export function createSubagentToolDefinition(
 							if (entry && !bgSignal.aborted) entry.status = "failed";
 							backgroundAbortControllers.delete(agentId);
 							safeNotify({
-								agent: agentName, task: taskSummary, exitCode: 1, output: "", stderr: "",
+								agent: agentName,
+								task: taskSummary,
+								exitCode: 1,
+								output: "",
+								stderr: "",
 								errorMessage: err instanceof Error ? err.message : String(err),
 							});
 						}
 					};
 					runChain().catch((err) => {
-						console.error(`[subagent] Unhandled background chain error (${agentId}): ${err instanceof Error ? err.message : String(err)}`);
+						console.error(
+							`[subagent] Unhandled background chain error (${agentId}): ${err instanceof Error ? err.message : String(err)}`,
+						);
 						const entry = backgroundAgentRegistry.get(agentId);
 						if (entry && entry.status === "running") entry.status = "failed";
 						backgroundAbortControllers.delete(agentId);
-						try { onBackgroundComplete(agentId, { agent: agentName, task: taskSummary, exitCode: 1, output: "", stderr: "", errorMessage: `Internal error: ${err instanceof Error ? err.message : String(err)}` }, bgSignal.aborted); } catch {}
+						try {
+							onBackgroundComplete(
+								agentId,
+								{
+									agent: agentName,
+									task: taskSummary,
+									exitCode: 1,
+									output: "",
+									stderr: "",
+									errorMessage: `Internal error: ${err instanceof Error ? err.message : String(err)}`,
+								},
+								bgSignal.aborted,
+							);
+						} catch {}
 					});
 
 					return {
-						content: [{ type: "text", text: `Background chain ${agentId} started (${taskSummary}). You will be notified when it completes.` }],
+						content: [
+							{
+								type: "text",
+								text: `Background chain ${agentId} started (${taskSummary}). You will be notified when it completes.`,
+							},
+						],
 						details: { mode: "chain", agentCount: params.chain!.length } as SubagentToolDetails,
 					};
 				}
 			}
 
-				// Foreground mode: run and wait for results
+			// Foreground mode: run and wait for results
 			const progressCallback = onUpdate
 				? (msg: string) => onUpdate({ content: [{ type: "text", text: msg }] } as any)
 				: undefined;
@@ -925,7 +1022,14 @@ export function createSubagentToolDefinition(
 			let details: SubagentToolDetails;
 
 			if (params.task) {
-				const result = await executeSingle(agents, params.agent, params.task, cwd, signal ?? undefined, progressCallback);
+				const result = await executeSingle(
+					agents,
+					params.agent,
+					params.task,
+					cwd,
+					signal ?? undefined,
+					progressCallback,
+				);
 				resultText = formatSingleResult(result);
 				details = { mode: "single", agentCount: 1 };
 			} else if (params.tasks) {

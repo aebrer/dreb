@@ -1,14 +1,5 @@
 import { type Model, modelsAreEqual } from "@dreb/ai";
-import {
-	Container,
-	type Focusable,
-	fuzzyFilter,
-	getKeybindings,
-	Input,
-	Spacer,
-	Text,
-	type TUI,
-} from "@dreb/tui";
+import { Container, type Focusable, fuzzyFilter, getKeybindings, Input, Spacer, Text, type TUI } from "@dreb/tui";
 import type { ModelRegistry } from "../../../core/model-registry.js";
 import type { SettingsManager } from "../../../core/settings-manager.js";
 import { theme } from "../theme/theme.js";

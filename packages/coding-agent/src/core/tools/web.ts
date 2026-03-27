@@ -1,15 +1,15 @@
-import type { AgentTool } from "@dreb/agent-core";
-import { Text } from "@dreb/tui";
-import { type Static, Type } from "@sinclair/typebox";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { AgentTool } from "@dreb/agent-core";
+import { Text } from "@dreb/tui";
+import { type Static, Type } from "@sinclair/typebox";
 import { CONFIG_DIR_NAME } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import { truncateHead, DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 // ---------------------------------------------------------------------------
 // Shared: HTTP fetching and HTML extraction
@@ -39,7 +39,7 @@ function stripHtmlToText(html: string): string {
 	text = text.replace(/<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, "$2 ($1)");
 	// Convert headings to markdown-style
 	text = text.replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (_match, level, content) => {
-		return "\n" + "#".repeat(Number(level)) + " " + content.trim() + "\n";
+		return `\n${"#".repeat(Number(level))} ${content.trim()}\n`;
 	});
 	// Convert list items
 	text = text.replace(/<li\b[^>]*>/gi, "\n- ");
@@ -98,9 +98,7 @@ function buildResponse(response: Response): Promise<{ body: string | Buffer; con
 	return response.text().then((text) => ({ body: text, contentType: ct }));
 }
 
-async function httpFetch(
-	url: string,
-): Promise<{ body: string | Buffer; contentType: string }> {
+async function httpFetch(url: string): Promise<{ body: string | Buffer; contentType: string }> {
 	const originalHost = new URL(url).hostname;
 	if (isPrivateHost(originalHost)) {
 		throw new Error(`Blocked: ${originalHost} is a private/internal address`);
@@ -158,12 +156,10 @@ function extractPdfText(buffer: Buffer): string {
 	const textChunks: string[] = [];
 
 	const btEtRegex = /BT\s([\s\S]*?)ET/g;
-	let match: RegExpExecArray | null;
-	while ((match = btEtRegex.exec(raw)) !== null) {
+	for (const match of raw.matchAll(btEtRegex)) {
 		const block = match[1];
 		const strRegex = /\(([^)]*)\)/g;
-		let strMatch: RegExpExecArray | null;
-		while ((strMatch = strRegex.exec(block)) !== null) {
+		for (const strMatch of block.matchAll(strRegex)) {
 			const decoded = strMatch[1]
 				.replace(/\\n/g, "\n")
 				.replace(/\\r/g, "\r")
@@ -335,7 +331,9 @@ function getSearchConfig(): WebSearchConfig {
 		if ((VALID_BACKENDS as readonly string[]).includes(rawBackend)) {
 			backend = rawBackend as WebSearchConfig["backend"];
 		} else {
-			console.error(`Warning: unrecognized search backend "${rawBackend}", falling back to ddg. Valid: ${VALID_BACKENDS.join(", ")}`);
+			console.error(
+				`Warning: unrecognized search backend "${rawBackend}", falling back to ddg. Valid: ${VALID_BACKENDS.join(", ")}`,
+			);
 		}
 	}
 	return {
@@ -353,7 +351,6 @@ async function executeSearch(query: string): Promise<SearchResult[]> {
 		case "brave":
 			if (!config.braveApiKey) throw new Error("DREB_BRAVE_API_KEY not set");
 			return searchBrave(query, config.braveApiKey);
-		case "ddg":
 		default:
 			return searchDuckDuckGo(query);
 	}
@@ -402,7 +399,8 @@ export function createWebSearchToolDefinition(
 	return {
 		name: "web_search",
 		label: "web_search",
-		description: "Search the web. Returns titles, URLs, and snippets. Configure backend via DREB_SEARCH_BACKEND env var (ddg, searxng, brave).",
+		description:
+			"Search the web. Returns titles, URLs, and snippets. Configure backend via DREB_SEARCH_BACKEND env var (ddg, searxng, brave).",
 		promptSnippet: "Search the web for information",
 		parameters: webSearchSchema,
 		async execute(_toolCallId, { query }: { query: string }) {
@@ -422,9 +420,7 @@ export function createWebSearchToolDefinition(
 					details: undefined,
 				};
 			}
-			const formatted = results
-				.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`)
-				.join("\n\n");
+			const formatted = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join("\n\n");
 			const output = `Search results for: ${query}\n\n${formatted}`;
 			return {
 				content: [{ type: "text", text: output }],
@@ -472,11 +468,7 @@ function formatFetchCall(
 ): string {
 	const url = str(args?.url);
 	const invalidArg = invalidArgText(theme);
-	return (
-		theme.fg("toolTitle", theme.bold("web_fetch")) +
-		" " +
-		(url === null ? invalidArg : theme.fg("accent", url || ""))
-	);
+	return `${theme.fg("toolTitle", theme.bold("web_fetch"))} ${url === null ? invalidArg : theme.fg("accent", url || "")}`;
 }
 
 function formatFetchResult(
@@ -597,7 +589,7 @@ export function createWebFetchToolDefinition(
 
 			// Truncate to prevent context overflow (~100K characters)
 			if (text.length > MAX_CONTENT_LENGTH) {
-				text = text.slice(0, MAX_CONTENT_LENGTH) + `\n\n[Content truncated at ~${Math.round(MAX_CONTENT_LENGTH / 1024)}KB]`;
+				text = `${text.slice(0, MAX_CONTENT_LENGTH)}\n\n[Content truncated at ~${Math.round(MAX_CONTENT_LENGTH / 1024)}KB]`;
 				details.truncatedContent = true;
 			}
 

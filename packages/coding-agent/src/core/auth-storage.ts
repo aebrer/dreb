@@ -6,12 +6,7 @@
  * try to refresh tokens simultaneously.
  */
 
-import {
-	getEnvApiKey,
-	type OAuthCredentials,
-	type OAuthLoginCallbacks,
-	type OAuthProviderId,
-} from "@dreb/ai";
+import { getEnvApiKey, type OAuthCredentials, type OAuthLoginCallbacks, type OAuthProviderId } from "@dreb/ai";
 import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@dreb/ai/oauth";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";

@@ -59,12 +59,7 @@ function stripHtmlComments(content: string): string {
 }
 
 function loadContextFilesFromDir(dir: string): Array<{ path: string; content: string }> {
-	const candidates = [
-		"AGENTS.md",
-		"CLAUDE.md",
-		join(".claude", "CLAUDE.md"),
-		join(".dreb", "CONTEXT.md"),
-	];
+	const candidates = ["AGENTS.md", "CLAUDE.md", join(".claude", "CLAUDE.md"), join(".dreb", "CONTEXT.md")];
 	const results: Array<{ path: string; content: string }> = [];
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
@@ -89,7 +84,7 @@ function loadRulesFromDir(
 	depth: number = 0,
 ): void {
 	if (depth > 10) return;
-	let entries;
+	let entries: import("node:fs").Dirent[];
 	try {
 		entries = readdirSync(dir, { withFileTypes: true });
 	} catch (error) {
