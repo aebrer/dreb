@@ -2331,9 +2331,13 @@ export class AgentSession {
 							if (cancelled) {
 								// Cancelled by user (Esc) — add to context and render in chat,
 								// but do NOT trigger a response (the user hit Esc to stop, not to ask a question)
-								this.agent.appendMessage(message);
-								this._emit({ type: "message_start", message });
-								this._emit({ type: "message_end", message });
+								try {
+									this.agent.appendMessage(message);
+									this._emit({ type: "message_start", message });
+									this._emit({ type: "message_end", message });
+								} catch (err) {
+									console.error(`[subagent] Failed to deliver cancellation message for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`);
+								}
 							} else {
 								// Normal completion — deliver and trigger a response
 								// If the agent is already streaming, queue as follow-up instead of prompting

@@ -38,7 +38,7 @@ const BUILTIN_AGENTS: Record<string, AgentTypeConfig> = {
 	},
 	Critic: {
 		name: "Critic",
-		description: "Sandboxed analysis agent. No codebase access — can only read files in /tmp.",
+		description: "Analysis agent instructed to only read /tmp files (prompt-enforced). No codebase context.",
 		tools: "read",
 		systemPrompt:
 			"You are a sandboxed analysis agent. You have NO access to the project codebase.\n\nRules:\n- You can ONLY read files under /tmp/\n- Do NOT attempt to access any files outside /tmp/\n- All input data will be provided in the task prompt or in /tmp/ files\n- Analyze, summarize, and reason about the data you are given",
@@ -85,6 +85,7 @@ function discoverAgentTypes(cwd: string): Map<string, AgentTypeConfig> {
 	loadAgentsFromDir(userDir, agents);
 
 	// Project-level agents (.dreb/agents/*.md)
+	// TODO: Security gate — prompt user for confirmation before loading agents from untrusted repos
 	const projectDir = join(cwd, ".dreb", "agents");
 	loadAgentsFromDir(projectDir, agents);
 
@@ -311,6 +312,26 @@ async function spawnSubagent(
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
+
+// Semaphore for background task concurrency — shared across all background launches
+let bgRunning = 0;
+const bgWaiters: Array<() => void> = [];
+
+async function bgAcquire(): Promise<void> {
+	if (bgRunning < MAX_CONCURRENCY) {
+		bgRunning++;
+		return;
+	}
+	return new Promise<void>((resolve) => {
+		bgWaiters.push(() => { bgRunning++; resolve(); });
+	});
+}
+
+function bgRelease(): void {
+	bgRunning--;
+	const next = bgWaiters.shift();
+	if (next) next();
+}
 
 /**
  * Resolve a per-task cwd relative to the parent cwd.
@@ -696,15 +717,15 @@ export function createSubagentToolDefinition(
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate read-only exploration tasks to subagents that run independently. " +
+			"Delegate tasks to independent subagents (Explore for codebase research, Critic for unbiased analysis). " +
 			"Supports single task, parallel (up to 8, max 4 concurrent), " +
 			"and chain (sequential pipeline with {previous} substitution) modes. " +
 			"Set background=true to return immediately and get notified on completion.",
-		promptSnippet: "Delegate read-only exploration tasks to subagents (prefer background=true)",
+		promptSnippet: "Delegate tasks to independent subagents (prefer background=true)",
 		promptGuidelines: [
 			"Use `subagent` to delegate focused, independent tasks to child agents",
 			"Available agent types can be discovered from ~/.dreb/agents/ and .dreb/agents/ markdown files",
-			"Built-in agents: 'Explore' (default) — read-only codebase exploration; 'Critic' — sandboxed analysis with only read access to /tmp, no codebase access",
+			"Built-in agents: 'Explore' (default) — read-only codebase exploration; 'Critic' — analysis agent instructed to only read /tmp (prompt-enforced), no codebase context",
 			"Use parallel mode for independent tasks that can run concurrently",
 			"Use chain mode when each step depends on the previous step's output (reference with {previous})",
 			"PREFER background=true for most subagent calls — it lets you continue working while agents run. You'll be notified when they complete. Only use foreground (background=false) when you need the result immediately before you can proceed.",
@@ -744,7 +765,8 @@ export function createSubagentToolDefinition(
 				}
 
 				// Helper to launch a single background task with its own agent ID and lifecycle
-				const launchBackgroundTask = (agentName: string, task: string, taskLabel: string) => {
+				const launchBackgroundTask = (agentName: string, task: string, taskLabel: string, taskCwd?: string) => {
+					const resolvedCwd = taskCwd ?? cwd;
 					const agentId = generateAgentId();
 					const bgAbort = new AbortController();
 					backgroundAgentRegistry.set(agentId, {
@@ -769,15 +791,17 @@ export function createSubagentToolDefinition(
 					};
 
 					const run = async () => {
+						await bgAcquire();
 						try {
-							const result = await executeSingle(agents, agentName === DEFAULT_AGENT ? undefined : agentName, task, cwd, bgSignal);
+							const result = await executeSingle(agents, agentName === DEFAULT_AGENT ? undefined : agentName, task, resolvedCwd, bgSignal);
 							const entry = backgroundAgentRegistry.get(agentId);
-							if (entry) entry.status = result.exitCode === 0 ? "completed" : "failed";
+							// Don't overwrite status if abort already set it to "failed"
+							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
 							backgroundAbortControllers.delete(agentId);
 							safeNotify(result);
 						} catch (err) {
 							const entry = backgroundAgentRegistry.get(agentId);
-							if (entry) entry.status = "failed";
+							if (entry && !bgSignal.aborted) entry.status = "failed";
 							backgroundAbortControllers.delete(agentId);
 							safeNotify({
 								agent: agentName,
@@ -787,6 +811,8 @@ export function createSubagentToolDefinition(
 								stderr: "",
 								errorMessage: err instanceof Error ? err.message : String(err),
 							});
+						} finally {
+							bgRelease();
 						}
 					};
 					run().catch((err) => {
@@ -799,7 +825,7 @@ export function createSubagentToolDefinition(
 								agent: agentName, task, exitCode: 1, output: "", stderr: "",
 								errorMessage: `Internal error: ${err instanceof Error ? err.message : String(err)}`,
 							}, bgSignal.aborted);
-						} catch { /* truly nothing left to do */ }
+						} catch (notifyErr) { console.error(`[subagent] CRITICAL: Last-resort notification failed for background agent ${agentId}: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`); }
 					});
 
 					return agentId;
@@ -819,7 +845,13 @@ export function createSubagentToolDefinition(
 					for (let i = 0; i < params.tasks.length; i++) {
 						const item = params.tasks[i];
 						const agentName = item.agent || DEFAULT_AGENT;
-						const agentId = launchBackgroundTask(agentName, item.task, `${agentName} task ${i + 1}/${params.tasks.length}`);
+						const cwdResult = clampCwd(cwd, item.cwd);
+						if (!cwdResult.ok) {
+							// Surface cwd error immediately rather than launching a doomed agent
+							console.error(`[subagent] ${cwdResult.error}`);
+							continue;
+						}
+						const agentId = launchBackgroundTask(agentName, item.task, `${agentName} task ${i + 1}/${params.tasks.length}`, cwdResult.cwd);
 						launched.push(agentId);
 					}
 					const listing = launched.map((id, i) => `  ${id}: ${params.tasks![i].task.slice(0, 80)}`).join("\n");
@@ -856,12 +888,12 @@ export function createSubagentToolDefinition(
 								errorMessage: failed.length > 0 ? `Chain stopped at step ${results.length} of ${params.chain!.length}: ${results[results.length - 1]?.errorMessage}` : null,
 							};
 							const entry = backgroundAgentRegistry.get(agentId);
-							if (entry) entry.status = result.exitCode === 0 ? "completed" : "failed";
+							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
 							backgroundAbortControllers.delete(agentId);
 							safeNotify(result);
 						} catch (err) {
 							const entry = backgroundAgentRegistry.get(agentId);
-							if (entry) entry.status = "failed";
+							if (entry && !bgSignal.aborted) entry.status = "failed";
 							backgroundAbortControllers.delete(agentId);
 							safeNotify({
 								agent: agentName, task: taskSummary, exitCode: 1, output: "", stderr: "",
@@ -884,7 +916,7 @@ export function createSubagentToolDefinition(
 				}
 			}
 
-						// Foreground mode: run and wait for results
+				// Foreground mode: run and wait for results
 			const progressCallback = onUpdate
 				? (msg: string) => onUpdate({ content: [{ type: "text", text: msg }] } as any)
 				: undefined;
