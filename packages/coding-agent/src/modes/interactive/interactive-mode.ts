@@ -47,6 +47,7 @@ import {
 	VERSION,
 } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
+import { abortBackgroundAgents, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -464,7 +465,7 @@ export class InteractiveMode {
 			].join("\n");
 			const onboarding = theme.fg(
 				"dim",
-				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
+				`${APP_NAME} can explain its own features and look up its docs. Ask it how to use or extend ${APP_NAME}.`,
 			);
 			this.builtInHeader = new Text(`${logo}\n${instructions}\n\n${onboarding}`, 1, 0);
 
@@ -724,7 +725,7 @@ export class InteractiveMode {
 		}
 
 		if (extendedKeysFormat === "xterm") {
-			return "tmux extended-keys-format is xterm. Pi works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
+			return `tmux extended-keys-format is xterm. ${APP_NAME} works best with csi-u. Add \`set -g extended-keys-format csi-u\` to ~/.tmux.conf and restart tmux.`;
 		}
 
 		return undefined;
@@ -1946,7 +1947,10 @@ export class InteractiveMode {
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
 			if (this.loadingAnimation) {
+				this.cancelBackgroundAgents();
 				this.restoreQueuedMessagesToEditor({ abort: true });
+			} else if (getRunningBackgroundAgents().length > 0) {
+				this.cancelBackgroundAgents();
 			} else if (this.session.isBashRunning) {
 				this.session.abortBash();
 			} else if (this.isBashMode) {
@@ -2495,7 +2499,39 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 			}
+
+			case "background_agent_start":
+			case "background_agent_end": {
+				this.updateBackgroundAgentStatus();
+				break;
+			}
 		}
+	}
+
+	/** Update the footer status line with running background agent count. */
+	private updateBackgroundAgentStatus(): void {
+		const running = getRunningBackgroundAgents();
+		if (running.length === 0) {
+			this.footerDataProvider.setExtensionStatus("bg-agents", undefined);
+		} else {
+			const types = running.map((a) => a.agentType);
+			const label = running.length === 1
+				? `1 background agent (${types[0]})`
+				: `${running.length} background agents (${types.join(", ")})`;
+			const interrupt = keyText("app.interrupt");
+			this.footerDataProvider.setExtensionStatus("bg-agents", theme.fg("accent", `⟳ ${label}`) + theme.fg("muted", ` (${interrupt} to cancel)`));
+		}
+		this.footer.invalidate();
+		this.ui.requestRender();
+	}
+
+	/** Cancel all running background agents. The completion callback still fires with the result
+	 *  (including cancellation context), so no separate message is needed here. */
+	private cancelBackgroundAgents(): void {
+		const running = getRunningBackgroundAgents();
+		if (running.length === 0) return;
+		abortBackgroundAgents();
+		this.updateBackgroundAgentStatus();
 	}
 
 	/** Extract text content from a user message */

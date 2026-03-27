@@ -79,7 +79,7 @@ import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import type { BashOperations } from "./tools/bash.js";
-import { createAllToolDefinitions } from "./tools/index.js";
+import { createAllToolDefinitions, getRunningBackgroundAgents } from "./tools/index.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
 // ============================================================================
@@ -121,7 +121,9 @@ export type AgentSessionEvent =
 			errorMessage?: string;
 	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
-	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
+	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
+	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
+	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -2293,6 +2295,74 @@ export class AgentSession {
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix },
+					subagent: {
+						onBackgroundStart: (agentId, agentType, taskSummary) => {
+							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary });
+						},
+						onBackgroundComplete: (agentId, result, cancelled) => {
+							const parts: string[] = [];
+							if (cancelled) {
+								parts.push("This agent was cancelled by the user.");
+							}
+							if (result.exitCode !== 0) {
+								parts.push(`Error: ${result.errorMessage || "unknown"}`);
+							}
+							if (result.output) {
+								parts.push(result.output);
+							}
+							// Append status of other running agents so the model has awareness
+							const stillRunning = getRunningBackgroundAgents();
+							if (stillRunning.length > 0) {
+								const runningList = stillRunning.map((a) => `  ${a.agentId} (${a.agentType}): ${a.taskSummary}`).join("\n");
+								parts.push(`Still running (${stillRunning.length}):\n${runningList}`);
+							}
+							const summary = parts.join("\n\n") || "(no output)";
+							const status = cancelled ? "cancelled" : "completed";
+							const message = {
+								role: "user" as const,
+								content: [
+									{
+										type: "text" as const,
+										text: `<background-agent-complete>\nBackground agent ${agentId} (${result.agent}) ${status}.\n\n${summary}\n</background-agent-complete>`,
+									},
+								],
+								timestamp: Date.now(),
+							};
+							if (cancelled) {
+								// Cancelled by user (Esc) — add to context and render in chat,
+								// but do NOT trigger a response (the user hit Esc to stop, not to ask a question)
+								try {
+									this.agent.appendMessage(message);
+									this._emit({ type: "message_start", message });
+									this._emit({ type: "message_end", message });
+								} catch (err) {
+									console.error(`[subagent] Failed to deliver cancellation message for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`);
+								}
+							} else {
+								// Normal completion — deliver and trigger a response
+								// If the agent is already streaming, queue as follow-up instead of prompting
+								if (this.agent.state.isStreaming) {
+									this.agent.followUp(message);
+								} else {
+									// Fallback: if streaming started between the isStreaming check and this call, deliver as follow-up
+									this.agent.prompt(message).catch((promptErr) => {
+										console.error(`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`);
+										try {
+											this.agent.followUp(message);
+										} catch (followUpErr) {
+											console.error(`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`);
+										}
+									});
+								}
+							}
+							// Emit status event AFTER delivery — non-critical UI update that shouldn't block result delivery
+							try {
+								this._emit({ type: "background_agent_end", agentId, agentType: result.agent, success: result.exitCode === 0 });
+							} catch (emitErr) {
+								console.error(`[subagent] background_agent_end emit failed: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`);
+							}
+						},
+					},
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -2328,7 +2398,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch"];
+			: ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch", "subagent"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
