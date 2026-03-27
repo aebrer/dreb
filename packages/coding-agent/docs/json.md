@@ -8,7 +8,7 @@ Outputs all session events as JSON lines to stdout. Useful for integrating dreb 
 
 ## Event Types
 
-Events are defined in [`AgentSessionEvent`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/agent-session.ts#L102):
+Events are defined in [`AgentSessionEvent`](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/agent-session.ts#L102):
 
 ```typescript
 type AgentSessionEvent =
@@ -19,7 +19,7 @@ type AgentSessionEvent =
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
 ```
 
-Base events from [`AgentEvent`](https://github.com/badlogic/pi-mono/blob/main/packages/agent/src/types.ts#L179):
+Base events from [`AgentEvent`](https://github.com/aebrer/dreb/blob/master/packages/agent/src/types.ts#L179):
 
 ```typescript
 type AgentEvent =
@@ -41,12 +41,12 @@ type AgentEvent =
 
 ## Message Types
 
-Base messages from [`packages/ai/src/types.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/types.ts#L134):
+Base messages from [`packages/ai/src/types.ts`](https://github.com/aebrer/dreb/blob/master/packages/ai/src/types.ts#L134):
 - `UserMessage` (line 134)
 - `AssistantMessage` (line 140)
 - `ToolResultMessage` (line 152)
 
-Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/messages.ts#L29):
+Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/messages.ts#L29):
 - `BashExecutionMessage` (line 29)
 - `CustomMessage` (line 46)
 - `BranchSummaryMessage` (line 55)

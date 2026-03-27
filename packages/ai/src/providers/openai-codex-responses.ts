@@ -886,7 +886,7 @@ function buildBaseCodexHeaders(
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
 	headers.set("originator", "dreb");
-	const userAgent = _os ? `pi (${_os.platform()} ${_os.release()}; ${_os.arch()})` : "pi (browser)";
+	const userAgent = _os ? `dreb (${_os.platform()} ${_os.release()}; ${_os.arch()})` : "dreb (browser)";
 	headers.set("User-Agent", userAgent);
 	return headers;
 }

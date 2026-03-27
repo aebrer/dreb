@@ -42,7 +42,6 @@ import {
 	getAgentDir,
 	getAuthPath,
 	getDebugLogPath,
-
 	getUpdateInstruction,
 	VERSION,
 } from "../../config.js";
@@ -645,6 +644,9 @@ export class InteractiveMode {
 	 * Check npm registry for a newer version.
 	 */
 	private async checkForNewVersion(): Promise<string | undefined> {
+		// Not published to npm — skip version check
+		return undefined;
+
 		if (process.env.DREB_SKIP_VERSION_CHECK || process.env.DREB_OFFLINE) return undefined;
 
 		try {
@@ -2964,7 +2966,7 @@ export class InteractiveMode {
 		}
 
 		const currentText = this.editor.getExpandedText?.() ?? this.editor.getText();
-		const tmpFile = path.join(os.tmpdir(), `pi-editor-${Date.now()}.pi.md`);
+		const tmpFile = path.join(os.tmpdir(), `dreb-editor-${Date.now()}.dreb.md`);
 
 		try {
 			// Write current content to temp file
@@ -3029,7 +3031,7 @@ export class InteractiveMode {
 		const updateInstruction = theme.fg("muted", `New version ${newVersion} is available. `) + action;
 		const changelogUrl = theme.fg(
 			"accent",
-			"https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/CHANGELOG.md",
+			"https://github.com/aebrer/dreb/blob/master/packages/coding-agent/CHANGELOG.md",
 		);
 		const changelogLine = theme.fg("muted", "Changelog: ") + changelogUrl;
 

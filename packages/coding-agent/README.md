@@ -2,8 +2,7 @@ dreb is a minimal terminal coding harness, forked from [pi-mono](https://github.
 
 dreb ships with powerful defaults but skips features like sub agents and plan mode. Instead, you can ask dreb to build what you want or install a third party package that matches your workflow.
 
-dreb runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps. See [openclaw/openclaw](https://github.com/openclaw/openclaw) for a real-world SDK integration.
-
+dreb runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps.
 ## Table of Contents
 
 - [Quick Start](#quick-start)
@@ -319,8 +318,8 @@ Bundle and share extensions, skills, prompts, and themes via npm or git.
 > **Security:** Packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
 
 ```bash
-dreb install npm:@foo/pi-tools
-dreb install npm:@foo/pi-tools@1.2.3      # pinned version
+dreb install npm:@foo/my-tools
+dreb install npm:@foo/my-tools@1.2.3      # pinned version
 dreb install git:github.com/user/repo
 dreb install git:github.com/user/repo@v1  # tag or commit
 dreb install git:git@github.com:user/repo
@@ -329,8 +328,8 @@ dreb install https://github.com/user/repo
 dreb install https://github.com/user/repo@v1      # tag or commit
 dreb install ssh://git@github.com/user/repo
 dreb install ssh://git@github.com/user/repo@v1    # tag or commit
-dreb remove npm:@foo/pi-tools
-dreb uninstall npm:@foo/pi-tools          # alias for remove
+dreb remove npm:@foo/my-tools
+dreb uninstall npm:@foo/my-tools          # alias for remove
 dreb list
 dreb update                               # skips pinned packages
 dreb config                               # enable/disable extensions, skills, prompts, themes
@@ -395,7 +394,7 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 
 dreb is aggressively extensible so it doesn't have to dictate your workflow. Features that other tools bake in can be built with [extensions](#extensions), [skills](#skills), or installed from third-party [packages](#packages). This keeps the core minimal while letting you shape dreb to fit how you work.
 
-**No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. [Why?](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
+**No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. Why?
 
 **No sub-agents.** There's many ways to do this. Spawn dreb instances via tmux, or build your own with [extensions](#extensions), or install a package that does it your way.
 
@@ -406,8 +405,6 @@ dreb is aggressively extensible so it doesn't have to dictate your workflow. Fea
 **No built-in to-dos.** They confuse models. Use a TODO.md file, or build your own with [extensions](#extensions).
 
 **No background bash.** Use tmux. Full observability, direct interaction.
-
-Read the [blog post](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/) for the full rationale.
 
 ---
 

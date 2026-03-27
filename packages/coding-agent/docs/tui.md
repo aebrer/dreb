@@ -4,7 +4,7 @@
 
 Extensions and custom tools can render custom TUI components for interactive user interfaces. This page covers the component system and available building blocks.
 
-**Source:** [`@dreb/tui`](https://github.com/badlogic/pi-mono/tree/main/packages/tui)
+**Source:** [`@dreb/tui`](https://github.com/aebrer/dreb/tree/master/packages/tui)
 
 ## Component Interface
 
