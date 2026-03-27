@@ -5,7 +5,7 @@
  * This is useful for:
  * - Adding logging or auditing to tool calls
  * - Implementing access control or sandboxing
- * - Routing tool calls to remote systems (e.g., pi-ssh-remote)
+ * - Routing tool calls to remote systems (e.g., dreb-ssh-remote)
  * - Modifying tool behavior for specific workflows
  *
  * This example overrides the `read` tool to:

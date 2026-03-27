@@ -17,7 +17,7 @@ describe("createAgentSession skills option", () => {
 		skillsDir = join(tempDir, "skills", "test-skill");
 		mkdirSync(skillsDir, { recursive: true });
 
-		// Create a test skill in the pi skills directory
+		// Create a test skill in the dreb skills directory
 		writeFileSync(
 			join(skillsDir, "SKILL.md"),
 			`---

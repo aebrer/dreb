@@ -22,7 +22,7 @@ describe("ExtensionRunner", () => {
 	const defaultKeybindings = new KeybindingsManager().getEffectiveConfig();
 
 	beforeEach(() => {
-		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-runner-test-"));
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "dreb-runner-test-"));
 		extensionsDir = path.join(tempDir, "extensions");
 		fs.mkdirSync(extensionsDir);
 		sessionManager = SessionManager.inMemory();

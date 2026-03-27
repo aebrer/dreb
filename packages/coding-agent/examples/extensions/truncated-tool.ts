@@ -109,7 +109,7 @@ export default function (dreb: ExtensionAPI) {
 
 			if (truncation.truncated) {
 				// Save full output to a temp file so LLM can access it if needed
-				const tempDir = await mkdtemp(join(tmpdir(), "pi-rg-"));
+				const tempDir = await mkdtemp(join(tmpdir(), "dreb-rg-"));
 				const tempFile = join(tempDir, "output.txt");
 				await withFileMutationQueue(tempFile, async () => {
 					await writeFile(tempFile, output, "utf8");

@@ -1,5 +1,5 @@
 /**
- * Syncs pi theme with macOS system appearance (dark/light mode).
+ * Syncs dreb theme with macOS system appearance (dark/light mode).
  *
  * Usage:
  *   dreb -e examples/extensions/mac-system-theme.ts

@@ -25,14 +25,14 @@ export default function (dreb: ExtensionAPI) {
 	// -- setTitle, setWidget, setStatus on session lifecycle --
 
 	dreb.on("session_start", async (_event, ctx) => {
-		ctx.ui.setTitle("pi RPC Demo");
+		ctx.ui.setTitle("dreb RPC Demo");
 		ctx.ui.setWidget("rpc-demo", ["--- RPC Extension UI Demo ---", "Loaded and ready."]);
 		ctx.ui.setStatus("rpc-demo", `Turns: ${turnCount}`);
 	});
 
 	dreb.on("session_switch", async (_event, ctx) => {
 		turnCount = 0;
-		ctx.ui.setTitle("pi RPC Demo (new session)");
+		ctx.ui.setTitle("dreb RPC Demo (new session)");
 		ctx.ui.setStatus("rpc-demo", `Turns: ${turnCount}`);
 	});
 

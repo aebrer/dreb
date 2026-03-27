@@ -2,18 +2,18 @@
  * Custom Header Extension
  *
  * Demonstrates ctx.ui.setHeader() for replacing the built-in header
- * (logo + keybinding hints) with a custom component showing the pi mascot.
+ * (logo + keybinding hints) with a custom component showing the dreb mascot.
  */
 
 import type { ExtensionAPI, Theme } from "@dreb/coding-agent";
 import { VERSION } from "@dreb/coding-agent";
 
-// --- PI MASCOT ---
-// Based on pi_mascot.ts - the pi agent character
-function getPiMascot(theme: Theme): string[] {
+// --- DREB MASCOT ---
+// Based on the dreb agent character
+function getDrebMascot(theme: Theme): string[] {
 	// --- COLORS ---
 	// 3b1b Blue: R=80, G=180, B=230
-	const piBlue = (text: string) => theme.fg("accent", text);
+	const accentBlue = (text: string) => theme.fg("accent", text);
 	const white = (text: string) => text; // Use plain white (or theme.fg("text", text))
 	const black = (text: string) => theme.fg("dim", text); // Use dim for contrast
 
@@ -33,12 +33,12 @@ function getPiMascot(theme: Theme): string[] {
 
 	// 3. Line 2: The Wide Top Bar (The "Overhang")
 	// 14 blocks wide for that serif-style roof
-	const lineBar = `  ${piBlue(BLOCK.repeat(14))}`;
+	const lineBar = `  ${accentBlue(BLOCK.repeat(14))}`;
 
 	// 4. Lines 3-6: The Legs
 	// Indented 5 spaces relative to the very left edge
 	// Leg width: 2 blocks | Gap: 4 blocks
-	const lineLeg = `     ${piBlue(BLOCK.repeat(2))}    ${piBlue(BLOCK.repeat(2))}`;
+	const lineLeg = `     ${accentBlue(BLOCK.repeat(2))}    ${accentBlue(BLOCK.repeat(2))}`;
 
 	// --- ASSEMBLY ---
 	return ["", lineEyes, lineBar, lineLeg, lineLeg, lineLeg, lineLeg, ""];
@@ -51,7 +51,7 @@ export default function (dreb: ExtensionAPI) {
 			ctx.ui.setHeader((_tui, theme) => {
 				return {
 					render(_width: number): string[] {
-						const mascotLines = getPiMascot(theme);
+						const mascotLines = getDrebMascot(theme);
 						// Add a subtitle with hint
 						const subtitle = `${theme.fg("muted", "   shitty coding agent")}${theme.fg("dim", ` v${VERSION}`)}`;
 						return [...mascotLines, subtitle];

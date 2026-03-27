@@ -174,7 +174,7 @@ models: [{
   compat: {
     supportsDeveloperRole: false,      // use "system" instead of "developer"
     supportsReasoningEffort: true,
-    reasoningEffortMap: {              // map pi-ai levels to provider values
+    reasoningEffortMap: {              // map @dreb/ai reasoning effort levels to provider values
       minimal: "default",
       low: "default",
       medium: "default",

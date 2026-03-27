@@ -479,7 +479,7 @@ class StreamingOverflowComponent extends BaseOverlay {
 
 				# Add some colored status messages with long text
 				if [ $((i % 5)) -eq 0 ]; then
-					echo -e "  \\033[32m✓ Successfully processed \${i} files in /Users/nicobailon/Documents/development/pi-mono\\033[0m"
+					echo -e "  \\033[32m✓ Successfully processed \${i} files in /Users/nicobailon/Documents/development/dreb\\033[0m"
 				fi
 				if [ $((i % 7)) -eq 0 ]; then
 					echo -e "  \\033[33m⚠ Warning: potential issue detected at line \${i} in very-long-component-name-that-exceeds-width.ts\\033[0m"

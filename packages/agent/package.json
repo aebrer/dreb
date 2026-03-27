@@ -17,7 +17,7 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@dreb/ai": "^0.62.0"
+		"@dreb/ai": "^1.0.0"
 	},
 	"keywords": [
 		"ai",

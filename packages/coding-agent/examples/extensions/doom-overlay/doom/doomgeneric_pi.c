@@ -1,5 +1,6 @@
 /**
- * pi-doom platform implementation for doomgeneric
+ * dreb doom-overlay platform implementation for doomgeneric
+ * (adapted from pi-doom)
  *
  * Minimal implementation - no sound, just framebuffer and input.
  */

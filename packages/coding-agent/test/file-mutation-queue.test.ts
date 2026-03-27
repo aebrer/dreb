@@ -13,7 +13,7 @@ function delay(ms: number): Promise<void> {
 const tempDirs: string[] = [];
 
 async function createTempDir(): Promise<string> {
-	const dir = await mkdtemp(join(tmpdir(), "pi-file-mutation-queue-"));
+	const dir = await mkdtemp(join(tmpdir(), "dreb-file-mutation-queue-"));
 	tempDirs.push(dir);
 	return dir;
 }

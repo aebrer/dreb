@@ -36,7 +36,7 @@ export default function (dreb: ExtensionAPI) {
 
 		// Generate a simple commit message
 		const firstLine = lastAssistantText.split("\n")[0] || "Work in progress";
-		const commitMessage = `[pi] ${firstLine.slice(0, 50)}${firstLine.length > 50 ? "..." : ""}`;
+		const commitMessage = `[dreb] ${firstLine.slice(0, 50)}${firstLine.length > 50 ? "..." : ""}`;
 
 		// Stage and commit
 		await dreb.exec("git", ["add", "-A"]);

@@ -34,7 +34,7 @@
 	"version": "1.0.0",
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.5",
-		"@dreb/coding-agent": "^0.30.2",
+		"@dreb/coding-agent": "^1.0.0",
 		"get-east-asian-width": "^1.4.0"
 	},
 	"overrides": {
