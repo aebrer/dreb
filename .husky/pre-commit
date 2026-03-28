@@ -1,2 +1,3 @@
 npx biome check --error-on-warnings .
+npx tsgo --noEmit
 bash test.sh
