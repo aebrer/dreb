@@ -1022,6 +1022,20 @@ export class InteractiveMode {
 				this.chatContainer.addChild(new Spacer(1));
 			}
 
+			const memoryIndexes = this.session.resourceLoader.getMemoryIndexes();
+			const allMemorySources = [...memoryIndexes.global, ...memoryIndexes.project];
+			if (allMemorySources.length > 0) {
+				this.chatContainer.addChild(new Spacer(1));
+				const memoryList = allMemorySources
+					.map((m) => {
+						const label = m.source === "claude" ? " (claude)" : "";
+						return theme.fg("dim", `  ${this.formatDisplayPath(m.dir)}/MEMORY.md${label}`);
+					})
+					.join("\n");
+				this.chatContainer.addChild(new Text(`${sectionHeader("Memory")}\n${memoryList}`, 0, 0));
+				this.chatContainer.addChild(new Spacer(1));
+			}
+
 			const skills = skillsResult.skills;
 			if (skills.length > 0) {
 				const groups = this.buildScopeGroups(

@@ -1,10 +1,11 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
+import { findGitRoot } from "./git-root.js";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
 
@@ -25,12 +26,26 @@ export interface ResourceExtensionPaths {
 	themePaths?: Array<{ path: string; metadata: PathMetadata }>;
 }
 
+export interface MemorySource {
+	readonly content: string;
+	readonly dir: string;
+	readonly source: "dreb" | "claude";
+}
+
+export interface MemoryIndexes {
+	readonly global: readonly MemorySource[];
+	readonly project: readonly MemorySource[];
+	readonly globalMemoryDir: string;
+	readonly projectMemoryDir: string;
+}
+
 export interface ResourceLoader {
 	getExtensions(): LoadExtensionsResult;
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
+	getMemoryIndexes(): MemoryIndexes;
 	getSystemPrompt(): string | undefined;
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
@@ -187,6 +202,93 @@ function loadProjectContextFiles(
 	return contextFiles;
 }
 
+const MEMORY_INDEX_MAX_LINES = 200;
+
+/**
+ * Encode an absolute POSIX path the way Claude Code does for ~/.claude/projects/ directories.
+ * Replaces path separators and underscores with hyphens.
+ * /home/drew/projects/deep_yellow -> -home-drew-projects-deep-yellow
+ */
+export function encodeClaudeProjectPath(absolutePath: string): string {
+	return absolutePath.replace(/[/_]/g, "-");
+}
+
+function readMemoryIndex(dir: string): string | undefined {
+	const indexPath = join(dir, "MEMORY.md");
+	try {
+		if (!existsSync(indexPath)) return undefined;
+		const content = readFileSync(indexPath, "utf-8");
+		const lines = content.split("\n");
+		if (lines.length > MEMORY_INDEX_MAX_LINES) {
+			console.error(
+				chalk.yellow(
+					`Warning: ${indexPath} has ${lines.length} lines, truncated to ${MEMORY_INDEX_MAX_LINES}. Consider cleaning up older entries.`,
+				),
+			);
+			return lines.slice(0, MEMORY_INDEX_MAX_LINES).join("\n");
+		}
+		return content;
+	} catch (error) {
+		console.error(chalk.yellow(`Warning: Could not read ${indexPath}: ${error}`));
+		return undefined;
+	}
+}
+
+function loadMemoryIndexes(options: { cwd?: string; agentDir?: string }): MemoryIndexes {
+	const resolvedCwd = options.cwd ?? process.cwd();
+	const projectRoot = findGitRoot(resolvedCwd) ?? resolvedCwd;
+	const drebRoot = options.agentDir ? resolve(options.agentDir, "..") : join(homedir(), ".dreb");
+
+	// Primary write targets for dreb
+	const globalMemoryDir = join(drebRoot, "memory");
+	const projectMemoryDir = join(projectRoot, ".dreb", "memory");
+
+	// Claude Code memory paths (read-only — dreb reads these but writes to .dreb/)
+	const claudeGlobalMemoryDir = join(homedir(), ".claude", "projects", encodeClaudeProjectPath(homedir()), "memory");
+	const claudeProjectMemoryDir = join(
+		homedir(),
+		".claude",
+		"projects",
+		encodeClaudeProjectPath(projectRoot),
+		"memory",
+	);
+
+	const globalSources: MemorySource[] = [];
+	const projectSources: MemorySource[] = [];
+
+	// Load dreb memory (primary)
+	const drebGlobal = readMemoryIndex(globalMemoryDir);
+	if (drebGlobal) {
+		globalSources.push({ content: drebGlobal, dir: globalMemoryDir, source: "dreb" });
+	}
+
+	const drebProject = globalMemoryDir !== projectMemoryDir ? readMemoryIndex(projectMemoryDir) : undefined;
+	if (drebProject) {
+		projectSources.push({ content: drebProject, dir: projectMemoryDir, source: "dreb" });
+	}
+
+	// Load Claude Code memory (read-only, compat)
+	const claudeGlobal = readMemoryIndex(claudeGlobalMemoryDir);
+	if (claudeGlobal) {
+		globalSources.push({ content: claudeGlobal, dir: claudeGlobalMemoryDir, source: "claude" });
+	}
+
+	// Only load Claude project memory if it's a different path than Claude global
+	if (claudeProjectMemoryDir !== claudeGlobalMemoryDir) {
+		const claudeProject = readMemoryIndex(claudeProjectMemoryDir);
+		if (claudeProject) {
+			projectSources.push({ content: claudeProject, dir: claudeProjectMemoryDir, source: "claude" });
+		}
+	}
+
+	return {
+		global: globalSources,
+		project: projectSources,
+		globalMemoryDir,
+		projectMemoryDir,
+	};
+}
+
 export interface DefaultResourceLoaderOptions {
 	cwd?: string;
 	agentDir?: string;
@@ -267,6 +369,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private themes: Theme[];
 	private themeDiagnostics: ResourceDiagnostic[];
 	private agentsFiles: Array<{ path: string; content: string }>;
+	private memoryIndexes: MemoryIndexes;
 	private systemPrompt?: string;
 	private appendSystemPrompt: string[];
 	private lastSkillPaths: string[];
@@ -313,6 +416,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.themes = [];
 		this.themeDiagnostics = [];
 		this.agentsFiles = [];
+		this.memoryIndexes = {
+			global: [],
+			project: [],
+			globalMemoryDir: join(resolve(this.agentDir, ".."), "memory"),
+			projectMemoryDir: join(this.cwd, ".dreb", "memory"),
+		};
 		this.appendSystemPrompt = [];
 		this.lastSkillPaths = [];
 		this.extensionSkillSourceInfos = new Map();
@@ -340,6 +449,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> } {
 		return { agentsFiles: this.agentsFiles };
+	}
+
+	getMemoryIndexes(): MemoryIndexes {
+		return this.memoryIndexes;
 	}
 
 	getSystemPrompt(): string | undefined {
@@ -505,6 +618,27 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const agentsFiles = { agentsFiles: loadProjectContextFiles({ cwd: this.cwd, agentDir: this.agentDir }) };
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
 		this.agentsFiles = resolvedAgentsFiles.agentsFiles;
+
+		// Load memory indexes and ensure global memory directory exists.
+		// Wrapped in try/catch so memory loading failures degrade gracefully rather than crashing the session.
+		try {
+			this.memoryIndexes = loadMemoryIndexes({ cwd: this.cwd, agentDir: this.agentDir });
+			try {
+				mkdirSync(this.memoryIndexes.globalMemoryDir, { recursive: true });
+			} catch (error) {
+				console.error(
+					chalk.yellow(
+						`Warning: Could not create memory directory ${this.memoryIndexes.globalMemoryDir}: ${error}. Memory saves to this directory will fail.`,
+					),
+				);
+			}
+		} catch (error) {
+			console.error(
+				chalk.yellow(
+					`Warning: Could not load memory indexes: ${error}. Session will start without memory context.`,
+				),
+			);
+		}
 
 		const baseSystemPrompt = resolvePromptInput(
 			this.systemPromptSource ?? this.discoverSystemPromptFile(),

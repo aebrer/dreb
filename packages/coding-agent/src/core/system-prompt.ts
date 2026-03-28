@@ -3,6 +3,8 @@
  */
 
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
+import { getMemoryInstructions } from "./memory-prompt.js";
+import type { MemoryIndexes } from "./resource-loader.js";
 import { formatSkillsForPrompt, type Skill } from "./skills.js";
 
 export interface BuildSystemPromptOptions {
@@ -20,8 +22,51 @@ export interface BuildSystemPromptOptions {
 	cwd?: string;
 	/** Pre-loaded context files. */
 	contextFiles?: Array<{ path: string; content: string }>;
+	/** Memory indexes (global and project). */
+	memoryIndexes?: MemoryIndexes;
 	/** Pre-loaded skills. */
 	skills?: Skill[];
+}
+
+function formatMemoryScope(sources: readonly import("./resource-loader.js").MemorySource[], heading: string): string {
+	if (sources.length === 0) return "";
+
+	const drebSources = sources.filter((s) => s.source === "dreb");
+	const claudeSources = sources.filter((s) => s.source === "claude");
+
+	let out = `\n### ${heading}\n`;
+
+	for (const source of drebSources) {
+		out += `\n#### dreb memory (${source.dir}/)\n\n${source.content}\n`;
+	}
+
+	if (claudeSources.length > 0) {
+		out += `\n#### Claude Code memory (read-only)\n`;
+		out += `> **Note:** These memories were written by Claude Code and may reference Claude Code-specific features, tools, or conventions that don't exist in dreb. Treat the content as useful context, but verify any tool names or workflow references.\n`;
+		for (const source of claudeSources) {
+			out += `\nSource: ${source.dir}/\n\n${source.content}\n`;
+		}
+	}
+
+	return out;
+}
+
+function buildMemorySection(memoryIndexes?: MemoryIndexes): string {
+	if (!memoryIndexes) return "";
+
+	// Always include memory instructions so the agent knows the convention
+	let section = `\n\n${getMemoryInstructions({ globalMemoryDir: memoryIndexes.globalMemoryDir, projectMemoryDir: memoryIndexes.projectMemoryDir })}`;
+
+	const { global: globalSources, project: projectSources } = memoryIndexes;
+
+	// Append the actual memory indexes if any exist
+	if (globalSources.length > 0 || projectSources.length > 0) {
+		section += "\n\n## Current Memory Indexes\n";
+		section += formatMemoryScope(globalSources, "Global Memory");
+		section += formatMemoryScope(projectSources, "Project Memory");
+	}
+
+	return section;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -67,6 +112,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		if (customPromptHasRead && skills.length > 0) {
 			prompt += formatSkillsForPrompt(skills);
 		}
+
+		// Append memory indexes
+		prompt += buildMemorySection(options.memoryIndexes);
 
 		// Add date and working directory last
 		prompt += `\nCurrent date: ${date}`;
@@ -170,6 +218,9 @@ Dreb documentation (read only when the user asks about dreb itself, its SDK, ext
 	if (hasRead && skills.length > 0) {
 		prompt += formatSkillsForPrompt(skills);
 	}
+
+	// Append memory indexes
+	prompt += buildMemorySection(options.memoryIndexes);
 
 	// Add date and working directory last
 	prompt += `\nCurrent date: ${date}`;
