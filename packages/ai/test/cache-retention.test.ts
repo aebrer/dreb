@@ -27,7 +27,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 		it.skipIf(!process.env.ANTHROPIC_API_KEY)(
 			"should use default cache TTL (no ttl field) when DREB_CACHE_RETENTION is not set",
 			async () => {
-				const model = getModel("anthropic", "claude-3-5-haiku-20241022");
+				const model = getModel("anthropic", "claude-haiku-4-5");
 				let capturedPayload: any = null;
 
 				const s = stream(model, context, {
@@ -50,7 +50,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 
 		it.skipIf(!process.env.ANTHROPIC_API_KEY)("should use 1h cache TTL when DREB_CACHE_RETENTION=long", async () => {
 			process.env.DREB_CACHE_RETENTION = "long";
-			const model = getModel("anthropic", "claude-3-5-haiku-20241022");
+			const model = getModel("anthropic", "claude-haiku-4-5");
 			let capturedPayload: any = null;
 
 			const s = stream(model, context, {
@@ -74,7 +74,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 			process.env.DREB_CACHE_RETENTION = "long";
 
 			// Create a model with a different baseUrl (simulating a proxy)
-			const baseModel = getModel("anthropic", "claude-3-5-haiku-20241022");
+			const baseModel = getModel("anthropic", "claude-haiku-4-5");
 			const proxyModel = {
 				...baseModel,
 				baseUrl: "https://my-proxy.example.com/v1",
@@ -114,7 +114,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 		});
 
 		it("should omit cache_control when cacheRetention is none", async () => {
-			const baseModel = getModel("anthropic", "claude-3-5-haiku-20241022");
+			const baseModel = getModel("anthropic", "claude-haiku-4-5");
 			let capturedPayload: any = null;
 
 			const { streamAnthropic } = await import("../src/providers/anthropic.js");
@@ -140,7 +140,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 		});
 
 		it("should add cache_control to string user messages", async () => {
-			const baseModel = getModel("anthropic", "claude-3-5-haiku-20241022");
+			const baseModel = getModel("anthropic", "claude-haiku-4-5");
 			let capturedPayload: any = null;
 
 			const { streamAnthropic } = await import("../src/providers/anthropic.js");
@@ -168,7 +168,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 		});
 
 		it("should set 1h cache TTL when cacheRetention is long", async () => {
-			const baseModel = getModel("anthropic", "claude-3-5-haiku-20241022");
+			const baseModel = getModel("anthropic", "claude-haiku-4-5");
 			let capturedPayload: any = null;
 
 			const { streamAnthropic } = await import("../src/providers/anthropic.js");
