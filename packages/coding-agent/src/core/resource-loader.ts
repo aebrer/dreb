@@ -1,10 +1,11 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
+import { findGitRoot } from "./git-root.js";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
 
@@ -25,12 +26,26 @@ export interface ResourceExtensionPaths {
 	themePaths?: Array<{ path: string; metadata: PathMetadata }>;
 }
 
+export interface MemorySource {
+	content: string;
+	path: string;
+	source: "dreb" | "claude";
+}
+
+export interface MemoryIndexes {
+	global: MemorySource[];
+	project: MemorySource[];
+	globalMemoryDir: string;
+	projectMemoryDir: string;
+}
+
 export interface ResourceLoader {
 	getExtensions(): LoadExtensionsResult;
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
+	getMemoryIndexes(): MemoryIndexes;
 	getSystemPrompt(): string | undefined;
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
@@ -187,6 +202,85 @@ function loadProjectContextFiles(
 	return contextFiles;
 }
 
+const MEMORY_INDEX_MAX_LINES = 200;
+
+/**
+ * Encode a path the way Claude Code does for ~/.claude/projects/ directories.
+ * /home/drew/projects/dreb -> -home-drew-projects-dreb
+ */
+function encodeClaudeProjectPath(absolutePath: string): string {
+	return absolutePath.replace(/\//g, "-");
+}
+
+function readMemoryIndex(dir: string): string | undefined {
+	const indexPath = join(dir, "MEMORY.md");
+	if (!existsSync(indexPath)) return undefined;
+	try {
+		const content = readFileSync(indexPath, "utf-8");
+		const lines = content.split("\n");
+		if (lines.length > MEMORY_INDEX_MAX_LINES) {
+			return lines.slice(0, MEMORY_INDEX_MAX_LINES).join("\n");
+		}
+		return content;
+	} catch {
+		return undefined;
+	}
+}
+
+function loadMemoryIndexes(options: { cwd?: string }): MemoryIndexes {
+	const resolvedCwd = options.cwd ?? process.cwd();
+	const projectRoot = findGitRoot(resolvedCwd) ?? resolvedCwd;
+
+	// Primary write targets for dreb
+	const globalMemoryDir = join(homedir(), ".dreb", "memory");
+	const projectMemoryDir = join(projectRoot, ".dreb", "memory");
+
+	// Claude Code memory paths (read-only — dreb reads these but writes to .dreb/)
+	const claudeGlobalMemoryDir = join(homedir(), ".claude", "projects", encodeClaudeProjectPath(homedir()), "memory");
+	const claudeProjectMemoryDir = join(
+		homedir(),
+		".claude",
+		"projects",
+		encodeClaudeProjectPath(projectRoot),
+		"memory",
+	);
+
+	const globalSources: MemorySource[] = [];
+	const projectSources: MemorySource[] = [];
+
+	// Load dreb memory (primary)
+	const drebGlobal = readMemoryIndex(globalMemoryDir);
+	if (drebGlobal) {
+		globalSources.push({ content: drebGlobal, path: globalMemoryDir, source: "dreb" });
+	}
+
+	const drebProject = globalMemoryDir !== projectMemoryDir ? readMemoryIndex(projectMemoryDir) : undefined;
+	if (drebProject) {
+		projectSources.push({ content: drebProject, path: projectMemoryDir, source: "dreb" });
+	}
+
+	// Load Claude Code memory (read-only, compat)
+	const claudeGlobal = readMemoryIndex(claudeGlobalMemoryDir);
+	if (claudeGlobal) {
+		globalSources.push({ content: claudeGlobal, path: claudeGlobalMemoryDir, source: "claude" });
+	}
+
+	// Only load Claude project memory if it's a different path than Claude global
+	if (claudeProjectMemoryDir !== claudeGlobalMemoryDir) {
+		const claudeProject = readMemoryIndex(claudeProjectMemoryDir);
+		if (claudeProject) {
+			projectSources.push({ content: claudeProject, path: claudeProjectMemoryDir, source: "claude" });
+		}
+	}
+
+	return {
+		global: globalSources,
+		project: projectSources,
+		globalMemoryDir,
+		projectMemoryDir,
+	};
+}
+
 export interface DefaultResourceLoaderOptions {
 	cwd?: string;
 	agentDir?: string;
@@ -267,6 +361,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private themes: Theme[];
 	private themeDiagnostics: ResourceDiagnostic[];
 	private agentsFiles: Array<{ path: string; content: string }>;
+	private memoryIndexes: MemoryIndexes;
 	private systemPrompt?: string;
 	private appendSystemPrompt: string[];
 	private lastSkillPaths: string[];
@@ -313,6 +408,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.themes = [];
 		this.themeDiagnostics = [];
 		this.agentsFiles = [];
+		this.memoryIndexes = {
+			global: [],
+			project: [],
+			globalMemoryDir: join(homedir(), ".dreb", "memory"),
+			projectMemoryDir: join(this.cwd, ".dreb", "memory"),
+		};
 		this.appendSystemPrompt = [];
 		this.lastSkillPaths = [];
 		this.extensionSkillSourceInfos = new Map();
@@ -340,6 +441,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> } {
 		return { agentsFiles: this.agentsFiles };
+	}
+
+	getMemoryIndexes(): MemoryIndexes {
+		return this.memoryIndexes;
 	}
 
 	getSystemPrompt(): string | undefined {
@@ -505,6 +610,14 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const agentsFiles = { agentsFiles: loadProjectContextFiles({ cwd: this.cwd, agentDir: this.agentDir }) };
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
 		this.agentsFiles = resolvedAgentsFiles.agentsFiles;
+
+		// Load memory indexes and ensure global memory directory exists
+		this.memoryIndexes = loadMemoryIndexes({ cwd: this.cwd });
+		try {
+			mkdirSync(this.memoryIndexes.globalMemoryDir, { recursive: true });
+		} catch {
+			// Best-effort — if the directory can't be created, memory writes will fail at write time
+		}
 
 		const baseSystemPrompt = resolvePromptInput(
 			this.systemPromptSource ?? this.discoverSystemPromptFile(),

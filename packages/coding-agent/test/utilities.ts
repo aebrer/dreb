@@ -221,6 +221,12 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 		getPrompts: () => ({ prompts: [], diagnostics: [] }),
 		getThemes: () => ({ themes: [], diagnostics: [] }),
 		getAgentsFiles: () => ({ agentsFiles: [] }),
+		getMemoryIndexes: () => ({
+			global: [],
+			project: [],
+			globalMemoryDir: "/tmp/dreb-test/memory",
+			projectMemoryDir: "/tmp/dreb-test/memory",
+		}),
 		getSystemPrompt: () => undefined,
 		getAppendSystemPrompt: () => [],
 		extendResources: () => {},

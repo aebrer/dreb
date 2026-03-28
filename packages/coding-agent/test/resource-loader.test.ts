@@ -129,8 +129,10 @@ description: project
 Project skill`,
 			);
 
+			// Resolve theme path relative to this package (works whether cwd is repo root or packages/coding-agent)
+			const packageDir = join(import.meta.dirname, "..");
 			const baseTheme = JSON.parse(
-				readFileSync(join(process.cwd(), "src", "modes", "interactive", "theme", "dark.json"), "utf-8"),
+				readFileSync(join(packageDir, "src", "modes", "interactive", "theme", "dark.json"), "utf-8"),
 			) as { name: string; vars?: Record<string, string> };
 			baseTheme.name = "collision-theme";
 			const userThemePath = join(agentDir, "themes", "collision.json");

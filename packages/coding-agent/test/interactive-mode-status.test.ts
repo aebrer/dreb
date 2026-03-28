@@ -131,6 +131,12 @@ describe("InteractiveMode.showLoadedResources", () => {
 				resourceLoader: {
 					getPathMetadata: () => new Map(),
 					getAgentsFiles: () => ({ agentsFiles: [] }),
+					getMemoryIndexes: () => ({
+						global: [],
+						project: [],
+						globalMemoryDir: "/tmp/test/memory",
+						projectMemoryDir: "/tmp/test/memory",
+					}),
 					getSkills: () => ({
 						skills: options.skills ?? [],
 						diagnostics: options.skillDiagnostics ?? [],
