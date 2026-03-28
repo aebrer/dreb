@@ -215,8 +215,8 @@ export function encodeClaudeProjectPath(absolutePath: string): string {
 
 function readMemoryIndex(dir: string): string | undefined {
 	const indexPath = join(dir, "MEMORY.md");
-	if (!existsSync(indexPath)) return undefined;
 	try {
+		if (!existsSync(indexPath)) return undefined;
 		const content = readFileSync(indexPath, "utf-8");
 		const lines = content.split("\n");
 		if (lines.length > MEMORY_INDEX_MAX_LINES) {
@@ -234,12 +234,13 @@ function readMemoryIndex(dir: string): string | undefined {
 	}
 }
 
-function loadMemoryIndexes(options: { cwd?: string }): MemoryIndexes {
+function loadMemoryIndexes(options: { cwd?: string; agentDir?: string }): MemoryIndexes {
 	const resolvedCwd = options.cwd ?? process.cwd();
 	const projectRoot = findGitRoot(resolvedCwd) ?? resolvedCwd;
+	const drebRoot = options.agentDir ? resolve(options.agentDir, "..") : join(homedir(), ".dreb");
 
 	// Primary write targets for dreb
-	const globalMemoryDir = join(homedir(), ".dreb", "memory");
+	const globalMemoryDir = join(drebRoot, "memory");
 	const projectMemoryDir = join(projectRoot, ".dreb", "memory");
 
 	// Claude Code memory paths (read-only — dreb reads these but writes to .dreb/)
@@ -418,7 +419,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.memoryIndexes = {
 			global: [],
 			project: [],
-			globalMemoryDir: join(homedir(), ".dreb", "memory"),
+			globalMemoryDir: join(resolve(this.agentDir, ".."), "memory"),
 			projectMemoryDir: join(this.cwd, ".dreb", "memory"),
 		};
 		this.appendSystemPrompt = [];
@@ -618,14 +619,23 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
 		this.agentsFiles = resolvedAgentsFiles.agentsFiles;
 
-		// Load memory indexes and ensure global memory directory exists
-		this.memoryIndexes = loadMemoryIndexes({ cwd: this.cwd });
+		// Load memory indexes and ensure global memory directory exists.
+		// Wrapped in try/catch so memory loading failures degrade gracefully rather than crashing the session.
 		try {
-			mkdirSync(this.memoryIndexes.globalMemoryDir, { recursive: true });
+			this.memoryIndexes = loadMemoryIndexes({ cwd: this.cwd, agentDir: this.agentDir });
+			try {
+				mkdirSync(this.memoryIndexes.globalMemoryDir, { recursive: true });
+			} catch (error) {
+				console.error(
+					chalk.yellow(
+						`Warning: Could not create memory directory ${this.memoryIndexes.globalMemoryDir}: ${error}. Memory saves to this directory will fail.`,
+					),
+				);
+			}
 		} catch (error) {
 			console.error(
 				chalk.yellow(
-					`Warning: Could not create memory directory ${this.memoryIndexes.globalMemoryDir}: ${error}. Memory saves to this directory will fail.`,
+					`Warning: Could not load memory indexes: ${error}. Session will start without memory context.`,
 				),
 			);
 		}
