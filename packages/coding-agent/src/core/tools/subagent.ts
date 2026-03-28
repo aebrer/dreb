@@ -10,6 +10,8 @@ import { CONFIG_DIR_NAME } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import type { ModelRegistry } from "../model-registry.js";
+import { resolveCliModel } from "../model-resolver.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
@@ -127,6 +129,7 @@ function loadAgentsFromDir(dir: string, agents: Map<string, AgentTypeConfig>): v
 export interface SubagentResult {
 	agent: string;
 	task: string;
+	model?: string;
 	exitCode: number;
 	output: string;
 	stderr: string;
@@ -151,6 +154,7 @@ async function spawnSubagent(
 	cwd: string,
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
+	parentProvider?: string,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
 	console.error(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
@@ -171,6 +175,12 @@ async function spawnSubagent(
 	const args: string[] = ["--mode", "json", "--no-session"];
 	if (agentConfig.model) {
 		args.push("--model", agentConfig.model);
+		// When the model string doesn't already specify a provider (no "/"),
+		// inherit the parent's provider to prevent fuzzy matching from picking
+		// an unauthenticated provider (e.g. Bedrock instead of Anthropic).
+		if (parentProvider && !agentConfig.model.includes("/")) {
+			args.push("--provider", parentProvider);
+		}
 	}
 	if (agentConfig.tools) {
 		args.push("--tools", agentConfig.tools);
@@ -201,6 +211,7 @@ async function spawnSubagent(
 		const MAX_STDERR_BYTES = 8192;
 		const plainStdoutLines: string[] = [];
 		let lastToolName = "";
+		let resolvedModel: string | undefined;
 
 		// Drain stderr concurrently to avoid pipe deadlock (capped to prevent OOM from verbose subagents)
 		proc.stderr?.on("data", (chunk: Buffer) => {
@@ -234,6 +245,9 @@ async function spawnSubagent(
 						console.error(`[subagent] Failed to parse JSONL event: ${line.slice(0, 200)}`);
 					}
 					return;
+				}
+				if (event.type === "agent_start" && event.model) {
+					resolvedModel = event.model.id;
 				}
 				if (event.type === "message_end" && event.message?.role === "assistant") {
 					collectedMessages.push(event.message);
@@ -309,6 +323,7 @@ async function spawnSubagent(
 			resolvePromise({
 				agent: agentConfig.name,
 				task,
+				model: resolvedModel ?? (exitCode === 0 ? agentConfig.model : undefined),
 				exitCode,
 				output,
 				stderr: stderr.slice(0, 2000), // cap stderr
@@ -321,6 +336,51 @@ async function spawnSubagent(
 // ---------------------------------------------------------------------------
 // Execution modes
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolve a model string against the registry. Returns the canonical model ID
+ * on success, or an error string on failure. When no modelRegistry is available,
+ * passes the string through unvalidated (backward compat).
+ */
+function resolveModelString(
+	modelStr: string,
+	parentProvider: string | undefined,
+	registry: ModelRegistry | undefined,
+): { ok: true; modelId: string; provider?: string } | { ok: false; error: string } {
+	if (!registry) {
+		return { ok: true, modelId: modelStr };
+	}
+
+	// If the model string contains "/" the user already specified a provider
+	const hasProvider = modelStr.includes("/");
+	const resolved = resolveCliModel({
+		cliProvider: hasProvider ? undefined : parentProvider,
+		cliModel: modelStr,
+		modelRegistry: registry,
+	});
+
+	if (resolved.error) {
+		return { ok: false, error: resolved.error };
+	}
+	if (!resolved.model) {
+		return { ok: false, error: `Model "${modelStr}" not found. Use --list-models to see available models.` };
+	}
+
+	// FRAGILE: This string must match the warning text in model-resolver.ts
+	// buildFallbackModel path (line ~446). resolveCliModel creates a synthetic
+	// model for any unknown ID when a provider is specified (designed for
+	// custom/self-hosted models like Ollama). For subagents this causes silent
+	// failures — reject it.
+	// TODO: Replace with a structured flag like `isSyntheticFallback` on ResolveCliModelResult.
+	if (resolved.warning?.includes("Using custom model id.")) {
+		return {
+			ok: false,
+			error: `Model "${modelStr}" not found for provider "${resolved.model.provider}". Use --list-models to see available models.`,
+		};
+	}
+
+	return { ok: true, modelId: resolved.model.id, provider: resolved.model.provider };
+}
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -373,6 +433,9 @@ async function executeSingle(
 	cwd: string,
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
+	modelOverride?: string,
+	parentProvider?: string,
+	registry?: ModelRegistry,
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -397,16 +460,45 @@ async function executeSingle(
 			errorMessage: `Task prompt too long (${task.length} chars, max ${MAX_TASK_LENGTH}). Shorten the prompt.`,
 		};
 	}
+	// Per-invocation model override takes precedence over agent definition model
+	const modelStr = modelOverride || config.model;
+	let effectiveConfig = modelOverride ? { ...config, model: modelOverride } : config;
+	let resolvedProvider = parentProvider;
+
+	// Resolve and validate the model string against the registry before spawning.
+	// This catches typos and invalid model names immediately instead of failing
+	// silently in the child process. Also passes the canonical model ID to the
+	// child, avoiding fuzzy matching entirely.
+	if (modelStr) {
+		const resolved = resolveModelString(modelStr, parentProvider, registry);
+		if (!resolved.ok) {
+			return {
+				agent: name,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				errorMessage: resolved.error,
+			};
+		}
+		effectiveConfig = { ...effectiveConfig, model: resolved.modelId };
+		if (resolved.provider) {
+			resolvedProvider = resolved.provider;
+		}
+	}
+
 	onProgress?.(`Running ${name} agent...`);
-	return spawnSubagent(config, task, cwd, signal, onProgress);
+	return spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider);
 }
 
 async function executeParallel(
 	agents: Map<string, AgentTypeConfig>,
-	tasks: Array<{ agent?: string; task: string; cwd?: string }>,
+	tasks: Array<{ agent?: string; task: string; cwd?: string; model?: string }>,
 	defaultCwd: string,
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
+	parentProvider?: string,
+	registry?: ModelRegistry,
 ): Promise<SubagentResult[]> {
 	if (tasks.length > MAX_PARALLEL_TASKS) {
 		return [
@@ -460,7 +552,17 @@ async function executeParallel(
 				};
 			} else {
 				try {
-					result = await executeSingle(agents, item.agent, item.task, cwdResult.cwd, signal, onProgress);
+					result = await executeSingle(
+						agents,
+						item.agent,
+						item.task,
+						cwdResult.cwd,
+						signal,
+						onProgress,
+						item.model,
+						parentProvider,
+						registry,
+					);
 				} catch (err) {
 					result = {
 						agent: item.agent || DEFAULT_AGENT,
@@ -490,10 +592,12 @@ async function executeParallel(
 
 async function executeChain(
 	agents: Map<string, AgentTypeConfig>,
-	chain: Array<{ agent?: string; task: string; cwd?: string }>,
+	chain: Array<{ agent?: string; task: string; cwd?: string; model?: string }>,
 	defaultCwd: string,
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
+	parentProvider?: string,
+	registry?: ModelRegistry,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -530,7 +634,17 @@ async function executeChain(
 			break;
 		}
 
-		const result = await executeSingle(agents, step.agent, task, cwdResult.cwd, signal, onProgress);
+		const result = await executeSingle(
+			agents,
+			step.agent,
+			task,
+			cwdResult.cwd,
+			signal,
+			onProgress,
+			step.model,
+			parentProvider,
+			registry,
+		);
 		results.push(result);
 
 		if (result.exitCode !== 0) {
@@ -603,6 +717,10 @@ export interface SubagentToolOptions {
 	onBackgroundStart?: (agentId: string, agentType: string, taskSummary: string) => void;
 	/** Called when a background subagent completes with its result. `cancelled` is true if the user aborted it. */
 	onBackgroundComplete?: (agentId: string, result: SubagentResult, cancelled: boolean) => void;
+	/** Parent session's provider (e.g. "anthropic"). Passed as --provider to child processes to constrain model resolution. */
+	parentProvider?: string;
+	/** Model registry for validating model names before spawning child processes. */
+	modelRegistry?: ModelRegistry;
 }
 
 // ---------------------------------------------------------------------------
@@ -613,11 +731,23 @@ const taskItemSchema = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'Explore')" })),
 	task: Type.String({ description: "The task prompt for this subagent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory (defaults to parent's cwd)" })),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"Model override for this task (e.g. 'haiku', 'sonnet'). Takes precedence over agent definition model.",
+		}),
+	),
 });
 
 const subagentSchema = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'Explore')" })),
 	task: Type.Optional(Type.String({ description: "Task prompt (single mode)", minLength: 1 })),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"Model override (e.g. 'haiku', 'sonnet'). Takes precedence over agent definition model. For parallel/chain, set per-task instead.",
+		}),
+	),
 	tasks: Type.Optional(
 		Type.Array(taskItemSchema, {
 			description: "Array of tasks to run in parallel (max 8)",
@@ -662,12 +792,15 @@ function formatSubagentCall(
 	}
 
 	const agent = str(args?.agent) || DEFAULT_AGENT;
+	const model = str(args?.model);
 	const task = str(args?.task);
 	const taskPreview = task ? (task.length > 60 ? `${task.slice(0, 57)}...` : task) : null;
+	const modelSuffix = model ? ` ${theme.fg("muted", `(${model})`)}` : "";
 	return (
 		theme.fg("toolTitle", theme.bold("subagent")) +
 		" " +
 		theme.fg("accent", agent) +
+		modelSuffix +
 		" " +
 		(taskPreview === null ? invalidArg : theme.fg("toolOutput", `"${taskPreview}"`))
 	);
@@ -702,7 +835,7 @@ function formatSubagentResult(
 }
 
 function formatSingleResult(result: SubagentResult): string {
-	let text = `## Agent: ${result.agent}\n`;
+	let text = `## Agent: ${result.agent}${result.model ? ` (model: ${result.model})` : ""}\n`;
 	if (result.exitCode !== 0) {
 		text += `**Error** (exit ${result.exitCode}): ${result.errorMessage || "Unknown error"}\n`;
 		if (result.stderr) {
@@ -723,6 +856,8 @@ export function createSubagentToolDefinition(
 ): ToolDefinition<typeof subagentSchema, SubagentToolDetails | undefined> {
 	const onBackgroundStart = options?.onBackgroundStart;
 	const onBackgroundComplete = options?.onBackgroundComplete;
+	const parentProvider = options?.parentProvider;
+	const modelRegistry = options?.modelRegistry;
 
 	return {
 		name: "subagent",
@@ -742,6 +877,7 @@ export function createSubagentToolDefinition(
 			"PREFER background=true for most subagent calls — it lets you continue working while agents run. You'll be notified when they complete. Only use foreground (background=false) when you need the result immediately before you can proceed.",
 			"Subagents have their own context window — provide enough context in the task prompt",
 			"Each background agent notifies independently when done — completion messages include a list of any still-running agents",
+			"Use `model` to override the model per-invocation (e.g. 'haiku' for cheap tasks, 'opus' for complex ones) without creating an agent definition file. Per-invocation model overrides agent definition model.",
 		],
 		parameters: subagentSchema,
 
@@ -785,7 +921,13 @@ export function createSubagentToolDefinition(
 				}
 
 				// Helper to launch a single background task with its own agent ID and lifecycle
-				const launchBackgroundTask = (agentName: string, task: string, taskLabel: string, taskCwd?: string) => {
+				const launchBackgroundTask = (
+					agentName: string,
+					task: string,
+					taskLabel: string,
+					taskCwd?: string,
+					modelOverride?: string,
+				) => {
 					const resolvedCwd = taskCwd ?? cwd;
 					const agentId = generateAgentId();
 					const bgAbort = new AbortController();
@@ -821,6 +963,10 @@ export function createSubagentToolDefinition(
 								task,
 								resolvedCwd,
 								bgSignal,
+								undefined,
+								modelOverride,
+								parentProvider,
+								modelRegistry,
 							);
 							const entry = backgroundAgentRegistry.get(agentId);
 							// Don't overwrite status if abort already set it to "failed"
@@ -876,7 +1022,13 @@ export function createSubagentToolDefinition(
 				if (params.task) {
 					// Single background task
 					const agentName = params.agent || DEFAULT_AGENT;
-					const agentId = launchBackgroundTask(agentName, params.task, `${agentName} task`);
+					const agentId = launchBackgroundTask(
+						agentName,
+						params.task,
+						`${agentName} task`,
+						undefined,
+						params.model,
+					);
 					return {
 						content: [
 							{
@@ -903,6 +1055,7 @@ export function createSubagentToolDefinition(
 							item.task,
 							`${agentName} task ${i + 1}/${params.tasks.length}`,
 							cwdResult.cwd,
+							item.model,
 						);
 						launched.push(agentId);
 					}
@@ -944,7 +1097,15 @@ export function createSubagentToolDefinition(
 					};
 					const runChain = async () => {
 						try {
-							const results = await executeChain(agents, params.chain!, cwd, bgSignal);
+							const results = await executeChain(
+								agents,
+								params.chain!,
+								cwd,
+								bgSignal,
+								undefined,
+								parentProvider,
+								modelRegistry,
+							);
 							const resultText = results
 								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
 								.join("\n\n---\n\n");
@@ -998,7 +1159,11 @@ export function createSubagentToolDefinition(
 								},
 								bgSignal.aborted,
 							);
-						} catch {}
+						} catch (notifyErr) {
+							console.error(
+								`[subagent] CRITICAL: Last-resort notification failed for background chain ${agentId}: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`,
+							);
+						}
 					});
 
 					return {
@@ -1029,15 +1194,34 @@ export function createSubagentToolDefinition(
 					cwd,
 					signal ?? undefined,
 					progressCallback,
+					params.model,
+					parentProvider,
+					modelRegistry,
 				);
 				resultText = formatSingleResult(result);
 				details = { mode: "single", agentCount: 1 };
 			} else if (params.tasks) {
-				const results = await executeParallel(agents, params.tasks, cwd, signal ?? undefined, progressCallback);
+				const results = await executeParallel(
+					agents,
+					params.tasks,
+					cwd,
+					signal ?? undefined,
+					progressCallback,
+					parentProvider,
+					modelRegistry,
+				);
 				resultText = results.map((r, i) => `### Task ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 				details = { mode: "parallel", agentCount: params.tasks.length };
 			} else {
-				const results = await executeChain(agents, params.chain!, cwd, signal ?? undefined, progressCallback);
+				const results = await executeChain(
+					agents,
+					params.chain!,
+					cwd,
+					signal ?? undefined,
+					progressCallback,
+					parentProvider,
+					modelRegistry,
+				);
 				resultText = results.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`).join("\n\n---\n\n");
 				details = { mode: "chain", agentCount: params.chain!.length };
 			}

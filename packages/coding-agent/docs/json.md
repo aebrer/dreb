@@ -24,7 +24,7 @@ Base events from [`AgentEvent`](https://github.com/aebrer/dreb/blob/master/packa
 ```typescript
 type AgentEvent =
   // Agent lifecycle
-  | { type: "agent_start" }
+  | { type: "agent_start"; model?: { provider: string; id: string } }
   | { type: "agent_end"; messages: AgentMessage[] }
   // Turn lifecycle
   | { type: "turn_start" }
@@ -63,7 +63,7 @@ Each line is a JSON object. The first line is the session header:
 Followed by events as they occur:
 
 ```json
-{"type":"agent_start"}
+{"type":"agent_start","model":{"provider":"anthropic","id":"claude-sonnet-4-20250514"}}
 {"type":"turn_start"}
 {"type":"message_start","message":{"role":"assistant","content":[],...}}
 {"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","delta":"Hello",...}}

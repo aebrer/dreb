@@ -40,17 +40,20 @@ Parameters:
   agent:        string (optional)  # Agent type name (e.g. "Explore", "code-reviewer")
   task:         string (required in single mode)  # The task prompt
   cwd:          string (optional)  # Working directory, defaults to parent's cwd
+  model:        string (optional)  # Model override (e.g. "haiku", "opus")
 
   # --- Parallel mode (multiple subagents) ---
-  tasks:        array (optional)   # Array of {agent, task, cwd} objects
+  tasks:        array (optional)   # Array of {agent, task, cwd, model} objects
                                    # Max 8 tasks, run with concurrency limit of 4
 
   # --- Chain mode (sequential pipeline) ---
-  chain:        array (optional)   # Array of {agent, task} objects
+  chain:        array (optional)   # Array of {agent, task, cwd, model} objects
                                    # Each step can reference {previous} for prior output
                                    # Stops on first error
 
 Modes are mutually exclusive: provide task (single), tasks (parallel), or chain.
+
+Model precedence: per-invocation model > agent definition model > inherited from parent.
 ```
 
 ## Execution modes
@@ -61,12 +64,15 @@ Spawn one subagent, wait for completion, return result.
 ```
 Pseudocode:
 
-function execute_single(agent_name, task, cwd):
+function execute_single(agent_name, task, cwd, model_override=None):
     agent_config = load_agent_config(agent_name)  # from ~/.dreb/agents/ or .dreb/agents/
 
+    # Per-invocation model takes precedence over agent definition model
+    effective_model = model_override or agent_config.model
+
     args = ["--mode", "json", "--no-session"]
-    if agent_config.model:
-        args += ["--model", agent_config.model]
+    if effective_model:
+        args += ["--model", effective_model]
     if agent_config.tools:
         args += ["--tools", agent_config.tools]
     if agent_config.system_prompt:
@@ -111,7 +117,7 @@ function execute_parallel(task_list):
 
     async for each task_item in task_list:
         semaphore.acquire()
-        result = await execute_single(task_item.agent, task_item.task, task_item.cwd)
+        result = await execute_single(task_item.agent, task_item.task, task_item.cwd, task_item.model)
         results.append(result)
         semaphore.release()
         on_progress_update(f"{len(results)}/{len(task_list)} complete")
@@ -131,7 +137,7 @@ function execute_chain(chain_steps):
 
     for step in chain_steps:
         task = step.task.replace("{previous}", previous_output)
-        result = execute_single(step.agent, task, step.cwd)
+        result = execute_single(step.agent, task, step.cwd, step.model)
 
         if result.exit_code != 0:
             results.append(result)
@@ -191,6 +197,7 @@ These ship with dreb (not as files, but as defaults when no matching agent file 
 SingleResult:
     agent:         string        # agent type name
     task:          string        # original task prompt
+    model:         string | null # resolved model ID (if any)
     exit_code:     int           # 0 = success
     messages:      Message[]     # full conversation (assistant + tool results)
     stderr:        string        # captured stderr (for debugging)

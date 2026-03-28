@@ -219,6 +219,7 @@ session.subscribe((event) => {
     // Agent lifecycle
     case "agent_start":
       // Agent started processing prompt
+      // event.model?: { provider: string; id: string } — resolved model
       break;
     case "agent_end":
       // Agent finished (event.messages contains new messages)

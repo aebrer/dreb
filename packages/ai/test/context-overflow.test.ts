@@ -100,8 +100,8 @@ function logResult(result: OverflowResult) {
 
 describe("Context overflow error handling", () => {
 	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic (API Key)", () => {
-		it("claude-3-5-haiku - should detect overflow via isContextOverflow", async () => {
-			const model = getModel("anthropic", "claude-3-5-haiku-20241022");
+		it("claude-haiku-4-5 - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("anthropic", "claude-haiku-4-5");
 			const result = await testContextOverflow(model, process.env.ANTHROPIC_API_KEY!);
 			logResult(result);
 
