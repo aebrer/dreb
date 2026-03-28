@@ -17,6 +17,22 @@ This builds all packages in dependency order: tui → ai → agent → coding-ag
 - `packages/coding-agent` — CLI tool, tools, model resolution, TUI
 - `packages/tui` — Terminal UI components
 
+## Release Protocol
+
+**Every release MUST follow these steps in order. No exceptions.**
+
+1. **Bump version**: Update `version` in the root `package.json`
+2. **Sync**: Run `npm run sync-version` (or let `npm run build` do it — the build script runs `sync-version.sh` automatically)
+3. **Build**: Run `npm run build` to compile with the new version
+4. **Verify**: Launch the binary and confirm the TUI welcome message shows the correct version
+5. **Commit**: Commit the version bump (all `package.json` files touched by sync)
+6. **Tag**: Create a git tag matching the version: `git tag v<version>`
+7. **Push**: Push the commit and tag: `git push && git push --tags`
+
+**The version in `package.json` is the source of truth.** The TUI reads it at runtime via `config.ts`. If the version in `package.json` doesn't match the release, the TUI will show the wrong version to users.
+
+**Never create a git tag without first bumping `package.json` to match.**
+
 ## Testing
 
 ```bash
