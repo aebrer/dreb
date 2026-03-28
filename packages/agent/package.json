@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/agent-core",
-	"version": "1.0.0",
+	"version": "1.2.0",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"type": "module",
 	"main": "./dist/index.js",
