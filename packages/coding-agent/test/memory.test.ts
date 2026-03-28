@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { findGitRoot } from "../src/core/git-root.js";
 import { getMemoryInstructions } from "../src/core/memory-prompt.js";
-import type { MemoryIndexes, MemorySource } from "../src/core/resource-loader.js";
+import { encodeClaudeProjectPath, type MemoryIndexes, type MemorySource } from "../src/core/resource-loader.js";
 import { buildSystemPrompt } from "../src/core/system-prompt.js";
 
 // Helper to create a unique temp directory for each test
@@ -31,14 +31,14 @@ function makeIndexes(opts: {
 	if (opts.global) {
 		globalSources.push({
 			content: opts.global,
-			path: globalDir,
+			dir: globalDir,
 			source: opts.globalSource ?? "dreb",
 		});
 	}
 	if (opts.project) {
 		projectSources.push({
 			content: opts.project,
-			path: projectDir,
+			dir: projectDir,
 			source: opts.projectSource ?? "dreb",
 		});
 	}
@@ -196,10 +196,10 @@ describe("buildSystemPrompt with memory", () => {
 	test("handles multiple sources in same scope", () => {
 		const indexes: MemoryIndexes = {
 			global: [
-				{ content: "- [Dreb global](dreb.md) — from dreb", path: "/home/user/.dreb/memory", source: "dreb" },
+				{ content: "- [Dreb global](dreb.md) — from dreb", dir: "/home/user/.dreb/memory", source: "dreb" },
 				{
 					content: "- [Claude global](claude.md) — from claude",
-					path: "/home/user/.claude/projects/-home-user/memory",
+					dir: "/home/user/.claude/projects/-home-user/memory",
 					source: "claude",
 				},
 			],
@@ -221,7 +221,8 @@ describe("buildSystemPrompt with memory", () => {
 describe("getMemoryInstructions", () => {
 	test("includes all four memory types", () => {
 		const instructions = getMemoryInstructions({
-			memoryIndexes: makeIndexes({}),
+			globalMemoryDir: "/home/user/.dreb/memory",
+			projectMemoryDir: "/project/.dreb/memory",
 		});
 		expect(instructions).toContain("user-preferences");
 		expect(instructions).toContain("good-practices");
@@ -231,10 +232,8 @@ describe("getMemoryInstructions", () => {
 
 	test("includes memory directories in instructions", () => {
 		const instructions = getMemoryInstructions({
-			memoryIndexes: makeIndexes({
-				globalDir: "/custom/global/memory",
-				projectDir: "/custom/project/memory",
-			}),
+			globalMemoryDir: "/custom/global/memory",
+			projectMemoryDir: "/custom/project/memory",
 		});
 		expect(instructions).toContain("/custom/global/memory/");
 		expect(instructions).toContain("/custom/project/memory/");
@@ -242,12 +241,86 @@ describe("getMemoryInstructions", () => {
 
 	test("includes save and access conventions", () => {
 		const instructions = getMemoryInstructions({
-			memoryIndexes: makeIndexes({}),
+			globalMemoryDir: "/home/user/.dreb/memory",
+			projectMemoryDir: "/project/.dreb/memory",
 		});
 		expect(instructions).toContain("How to Save Memory");
 		expect(instructions).toContain("When to Access Memory");
 		expect(instructions).toContain("What NOT to Save");
 		expect(instructions).toContain("YAML frontmatter");
 		expect(instructions).toContain("Staleness Warning");
+	});
+
+	test("references .dreb/CONTEXT.md not bare CONTEXT.md", () => {
+		const instructions = getMemoryInstructions({
+			globalMemoryDir: "/home/user/.dreb/memory",
+			projectMemoryDir: "/project/.dreb/memory",
+		});
+		expect(instructions).toContain(".dreb/CONTEXT.md");
+	});
+});
+
+describe("encodeClaudeProjectPath", () => {
+	test("replaces slashes with hyphens", () => {
+		expect(encodeClaudeProjectPath("/home/drew/projects/dreb")).toBe("-home-drew-projects-dreb");
+	});
+
+	test("replaces underscores with hyphens", () => {
+		expect(encodeClaudeProjectPath("/home/drew/projects/deep_yellow")).toBe("-home-drew-projects-deep-yellow");
+	});
+
+	test("handles homedir path", () => {
+		expect(encodeClaudeProjectPath("/home/drew")).toBe("-home-drew");
+	});
+
+	test("handles mixed underscores and slashes", () => {
+		expect(encodeClaudeProjectPath("/home/user_name/my_project/sub_dir")).toBe("-home-user-name-my-project-sub-dir");
+	});
+});
+
+describe("readMemoryIndex via DefaultResourceLoader", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = createTempDir("memory-load");
+	});
+
+	afterEach(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	test("truncates MEMORY.md at 200 lines", async () => {
+		// Create a git repo so project root resolves to tempDir
+		mkdirSync(join(tempDir, ".git"));
+
+		// Create a global memory dir with an oversized MEMORY.md
+		const memoryDir = join(tempDir, ".dreb-global", "memory");
+		mkdirSync(memoryDir, { recursive: true });
+
+		const lines = Array.from({ length: 250 }, (_, i) => `- [Memory ${i}](mem_${i}.md) — entry ${i}`);
+		writeFileSync(join(memoryDir, "MEMORY.md"), lines.join("\n"));
+
+		// Create project-scoped memory (tempDir is the git root, so project memory resolves here)
+		const projectMemoryDir = join(tempDir, ".dreb", "memory");
+		mkdirSync(projectMemoryDir, { recursive: true });
+		writeFileSync(join(projectMemoryDir, "MEMORY.md"), lines.join("\n"));
+
+		const { DefaultResourceLoader } = await import("../src/core/resource-loader.js");
+		const loader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir: join(tempDir, ".dreb-global"),
+		});
+		await loader.reload();
+
+		const indexes2 = loader.getMemoryIndexes();
+
+		const projectSources = indexes2.project;
+		expect(projectSources.length).toBeGreaterThan(0);
+
+		const projectContent = projectSources[0].content;
+		const loadedLines = projectContent.split("\n");
+		expect(loadedLines.length).toBe(200);
+		expect(loadedLines[0]).toBe("- [Memory 0](mem_0.md) — entry 0");
+		expect(loadedLines[199]).toBe("- [Memory 199](mem_199.md) — entry 199");
 	});
 });

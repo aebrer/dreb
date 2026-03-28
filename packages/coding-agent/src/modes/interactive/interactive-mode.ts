@@ -1029,7 +1029,7 @@ export class InteractiveMode {
 				const memoryList = allMemorySources
 					.map((m) => {
 						const label = m.source === "claude" ? " (claude)" : "";
-						return theme.fg("dim", `  ${this.formatDisplayPath(m.path)}/MEMORY.md${label}`);
+						return theme.fg("dim", `  ${this.formatDisplayPath(m.dir)}/MEMORY.md${label}`);
 					})
 					.join("\n");
 				this.chatContainer.addChild(new Text(`${sectionHeader("Memory")}\n${memoryList}`, 0, 0));

@@ -1,7 +1,6 @@
-import type { MemoryIndexes } from "./resource-loader.js";
-
 export interface MemoryInstructionsOptions {
-	memoryIndexes: MemoryIndexes;
+	globalMemoryDir: string;
+	projectMemoryDir: string;
 }
 
 /**
@@ -9,7 +8,7 @@ export interface MemoryInstructionsOptions {
  * This covers memory types, file format, save/read conventions, and scoping rules.
  */
 export function getMemoryInstructions(options: MemoryInstructionsOptions): string {
-	const { globalMemoryDir, projectMemoryDir } = options.memoryIndexes;
+	const { globalMemoryDir, projectMemoryDir } = options;
 
 	return `# Memory System
 
@@ -17,8 +16,8 @@ You have a persistent, file-based memory system. Memory survives across sessions
 
 ## Memory Directories
 
-- **Global memory**: \`${globalMemoryDir}/\` — loaded in every session regardless of project
-- **Project memory**: \`${projectMemoryDir}/\` — loaded only when working in this project
+- **Global memory**: \`${globalMemoryDir}/\` — its MEMORY.md index is loaded in every session regardless of project
+- **Project memory**: \`${projectMemoryDir}/\` — its MEMORY.md index is loaded only when working in this project
 
 ## Memory Entry Format
 
@@ -79,14 +78,14 @@ Read individual memory files on-demand using the Read tool — only the MEMORY.m
 - Code patterns, architecture, file paths — derivable from reading the codebase
 - Git history — use \`git log\` / \`git blame\`
 - Debugging solutions — the fix is in the code, the commit message has context
-- Anything already in CLAUDE.md / AGENTS.md / CONTEXT.md
+- Anything already in CLAUDE.md / AGENTS.md / .dreb/CONTEXT.md
 - Ephemeral task details only relevant to the current session
 
 ## Scoping Rules
 
 - **Global memory** applies to all projects — save user preferences and cross-project practices here
 - **Project memory** is specific to the current project — save project decisions and context here
-- **Project identity** is determined by git repo root. All worktrees of the same repo share one memory directory. Outside a git repo, the working directory is the project root.
+- **Project identity** is determined by git repo root. Outside a git repo, the working directory is the project root.
 
 ## Memory Maintenance
 

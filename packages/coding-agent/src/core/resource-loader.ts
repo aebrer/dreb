@@ -27,16 +27,16 @@ export interface ResourceExtensionPaths {
 }
 
 export interface MemorySource {
-	content: string;
-	path: string;
-	source: "dreb" | "claude";
+	readonly content: string;
+	readonly dir: string;
+	readonly source: "dreb" | "claude";
 }
 
 export interface MemoryIndexes {
-	global: MemorySource[];
-	project: MemorySource[];
-	globalMemoryDir: string;
-	projectMemoryDir: string;
+	readonly global: readonly MemorySource[];
+	readonly project: readonly MemorySource[];
+	readonly globalMemoryDir: string;
+	readonly projectMemoryDir: string;
 }
 
 export interface ResourceLoader {
@@ -205,11 +205,12 @@ function loadProjectContextFiles(
 const MEMORY_INDEX_MAX_LINES = 200;
 
 /**
- * Encode a path the way Claude Code does for ~/.claude/projects/ directories.
- * /home/drew/projects/dreb -> -home-drew-projects-dreb
+ * Encode an absolute POSIX path the way Claude Code does for ~/.claude/projects/ directories.
+ * Replaces path separators and underscores with hyphens.
+ * /home/drew/projects/deep_yellow -> -home-drew-projects-deep-yellow
  */
-function encodeClaudeProjectPath(absolutePath: string): string {
-	return absolutePath.replace(/\//g, "-");
+export function encodeClaudeProjectPath(absolutePath: string): string {
+	return absolutePath.replace(/[/_]/g, "-");
 }
 
 function readMemoryIndex(dir: string): string | undefined {
@@ -219,10 +220,16 @@ function readMemoryIndex(dir: string): string | undefined {
 		const content = readFileSync(indexPath, "utf-8");
 		const lines = content.split("\n");
 		if (lines.length > MEMORY_INDEX_MAX_LINES) {
+			console.error(
+				chalk.yellow(
+					`Warning: ${indexPath} has ${lines.length} lines, truncated to ${MEMORY_INDEX_MAX_LINES}. Consider cleaning up older entries.`,
+				),
+			);
 			return lines.slice(0, MEMORY_INDEX_MAX_LINES).join("\n");
 		}
 		return content;
-	} catch {
+	} catch (error) {
+		console.error(chalk.yellow(`Warning: Could not read ${indexPath}: ${error}`));
 		return undefined;
 	}
 }
@@ -251,25 +258,25 @@ function loadMemoryIndexes(options: { cwd?: string }): MemoryIndexes {
 	// Load dreb memory (primary)
 	const drebGlobal = readMemoryIndex(globalMemoryDir);
 	if (drebGlobal) {
-		globalSources.push({ content: drebGlobal, path: globalMemoryDir, source: "dreb" });
+		globalSources.push({ content: drebGlobal, dir: globalMemoryDir, source: "dreb" });
 	}
 
 	const drebProject = globalMemoryDir !== projectMemoryDir ? readMemoryIndex(projectMemoryDir) : undefined;
 	if (drebProject) {
-		projectSources.push({ content: drebProject, path: projectMemoryDir, source: "dreb" });
+		projectSources.push({ content: drebProject, dir: projectMemoryDir, source: "dreb" });
 	}
 
 	// Load Claude Code memory (read-only, compat)
 	const claudeGlobal = readMemoryIndex(claudeGlobalMemoryDir);
 	if (claudeGlobal) {
-		globalSources.push({ content: claudeGlobal, path: claudeGlobalMemoryDir, source: "claude" });
+		globalSources.push({ content: claudeGlobal, dir: claudeGlobalMemoryDir, source: "claude" });
 	}
 
 	// Only load Claude project memory if it's a different path than Claude global
 	if (claudeProjectMemoryDir !== claudeGlobalMemoryDir) {
 		const claudeProject = readMemoryIndex(claudeProjectMemoryDir);
 		if (claudeProject) {
-			projectSources.push({ content: claudeProject, path: claudeProjectMemoryDir, source: "claude" });
+			projectSources.push({ content: claudeProject, dir: claudeProjectMemoryDir, source: "claude" });
 		}
 	}
 
@@ -615,8 +622,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.memoryIndexes = loadMemoryIndexes({ cwd: this.cwd });
 		try {
 			mkdirSync(this.memoryIndexes.globalMemoryDir, { recursive: true });
-		} catch {
-			// Best-effort — if the directory can't be created, memory writes will fail at write time
+		} catch (error) {
+			console.error(
+				chalk.yellow(
+					`Warning: Could not create memory directory ${this.memoryIndexes.globalMemoryDir}: ${error}. Memory saves to this directory will fail.`,
+				),
+			);
 		}
 
 		const baseSystemPrompt = resolvePromptInput(
