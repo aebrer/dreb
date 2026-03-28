@@ -49,12 +49,6 @@ See the [brainstorming doc](docs/brainstorming.md) for the full rationale.
 | [@dreb/coding-agent](packages/coding-agent/) | CLI tool, built-in tools, sessions, extensions |
 | [@dreb/tui](packages/tui/) | Terminal UI — differential rendering, markdown, syntax highlighting |
 
-## Status
-
-**v1.0.0** — Core CLI is functional. Built-in tools, multi-provider support, sessions, extensions all work.
-
-Coming next: persistent memory, task tracking. See `docs/spec-*.md` for the specs.
-
 ## License
 
 MIT
