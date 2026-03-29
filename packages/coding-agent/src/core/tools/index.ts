@@ -85,6 +85,14 @@ export {
 	subagentToolDefinition,
 } from "./subagent.js";
 export {
+	createTasksToolDefinition,
+	type SessionTask,
+	type TaskStatus,
+	type TasksToolDetails,
+	type TasksToolInput,
+	type TasksUpdateCallback,
+} from "./tasks.js";
+export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
@@ -147,6 +155,8 @@ import {
 	subagentTool,
 	subagentToolDefinition,
 } from "./subagent.js";
+import { createTasksToolDefinition, type TasksUpdateCallback } from "./tasks.js";
+import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import {
 	createWebFetchTool,
 	createWebFetchToolDefinition,
@@ -198,6 +208,7 @@ export interface ToolsOptions {
 	bash?: BashToolOptions;
 	subagent?: SubagentToolOptions;
 	skill?: SkillToolOptions;
+	tasks?: { onUpdate: TasksUpdateCallback };
 }
 
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
@@ -234,6 +245,9 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 	if (options?.skill) {
 		tools.skill = createSkillToolDefinition(cwd, options.skill);
 	}
+	if (options?.tasks) {
+		tools.tasks_update = createTasksToolDefinition(options.tasks.onUpdate);
+	}
 	return tools as Record<ToolName | "skill", ToolDef>;
 }
 
@@ -265,6 +279,9 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 	};
 	if (options?.skill) {
 		tools.skill = createSkillTool(cwd, options.skill);
+	}
+	if (options?.tasks) {
+		tools.tasks_update = wrapToolDefinition(createTasksToolDefinition(options.tasks.onUpdate));
 	}
 	return tools as Record<ToolName | "skill", Tool>;
 }

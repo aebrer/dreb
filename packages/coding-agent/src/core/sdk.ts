@@ -250,6 +250,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = "off";
 	}
 
+	// Tools that are always active when available (created by factory, not in allTools singleton)
+	const alwaysActiveBuiltins = ["skill", "tasks_update"];
 	const defaultActiveToolNames: ToolName[] = [
 		"read",
 		"bash",
@@ -262,9 +264,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"web_fetch",
 		"subagent",
 	];
-	const initialActiveToolNames: ToolName[] = options.tools
-		? options.tools.map((t) => t.name).filter((n): n is ToolName => n in allTools)
-		: defaultActiveToolNames;
+	const initialActiveToolNames: string[] = options.tools
+		? [...options.tools.map((t) => t.name).filter((n): n is ToolName => n in allTools), ...alwaysActiveBuiltins]
+		: [...defaultActiveToolNames, ...alwaysActiveBuiltins];
 
 	let agent: Agent;
 

@@ -71,7 +71,7 @@ import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import type { BashOperations } from "./tools/bash.js";
-import { createAllToolDefinitions, getRunningBackgroundAgents } from "./tools/index.js";
+import { createAllToolDefinitions, getRunningBackgroundAgents, type SessionTask } from "./tools/index.js";
 import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
@@ -116,7 +116,8 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
-	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean };
+	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean }
+	| { type: "tasks_update"; tasks: readonly SessionTask[] };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -273,6 +274,9 @@ export class AgentSession {
 
 	// Model registry for API key resolution
 	private _modelRegistry: ModelRegistry;
+
+	// Session tasks (in-memory, lost on session end)
+	private _tasks: SessionTask[] = [];
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -676,6 +680,11 @@ export class AgentSession {
 	/** Full agent state */
 	get state(): AgentState {
 		return this.agent.state;
+	}
+
+	/** Current session task list (read-only) */
+	get tasks(): readonly SessionTask[] {
+		return this._tasks;
 	}
 
 	/** Current model (may be undefined if not yet selected) */
@@ -2299,6 +2308,26 @@ export class AgentSession {
 						getSkills: () => this._resourceLoader.getSkills().skills,
 						getSessionId: () => this.sessionId,
 					},
+					tasks: {
+						onUpdate: (tasks) => {
+							const completed = tasks.filter((t) => t.status === "completed").length;
+							const inProgressTask = tasks.find((t) => t.status === "in_progress");
+							const result = {
+								taskCount: tasks.length,
+								completed,
+								inProgress: inProgressTask?.title,
+							};
+							// Commit state and emit event. Emit is fire-and-forget —
+							// don't let a TUI render error crash the tool call.
+							this._tasks = tasks;
+							try {
+								this._emit({ type: "tasks_update", tasks: this._tasks });
+							} catch {
+								// Swallow emit errors (e.g. TUI rendering failures)
+							}
+							return result;
+						},
+					},
 					subagent: {
 						parentProvider: this.model?.provider,
 						modelRegistry: this._modelRegistry,
@@ -2419,7 +2448,20 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "skill"];
+			: [
+					"read",
+					"bash",
+					"edit",
+					"write",
+					"grep",
+					"find",
+					"ls",
+					"web_search",
+					"web_fetch",
+					"subagent",
+					"skill",
+					"tasks_update",
+				];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
