@@ -39,6 +39,7 @@ import {
 import { spawn, spawnSync } from "child_process";
 import { APP_NAME, getAgentDir, getAuthPath, getDebugLogPath, getUpdateInstruction, VERSION } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
+import { TasksPanelComponent } from "./components/tasks-panel.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -143,6 +144,8 @@ export class InteractiveMode {
 	private chatContainer: Container;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
+	private tasksPanel: TasksPanelComponent;
+	private tasksPanelContainer: Container;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
 	private autocompleteProvider: CombinedAutocompleteProvider | undefined;
@@ -253,6 +256,9 @@ export class InteractiveMode {
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
+		this.tasksPanel = new TasksPanelComponent(theme);
+		this.tasksPanelContainer = new Container();
+		this.tasksPanelContainer.addChild(this.tasksPanel);
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create();
@@ -502,6 +508,7 @@ export class InteractiveMode {
 		this.ui.addChild(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
+		this.ui.addChild(this.tasksPanelContainer);
 		this.renderWidgets(); // Initialize with default spacer
 		this.ui.addChild(this.widgetContainerAbove);
 		this.ui.addChild(this.editorContainer);
@@ -1979,6 +1986,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
 		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
+		this.defaultEditor.onAction("app.tasks.toggle", () => this.toggleTasksPanel());
 		this.defaultEditor.onAction("app.editor.external", () => this.openExternalEditor());
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
 		this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
@@ -2490,6 +2498,12 @@ export class InteractiveMode {
 				this.updateBackgroundAgentStatus();
 				break;
 			}
+
+			case "tasks_update": {
+				this.tasksPanel.update(event.tasks);
+				this.ui.requestRender();
+				break;
+			}
 		}
 	}
 
@@ -2915,6 +2929,12 @@ export class InteractiveMode {
 		} catch (error) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	private toggleTasksPanel(): void {
+		this.tasksPanel.toggleVisible();
+		this.ui.requestRender();
+		this.showStatus(`Tasks panel: ${this.tasksPanel.visible ? "visible" : "hidden"}`);
 	}
 
 	private toggleToolOutputExpansion(): void {
