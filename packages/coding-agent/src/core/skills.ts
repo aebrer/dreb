@@ -70,8 +70,6 @@ export interface SkillFrontmatter {
 	"argument-hint"?: string;
 	tools?: string;
 	model?: string;
-	context?: string;
-	agent?: string;
 	"disable-model-invocation"?: boolean;
 	"user-invocable"?: boolean;
 	[key: string]: unknown;
@@ -86,8 +84,6 @@ export interface Skill {
 	argumentHint?: string;
 	tools: string[];
 	model?: string;
-	context?: "fork";
-	agent?: string;
 	disableModelInvocation: boolean;
 	userInvocable: boolean;
 }
@@ -340,8 +336,6 @@ function loadSkillFromFile(
 				argumentHint: frontmatter["argument-hint"],
 				tools,
 				model: frontmatter.model,
-				context: frontmatter.context === "fork" ? "fork" : undefined,
-				agent: frontmatter.agent,
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
 				userInvocable: frontmatter["user-invocable"] !== false,
 			},

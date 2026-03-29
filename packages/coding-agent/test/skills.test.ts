@@ -239,8 +239,6 @@ describe("skills", () => {
 			expect(skill.argumentHint).toBe("[PR number or URL]");
 			expect(skill.tools).toEqual(["read", "grep", "glob", "bash"]);
 			expect(skill.model).toBe("sonnet");
-			expect(skill.context).toBe("fork");
-			expect(skill.agent).toBe("general-purpose");
 			expect(skill.disableModelInvocation).toBe(false);
 			expect(skill.userInvocable).toBe(true);
 			expect(diagnostics).toHaveLength(0);
@@ -274,32 +272,6 @@ describe("skills", () => {
 
 			expect(skills).toHaveLength(1);
 			expect(skills[0].tools).toEqual([]);
-		});
-
-		it("should default context to undefined when not specified", () => {
-			const { skills } = loadSkillsFromDir({
-				dir: join(fixturesDir, "valid-skill"),
-				source: "test",
-			});
-
-			expect(skills).toHaveLength(1);
-			expect(skills[0].context).toBeUndefined();
-		});
-
-		it("should only accept 'fork' as a valid context value", () => {
-			// valid-skill doesn't have context set, so it should be undefined
-			const { skills: validSkills } = loadSkillsFromDir({
-				dir: join(fixturesDir, "valid-skill"),
-				source: "test",
-			});
-			expect(validSkills[0].context).toBeUndefined();
-
-			// full-frontmatter has context: fork
-			const { skills: forkSkills } = loadSkillsFromDir({
-				dir: join(fixturesDir, "full-frontmatter"),
-				source: "test",
-			});
-			expect(forkSkills[0].context).toBe("fork");
 		});
 	});
 
