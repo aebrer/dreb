@@ -85,6 +85,14 @@ export {
 	subagentToolDefinition,
 } from "./subagent.js";
 export {
+	createTasksToolDefinition,
+	type SessionTask,
+	type TaskStatus,
+	type TasksToolDetails,
+	type TasksToolInput,
+	type TasksUpdateCallback,
+} from "./tasks.js";
+export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
 	formatSize,
@@ -109,14 +117,6 @@ export {
 	webSearchTool,
 	webSearchToolDefinition,
 } from "./web.js";
-export {
-	createTasksToolDefinition,
-	type SessionTask,
-	type TasksToolDetails,
-	type TasksToolInput,
-	type TasksUpdateCallback,
-	type TaskStatus,
-} from "./tasks.js";
 export {
 	createWriteTool,
 	createWriteToolDefinition,
@@ -148,8 +148,6 @@ import {
 	readToolDefinition,
 } from "./read.js";
 import { createSkillTool, createSkillToolDefinition, type SkillToolOptions } from "./skill.js";
-import { createTasksToolDefinition, type TasksUpdateCallback } from "./tasks.js";
-import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import {
 	createSubagentTool,
 	createSubagentToolDefinition,
@@ -157,6 +155,8 @@ import {
 	subagentTool,
 	subagentToolDefinition,
 } from "./subagent.js";
+import { createTasksToolDefinition, type TasksUpdateCallback } from "./tasks.js";
+import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import {
 	createWebFetchTool,
 	createWebFetchToolDefinition,

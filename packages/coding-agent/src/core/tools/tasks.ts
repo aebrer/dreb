@@ -6,9 +6,9 @@
  * Tasks are session-local (in-memory, lost on session end).
  */
 
-import { Type, type Static } from "@sinclair/typebox";
-import type { ToolDefinition } from "../extensions/types.js";
 import { Text } from "@dreb/tui";
+import { type Static, Type } from "@sinclair/typebox";
+import type { ToolDefinition } from "../extensions/types.js";
 
 // ============================================================================
 // Types
@@ -33,7 +33,7 @@ export type TasksUpdateCallback = (tasks: SessionTask[]) => TasksToolDetails;
 // Schema
 
 const taskSchema = Type.Object({
-	id: Type.String({ description: "Stable identifier (e.g. \"1\", \"setup\", \"fix-auth\")" }),
+	id: Type.String({ description: 'Stable identifier (e.g. "1", "setup", "fix-auth")' }),
 	title: Type.String({ description: "Brief action-oriented title" }),
 	status: Type.Union([Type.Literal("pending"), Type.Literal("in_progress"), Type.Literal("completed")], {
 		description: "Task status: pending, in_progress, or completed",
@@ -104,16 +104,10 @@ export function createTasksToolDefinition(
 			"Send the complete task list each time (full replacement, not a patch)",
 			"At most one task can be in_progress at a time",
 			"Keep task lists concise: typically 3-10 items. Never exceed 20 tasks.",
-			"Use short, action-oriented titles (e.g. \"Read existing tests\", \"Fix auth handler\")",
+			'Use short, action-oriented titles (e.g. "Read existing tests", "Fix auth handler")',
 		],
 
-		async execute(
-			_toolCallId,
-			{ tasks }: TasksToolInput,
-			_signal?,
-			_onUpdate?,
-			_ctx?,
-		) {
+		async execute(_toolCallId, { tasks }: TasksToolInput, _signal?, _onUpdate?, _ctx?) {
 			// Validate: max 20 tasks
 			if (tasks.length > 20) {
 				return {

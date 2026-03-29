@@ -1,4 +1,4 @@
-import { describe, it, assert } from "vitest";
+import { assert, describe, it } from "vitest";
 import { createTasksToolDefinition, type SessionTask, type TasksToolDetails } from "../../src/core/tools/tasks.js";
 
 describe("tasks_update tool", () => {
