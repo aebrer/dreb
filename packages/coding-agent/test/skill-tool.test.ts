@@ -11,7 +11,6 @@ function createTestSkill(
 ): Skill {
 	return {
 		sourceInfo: createSyntheticSourceInfo(overrides.filePath, { source: "test" }),
-		tools: [],
 		disableModelInvocation: false,
 		userInvocable: true,
 		...overrides,

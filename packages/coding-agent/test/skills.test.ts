@@ -23,7 +23,6 @@ function createTestSkill(options: {
 		filePath: options.filePath,
 		baseDir: options.baseDir,
 		sourceInfo: createSyntheticSourceInfo(options.filePath, { source: options.source ?? "test" }),
-		tools: [],
 		disableModelInvocation: options.disableModelInvocation ?? false,
 		userInvocable: options.userInvocable ?? true,
 	};
@@ -237,8 +236,6 @@ describe("skills", () => {
 			const skill = skills[0];
 			expect(skill.name).toBe("full-frontmatter");
 			expect(skill.argumentHint).toBe("[PR number or URL]");
-			expect(skill.tools).toEqual(["read", "grep", "glob", "bash"]);
-			expect(skill.model).toBe("sonnet");
 			expect(skill.disableModelInvocation).toBe(false);
 			expect(skill.userInvocable).toBe(true);
 			expect(diagnostics).toHaveLength(0);
@@ -262,16 +259,6 @@ describe("skills", () => {
 
 			expect(skills).toHaveLength(1);
 			expect(skills[0].userInvocable).toBe(false);
-		});
-
-		it("should default tools to empty array when not specified", () => {
-			const { skills } = loadSkillsFromDir({
-				dir: join(fixturesDir, "valid-skill"),
-				source: "test",
-			});
-
-			expect(skills).toHaveLength(1);
-			expect(skills[0].tools).toEqual([]);
 		});
 	});
 

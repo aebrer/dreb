@@ -394,9 +394,16 @@ export class InteractiveMode {
 			for (const skill of this.session.resourceLoader.getSkills().skills) {
 				const commandName = `skill:${skill.name}`;
 				this.skillCommands.set(commandName, skill.filePath);
+				// Skills with userInvocable: false are hidden from the slash command menu
+				// (they can still be invoked by the model via the skill tool)
+				if (!skill.userInvocable) continue;
+				let description = this.prefixAutocompleteDescription(skill.description, skill.sourceInfo);
+				if (skill.argumentHint) {
+					description += ` (args: ${skill.argumentHint})`;
+				}
 				skillCommandList.push({
 					name: commandName,
-					description: this.prefixAutocompleteDescription(skill.description, skill.sourceInfo),
+					description,
 				});
 			}
 		}

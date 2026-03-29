@@ -20,7 +20,6 @@ const customSkill: Skill = {
 	filePath: "/virtual/SKILL.md",
 	baseDir: "/virtual",
 	sourceInfo: createSyntheticSourceInfo("/virtual/SKILL.md", { source: "sdk" }),
-	tools: [],
 	disableModelInvocation: false,
 	userInvocable: true,
 };

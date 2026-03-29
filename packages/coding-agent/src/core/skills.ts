@@ -68,8 +68,6 @@ export interface SkillFrontmatter {
 	name?: string;
 	description?: string;
 	"argument-hint"?: string;
-	tools?: string;
-	model?: string;
 	"disable-model-invocation"?: boolean;
 	"user-invocable"?: boolean;
 	[key: string]: unknown;
@@ -82,8 +80,6 @@ export interface Skill {
 	baseDir: string;
 	sourceInfo: SourceInfo;
 	argumentHint?: string;
-	tools: string[];
-	model?: string;
 	disableModelInvocation: boolean;
 	userInvocable: boolean;
 }
@@ -318,14 +314,6 @@ function loadSkillFromFile(
 			return { skill: null, diagnostics };
 		}
 
-		// Parse tools from comma-separated string to array
-		const tools = frontmatter.tools
-			? frontmatter.tools
-					.split(",")
-					.map((t) => t.trim())
-					.filter(Boolean)
-			: [];
-
 		return {
 			skill: {
 				name,
@@ -334,8 +322,6 @@ function loadSkillFromFile(
 				baseDir: skillDir,
 				sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
 				argumentHint: frontmatter["argument-hint"],
-				tools,
-				model: frontmatter.model,
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
 				userInvocable: frontmatter["user-invocable"] !== false,
 			},

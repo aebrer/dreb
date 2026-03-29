@@ -87,7 +87,6 @@ This is a test skill.
 			filePath: "/fake/path/SKILL.md",
 			baseDir: "/fake/path",
 			sourceInfo: createSyntheticSourceInfo("/fake/path/SKILL.md", { source: "sdk" }),
-			tools: [],
 			disableModelInvocation: false,
 			userInvocable: true,
 		};
