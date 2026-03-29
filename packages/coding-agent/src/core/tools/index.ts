@@ -63,6 +63,13 @@ export {
 	readToolDefinition,
 } from "./read.js";
 export {
+	createSkillTool,
+	createSkillToolDefinition,
+	type SkillToolDetails,
+	type SkillToolInput,
+	type SkillToolOptions,
+} from "./skill.js";
+export {
 	abortBackgroundAgents,
 	type BackgroundAgentInfo,
 	createSubagentTool,
@@ -132,6 +139,7 @@ import {
 	readTool,
 	readToolDefinition,
 } from "./read.js";
+import { createSkillTool, createSkillToolDefinition, type SkillToolOptions } from "./skill.js";
 import {
 	createSubagentTool,
 	createSubagentToolDefinition,
@@ -189,6 +197,7 @@ export interface ToolsOptions {
 	read?: ReadToolOptions;
 	bash?: BashToolOptions;
 	subagent?: SubagentToolOptions;
+	skill?: SkillToolOptions;
 }
 
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
@@ -210,7 +219,7 @@ export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOption
 }
 
 export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
-	return {
+	const tools: Record<string, ToolDef> = {
 		read: createReadToolDefinition(cwd, options?.read),
 		bash: createBashToolDefinition(cwd, options?.bash),
 		edit: createEditToolDefinition(cwd),
@@ -222,6 +231,10 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		web_fetch: createWebFetchToolDefinition(cwd),
 		subagent: createSubagentToolDefinition(cwd, options?.subagent),
 	};
+	if (options?.skill) {
+		tools.skill = createSkillToolDefinition(cwd, options.skill);
+	}
+	return tools as Record<ToolName, ToolDef>;
 }
 
 export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
@@ -238,7 +251,7 @@ export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[]
 }
 
 export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
-	return {
+	const tools: Record<string, Tool> = {
 		read: createReadTool(cwd, options?.read),
 		bash: createBashTool(cwd, options?.bash),
 		edit: createEditTool(cwd),
@@ -250,4 +263,8 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		web_fetch: createWebFetchTool(cwd),
 		subagent: createSubagentTool(cwd, options?.subagent),
 	};
+	if (options?.skill) {
+		tools.skill = createSkillTool(cwd, options.skill);
+	}
+	return tools as Record<ToolName, Tool>;
 }

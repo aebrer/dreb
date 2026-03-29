@@ -2301,6 +2301,10 @@ export class AgentSession {
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix },
+					skill: {
+						getSkills: () => this._resourceLoader.getSkills().skills,
+						getSessionId: () => this.sessionId,
+					},
 					subagent: {
 						parentProvider: this.model?.provider,
 						modelRegistry: this._modelRegistry,
@@ -2421,7 +2425,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch", "subagent"];
+			: ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "skill"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
