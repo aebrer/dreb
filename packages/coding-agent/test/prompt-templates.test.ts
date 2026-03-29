@@ -102,8 +102,8 @@ describe("substituteArgs", () => {
 		expect(substituteArgs("Test: $@", ["only"])).toBe("Test: only");
 	});
 
-	test("should handle $0 (zero index)", () => {
-		expect(substituteArgs("$0", ["a", "b"])).toBe("");
+	test("should leave $0 untouched (reserved for skill expansion)", () => {
+		expect(substituteArgs("$0", ["a", "b"])).toBe("$0");
 	});
 
 	test("should handle decimal number in pattern (only integer part matches)", () => {

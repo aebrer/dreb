@@ -63,7 +63,7 @@ import {
 } from "./extensions/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
-import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
+import { expandPromptTemplate, type PromptTemplate, parseCommandArgs, substituteArgs } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
@@ -1053,6 +1053,7 @@ export class AgentSession {
 	/**
 	 * Expand skill commands (/skill:name args) to their full content.
 	 * Returns the expanded text, or the original text if not a skill command or skill not found.
+	 * Applies content substitution: $ARGUMENTS, $0, $1..., ${DREB_SKILL_DIR}, ${DREB_SESSION_ID}.
 	 * Emits errors via extension runner if file read fails.
 	 */
 	private _expandSkillCommand(text: string): string {
@@ -1067,7 +1068,17 @@ export class AgentSession {
 
 		try {
 			const content = readFileSync(skill.filePath, "utf-8");
-			const body = stripFrontmatter(content).trim();
+			let body = stripFrontmatter(content).trim();
+
+			// Apply content substitution
+			const parsedArgs = parseCommandArgs(args);
+			body = substituteArgs(body, parsedArgs);
+			// $0 is an alias for first argument (per spec)
+			body = body.replace(/\$0/g, parsedArgs[0] ?? "");
+			// Environment-style placeholders
+			body = body.replace(/\$\{DREB_SKILL_DIR\}/g, skill.baseDir);
+			body = body.replace(/\$\{DREB_SESSION_ID\}/g, this.sessionId);
+
 			const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
 			return args ? `${skillBlock}\n\n${args}` : skillBlock;
 		} catch (err) {

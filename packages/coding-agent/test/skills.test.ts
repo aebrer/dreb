@@ -14,6 +14,7 @@ function createTestSkill(options: {
 	filePath: string;
 	baseDir: string;
 	disableModelInvocation?: boolean;
+	userInvocable?: boolean;
 	source?: string;
 }): Skill {
 	return {
@@ -22,7 +23,9 @@ function createTestSkill(options: {
 		filePath: options.filePath,
 		baseDir: options.baseDir,
 		sourceInfo: createSyntheticSourceInfo(options.filePath, { source: options.source ?? "test" }),
+		tools: [],
 		disableModelInvocation: options.disableModelInvocation ?? false,
+		userInvocable: options.userInvocable ?? true,
 	};
 }
 
@@ -167,8 +170,12 @@ describe("skills", () => {
 			});
 
 			// Should load all skills that have descriptions (even with warnings)
-			// valid-skill, name-mismatch, invalid-name-chars, long-name, unknown-field, nested/child-skill, consecutive-hyphens
+			// valid-skill, name-mismatch, invalid-name-chars, long-name, unknown-field,
+			// nested/child-skill, consecutive-hyphens, disable-model-invocation,
+			// full-frontmatter, not-user-invocable, substitution-test,
+			// root-skill-preferred, multiline-description
 			// NOT: missing-description, no-frontmatter (both missing descriptions)
+			// NOT: invalid-yaml (parse failure)
 			expect(skills.length).toBeGreaterThanOrEqual(6);
 		});
 
@@ -218,6 +225,81 @@ describe("skills", () => {
 
 			expect(skills).toHaveLength(1);
 			expect(skills[0].disableModelInvocation).toBe(false);
+		});
+
+		it("should parse all frontmatter fields", () => {
+			const { skills, diagnostics } = loadSkillsFromDir({
+				dir: join(fixturesDir, "full-frontmatter"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			const skill = skills[0];
+			expect(skill.name).toBe("full-frontmatter");
+			expect(skill.argumentHint).toBe("[PR number or URL]");
+			expect(skill.tools).toEqual(["read", "grep", "glob", "bash"]);
+			expect(skill.model).toBe("sonnet");
+			expect(skill.context).toBe("fork");
+			expect(skill.agent).toBe("general-purpose");
+			expect(skill.disableModelInvocation).toBe(false);
+			expect(skill.userInvocable).toBe(true);
+			expect(diagnostics).toHaveLength(0);
+		});
+
+		it("should default userInvocable to true when not specified", () => {
+			const { skills } = loadSkillsFromDir({
+				dir: join(fixturesDir, "valid-skill"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].userInvocable).toBe(true);
+		});
+
+		it("should parse user-invocable: false", () => {
+			const { skills } = loadSkillsFromDir({
+				dir: join(fixturesDir, "not-user-invocable"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].userInvocable).toBe(false);
+		});
+
+		it("should default tools to empty array when not specified", () => {
+			const { skills } = loadSkillsFromDir({
+				dir: join(fixturesDir, "valid-skill"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].tools).toEqual([]);
+		});
+
+		it("should default context to undefined when not specified", () => {
+			const { skills } = loadSkillsFromDir({
+				dir: join(fixturesDir, "valid-skill"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].context).toBeUndefined();
+		});
+
+		it("should only accept 'fork' as a valid context value", () => {
+			// valid-skill doesn't have context set, so it should be undefined
+			const { skills: validSkills } = loadSkillsFromDir({
+				dir: join(fixturesDir, "valid-skill"),
+				source: "test",
+			});
+			expect(validSkills[0].context).toBeUndefined();
+
+			// full-frontmatter has context: fork
+			const { skills: forkSkills } = loadSkillsFromDir({
+				dir: join(fixturesDir, "full-frontmatter"),
+				source: "test",
+			});
+			expect(forkSkills[0].context).toBe("fork");
 		});
 	});
 

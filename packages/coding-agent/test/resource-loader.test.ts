@@ -421,7 +421,9 @@ Content`,
 				filePath: "/fake/path",
 				baseDir: "/fake",
 				sourceInfo: createSyntheticSourceInfo("/fake/path", { source: "custom" }),
+				tools: [],
 				disableModelInvocation: false,
+				userInvocable: true,
 			};
 			const loader = new DefaultResourceLoader({
 				cwd,

@@ -67,7 +67,13 @@ function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
 export interface SkillFrontmatter {
 	name?: string;
 	description?: string;
+	"argument-hint"?: string;
+	tools?: string;
+	model?: string;
+	context?: string;
+	agent?: string;
 	"disable-model-invocation"?: boolean;
+	"user-invocable"?: boolean;
 	[key: string]: unknown;
 }
 
@@ -77,7 +83,13 @@ export interface Skill {
 	filePath: string;
 	baseDir: string;
 	sourceInfo: SourceInfo;
+	argumentHint?: string;
+	tools: string[];
+	model?: string;
+	context?: "fork";
+	agent?: string;
 	disableModelInvocation: boolean;
+	userInvocable: boolean;
 }
 
 export interface LoadSkillsResult {
@@ -310,6 +322,14 @@ function loadSkillFromFile(
 			return { skill: null, diagnostics };
 		}
 
+		// Parse tools from comma-separated string to array
+		const tools = frontmatter.tools
+			? frontmatter.tools
+					.split(",")
+					.map((t) => t.trim())
+					.filter(Boolean)
+			: [];
+
 		return {
 			skill: {
 				name,
@@ -317,7 +337,13 @@ function loadSkillFromFile(
 				filePath,
 				baseDir: skillDir,
 				sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
+				argumentHint: frontmatter["argument-hint"],
+				tools,
+				model: frontmatter.model,
+				context: frontmatter.context === "fork" ? "fork" : undefined,
+				agent: frontmatter.agent,
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+				userInvocable: frontmatter["user-invocable"] !== false,
 			},
 			diagnostics,
 		};
