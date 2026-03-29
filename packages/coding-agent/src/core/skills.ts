@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
+import { escapeXml } from "../utils/xml.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
@@ -373,15 +374,6 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
 	lines.push("</available_skills>");
 
 	return lines.join("\n");
-}
-
-function escapeXml(str: string): string {
-	return str
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&apos;");
 }
 
 export interface LoadSkillsOptions {

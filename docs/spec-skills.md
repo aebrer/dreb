@@ -67,6 +67,9 @@ Before injecting skill content into the session, perform these substitutions:
 | `$ARGUMENTS` | Everything after the skill name in the invocation |
 | `$0` | Alias for `$1` (first argument) |
 | `$1`, `$2`, ... | Positional arguments (1-indexed, bash-style parsing) |
+| `$@` | All arguments joined by spaces (same as `$ARGUMENTS`) |
+| `${@:N}` | Arguments from position N onward (1-indexed, bash-style) |
+| `${@:N:L}` | L arguments starting from position N (1-indexed, bash-style) |
 | `${DREB_SESSION_ID}` | Current session ID |
 | `${DREB_SKILL_DIR}` | Absolute path to the skill's directory |
 

@@ -180,9 +180,6 @@ export class InteractiveMode {
 	// Thinking block visibility state
 	private hideThinkingBlock = false;
 
-	// Skill commands: command name -> skill file path
-	private skillCommands = new Map<string, string>();
-
 	// Agent subscription unsubscribe function
 	private unsubscribe?: () => void;
 
@@ -388,12 +385,9 @@ export class InteractiveMode {
 		}));
 
 		// Build skill commands from session.skills (if enabled)
-		this.skillCommands.clear();
 		const skillCommandList: SlashCommand[] = [];
 		if (this.settingsManager.getEnableSkillCommands()) {
 			for (const skill of this.session.resourceLoader.getSkills().skills) {
-				const commandName = `skill:${skill.name}`;
-				this.skillCommands.set(commandName, skill.filePath);
 				// Skills with userInvocable: false are hidden from the slash command menu
 				// (they can still be invoked by the model via the skill tool)
 				if (!skill.userInvocable) continue;
@@ -402,7 +396,7 @@ export class InteractiveMode {
 					description += ` (args: ${skill.argumentHint})`;
 				}
 				skillCommandList.push({
-					name: commandName,
+					name: `skill:${skill.name}`,
 					description,
 				});
 			}

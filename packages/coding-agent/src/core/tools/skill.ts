@@ -3,20 +3,12 @@ import type { AgentTool } from "@dreb/agent-core";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { stripFrontmatter } from "../../utils/frontmatter.js";
+import { escapeXml } from "../../utils/xml.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import { parseCommandArgs, substituteArgs } from "../prompt-templates.js";
 import type { Skill } from "../skills.js";
 import { getTextOutput } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-
-function escapeXml(str: string): string {
-	return str
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&apos;");
-}
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -56,9 +48,11 @@ export function expandSkillContent(skill: Skill, args: string, sessionId: string
 	let body = stripFrontmatter(content).trim();
 
 	const parsedArgs = parseCommandArgs(args);
+	// $0 is an alias for first argument (per spec). Replace BEFORE substituteArgs
+	// so that argument values containing "$0" aren't re-substituted.
+	// Negative lookahead avoids matching $00, $01, etc.
+	body = body.replace(/\$0(?![0-9])/g, parsedArgs[0] ?? "");
 	body = substituteArgs(body, parsedArgs);
-	// $0 is an alias for first argument (per spec)
-	body = body.replace(/\$0/g, parsedArgs[0] ?? "");
 	// Environment-style placeholders
 	body = body.replace(/\$\{DREB_SKILL_DIR\}/g, skill.baseDir);
 	body = body.replace(/\$\{DREB_SESSION_ID\}/g, sessionId);
