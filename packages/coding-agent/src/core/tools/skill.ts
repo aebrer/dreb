@@ -1,0 +1,169 @@
+import { readFileSync } from "node:fs";
+import type { AgentTool } from "@dreb/agent-core";
+import { Text } from "@dreb/tui";
+import { type Static, Type } from "@sinclair/typebox";
+import { stripFrontmatter } from "../../utils/frontmatter.js";
+import { escapeXml } from "../../utils/xml.js";
+import type { ToolDefinition } from "../extensions/types.js";
+import { parseCommandArgs, substituteArgs } from "../prompt-templates.js";
+import type { Skill } from "../skills.js";
+import { getTextOutput } from "./render-utils.js";
+import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+
+// ---------------------------------------------------------------------------
+// Schema
+// ---------------------------------------------------------------------------
+
+const skillSchema = Type.Object({
+	skill: Type.String({ description: 'The skill name to invoke (e.g. "review-pr", "telegram-send")' }),
+	args: Type.Optional(Type.String({ description: "Optional arguments to pass to the skill" })),
+});
+
+export type SkillToolInput = Static<typeof skillSchema>;
+
+export interface SkillToolDetails {
+	skillName: string;
+	found: boolean;
+	warned: boolean;
+	error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Options
+// ---------------------------------------------------------------------------
+
+export interface SkillToolOptions {
+	/** Returns the current list of loaded skills. Called on each invocation so reloads are reflected. */
+	getSkills: () => Skill[];
+	/** Returns the current session ID for ${DREB_SESSION_ID} substitution. Called on each invocation so session rotations are reflected. */
+	getSessionId: () => string;
+}
+
+// ---------------------------------------------------------------------------
+// Skill expansion — shared between skill tool and _expandSkillCommand
+// ---------------------------------------------------------------------------
+
+export function expandSkillContent(skill: Skill, args: string, sessionId: string): string {
+	const content = readFileSync(skill.filePath, "utf-8");
+	let body = stripFrontmatter(content).trim();
+
+	const parsedArgs = parseCommandArgs(args);
+	// $0 is an alias for first argument (per spec). Replace BEFORE substituteArgs
+	// so that argument values containing "$0" aren't re-substituted.
+	// Negative lookahead avoids matching $00, $01, etc.
+	body = body.replace(/\$0(?![0-9])/g, parsedArgs[0] ?? "");
+	body = substituteArgs(body, parsedArgs);
+	// Environment-style placeholders
+	body = body.replace(/\$\{DREB_SKILL_DIR\}/g, skill.baseDir);
+	body = body.replace(/\$\{DREB_SESSION_ID\}/g, sessionId);
+
+	const skillBlock = `<skill name="${escapeXml(skill.name)}" location="${escapeXml(skill.filePath)}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
+	return skillBlock;
+}
+
+// ---------------------------------------------------------------------------
+// Tool definition
+// ---------------------------------------------------------------------------
+
+export function createSkillToolDefinition(
+	_cwd: string,
+	options: SkillToolOptions,
+): ToolDefinition<typeof skillSchema, SkillToolDetails> {
+	const { getSkills, getSessionId } = options;
+
+	return {
+		name: "skill",
+		label: "skill",
+		description:
+			"Invoke a skill by name. Skills provide specialized instructions for specific tasks. " +
+			"Use this tool when a task matches a skill's description from the available_skills list in the system prompt.",
+		promptSnippet: "Invoke a skill to get specialized instructions for a task",
+		parameters: skillSchema,
+
+		async execute(_toolCallId, params: { skill: string; args?: string }) {
+			const skills = getSkills();
+			const skill = skills.find((s) => s.name === params.skill);
+
+			if (!skill) {
+				const available = skills
+					.filter((s) => !s.disableModelInvocation)
+					.map((s) => `  - ${s.name}: ${s.description}`)
+					.join("\n");
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Unknown skill "${params.skill}". Available skills:\n${available || "  (none loaded)"}`,
+						},
+					],
+					details: { skillName: params.skill, found: false, warned: false },
+				};
+			}
+
+			if (skill.disableModelInvocation) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text:
+								`The skill "${skill.name}" has model invocation disabled. ` +
+								`This skill is intended to be invoked explicitly by the user (via /skill:${skill.name}), not by the model. ` +
+								`Please ask the user for clarification before proceeding.`,
+						},
+					],
+					details: { skillName: skill.name, found: true, warned: true },
+				};
+			}
+
+			try {
+				const expanded = expandSkillContent(skill, params.args ?? "", getSessionId());
+				return {
+					content: [{ type: "text" as const, text: expanded }],
+					details: { skillName: skill.name, found: true, warned: false },
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Error loading skill "${skill.name}": ${message}`,
+						},
+					],
+					details: { skillName: skill.name, found: true, warned: false, error: message },
+				};
+			}
+		},
+
+		renderCall(args, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const skillName = args?.skill ?? "...";
+			const argsStr = args?.args ? ` ${theme.fg("accent", args.args)}` : "";
+			text.setText(`${theme.fg("toolTitle", theme.bold("skill"))} ${theme.fg("accent", skillName)}${argsStr}`);
+			return text;
+		},
+
+		renderResult(result, options, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const output = getTextOutput(result, context.showImages).trim();
+			if (!output) {
+				text.setText("");
+				return text;
+			}
+			const lines = output.split("\n");
+			const maxLines = options.expanded ? lines.length : 15;
+			const displayLines = lines.slice(0, maxLines);
+			let display = `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
+			const remaining = lines.length - maxLines;
+			if (remaining > 0) {
+				display += `\n${theme.fg("muted", `... (${remaining} more lines)`)}`;
+			}
+			text.setText(display);
+			return text;
+		},
+	};
+}
+
+export function createSkillTool(cwd: string, options: SkillToolOptions): AgentTool<typeof skillSchema> {
+	return wrapToolDefinition(createSkillToolDefinition(cwd, options));
+}

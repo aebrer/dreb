@@ -69,7 +69,9 @@ export function substituteArgs(content: string, args: string[]): string {
 
 	// Replace $1, $2, etc. with positional args FIRST (before wildcards)
 	// This prevents wildcard replacement values containing $<digit> patterns from being re-substituted
-	result = result.replace(/\$(\d+)/g, (_, num) => {
+	// Starts from $1 (not $0) — $0 has special meaning in skills (alias for $1) and is not
+	// a valid positional parameter in prompt templates (shell convention: args start at $1)
+	result = result.replace(/\$([1-9]\d*)/g, (_, num) => {
 		const index = parseInt(num, 10) - 1;
 		return args[index] ?? "";
 	});

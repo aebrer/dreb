@@ -14,6 +14,7 @@ function createTestSkill(options: {
 	filePath: string;
 	baseDir: string;
 	disableModelInvocation?: boolean;
+	userInvocable?: boolean;
 	source?: string;
 }): Skill {
 	return {
@@ -23,6 +24,7 @@ function createTestSkill(options: {
 		baseDir: options.baseDir,
 		sourceInfo: createSyntheticSourceInfo(options.filePath, { source: options.source ?? "test" }),
 		disableModelInvocation: options.disableModelInvocation ?? false,
+		userInvocable: options.userInvocable ?? true,
 	};
 }
 
@@ -167,8 +169,12 @@ describe("skills", () => {
 			});
 
 			// Should load all skills that have descriptions (even with warnings)
-			// valid-skill, name-mismatch, invalid-name-chars, long-name, unknown-field, nested/child-skill, consecutive-hyphens
+			// valid-skill, name-mismatch, invalid-name-chars, long-name, unknown-field,
+			// nested/child-skill, consecutive-hyphens, disable-model-invocation,
+			// full-frontmatter, not-user-invocable, substitution-test,
+			// root-skill-preferred, multiline-description
 			// NOT: missing-description, no-frontmatter (both missing descriptions)
+			// NOT: invalid-yaml (parse failure)
 			expect(skills.length).toBeGreaterThanOrEqual(6);
 		});
 
@@ -219,6 +225,41 @@ describe("skills", () => {
 			expect(skills).toHaveLength(1);
 			expect(skills[0].disableModelInvocation).toBe(false);
 		});
+
+		it("should parse all frontmatter fields", () => {
+			const { skills, diagnostics } = loadSkillsFromDir({
+				dir: join(fixturesDir, "full-frontmatter"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			const skill = skills[0];
+			expect(skill.name).toBe("full-frontmatter");
+			expect(skill.argumentHint).toBe("[PR number or URL]");
+			expect(skill.disableModelInvocation).toBe(false);
+			expect(skill.userInvocable).toBe(true);
+			expect(diagnostics).toHaveLength(0);
+		});
+
+		it("should default userInvocable to true when not specified", () => {
+			const { skills } = loadSkillsFromDir({
+				dir: join(fixturesDir, "valid-skill"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].userInvocable).toBe(true);
+		});
+
+		it("should parse user-invocable: false", () => {
+			const { skills } = loadSkillsFromDir({
+				dir: join(fixturesDir, "not-user-invocable"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].userInvocable).toBe(false);
+		});
 	});
 
 	describe("formatSkillsForPrompt", () => {
@@ -244,7 +285,7 @@ describe("skills", () => {
 			expect(result).toContain("<skill>");
 			expect(result).toContain("<name>test-skill</name>");
 			expect(result).toContain("<description>A test skill.</description>");
-			expect(result).toContain("<location>/path/to/skill/SKILL.md</location>");
+			expect(result).not.toContain("<location>");
 		});
 
 		it("should include intro text before XML", () => {
@@ -262,7 +303,7 @@ describe("skills", () => {
 			const introText = result.substring(0, xmlStart);
 
 			expect(introText).toContain("The following skills provide specialized instructions");
-			expect(introText).toContain("Use the read tool to load a skill's file");
+			expect(introText).toContain("Use the skill tool to invoke a skill");
 		});
 
 		it("should escape XML special characters", () => {

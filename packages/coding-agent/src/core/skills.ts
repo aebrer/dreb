@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
+import { escapeXml } from "../utils/xml.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
@@ -67,7 +68,9 @@ function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
 export interface SkillFrontmatter {
 	name?: string;
 	description?: string;
+	"argument-hint"?: string;
 	"disable-model-invocation"?: boolean;
+	"user-invocable"?: boolean;
 	[key: string]: unknown;
 }
 
@@ -77,7 +80,9 @@ export interface Skill {
 	filePath: string;
 	baseDir: string;
 	sourceInfo: SourceInfo;
+	argumentHint?: string;
 	disableModelInvocation: boolean;
+	userInvocable: boolean;
 }
 
 export interface LoadSkillsResult {
@@ -273,7 +278,13 @@ function loadSkillsFromDirInternal(
 			}
 			diagnostics.push(...result.diagnostics);
 		}
-	} catch {}
+	} catch (error) {
+		diagnostics.push({
+			type: "warning",
+			message: error instanceof Error ? error.message : `Failed to scan skills directory: ${dir}`,
+			path: dir,
+		});
+	}
 
 	return { skills, diagnostics };
 }
@@ -317,7 +328,9 @@ function loadSkillFromFile(
 				filePath,
 				baseDir: skillDir,
 				sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
+				argumentHint: frontmatter["argument-hint"],
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+				userInvocable: frontmatter["user-invocable"] !== false,
 			},
 			diagnostics,
 		};
@@ -345,7 +358,7 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
 
 	const lines = [
 		"\n\nThe following skills provide specialized instructions for specific tasks.",
-		"Use the read tool to load a skill's file when the task matches its description.",
+		"Use the skill tool to invoke a skill when the task matches its description.",
 		"When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
 		"",
 		"<available_skills>",
@@ -355,22 +368,12 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
 		lines.push("  <skill>");
 		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
 		lines.push(`    <description>${escapeXml(skill.description)}</description>`);
-		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
 		lines.push("  </skill>");
 	}
 
 	lines.push("</available_skills>");
 
 	return lines.join("\n");
-}
-
-function escapeXml(str: string): string {
-	return str
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&apos;");
 }
 
 export interface LoadSkillsOptions {

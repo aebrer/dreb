@@ -4,3 +4,4 @@ analysis/plots/
 node_modules/
 dist/
 *.tsbuildinfo
+packages/ai/src/models.generated.ts

@@ -13,14 +13,13 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
 import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@dreb/ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
-import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
 import { type BashResult, executeBash as executeBashCommand, executeBashWithOperations } from "./bash-executor.js";
 import {
@@ -73,6 +72,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import type { BashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions, getRunningBackgroundAgents } from "./tools/index.js";
+import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
 // ============================================================================
@@ -1053,6 +1053,7 @@ export class AgentSession {
 	/**
 	 * Expand skill commands (/skill:name args) to their full content.
 	 * Returns the expanded text, or the original text if not a skill command or skill not found.
+	 * Applies content substitution: $ARGUMENTS, $0, $1..., ${DREB_SKILL_DIR}, ${DREB_SESSION_ID}.
 	 * Emits errors via extension runner if file read fails.
 	 */
 	private _expandSkillCommand(text: string): string {
@@ -1063,20 +1064,24 @@ export class AgentSession {
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
 
 		const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
-		if (!skill) return text; // Unknown skill, pass through
+		if (!skill) {
+			console.error(`Unknown skill "${skillName}" — no skill found with that name`);
+			return text;
+		}
 
 		try {
-			const content = readFileSync(skill.filePath, "utf-8");
-			const body = stripFrontmatter(content).trim();
-			const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
-			return args ? `${skillBlock}\n\n${args}` : skillBlock;
+			return expandSkillContent(skill, args, this.sessionId);
 		} catch (err) {
-			// Emit error like extension commands do
-			this._extensionRunner?.emitError({
-				extensionPath: skill.filePath,
-				event: "skill_expansion",
-				error: err instanceof Error ? err.message : String(err),
-			});
+			const message = err instanceof Error ? err.message : String(err);
+			if (this._extensionRunner) {
+				this._extensionRunner.emitError({
+					extensionPath: skill.filePath,
+					event: "skill_expansion",
+					error: message,
+				});
+			} else {
+				console.error(`Skill expansion error for "${skillName}": ${message}`);
+			}
 			return text; // Return original on error
 		}
 	}
@@ -2290,6 +2295,10 @@ export class AgentSession {
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix },
+					skill: {
+						getSkills: () => this._resourceLoader.getSkills().skills,
+						getSessionId: () => this.sessionId,
+					},
 					subagent: {
 						parentProvider: this.model?.provider,
 						modelRegistry: this._modelRegistry,
@@ -2410,7 +2419,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch", "subagent"];
+			: ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "skill"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
