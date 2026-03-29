@@ -48,7 +48,9 @@ export class TasksPanelComponent extends Container {
 	private _rebuild(): void {
 		this.clear();
 
-		if (!this._visible || this._tasks.length === 0) {
+		const hasActiveTasks =
+			this._tasks.length > 0 && this._tasks.some((t) => t.status !== "completed");
+		if (!this._visible || !hasActiveTasks) {
 			return;
 		}
 
