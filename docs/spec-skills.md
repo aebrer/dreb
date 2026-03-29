@@ -9,11 +9,11 @@ Skills are reusable prompt-driven workflows that the agent can invoke (or the us
 Skills are discovered from the filesystem at session start:
 
 ```
-~/.dreb/skills/<skill-name>/SKILL.md     # User-level (available everywhere)
+~/.dreb/agent/skills/<skill-name>/SKILL.md     # User-level (available everywhere)
 .dreb/skills/<skill-name>/SKILL.md       # Project-level (repo-specific)
 ```
 
-Symlinks are followed transparently — a skill can live in a project repo and be symlinked to `~/.dreb/skills/` for global availability.
+Symlinks are followed transparently — a skill can live in a project repo and be symlinked to `~/.dreb/agent/skills/` for global availability.
 
 Nested plugin skills use namespaced names: `plugin-name:skill-name`.
 
@@ -52,13 +52,13 @@ If no arguments, review the current branch against main.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | yes | Skill identifier, used for `/name` invocation |
+| `name` | yes | Skill identifier, used for `/skill:name` invocation |
 | `description` | yes | When to use this skill. Agent reads this to decide on auto-invocation. |
 | `argument-hint` | no | Shown in `/` menu to hint at expected arguments |
-| `tools` | no | Comma-separated tools to allow without permission prompts |
-| `model` | no | Override the session model for this skill |
-| `context` | no | `"fork"` to run in an isolated subagent session |
-| `agent` | no | Agent type if `context=fork` |
+| `tools` | no | Comma-separated tools to allow without permission prompts. **Not implemented** — dreb auto-allows all tools, so permission gating is unnecessary. |
+| `model` | no | Override the session model for this skill. **Not implemented** — skills are prompt-driven; model selection is a session concern. |
+| `context` | no | `"fork"` to run in an isolated subagent session. **Not implemented** — skills that want subagent delegation can instruct the agent directly in their body. |
+| `agent` | no | Agent type if `context=fork`. **Not implemented** — see `context`. |
 | `disable-model-invocation` | no | `true` = only user can invoke via `/`, agent cannot auto-invoke |
 | `user-invocable` | no | `false` = hidden from `/` menu, only agent can invoke |
 
@@ -69,8 +69,8 @@ Before injecting skill content into the session, perform these substitutions:
 | Placeholder | Replaced with |
 |-------------|---------------|
 | `$ARGUMENTS` | Everything after the skill name in the invocation |
-| `$0` | First whitespace-separated argument |
-| `$1`, `$2`, ... | Subsequent arguments |
+| `$0` | Alias for `$1` (first argument) |
+| `$1`, `$2`, ... | Positional arguments (1-indexed, bash-style parsing) |
 | `${DREB_SESSION_ID}` | Current session ID |
 | `${DREB_SKILL_DIR}` | Absolute path to the skill's directory |
 
@@ -118,16 +118,11 @@ function invoke_skill(skill_name, arguments):
     body = body.replace("$0", arguments.split()[0] if arguments else "")
     # ... etc for $1, $2, env vars
 
-    if frontmatter.context == "fork":
-        # Run in isolated subagent
-        return spawn_subagent(
-            agent=frontmatter.agent or "general-purpose",
-            task=body,
-            model=frontmatter.model,
-        )
-    else:
-        # Inject into current session
-        session.inject_user_message(body)
+    # NOTE: context=fork path is not implemented.
+    # Skills that want subagent delegation instruct the agent in their body.
+
+    # Inject into current session
+    session.inject_user_message(body)
 ```
 
 ## Skill tool definition
@@ -147,7 +142,7 @@ Pi-mono has slash commands (registered via extensions) and "skills" (npm package
 
 - **No npm packaging** — skills are local markdown files
 - **No TypeScript** — skill logic is prompt-driven, not code-driven
-- **Slash commands map to skills** — `/review-pr` invokes the `review-pr` skill
+- **Slash commands map to skills** — `/skill:review-pr` invokes the `review-pr` skill
 - **Extensions are for tools** — custom tools are TypeScript extensions; skills are prompt workflows
 
 A skill can reference extension tools (by listing them in the `tools` frontmatter), but the skill itself is always a prompt template, not executable code.

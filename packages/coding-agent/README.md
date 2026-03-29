@@ -1,6 +1,6 @@
 dreb is a minimal terminal coding harness, forked from [pi-mono](https://github.com/badlogic/pi-mono). Adapt dreb to your workflows, not the other way around, without having to fork and modify dreb internals. Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Put your extensions, skills, prompt templates, and themes in [Packages](#packages) and share them with others via npm or git.
 
-dreb ships with powerful defaults but skips features like sub agents and plan mode. Instead, you can ask dreb to build what you want or install a third party package that matches your workflow.
+dreb ships with powerful defaults but skips features like plan mode. Instead, you can ask dreb to build what you want or install a third party package that matches your workflow.
 
 dreb runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps.
 ## Table of Contents
@@ -49,7 +49,7 @@ dreb
 /login  # Then select provider
 ```
 
-Then just talk to dreb. By default, dreb gives the model four tools: `read`, `write`, `edit`, and `bash`. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
+Then just talk to dreb. By default, dreb gives the model four tools: `read`, `write`, `edit`, and `bash`. Additional built-in tools (`grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `skill`) are available and can be enabled via `--tools`. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -260,17 +260,22 @@ Place in `~/.dreb/agent/prompts/`, `.dreb/prompts/`, or a [package](#packages) t
 
 ### Skills
 
-On-demand capability packages following the [Agent Skills standard](https://agentskills.io). Invoke via `/skill:name` or let the agent load them automatically.
+On-demand capability packages following the [Agent Skills standard](https://agentskills.io). Invoke via `/skill:name`, or the agent invokes them automatically via the built-in `skill` tool when a task matches.
 
 ```markdown
 <!-- ~/.dreb/agent/skills/my-skill/SKILL.md -->
-# My Skill
-Use this skill when the user asks about X.
+---
+name: my-skill
+description: Use this skill when the user asks about X.
+argument-hint: "<topic>"
+---
 
 ## Steps
-1. Do this
+1. Do this with $1
 2. Then that
 ```
+
+Skills support [content substitution](docs/skills.md#content-substitution) (`$1`, `$ARGUMENTS`, `${DREB_SKILL_DIR}`, etc.) and frontmatter fields like `argument-hint`, `user-invocable`, and `disable-model-invocation`.
 
 Place in `~/.dreb/agent/skills/`, `~/.agents/skills/`, `.dreb/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [package](#packages) to share with others. See [docs/skills.md](docs/skills.md).
 
@@ -290,7 +295,7 @@ export default function (dreb: ExtensionAPI) {
 
 **What's possible:**
 - Custom tools (or replace built-in tools entirely)
-- Sub-agents and plan mode
+- Plan mode and custom agent workflows
 - Custom compaction and summarization
 - Permission gates and path protection
 - Custom editors and UI components
@@ -395,8 +400,6 @@ dreb is aggressively extensible so it doesn't have to dictate your workflow. Fea
 
 **No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. Why?
 
-**No sub-agents.** There's many ways to do this. Spawn dreb instances via tmux, or build your own with [extensions](#extensions), or install a package that does it your way.
-
 **No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions) inline with your environment and security requirements.
 
 **No plan mode.** Write plans to files, or build it with [extensions](#extensions), or install a package.
@@ -469,7 +472,7 @@ cat README.md | dreb -p "Summarize this text"
 | `--tools <list>` | Enable specific built-in tools (default: `read,bash,edit,write`) |
 | `--no-tools` | Disable all built-in tools (extension tools still work) |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`
+Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `skill`
 
 ### Resource Options
 

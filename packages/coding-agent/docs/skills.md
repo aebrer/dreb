@@ -10,9 +10,10 @@ dreb implements the [Agent Skills standard](https://agentskills.io/specification
 
 - [Locations](#locations)
 - [How Skills Work](#how-skills-work)
-- [Skill Commands](#skill-commands)
+- [Invocation](#invocation)
 - [Skill Structure](#skill-structure)
 - [Frontmatter](#frontmatter)
+- [Content Substitution](#content-substitution)
 - [Validation](#validation)
 - [Example](#example)
 - [Skill Repositories](#skill-repositories)
@@ -64,21 +65,36 @@ For project-level Claude Code skills, add to `.dreb/settings.json`:
 
 1. At startup, dreb scans skill locations and extracts names and descriptions
 2. The system prompt includes available skills in XML format per the [specification](https://agentskills.io/integrate-skills)
-3. When a task matches, the agent uses `read` to load the full SKILL.md (models don't always do this; use prompting or `/skill:name` to force it)
-4. The agent follows the instructions, using relative paths to reference scripts and assets
+3. When a task matches, the agent uses the `skill` tool to load the full SKILL.md with content substitution applied
+4. Users can also invoke skills directly via `/skill:name [args]` slash commands
+5. The agent follows the instructions, using relative paths to reference scripts and assets
 
 This is progressive disclosure: only descriptions are always in context, full instructions load on-demand.
 
-## Skill Commands
+## Invocation
 
-Skills register as `/skill:name` commands:
+### Skill Tool (model-invocable)
+
+The agent can invoke skills programmatically via the built-in `skill` tool:
+
+```
+skill(skill: "review-pr", args: "123")
+```
+
+The tool reads the SKILL.md, strips frontmatter, applies [content substitution](#content-substitution), and returns the expanded content. Skills with `disable-model-invocation: true` are hidden from the system prompt and return a warning if the model tries to invoke them.
+
+### Slash Commands (user-invocable)
+
+Skills register as `/skill:name` commands in interactive mode:
 
 ```bash
 /skill:brave-search           # Load and execute the skill
 /skill:pdf-tools extract      # Load skill with arguments
 ```
 
-Arguments after the command are appended to the skill content as `User: <args>`.
+Arguments after the command are passed through [content substitution](#content-substitution) and appended after the skill content.
+
+Skills with `user-invocable: false` are hidden from the `/` menu but remain available to the model via the skill tool.
 
 Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 
@@ -109,6 +125,7 @@ my-skill/
 ---
 name: my-skill
 description: What this skill does and when to use it. Be specific.
+argument-hint: "<input file>"
 ---
 
 # My Skill
@@ -117,13 +134,15 @@ description: What this skill does and when to use it. Be specific.
 
 Run once before first use:
 \`\`\`bash
-cd /path/to/skill && npm install
+cd ${DREB_SKILL_DIR} && npm install
 \`\`\`
 
 ## Usage
 
+Process the input file: $1
+
 \`\`\`bash
-./scripts/process.sh <input>
+${DREB_SKILL_DIR}/scripts/process.sh $1
 \`\`\`
 ```
 
@@ -135,17 +154,19 @@ See [the reference guide](references/REFERENCE.md) for details.
 
 ## Frontmatter
 
-Per the [Agent Skills specification](https://agentskills.io/specification#frontmatter-required):
+Per the [Agent Skills specification](https://agentskills.io/specification#frontmatter-required), plus dreb-specific fields:
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Max 64 chars. Lowercase a-z, 0-9, hyphens. Must match parent directory. |
 | `description` | Yes | Max 1024 chars. What the skill does and when to use it. |
+| `argument-hint` | No | Hint text shown in the `/` menu (e.g. `"[PR number or URL]"`). |
+| `user-invocable` | No | Default `true`. When `false`, skill is hidden from the `/` menu but remains available to the model via the skill tool. |
+| `disable-model-invocation` | No | When `true`, skill is hidden from system prompt. Users must use `/skill:name`. |
 | `license` | No | License name or reference to bundled file. |
 | `compatibility` | No | Max 500 chars. Environment requirements. |
 | `metadata` | No | Arbitrary key-value mapping. |
 | `allowed-tools` | No | Space-delimited list of pre-approved tools (experimental). |
-| `disable-model-invocation` | No | When `true`, skill is hidden from system prompt. Users must use `/skill:name`. |
 
 ### Name Rules
 
@@ -171,6 +192,36 @@ Poor:
 ```yaml
 description: Helps with PDFs.
 ```
+
+## Content Substitution
+
+When a skill is invoked (via the skill tool or `/skill:name`), placeholders in the body are replaced before injection:
+
+| Placeholder | Replaced with |
+|-------------|---------------|
+| `$ARGUMENTS`, `$@` | All arguments joined |
+| `$0` | First argument (alias for `$1`) |
+| `$1`, `$2`, ... | Positional arguments (bash-style parsing: supports quoting) |
+| `${@:N}` | Arguments from the Nth position |
+| `${@:N:L}` | `L` arguments starting at N |
+| `${DREB_SKILL_DIR}` | Absolute path to the skill's directory |
+| `${DREB_SESSION_ID}` | Current session ID |
+
+Example:
+
+```markdown
+---
+name: review-file
+description: Review a specific file for issues.
+argument-hint: "<filename>"
+---
+Read ${DREB_SKILL_DIR}/checklist.md for the review criteria.
+
+Review the file: $1
+Focus areas: ${@:2}
+```
+
+Usage: `/skill:review-file src/main.ts "security" "performance"`
 
 ## Validation
 
