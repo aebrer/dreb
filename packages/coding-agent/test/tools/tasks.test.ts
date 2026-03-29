@@ -102,6 +102,19 @@ describe("tasks_update tool", () => {
 		assert.equal(updates[1][1].status, "in_progress");
 	});
 
+	it("should accept exactly 20 tasks", async () => {
+		const { execute, updates } = createTool();
+		const maxList = Array.from({ length: 20 }, (_, i) => ({
+			id: String(i + 1),
+			title: `Task ${i + 1}`,
+			status: "pending" as const,
+		}));
+		const result = await execute("call-boundary", { tasks: maxList });
+
+		assert.equal(updates.length, 1);
+		assert.equal(result.details?.taskCount, 20);
+	});
+
 	it("should reject task lists exceeding 20 items", async () => {
 		const { execute, updates } = createTool();
 		const bigList = Array.from({ length: 25 }, (_, i) => ({

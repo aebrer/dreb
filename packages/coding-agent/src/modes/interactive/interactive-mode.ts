@@ -145,7 +145,6 @@ export class InteractiveMode {
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private tasksPanel: TasksPanelComponent;
-	private tasksPanelContainer: Container;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
 	private autocompleteProvider: CombinedAutocompleteProvider | undefined;
@@ -257,8 +256,6 @@ export class InteractiveMode {
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
 		this.tasksPanel = new TasksPanelComponent(theme);
-		this.tasksPanelContainer = new Container();
-		this.tasksPanelContainer.addChild(this.tasksPanel);
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
 		this.keybindings = KeybindingsManager.create();
@@ -508,7 +505,7 @@ export class InteractiveMode {
 		this.ui.addChild(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
-		this.ui.addChild(this.tasksPanelContainer);
+		this.ui.addChild(this.tasksPanel);
 		this.renderWidgets(); // Initialize with default spacer
 		this.ui.addChild(this.widgetContainerAbove);
 		this.ui.addChild(this.editorContainer);

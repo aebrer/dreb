@@ -2310,15 +2310,22 @@ export class AgentSession {
 					},
 					tasks: {
 						onUpdate: (tasks) => {
-							this._tasks = tasks;
 							const completed = tasks.filter((t) => t.status === "completed").length;
 							const inProgressTask = tasks.find((t) => t.status === "in_progress");
-							this._emit({ type: "tasks_update", tasks: this._tasks });
-							return {
+							const result = {
 								taskCount: tasks.length,
 								completed,
 								inProgress: inProgressTask?.title,
 							};
+							// Commit state and emit event. Emit is fire-and-forget —
+							// don't let a TUI render error crash the tool call.
+							this._tasks = tasks;
+							try {
+								this._emit({ type: "tasks_update", tasks: this._tasks });
+							} catch {
+								// Swallow emit errors (e.g. TUI rendering failures)
+							}
+							return result;
 						},
 					},
 					subagent: {
