@@ -1064,17 +1064,24 @@ export class AgentSession {
 		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
 
 		const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
-		if (!skill) return text; // Unknown skill, pass through
+		if (!skill) {
+			console.error(`Unknown skill "${skillName}" — no skill found with that name`);
+			return text;
+		}
 
 		try {
 			return expandSkillContent(skill, args, this.sessionId);
 		} catch (err) {
-			// Emit error like extension commands do
-			this._extensionRunner?.emitError({
-				extensionPath: skill.filePath,
-				event: "skill_expansion",
-				error: err instanceof Error ? err.message : String(err),
-			});
+			const message = err instanceof Error ? err.message : String(err);
+			if (this._extensionRunner) {
+				this._extensionRunner.emitError({
+					extensionPath: skill.filePath,
+					event: "skill_expansion",
+					error: message,
+				});
+			} else {
+				console.error(`Skill expansion error for "${skillName}": ${message}`);
+			}
 			return text; // Return original on error
 		}
 	}

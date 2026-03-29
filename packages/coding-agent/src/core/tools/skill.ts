@@ -143,9 +143,22 @@ export function createSkillToolDefinition(
 			return text;
 		},
 
-		renderResult(result, _options, _theme, context) {
+		renderResult(result, options, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(getTextOutput(result, context.showImages));
+			const output = getTextOutput(result, context.showImages).trim();
+			if (!output) {
+				text.setText("");
+				return text;
+			}
+			const lines = output.split("\n");
+			const maxLines = options.expanded ? lines.length : 15;
+			const displayLines = lines.slice(0, maxLines);
+			let display = `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
+			const remaining = lines.length - maxLines;
+			if (remaining > 0) {
+				display += `\n${theme.fg("muted", `... (${remaining} more lines)`)}`;
+			}
+			text.setText(display);
 			return text;
 		},
 	};

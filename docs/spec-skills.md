@@ -113,9 +113,11 @@ function invoke_skill(skill_name, arguments):
     frontmatter, body = parse_frontmatter_and_body(content)
 
     # Apply substitutions
-    body = body.replace("$ARGUMENTS", arguments)
+    # $0 must be replaced BEFORE $1+/$ARGUMENTS to prevent re-substitution
+    # (argument values containing "$0" would be corrupted otherwise)
     body = body.replace("$0", parse_args(arguments)[0] if arguments else "")
-    # ... etc for $1, $2, env vars
+    body = body.replace("$1", parse_args(arguments)[0] if arguments else "")
+    # ... etc for $2, $3, $ARGUMENTS, env vars
 
     # NOTE: context=fork path is not implemented.
     # Skills that want subagent delegation instruct the agent in their body.

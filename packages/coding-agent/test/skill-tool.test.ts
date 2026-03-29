@@ -39,7 +39,14 @@ const substitutionSkill = createTestSkill({
 	baseDir: resolve(fixturesDir, "substitution-test"),
 });
 
-const allSkills = [validSkill, disabledSkill, substitutionSkill];
+const lookaheadSkill = createTestSkill({
+	name: "dollar-zero-lookahead",
+	description: "Tests that $0 negative lookahead does not match $00 or $01.",
+	filePath: resolve(fixturesDir, "dollar-zero-lookahead/SKILL.md"),
+	baseDir: resolve(fixturesDir, "dollar-zero-lookahead"),
+});
+
+const allSkills = [validSkill, disabledSkill, substitutionSkill, lookaheadSkill];
 let sessionId = "test-session-123";
 
 function createTool(skills: Skill[] = allSkills) {
@@ -187,6 +194,28 @@ describe("skill tool", () => {
 		expect(text).toContain("ENOENT");
 		expect(result.details.found).toBe(true);
 		expect(result.details.warned).toBe(false);
+	});
+
+	it("should not substitute $0 inside $00 or $01 (negative lookahead)", async () => {
+		const tool = createTool();
+		const result = await tool.execute(
+			"call-lookahead",
+			{ skill: "dollar-zero-lookahead", args: "FIRST" },
+			undefined,
+			undefined,
+			{} as any,
+		);
+
+		const text = (result.content[0] as { type: "text"; text: string }).text;
+		// $0 should be replaced with "FIRST"
+		expect(text).toContain("Zero: FIRST.");
+		// $00 should NOT be touched by $0 replacement — it's not a valid variable
+		// substituteArgs skips $0 (matches $1+ only), so $00 passes through as literal "$00"
+		expect(text).toContain("Double-zero: $00.");
+		// $01 should NOT be touched by $0 replacement
+		expect(text).toContain("Zero-one: $01.");
+		// $10 is handled by substituteArgs as positional arg 10 (empty here)
+		expect(text).toContain("Ten: .");
 	});
 
 	it("should reflect getSkills() at invocation time", async () => {

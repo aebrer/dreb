@@ -163,10 +163,6 @@ Per the [Agent Skills specification](https://agentskills.io/specification#frontm
 | `argument-hint` | No | Hint text shown in the `/` menu (e.g. `"[PR number or URL]"`). |
 | `user-invocable` | No | Default `true`. When `false`, skill is hidden from the `/` menu but remains available to the model via the skill tool. |
 | `disable-model-invocation` | No | When `true`, skill is hidden from system prompt. Users must use `/skill:name`. |
-| `license` | No | License name or reference to bundled file. |
-| `compatibility` | No | Max 500 chars. Environment requirements. |
-| `metadata` | No | Arbitrary key-value mapping. |
-| `allowed-tools` | No | Space-delimited list of pre-approved tools (experimental). |
 
 ### Name Rules
 
