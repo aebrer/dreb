@@ -92,7 +92,7 @@ Skills register as `/skill:name` commands in interactive mode:
 /skill:pdf-tools extract      # Load skill with arguments
 ```
 
-Arguments after the command are passed through [content substitution](#content-substitution) and appended after the skill content.
+Arguments after the command are passed through [content substitution](#content-substitution) into the skill content.
 
 Skills with `user-invocable: false` are hidden from the `/` menu but remain available to the model via the skill tool.
 
@@ -259,7 +259,7 @@ description: Web search and content extraction via Brave Search API. Use for sea
 ## Setup
 
 \`\`\`bash
-cd /path/to/brave-search && npm install
+cd ${DREB_SKILL_DIR} && npm install
 \`\`\`
 
 ## Search

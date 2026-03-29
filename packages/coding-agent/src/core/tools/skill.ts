@@ -9,6 +9,15 @@ import type { Skill } from "../skills.js";
 import { getTextOutput } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
+function escapeXml(str: string): string {
+	return str
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&apos;");
+}
+
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------
@@ -24,6 +33,7 @@ export interface SkillToolDetails {
 	skillName: string;
 	found: boolean;
 	warned: boolean;
+	error?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -53,8 +63,8 @@ export function expandSkillContent(skill: Skill, args: string, sessionId: string
 	body = body.replace(/\$\{DREB_SKILL_DIR\}/g, skill.baseDir);
 	body = body.replace(/\$\{DREB_SESSION_ID\}/g, sessionId);
 
-	const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
-	return args ? `${skillBlock}\n\n${args}` : skillBlock;
+	const skillBlock = `<skill name="${escapeXml(skill.name)}" location="${escapeXml(skill.filePath)}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
+	return skillBlock;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,14 +128,15 @@ export function createSkillToolDefinition(
 					details: { skillName: skill.name, found: true, warned: false },
 				};
 			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
 				return {
 					content: [
 						{
 							type: "text" as const,
-							text: `Error loading skill "${skill.name}": ${err instanceof Error ? err.message : String(err)}`,
+							text: `Error loading skill "${skill.name}": ${message}`,
 						},
 					],
-					details: { skillName: skill.name, found: true, warned: false },
+					details: { skillName: skill.name, found: true, warned: false, error: message },
 				};
 			}
 		},

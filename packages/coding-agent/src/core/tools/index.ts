@@ -218,7 +218,7 @@ export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOption
 	];
 }
 
-export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
+export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName | "skill", ToolDef> {
 	const tools: Record<string, ToolDef> = {
 		read: createReadToolDefinition(cwd, options?.read),
 		bash: createBashToolDefinition(cwd, options?.bash),
@@ -234,7 +234,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 	if (options?.skill) {
 		tools.skill = createSkillToolDefinition(cwd, options.skill);
 	}
-	return tools as Record<ToolName, ToolDef>;
+	return tools as Record<ToolName | "skill", ToolDef>;
 }
 
 export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
@@ -250,7 +250,7 @@ export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[]
 	return [createReadTool(cwd, options?.read), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd)];
 }
 
-export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
+export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName | "skill", Tool> {
 	const tools: Record<string, Tool> = {
 		read: createReadTool(cwd, options?.read),
 		bash: createBashTool(cwd, options?.bash),
@@ -266,5 +266,5 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 	if (options?.skill) {
 		tools.skill = createSkillTool(cwd, options.skill);
 	}
-	return tools as Record<ToolName, Tool>;
+	return tools as Record<ToolName | "skill", Tool>;
 }

@@ -277,7 +277,13 @@ function loadSkillsFromDirInternal(
 			}
 			diagnostics.push(...result.diagnostics);
 		}
-	} catch {}
+	} catch (error) {
+		diagnostics.push({
+			type: "warning",
+			message: error instanceof Error ? error.message : `Failed to scan skills directory: ${dir}`,
+			path: dir,
+		});
+	}
 
 	return { skills, diagnostics };
 }

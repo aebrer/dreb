@@ -111,7 +111,7 @@ function invoke_skill(skill_name, arguments):
 
     # Apply substitutions
     body = body.replace("$ARGUMENTS", arguments)
-    body = body.replace("$0", arguments.split()[0] if arguments else "")
+    body = body.replace("$0", parse_args(arguments)[0] if arguments else "")
     # ... etc for $1, $2, env vars
 
     # NOTE: context=fork path is not implemented.
@@ -141,7 +141,7 @@ Pi-mono has slash commands (registered via extensions) and "skills" (npm package
 - **Slash commands map to skills** — `/skill:review-pr` invokes the `review-pr` skill
 - **Extensions are for tools** — custom tools are TypeScript extensions; skills are prompt workflows
 
-A skill can reference extension tools (by listing them in the `tools` frontmatter), but the skill itself is always a prompt template, not executable code.
+A skill can reference extension tools (by name in its body), but the skill itself is always a prompt template, not executable code.
 
 ## Supporting files
 

@@ -131,7 +131,9 @@ describe("skill tool", () => {
 		);
 
 		const text = (result.content[0] as { type: "text"; text: string }).text;
-		expect(text).toContain("</skill>\n\nmy arguments");
+		expect(text).toContain("</skill>");
+		// Raw args are no longer appended — content substitution handles arg embedding
+		expect(text).not.toContain("my arguments");
 	});
 
 	it("should return error with empty list when no skills loaded", async () => {
