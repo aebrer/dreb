@@ -25,10 +25,6 @@ name: review-pr
 description: Comprehensive PR review using specialized agents. Use when the
              user asks to review a PR or wants code review before merging.
 argument-hint: "[PR number or URL]"
-tools: read,grep,glob,bash,subagent          # (optional) tools to allow without permission
-model: (optional)                             # override session model
-context: fork                                 # (optional) "fork" = run in isolated subagent
-agent: general-purpose                        # (optional) agent type if context=fork
 disable-model-invocation: false               # (optional) prevent auto-invocation by agent
 user-invocable: true                          # (optional) show in /slash menu
 ---
@@ -94,7 +90,7 @@ This lets the agent know what skills exist and when to invoke them, without load
 Pseudocode:
 
 function load_skill_descriptions():
-    skills = discover_skills()  # scan ~/.dreb/skills/ and .dreb/skills/
+    skills = discover_skills()  # scan ~/.dreb/agent/skills/ and .dreb/skills/
 
     descriptions = []
     for skill in skills:
@@ -152,7 +148,7 @@ A skill can reference extension tools (by listing them in the `tools` frontmatte
 A skill directory can contain additional files beyond SKILL.md:
 
 ```
-~/.dreb/skills/review-pr/
+~/.dreb/agent/skills/review-pr/
 ├── SKILL.md           # Main skill definition
 ├── examples.md        # Examples the agent can Read on-demand
 ├── checklist.md       # Review checklist template

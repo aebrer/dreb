@@ -38,10 +38,10 @@ export interface SkillToolOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Skill expansion (shared with _expandSkillCommand in agent-session)
+// Skill expansion — shared between skill tool and _expandSkillCommand
 // ---------------------------------------------------------------------------
 
-function expandSkillContent(skill: Skill, args: string, sessionId: string): string {
+export function expandSkillContent(skill: Skill, args: string, sessionId: string): string {
 	const content = readFileSync(skill.filePath, "utf-8");
 	let body = stripFrontmatter(content).trim();
 

@@ -170,6 +170,23 @@ describe("skill tool", () => {
 		sessionId = "test-session-123";
 	});
 
+	it("should return error when skill file cannot be read", async () => {
+		const brokenSkill = createTestSkill({
+			name: "broken-skill",
+			description: "A skill with a nonexistent file.",
+			filePath: resolve(fixturesDir, "nonexistent/SKILL.md"),
+			baseDir: resolve(fixturesDir, "nonexistent"),
+		});
+		const tool = createTool([brokenSkill]);
+		const result = await tool.execute("call-err", { skill: "broken-skill" }, undefined, undefined, {} as any);
+
+		const text = (result.content[0] as { type: "text"; text: string }).text;
+		expect(text).toContain('Error loading skill "broken-skill"');
+		expect(text).toContain("ENOENT");
+		expect(result.details.found).toBe(true);
+		expect(result.details.warned).toBe(false);
+	});
+
 	it("should reflect getSkills() at invocation time", async () => {
 		const mutableSkills: Skill[] = [];
 		const tool = createSkillToolDefinition(process.cwd(), {

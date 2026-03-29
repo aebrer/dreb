@@ -13,14 +13,13 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
 import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@dreb/ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
-import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
 import { type BashResult, executeBash as executeBashCommand, executeBashWithOperations } from "./bash-executor.js";
 import {
@@ -63,7 +62,7 @@ import {
 } from "./extensions/index.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
-import { expandPromptTemplate, type PromptTemplate, parseCommandArgs, substituteArgs } from "./prompt-templates.js";
+import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
@@ -73,6 +72,7 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import type { BashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions, getRunningBackgroundAgents } from "./tools/index.js";
+import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
 // ============================================================================
@@ -1067,20 +1067,7 @@ export class AgentSession {
 		if (!skill) return text; // Unknown skill, pass through
 
 		try {
-			const content = readFileSync(skill.filePath, "utf-8");
-			let body = stripFrontmatter(content).trim();
-
-			// Apply content substitution
-			const parsedArgs = parseCommandArgs(args);
-			body = substituteArgs(body, parsedArgs);
-			// $0 is an alias for first argument (per spec)
-			body = body.replace(/\$0/g, parsedArgs[0] ?? "");
-			// Environment-style placeholders
-			body = body.replace(/\$\{DREB_SKILL_DIR\}/g, skill.baseDir);
-			body = body.replace(/\$\{DREB_SESSION_ID\}/g, this.sessionId);
-
-			const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
-			return args ? `${skillBlock}\n\n${args}` : skillBlock;
+			return expandSkillContent(skill, args, this.sessionId);
 		} catch (err) {
 			// Emit error like extension commands do
 			this._extensionRunner?.emitError({
