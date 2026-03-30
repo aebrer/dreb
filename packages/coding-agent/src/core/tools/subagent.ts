@@ -781,6 +781,7 @@ export interface SubagentToolDetails {
 function formatSubagentCall(
 	args: SubagentToolInput | undefined,
 	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+	argsComplete = true,
 ): string {
 	const invalidArg = invalidArgText(theme);
 
@@ -806,7 +807,11 @@ function formatSubagentCall(
 		theme.fg("accent", agent) +
 		modelSuffix +
 		" " +
-		(taskPreview === null ? invalidArg : theme.fg("toolOutput", `"${taskPreview}"`))
+		(taskPreview === null
+			? argsComplete
+				? invalidArg
+				: theme.fg("muted", "…")
+			: theme.fg("toolOutput", `"${taskPreview}"`))
 	);
 }
 
@@ -1260,7 +1265,7 @@ export function createSubagentToolDefinition(
 
 		renderCall(args, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatSubagentCall(args, theme));
+			text.setText(formatSubagentCall(args, theme, context.argsComplete));
 			return text;
 		},
 		renderResult(result, options, theme, context) {
