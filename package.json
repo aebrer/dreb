@@ -31,7 +31,9 @@
 	"engines": {
 		"node": ">=20.0.0"
 	},
-	"version": "1.7.3",
+
+	"version": "1.7.4",
+
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.5",
 		"@dreb/coding-agent": "^1.0.0",
