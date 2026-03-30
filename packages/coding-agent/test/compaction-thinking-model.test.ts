@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type ThinkingLevel } from "@dreb/agent-core";
-import { getModel, type Model } from "@dreb/ai";
+import { findModel, getModel, type Model } from "@dreb/ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
@@ -194,7 +194,7 @@ describe.skipIf(!HAS_ANTHROPIC_AUTH)("Compaction with thinking models (Anthropic
 	}
 
 	it("should compact successfully with claude-sonnet-4-5 and thinking level high", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = findModel("anthropic", "sonnet")!;
 		createSession(model, "high");
 
 		// Send a simple prompt

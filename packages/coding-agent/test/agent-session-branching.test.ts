@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@dreb/agent-core";
-import { getModel } from "@dreb/ai";
+import { findModel } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -42,7 +42,7 @@ describe.skipIf(!API_KEY)("AgentSession forking", () => {
 	});
 
 	function createSession(noSession: boolean = false) {
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = findModel("anthropic", "sonnet")!;
 		const agent = new Agent({
 			getApiKey: () => API_KEY,
 			initialState: {

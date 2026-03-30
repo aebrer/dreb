@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getModel } from "@dreb/ai";
+import { findModel } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
@@ -26,7 +26,7 @@ describe("createAgentSession session manager defaults", () => {
 	});
 
 	it("uses agentDir for the default persisted session path", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5");
+		const model = findModel("anthropic", "sonnet");
 		expect(model).toBeTruthy();
 
 		const { session } = await createAgentSession({
@@ -47,7 +47,7 @@ describe("createAgentSession session manager defaults", () => {
 	});
 
 	it("keeps an explicit sessionManager override", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5");
+		const model = findModel("anthropic", "sonnet");
 		expect(model).toBeTruthy();
 
 		const sessionManager = SessionManager.inMemory(cwd);

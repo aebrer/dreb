@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@dreb/agent-core";
 import type { AssistantMessage, Usage } from "@dreb/ai";
-import { getModel } from "@dreb/ai";
+import { findModel } from "@dreb/ai";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -397,7 +397,7 @@ describe("Large session fixture", () => {
 describe.skipIf(!process.env.ANTHROPIC_OAUTH_TOKEN)("LLM summarization", () => {
 	it("should generate a compaction result for the large session", async () => {
 		const entries = loadLargeSessionEntries();
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = findModel("anthropic", "sonnet")!;
 
 		const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS);
 		expect(preparation).toBeDefined();
@@ -418,7 +418,7 @@ describe.skipIf(!process.env.ANTHROPIC_OAUTH_TOKEN)("LLM summarization", () => {
 	it("should produce valid session after compaction", async () => {
 		const entries = loadLargeSessionEntries();
 		const loaded = buildSessionContext(entries);
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = findModel("anthropic", "sonnet")!;
 
 		const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS);
 		expect(preparation).toBeDefined();

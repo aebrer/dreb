@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Agent } from "@dreb/agent-core";
-import { getModel, type OAuthCredentials, type OAuthProvider } from "@dreb/ai";
+import { findModel, type OAuthCredentials, type OAuthProvider } from "@dreb/ai";
 import { getOAuthApiKey } from "@dreb/ai/oauth";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -242,7 +242,7 @@ export function createTestSession(options: TestSessionOptions = {}): TestSession
 	const tempDir = join(tmpdir(), `dreb-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(tempDir, { recursive: true });
 
-	const model = getModel("anthropic", "claude-sonnet-4-5")!;
+	const model = findModel("anthropic", "sonnet")!;
 	const agent = new Agent({
 		getApiKey: () => API_KEY,
 		initialState: {

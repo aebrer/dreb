@@ -1,5 +1,5 @@
 import { Agent, type ThinkingLevel } from "@dreb/agent-core";
-import { getModel } from "@dreb/ai";
+import { findModel } from "@dreb/ai";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -8,8 +8,9 @@ import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { createTestResourceLoader } from "./utilities.js";
 
-const reasoningModel = getModel("anthropic", "claude-sonnet-4-5")!;
-const nonReasoningModel = getModel("anthropic", "claude-3-5-haiku-latest")!;
+const reasoningModel = findModel("anthropic", "sonnet")!;
+// This test specifically needs a non-reasoning model — claude-3-5-haiku has reasoning: false
+const nonReasoningModel = findModel("anthropic", "3-5-haiku")!;
 
 function createSession({
 	thinkingLevel = "high",

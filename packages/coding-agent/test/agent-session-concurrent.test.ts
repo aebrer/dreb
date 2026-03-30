@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@dreb/agent-core";
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@dreb/ai";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, findModel } from "@dreb/ai";
 import { Type } from "@sinclair/typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
@@ -69,7 +69,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	});
 
 	function createSession() {
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = findModel("anthropic", "sonnet")!;
 		let abortSignal: AbortSignal | undefined;
 
 		// Use a stream function that responds to abort
@@ -173,7 +173,7 @@ describe("AgentSession concurrent prompt guard", () => {
 
 	it("should allow prompt() after previous completes", async () => {
 		// Create session with a stream that completes immediately
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = findModel("anthropic", "sonnet")!;
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: {
@@ -217,7 +217,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	});
 
 	it("should wait for queued agent events before emitting tool_call", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = findModel("anthropic", "sonnet")!;
 		const tool = {
 			name: "dummy",
 			description: "Dummy tool",
@@ -353,7 +353,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	});
 
 	it("should persist message_end events in order with slow extension handlers", async () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = findModel("anthropic", "sonnet")!;
 		const tool = {
 			name: "dummy",
 			description: "Dummy tool",

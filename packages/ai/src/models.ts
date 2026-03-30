@@ -25,6 +25,52 @@ export function getModel<TProvider extends KnownProvider, TModelId extends keyof
 	return providerModels?.get(modelId as string) as Model<ModelApi<TProvider, TModelId>>;
 }
 
+/**
+ * Find a model by fuzzy matching against the provider's model IDs.
+ *
+ * Tries exact match first, then falls back to case-insensitive substring
+ * matching. Prefers alias models (non-dated IDs) over dated versions.
+ * Returns undefined if no match or multiple ambiguous matches.
+ *
+ * Useful in tests to avoid hardcoding exact model IDs that may be
+ * deprecated or renamed across model generations.
+ *
+ * @example
+ * findModel("anthropic", "sonnet")    // → claude-sonnet-4-5
+ * findModel("anthropic", "haiku")     // → claude-haiku-4-5
+ * findModel("openai", "gpt-5-mini")   // → exact match
+ */
+export function findModel(provider: string, pattern: string): Model<Api> | undefined {
+	const providerModels = modelRegistry.get(provider);
+	if (!providerModels) return undefined;
+
+	// Try exact match first
+	const exact = providerModels.get(pattern);
+	if (exact) return exact;
+
+	// Substring match (case-insensitive)
+	const normalizedPattern = pattern.toLowerCase();
+	const matches = Array.from(providerModels.values()).filter(
+		(m) => m.id.toLowerCase().includes(normalizedPattern) || m.name?.toLowerCase().includes(normalizedPattern),
+	);
+
+	if (matches.length === 0) return undefined;
+	if (matches.length === 1) return matches[0];
+
+	// Multiple matches — prefer aliases (non-dated IDs) over dated versions
+	const isAlias = (id: string) => !/\d{8}/.test(id);
+	const aliases = matches.filter((m) => isAlias(m.id));
+
+	if (aliases.length === 1) return aliases[0];
+	if (aliases.length > 1) {
+		// Among multiple aliases, prefer the latest (highest version sort)
+		return aliases.sort((a, b) => b.id.localeCompare(a.id))[0];
+	}
+
+	// All dated — prefer the latest
+	return matches.sort((a, b) => b.id.localeCompare(a.id))[0];
+}
+
 export function getProviders(): KnownProvider[] {
 	return Array.from(modelRegistry.keys()) as KnownProvider[];
 }
