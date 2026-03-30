@@ -79,7 +79,7 @@ Apply these heuristics for how many findings to tackle at once:
 - **Moderate fixes** (logic changes, refactors): ~6 per batch
 - **Complex fixes** (architecture, new features): ~3 per batch
 
-If there are more findings than the batch size, fix the first batch and let the user know to run `mach6-fix` again for the rest.
+If there are more findings than the batch size, fix the first batch and let the user know to run `/skill:mach6-fix` again for the rest.
 
 ## Step 5: Implement fixes
 
@@ -99,4 +99,4 @@ If a fix is out of scope or would require significant refactoring, recommend def
 
 Update task: fix → completed, verify → in_progress, then verify → completed.
 
-Suggest next step: `mach6-push` then `mach6-review <pr-number>` for re-review.
+Suggest next step: `/skill:mach6-push` then `/skill:mach6-review <pr-number>` for re-review.

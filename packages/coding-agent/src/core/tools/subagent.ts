@@ -1045,13 +1045,13 @@ export function createSubagentToolDefinition(
 				} else if (params.tasks) {
 					// Parallel background tasks — each gets its own agent ID and notifies independently
 					const launched: Array<{ id: string; taskText: string }> = [];
+					const skipped: Array<{ taskText: string; error: string }> = [];
 					for (let i = 0; i < params.tasks.length; i++) {
 						const item = params.tasks[i];
 						const agentName = item.agent || DEFAULT_AGENT;
 						const cwdResult = clampCwd(cwd, item.cwd);
 						if (!cwdResult.ok) {
-							// Surface cwd error immediately rather than launching a doomed agent
-							console.error(`[subagent] ${cwdResult.error}`);
+							skipped.push({ taskText: item.task, error: cwdResult.error });
 							continue;
 						}
 						const agentId = launchBackgroundTask(
@@ -1064,11 +1064,19 @@ export function createSubagentToolDefinition(
 						launched.push({ id: agentId, taskText: item.task });
 					}
 					const listing = launched.map(({ id, taskText }) => `  ${id}: ${taskText.slice(0, 80)}`).join("\n");
+					const skippedListing = skipped
+						.map(({ taskText, error }) => `  SKIPPED: ${taskText.slice(0, 60)} — ${error}`)
+						.join("\n");
+					const parts = [`${launched.length} background agents started:\n${listing}`];
+					if (skipped.length > 0) {
+						parts.push(`\n${skipped.length} task(s) failed to launch:\n${skippedListing}`);
+					}
+					parts.push("\nEach will notify independently when complete.");
 					return {
 						content: [
 							{
 								type: "text",
-								text: `${launched.length} background agents started:\n${listing}\n\nEach will notify independently when complete.`,
+								text: parts.join("\n"),
 							},
 						],
 						details: { mode: "parallel", agentCount: launched.length } as SubagentToolDetails,

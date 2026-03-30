@@ -87,7 +87,7 @@ gh issue comment <number> --body "<!-- mach6-assessment -->
 
 Update task: post → completed.
 
-Suggest next step: `mach6-plan <number>`
+Suggest next step: `/skill:mach6-plan <number>`
 
 ---
 
@@ -127,4 +127,4 @@ Present the draft to the user for approval.
 gh issue create --title "<title>" --body "<body>" [--label "<labels>"]
 ```
 
-Report the issue number and URL. Suggest next step: `mach6-plan <number>`
+Report the issue number and URL. Suggest next step: `/skill:mach6-plan <number>`

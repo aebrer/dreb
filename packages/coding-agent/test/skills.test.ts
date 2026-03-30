@@ -457,33 +457,29 @@ describe("skills", () => {
 		});
 
 		it("should allow user/project skills to override built-ins (built-ins are lowest priority)", () => {
-			// Load with a skillPaths entry that has a skill with the same name as a built-in
-			// The path skill should win because built-ins are loaded last
+			// Load with a fixture skill named "mach6-issue" to collide with the built-in
 			const { skills, diagnostics } = loadSkills({
 				agentDir: emptyAgentDir,
 				cwd: emptyCwd,
-				skillPaths: [join(fixturesDir, "valid-skill")],
+				skillPaths: [join(fixturesDir, "builtin-override")],
 			});
 
-			// The valid-skill fixture shouldn't collide with built-ins (different name),
-			// but we can verify the priority ordering by checking that built-ins are
-			// loaded after other sources
-			const builtins = skills.filter((s) => s.sourceInfo.source === "builtin");
-			const nonBuiltins = skills.filter((s) => s.sourceInfo.source !== "builtin");
-			expect(builtins.length).toBeGreaterThan(0);
-			expect(nonBuiltins.length).toBeGreaterThan(0);
+			// The path skill should win because built-ins are loaded last (lowest priority)
+			const mach6Issue = skills.find((s) => s.name === "mach6-issue");
+			expect(mach6Issue).toBeDefined();
+			expect(mach6Issue!.sourceInfo.source).not.toBe("builtin");
+			expect(mach6Issue!.description).toContain("User override");
 
-			// Verify collision diagnostics show built-ins as losers (not winners)
-			// when there's a name conflict
-			const _builtinCollisions = diagnostics.filter(
-				(d: ResourceDiagnostic) => d.type === "collision" && d.collision?.loserPath?.includes("skills/mach6-"),
-			);
-			// No collisions expected since valid-skill has a different name
-			// But the key invariant is: built-ins should never appear as collision winners
+			// Built-in should appear as the collision loser, not winner
 			const builtinWinners = diagnostics.filter(
 				(d: ResourceDiagnostic) => d.type === "collision" && d.collision?.winnerPath?.includes("skills/mach6-"),
 			);
 			expect(builtinWinners).toHaveLength(0);
+
+			const builtinLosers = diagnostics.filter(
+				(d: ResourceDiagnostic) => d.type === "collision" && d.collision?.loserPath?.includes("skills/mach6-"),
+			);
+			expect(builtinLosers.length).toBeGreaterThan(0);
 		});
 	});
 

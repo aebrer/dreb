@@ -15,8 +15,7 @@ if npm test > "$LOG_FILE" 2>&1; then
     # Vitest lines have leading whitespace: "      Tests  N passed | M skipped (T)"
     # Node test runner lines: "# tests N", "# pass N", "# fail N"
     VITEST_PASSED=$(grep -oP 'Tests\s+\K\d+(?=\s+passed)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
-    VITEST_FAILED=$(grep -oP 'Tests\s+\d+\s+failed\s+\|\s+\K\d+' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
-    # Vitest "N failed" comes before "passed" — extract differently
+    # Vitest format: "Tests  N failed | M passed" — "N failed" comes before "passed"
     VITEST_FAILED=$(grep -oP 'Tests\s+\K\d+(?=\s+failed)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
     VITEST_SKIPPED=$(grep -oP '\|\s+\K\d+(?=\s+skipped)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
     NODE_PASSED=$(grep -P '^# pass ' "$LOG_FILE" | grep -oP '\d+' | awk '{s+=$1} END {print s+0}')

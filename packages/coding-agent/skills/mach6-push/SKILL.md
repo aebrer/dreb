@@ -100,6 +100,6 @@ Update task: comment → completed.
 Report: what was committed, where pushed, where the comment was posted (with link).
 
 Suggest next step based on context:
-- If on a feature branch with a PR: `mach6-review <pr-number>`
-- If on a feature branch without a PR: `mach6-plan <issue-number>` to create one
+- If on a feature branch with a PR: `/skill:mach6-review <pr-number>`
+- If on a feature branch without a PR: `/skill:mach6-plan <issue-number>` to create one
 - If on the default branch: issue-oriented next steps

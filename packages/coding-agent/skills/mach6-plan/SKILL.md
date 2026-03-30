@@ -120,4 +120,4 @@ gh pr comment <pr-number> --body "<!-- mach6-plan -->
 
 Update task: post → completed.
 
-Suggest next step: implement the plan, then `mach6-push` when ready.
+Suggest next step: implement the plan, then `/skill:mach6-push` when ready.
