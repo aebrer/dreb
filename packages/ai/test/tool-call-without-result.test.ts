@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
+import { findModel, getModel } from "../src/models.js";
 import { complete } from "../src/stream.js";
 import type { Api, Context, Model, StreamOptions, Tool } from "../src/types.js";
 
@@ -137,7 +137,7 @@ describe("Tool Call Without Result Tests", () => {
 	});
 
 	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic Provider", () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = findModel("anthropic", "haiku")!;
 
 		it("should filter out tool calls without corresponding tool results", { retry: 3, timeout: 30000 }, async () => {
 			await testToolCallWithoutResult(model);
@@ -229,7 +229,7 @@ describe("Tool Call Without Result Tests", () => {
 	// =========================================================================
 
 	describe("Anthropic OAuth Provider", () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = findModel("anthropic", "haiku")!;
 
 		it.skipIf(!anthropicOAuthToken)(
 			"should filter out tool calls without corresponding tool results",

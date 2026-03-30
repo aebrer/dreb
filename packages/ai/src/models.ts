@@ -25,6 +25,104 @@ export function getModel<TProvider extends KnownProvider, TModelId extends keyof
 	return providerModels?.get(modelId as string) as Model<ModelApi<TProvider, TModelId>>;
 }
 
+/**
+ * Check if a model ID looks like an alias (no date suffix).
+ * Aliases are preferred over dated versions when fuzzy matching.
+ *
+ * IDs ending with `-latest` are treated as aliases.
+ * IDs ending with a date pattern (`-YYYYMMDD`) are treated as dated versions.
+ */
+export function isModelAlias(id: string): boolean {
+	if (id.endsWith("-latest")) return true;
+	return !/-\d{8}$/.test(id);
+}
+
+/**
+ * Find a model by fuzzy matching against the provider's registered models.
+ *
+ * Resolution order:
+ * 1. Exact match by provider + model ID (via registry Map.get)
+ * 2. Case-insensitive substring match against model ID and display name
+ * 3. Among matches, prefer aliases (non-dated IDs) over dated versions
+ * 4. Among ties, pick the lexicographically highest (latest) ID
+ *
+ * This is the same matching logic used by the CLI, subagent model resolution,
+ * and interactive mode — centralised here so tests can exercise the real path.
+ *
+ * @example
+ * findModel("anthropic", "sonnet")  // → latest claude-sonnet alias
+ * findModel("anthropic", "haiku")   // → latest claude-haiku alias
+ * findModel("openai", "gpt-5")     // → latest gpt-5 alias
+ */
+export function findModel(provider: string, pattern: string): Model<Api> | undefined {
+	const providerModels = modelRegistry.get(provider);
+	if (!providerModels) return undefined;
+
+	// Try exact match first
+	const exact = providerModels.get(pattern);
+	if (exact) return exact;
+
+	// Substring match (case-insensitive)
+	const normalizedPattern = pattern.toLowerCase();
+	const matches = Array.from(providerModels.values()).filter(
+		(m) => m.id.toLowerCase().includes(normalizedPattern) || m.name?.toLowerCase().includes(normalizedPattern),
+	);
+
+	if (matches.length === 0) return undefined;
+	if (matches.length === 1) return matches[0];
+
+	// Multiple matches — separate into aliases and dated versions
+	const aliases = matches.filter((m) => isModelAlias(m.id));
+	const datedVersions = matches.filter((m) => !isModelAlias(m.id));
+
+	if (aliases.length > 0) {
+		// Prefer alias — if multiple, pick the lexicographically highest
+		aliases.sort((a, b) => b.id.localeCompare(a.id));
+		return aliases[0];
+	}
+
+	// All dated — prefer the latest
+	datedVersions.sort((a, b) => b.id.localeCompare(a.id));
+	return datedVersions[0];
+}
+
+/**
+ * Find a model by fuzzy matching against a flat array of models.
+ * Same algorithm as findModel() but operates on an arbitrary model list
+ * instead of the built-in registry.
+ *
+ * Used by model-resolver.ts and other code that manages its own model lists.
+ */
+export function findModelInList(pattern: string, models: Model<Api>[]): Model<Api> | undefined {
+	if (models.length === 0) return undefined;
+
+	const normalizedPattern = pattern.toLowerCase();
+
+	// Exact ID match (case-insensitive)
+	const exactById = models.find((m) => m.id.toLowerCase() === normalizedPattern);
+	if (exactById) return exactById;
+
+	// Substring match (case-insensitive)
+	const matches = models.filter(
+		(m) => m.id.toLowerCase().includes(normalizedPattern) || m.name?.toLowerCase().includes(normalizedPattern),
+	);
+
+	if (matches.length === 0) return undefined;
+	if (matches.length === 1) return matches[0];
+
+	// Multiple matches — separate into aliases and dated versions
+	const aliases = matches.filter((m) => isModelAlias(m.id));
+	const datedVersions = matches.filter((m) => !isModelAlias(m.id));
+
+	if (aliases.length > 0) {
+		aliases.sort((a, b) => b.id.localeCompare(a.id));
+		return aliases[0];
+	}
+
+	datedVersions.sort((a, b) => b.id.localeCompare(a.id));
+	return datedVersions[0];
+}
+
 export function getProviders(): KnownProvider[] {
 	return Array.from(modelRegistry.keys()) as KnownProvider[];
 }

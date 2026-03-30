@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
+import { findModel, getModel } from "../src/models.js";
 import { complete } from "../src/stream.js";
 import type { Api, Context, Model, StreamOptions, ToolResultMessage } from "../src/types.js";
 
@@ -352,7 +352,7 @@ describe("AI Providers Unicode Surrogate Pair Tests", () => {
 	});
 
 	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic Provider Unicode Handling", () => {
-		const llm = getModel("anthropic", "claude-haiku-4-5");
+		const llm = findModel("anthropic", "haiku")!;
 
 		it("should handle emoji in tool results", { retry: 3, timeout: 30000 }, async () => {
 			await testEmojiInToolResults(llm);
@@ -372,7 +372,7 @@ describe("AI Providers Unicode Surrogate Pair Tests", () => {
 	// =========================================================================
 
 	describe("Anthropic OAuth Provider Unicode Handling", () => {
-		const llm = getModel("anthropic", "claude-haiku-4-5");
+		const llm = findModel("anthropic", "haiku")!;
 
 		it.skipIf(!anthropicOAuthToken)("should handle emoji in tool results", { retry: 3, timeout: 30000 }, async () => {
 			await testEmojiInToolResults(llm, { apiKey: anthropicOAuthToken });

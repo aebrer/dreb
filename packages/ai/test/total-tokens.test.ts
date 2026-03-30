@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
+import { findModel, getModel } from "../src/models.js";
 import { complete } from "../src/stream.js";
 import type { Api, Context, Model, StreamOptions, Usage } from "../src/types.js";
 
@@ -109,7 +109,7 @@ describe("totalTokens field", () => {
 			"claude-haiku-4-5 - should return totalTokens equal to sum of components",
 			{ retry: 3, timeout: 60000 },
 			async () => {
-				const llm = getModel("anthropic", "claude-haiku-4-5");
+				const llm = findModel("anthropic", "haiku")!;
 
 				console.log(`\nAnthropic / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.ANTHROPIC_API_KEY });

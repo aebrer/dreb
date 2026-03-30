@@ -3,7 +3,7 @@
  */
 
 import type { ThinkingLevel } from "@dreb/agent-core";
-import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@dreb/ai";
+import { type Api, findModelInList, type KnownProvider, type Model, modelsAreEqual } from "@dreb/ai";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.js";
@@ -43,18 +43,7 @@ export interface ScopedModel {
 	thinkingLevel?: ThinkingLevel;
 }
 
-/**
- * Helper to check if a model ID looks like an alias (no date suffix)
- * Dates are typically in format: -20241022 or -20250929
- */
-function isAlias(id: string): boolean {
-	// Check if ID ends with -latest
-	if (id.endsWith("-latest")) return true;
-
-	// Check if ID ends with a date pattern (-YYYYMMDD)
-	const datePattern = /-\d{8}$/;
-	return !datePattern.test(id);
-}
+// isAlias logic moved to @dreb/ai as isModelAlias
 
 /**
  * Find an exact model reference match.
@@ -107,38 +96,17 @@ export function findExactModelReferenceMatch(
 
 /**
  * Try to match a pattern to a model from the available models list.
- * Returns the matched model or undefined if no match found.
+ *
+ * Extends findModelInList() with support for canonical `provider/model`
+ * references via findExactModelReferenceMatch.
  */
 function tryMatchModel(modelPattern: string, availableModels: Model<Api>[]): Model<Api> | undefined {
+	// Try canonical provider/model and cross-provider exact matches first
 	const exactMatch = findExactModelReferenceMatch(modelPattern, availableModels);
-	if (exactMatch) {
-		return exactMatch;
-	}
+	if (exactMatch) return exactMatch;
 
-	// No exact match - fall back to partial matching
-	const matches = availableModels.filter(
-		(m) =>
-			m.id.toLowerCase().includes(modelPattern.toLowerCase()) ||
-			m.name?.toLowerCase().includes(modelPattern.toLowerCase()),
-	);
-
-	if (matches.length === 0) {
-		return undefined;
-	}
-
-	// Separate into aliases and dated versions
-	const aliases = matches.filter((m) => isAlias(m.id));
-	const datedVersions = matches.filter((m) => !isAlias(m.id));
-
-	if (aliases.length > 0) {
-		// Prefer alias - if multiple aliases, pick the one that sorts highest
-		aliases.sort((a, b) => b.id.localeCompare(a.id));
-		return aliases[0];
-	} else {
-		// No alias found, pick latest dated version
-		datedVersions.sort((a, b) => b.id.localeCompare(a.id));
-		return datedVersions[0];
-	}
+	// Delegate fuzzy matching to @dreb/ai
+	return findModelInList(modelPattern, availableModels);
 }
 
 export interface ParsedModelResult {

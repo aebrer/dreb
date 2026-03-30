@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
+import { findModel, getModel } from "../src/models.js";
 import { streamSimple } from "../src/stream.js";
 import type { Api, Context, Model, SimpleStreamOptions } from "../src/types.js";
 import { resolveApiKey } from "./oauth.js";
@@ -102,7 +102,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic thinking disable E2E"
 	});
 
 	it("disables thinking for adaptive reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("anthropic", "claude-sonnet-4-6"), {
+		await expectThinkingDisabledE2E(findModel("anthropic", "sonnet")!, {
 			requestOptions: { maxTokens: 320, temperature: 0 },
 		});
 	});

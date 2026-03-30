@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
+import { findModel } from "../src/models.js";
 import { streamSimple } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
 
@@ -101,14 +101,14 @@ async function runWithoutReasoning(model: Model<"anthropic-messages">): Promise<
 
 describe("Anthropic thinking disable payload", () => {
 	it("sends thinking.type=disabled for budget-based reasoning models when thinking is off", async () => {
-		const payload = await capturePayload(getModel("anthropic", "claude-sonnet-4-5"));
+		const payload = await capturePayload(findModel("anthropic", "sonnet")! as Model<"anthropic-messages">);
 
 		expect(payload.thinking).toEqual({ type: "disabled" });
 		expect(payload.output_config).toBeUndefined();
 	});
 
 	it("sends thinking.type=disabled for adaptive reasoning models when thinking is off", async () => {
-		const payload = await capturePayload(getModel("anthropic", "claude-opus-4-6"));
+		const payload = await capturePayload(findModel("anthropic", "opus")! as Model<"anthropic-messages">);
 
 		expect(payload.thinking).toEqual({ type: "disabled" });
 		expect(payload.output_config).toBeUndefined();
@@ -117,7 +117,7 @@ describe("Anthropic thinking disable payload", () => {
 
 describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic thinking disable E2E", () => {
 	it("disables thinking for Claude reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		const result = await runWithoutReasoning(getModel("anthropic", "claude-sonnet-4-5"));
+		const result = await runWithoutReasoning(findModel("anthropic", "sonnet")! as Model<"anthropic-messages">);
 
 		expect(result.thinkingEventCount).toBe(0);
 		expect(result.thinkingCharCount).toBe(0);

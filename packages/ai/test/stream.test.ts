@@ -4,7 +4,7 @@ import { readFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
+import { findModel, getModel } from "../src/models.js";
 import { complete, stream } from "../src/stream.js";
 import type { Api, Context, ImageContent, Model, StreamOptions, Tool, ToolResultMessage } from "../src/types.js";
 
@@ -476,7 +476,7 @@ describe("Generate E2E Tests", () => {
 	});
 
 	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic Provider (claude-haiku-4-5)", () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = findModel("anthropic", "haiku")!;
 
 		it("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(model, { thinkingEnabled: true });
@@ -880,7 +880,7 @@ describe("Generate E2E Tests", () => {
 	});
 
 	describe("Anthropic OAuth Provider (claude-opus-4-6 with adaptive thinking)", () => {
-		const model = getModel("anthropic", "claude-opus-4-6");
+		const model = findModel("anthropic", "opus")!;
 
 		it.skipIf(!anthropicOAuthToken)("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(model, { apiKey: anthropicOAuthToken });

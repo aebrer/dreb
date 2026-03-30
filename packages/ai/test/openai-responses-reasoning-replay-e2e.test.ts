@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
-import { getModel } from "../src/models.js";
+import { findModel, getModel } from "../src/models.js";
 import { complete, getEnvApiKey } from "../src/stream.js";
 import type { AssistantMessage, Context, Message, Tool, ToolCall } from "../src/types.js";
 
@@ -189,7 +189,7 @@ describe.skipIf(!process.env.OPENAI_API_KEY || !process.env.ANTHROPIC_API_KEY)(
 			// 4. Tool call ID is Anthropic format (toolu_xxx), no OpenAI pairing history
 			// 5. Should work because foreign IDs have no pairing expectation
 
-			const anthropicModel = getModel("anthropic", "claude-sonnet-4-5");
+			const anthropicModel = findModel("anthropic", "sonnet")!;
 			const codexModel = getModel("openai", "gpt-5.2-codex");
 
 			const anthropicApiKey = getEnvApiKey("anthropic");

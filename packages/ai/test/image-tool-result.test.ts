@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import type { Api, Context, Model, Tool, ToolResultMessage } from "../src/index.js";
-import { complete, getModel } from "../src/index.js";
+import { complete, findModel, getModel } from "../src/index.js";
 import type { StreamOptions } from "../src/types.js";
 
 type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
@@ -265,7 +265,7 @@ describe("Tool Results with Images", () => {
 	});
 
 	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic Provider (claude-haiku-4-5)", () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = findModel("anthropic", "haiku")!;
 
 		it("should handle tool result with only image", { retry: 3, timeout: 30000 }, async () => {
 			await handleToolWithImageResult(model);
@@ -341,7 +341,7 @@ describe("Tool Results with Images", () => {
 	// =========================================================================
 
 	describe("Anthropic OAuth Provider (claude-sonnet-4-5)", () => {
-		const model = getModel("anthropic", "claude-sonnet-4-5");
+		const model = findModel("anthropic", "sonnet")!;
 
 		it.skipIf(!anthropicOAuthToken)(
 			"should handle tool result with only image",

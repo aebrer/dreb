@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@dreb/agent-core";
-import { type AssistantMessage, getModel } from "@dreb/ai";
+import { type AssistantMessage, findModel } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -63,7 +63,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 		mkdirSync(tempDir, { recursive: true });
 		vi.useFakeTimers();
 
-		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const model = findModel("anthropic", "sonnet")!;
 		const agent = new Agent({
 			initialState: {
 				model,
@@ -236,6 +236,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 	it("should trigger threshold compaction for error messages using last successful usage", async () => {
 		const model = session.model!;
+		const nearLimitTokens = model.contextWindow - 10_000;
 
 		// A successful assistant message with high token usage (near context limit)
 		const successfulAssistant: AssistantMessage = {
@@ -245,11 +246,11 @@ describe("AgentSession auto-compaction queue resume", () => {
 			provider: model.provider,
 			model: model.id,
 			usage: {
-				input: 180_000,
-				output: 10_000,
+				input: nearLimitTokens,
+				output: 0,
 				cacheRead: 0,
 				cacheWrite: 0,
-				totalTokens: 190_000,
+				totalTokens: nearLimitTokens,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "stop",

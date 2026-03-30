@@ -1,5 +1,5 @@
 import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "@dreb/ai";
-import { getModel } from "@dreb/ai";
+import { findModel, getModel } from "@dreb/ai";
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/index.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
@@ -209,7 +209,7 @@ describe("Agent E2E Tests", () => {
 	});
 
 	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic Provider (claude-haiku-4-5)", () => {
-		const model = getModel("anthropic", "claude-haiku-4-5");
+		const model = findModel("anthropic", "haiku")!;
 
 		it("should handle basic text prompt", async () => {
 			await basicPrompt(model);

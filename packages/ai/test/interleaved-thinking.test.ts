@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { getEnvApiKey } from "../src/env-api-keys.js";
-import { getModel } from "../src/models.js";
+import { findModel, getModel } from "../src/models.js";
 import { completeSimple } from "../src/stream.js";
 import type { Api, Context, Model, StopReason, Tool, ToolCall, ToolResultMessage } from "../src/types.js";
 import { StringEnum } from "../src/utils/typebox-helpers.js";
@@ -139,7 +139,7 @@ describe.skipIf(!hasAnthropicCredentials)("Anthropic interleaved thinking", () =
 	});
 
 	it("should do interleaved thinking on Claude Opus 4.6", { retry: 3 }, async () => {
-		const llm = getModel("anthropic", "claude-opus-4-6");
+		const llm = findModel("anthropic", "opus")!;
 		await assertSecondToolCallWithInterleavedThinking(llm, "high");
 	});
 });
