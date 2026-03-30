@@ -388,22 +388,11 @@ export class InteractiveMode {
 		}));
 
 		// Build skill commands from session.skills (if enabled)
-		const skillCommandList: SlashCommand[] = [];
-		if (this.settingsManager.getEnableSkillCommands()) {
-			for (const skill of this.session.resourceLoader.getSkills().skills) {
-				// Skills with userInvocable: false are hidden from the slash command menu
-				// (they can still be invoked by the model via the skill tool)
-				if (!skill.userInvocable) continue;
-				let description = this.prefixAutocompleteDescription(skill.description, skill.sourceInfo);
-				if (skill.argumentHint) {
-					description += ` (args: ${skill.argumentHint})`;
-				}
-				skillCommandList.push({
-					name: `skill:${skill.name}`,
-					description,
-				});
-			}
-		}
+		const skillCommandList: SlashCommand[] = this.settingsManager.getEnableSkillCommands()
+			? buildSkillSlashCommands(this.session.resourceLoader.getSkills().skills, (desc, info) =>
+					this.prefixAutocompleteDescription(desc, info),
+				)
+			: [];
 
 		// Setup autocomplete
 		this.autocompleteProvider = new CombinedAutocompleteProvider(
@@ -4596,4 +4585,35 @@ export class InteractiveMode {
 			this.isInitialized = false;
 		}
 	}
+}
+
+/**
+ * Build slash command entries for skills, filtering out non-user-invocable ones.
+ *
+ * Skills with `userInvocable: false` are hidden from the autocomplete menu
+ * but remain invocable by the model via the skill tool and by the user via
+ * manual `/skill:name` input (which goes through `_expandSkillCommand`).
+ */
+export function buildSkillSlashCommands(
+	skills: import("../../core/skills.js").Skill[],
+	formatDescription?: (
+		description: string,
+		sourceInfo: import("../../core/source-info.js").SourceInfo,
+	) => string | undefined,
+): SlashCommand[] {
+	const commands: SlashCommand[] = [];
+	for (const skill of skills) {
+		if (!skill.userInvocable) continue;
+		let description = formatDescription
+			? (formatDescription(skill.description, skill.sourceInfo) ?? skill.description)
+			: skill.description;
+		if (skill.argumentHint) {
+			description += ` (args: ${skill.argumentHint})`;
+		}
+		commands.push({
+			name: `skill:${skill.name}`,
+			description,
+		});
+	}
+	return commands;
 }
