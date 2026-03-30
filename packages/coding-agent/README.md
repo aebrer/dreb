@@ -1,8 +1,16 @@
-dreb is a minimal terminal coding harness, forked from [pi-mono](https://github.com/badlogic/pi-mono). Adapt dreb to your workflows, not the other way around, without having to fork and modify dreb internals. Extend it with TypeScript [Extensions](#extensions), [Skills](#skills), [Prompt Templates](#prompt-templates), and [Themes](#themes). Put your extensions, skills, prompt templates, and themes in [Packages](#packages) and share them with others via npm or git.
+dreb is an open-source terminal coding agent, forked from [pi-code](https://github.com/nicholasgasior/pi-code) (itself derived from Claude Code). It has *fewer* features than Claude Code by design — the bet is that a small, hackable core you can shape beats a large feature set you can't.
 
-dreb ships with powerful defaults but skips features like plan mode. Instead, you can ask dreb to build what you want or install a third party package that matches your workflow.
+Claude Code is a great product. dreb isn't trying to compete on features — it's trying to compete on flexibility. The core is kept minimal; what you'd find baked into other tools, you build here with [skills](#skills) (markdown workflows), [extensions](#extensions) (TypeScript), or install from third-party [packages](#packages).
 
-dreb runs in four modes: interactive, print or JSON, RPC for process integration, and an SDK for embedding in your own apps.
+Concretely, dreb ships *without* things Claude Code has — and that's intentional:
+
+- **No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support.
+- **No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions).
+- **No plan mode.** Write plans to files, or build it with extensions, or install a package.
+- **No background bash in the main agent.** The main agent runs commands synchronously. For parallel work, use the `subagent` tool — each subagent runs as an independent process with its own tools.
+
+What you get in exchange: a skill system, an extension API, custom agent definitions, custom provider support (route through any proxy, use any API-compatible backend), and a subagent system for parallel work. From those primitives, you build what you need — and share it with others via git or npm.
+
 ## Table of Contents
 
 - [Quick Start](#quick-start)
@@ -26,15 +34,20 @@ dreb runs in four modes: interactive, print or JSON, RPC for process integration
   - [Themes](#themes)
   - [Packages](#packages)
 - [Programmatic Usage](#programmatic-usage)
-- [Philosophy](#philosophy)
 - [CLI Reference](#cli-reference)
 
 ---
 
 ## Quick Start
 
+Clone and build:
+
 ```bash
-npm install -g @dreb/coding-agent
+git clone https://github.com/aebrer/dreb.git
+cd dreb
+npm install
+npm run build
+npm link -w packages/coding-agent
 ```
 
 Authenticate with an API key:
@@ -50,6 +63,8 @@ Or use your existing subscription:
 dreb
 /login  # Then select provider
 ```
+
+Or use a custom provider (corporate proxy, Bedrock, etc.) — see [Custom providers & models](#providers--models).
 
 Then just talk to dreb. All 10 built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, and `subagent`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Two additional tools — `skill` and `tasks_update` — are always active. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
 
@@ -457,20 +472,6 @@ See [docs/rpc.md](docs/rpc.md) for the protocol.
 
 ---
 
-## Philosophy
-
-dreb is aggressively extensible so it doesn't have to dictate your workflow. Features that other tools bake in can be built with [extensions](#extensions), [skills](#skills), or installed from third-party [packages](#packages). This keeps the core minimal while letting you shape dreb to fit how you work.
-
-**No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support. Why?
-
-**No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions) inline with your environment and security requirements.
-
-**No plan mode.** Write plans to files, or build it with [extensions](#extensions), or install a package.
-
-**No background bash in the main agent.** The main agent runs commands synchronously. For parallel work, use the `subagent` tool — each subagent runs as an independent process with its own tools. For long-running processes (servers, watchers), use tmux.
-
----
-
 ## CLI Reference
 
 ```bash
@@ -630,6 +631,6 @@ MIT
 
 ## See Also
 
-- [@dreb/ai](https://www.npmjs.com/package/@dreb/ai): Core LLM toolkit
-- [@dreb/agent-core](https://www.npmjs.com/package/@dreb/agent-core): Agent framework
-- [@dreb/tui](https://www.npmjs.com/package/@dreb/tui): Terminal UI components
+- `packages/ai` — Core LLM toolkit (model registry, provider APIs, streaming)
+- `packages/agent` — Agent framework (agent loop, event system, types)
+- `packages/tui` — Terminal UI components
