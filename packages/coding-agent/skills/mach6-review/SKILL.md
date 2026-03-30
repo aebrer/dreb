@@ -57,6 +57,8 @@ Update task: prepare → completed, review → in_progress.
 
 **Available review agents:**
 
+These agents are **pre-existing agent definitions** shipped with dreb — do not redefine them inline. Reference them by name via the `agent` parameter in `subagent`. They default to `model: sonnet` (mid-tier reasoning model). If your current provider doesn't carry models matching "sonnet", pass a `model` override with your provider's equivalent mid-tier model (e.g., `glm-5-turbo` on z.ai).
+
 | Agent | Question | When to run |
 |---|---|---|
 | `code-reviewer` | "Does this code do what it should, correctly and idiomatically?" | Always |
@@ -72,7 +74,7 @@ Update task: prepare → completed, review → in_progress.
 - `completeness` → completeness-checker
 - `simplify` → simplifier
 
-**For each agent**, launch via the `subagent` tool. Run `code-reviewer`, `error-auditor`, `test-reviewer`, and `completeness-checker` in parallel. Run `simplifier` after the others complete.
+**For each agent**, launch via the `subagent` tool with `background=true`. Run `code-reviewer`, `error-auditor`, `test-reviewer`, and `completeness-checker` in parallel. Run `simplifier` after the others complete.
 
 Provide each agent with:
 - The list of changed files with paths
@@ -119,7 +121,11 @@ Update task: post-review → completed, assess → in_progress.
 
 ## Step 6: Independent assessment
 
-Launch a subagent to independently assess each finding. Provide:
+Launch a subagent with `agent: "independent-assessor"`. This is a **pre-existing agent definition** shipped with dreb — it has full codebase read access and defaults to `model: opus` (strongest tier). If your provider doesn't carry models matching "opus", pass a `model` override with your provider's strongest model (e.g., `glm-5-1` on z.ai).
+
+**Do NOT use the Sandbox agent for this step** — the Sandbox agent has no codebase access and cannot verify findings against actual code.
+
+Provide the assessor with:
 - The full review text
 - The PR context (title, body, comments)
 - Instructions to **read the actual code** for each finding and verify independently
