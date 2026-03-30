@@ -8,7 +8,7 @@
  */
 
 import { Agent } from "@dreb/agent-core";
-import { getModel } from "@dreb/ai";
+import { findModel } from "@dreb/ai";
 import { resolve } from "path";
 import { describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
@@ -21,7 +21,7 @@ import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 import { createTestResourceLoader } from "./utilities.js";
 
 const fixturesDir = resolve(__dirname, "fixtures/skills");
-const model = getModel("anthropic", "claude-sonnet-4-5")!;
+const model = findModel("anthropic", "sonnet")!;
 
 function makeSkill(overrides: Partial<Skill> & { name: string; filePath: string; baseDir: string }): Skill {
 	return {

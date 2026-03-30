@@ -1,5 +1,5 @@
 import { Agent } from "@dreb/agent-core";
-import { type AssistantMessage, getModel, type Usage } from "@dreb/ai";
+import { type AssistantMessage, findModel, type Usage } from "@dreb/ai";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -8,7 +8,7 @@ import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { createTestResourceLoader } from "./utilities.js";
 
-const model = getModel("anthropic", "claude-sonnet-4-5")!;
+const model = findModel("anthropic", "sonnet")!;
 
 function createUsage(totalTokens: number): Usage {
 	return {
