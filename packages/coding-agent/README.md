@@ -17,6 +17,8 @@ dreb runs in four modes: interactive, print or JSON, RPC for process integration
   - [Compaction](#compaction)
 - [Settings](#settings)
 - [Context Files](#context-files)
+- [Memory](#memory)
+- [Task Tracking](#task-tracking)
 - [Customization](#customization)
   - [Prompt Templates](#prompt-templates)
   - [Skills](#skills)
@@ -49,7 +51,7 @@ dreb
 /login  # Then select provider
 ```
 
-Then just talk to dreb. By default, dreb gives the model four tools: `read`, `write`, `edit`, and `bash`. Additional built-in tools (`grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `skill`) are available and can be enabled via `--tools`. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
+Then just talk to dreb. All 10 built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, and `subagent`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Two additional tools — `skill` and `tasks_update` — are always active. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -85,6 +87,7 @@ For each built-in provider, dreb maintains a list of tool-capable models, update
 - Hugging Face
 - Kimi For Coding
 - MiniMax
+- MiniMax (China)
 
 See [docs/providers.md](docs/providers.md) for detailed setup instructions.
 
@@ -198,7 +201,7 @@ dreb --fork <path>       # Fork specific session file or ID into a new session
 
 - Search by typing, fold/unfold and jump between branches with Ctrl+←/Ctrl+→ or Alt+←/Alt+→, page with ←/→
 - Filter modes (Ctrl+O): default → no-tools → user-only → labeled-only → all
-- Press `l` to label entries as bookmarks
+- Press `L` (Shift+L) to label entries as bookmarks
 
 **`/fork`** - Create a new session file from the current branch. Opens a selector, copies history up to the selected point, and places that message in the editor for modification.
 
@@ -241,6 +244,64 @@ Use for project instructions, conventions, common commands. All matching files a
 ### System Prompt
 
 Replace the default system prompt with `.dreb/SYSTEM.md` (project) or `~/.dreb/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
+
+---
+
+## Memory
+
+dreb has a persistent, file-based memory system. Memory survives across sessions and helps the model recall user preferences, past decisions, project context, and pointers to external resources.
+
+### How it works
+
+Memory is convention-based — no dedicated tool. The system prompt teaches the model the memory format; the model uses the standard `read`, `write`, and `edit` tools to manage memory files. Memory indexes (`MEMORY.md`) are loaded at session start and injected into the system prompt.
+
+### Locations
+
+| Scope | Directory | Loaded |
+|-------|-----------|--------|
+| Global | `~/.dreb/memory/` | Every session |
+| Project | `<project-root>/.dreb/memory/` | When working in that project |
+
+Project identity is determined by git repo root. The global memory directory is auto-created on first session; project directories are created on demand by the model.
+
+### Memory entries
+
+Each memory is a Markdown file with YAML frontmatter:
+
+```markdown
+---
+name: descriptive-name
+description: One-line description for relevance matching
+type: user-preferences
+---
+
+Content of the memory entry.
+```
+
+Four types: `user-preferences` (who the user is), `good-practices` (how to approach work), `project` (ongoing work context), `navigation` (pointers to external resources).
+
+### MEMORY.md index
+
+Each memory directory has a `MEMORY.md` file that serves as an index. Only the first 200 lines are loaded at session start — keep it concise:
+
+```markdown
+- [User role](user_role.md) — Python dev, generative art background
+- [CI parity](feedback_ci_parity.md) — run tsgo --noEmit locally, not just tests
+```
+
+### Claude Code compatibility
+
+dreb reads existing Claude Code memory for the current project from `~/.claude/projects/` (read-only), with source labeling and a warning about Claude Code-specific references that may not apply to dreb.
+
+---
+
+## Task Tracking
+
+The `tasks_update` tool lets the model maintain a visible task list during multi-step work. Tasks appear in a TUI panel with status indicators (☐ pending, ⧖ in progress, ☑ completed).
+
+The tool uses a full-replacement model — the model sends the complete task list on each call, no incremental updates. The TUI panel is visible by default and renders when active tasks exist. It auto-hides when the task list is empty or all tasks are completed. Toggle visibility with the `app.tasks.toggle` keybinding (unbound by default, configurable in [keybindings](docs/keybindings.md)). The panel displays up to 10 tasks at a time; overflow shows as "... and N more".
+
+Task tracking is prompt-driven: the system prompt includes guidelines for when to use it (3+ step work), concise titles, and a maximum of 20 tasks.
 
 ---
 
@@ -404,9 +465,7 @@ dreb is aggressively extensible so it doesn't have to dictate your workflow. Fea
 
 **No plan mode.** Write plans to files, or build it with [extensions](#extensions), or install a package.
 
-**No built-in to-dos.** They confuse models. Use a TODO.md file, or build your own with [extensions](#extensions).
-
-**No background bash.** Use tmux. Full observability, direct interaction.
+**No background bash in the main agent.** The main agent runs commands synchronously. For parallel work, use the `subagent` tool — each subagent runs as an independent process with its own tools. For long-running processes (servers, watchers), use tmux.
 
 ---
 
@@ -469,10 +528,14 @@ cat README.md | dreb -p "Summarize this text"
 
 | Option | Description |
 |--------|-------------|
-| `--tools <list>` | Enable specific built-in tools (default: `read,bash,edit,write`) |
+| `--tools <list>` | Comma-separated list of tools to enable (default: all) |
 | `--no-tools` | Disable all built-in tools (extension tools still work) |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `skill`
+Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`
+
+Two additional tools are always active but don't appear in `--tools`:
+- `skill` — invokes [skills](#skills) programmatically
+- `tasks_update` — session [task tracking](#task-tracking) with TUI panel
 
 ### Resource Options
 
@@ -496,6 +559,7 @@ Combine `--no-*` with explicit flags to load exactly what you need, ignoring set
 | `--system-prompt <text>` | Replace default prompt (context files and skills still appended) |
 | `--append-system-prompt <text>` | Append to system prompt |
 | `--verbose` | Force verbose startup |
+| `--offline` | Disable startup network ops (same as `DREB_OFFLINE=1`) |
 | `-h`, `--help` | Show help |
 | `-v`, `--version` | Show version |
 
@@ -547,6 +611,7 @@ dreb --thinking high "Solve this complex problem"
 | `DREB_CODING_AGENT_DIR` | Override config directory (default: `~/.dreb/agent`) |
 | `DREB_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
 | `DREB_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
+| `DREB_OFFLINE` | Disable startup network ops (same as `--offline`) |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
 ---

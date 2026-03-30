@@ -78,8 +78,8 @@ interface AgentSession {
   prompt(text: string, options?: PromptOptions): Promise<void>;
   
   // Queue messages during streaming
-  steer(text: string): Promise<void>;    // Queue for delivery after the current assistant turn finishes its tool calls
-  followUp(text: string): Promise<void>; // Wait: delivered only when agent finishes
+  steer(text: string, images?: ImageContent[]): Promise<void>;    // Queue for delivery after the current assistant turn finishes its tool calls
+  followUp(text: string, images?: ImageContent[]): Promise<void>; // Wait: delivered only when agent finishes
   
   // Subscribe to events (returns unsubscribe function)
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
@@ -102,12 +102,12 @@ interface AgentSession {
   isStreaming: boolean;
   
   // Session management
-  newSession(options?: { parentSession?: string }): Promise<boolean>;  // Returns false if cancelled by hook
+  newSession(options?: { parentSession?: string; setup?: (sessionManager: SessionManager) => Promise<void> }): Promise<boolean>;  // Returns false if cancelled by hook
   switchSession(sessionPath: string): Promise<boolean>;
   
   // Forking
   fork(entryId: string): Promise<{ selectedText: string; cancelled: boolean }>;  // Creates new session file
-  navigateTree(targetId: string, options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean }>;  // In-place navigation
+  navigateTree(targetId: string, options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string }): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean; summaryEntry?: BranchSummaryEntry }>;  // In-place navigation
   
   // Hook message injection
   sendHookMessage(message: HookMessage, triggerTurn?: boolean): Promise<void>;
@@ -383,7 +383,7 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 ```typescript
 import {
-  codingTools,   // read, bash, edit, write (default)
+  codingTools,   // read, bash, edit, write (subset — default is all 10)
   readOnlyTools, // read, grep, find, ls
   readTool, bashTool, editTool, writeTool,
   grepTool, findTool, lsTool,
@@ -455,7 +455,7 @@ const myTool: ToolDefinition = {
   parameters: Type.Object({
     input: Type.String({ description: "Input value" }),
   }),
-  execute: async (toolCallId, params, onUpdate, ctx, signal) => ({
+  execute: async (toolCallId, params, signal, onUpdate, ctx) => ({
     content: [{ type: "text", text: `Result: ${params.input}` }],
     details: {},
   }),
@@ -938,6 +938,7 @@ type ResourceLoader
 createEventBus
 
 // Helpers
+getAgentDir
 
 // Session management
 SessionManager
@@ -963,7 +964,6 @@ type ExtensionAPI
 type ToolDefinition
 type Skill
 type PromptTemplate
-type Tool
 ```
 
 For extension types, see [extensions.md](extensions.md) for the full API.

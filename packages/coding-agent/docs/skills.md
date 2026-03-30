@@ -275,4 +275,4 @@ cd ${DREB_SKILL_DIR} && npm install
 ## Skill Repositories
 
 - [Anthropic Skills](https://github.com/anthropics/skills) - Document processing (docx, pdf, pptx, xlsx), web development
-- [Pi Skills](https://github.com/badlogic/pi-skills) - Web search, browser automation, Google APIs, transcription (upstream)
+- [Pi Skills](https://github.com/badlogic/pi-skills) - Web search, browser automation, Google APIs, transcription (from [pi-mono](https://github.com/badlogic/pi-mono), dreb's upstream fork)

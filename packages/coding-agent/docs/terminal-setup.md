@@ -14,21 +14,19 @@ Add to your Ghostty config (`~/Library/Application Support/com.mitchellh.ghostty
 keybind = alt+backspace=text:\x1b\x7f
 ```
 
-Older Claude Code versions may have added this Ghostty mapping:
+You may have a Ghostty mapping that sends a raw linefeed for `Shift+Enter`:
 
 ```
 keybind = shift+enter=text:\n
 ```
 
-That mapping sends a raw linefeed byte. Inside dreb, that is indistinguishable from `Ctrl+J`, so tmux and dreb no longer see a real `shift+enter` key event.
+This is indistinguishable from `Ctrl+J` inside dreb, so tmux and dreb can't see a real `shift+enter` key event. If you don't need this mapping for another tool, remove it.
 
-If Claude Code 2.x or newer is the only reason you added that mapping, you can remove it, unless you want to use Claude Code in tmux, where it still requires that Ghostty mapping.
-
-If you want `Shift+Enter` to keep working in tmux via that remap, add `ctrl+j` to your dreb `newLine` keybinding in `~/.dreb/agent/keybindings.json`:
+If you want `Shift+Enter` to keep working in tmux with that remap active, add `ctrl+j` to your dreb `tui.input.newLine` keybinding in `~/.dreb/agent/keybindings.json`:
 
 ```json
 {
-  "newLine": ["shift+enter", "ctrl+j"]
+  "tui.input.newLine": ["shift+enter", "ctrl+j"]
 }
 ```
 
