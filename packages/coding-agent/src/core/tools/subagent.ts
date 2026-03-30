@@ -880,7 +880,7 @@ export function createSubagentToolDefinition(
 			"Use chain mode when each step depends on the previous step's output (reference with {previous})",
 			"ALWAYS use background=true when launching 2 or more subagents, or when the task is complex enough that you can do useful work while waiting. Foreground (blocking) mode should only be used for single subagents whose result you need immediately before deciding what to do next.",
 			"Subagents have their own context window — provide enough context in the task prompt",
-			"Each background agent notifies independently when done — completion messages include a list of any still-running agents",
+			"Each background agent notifies independently when done — completion messages include a list of any still-running agents. If you need their results before proceeding, stop generating — do not output anything, do not launch filler work. Your turn ends, and when a background agent completes, its result arrives as a new message that resumes your turn automatically.",
 			"Agent definitions may specify a `model` field using Anthropic-family names as strength-tier hints: 'opus' = strongest, 'sonnet' = mid-tier, 'haiku' = fast/cheap. These resolve via substring matching against the current provider's model list. If your provider doesn't carry matching models (e.g., on z.ai, OpenAI, etc.), you MUST pass a `model` override with your provider's equivalent: strongest tier (e.g., glm-5-1), mid tier (e.g., glm-5-turbo), or fast tier. Per-invocation `model` overrides always take precedence over agent definition models. For parallel/chain, set per-task.",
 		],
 		parameters: subagentSchema,
