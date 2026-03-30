@@ -1,4 +1,4 @@
-dreb is an open-source terminal coding agent, forked from [pi-code](https://github.com/nicholasgasior/pi-code) (itself derived from Claude Code). It has *fewer* features than Claude Code by design — the bet is that a small, hackable core you can shape beats a large feature set you can't.
+dreb is an open-source terminal coding agent, forked from [pi-mono](https://github.com/badlogic/pi-mono) (itself derived from Claude Code). It has *fewer* features than Claude Code by design — the bet is that a small, hackable core you can shape beats a large feature set you can't.
 
 Claude Code is a great product. dreb isn't trying to compete on features — it's trying to compete on flexibility. The core is kept minimal; what you'd find baked into other tools, you build here with [skills](#skills) (markdown workflows), [extensions](#extensions) (TypeScript), or install from third-party [packages](#packages).
 
