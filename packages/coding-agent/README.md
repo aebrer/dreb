@@ -397,7 +397,7 @@ Place in `~/.dreb/agent/themes/`, `.dreb/themes/`, or a [package](#packages) to 
 
 Bundle and share extensions, skills, prompts, and themes via npm or git.
 
-> **Security:** Packages run with full system access. Extensions execute arbitrary code, and skills can instruct the model to perform any action including running executables. Review source code before installing third-party packages.
+> **Note:** Third-party packages can include extensions (arbitrary code) and skills (model instructions). Skim what you're installing, same as any other dependency.
 
 ```bash
 dreb install npm:@foo/my-tools
