@@ -96,7 +96,7 @@ async function expectThinkingDisabledE2E<TApi extends Api>(model: Model<TApi>, e
 
 describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic thinking disable E2E", () => {
 	it("disables thinking for budget-based reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(findModel("anthropic", "sonnet")!, {
+		await expectThinkingDisabledE2E(getModel("anthropic", "claude-sonnet-4-5"), {
 			requestOptions: { maxTokens: 320, temperature: 0 },
 		});
 	});

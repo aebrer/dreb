@@ -134,7 +134,7 @@ describe.skipIf(!hasBedrockCredentials())("Amazon Bedrock interleaved thinking",
 
 describe.skipIf(!hasAnthropicCredentials)("Anthropic interleaved thinking", () => {
 	it("should do interleaved thinking on Claude Opus 4.5", { retry: 3 }, async () => {
-		const llm = findModel("anthropic", "opus")!;
+		const llm = getModel("anthropic", "claude-opus-4-5");
 		await assertSecondToolCallWithInterleavedThinking(llm, "high");
 	});
 
