@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "f
 import ignore from "ignore";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
-import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
+import { CONFIG_DIR_NAME, getAgentDir, getPackageDir } from "../config.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 import { escapeXml } from "../utils/xml.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
@@ -154,6 +154,12 @@ function createSkillSourceInfo(filePath: string, baseDir: string, source: string
 			return createSyntheticSourceInfo(filePath, {
 				source: "local",
 				scope: "project",
+				baseDir,
+			});
+		case "builtin":
+			return createSyntheticSourceInfo(filePath, {
+				source: "builtin",
+				scope: "user",
 				baseDir,
 			});
 		case "path":
@@ -450,6 +456,10 @@ export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
 			}
 		}
 	}
+
+	// Built-in skills shipped with the package (always loaded, lowest priority — overridable by user/project/path)
+	const builtinSkillsDir = join(getPackageDir(), "skills");
+	addSkills(loadSkillsFromDirInternal(builtinSkillsDir, "builtin", true));
 
 	if (includeDefaults) {
 		addSkills(loadSkillsFromDirInternal(join(resolvedAgentDir, "skills"), "user", true));

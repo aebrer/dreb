@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
-import { CONFIG_DIR_NAME } from "../../config.js";
+import { CONFIG_DIR_NAME, getPackageDir } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -81,6 +81,10 @@ function discoverAgentTypes(cwd: string): Map<string, AgentTypeConfig> {
 	for (const [key, config] of Object.entries(BUILTIN_AGENTS)) {
 		agents.set(key, config);
 	}
+
+	// Package-bundled agents (shipped with dreb, lowest priority for overrides)
+	const packageAgentsDir = join(getPackageDir(), "agents");
+	loadAgentsFromDir(packageAgentsDir, agents);
 
 	// User-level agents (~/.dreb/agents/*.md)
 	const userDir = join(homedir(), CONFIG_DIR_NAME, "agents");

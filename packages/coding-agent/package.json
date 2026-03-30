@@ -24,6 +24,8 @@
 	},
 	"files": [
 		"dist",
+		"agents",
+		"skills",
 		"docs",
 		"examples",
 		"CHANGELOG.md"

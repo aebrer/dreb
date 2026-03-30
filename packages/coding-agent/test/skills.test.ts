@@ -396,8 +396,10 @@ describe("skills", () => {
 				cwd: emptyCwd,
 				skillPaths: [join(fixturesDir, "valid-skill")],
 			});
-			expect(skills).toHaveLength(1);
-			expect(skills[0].sourceInfo.scope).toBe("temporary");
+			// Built-in skills (e.g. mach6) are always loaded, plus the explicit path skill
+			const nonBuiltinSkills = skills.filter((s) => s.sourceInfo.source !== "builtin");
+			expect(nonBuiltinSkills).toHaveLength(1);
+			expect(nonBuiltinSkills[0].sourceInfo.scope).toBe("temporary");
 			expect(diagnostics).toHaveLength(0);
 		});
 
@@ -407,7 +409,9 @@ describe("skills", () => {
 				cwd: emptyCwd,
 				skillPaths: ["/non/existent/path"],
 			});
-			expect(skills).toHaveLength(0);
+			// Built-in skills still load even when explicit path doesn't exist
+			const nonBuiltinSkills = skills.filter((s) => s.sourceInfo.source !== "builtin");
+			expect(nonBuiltinSkills).toHaveLength(0);
 			expect(diagnostics.some((d: ResourceDiagnostic) => d.message.includes("does not exist"))).toBe(true);
 		});
 
