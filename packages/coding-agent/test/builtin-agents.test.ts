@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { getPackageDir } from "../src/config.js";
@@ -32,11 +32,17 @@ function parseAgentFrontmatter(
 	};
 }
 
+function getAgentFiles(): string[] {
+	const agentsDir = join(getPackageDir(), "agents");
+	if (!existsSync(agentsDir)) return [];
+	return readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
+}
+
 describe("built-in agent definitions", () => {
 	const agentsDir = join(getPackageDir(), "agents");
-	const agentFiles = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
 
 	it("should have agent definition files in package agents directory", () => {
+		const agentFiles = getAgentFiles();
 		expect(agentFiles.length).toBeGreaterThan(0);
 	});
 
@@ -44,6 +50,7 @@ describe("built-in agent definitions", () => {
 
 	for (const expectedName of expectedAgents) {
 		it(`should include ${expectedName} agent with valid frontmatter`, () => {
+			const agentFiles = getAgentFiles();
 			const file = agentFiles.find((f) => f === `${expectedName}.md`);
 			expect(file, `${expectedName}.md not found in ${agentsDir}`).toBeDefined();
 
@@ -57,6 +64,8 @@ describe("built-in agent definitions", () => {
 	}
 
 	it("all agent files should have valid frontmatter with required fields", () => {
+		const agentFiles = getAgentFiles();
+		expect(agentFiles.length).toBeGreaterThan(0);
 		for (const file of agentFiles) {
 			const content = readFileSync(join(agentsDir, file), "utf-8");
 			const parsed = parseAgentFrontmatter(content);

@@ -82,7 +82,7 @@ function discoverAgentTypes(cwd: string): Map<string, AgentTypeConfig> {
 		agents.set(key, config);
 	}
 
-	// Package-bundled agents (shipped with dreb, lowest priority for overrides)
+	// Package-bundled agents (shipped with dreb — overrides hardcoded defaults, but overridden by user/project agents)
 	const packageAgentsDir = join(getPackageDir(), "agents");
 	loadAgentsFromDir(packageAgentsDir, agents);
 
@@ -1071,7 +1071,11 @@ export function createSubagentToolDefinition(
 					if (skipped.length > 0) {
 						parts.push(`\n${skipped.length} task(s) failed to launch:\n${skippedListing}`);
 					}
-					parts.push("\nEach will notify independently when complete.");
+					if (launched.length > 0) {
+						parts.push("\nEach will notify independently when complete.");
+					} else {
+						parts.push("\nNo agents were launched.");
+					}
 					return {
 						content: [
 							{

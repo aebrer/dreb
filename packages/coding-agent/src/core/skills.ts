@@ -512,7 +512,15 @@ export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
 
 	// Built-in skills shipped with the package (always loaded, lowest priority — overridable by user/project/path)
 	const builtinSkillsDir = join(getPackageDir(), "skills");
-	addSkills(loadSkillsFromDirInternal(builtinSkillsDir, "builtin", true));
+	if (!existsSync(builtinSkillsDir)) {
+		allDiagnostics.push({
+			type: "warning",
+			message: `Built-in skills directory not found: ${builtinSkillsDir}`,
+			path: builtinSkillsDir,
+		});
+	} else {
+		addSkills(loadSkillsFromDirInternal(builtinSkillsDir, "builtin", true));
+	}
 
 	return {
 		skills: Array.from(skillMap.values()),
