@@ -47,6 +47,14 @@ const substitutionSkill = makeSkill({
 	baseDir: resolve(fixturesDir, "substitution-test"),
 });
 
+const nonUserInvocableSkill = makeSkill({
+	name: "not-user-invocable",
+	description: "A skill only the agent can invoke.",
+	filePath: resolve(fixturesDir, "not-user-invocable/SKILL.md"),
+	baseDir: resolve(fixturesDir, "not-user-invocable"),
+	userInvocable: false,
+});
+
 const brokenSkill = makeSkill({
 	name: "broken-skill",
 	description: "A skill pointing to a nonexistent file.",
@@ -120,6 +128,9 @@ describe("AgentSession._expandSkillCommand", () => {
 			expect(result).toContain("Review foo in foo bar.");
 			expect(result).toContain("First arg: foo, second arg: bar.");
 			expect(result).toContain(`Skill dir: ${resolve(fixturesDir, "substitution-test")}.`);
+			// Verify ${DREB_SESSION_ID} was substituted with a UUID
+			expect(result).toMatch(/Session: [0-9a-f-]{36}\./);
+			expect(result).not.toContain("$" + "{DREB_SESSION_ID}");
 		} finally {
 			session.dispose();
 		}
@@ -175,12 +186,14 @@ describe("AgentSession._expandSkillCommand", () => {
 		}
 	});
 
-	it("handles skill name with no trailing text correctly", () => {
-		const session = createSession([validSkill]);
+	it("expands userInvocable: false skills (manual dispatch bypasses autocomplete filter)", () => {
+		const session = createSession([nonUserInvocableSkill]);
 		try {
-			// No space means entire text after /skill: is the skill name
-			const result = expandSkillCommand(session, "/skill:valid-skill");
-			expect(result).toContain('<skill name="valid-skill"');
+			// _expandSkillCommand searches all skills by name, regardless of userInvocable.
+			// This is the key behavior: hidden from autocomplete but still manually invocable.
+			const result = expandSkillCommand(session, "/skill:not-user-invocable");
+			expect(result).toContain('<skill name="not-user-invocable"');
+			expect(result).toContain("This skill is hidden from the slash command menu.");
 		} finally {
 			session.dispose();
 		}
