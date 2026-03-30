@@ -21,7 +21,7 @@ dreb implements the [Agent Skills standard](https://agentskills.io/specification
 
 ## Locations
 
-> **Security:** Skills can instruct the model to perform any action and may include executable code the model invokes. Review skill content before use.
+> **Note:** Skills can instruct the model to run commands and may include executable code. Skim what you're loading, same as any other dependency.
 
 dreb loads skills from:
 
