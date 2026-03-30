@@ -40,5 +40,25 @@ unset AWS_CONTAINER_CREDENTIALS_FULL_URI
 unset AWS_WEB_IDENTITY_TOKEN_FILE
 unset BEDROCK_EXTENSIVE_MODEL_TEST
 
+LOG_FILE="/tmp/dreb-test-$(date +%s).log"
+
 echo "Running tests without API keys..."
-npm test
+if npm test > "$LOG_FILE" 2>&1; then
+    # Extract summary lines from the log
+    grep -E "^(ok|not ok|# tests|# pass|# fail|# skip|Tests |Test Files )" "$LOG_FILE" | tail -20
+    echo "All tests passed. Full log: $LOG_FILE"
+else
+    EXIT_CODE=$?
+    echo ""
+    echo "Tests failed! Showing failures:"
+    echo "─────────────────────────────────"
+    # Show failed test names and error details
+    grep -E "(FAIL|not ok|✕|×|Error:|failed)" "$LOG_FILE" | head -30
+    echo "─────────────────────────────────"
+    echo ""
+    # Show summary lines
+    grep -E "^(# tests|# pass|# fail|Tests |Test Files )" "$LOG_FILE" | tail -10
+    echo ""
+    echo "Full log: $LOG_FILE"
+    exit $EXIT_CODE
+fi
