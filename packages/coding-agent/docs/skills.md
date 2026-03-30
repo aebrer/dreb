@@ -16,6 +16,7 @@ dreb implements the [Agent Skills standard](https://agentskills.io/specification
 - [Content Substitution](#content-substitution)
 - [Validation](#validation)
 - [Example](#example)
+- [Built-in Skills](#built-in-skills)
 - [Skill Repositories](#skill-repositories)
 
 ## Locations
@@ -271,6 +272,23 @@ cd ${DREB_SKILL_DIR} && npm install
 ./content.js https://example.com
 \`\`\`
 ```
+
+## Built-in Skills
+
+dreb ships with **mach6**, a development workflow that orchestrates the full issue-to-merge lifecycle using GitHub as shared memory. Six skills cover each stage:
+
+| Skill | What it does |
+|---|---|
+| `mach6-issue` | Assess an existing issue or create a new one |
+| `mach6-plan` | Explore codebase, plan, create branch and draft PR |
+| `mach6-push` | Commit, push, post progress comment |
+| `mach6-review` | Multi-agent code review with independent assessment |
+| `mach6-fix` | Fix review findings or CI failures |
+| `mach6-publish` | Pre-merge checks, merge, tag, release |
+
+Built-in skills are always available and can be overridden by placing a skill with the same name in any [user or project location](#locations).
+
+See [docs/mach6.md](mach6.md) for full documentation.
 
 ## Skill Repositories
 
