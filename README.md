@@ -36,9 +36,7 @@ dreb gives an LLM a set of tools — read, write, edit, bash, grep, find, glob, 
 
 ## Why fork?
 
-A coding harness has access to your filesystem, shell, and auth tokens — it's the highest-trust software you run. A hard fork means no `npm install` pulling in upstream changes you haven't audited. We maintain independently and cherry-pick from upstream when something useful lands, after reading the diff.
-
-See the [brainstorming doc](docs/brainstorming.md) for the full rationale.
+A hard fork means we control the update cadence. No upstream changes land without us reading the diff first. We cherry-pick what's useful and skip what isn't.
 
 ## Packages
 
