@@ -340,6 +340,8 @@ Skills support [content substitution](docs/skills.md#content-substitution) (`$1`
 
 Place in `~/.dreb/agent/skills/`, `~/.agents/skills/`, `.dreb/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [package](#packages) to share with others. See [docs/skills.md](docs/skills.md).
 
+dreb ships with **mach6** — a built-in development workflow (issue → plan → push → review → fix → publish) that uses GitHub as shared memory and multi-agent code review. See [docs/mach6.md](docs/mach6.md).
+
 ### Extensions
 
 <p align="center"><img src="docs/images/doom-extension.png" alt="Doom Extension" width="600"></p>

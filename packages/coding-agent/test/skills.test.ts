@@ -396,8 +396,10 @@ describe("skills", () => {
 				cwd: emptyCwd,
 				skillPaths: [join(fixturesDir, "valid-skill")],
 			});
-			expect(skills).toHaveLength(1);
-			expect(skills[0].sourceInfo.scope).toBe("temporary");
+			// Built-in skills (e.g. mach6) are always loaded, plus the explicit path skill
+			const nonBuiltinSkills = skills.filter((s) => s.sourceInfo.source !== "builtin");
+			expect(nonBuiltinSkills).toHaveLength(1);
+			expect(nonBuiltinSkills[0].sourceInfo.scope).toBe("temporary");
 			expect(diagnostics).toHaveLength(0);
 		});
 
@@ -407,7 +409,9 @@ describe("skills", () => {
 				cwd: emptyCwd,
 				skillPaths: ["/non/existent/path"],
 			});
-			expect(skills).toHaveLength(0);
+			// Built-in skills still load even when explicit path doesn't exist
+			const nonBuiltinSkills = skills.filter((s) => s.sourceInfo.source !== "builtin");
+			expect(nonBuiltinSkills).toHaveLength(0);
 			expect(diagnostics.some((d: ResourceDiagnostic) => d.message.includes("does not exist"))).toBe(true);
 		});
 
@@ -424,6 +428,58 @@ describe("skills", () => {
 				skillPaths: [homeSkillsDir],
 			});
 			expect(withTilde.length).toBe(withoutTilde.length);
+		});
+	});
+
+	describe("built-in skills", () => {
+		const emptyAgentDir = resolve(__dirname, "fixtures/empty-agent");
+		const emptyCwd = resolve(__dirname, "fixtures/empty-cwd");
+
+		it("should load built-in skills with source='builtin' and scope='user'", () => {
+			const { skills } = loadSkills({ agentDir: emptyAgentDir, cwd: emptyCwd });
+			const builtins = skills.filter((s) => s.sourceInfo.source === "builtin");
+			expect(builtins.length).toBeGreaterThan(0);
+			for (const s of builtins) {
+				expect(s.sourceInfo.scope).toBe("user");
+			}
+		});
+
+		it("should include all mach6 skills as built-ins", () => {
+			const { skills } = loadSkills({ agentDir: emptyAgentDir, cwd: emptyCwd });
+			const builtins = skills.filter((s) => s.sourceInfo.source === "builtin");
+			const builtinNames = builtins.map((s) => s.name).sort();
+			expect(builtinNames).toContain("mach6-issue");
+			expect(builtinNames).toContain("mach6-plan");
+			expect(builtinNames).toContain("mach6-push");
+			expect(builtinNames).toContain("mach6-review");
+			expect(builtinNames).toContain("mach6-fix");
+			expect(builtinNames).toContain("mach6-publish");
+		});
+
+		it("should allow user/project skills to override built-ins (built-ins are lowest priority)", () => {
+			// Load with a fixture skill named "mach6-issue" to collide with the built-in
+			const { skills, diagnostics } = loadSkills({
+				agentDir: emptyAgentDir,
+				cwd: emptyCwd,
+				skillPaths: [join(fixturesDir, "builtin-override")],
+			});
+
+			// The path skill should win because built-ins are loaded last (lowest priority)
+			const mach6Issue = skills.find((s) => s.name === "mach6-issue");
+			expect(mach6Issue).toBeDefined();
+			expect(mach6Issue!.sourceInfo.source).not.toBe("builtin");
+			expect(mach6Issue!.description).toContain("User override");
+
+			// Built-in should appear as the collision loser, not winner
+			const builtinWinners = diagnostics.filter(
+				(d: ResourceDiagnostic) => d.type === "collision" && d.collision?.winnerPath?.includes("skills/mach6-"),
+			);
+			expect(builtinWinners).toHaveLength(0);
+
+			const builtinLosers = diagnostics.filter(
+				(d: ResourceDiagnostic) => d.type === "collision" && d.collision?.loserPath?.includes("skills/mach6-"),
+			);
+			expect(builtinLosers.length).toBeGreaterThan(0);
 		});
 	});
 

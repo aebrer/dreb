@@ -108,9 +108,12 @@ describe("readClipboardImage", () => {
 	});
 
 	test("Non-Wayland: uses clipboard", async () => {
-		mocks.spawnSync.mockImplementation(() => {
-			throw new Error("spawnSync should not be called for non-Wayland sessions");
-		});
+		// On WSL hosts, isWSL() detects /proc/version even with empty env,
+		// so spawnSync may be called for wl-paste/xclip. Return failures
+		// to let the code fall through to the native clipboard path.
+		const enoent = new Error("spawn ENOENT");
+		(enoent as { code?: string }).code = "ENOENT";
+		mocks.spawnSync.mockReturnValue(spawnError(enoent));
 
 		mocks.clipboard.hasImage.mockReturnValue(true);
 		mocks.clipboard.getImageBinary.mockResolvedValue(new Uint8Array([7]));
@@ -123,9 +126,12 @@ describe("readClipboardImage", () => {
 	});
 
 	test("Non-Wayland: returns null when clipboard has no image", async () => {
-		mocks.spawnSync.mockImplementation(() => {
-			throw new Error("spawnSync should not be called for non-Wayland sessions");
-		});
+		// On WSL hosts, isWSL() detects /proc/version even with empty env,
+		// so spawnSync may be called for wl-paste/xclip. Return failures
+		// to let the code fall through to the native clipboard path.
+		const enoent = new Error("spawn ENOENT");
+		(enoent as { code?: string }).code = "ENOENT";
+		mocks.spawnSync.mockReturnValue(spawnError(enoent));
 
 		mocks.clipboard.hasImage.mockReturnValue(false);
 

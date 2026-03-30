@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
-import { CONFIG_DIR_NAME } from "../../config.js";
+import { CONFIG_DIR_NAME, getPackageDir } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -81,6 +81,10 @@ function discoverAgentTypes(cwd: string): Map<string, AgentTypeConfig> {
 	for (const [key, config] of Object.entries(BUILTIN_AGENTS)) {
 		agents.set(key, config);
 	}
+
+	// Package-bundled agents (shipped with dreb — overrides hardcoded defaults, but overridden by user/project agents)
+	const packageAgentsDir = join(getPackageDir(), "agents");
+	loadAgentsFromDir(packageAgentsDir, agents);
 
 	// User-level agents (~/.dreb/agents/*.md)
 	const userDir = join(homedir(), CONFIG_DIR_NAME, "agents");
@@ -1040,14 +1044,14 @@ export function createSubagentToolDefinition(
 					};
 				} else if (params.tasks) {
 					// Parallel background tasks — each gets its own agent ID and notifies independently
-					const launched: string[] = [];
+					const launched: Array<{ id: string; taskText: string }> = [];
+					const skipped: Array<{ taskText: string; error: string }> = [];
 					for (let i = 0; i < params.tasks.length; i++) {
 						const item = params.tasks[i];
 						const agentName = item.agent || DEFAULT_AGENT;
 						const cwdResult = clampCwd(cwd, item.cwd);
 						if (!cwdResult.ok) {
-							// Surface cwd error immediately rather than launching a doomed agent
-							console.error(`[subagent] ${cwdResult.error}`);
+							skipped.push({ taskText: item.task, error: cwdResult.error });
 							continue;
 						}
 						const agentId = launchBackgroundTask(
@@ -1057,14 +1061,26 @@ export function createSubagentToolDefinition(
 							cwdResult.cwd,
 							item.model,
 						);
-						launched.push(agentId);
+						launched.push({ id: agentId, taskText: item.task });
 					}
-					const listing = launched.map((id, i) => `  ${id}: ${params.tasks![i].task.slice(0, 80)}`).join("\n");
+					const listing = launched.map(({ id, taskText }) => `  ${id}: ${taskText.slice(0, 80)}`).join("\n");
+					const skippedListing = skipped
+						.map(({ taskText, error }) => `  SKIPPED: ${taskText.slice(0, 60)} — ${error}`)
+						.join("\n");
+					const parts = [`${launched.length} background agents started:\n${listing}`];
+					if (skipped.length > 0) {
+						parts.push(`\n${skipped.length} task(s) failed to launch:\n${skippedListing}`);
+					}
+					if (launched.length > 0) {
+						parts.push("\nEach will notify independently when complete.");
+					} else {
+						parts.push("\nNo agents were launched.");
+					}
 					return {
 						content: [
 							{
 								type: "text",
-								text: `${launched.length} background agents started:\n${listing}\n\nEach will notify independently when complete.`,
+								text: parts.join("\n"),
 							},
 						],
 						details: { mode: "parallel", agentCount: launched.length } as SubagentToolDetails,
