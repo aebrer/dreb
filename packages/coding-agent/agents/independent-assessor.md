@@ -46,7 +46,7 @@ If a finding was already addressed in prior commits or PR discussion, classify a
 
 <Numbered list of genuine issues to fix, ordered by priority — critical first>
 
-If no genuine issues found, say "No action needed — all findings are nitpicks or false positives." with a brief summary.
+If no genuine issues found, say "No action needed before merge — all findings are nitpicks, false positives, or deferred." with a brief summary. Note any deferred items separately for follow-up tracking.
 
 ## Important
 
