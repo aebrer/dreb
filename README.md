@@ -48,7 +48,7 @@ Or use a custom provider — corporate proxy, Bedrock, local models, anything Op
 
 **[Memory](packages/coding-agent/README.md#memory)** — persistent, file-based memory (global + project-scoped) that survives across sessions.
 
-**[Custom Providers](packages/coding-agent/docs/models.md)** — route any built-in provider through a proxy, add new providers via JSON config or extensions. 15+ providers supported out of the box.
+**[Custom Providers](packages/coding-agent/docs/models.md)** — route any built-in provider through a proxy, add new providers via JSON config or extensions. 20+ providers supported out of the box.
 
 **Modes:** Interactive TUI, print/JSON CLI, RPC (for process integration), SDK (for embedding in your own apps).
 
@@ -63,7 +63,7 @@ See [FORK.md](FORK.md) for details.
 | Package | Description |
 |---|---|
 | [packages/coding-agent](packages/coding-agent/) | CLI tool, built-in tools, skills, sessions, extensions — [full docs](packages/coding-agent/README.md) |
-| [packages/ai](packages/ai/) | LLM provider abstraction — 15+ adapters, OAuth, model discovery |
+| [packages/ai](packages/ai/) | LLM provider abstraction — 20+ adapters, OAuth, model discovery |
 | [packages/agent](packages/agent/) | Agent runtime — tool loop, state, streaming, hooks |
 | [packages/tui](packages/tui/) | Terminal UI — differential rendering, markdown, syntax highlighting |
 
