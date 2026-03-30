@@ -1044,7 +1044,7 @@ export function createSubagentToolDefinition(
 					};
 				} else if (params.tasks) {
 					// Parallel background tasks — each gets its own agent ID and notifies independently
-					const launched: string[] = [];
+					const launched: Array<{ id: string; taskText: string }> = [];
 					for (let i = 0; i < params.tasks.length; i++) {
 						const item = params.tasks[i];
 						const agentName = item.agent || DEFAULT_AGENT;
@@ -1061,9 +1061,9 @@ export function createSubagentToolDefinition(
 							cwdResult.cwd,
 							item.model,
 						);
-						launched.push(agentId);
+						launched.push({ id: agentId, taskText: item.task });
 					}
-					const listing = launched.map((id, i) => `  ${id}: ${params.tasks![i].task.slice(0, 80)}`).join("\n");
+					const listing = launched.map(({ id, taskText }) => `  ${id}: ${taskText.slice(0, 80)}`).join("\n");
 					return {
 						content: [
 							{

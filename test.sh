@@ -1,52 +1,33 @@
 #!/usr/bin/env bash
 set -e
 
-# Skip local LLM tests (ollama, lmstudio)
+# Skip local LLM tests (ollama, lmstudio) — no local server expected in CI/hooks
 export DREB_NO_LOCAL_LLM=1
 
-# Unset API keys (see packages/ai/src/stream.ts getEnvApiKey)
-unset ANTHROPIC_API_KEY
-unset ANTHROPIC_OAUTH_TOKEN
-unset OPENAI_API_KEY
-unset GEMINI_API_KEY
-unset GROQ_API_KEY
-unset CEREBRAS_API_KEY
-unset XAI_API_KEY
-unset OPENROUTER_API_KEY
-unset ZAI_API_KEY
-unset MISTRAL_API_KEY
-unset MINIMAX_API_KEY
-unset MINIMAX_CN_API_KEY
-unset KIMI_API_KEY
-unset HF_TOKEN
-unset AI_GATEWAY_API_KEY
-unset OPENCODE_API_KEY
-unset COPILOT_GITHUB_TOKEN
-unset GH_TOKEN
-unset GITHUB_TOKEN
-unset GOOGLE_APPLICATION_CREDENTIALS
-unset GOOGLE_CLOUD_PROJECT
-unset GCLOUD_PROJECT
-unset GOOGLE_CLOUD_LOCATION
-unset AWS_PROFILE
-unset AWS_ACCESS_KEY_ID
-unset AWS_SECRET_ACCESS_KEY
-unset AWS_SESSION_TOKEN
-unset AWS_REGION
-unset AWS_DEFAULT_REGION
-unset AWS_BEARER_TOKEN_BEDROCK
-unset AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
-unset AWS_CONTAINER_CREDENTIALS_FULL_URI
-unset AWS_WEB_IDENTITY_TOKEN_FILE
-unset BEDROCK_EXTENSIVE_MODEL_TEST
+# Provider E2E tests run for any provider with a configured API key.
+# Tests for unconfigured providers are skipped automatically.
 
 LOG_FILE="/tmp/dreb-test-$(date +%s).log"
 
-echo "Running tests without API keys..."
+echo "Running tests..."
 if npm test > "$LOG_FILE" 2>&1; then
-    # Extract summary lines from the log
-    grep -E "^(ok|not ok|# tests|# pass|# fail|# skip|Tests |Test Files )" "$LOG_FILE" | tail -20
-    echo "All tests passed. Full log: $LOG_FILE"
+    # Aggregate results across all test runners (vitest + node:test)
+    # Vitest lines have leading whitespace: "      Tests  N passed | M skipped (T)"
+    # Node test runner lines: "# tests N", "# pass N", "# fail N"
+    VITEST_PASSED=$(grep -oP 'Tests\s+\K\d+(?=\s+passed)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
+    VITEST_FAILED=$(grep -oP 'Tests\s+\d+\s+failed\s+\|\s+\K\d+' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
+    # Vitest "N failed" comes before "passed" — extract differently
+    VITEST_FAILED=$(grep -oP 'Tests\s+\K\d+(?=\s+failed)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
+    VITEST_SKIPPED=$(grep -oP '\|\s+\K\d+(?=\s+skipped)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
+    NODE_PASSED=$(grep -P '^# pass ' "$LOG_FILE" | grep -oP '\d+' | awk '{s+=$1} END {print s+0}')
+    NODE_FAILED=$(grep -P '^# fail ' "$LOG_FILE" | grep -oP '\d+' | awk '{s+=$1} END {print s+0}')
+
+    TOTAL_PASSED=$((VITEST_PASSED + NODE_PASSED))
+    TOTAL_FAILED=$((VITEST_FAILED + NODE_FAILED))
+
+    echo "All tests passed."
+    echo "  passed: $TOTAL_PASSED | failed: $TOTAL_FAILED | skipped: $VITEST_SKIPPED"
+    echo "  Full log: $LOG_FILE"
 else
     EXIT_CODE=$?
     echo ""
@@ -56,8 +37,8 @@ else
     grep -E "(FAIL|not ok|✕|×|Error:|failed)" "$LOG_FILE" | head -30
     echo "─────────────────────────────────"
     echo ""
-    # Show summary lines
-    grep -E "^(# tests|# pass|# fail|Tests |Test Files )" "$LOG_FILE" | tail -10
+    # Show per-runner summaries
+    grep -P '(Tests\s+\d+|# tests\s+\d+|# fail\s+\d+|Test Files)' "$LOG_FILE" | tail -10
     echo ""
     echo "Full log: $LOG_FILE"
     exit $EXIT_CODE

@@ -457,10 +457,6 @@ export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
 		}
 	}
 
-	// Built-in skills shipped with the package (always loaded, lowest priority — overridable by user/project/path)
-	const builtinSkillsDir = join(getPackageDir(), "skills");
-	addSkills(loadSkillsFromDirInternal(builtinSkillsDir, "builtin", true));
-
 	if (includeDefaults) {
 		addSkills(loadSkillsFromDirInternal(join(resolvedAgentDir, "skills"), "user", true));
 		addSkills(loadSkillsFromDirInternal(resolve(cwd, CONFIG_DIR_NAME, "skills"), "project", true));
@@ -513,6 +509,10 @@ export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
 			allDiagnostics.push({ type: "warning", message, path: resolvedPath });
 		}
 	}
+
+	// Built-in skills shipped with the package (always loaded, lowest priority — overridable by user/project/path)
+	const builtinSkillsDir = join(getPackageDir(), "skills");
+	addSkills(loadSkillsFromDirInternal(builtinSkillsDir, "builtin", true));
 
 	return {
 		skills: Array.from(skillMap.values()),
