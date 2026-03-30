@@ -38,9 +38,9 @@ const BUILTIN_AGENTS: Record<string, AgentTypeConfig> = {
 		systemPrompt:
 			"You are a codebase exploration agent. Your job is to quickly find information in the codebase and report back concisely.\n\nRules:\n- Do NOT modify any files\n- Be thorough but concise in your findings\n- If you can't find what you're looking for, say so explicitly",
 	},
-	Critic: {
-		name: "Critic",
-		description: "Analysis agent instructed to only read /tmp files (prompt-enforced). No codebase context.",
+	Sandbox: {
+		name: "Sandbox",
+		description: "Sandboxed analysis agent restricted to /tmp files only (no codebase access).",
 		tools: "read",
 		systemPrompt:
 			"You are a sandboxed analysis agent. You have NO access to the project codebase.\n\nRules:\n- You can ONLY read files under /tmp/\n- Do NOT attempt to access any files outside /tmp/\n- All input data will be provided in the task prompt or in /tmp/ files\n- Analyze, summarize, and reason about the data you are given",
@@ -867,7 +867,7 @@ export function createSubagentToolDefinition(
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate tasks to independent subagents (Explore for codebase research, Critic for unbiased analysis). " +
+			"Delegate tasks to independent subagents (Explore for codebase research, Sandbox for isolated /tmp-only analysis). " +
 			"Supports single task, parallel (up to 8, max 4 concurrent), " +
 			"and chain (sequential pipeline with {previous} substitution) modes. " +
 			"Set background=true to return immediately and get notified on completion.",
@@ -875,13 +875,13 @@ export function createSubagentToolDefinition(
 		promptGuidelines: [
 			"Use `subagent` to delegate focused, independent tasks to child agents",
 			"Available agent types can be discovered from ~/.dreb/agents/ and .dreb/agents/ markdown files",
-			"Built-in agents: 'Explore' (default) — read-only codebase exploration; 'Critic' — analysis agent instructed to only read /tmp (prompt-enforced), no codebase context",
+			"Built-in agents: 'Explore' (default) — read-only codebase exploration; 'Sandbox' — isolated analysis agent restricted to /tmp files only (no codebase access)",
 			"Use parallel mode for independent tasks that can run concurrently",
 			"Use chain mode when each step depends on the previous step's output (reference with {previous})",
-			"PREFER background=true for most subagent calls — it lets you continue working while agents run. You'll be notified when they complete. Only use foreground (background=false) when you need the result immediately before you can proceed.",
+			"ALWAYS use background=true when launching 2 or more subagents, or when the task is complex enough that you can do useful work while waiting. Foreground (blocking) mode should only be used for single subagents whose result you need immediately before deciding what to do next.",
 			"Subagents have their own context window — provide enough context in the task prompt",
-			"Each background agent notifies independently when done — completion messages include a list of any still-running agents",
-			"Use `model` to override the model per-invocation (e.g. 'haiku' for cheap tasks, 'opus' for complex ones) without creating an agent definition file. Per-invocation model overrides agent definition model.",
+			"Each background agent notifies independently when done — completion messages include a list of any still-running agents. If you need their results before proceeding, stop generating — do not output anything, do not launch filler work. Your turn ends, and when a background agent completes, its result arrives as a new message that resumes your turn automatically.",
+			"Agent definitions may specify a `model` field using Anthropic-family names as strength-tier hints: 'opus' = strongest, 'sonnet' = mid-tier, 'haiku' = fast/cheap. These resolve via substring matching against the current provider's model list. If your provider doesn't carry matching models (e.g., on z.ai, OpenAI, etc.), you MUST pass a `model` override with your provider's equivalent: strongest tier (e.g., glm-5-1), mid tier (e.g., glm-5-turbo), or fast tier. Per-invocation `model` overrides always take precedence over agent definition models. For parallel/chain, set per-task.",
 		],
 		parameters: subagentSchema,
 
