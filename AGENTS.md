@@ -33,6 +33,10 @@ This builds all packages in dependency order: tui → ai → agent → coding-ag
 
 **Never create a git tag without first bumping `package.json` to match.**
 
+## Completeness Rule
+
+**Don't defer parts of categorical work.** If the task is "fix docs," fix ALL docs — don't cherry-pick the easy ones and punt the rest to a follow-up. Same applies to failing tests and discovered bugs: if you find it during the work, fix it now. "Out of scope" is not an excuse to ship known-broken things.
+
 ## Testing
 
 ```bash

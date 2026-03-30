@@ -569,7 +569,7 @@ In the default parallel tool execution mode, sibling tool calls from the same as
 import { isToolCallEventType } from "@dreb/coding-agent";
 
 dreb.on("tool_call", async (event, ctx) => {
-  // event.toolName - "bash", "read", "write", "edit", etc.
+  // event.toolName - "bash", "read", "write", "edit", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "skill", "tasks_update", or custom tool names
   // event.toolCallId
   // event.input - tool parameters
 
@@ -1474,7 +1474,7 @@ async execute(toolCallId, params) {
 
 ### Overriding Built-in Tools
 
-Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) by registering a tool with the same name. Interactive mode displays a warning when this happens.
+Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`) by registering a tool with the same name. Interactive mode displays a warning when this happens. The factory-only tools (`skill`, `tasks_update`) can also be overridden.
 
 ```bash
 # Extension's read tool replaces built-in read
@@ -1503,6 +1503,10 @@ Built-in tool implementations:
 - [grep.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/grep.ts) - `GrepToolDetails`
 - [find.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/find.ts) - `FindToolDetails`
 - [ls.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/ls.ts) - `LsToolDetails`
+- [web.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/web.ts) - `web_search` and `web_fetch`
+- [subagent.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/subagent.ts)
+- [skill.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/skill.ts) - factory-only
+- [tasks.ts](https://github.com/aebrer/dreb/blob/master/packages/coding-agent/src/core/tools/tasks.ts) - factory-only
 
 ### Remote Execution
 

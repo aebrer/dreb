@@ -38,7 +38,7 @@ Sessions are stored as trees where each entry has an `id` and `parentId`. The "l
 | Enter | Select node |
 | Escape/Ctrl+C | Cancel |
 | Ctrl+U | Toggle: user messages only |
-| Ctrl+O | Toggle: show all (including custom/label entries) |
+| Ctrl+O | Cycle filter modes: default → no-tools → user-only → labeled-only → all |
 
 `Ctrl+←` or `Alt+←` folds the current node if it is foldable. Foldable nodes are roots and branch segment starts that have visible children. If the current node is not foldable, or is already folded, the selection jumps up to the previous visible branch segment start.
 
@@ -210,7 +210,7 @@ interface SessionTreeEvent {
 ### Example: Custom Summarizer
 
 ```typescript
-export default function(dreb: HookAPI) {
+export default function(dreb: ExtensionAPI) {
   dreb.on("session_before_tree", async (event, ctx) => {
     if (!event.preparation.userWantsSummary) return;
     if (event.preparation.entriesToSummarize.length === 0) return;
