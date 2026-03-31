@@ -390,8 +390,15 @@ export class AgentSession {
 	 * - Layer D: Turn limiter — restrict parent to N turns while bg agents are running
 	 */
 	private _installBackgroundAgentGuardrails(): void {
-		// Layer B: Sentinel monitor — detect hallucinated bg agent responses in streaming output
+		// Layer B: Sentinel monitor — detect hallucinated bg agent responses in streaming output.
+		// Resets per assistant message; fires at most once per streaming response.
 		this.agent.subscribe((event) => {
+			// Reset sentinel flag at the start of each new assistant message
+			if (event.type === "message_start" && (event.message as any).role === "assistant") {
+				this._sentinelSteered = false;
+				return;
+			}
+
 			if (event.type !== "message_update") return;
 			const ame = event.assistantMessageEvent;
 			if (ame.type !== "text_delta") return;
@@ -403,29 +410,23 @@ export class AgentSession {
 			// Don't steer twice for the same streaming response
 			if (this._sentinelSteered) return;
 
-			// Check the partial text accumulated so far for sentinel patterns
+			// Check the partial text accumulated so far for the sentinel pattern.
+			// <background-agent-complete> is a synthetic tag only produced by the system —
+			// the model should never generate it.
 			const partial = event.message as AssistantMessage;
-			const textContent = partial.content?.find((c: any) => c.type === "text");
-			const text = textContent && "text" in textContent ? (textContent as any).text : "";
-			if (text.includes("<background-agent-complete>") || text.includes("<details>")) {
+			const text = (partial.content?.find((c: any) => c.type === "text") as any)?.text ?? "";
+			if (text.includes("<background-agent-complete>")) {
 				this._sentinelSteered = true;
 				this.agent.steer({
 					role: "user",
 					content: [
 						{
 							type: "text",
-							text: "You appear to be fabricating a background agent response. Background agents have not completed yet — their results arrive as system messages. Stop generating and wait for real results. If you are intentionally writing HTML containing these tags (e.g. in a code block), acknowledge this and continue.",
+							text: "You appear to be fabricating a background agent response. Background agents have not completed yet — their results arrive as system messages. Stop generating and wait for real results. If you are intentionally writing content containing this tag (e.g. in a code block), acknowledge this and continue.",
 						},
 					],
 					timestamp: Date.now(),
 				});
-			}
-		});
-
-		// Reset sentinel flag at the start of each new assistant message
-		this.agent.subscribe((event) => {
-			if (event.type === "message_start" && (event.message as any).role === "assistant") {
-				this._sentinelSteered = false;
 			}
 		});
 

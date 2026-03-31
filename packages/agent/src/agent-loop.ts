@@ -162,27 +162,24 @@ async function runLoop(
 ): Promise<void> {
 	let firstTurn = true;
 	let endTurnRequested = false;
+	let llmCallCount = 0;
 	// Check for steering messages at start (user may have typed while waiting)
 	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
 	while (true) {
 		let hasMoreToolCalls = true;
+		endTurnRequested = false;
 
 		// Inner loop: process tool calls and steering messages
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
-			// Check shouldContinue before subsequent LLM calls (not the first)
-			if (!firstTurn && config.shouldContinue && !config.shouldContinue()) {
-				break;
-			}
-
 			if (!firstTurn) {
 				await emit({ type: "turn_start" });
 			} else {
 				firstTurn = false;
 			}
 
-			// Process pending messages (inject before next assistant response)
+			// Process pending messages first (inject into context so they're never lost)
 			if (pendingMessages.length > 0) {
 				for (const message of pendingMessages) {
 					await emit({ type: "message_start", message });
@@ -193,9 +190,17 @@ async function runLoop(
 				pendingMessages = [];
 			}
 
+			// Check shouldContinue before subsequent LLM calls (not the very first).
+			// Pending messages have already been injected into context above, so they
+			// won't be lost if the loop breaks here.
+			if (llmCallCount > 0 && config.shouldContinue && !config.shouldContinue()) {
+				break;
+			}
+
 			// Stream assistant response
 			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFn);
 			newMessages.push(message);
+			llmCallCount++;
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				await emit({ type: "turn_end", message, toolResults: [] });

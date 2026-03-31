@@ -275,6 +275,91 @@ describe("endTurn on tool result", () => {
 		// Two LLM calls: tool call + final response
 		expect(callIndex).toBe(2);
 	});
+
+	it("should reset endTurn flag when follow-up messages restart the outer loop", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema> = {
+			name: "bg-launch",
+			label: "BG Launch",
+			description: "Launches background work",
+			parameters: toolSchema,
+			async execute() {
+				return {
+					content: [{ type: "text", text: "Background agent started." }],
+					details: {},
+					endTurn: true,
+				};
+			},
+		};
+
+		const normalTool: AgentTool<typeof toolSchema> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo",
+			parameters: toolSchema,
+			async execute(_id, params) {
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: {},
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool, normalTool],
+		};
+
+		let callIndex = 0;
+		let followUpDelivered = false;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (callIndex === 0) {
+					// First call: tool call with endTurn
+					const message = createAssistantMessage(
+						[{ type: "toolCall", id: "tool-1", name: "bg-launch", arguments: { value: "go" } }],
+						"toolUse",
+					);
+					stream.push({ type: "done", reason: "toolUse", message });
+				} else if (callIndex === 1) {
+					// Second call (from follow-up): tool call WITHOUT endTurn
+					const message = createAssistantMessage(
+						[{ type: "toolCall", id: "tool-2", name: "echo", arguments: { value: "hello" } }],
+						"toolUse",
+					);
+					stream.push({ type: "done", reason: "toolUse", message });
+				} else {
+					// Third call: final text response
+					const message = createAssistantMessage([{ type: "text", text: "done" }]);
+					stream.push({ type: "done", reason: "stop", message });
+				}
+				callIndex++;
+			});
+			return stream;
+		};
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			getFollowUpMessages: async () => {
+				// Deliver one follow-up after endTurn stops the loop
+				if (!followUpDelivered) {
+					followUpDelivered = true;
+					return [createUserMessage("bg agent results here")];
+				}
+				return [];
+			},
+		};
+
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const _ of stream) {
+		}
+
+		// Three LLM calls: endTurn tool → follow-up triggers new turn → echo tool → final response
+		expect(callIndex).toBe(3);
+	});
 });
 
 describe("shouldContinue", () => {
@@ -335,5 +420,73 @@ describe("shouldContinue", () => {
 		// So we get 2 LLM calls total.
 		expect(callIndex).toBe(2);
 		expect(continueCount).toBe(2);
+	});
+
+	it("should preserve pending messages in context when shouldContinue blocks", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo",
+			parameters: toolSchema,
+			async execute() {
+				return {
+					content: [{ type: "text", text: "echoed" }],
+					details: {},
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+
+		let callIndex = 0;
+		let steeringDelivered = false;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage(
+					[{ type: "toolCall", id: `tool-${callIndex}`, name: "echo", arguments: { value: "x" } }],
+					"toolUse",
+				);
+				stream.push({ type: "done", reason: "toolUse", message });
+				callIndex++;
+			});
+			return stream;
+		};
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			shouldContinue: () => false, // Block immediately on second call
+			getSteeringMessages: async () => {
+				// Deliver a steering message after the first tool call
+				if (!steeringDelivered) {
+					steeringDelivered = true;
+					return [createUserMessage("user typed this while agent was working")];
+				}
+				return [];
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// The steering message should have been emitted as message_start/message_end
+		// even though shouldContinue blocked the next LLM call
+		const messageEvents = events.filter((e) => e.type === "message_start" && (e as any).message?.role === "user");
+		const steeringFound = messageEvents.some(
+			(e) => (e as any).message?.content === "user typed this while agent was working",
+		);
+		expect(steeringFound).toBe(true);
+
+		// Only one LLM call (shouldContinue blocks the second)
+		expect(callIndex).toBe(1);
 	});
 });
