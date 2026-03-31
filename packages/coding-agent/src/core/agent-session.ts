@@ -71,7 +71,12 @@ import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import type { BashOperations } from "./tools/bash.js";
-import { createAllToolDefinitions, getRunningBackgroundAgents, type SessionTask } from "./tools/index.js";
+import {
+	createAllToolDefinitions,
+	getRunningBackgroundAgents,
+	type SessionTask,
+	type SubagentResult,
+} from "./tools/index.js";
 import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
@@ -278,6 +283,18 @@ export class AgentSession {
 	// Session tasks (in-memory, lost on session end)
 	private _tasks: SessionTask[] = [];
 
+	// Background agent turn limiter (Layer D): counts LLM turns while bg agents are running.
+	// Reset when a bg agent delivers results. No limit when no bg agents are active.
+	private _bgTurnCounter = 0;
+	private static readonly BG_TURN_LIMIT = 3;
+
+	// Sentinel monitor state (Layer B): tracks whether we've already steered for this streaming response
+	private _sentinelSteered = false;
+
+	// Guardrail unsubscribe functions (must be cleaned up on dispose)
+	private _unsubscribeGuardrailSentinel?: () => void;
+	private _unsubscribeGuardrailCounter?: () => void;
+
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
@@ -304,6 +321,7 @@ export class AgentSession {
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
+		this._installBackgroundAgentGuardrails();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -373,6 +391,167 @@ export class AgentSession {
 				details: hookResult.details,
 			};
 		});
+	}
+
+	/**
+	 * Install guardrails for background agent interactions:
+	 * - Layer B: Sentinel monitor — steer if the parent model generates suspicious tokens
+	 * - Layer D: Turn limiter — restrict parent to N turns while bg agents are running
+	 */
+	private _installBackgroundAgentGuardrails(): void {
+		// Layer B: Sentinel monitor — detect hallucinated bg agent responses in streaming output.
+		// Resets per assistant message; fires at most once per streaming response.
+		this._unsubscribeGuardrailSentinel = this.agent.subscribe((event) => {
+			// Reset sentinel flag at the start of each new assistant message
+			if (event.type === "message_start" && event.message.role === "assistant") {
+				this._sentinelSteered = false;
+				return;
+			}
+
+			if (event.type !== "message_update") return;
+			const ame = event.assistantMessageEvent;
+			if (ame.type !== "text_delta") return;
+
+			// Only activate when background agents are running
+			const bgRunning = getRunningBackgroundAgents();
+			if (bgRunning.length === 0) return;
+
+			// Don't steer twice for the same streaming response
+			if (this._sentinelSteered) return;
+
+			// Check the partial text accumulated so far for the sentinel pattern.
+			// <background-agent-complete> is a synthetic tag only produced by the system —
+			// the model should never generate it.
+			const partial = event.message as AssistantMessage;
+			const textBlock = partial.content?.find((c): c is TextContent => c.type === "text");
+			const text = textBlock?.text ?? "";
+			if (text.includes("<background-agent-complete>")) {
+				this._sentinelSteered = true;
+				this.agent.steer({
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "You appear to be fabricating a background agent response. Background agents have not completed yet — their results arrive as system messages. Stop generating and wait for real results. If you are intentionally writing content containing this tag (e.g. in a code block), acknowledge this and continue.",
+						},
+					],
+					timestamp: Date.now(),
+				});
+			}
+		});
+
+		// Layer D: Turn limiter — cap parent turns while bg agents are running.
+		// Increment counter on each turn_end while bg agents are active.
+		this._unsubscribeGuardrailCounter = this.agent.subscribe((event) => {
+			if (event.type !== "turn_end") return;
+			const bgRunning = getRunningBackgroundAgents();
+			if (bgRunning.length === 0) {
+				this._bgTurnCounter = 0;
+				return;
+			}
+			this._bgTurnCounter++;
+		});
+
+		// shouldContinue callback — checked before each subsequent LLM call.
+		// Does NOT inject a steer warning — the loop is already stopping, and any
+		// queued warning would go stale (consumed in the next run after bg agents
+		// have already delivered results, making the warning factually wrong).
+		this.agent.setShouldContinue(() => {
+			const bgRunning = getRunningBackgroundAgents();
+			if (bgRunning.length === 0) {
+				this._bgTurnCounter = 0;
+				return true;
+			}
+			return this._bgTurnCounter < AgentSession.BG_TURN_LIMIT;
+		});
+	}
+
+	/**
+	 * Handle background agent completion — builds the delivery message and routes
+	 * it to the parent agent via the appropriate channel (steer, prompt, or appendMessage).
+	 *
+	 * Extracted from `_buildRuntime` for testability.
+	 */
+	_handleBackgroundComplete(agentId: string, result: SubagentResult, cancelled: boolean): void {
+		const parts: string[] = [];
+		if (cancelled) {
+			parts.push("This agent was cancelled by the user.");
+		}
+		if (result.exitCode !== 0) {
+			parts.push(`Error: ${result.errorMessage || "unknown"}`);
+		}
+		if (result.output) {
+			parts.push(result.output);
+		}
+		// Append status of other running agents so the model has awareness
+		const stillRunning = getRunningBackgroundAgents();
+		if (stillRunning.length > 0) {
+			const runningList = stillRunning.map((a) => `  ${a.agentId} (${a.agentType}): ${a.taskSummary}`).join("\n");
+			parts.push(`Still running (${stillRunning.length}):\n${runningList}`);
+		}
+		const summary = parts.join("\n\n") || "(no output)";
+		const status = cancelled ? "cancelled" : "completed";
+		const message = {
+			role: "user" as const,
+			content: [
+				{
+					type: "text" as const,
+					text: `<background-agent-complete>\nBackground agent ${agentId} (${result.agent}) ${status}.\n\n${summary}\n</background-agent-complete>`,
+				},
+			],
+			timestamp: Date.now(),
+		};
+		if (cancelled) {
+			// Cancelled by user (Esc) — add to context and render in chat,
+			// but do NOT trigger a response (the user hit Esc to stop, not to ask a question)
+			try {
+				this.agent.appendMessage(message);
+				this.sessionManager.appendMessage(message);
+				this._emit({ type: "message_start", message });
+				this._emit({ type: "message_end", message });
+			} catch (err) {
+				console.error(
+					`[subagent] Failed to deliver cancellation message for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+		} else {
+			// Reset bg turn counter on delivery — parent gets fresh turns
+			this._bgTurnCounter = 0;
+
+			// Normal completion — deliver and trigger a response
+			// If the agent is already streaming, steer (injects after current tool calls)
+			// instead of followUp (waits until agent would fully stop)
+			if (this.agent.state.isStreaming) {
+				this.agent.steer(message);
+			} else {
+				// Fallback: if streaming started between the isStreaming check and this call, deliver as follow-up
+				this.agent.prompt(message).catch((promptErr) => {
+					console.error(
+						`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`,
+					);
+					try {
+						this.agent.followUp(message);
+					} catch (followUpErr) {
+						console.error(
+							`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`,
+						);
+					}
+				});
+			}
+		}
+		// Emit status event AFTER delivery — non-critical UI update that shouldn't block result delivery
+		try {
+			this._emit({
+				type: "background_agent_end",
+				agentId,
+				agentType: result.agent,
+				success: result.exitCode === 0,
+			});
+		} catch (emitErr) {
+			console.error(
+				`[subagent] background_agent_end emit failed: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
+			);
+		}
 	}
 
 	// =========================================================================
@@ -653,6 +832,13 @@ export class AgentSession {
 			this._unsubscribeAgent();
 			this._unsubscribeAgent = undefined;
 		}
+		// Clean up guardrail subscriptions (Layer B sentinel + Layer D counter)
+		this._unsubscribeGuardrailSentinel?.();
+		this._unsubscribeGuardrailSentinel = undefined;
+		this._unsubscribeGuardrailCounter?.();
+		this._unsubscribeGuardrailCounter = undefined;
+		// Clear the shouldContinue callback so the agent doesn't hold a reference to a disposed session
+		this.agent.setShouldContinue(undefined);
 	}
 
 	/**
@@ -662,6 +848,7 @@ export class AgentSession {
 	private _reconnectToAgent(): void {
 		if (this._unsubscribeAgent) return; // Already connected
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
+		this._installBackgroundAgentGuardrails();
 	}
 
 	/**
@@ -2335,82 +2522,7 @@ export class AgentSession {
 							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary });
 						},
 						onBackgroundComplete: (agentId, result, cancelled) => {
-							const parts: string[] = [];
-							if (cancelled) {
-								parts.push("This agent was cancelled by the user.");
-							}
-							if (result.exitCode !== 0) {
-								parts.push(`Error: ${result.errorMessage || "unknown"}`);
-							}
-							if (result.output) {
-								parts.push(result.output);
-							}
-							// Append status of other running agents so the model has awareness
-							const stillRunning = getRunningBackgroundAgents();
-							if (stillRunning.length > 0) {
-								const runningList = stillRunning
-									.map((a) => `  ${a.agentId} (${a.agentType}): ${a.taskSummary}`)
-									.join("\n");
-								parts.push(`Still running (${stillRunning.length}):\n${runningList}`);
-							}
-							const summary = parts.join("\n\n") || "(no output)";
-							const status = cancelled ? "cancelled" : "completed";
-							const message = {
-								role: "user" as const,
-								content: [
-									{
-										type: "text" as const,
-										text: `<background-agent-complete>\nBackground agent ${agentId} (${result.agent}) ${status}.\n\n${summary}\n</background-agent-complete>`,
-									},
-								],
-								timestamp: Date.now(),
-							};
-							if (cancelled) {
-								// Cancelled by user (Esc) — add to context and render in chat,
-								// but do NOT trigger a response (the user hit Esc to stop, not to ask a question)
-								try {
-									this.agent.appendMessage(message);
-									this._emit({ type: "message_start", message });
-									this._emit({ type: "message_end", message });
-								} catch (err) {
-									console.error(
-										`[subagent] Failed to deliver cancellation message for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
-									);
-								}
-							} else {
-								// Normal completion — deliver and trigger a response
-								// If the agent is already streaming, queue as follow-up instead of prompting
-								if (this.agent.state.isStreaming) {
-									this.agent.followUp(message);
-								} else {
-									// Fallback: if streaming started between the isStreaming check and this call, deliver as follow-up
-									this.agent.prompt(message).catch((promptErr) => {
-										console.error(
-											`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`,
-										);
-										try {
-											this.agent.followUp(message);
-										} catch (followUpErr) {
-											console.error(
-												`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`,
-											);
-										}
-									});
-								}
-							}
-							// Emit status event AFTER delivery — non-critical UI update that shouldn't block result delivery
-							try {
-								this._emit({
-									type: "background_agent_end",
-									agentId,
-									agentType: result.agent,
-									success: result.exitCode === 0,
-								});
-							} catch (emitErr) {
-								console.error(
-									`[subagent] background_agent_end emit failed: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
-								);
-							}
+							this._handleBackgroundComplete(agentId, result, cancelled);
 						},
 					},
 				});

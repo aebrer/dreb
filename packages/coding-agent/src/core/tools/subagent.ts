@@ -1051,6 +1051,7 @@ export function createSubagentToolDefinition(
 							},
 						],
 						details: { mode: "single", agentCount: 1 } as SubagentToolDetails,
+						endTurn: true,
 					};
 				} else if (params.tasks) {
 					// Parallel background tasks — each gets its own agent ID and notifies independently
@@ -1094,6 +1095,7 @@ export function createSubagentToolDefinition(
 							},
 						],
 						details: { mode: "parallel", agentCount: launched.length } as SubagentToolDetails,
+						endTurn: launched.length > 0,
 					};
 				} else {
 					// Chain mode — sequential, stays as one agent since steps depend on each other
@@ -1200,6 +1202,7 @@ export function createSubagentToolDefinition(
 							},
 						],
 						details: { mode: "chain", agentCount: params.chain!.length } as SubagentToolDetails,
+						endTurn: true,
 					};
 				}
 			}

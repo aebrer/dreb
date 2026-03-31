@@ -64,3 +64,8 @@ If everything is delivered, say "All requirements met." with the full checklist.
 - Don't invent requirements that aren't in the issue. Stick to what was explicitly or clearly implicitly asked for.
 - If the issue is vague, note the ambiguity rather than assuming a specific interpretation.
 - Do NOT use `#N` notation in your output (GitHub auto-links it to issues). Use "finding N" or "item N" instead.
+
+
+## Constraints
+
+- **Never post to GitHub.** Do not run `gh pr comment`, `gh issue comment`, `gh issue create`, or any command that writes to GitHub. Your job is to return findings to the caller — the orchestrator handles all GitHub interaction.
