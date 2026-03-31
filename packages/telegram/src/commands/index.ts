@@ -9,6 +9,7 @@ import { log } from "../util/telegram.js";
 import { cmdAgents, cmdCompact, cmdModel, cmdStats, cmdThinking } from "./agent.js";
 import { cmdCwd, cmdNew, cmdRestart, cmdStart, cmdStatus, cmdStop } from "./core.js";
 import { cmdRecent, cmdResume, cmdSessions } from "./sessions.js";
+import { cmdSkills } from "./skills.js";
 
 /**
  * Register all command handlers on the bot.
@@ -25,7 +26,8 @@ export function registerCommands(bot: Bot, config: Config, getUserState: (userId
 
 	bot.command("new", (ctx) => {
 		const us = getUserState(ctx.from!.id);
-		return cmdNew(ctx, us);
+		const args = ctx.match as string;
+		return cmdNew(ctx, us, args);
 	});
 
 	bot.command("stop", (ctx) => {
@@ -50,6 +52,11 @@ export function registerCommands(bot: Bot, config: Config, getUserState: (userId
 		const us = getUserState(ctx.from!.id);
 		const args = ctx.match as string;
 		return cmdRecent(ctx, us, args, config);
+	});
+
+	bot.command("skills", (ctx) => {
+		const us = getUserState(ctx.from!.id);
+		return cmdSkills(ctx, us, config);
 	});
 
 	bot.command("compact", (ctx) => {
@@ -88,10 +95,11 @@ export async function setMyCommands(bot: Bot): Promise<void> {
 		await bot.api.setMyCommands([
 			{ command: "start", description: "Help & command list" },
 			{ command: "status", description: "Connection & version info" },
-			{ command: "new", description: "Start fresh session" },
+			{ command: "new", description: "Start fresh session [optional: path]" },
 			{ command: "sessions", description: "List recent sessions" },
 			{ command: "resume", description: "Resume a session by ID" },
 			{ command: "recent", description: "Resend last N messages" },
+			{ command: "skills", description: "List available skills" },
 			{ command: "stats", description: "Token usage & cost" },
 			{ command: "compact", description: "Compact context" },
 			{ command: "model", description: "View/switch model" },

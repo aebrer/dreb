@@ -21,6 +21,7 @@ function createUserState(): UserState {
 		queue: [],
 		processing: false,
 		newSessionFlag: false,
+		newSessionCwd: null,
 		backgroundAgents: new Map(),
 		stopRequested: false,
 	};
@@ -40,6 +41,24 @@ function getUserState(userId: number): UserState {
  * Used by message/file handlers before prompting.
  */
 async function ensureBridgeWithSession(config: Config, userState: UserState): Promise<AgentBridge> {
+	// Handle new session with custom working directory — requires a fresh bridge
+	if (userState.newSessionFlag && userState.newSessionCwd) {
+		const cwd = userState.newSessionCwd;
+		userState.newSessionFlag = false;
+		userState.newSessionCwd = null;
+
+		// Kill existing bridge and start a new one with the custom cwd
+		if (userState.bridge?.isAlive) {
+			await userState.bridge.stop();
+		}
+		userState.bridge = null;
+
+		const customConfig = { ...config, workingDir: cwd };
+		const bridge = await ensureBridge(customConfig, userState);
+		await bridge.newSession();
+		return bridge;
+	}
+
 	const bridge = await ensureBridge(config, userState);
 
 	// Handle session flags

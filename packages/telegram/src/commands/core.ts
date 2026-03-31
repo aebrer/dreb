@@ -3,6 +3,9 @@
  */
 
 import { execSync } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import type { Api, Context } from "grammy";
 import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
@@ -13,7 +16,7 @@ export async function cmdStart(ctx: Context): Promise<void> {
 		"🤖 *dreb Telegram*\n\n" +
 			"Send me a message and I'll forward it to dreb.\n\n" +
 			"*Session:*\n" +
-			"/new — Start a fresh session\n" +
+			"/new \\[path\\] — Start a fresh session (optionally in a different directory)\n" +
 			"/sessions — List recent sessions\n" +
 			"/resume <id> — Resume a session\n" +
 			"/recent \\[N\\] — Resend last N messages\n\n" +
@@ -24,7 +27,8 @@ export async function cmdStart(ctx: Context): Promise<void> {
 			"/compact — Compact context\n" +
 			"/agents — Background subagents\n" +
 			"/model \\[pattern\\] — View/switch model\n" +
-			"/thinking \\[level\\] — View/set thinking\n\n" +
+			"/thinking \\[level\\] — View/set thinking\n" +
+			"/skills — List available skills\n\n" +
 			"*Control:*\n" +
 			"/stop — Interrupt & clear queue\n" +
 			"/restart — Restart the bot",
@@ -66,9 +70,31 @@ export async function cmdCwd(ctx: Context, config: Config): Promise<void> {
 	await safeSend(ctx.api, ctx.chat!.id, `📁 Working directory: \`${config.workingDir}\``);
 }
 
-export async function cmdNew(ctx: Context, userState: UserState): Promise<void> {
-	userState.newSessionFlag = true;
-	await ctx.reply("🆕 Next message will start a fresh session.");
+export async function cmdNew(ctx: Context, userState: UserState, args: string): Promise<void> {
+	const pathArg = args.trim();
+
+	if (pathArg) {
+		// Resolve path (expand ~ and make absolute)
+		const expanded = pathArg.startsWith("~") ? pathArg.replace("~", homedir()) : pathArg;
+		const resolved = resolve(expanded);
+
+		if (!existsSync(resolved)) {
+			await safeSend(ctx.api, ctx.chat!.id, `❌ Directory not found: \`${resolved}\``);
+			return;
+		}
+		if (!statSync(resolved).isDirectory()) {
+			await safeSend(ctx.api, ctx.chat!.id, `❌ Not a directory: \`${resolved}\``);
+			return;
+		}
+
+		userState.newSessionFlag = true;
+		userState.newSessionCwd = resolved;
+		await ctx.reply(`🆕 Next message will start a fresh session in \`${resolved}\``);
+	} else {
+		userState.newSessionFlag = true;
+		userState.newSessionCwd = null;
+		await ctx.reply("🆕 Next message will start a fresh session.");
+	}
 }
 
 export async function cmdStop(ctx: Context, api: Api, userState: UserState): Promise<void> {
