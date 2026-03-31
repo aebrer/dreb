@@ -102,7 +102,7 @@ export async function cmdStop(ctx: Context, api: Api, userState: UserState): Pro
 	const hadProc = userState.bridge?.isStreaming;
 	const queuedCount = userState.queue.length;
 
-	if (!hadProc && queuedCount === 0) {
+	if (!hadProc && queuedCount === 0 && !userState.processing) {
 		await ctx.reply("Nothing running to stop.");
 		return;
 	}
@@ -116,13 +116,15 @@ export async function cmdStop(ctx: Context, api: Api, userState: UserState): Pro
 	userState.queue = [];
 	userState.stopRequested = true;
 
-	// Abort the running agent
-	if (userState.bridge?.isStreaming) {
+	// Always abort the bridge when the user asks to stop — even if isStreaming is false,
+	// the RPC process may still be running (e.g., after timeout expired the waitForDone
+	// but didn't abort). This ensures a clean state for the next prompt.
+	if (userState.bridge?.isAlive) {
 		await userState.bridge.abort();
 	}
 
 	const parts: string[] = [];
-	if (hadProc) parts.push("interrupted current task");
+	if (hadProc || userState.processing) parts.push("interrupted current task");
 	if (queuedCount > 0) parts.push(`cleared ${queuedCount} queued message(s)`);
 	await ctx.reply(`🛑 Stopped — ${parts.join(", ")}.`);
 }

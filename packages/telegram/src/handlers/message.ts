@@ -81,8 +81,8 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 		// Send the prompt
 		await bridge.prompt(item.prompt, item.images);
 
-		// Wait for agent_end
-		await waitForDone(display, 600_000); // 10 minute timeout
+		// Wait for agent_end — activity-based timeout (5 min of silence, not wall-clock)
+		await waitForDone(display, bridge, 300_000);
 
 		// Update session info after completion and persist for reconnect
 		await bridge.refreshSessionInfo();
@@ -105,20 +105,36 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 	}
 }
 
-function waitForDone(display: EventDisplayState, timeout: number): Promise<void> {
+/**
+ * Wait for the agent to finish. Uses activity-based timeout: resets the clock
+ * every time an event arrives. Only times out after `timeout` ms of silence.
+ * On timeout, aborts the bridge so the RPC process is clean for the next prompt.
+ */
+function waitForDone(display: EventDisplayState, bridge: { abort(): Promise<void> }, timeout: number): Promise<void> {
 	if (display.done) return Promise.resolve();
 	return new Promise((resolve, reject) => {
-		const timer = setTimeout(() => {
-			clearInterval(check);
-			reject(new Error("Timeout waiting for agent completion"));
-		}, timeout);
-
-		const check = setInterval(() => {
+		const timer = setInterval(() => {
 			if (display.done) {
-				clearTimeout(timer);
-				clearInterval(check);
+				clearInterval(timer);
+				clearTimeout(safetyNet);
 				resolve();
+				return;
 			}
-		}, 100);
+			// Check for activity-based timeout: no events for `timeout` ms
+			if (Date.now() - display.lastEventTime > timeout) {
+				clearInterval(timer);
+				clearTimeout(safetyNet);
+				// Abort the bridge so the RPC process doesn't continue as a zombie
+				bridge.abort().catch(() => {});
+				reject(new Error("Agent timed out — no activity for 5 minutes. Aborted."));
+			}
+		}, 1000);
+
+		// Safety net: hard 30-minute wall-clock limit (prevents infinite wait if event stream breaks)
+		const safetyNet = setTimeout(() => {
+			clearInterval(timer);
+			bridge.abort().catch(() => {});
+			reject(new Error("Agent timed out — 30 minute hard limit reached. Aborted."));
+		}, 1_800_000);
 	});
 }

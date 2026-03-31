@@ -330,8 +330,13 @@ export class AgentBridge {
 
 	private handleProcessError(e: unknown): void {
 		const msg = e instanceof Error ? e.message : String(e);
-		if (msg.includes("not started") || msg.includes("EPIPE") || msg.includes("write after end")) {
-			log("[BRIDGE] RPC process exited unexpectedly");
+		if (
+			msg.includes("not started") ||
+			msg.includes("EPIPE") ||
+			msg.includes("write after end") ||
+			msg.includes("Timeout waiting for response")
+		) {
+			log("[BRIDGE] RPC process exited or hung: " + msg.slice(0, 100));
 			this.exited = true;
 			this.client = null;
 		}
