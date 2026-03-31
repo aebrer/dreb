@@ -11,7 +11,7 @@ import { ensureBridge } from "./bridge-lifecycle.js";
 import { refreshCommandsWithSkills } from "./commands/refresh.js";
 import { setSkillsBot } from "./commands/skills.js";
 import { loadConfig } from "./config.js";
-import { getUserSession, loadState } from "./state.js";
+import { getUserSession, loadState, setUserSession } from "./state.js";
 import { log } from "./util/telegram.js";
 
 /**
@@ -38,6 +38,8 @@ async function reconnectUsers(config: import("./config.js").Config): Promise<voi
 			}
 		} catch (e) {
 			log(`[RECONNECT] User ${userId} reconnect failed: ${e}`);
+			// Clear stale session so we don't retry every restart
+			setUserSession(userId, "");
 		}
 	}
 }

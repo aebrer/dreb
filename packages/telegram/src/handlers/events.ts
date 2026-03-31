@@ -257,7 +257,15 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			);
 
 			if (errorMsg?.errorMessage) {
-				await safeSend(api, state.chatId, `❌ ${errorMsg.errorMessage.slice(0, 500)}`);
+				const provider = errorMsg.provider ? `${errorMsg.provider}/${errorMsg.model}` : "";
+				const prefix = provider ? `${provider}: ` : "";
+				const hint =
+					errorMsg.errorMessage.toLowerCase().includes("connection") ||
+					errorMsg.errorMessage.toLowerCase().includes("timeout") ||
+					errorMsg.errorMessage.toLowerCase().includes("network")
+						? "\n_Provider may be down — try /model to switch._"
+						: "";
+				await safeSend(api, state.chatId, `❌ ${prefix}${errorMsg.errorMessage.slice(0, 400)}${hint}`);
 			} else if (state.textBlocks.length === 0 && state.backgroundAgents.size === 0) {
 				// Only show "(No response)" when truly done — not between agent cycles
 				await safeSend(api, state.chatId, "(No response)");

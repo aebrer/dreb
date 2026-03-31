@@ -52,7 +52,11 @@ export async function handleFile(
 	let localPath: string;
 	try {
 		const file = await ctx.getFile();
-		const buffer = await downloadFile(api, file.file_path!);
+		if (!file.file_path) {
+			await safeSend(api, chatId, "❌ File too large for download (max 20MB via Bot API)");
+			return;
+		}
+		const buffer = await downloadFile(api, file.file_path);
 		localPath = saveUpload(fileInfo.name, buffer);
 		log(`[FILE] Downloaded: ${localPath}`);
 	} catch (e) {
@@ -128,7 +132,7 @@ async function flushBatch(key: string, api: Api, getUserState: (userId: number) 
 	}
 
 	enqueuePrompt(api, userState, {
-		message: { chat: { id: batch.chatId }, message_id: batch.replyToId } as any,
+		message: { chat: { id: batch.chatId }, message_id: batch.replyToId, from: { id: batch.userId } } as any,
 		prompt,
 		statusMessage: batch.statusMessageId ? { chat_id: batch.chatId, message_id: batch.statusMessageId } : null,
 		wasQueued: userState.processing,

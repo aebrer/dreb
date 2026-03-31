@@ -42,11 +42,8 @@ async function processQueue(api: Api, userState: UserState): Promise<void> {
 	} finally {
 		userState.processing = false;
 
-		// Send DONE unless /stop was used
-		if (!userState.stopRequested && userState.queue.length === 0) {
-			// Find the last item's chat to send DONE to
-			// The bridge tracks the chat from the last processed item
-		}
+		// Clean up upload files after queue is fully drained
+		cleanupUploads();
 	}
 }
 
@@ -106,9 +103,6 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 	if (userState.queue.length === 0 && !userState.stopRequested) {
 		await safeSend(api, chatId, "🦀 _dreb DONE_");
 	}
-
-	// Clean up old upload files (older than 1 hour)
-	cleanupUploads();
 }
 
 function waitForDone(display: EventDisplayState, timeout: number): Promise<void> {
