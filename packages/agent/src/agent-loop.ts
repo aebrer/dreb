@@ -161,22 +161,21 @@ async function runLoop(
 	streamFn?: StreamFn,
 ): Promise<void> {
 	let firstTurn = true;
+	let endTurnRequested = false;
+	let llmCallCount = 0;
 	// Check for steering messages at start (user may have typed while waiting)
 	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
 
 	// Outer loop: continues when queued follow-up messages arrive after agent would stop
 	while (true) {
 		let hasMoreToolCalls = true;
+		endTurnRequested = false;
 
 		// Inner loop: process tool calls and steering messages
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
-			if (!firstTurn) {
-				await emit({ type: "turn_start" });
-			} else {
-				firstTurn = false;
-			}
-
-			// Process pending messages (inject before next assistant response)
+			// Process pending messages first (inject into context so they're never lost).
+			// This happens before turn_start and shouldContinue so messages are always
+			// preserved regardless of whether the turn proceeds.
 			if (pendingMessages.length > 0) {
 				for (const message of pendingMessages) {
 					await emit({ type: "message_start", message });
@@ -187,9 +186,22 @@ async function runLoop(
 				pendingMessages = [];
 			}
 
+			// Check shouldContinue before starting a new turn (not the very first).
+			// This runs before turn_start so we never emit an orphaned turn_start.
+			if (llmCallCount > 0 && config.shouldContinue && !config.shouldContinue()) {
+				break;
+			}
+
+			if (!firstTurn) {
+				await emit({ type: "turn_start" });
+			} else {
+				firstTurn = false;
+			}
+
 			// Stream assistant response
 			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFn);
 			newMessages.push(message);
+			llmCallCount++;
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				await emit({ type: "turn_end", message, toolResults: [] });
@@ -203,24 +215,40 @@ async function runLoop(
 
 			const toolResults: ToolResultMessage[] = [];
 			if (hasMoreToolCalls) {
-				toolResults.push(...(await executeToolCalls(currentContext, message, config, signal, emit)));
+				const executionResult = await executeToolCalls(currentContext, message, config, signal, emit);
+				toolResults.push(...executionResult.results);
 
 				for (const result of toolResults) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
 				}
+
+				if (executionResult.endTurn) {
+					endTurnRequested = true;
+				}
 			}
 
 			await emit({ type: "turn_end", message, toolResults });
 
+			// If a tool requested endTurn, stop the loop (skip further LLM calls)
+			if (endTurnRequested) {
+				hasMoreToolCalls = false;
+				pendingMessages = [];
+				break;
+			}
+
 			pendingMessages = (await config.getSteeringMessages?.()) || [];
 		}
 
-		// Agent would stop here. Check for follow-up messages.
+		// Agent would stop here. Drain any steering messages that arrived during
+		// wind-down (e.g., background agent results delivered via steer() between
+		// endTurn break and here). Then check for follow-up messages.
+		const leftoverSteering = (await config.getSteeringMessages?.()) || [];
 		const followUpMessages = (await config.getFollowUpMessages?.()) || [];
-		if (followUpMessages.length > 0) {
+		const allPending = [...leftoverSteering, ...followUpMessages];
+		if (allPending.length > 0) {
 			// Set as pending so inner loop processes them
-			pendingMessages = followUpMessages;
+			pendingMessages = allPending;
 			continue;
 		}
 
@@ -330,6 +358,11 @@ async function streamAssistantResponse(
 	return finalMessage;
 }
 
+interface ToolExecutionResult {
+	results: ToolResultMessage[];
+	endTurn: boolean;
+}
+
 /**
  * Execute tool calls from an assistant message.
  */
@@ -339,7 +372,7 @@ async function executeToolCalls(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
-): Promise<ToolResultMessage[]> {
+): Promise<ToolExecutionResult> {
 	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
 	if (config.toolExecution === "sequential") {
 		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
@@ -354,8 +387,9 @@ async function executeToolCallsSequential(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
-): Promise<ToolResultMessage[]> {
+): Promise<ToolExecutionResult> {
 	const results: ToolResultMessage[] = [];
+	let endTurn = false;
 
 	for (const toolCall of toolCalls) {
 		await emit({
@@ -367,9 +401,11 @@ async function executeToolCallsSequential(
 
 		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		if (preparation.kind === "immediate") {
+			if (preparation.result.endTurn) endTurn = true;
 			results.push(await emitToolCallOutcome(toolCall, preparation.result, preparation.isError, emit));
 		} else {
 			const executed = await executePreparedToolCall(preparation, signal, emit);
+			if (executed.result.endTurn) endTurn = true;
 			results.push(
 				await finalizeExecutedToolCall(
 					currentContext,
@@ -384,7 +420,7 @@ async function executeToolCallsSequential(
 		}
 	}
 
-	return results;
+	return { results, endTurn };
 }
 
 async function executeToolCallsParallel(
@@ -394,9 +430,10 @@ async function executeToolCallsParallel(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
-): Promise<ToolResultMessage[]> {
+): Promise<ToolExecutionResult> {
 	const results: ToolResultMessage[] = [];
 	const runnableCalls: PreparedToolCall[] = [];
+	let endTurn = false;
 
 	for (const toolCall of toolCalls) {
 		await emit({
@@ -408,6 +445,7 @@ async function executeToolCallsParallel(
 
 		const preparation = await prepareToolCall(currentContext, assistantMessage, toolCall, config, signal);
 		if (preparation.kind === "immediate") {
+			if (preparation.result.endTurn) endTurn = true;
 			results.push(await emitToolCallOutcome(toolCall, preparation.result, preparation.isError, emit));
 		} else {
 			runnableCalls.push(preparation);
@@ -421,6 +459,7 @@ async function executeToolCallsParallel(
 
 	for (const running of runningCalls) {
 		const executed = await running.execution;
+		if (executed.result.endTurn) endTurn = true;
 		results.push(
 			await finalizeExecutedToolCall(
 				currentContext,
@@ -434,7 +473,7 @@ async function executeToolCallsParallel(
 		);
 	}
 
-	return results;
+	return { results, endTurn };
 }
 
 type PreparedToolCall = {

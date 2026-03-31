@@ -62,3 +62,8 @@ If the code is already clean, say "No findings — code is already well-expresse
 - Small improvements count. Removing one unnecessary variable or flattening one nested if-else is worth reporting.
 - Don't suggest rewriting working code just because you'd write it differently. Focus on objective simplifications.
 - Do NOT use `#N` notation in your output (GitHub auto-links it to issues). Use "finding N" or "item N" instead.
+
+
+## Constraints
+
+- **Never post to GitHub.** Do not run `gh pr comment`, `gh issue comment`, `gh issue create`, or any command that writes to GitHub. Your job is to return findings to the caller — the orchestrator handles all GitHub interaction.
