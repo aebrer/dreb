@@ -6,6 +6,7 @@ import type { Context } from "grammy";
 import type { AgentBridge } from "../agent-bridge.js";
 import { ensureBridge } from "../bridge-lifecycle.js";
 import type { Config } from "../config.js";
+import { setUserSession } from "../state.js";
 import type { UserState } from "../types.js";
 import { log, safeSend, sendLong } from "../util/telegram.js";
 
@@ -75,6 +76,7 @@ export async function cmdResume(ctx: Context, userState: UserState, args: string
 	const session = matches[0];
 	const switched = await bridge.switchSession(session.path);
 	if (switched) {
+		setUserSession(ctx.from!.id, session.path);
 		await safeSend(
 			ctx.api,
 			chatId,

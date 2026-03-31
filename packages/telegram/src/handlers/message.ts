@@ -4,6 +4,7 @@
  */
 
 import type { Api } from "grammy";
+import { setUserSession } from "../state.js";
 import type { QueueItem, UserState } from "../types.js";
 import { log, safeSend } from "../util/telegram.js";
 import { createEventDisplay, type EventDisplayState, handleAgentEvent } from "./events.js";
@@ -76,8 +77,12 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 		// Wait for agent_end
 		await waitForDone(display, 600_000); // 10 minute timeout
 
-		// Update session info after completion
+		// Update session info after completion and persist for reconnect
 		await bridge.refreshSessionInfo();
+		if (bridge.sessionFile) {
+			const userId = item.message?.from?.id;
+			if (userId) setUserSession(userId, bridge.sessionFile);
+		}
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		if (!userState.stopRequested) {

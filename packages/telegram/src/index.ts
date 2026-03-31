@@ -6,9 +6,39 @@
  * Starts the bot in long-polling mode with the configuration from env vars.
  */
 
-import { createBot, setMyCommands } from "./bot.js";
+import { createBot, getUserState, setMyCommands } from "./bot.js";
+import { ensureBridge } from "./bridge-lifecycle.js";
 import { loadConfig } from "./config.js";
+import { getUserSession, loadState } from "./state.js";
 import { log } from "./util/telegram.js";
+
+/**
+ * Eagerly reconnect known users to their last session.
+ * Spins up an RPC bridge and switches to the persisted session path.
+ */
+async function reconnectUsers(config: import("./config.js").Config): Promise<void> {
+	for (const userId of config.allowedUserIds) {
+		const sessionPath = getUserSession(userId);
+		if (!sessionPath) {
+			log(`[RECONNECT] No persisted session for user ${userId}, skipping`);
+			continue;
+		}
+
+		try {
+			const userState = getUserState(userId);
+			const bridge = await ensureBridge(config, userState);
+			const switched = await bridge.switchSession(sessionPath);
+			if (switched) {
+				log(`[RECONNECT] User ${userId} reconnected to session ${bridge.sessionId?.slice(0, 8)}`);
+			} else {
+				log(`[RECONNECT] User ${userId} failed to switch to persisted session, will resume latest`);
+				await bridge.resumeLatest();
+			}
+		} catch (e) {
+			log(`[RECONNECT] User ${userId} reconnect failed: ${e}`);
+		}
+	}
+}
 
 async function main(): Promise<void> {
 	const config = loadConfig();
@@ -20,6 +50,10 @@ async function main(): Promise<void> {
 	} else {
 		log("WARNING: ALLOWED_USER_IDS not set — bot will accept messages from anyone!");
 	}
+
+	// Load persisted state and reconnect users before accepting messages
+	loadState();
+	await reconnectUsers(config);
 
 	const bot = createBot(config);
 

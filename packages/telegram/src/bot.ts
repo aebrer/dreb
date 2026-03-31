@@ -134,4 +134,4 @@ export function createBot(config: Config): Bot {
 	return bot;
 }
 
-export { setMyCommands };
+export { getUserState, setMyCommands };
