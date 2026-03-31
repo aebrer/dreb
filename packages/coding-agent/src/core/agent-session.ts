@@ -842,10 +842,15 @@ export class AgentSession {
 	}
 
 	/** Get skills filtered by the current UI type */
-	private _getFilteredSkills(): import("./skills.js").Skill[] {
+	getFilteredSkills(): import("./skills.js").Skill[] {
 		const allSkills = this._resourceLoader.getSkills().skills;
 		if (!this._uiType) return allSkills;
 		return allSkills.filter((s) => !s.ui || s.ui === this._uiType);
+	}
+
+	/** @deprecated Use getFilteredSkills() instead */
+	private _getFilteredSkills(): import("./skills.js").Skill[] {
+		return this.getFilteredSkills();
 	}
 
 	private _rebuildSystemPrompt(toolNames: string[]): string {

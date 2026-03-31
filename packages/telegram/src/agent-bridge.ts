@@ -189,7 +189,12 @@ export class AgentBridge {
 	 */
 	async getVersion(): Promise<string> {
 		await this.ensureAlive();
-		return this.client!.getVersion();
+		try {
+			return await this.client!.getVersion();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -197,7 +202,12 @@ export class AgentBridge {
 	 */
 	async getSessionStats(): Promise<any> {
 		if (!this.client) return null;
-		return this.client.getSessionStats();
+		try {
+			return await this.client.getSessionStats();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -205,7 +215,12 @@ export class AgentBridge {
 	 */
 	async getState(): Promise<any> {
 		if (!this.client) return null;
-		return this.client.getState();
+		try {
+			return await this.client.getState();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -213,7 +228,12 @@ export class AgentBridge {
 	 */
 	async getCommands(): Promise<any[]> {
 		if (!this.client) return [];
-		return this.client.getCommands();
+		try {
+			return await this.client.getCommands();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -221,7 +241,12 @@ export class AgentBridge {
 	 */
 	async compact(): Promise<any> {
 		if (!this.client) return null;
-		return this.client.compact();
+		try {
+			return await this.client.compact();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -229,7 +254,12 @@ export class AgentBridge {
 	 */
 	async getAvailableModels(): Promise<any[]> {
 		if (!this.client) return [];
-		return this.client.getAvailableModels();
+		try {
+			return await this.client.getAvailableModels();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -237,7 +267,12 @@ export class AgentBridge {
 	 */
 	async setModel(provider: string, modelId: string): Promise<any> {
 		if (!this.client) return null;
-		return this.client.setModel(provider, modelId);
+		try {
+			return await this.client.setModel(provider, modelId);
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -245,7 +280,12 @@ export class AgentBridge {
 	 */
 	async setThinkingLevel(level: string): Promise<void> {
 		if (!this.client) return;
-		await this.client.setThinkingLevel(level as any);
+		try {
+			await this.client.setThinkingLevel(level as any);
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -253,7 +293,12 @@ export class AgentBridge {
 	 */
 	async getMessages(): Promise<any[]> {
 		if (!this.client) return [];
-		return this.client.getMessages();
+		try {
+			return await this.client.getMessages();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -261,7 +306,12 @@ export class AgentBridge {
 	 */
 	async getLastAssistantText(): Promise<string | null> {
 		if (!this.client) return null;
-		return this.client.getLastAssistantText();
+		try {
+			return await this.client.getLastAssistantText();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
 	}
 
 	/**
@@ -273,8 +323,9 @@ export class AgentBridge {
 			const state = await this.client.getState();
 			this._sessionFile = state.sessionFile;
 			this._sessionId = state.sessionId;
-		} catch {
-			// Non-critical
+		} catch (e) {
+			this.handleProcessError(e);
+			// Non-critical — don't re-throw
 		}
 	}
 
@@ -332,11 +383,13 @@ export class AgentBridge {
 		const msg = e instanceof Error ? e.message : String(e);
 		if (
 			msg.includes("not started") ||
+			msg.includes("not running") ||
 			msg.includes("EPIPE") ||
 			msg.includes("write after end") ||
-			msg.includes("Timeout waiting for response")
+			msg.includes("Timeout waiting for response") ||
+			msg.includes("RPC process exited")
 		) {
-			log("[BRIDGE] RPC process exited or hung: " + msg.slice(0, 100));
+			log(`[BRIDGE] RPC process exited or hung: ${msg.slice(0, 100)}`);
 			this.exited = true;
 			this.client = null;
 		}

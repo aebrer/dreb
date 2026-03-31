@@ -595,7 +595,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 					});
 				}
 
-				for (const skill of session.resourceLoader.getSkills().skills) {
+				for (const skill of session.getFilteredSkills()) {
 					commands.push({
 						name: `skill:${skill.name}`,
 						description: skill.description,

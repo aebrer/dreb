@@ -59,6 +59,7 @@ export class RpcClient {
 		new Map();
 	private requestId = 0;
 	private stderr = "";
+	private _dead = false;
 
 	constructor(private options: RpcClientOptions = {}) {}
 
@@ -89,9 +90,20 @@ export class RpcClient {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 
+		this._dead = false;
+
 		// Collect stderr for debugging
 		this.process.stderr?.on("data", (data) => {
 			this.stderr += data.toString();
+		});
+
+		// Detect process exit — reject pending requests so callers don't hang
+		this.process.on("exit", (code, signal) => {
+			this._dead = true;
+			for (const pending of this.pendingRequests.values()) {
+				pending.reject(new Error(`RPC process exited with code ${code}, signal ${signal}`));
+			}
+			this.pendingRequests.clear();
 		});
 
 		// Set up strict JSONL reader for stdout.
@@ -131,6 +143,7 @@ export class RpcClient {
 		});
 
 		this.process = null;
+		this._dead = false;
 		this.pendingRequests.clear();
 	}
 
@@ -479,8 +492,8 @@ export class RpcClient {
 	}
 
 	private async send(command: RpcCommandBody): Promise<RpcResponse> {
-		if (!this.process?.stdin) {
-			throw new Error("Client not started");
+		if (this._dead || !this.process?.stdin) {
+			throw new Error("RPC process not running");
 		}
 
 		const id = `req_${++this.requestId}`;
