@@ -1,0 +1,29 @@
+[Unit]
+Description=dreb Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node %h/projects/dreb/packages/telegram/dist/index.js
+WorkingDirectory=%h/projects/dreb
+Restart=on-failure
+RestartSec=5
+
+# Provider API keys — shared with dreb CLI (chmod 600)
+# e.g. ZAI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY
+EnvironmentFile=-%h/.dreb/secrets/providers.env
+
+# Telegram secrets — bot token and allowed users (chmod 600)
+# Required keys: TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS
+EnvironmentFile=%h/.dreb/secrets/telegram.env
+
+# Optional — adjust paths and settings
+Environment=DREB_WORKING_DIR=%h
+Environment=DREB_PATH=%h/.local/bin/dreb
+Environment=DREB_TELEGRAM_SERVICE=dreb-telegram
+# Environment=DREB_PROVIDER=anthropic
+# Environment=DREB_MODEL=claude-sonnet-4
+
+[Install]
+WantedBy=default.target

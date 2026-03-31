@@ -12,6 +12,7 @@
  */
 
 import * as crypto from "node:crypto";
+import { VERSION } from "../../config.js";
 import type { AgentSession } from "../../core/agent-session.js";
 import type {
 	ExtensionUIContext,
@@ -19,6 +20,7 @@ import type {
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import { SessionManager } from "../../core/session-manager.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
@@ -26,6 +28,7 @@ import type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
+	RpcSessionInfo,
 	RpcSessionState,
 	RpcSlashCommand,
 } from "./rpc-types.js";
@@ -409,6 +412,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			}
 
 			case "get_available_models": {
+				session.modelRegistry.refresh();
 				const models = await session.modelRegistry.getAvailable();
 				return success(id, "get_available_models", { models });
 			}
@@ -541,6 +545,35 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			// Commands (available for invocation via prompt)
 			// =================================================================
 
+			// =================================================================
+			// Session Listing
+			// =================================================================
+
+			case "list_sessions": {
+				const cwd = session.sessionManager.getCwd();
+				const sessionDir = session.sessionManager.getSessionDir();
+				const sessions = await SessionManager.list(cwd, sessionDir);
+				const data: RpcSessionInfo[] = sessions.map((s) => ({
+					path: s.path,
+					id: s.id,
+					cwd: s.cwd,
+					name: s.name,
+					created: s.created.toISOString(),
+					modified: s.modified.toISOString(),
+					messageCount: s.messageCount,
+					firstMessage: s.firstMessage,
+				}));
+				return success(id, "list_sessions", { sessions: data });
+			}
+
+			// =================================================================
+			// Version
+			// =================================================================
+
+			case "get_version": {
+				return success(id, "get_version", { version: VERSION });
+			}
+
 			case "get_commands": {
 				const commands: RpcSlashCommand[] = [];
 
@@ -562,7 +595,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 					});
 				}
 
-				for (const skill of session.resourceLoader.getSkills().skills) {
+				for (const skill of session.getFilteredSkills()) {
 					commands.push({
 						name: `skill:${skill.name}`,
 						description: skill.description,
@@ -575,8 +608,8 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			}
 
 			default: {
-				const unknownCommand = command as { type: string };
-				return error(undefined, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
+				const unknownCommand = command as { type: string; id?: string };
+				return error(unknownCommand.id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
 			}
 		}
 	};
@@ -604,9 +637,15 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 	}
 
 	const handleInputLine = async (line: string) => {
+		let parsed: any;
 		try {
-			const parsed = JSON.parse(line);
+			parsed = JSON.parse(line);
+		} catch (e: any) {
+			output(error(undefined, "parse", `Failed to parse JSON: ${e.message}`));
+			return;
+		}
 
+		try {
 			// Handle extension UI responses
 			if (parsed.type === "extension_ui_response") {
 				const response = parsed as RpcExtensionUIResponse;
@@ -626,7 +665,9 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			// Check for deferred shutdown request (idle between commands)
 			await checkShutdownRequested();
 		} catch (e: any) {
-			output(error(undefined, "parse", `Failed to parse command: ${e.message}`));
+			const id = parsed?.id;
+			const cmd = parsed?.type || "unknown";
+			output(error(id, cmd, `Command failed: ${e.message}`));
 		}
 	};
 
@@ -634,6 +675,9 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 		void shutdown();
 	};
 	process.stdin.on("end", onInputEnd);
+	process.stdin.on("error", () => {
+		void shutdown();
+	});
 
 	detachInput = (() => {
 		const detachJsonl = attachJsonlLineReader(process.stdin, (line) => {

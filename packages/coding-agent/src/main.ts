@@ -14,7 +14,7 @@ import { processFileArguments } from "./cli/file-processor.js";
 import { buildInitialMessage } from "./cli/initial-message.js";
 import { listModels } from "./cli/list-models.js";
 import { selectSession } from "./cli/session-picker.js";
-import { APP_NAME, getAgentDir, getModelsPath, VERSION } from "./config.js";
+import { APP_NAME, getAgentDir, getModelsPath, loadProvidersEnv, VERSION } from "./config.js";
 import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { LoadExtensionsResult } from "./core/extensions/index.js";
@@ -622,6 +622,11 @@ async function handleConfigCommand(args: string[]): Promise<boolean> {
 
 export async function main(args: string[]) {
 	resetTimings();
+
+	// Load API keys and provider config from ~/.dreb/secrets/providers.env
+	// Must happen before model resolution or provider initialization
+	loadProvidersEnv();
+
 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.DREB_OFFLINE);
 	if (offlineMode) {
 		process.env.DREB_OFFLINE = "1";
@@ -820,6 +825,17 @@ export async function main(args: string[]) {
 	sessionOptions.authStorage = authStorage;
 	sessionOptions.modelRegistry = modelRegistry;
 	sessionOptions.resourceLoader = resourceLoader;
+
+	// Set UI type: explicit --ui flag > mode-based default
+	if (parsed.ui) {
+		sessionOptions.uiType = parsed.ui;
+	} else if (mode === "rpc") {
+		sessionOptions.uiType = "rpc";
+	} else if (isInteractive) {
+		sessionOptions.uiType = "tui";
+	} else {
+		sessionOptions.uiType = "cli";
+	}
 
 	// Handle CLI --api-key as runtime override (not persisted)
 	if (parsed.apiKey) {

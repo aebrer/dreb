@@ -176,7 +176,7 @@ async function spawnSubagent(
 		};
 	}
 
-	const args: string[] = ["--mode", "json", "--no-session"];
+	const args: string[] = ["--mode", "json", "--no-session", "--ui", "agent"];
 	if (agentConfig.model) {
 		args.push("--model", agentConfig.model);
 		// When the model string doesn't already specify a provider (no "/"),

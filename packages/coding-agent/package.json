@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/coding-agent",
-	"version": "1.8.0",
+	"version": "1.9.0",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"drebConfig": {
@@ -20,6 +20,10 @@
 		"./hooks": {
 			"types": "./dist/core/hooks/index.d.ts",
 			"import": "./dist/core/hooks/index.js"
+		},
+		"./rpc": {
+			"types": "./dist/modes/rpc/index.d.ts",
+			"import": "./dist/modes/rpc/index.js"
 		}
 	},
 	"files": [

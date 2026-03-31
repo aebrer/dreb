@@ -75,6 +75,8 @@ export interface CreateAgentSessionOptions {
 
 	/** Settings manager. Default: SettingsManager.create(cwd, agentDir) */
 	settingsManager?: SettingsManager;
+	/** UI type for system prompt context (e.g. "tui", "telegram", "rpc") */
+	uiType?: string;
 }
 
 /** Result from createAgentSession */
@@ -387,6 +389,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		modelRegistry,
 		initialActiveToolNames,
 		extensionRunnerRef,
+		uiType: options.uiType,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

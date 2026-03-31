@@ -11,7 +11,7 @@ import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
-import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.js";
+import type { RpcCommand, RpcResponse, RpcSessionInfo, RpcSessionState, RpcSlashCommand } from "./rpc-types.js";
 
 // ============================================================================
 // Types
@@ -59,6 +59,7 @@ export class RpcClient {
 		new Map();
 	private requestId = 0;
 	private stderr = "";
+	private _dead = false;
 
 	constructor(private options: RpcClientOptions = {}) {}
 
@@ -89,9 +90,25 @@ export class RpcClient {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 
+		this._dead = false;
+
 		// Collect stderr for debugging
 		this.process.stderr?.on("data", (data) => {
 			this.stderr += data.toString();
+		});
+
+		// Detect process exit — reject pending requests so callers don't hang.
+		// Capture the process reference so stale handlers from a previous process
+		// don't clobber state after a stop()/start() cycle.
+		const procRef = this.process;
+		procRef.on("exit", (code, signal) => {
+			// Guard: skip if this handler belongs to an old, already-stopped process
+			if (this.process !== procRef) return;
+			this._dead = true;
+			for (const pending of this.pendingRequests.values()) {
+				pending.reject(new Error(`RPC process exited with code ${code}, signal ${signal}`));
+			}
+			this.pendingRequests.clear();
 		});
 
 		// Set up strict JSONL reader for stdout.
@@ -131,6 +148,7 @@ export class RpcClient {
 		});
 
 		this.process = null;
+		this._dead = true;
 		this.pendingRequests.clear();
 	}
 
@@ -380,6 +398,23 @@ export class RpcClient {
 		return this.getData<{ commands: RpcSlashCommand[] }>(response).commands;
 	}
 
+	/**
+	 * List sessions for the current working directory.
+	 * Returns sessions sorted by most recently modified first.
+	 */
+	async listSessions(): Promise<RpcSessionInfo[]> {
+		const response = await this.send({ type: "list_sessions" });
+		return this.getData<{ sessions: RpcSessionInfo[] }>(response).sessions;
+	}
+
+	/**
+	 * Get the dreb version.
+	 */
+	async getVersion(): Promise<string> {
+		const response = await this.send({ type: "get_version" });
+		return this.getData<{ version: string }>(response).version;
+	}
+
 	// =========================================================================
 	// Helpers
 	// =========================================================================
@@ -462,16 +497,14 @@ export class RpcClient {
 	}
 
 	private async send(command: RpcCommandBody): Promise<RpcResponse> {
-		if (!this.process?.stdin) {
-			throw new Error("Client not started");
+		if (this._dead || !this.process?.stdin) {
+			throw new Error("RPC process not running");
 		}
 
 		const id = `req_${++this.requestId}`;
 		const fullCommand = { ...command, id } as RpcCommand;
 
 		return new Promise((resolve, reject) => {
-			this.pendingRequests.set(id, { resolve, reject });
-
 			const timeout = setTimeout(() => {
 				this.pendingRequests.delete(id);
 				reject(new Error(`Timeout waiting for response to ${command.type}. Stderr: ${this.stderr}`));
