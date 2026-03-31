@@ -108,6 +108,21 @@ export interface EventDisplayState {
 	lastEventTime: number;
 	/** Debounced editor instance */
 	editor: DebouncedEditor;
+	/** Whether auto-retry is in progress (Layer 1: reactive) */
+	retryInProgress: boolean;
+	/** Current retry attempt number for display */
+	retryAttempt: number;
+}
+
+/**
+ * Check if an error message looks retryable (overloaded, rate limit, server errors).
+ * Mirrors the core's _isRetryableError check as a defensive Layer 2.
+ */
+const RETRYABLE_ERROR_PATTERN =
+	/overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay/i;
+
+function isRetryableError(errorMessage: string): boolean {
+	return RETRYABLE_ERROR_PATTERN.test(errorMessage);
 }
 
 /**
@@ -131,6 +146,8 @@ export function createEventDisplay(
 		done: false,
 		lastEventTime: Date.now(),
 		editor: new DebouncedEditor(api),
+		retryInProgress: false,
+		retryAttempt: 0,
 	};
 }
 
@@ -249,6 +266,32 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			break;
 		}
 
+		// =====================================================================
+		// Auto-retry — prevents agent_end from marking done during retries
+		// =====================================================================
+
+		case "auto_retry_start": {
+			const { attempt, maxAttempts, delayMs, errorMessage } = event as any;
+			state.retryInProgress = true;
+			state.retryAttempt = attempt;
+			const delaySec = Math.round(delayMs / 1000);
+			const shortErr = errorMessage?.length > 80 ? `${errorMessage.slice(0, 80)}…` : errorMessage;
+			updateStatusText(state, `🔄 _Retrying (${attempt}/${maxAttempts}) in ${delaySec}s — ${shortErr || "error"}_`);
+			break;
+		}
+
+		case "auto_retry_end": {
+			const { success, attempt, finalError } = event as any;
+			state.retryInProgress = false;
+			state.retryAttempt = 0;
+			if (!success && finalError) {
+				// Max retries exhausted — show final error
+				await safeSend(api, state.chatId, `❌ _Retry failed (${attempt} attempts):_ ${finalError.slice(0, 400)}`);
+			}
+			// On success, the retry's agent_start/agent_end cycle will handle display normally
+			break;
+		}
+
 		case "agent_end": {
 			// Flush any remaining tools
 			if (state.toolsSinceText.length > 0) {
@@ -262,19 +305,41 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 				(m: any) => m.stopReason === "error" || m.stopReason === "aborted",
 			);
 
+			// Layer 2 (defensive): If this error looks retryable and we're not already
+			// tracking a retry via Layer 1, don't mark done — the core will auto-retry
+			// and emit a new agent_start/agent_end cycle.
+			const errorIsRetryable = errorMsg?.errorMessage && isRetryableError(errorMsg.errorMessage);
+
 			if (errorMsg?.errorMessage) {
-				const provider = errorMsg.provider ? `${errorMsg.provider}/${errorMsg.model}` : "";
-				const prefix = provider ? `${provider}: ` : "";
-				const hint =
-					errorMsg.errorMessage.toLowerCase().includes("connection") ||
-					errorMsg.errorMessage.toLowerCase().includes("timeout") ||
-					errorMsg.errorMessage.toLowerCase().includes("network")
-						? "\n_Provider may be down — try /model to switch._"
-						: "";
-				await safeSend(api, state.chatId, `❌ ${prefix}${errorMsg.errorMessage.slice(0, 400)}${hint}`);
+				// Suppress the scary error message during retry — user already saw the
+				// auto_retry_start status. Only show the error if retry tracking missed it
+				// (defensive: shouldn't happen, but better than silence).
+				if (!state.retryInProgress && !errorIsRetryable) {
+					const provider = errorMsg.provider ? `${errorMsg.provider}/${errorMsg.model}` : "";
+					const prefix = provider ? `${provider}: ` : "";
+					const hint =
+						errorMsg.errorMessage.toLowerCase().includes("connection") ||
+						errorMsg.errorMessage.toLowerCase().includes("timeout") ||
+						errorMsg.errorMessage.toLowerCase().includes("network")
+							? "\n_Provider may be down — try /model to switch._"
+							: "";
+					await safeSend(api, state.chatId, `❌ ${prefix}${errorMsg.errorMessage.slice(0, 400)}${hint}`);
+				}
 			} else if (state.textBlocks.length === 0 && state.backgroundAgents.size === 0) {
 				// Only show "(No response)" when truly done — not between agent cycles
-				await safeSend(api, state.chatId, "(No response)");
+				if (!state.retryInProgress && !errorIsRetryable) {
+					await safeSend(api, state.chatId, "(No response)");
+				}
+			}
+
+			// Don't mark done if auto-retry is in progress (Layer 1) or the error
+			// looks retryable (Layer 2 — defensive catch in case events were missed).
+			// The core will emit a new agent_start/agent_end cycle for the retry.
+			if (state.retryInProgress || errorIsRetryable) {
+				// Reset per-cycle state for the next agent loop
+				state.textBlocks = [];
+				state.toolCount = 0;
+				break;
 			}
 
 			// If background agents are still running, keep the subscription alive
