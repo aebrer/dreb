@@ -74,7 +74,8 @@ function buildMemorySection(memoryIndexes?: MemoryIndexes): string {
 /** UI type descriptions for system prompt context */
 const UI_DESCRIPTIONS: Record<string, string> = {
 	tui: "Terminal UI (interactive terminal with rich rendering)",
-	telegram: "Telegram (mobile messaging app — keep responses concise, use markdown sparingly)",
+	telegram:
+		"Telegram (mobile messaging app — the user is on their phone so messages may be shorter or have typos, but this doesn't reflect less thought or intent. The user sees tool names and arguments but not tool output/results, so summarize key findings or changes when relevant)",
 	rpc: "RPC (programmatic interface — another application is consuming your output)",
 	cli: "CLI (non-interactive command line — output will be printed and the process exits)",
 	agent: "Subagent (running as a child agent — focus on the task, report results concisely)",
