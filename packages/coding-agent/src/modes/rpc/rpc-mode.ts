@@ -412,6 +412,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			}
 
 			case "get_available_models": {
+				session.modelRegistry.refresh();
 				const models = await session.modelRegistry.getAvailable();
 				return success(id, "get_available_models", { models });
 			}
@@ -607,8 +608,8 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			}
 
 			default: {
-				const unknownCommand = command as { type: string };
-				return error(undefined, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
+				const unknownCommand = command as { type: string; id?: string };
+				return error(unknownCommand.id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
 			}
 		}
 	};
@@ -636,9 +637,15 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 	}
 
 	const handleInputLine = async (line: string) => {
+		let parsed: any;
 		try {
-			const parsed = JSON.parse(line);
+			parsed = JSON.parse(line);
+		} catch (e: any) {
+			output(error(undefined, "parse", `Failed to parse JSON: ${e.message}`));
+			return;
+		}
 
+		try {
 			// Handle extension UI responses
 			if (parsed.type === "extension_ui_response") {
 				const response = parsed as RpcExtensionUIResponse;
@@ -658,7 +665,9 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			// Check for deferred shutdown request (idle between commands)
 			await checkShutdownRequested();
 		} catch (e: any) {
-			output(error(undefined, "parse", `Failed to parse command: ${e.message}`));
+			const id = parsed?.id;
+			const cmd = parsed?.type || "unknown";
+			output(error(id, cmd, `Command failed: ${e.message}`));
 		}
 	};
 

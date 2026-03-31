@@ -118,19 +118,40 @@ export async function cmdModel(ctx: Context, userState: UserState, args: string)
 		// Try to match and switch
 		const pattern = args.trim().toLowerCase();
 		const models = await bridge.getAvailableModels();
-		const match = models.find(
-			(m: any) => m.id.toLowerCase().includes(pattern) || `${m.provider}/${m.id}`.toLowerCase().includes(pattern),
-		);
 
-		if (!match) {
-			const available = models
-				.slice(0, 10)
-				.map((m: any) => `  \`${m.provider}/${m.id}\``)
-				.join("\n");
-			await safeSend(ctx.api, chatId, `No model matching "${pattern}". Available:\n${available}`);
+		// Score matches: exact id > exact provider/id > substring
+		const scored = models
+			.map((m: any) => {
+				const id = m.id.toLowerCase();
+				const full = `${m.provider}/${m.id}`.toLowerCase();
+				if (id === pattern || full === pattern) return { model: m, score: 0 };
+				if (id.includes(pattern) || full.includes(pattern)) return { model: m, score: 1 };
+				return { model: m, score: -1 };
+			})
+			.filter((s) => s.score >= 0)
+			.sort((a, b) => a.score - b.score);
+
+		if (scored.length === 0) {
+			// Group models by provider for readable display
+			const byProvider = new Map<string, string[]>();
+			for (const m of models as any[]) {
+				const list = byProvider.get(m.provider) || [];
+				list.push(m.id);
+				byProvider.set(m.provider, list);
+			}
+			const lines = [`No model matching "${pattern}". Available:`];
+			for (const [provider, ids] of byProvider) {
+				lines.push(`\n*${provider}*:`);
+				for (const id of ids) {
+					lines.push(`  \`${id}\``);
+				}
+			}
+			await safeSend(ctx.api, chatId, lines.join("\n").slice(0, 4000));
 			return;
 		}
 
+		// If multiple matches, prefer exact over substring
+		const match = scored[0].model;
 		await bridge.setModel((match as any).provider, (match as any).id);
 		await safeSend(ctx.api, chatId, `🧠 Switched to \`${(match as any).provider}/${(match as any).id}\``);
 	} catch (e) {

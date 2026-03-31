@@ -10,7 +10,11 @@ WorkingDirectory=%h/projects/dreb
 Restart=on-failure
 RestartSec=5
 
-# Secrets — create this file with your tokens (chmod 600)
+# Provider API keys — shared with dreb CLI (chmod 600)
+# e.g. ZAI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY
+EnvironmentFile=-%h/.dreb/secrets/providers.env
+
+# Telegram secrets — bot token and allowed users (chmod 600)
 # Required keys: TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS
 EnvironmentFile=%h/.dreb/secrets/telegram.env
 

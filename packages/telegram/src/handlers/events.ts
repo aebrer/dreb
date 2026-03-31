@@ -175,13 +175,12 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 						await sendLong(api, state.chatId, cleanText);
 					}
 
-					// Send any requested files
+					// Send any requested files (silently skip non-existent paths —
+					// the pattern may appear in explanatory text)
 					for (const filePath of filePaths) {
 						try {
 							if (existsSync(filePath)) {
 								await api.sendDocument(state.chatId, new InputFile(filePath));
-							} else {
-								await safeSend(api, state.chatId, `⚠️ File not found: \`${filePath}\``);
 							}
 						} catch (e) {
 							log(`[EVENTS] Failed to send file ${filePath}: ${e}`);
@@ -233,14 +232,35 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 		}
 
 		case "agent_end": {
-			state.done = true;
-
 			// Flush any remaining tools
 			if (state.toolsSinceText.length > 0) {
 				const summary = `📋 *${state.toolsSinceText.length} tools*:\n${state.toolsSinceText.join("\n")}`;
 				await safeSend(api, state.chatId, summary.slice(0, 4000));
 				state.toolsSinceText = [];
 			}
+
+			// Check for error in agent_end messages
+			const errorMsg = (event.messages as any[])?.find(
+				(m: any) => m.stopReason === "error" || m.stopReason === "aborted",
+			);
+
+			if (errorMsg?.errorMessage) {
+				await safeSend(api, state.chatId, `❌ ${errorMsg.errorMessage.slice(0, 500)}`);
+			} else if (state.textBlocks.length === 0 && state.backgroundAgents.size === 0) {
+				// Only show "(No response)" when truly done — not between agent cycles
+				await safeSend(api, state.chatId, "(No response)");
+			}
+
+			// If background agents are still running, keep the subscription alive
+			// and reset per-cycle state for the next agent loop
+			if (state.backgroundAgents.size > 0) {
+				state.textBlocks = [];
+				state.toolCount = 0;
+				break;
+			}
+
+			// Truly done — no background agents pending
+			state.done = true;
 
 			// Delete ephemeral status
 			if (state.statusMessageId) {
@@ -251,9 +271,14 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 
 			// Clean up editor
 			state.editor.clear();
+			break;
+		}
 
-			if (state.textBlocks.length === 0) {
-				await safeSend(api, state.chatId, "(No response)");
+		// Handle error responses that leak through RPC (async prompt errors)
+		case "response": {
+			const resp = event as any;
+			if (!resp.success && resp.error) {
+				await safeSend(api, state.chatId, `❌ ${resp.error.slice(0, 500)}`);
 			}
 			break;
 		}
@@ -286,7 +311,7 @@ function updateStatus(state: EventDisplayState): void {
 	}
 
 	// Recent tools (last 5)
-	if (state.toolsSinceText.length > 0 && state.tasks.length === 0) {
+	if (state.toolsSinceText.length > 0) {
 		const recent = state.toolsSinceText.slice(-5);
 		parts.push(recent.join("\n\n"));
 	}

@@ -31,6 +31,9 @@ export interface Config {
 /** Default path to the secrets env file */
 export const DEFAULT_SECRETS_FILE = join(homedir(), ".dreb", "secrets", "telegram.env");
 
+/** Default path to shared provider API keys */
+export const DEFAULT_PROVIDERS_FILE = join(homedir(), ".dreb", "secrets", "providers.env");
+
 /**
  * Load KEY=VALUE pairs from a file into process.env (without overwriting).
  * Handles quoting, comments, and empty lines.
@@ -62,7 +65,10 @@ function loadEnvFile(path: string): void {
 }
 
 export function loadConfig(secretsFile: string = DEFAULT_SECRETS_FILE): Config {
-	// Auto-load secrets file if env vars aren't already set
+	// Auto-load provider API keys (shared with dreb CLI)
+	loadEnvFile(DEFAULT_PROVIDERS_FILE);
+
+	// Auto-load telegram-specific secrets
 	loadEnvFile(secretsFile);
 
 	const botToken = process.env.TELEGRAM_BOT_TOKEN;

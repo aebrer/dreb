@@ -231,3 +231,36 @@ export function getSessionsDir(): string {
 export function getDebugLogPath(): string {
 	return join(getAgentDir(), `${APP_NAME}-debug.log`);
 }
+
+/** Get path to secrets directory */
+export function getSecretsDir(): string {
+	return join(homedir(), `.${APP_NAME}`, "secrets");
+}
+
+/**
+ * Load providers.env from ~/.dreb/secrets/providers.env.
+ * Sets env vars for API keys and provider configuration.
+ * Explicit env vars take priority (won't be overwritten).
+ */
+export function loadProvidersEnv(): void {
+	const envPath = join(getSecretsDir(), "providers.env");
+	if (!existsSync(envPath)) return;
+
+	const content = readFileSync(envPath, "utf-8");
+	for (const line of content.split("\n")) {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith("#")) continue;
+		const eqIndex = trimmed.indexOf("=");
+		if (eqIndex === -1) continue;
+		const key = trimmed.slice(0, eqIndex).trim();
+		let value = trimmed.slice(eqIndex + 1).trim();
+		// Strip surrounding quotes
+		if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+			value = value.slice(1, -1);
+		}
+		// Don't overwrite existing env vars (explicit env takes priority)
+		if (!(key in process.env)) {
+			process.env[key] = value;
+		}
+	}
+}
