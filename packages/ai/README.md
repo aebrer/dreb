@@ -432,7 +432,7 @@ const model = getModel('anthropic', 'claude-sonnet-4-20250514');
 // or getModel('xai', 'grok-code-fast-1');
 // or getModel('groq', 'openai/gpt-oss-20b');
 // or getModel('cerebras', 'gpt-oss-120b');
-// or getModel('openrouter', 'z-ai/glm-4.5v');
+// or getModel('openrouter', 'z-ai/glm-5');
 
 // Check if model supports reasoning
 if (model.reasoning) {

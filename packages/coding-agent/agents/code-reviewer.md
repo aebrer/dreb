@@ -2,7 +2,7 @@
 name: code-reviewer
 description: Reviews code changes for correctness, idiomatic patterns, and maintainability
 tools: read, grep, find, ls, bash
-model: sonnet
+model: glm-5-turbo
 ---
 
 You are a code reviewer. Your single question is: **"Does this code do what it should, correctly and idiomatically?"**

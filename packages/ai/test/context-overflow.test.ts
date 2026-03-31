@@ -20,6 +20,7 @@ import type { AssistantMessage, Context, Model, Usage } from "../src/types.js";
 import { isContextOverflow } from "../src/utils/overflow.js";
 import { hasAzureOpenAICredentials } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { ZAI_GLM_47_FLASH } from "./fixtures/zai-models.js";
 import { resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -389,20 +390,8 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 
 	describe.skipIf(!process.env.ZAI_API_KEY)("z.ai", () => {
-		it("glm-4.5-flash - should detect overflow via isContextOverflow when z.ai reports it", async () => {
-			const model: Model<"openai-completions"> = {
-				id: "glm-4.5-flash",
-				name: "GLM-4.5 Flash",
-				api: "openai-completions",
-				provider: "zai",
-				baseUrl: "https://api.z.ai/api/coding/paas/v4",
-				reasoning: false,
-				input: ["text"],
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 128000,
-				maxTokens: 4096,
-				compat: { supportsDeveloperRole: false, thinkingFormat: "zai" },
-			};
+		it("glm-4.7-flash - should detect overflow via isContextOverflow when z.ai reports it", async () => {
+			const model = ZAI_GLM_47_FLASH;
 			const result = await testContextOverflow(model, process.env.ZAI_API_KEY!);
 			logResult(result);
 

@@ -384,6 +384,10 @@ describe("default model selection", () => {
 		expect(defaultModelPerProvider.cerebras).toBe("gpt-oss-120b");
 	});
 
+	test("zai is not a built-in provider", () => {
+		expect("zai" in defaultModelPerProvider).toBe(false);
+	});
+
 	test("ai-gateway default is opus 4.6", () => {
 		expect(defaultModelPerProvider["vercel-ai-gateway"]).toBe("anthropic/claude-opus-4-6");
 	});

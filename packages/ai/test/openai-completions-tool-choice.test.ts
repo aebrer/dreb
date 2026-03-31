@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
 import { streamSimple } from "../src/stream.js";
 import type { Tool } from "../src/types.js";
+import { ZAI_GLM_5 } from "./fixtures/zai-models.js";
 
 const mockState = vi.hoisted(() => ({
 	lastParams: undefined as unknown,
@@ -216,19 +217,7 @@ describe("openai-completions tool_choice", () => {
 			},
 		];
 
-		const model = {
-			id: "glm-5",
-			name: "GLM-5",
-			api: "openai-completions" as const,
-			provider: "zai",
-			baseUrl: "https://api.z.ai/api/coding/paas/v4",
-			reasoning: true,
-			input: ["text"] as ("text" | "image")[],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128000,
-			maxTokens: 4096,
-			compat: { supportsDeveloperRole: false, thinkingFormat: "zai" as const },
-		};
+		const model = ZAI_GLM_5;
 		const response = await streamSimple(
 			model,
 			{

@@ -8,6 +8,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { ZAI_GLM_47_FLASH } from "./fixtures/zai-models.js";
 import { resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -177,19 +178,7 @@ describe("Tool Call Without Result Tests", () => {
 	});
 
 	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider", () => {
-		const model: Model<"openai-completions"> = {
-			id: "glm-4.5-flash",
-			name: "GLM-4.5 Flash",
-			api: "openai-completions",
-			provider: "zai",
-			baseUrl: "https://api.z.ai/api/coding/paas/v4",
-			reasoning: false,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128000,
-			maxTokens: 4096,
-			compat: { supportsDeveloperRole: false, thinkingFormat: "zai" },
-		};
+		const model = ZAI_GLM_47_FLASH;
 
 		it("should filter out tool calls without corresponding tool results", { retry: 3, timeout: 30000 }, async () => {
 			await testToolCallWithoutResult(model);
