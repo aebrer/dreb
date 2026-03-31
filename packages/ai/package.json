@@ -1,8 +1,6 @@
 {
 	"name": "@dreb/ai",
-
-	"version": "1.7.4",
-
+	"version": "1.8.0",
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",
