@@ -71,6 +71,7 @@ export interface SkillFrontmatter {
 	"argument-hint"?: string;
 	"disable-model-invocation"?: boolean;
 	"user-invocable"?: boolean;
+	ui?: string;
 	[key: string]: unknown;
 }
 
@@ -83,6 +84,8 @@ export interface Skill {
 	argumentHint?: string;
 	disableModelInvocation: boolean;
 	userInvocable: boolean;
+	/** When set, skill only loads when uiType matches (e.g. "telegram") */
+	ui?: string;
 }
 
 export interface LoadSkillsResult {
@@ -337,6 +340,7 @@ function loadSkillFromFile(
 				argumentHint: frontmatter["argument-hint"],
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
 				userInvocable: frontmatter["user-invocable"] !== false,
+				ui: typeof frontmatter.ui === "string" ? frontmatter.ui : undefined,
 			},
 			diagnostics,
 		};

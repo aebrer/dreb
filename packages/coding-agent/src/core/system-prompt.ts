@@ -18,6 +18,8 @@ export interface BuildSystemPromptOptions {
 	promptGuidelines?: string[];
 	/** Text to append to system prompt. */
 	appendSystemPrompt?: string;
+	/** UI type the agent is communicating through (e.g. "tui", "telegram", "rpc"). */
+	uiType?: string;
 	/** Working directory. Default: process.cwd() */
 	cwd?: string;
 	/** Pre-loaded context files. */
@@ -67,6 +69,21 @@ function buildMemorySection(memoryIndexes?: MemoryIndexes): string {
 	}
 
 	return section;
+}
+
+/** UI type descriptions for system prompt context */
+const UI_DESCRIPTIONS: Record<string, string> = {
+	tui: "Terminal UI (interactive terminal with rich rendering)",
+	telegram: "Telegram (mobile messaging app — keep responses concise, use markdown sparingly)",
+	rpc: "RPC (programmatic interface — another application is consuming your output)",
+	cli: "CLI (non-interactive command line — output will be printed and the process exits)",
+	agent: "Subagent (running as a child agent — focus on the task, report results concisely)",
+};
+
+/** Format the UI context section for the system prompt */
+function formatUiSection(uiType: string): string {
+	const description = UI_DESCRIPTIONS[uiType] || uiType;
+	return `\nUI: ${description}`;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -120,6 +137,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		// Add date and working directory last
 		prompt += `\nCurrent date: ${date}`;
 		prompt += `\nCurrent working directory: ${promptCwd}`;
+		if (options.uiType) {
+			prompt += formatUiSection(options.uiType);
+		}
 
 		return prompt;
 	}
@@ -227,6 +247,9 @@ Dreb documentation (read only when the user asks about dreb itself, its SDK, ext
 	// Add date and working directory last
 	prompt += `\nCurrent date: ${date}`;
 	prompt += `\nCurrent working directory: ${promptCwd}`;
+	if (options.uiType) {
+		prompt += formatUiSection(options.uiType);
+	}
 
 	return prompt;
 }

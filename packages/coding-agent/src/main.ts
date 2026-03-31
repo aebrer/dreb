@@ -826,6 +826,17 @@ export async function main(args: string[]) {
 	sessionOptions.modelRegistry = modelRegistry;
 	sessionOptions.resourceLoader = resourceLoader;
 
+	// Set UI type: explicit --ui flag > mode-based default
+	if (parsed.ui) {
+		sessionOptions.uiType = parsed.ui;
+	} else if (mode === "rpc") {
+		sessionOptions.uiType = "rpc";
+	} else if (isInteractive) {
+		sessionOptions.uiType = "tui";
+	} else {
+		sessionOptions.uiType = "cli";
+	}
+
 	// Handle CLI --api-key as runtime override (not persisted)
 	if (parsed.apiKey) {
 		if (!sessionOptions.model) {

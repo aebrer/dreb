@@ -67,6 +67,7 @@ export class AgentBridge {
 			cwd: this.config.workingDir,
 			provider: this.config.provider,
 			model: this.config.model,
+			args: ["--ui", "telegram"],
 		});
 
 		this.exited = false;

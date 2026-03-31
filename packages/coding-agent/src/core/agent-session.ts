@@ -150,6 +150,8 @@ export interface AgentSessionConfig {
 	baseToolsOverride?: Record<string, AgentTool>;
 	/** Mutable ref used by Agent to access the current ExtensionRunner */
 	extensionRunnerRef?: { current?: ExtensionRunner };
+	/** UI type for system prompt context (e.g. "tui", "telegram", "rpc") */
+	uiType?: string;
 }
 
 export interface ExtensionBindings {
@@ -286,6 +288,7 @@ export class AgentSession {
 
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
+	private _uiType?: string;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -299,6 +302,7 @@ export class AgentSession {
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._baseToolsOverride = config.baseToolsOverride;
+		this._uiType = config.uiType;
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -837,6 +841,13 @@ export class AgentSession {
 		return Array.from(unique);
 	}
 
+	/** Get skills filtered by the current UI type */
+	private _getFilteredSkills(): import("./skills.js").Skill[] {
+		const allSkills = this._resourceLoader.getSkills().skills;
+		if (!this._uiType) return allSkills;
+		return allSkills.filter((s) => !s.ui || s.ui === this._uiType);
+	}
+
 	private _rebuildSystemPrompt(toolNames: string[]): string {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
 		const toolSnippets: Record<string, string> = {};
@@ -857,7 +868,7 @@ export class AgentSession {
 		const loaderAppendSystemPrompt = this._resourceLoader.getAppendSystemPrompt();
 		const appendSystemPrompt =
 			loaderAppendSystemPrompt.length > 0 ? loaderAppendSystemPrompt.join("\n\n") : undefined;
-		const loadedSkills = this._resourceLoader.getSkills().skills;
+		const loadedSkills = this._getFilteredSkills();
 		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
 		const memoryIndexes = this._resourceLoader.getMemoryIndexes();
 
@@ -871,6 +882,7 @@ export class AgentSession {
 			selectedTools: validToolNames,
 			toolSnippets,
 			promptGuidelines,
+			uiType: this._uiType,
 		});
 	}
 
@@ -2305,7 +2317,7 @@ export class AgentSession {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix },
 					skill: {
-						getSkills: () => this._resourceLoader.getSkills().skills,
+						getSkills: () => this._getFilteredSkills(),
 						getSessionId: () => this.sessionId,
 					},
 					tasks: {
