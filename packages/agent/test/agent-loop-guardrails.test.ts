@@ -422,6 +422,67 @@ describe("shouldContinue", () => {
 		expect(continueCount).toBe(2);
 	});
 
+	it("should not emit orphaned turn_start when shouldContinue blocks", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo",
+			parameters: toolSchema,
+			async execute() {
+				return {
+					content: [{ type: "text", text: "echoed" }],
+					details: {},
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+
+		let callIndex = 0;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage(
+					[{ type: "toolCall", id: `tool-${callIndex}`, name: "echo", arguments: { value: `call-${callIndex}` } }],
+					"toolUse",
+				);
+				stream.push({ type: "done", reason: "toolUse", message });
+				callIndex++;
+			});
+			return stream;
+		};
+
+		let shouldContinueCallCount = 0;
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			shouldContinue: () => {
+				shouldContinueCallCount++;
+				// Allow first callback, block second
+				return shouldContinueCallCount < 2;
+			},
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// Every turn_start must have a matching turn_end
+		const turnStarts = events.filter((e) => e.type === "turn_start").length;
+		const turnEnds = events.filter((e) => e.type === "turn_end").length;
+		expect(turnStarts).toBe(turnEnds);
+
+		// Should have had 2 turns (first + one more before shouldContinue blocks the third)
+		expect(turnEnds).toBe(2);
+	});
+
 	it("should preserve pending messages in context when shouldContinue blocks", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const tool: AgentTool<typeof toolSchema> = {

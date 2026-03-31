@@ -286,6 +286,10 @@ export class AgentSession {
 	// Sentinel monitor state (Layer B): tracks whether we've already steered for this streaming response
 	private _sentinelSteered = false;
 
+	// Guardrail unsubscribe functions (must be cleaned up on dispose)
+	private _unsubscribeGuardrailSentinel?: () => void;
+	private _unsubscribeGuardrailCounter?: () => void;
+
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
@@ -392,9 +396,9 @@ export class AgentSession {
 	private _installBackgroundAgentGuardrails(): void {
 		// Layer B: Sentinel monitor — detect hallucinated bg agent responses in streaming output.
 		// Resets per assistant message; fires at most once per streaming response.
-		this.agent.subscribe((event) => {
+		this._unsubscribeGuardrailSentinel = this.agent.subscribe((event) => {
 			// Reset sentinel flag at the start of each new assistant message
-			if (event.type === "message_start" && (event.message as any).role === "assistant") {
+			if (event.type === "message_start" && event.message.role === "assistant") {
 				this._sentinelSteered = false;
 				return;
 			}
@@ -414,7 +418,8 @@ export class AgentSession {
 			// <background-agent-complete> is a synthetic tag only produced by the system —
 			// the model should never generate it.
 			const partial = event.message as AssistantMessage;
-			const text = (partial.content?.find((c: any) => c.type === "text") as any)?.text ?? "";
+			const textBlock = partial.content?.find((c): c is TextContent => c.type === "text");
+			const text = textBlock?.text ?? "";
 			if (text.includes("<background-agent-complete>")) {
 				this._sentinelSteered = true;
 				this.agent.steer({
@@ -432,7 +437,7 @@ export class AgentSession {
 
 		// Layer D: Turn limiter — cap parent turns while bg agents are running.
 		// Increment counter on each turn_end while bg agents are active.
-		this.agent.subscribe((event) => {
+		this._unsubscribeGuardrailCounter = this.agent.subscribe((event) => {
 			if (event.type !== "turn_end") return;
 			const bgRunning = getRunningBackgroundAgents();
 			if (bgRunning.length === 0) {
@@ -442,28 +447,17 @@ export class AgentSession {
 			this._bgTurnCounter++;
 		});
 
-		// shouldContinue callback — checked before each subsequent LLM call
+		// shouldContinue callback — checked before each subsequent LLM call.
+		// Does NOT inject a steer warning — the loop is already stopping, and any
+		// queued warning would go stale (consumed in the next run after bg agents
+		// have already delivered results, making the warning factually wrong).
 		this.agent.setShouldContinue(() => {
 			const bgRunning = getRunningBackgroundAgents();
 			if (bgRunning.length === 0) {
 				this._bgTurnCounter = 0;
 				return true;
 			}
-			if (this._bgTurnCounter >= AgentSession.BG_TURN_LIMIT) {
-				// Inject a warning via steer so the model sees it next time
-				this.agent.steer({
-					role: "user",
-					content: [
-						{
-							type: "text",
-							text: `Turn limit reached — background agents are still running. Wait for their results before continuing. You have used ${this._bgTurnCounter} turns while background agents are active.`,
-						},
-					],
-					timestamp: Date.now(),
-				});
-				return false;
-			}
-			return true;
+			return this._bgTurnCounter < AgentSession.BG_TURN_LIMIT;
 		});
 	}
 
@@ -745,6 +739,13 @@ export class AgentSession {
 			this._unsubscribeAgent();
 			this._unsubscribeAgent = undefined;
 		}
+		// Clean up guardrail subscriptions (Layer B sentinel + Layer D counter)
+		this._unsubscribeGuardrailSentinel?.();
+		this._unsubscribeGuardrailSentinel = undefined;
+		this._unsubscribeGuardrailCounter?.();
+		this._unsubscribeGuardrailCounter = undefined;
+		// Clear the shouldContinue callback so the agent doesn't hold a reference to a disposed session
+		this.agent.setShouldContinue(undefined);
 	}
 
 	/**

@@ -173,13 +173,9 @@ async function runLoop(
 
 		// Inner loop: process tool calls and steering messages
 		while (hasMoreToolCalls || pendingMessages.length > 0) {
-			if (!firstTurn) {
-				await emit({ type: "turn_start" });
-			} else {
-				firstTurn = false;
-			}
-
-			// Process pending messages first (inject into context so they're never lost)
+			// Process pending messages first (inject into context so they're never lost).
+			// This happens before turn_start and shouldContinue so messages are always
+			// preserved regardless of whether the turn proceeds.
 			if (pendingMessages.length > 0) {
 				for (const message of pendingMessages) {
 					await emit({ type: "message_start", message });
@@ -190,11 +186,16 @@ async function runLoop(
 				pendingMessages = [];
 			}
 
-			// Check shouldContinue before subsequent LLM calls (not the very first).
-			// Pending messages have already been injected into context above, so they
-			// won't be lost if the loop breaks here.
+			// Check shouldContinue before starting a new turn (not the very first).
+			// This runs before turn_start so we never emit an orphaned turn_start.
 			if (llmCallCount > 0 && config.shouldContinue && !config.shouldContinue()) {
 				break;
+			}
+
+			if (!firstTurn) {
+				await emit({ type: "turn_start" });
+			} else {
+				firstTurn = false;
 			}
 
 			// Stream assistant response
@@ -239,11 +240,15 @@ async function runLoop(
 			pendingMessages = (await config.getSteeringMessages?.()) || [];
 		}
 
-		// Agent would stop here. Check for follow-up messages.
+		// Agent would stop here. Drain any steering messages that arrived during
+		// wind-down (e.g., background agent results delivered via steer() between
+		// endTurn break and here). Then check for follow-up messages.
+		const leftoverSteering = (await config.getSteeringMessages?.()) || [];
 		const followUpMessages = (await config.getFollowUpMessages?.()) || [];
-		if (followUpMessages.length > 0) {
+		const allPending = [...leftoverSteering, ...followUpMessages];
+		if (allPending.length > 0) {
 			// Set as pending so inner loop processes them
-			pendingMessages = followUpMessages;
+			pendingMessages = allPending;
 			continue;
 		}
 
