@@ -5,11 +5,6 @@
 import type { Context } from "grammy";
 import type { AgentBridge } from "./agent-bridge.js";
 
-/** Extended context with user-specific agent bridge */
-export interface BotContext extends Context {
-	agentBridge?: AgentBridge;
-}
-
 /** Tracked background agent */
 export interface TrackedAgent {
 	agentId: string;

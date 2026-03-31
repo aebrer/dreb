@@ -105,7 +105,7 @@ export function createBot(config: Config): Bot {
 			return;
 		}
 
-		await handleFile(ctx, ctx.api, userState, getUserState);
+		await handleFile(ctx, ctx.api, getUserState);
 	});
 
 	// Error handler

@@ -26,12 +26,7 @@ const pendingBatches = new Map<string, FileBatch>();
 /**
  * Handle an incoming file (document, photo, voice, audio, video).
  */
-export async function handleFile(
-	ctx: Context,
-	api: Api,
-	_userState: UserState,
-	getUserState: (userId: number) => UserState,
-): Promise<void> {
+export async function handleFile(ctx: Context, api: Api, getUserState: (userId: number) => UserState): Promise<void> {
 	const msg = ctx.message;
 	if (!msg) return;
 
@@ -118,7 +113,16 @@ async function flushBatch(key: string, api: Api, getUserState: (userId: number) 
 
 	log(`[FILE] Flushing batch: ${n} file(s) for user ${batch.userId}`);
 
-	// Update status
+	// Enqueue BEFORE any async operations — prevents cleanupUploads race where
+	// the queue's finally block could delete upload files during an await yield
+	enqueuePrompt(api, userState, {
+		message: { chat: { id: batch.chatId }, message_id: batch.replyToId, from: { id: batch.userId } } as any,
+		prompt,
+		statusMessage: batch.statusMessageId ? { chat_id: batch.chatId, message_id: batch.statusMessageId } : null,
+		wasQueued: userState.processing,
+	});
+
+	// Update status (non-critical, after enqueue)
 	if (batch.statusMessageId) {
 		const isBusy = userState.processing;
 		const indicator = isBusy ? "📋 _Queued..._" : "🧠 _Processing..._";
@@ -132,13 +136,6 @@ async function flushBatch(key: string, api: Api, getUserState: (userId: number) 
 			// Non-critical
 		}
 	}
-
-	enqueuePrompt(api, userState, {
-		message: { chat: { id: batch.chatId }, message_id: batch.replyToId, from: { id: batch.userId } } as any,
-		prompt,
-		statusMessage: batch.statusMessageId ? { chat_id: batch.chatId, message_id: batch.statusMessageId } : null,
-		wasQueued: userState.processing,
-	});
 }
 
 function getFileInfo(msg: any): { name: string } | null {

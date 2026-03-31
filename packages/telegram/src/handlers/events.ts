@@ -336,10 +336,9 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 				if (!state.retryInProgress && !errorIsRetryable) {
 					const provider = errorMsg.provider ? `${errorMsg.provider}/${errorMsg.model}` : "";
 					const prefix = provider ? `${provider}: ` : "";
+					const errLower = errorMsg.errorMessage.toLowerCase();
 					const hint =
-						errorMsg.errorMessage.toLowerCase().includes("connection") ||
-						errorMsg.errorMessage.toLowerCase().includes("timeout") ||
-						errorMsg.errorMessage.toLowerCase().includes("network")
+						errLower.includes("connection") || errLower.includes("timeout") || errLower.includes("network")
 							? "\n_Provider may be down — try /model to switch._"
 							: "";
 					await safeSend(api, state.chatId, `❌ ${prefix}${errorMsg.errorMessage.slice(0, 400)}${hint}`);

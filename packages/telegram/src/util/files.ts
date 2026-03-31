@@ -4,7 +4,7 @@
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { log } from "./telegram.js";
 
 const UPLOAD_DIR = join(tmpdir(), "dreb-telegram-uploads");
@@ -27,7 +27,8 @@ export function ensureUploadDir(): string {
  */
 export function saveUpload(filename: string, data: Buffer): string {
 	const dir = ensureUploadDir();
-	const path = join(dir, `${Date.now()}_${filename}`);
+	const safe = basename(filename);
+	const path = join(dir, `${Date.now()}_${safe}`);
 	writeFileSync(path, data);
 	return path;
 }

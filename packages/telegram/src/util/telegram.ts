@@ -4,8 +4,7 @@
 
 import type { Api } from "grammy";
 
-const _TELEGRAM_MAX_LENGTH = 4096;
-const SAFE_LENGTH = 4000; // Leave room for markdown overhead
+const SAFE_LENGTH = 4000; // Leave room for markdown overhead (Telegram max is 4096)
 
 /**
  * Send a message, falling back to plain text if Markdown fails.
