@@ -177,7 +177,19 @@ describe("Tool Call Without Result Tests", () => {
 	});
 
 	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider", () => {
-		const model = getModel("zai", "glm-4.5-flash");
+		const model: Model<"openai-completions"> = {
+			id: "glm-4.5-flash",
+			name: "GLM-4.5 Flash",
+			api: "openai-completions",
+			provider: "zai",
+			baseUrl: "https://api.z.ai/api/coding/paas/v4",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 4096,
+			compat: { supportsDeveloperRole: false, thinkingFormat: "zai" },
+		};
 
 		it("should filter out tool calls without corresponding tool results", { retry: 3, timeout: 30000 }, async () => {
 			await testToolCallWithoutResult(model);

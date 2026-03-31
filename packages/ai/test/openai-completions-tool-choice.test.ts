@@ -216,7 +216,19 @@ describe("openai-completions tool_choice", () => {
 			},
 		];
 
-		const model = getModel("zai", "glm-5")!;
+		const model = {
+			id: "glm-5",
+			name: "GLM-5",
+			api: "openai-completions" as const,
+			provider: "zai",
+			baseUrl: "https://api.z.ai/api/coding/paas/v4",
+			reasoning: true,
+			input: ["text"] as ("text" | "image")[],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 4096,
+			compat: { supportsDeveloperRole: false, thinkingFormat: "zai" as const },
+		};
 		const response = await streamSimple(
 			model,
 			{

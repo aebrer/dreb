@@ -723,7 +723,19 @@ describe("Generate E2E Tests", () => {
 	);
 
 	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider (glm-5 via OpenAI Completions)", () => {
-		const llm = getModel("zai", "glm-5");
+		const llm: Model<"openai-completions"> = {
+			id: "glm-5",
+			name: "GLM-5",
+			api: "openai-completions",
+			provider: "zai",
+			baseUrl: "https://api.z.ai/api/coding/paas/v4",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 204800,
+			maxTokens: 131072,
+			compat: { supportsDeveloperRole: false, thinkingFormat: "zai" },
+		};
 
 		it("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm);
