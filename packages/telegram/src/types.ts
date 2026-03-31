@@ -30,6 +30,8 @@ export interface UserState {
 	newSessionFlag: boolean;
 	/** Optional working directory override for the next new session */
 	newSessionCwd: string | null;
+	/** The actual working directory of the current bridge (may differ from config default) */
+	effectiveCwd: string | null;
 	/** Currently running background agents */
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether /stop was used (suppress DONE marker) */

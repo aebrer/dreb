@@ -3,11 +3,13 @@
  */
 
 import type { Bot } from "grammy";
+import { ensureBridge } from "../bridge-lifecycle.js";
 import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
-import { log } from "../util/telegram.js";
+import { log, safeSend } from "../util/telegram.js";
 import { cmdAgents, cmdCompact, cmdModel, cmdStats, cmdThinking } from "./agent.js";
 import { cmdCwd, cmdNew, cmdRestart, cmdStart, cmdStatus, cmdStop } from "./core.js";
+import { STATIC_COMMANDS } from "./refresh.js";
 import { cmdRecent, cmdResume, cmdSessions } from "./sessions.js";
 import { cmdSkills } from "./skills.js";
 
@@ -22,7 +24,10 @@ export function registerCommands(bot: Bot, config: Config, getUserState: (userId
 		return cmdStatus(ctx, config, us);
 	});
 
-	bot.command("cwd", (ctx) => cmdCwd(ctx, config));
+	bot.command("cwd", (ctx) => {
+		const us = getUserState(ctx.from!.id);
+		return cmdCwd(ctx, config, us);
+	});
 
 	bot.command("new", (ctx) => {
 		const us = getUserState(ctx.from!.id);
@@ -85,32 +90,60 @@ export function registerCommands(bot: Bot, config: Config, getUserState: (userId
 		const args = ctx.match as string;
 		return cmdThinking(ctx, us, args);
 	});
+
+	// Dynamic skill commands: /skill_<name> [args]
+	// Catches any /skill_* command and sends it as a skill invocation prompt
+	bot.hears(/^\/skill_([a-z0-9_]+)(?:\s+(.*))?$/i, async (ctx) => {
+		const userId = ctx.from!.id;
+		const userState = getUserState(userId);
+		const chatId = ctx.chat!.id;
+
+		// Convert back from Telegram-safe name to skill name: skill_reddit_reader → reddit-reader
+		const rawName = ctx.match[1].replace(/_/g, "-");
+		const args = ctx.match[2]?.trim() || "";
+
+		// Ensure bridge is alive
+		try {
+			await ensureBridge(config, userState);
+		} catch (e) {
+			await safeSend(ctx.api, chatId, `❌ Failed to start agent: ${e}`);
+			return;
+		}
+
+		// Send as a prompt that invokes the skill
+		const prompt = args ? `Use the ${rawName} skill: ${args}` : `Use the ${rawName} skill`;
+
+		// Show thinking status
+		let statusMsg: { chat_id: number; message_id: number } | null = null;
+		try {
+			const sent = await ctx.reply("🛠 _Invoking skill..._", { parse_mode: "Markdown" });
+			statusMsg = { chat_id: sent.chat.id, message_id: sent.message_id };
+		} catch (e) {
+			log(`[SKILL] Failed to send status: ${e}`);
+		}
+
+		// Import enqueuePrompt dynamically to avoid circular deps
+		const { enqueuePrompt } = await import("../handlers/message.js");
+		enqueuePrompt(ctx.api, userState, {
+			message: ctx.message!,
+			prompt,
+			statusMessage: statusMsg,
+			wasQueued: userState.processing,
+		});
+	});
 }
 
 /**
- * Register commands with Telegram's autocomplete menu.
+ * Register commands with Telegram's autocomplete menu (static commands only).
  */
 export async function setMyCommands(bot: Bot): Promise<void> {
 	try {
-		await bot.api.setMyCommands([
-			{ command: "start", description: "Help & command list" },
-			{ command: "status", description: "Connection & version info" },
-			{ command: "new", description: "Start fresh session [optional: path]" },
-			{ command: "sessions", description: "List recent sessions" },
-			{ command: "resume", description: "Resume a session by ID" },
-			{ command: "recent", description: "Resend last N messages" },
-			{ command: "skills", description: "List available skills" },
-			{ command: "stats", description: "Token usage & cost" },
-			{ command: "compact", description: "Compact context" },
-			{ command: "model", description: "View/switch model" },
-			{ command: "thinking", description: "View/set thinking level" },
-			{ command: "agents", description: "Background subagents" },
-			{ command: "cwd", description: "Working directory" },
-			{ command: "stop", description: "Interrupt & clear queue" },
-			{ command: "restart", description: "Restart the bot" },
-		]);
+		await bot.api.setMyCommands(STATIC_COMMANDS);
 		log("[BOT] Registered commands with Telegram");
 	} catch (e) {
 		log(`[BOT] Failed to set commands: ${e}`);
 	}
 }
+
+// Re-export for use from other modules
+export { refreshCommandsWithSkills } from "./refresh.js";

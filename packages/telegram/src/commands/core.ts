@@ -66,8 +66,9 @@ export async function cmdStatus(ctx: Context, config: Config, userState: UserSta
 	await safeSend(ctx.api, chatId, lines.join("\n"));
 }
 
-export async function cmdCwd(ctx: Context, config: Config): Promise<void> {
-	await safeSend(ctx.api, ctx.chat!.id, `📁 Working directory: \`${config.workingDir}\``);
+export async function cmdCwd(ctx: Context, config: Config, userState: UserState): Promise<void> {
+	const cwd = userState.effectiveCwd ?? config.workingDir;
+	await safeSend(ctx.api, ctx.chat!.id, `📁 Working directory: \`${cwd}\``);
 }
 
 export async function cmdNew(ctx: Context, userState: UserState, args: string): Promise<void> {

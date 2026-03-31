@@ -8,6 +8,8 @@
 
 import { createBot, getUserState, setMyCommands } from "./bot.js";
 import { ensureBridge } from "./bridge-lifecycle.js";
+import { refreshCommandsWithSkills } from "./commands/refresh.js";
+import { setSkillsBot } from "./commands/skills.js";
 import { loadConfig } from "./config.js";
 import { getUserSession, loadState } from "./state.js";
 import { log } from "./util/telegram.js";
@@ -57,8 +59,20 @@ async function main(): Promise<void> {
 
 	const bot = createBot(config);
 
-	// Register commands for autocomplete
+	// Store bot ref for dynamic command refresh from /skills
+	setSkillsBot(bot);
+
+	// Register static commands for autocomplete
 	await setMyCommands(bot);
+
+	// Refresh command menu with dynamic skill commands from the first available bridge
+	for (const userId of config.allowedUserIds) {
+		const userState = getUserState(userId);
+		if (userState.bridge?.isAlive) {
+			await refreshCommandsWithSkills(bot, userState.bridge);
+			break; // Only need one bridge to query skills
+		}
+	}
 
 	// Start polling
 	log("Bot running. Press Ctrl+C to stop.");

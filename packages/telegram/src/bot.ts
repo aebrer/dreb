@@ -22,6 +22,7 @@ function createUserState(): UserState {
 		processing: false,
 		newSessionFlag: false,
 		newSessionCwd: null,
+		effectiveCwd: null,
 		backgroundAgents: new Map(),
 		stopRequested: false,
 	};
@@ -55,11 +56,17 @@ async function ensureBridgeWithSession(config: Config, userState: UserState): Pr
 
 		const customConfig = { ...config, workingDir: cwd };
 		const bridge = await ensureBridge(customConfig, userState);
+		userState.effectiveCwd = cwd;
 		await bridge.newSession();
 		return bridge;
 	}
 
 	const bridge = await ensureBridge(config, userState);
+
+	// Track effective cwd (default from config on first bridge creation)
+	if (!userState.effectiveCwd) {
+		userState.effectiveCwd = config.workingDir;
+	}
 
 	// Handle session flags
 	if (userState.newSessionFlag) {
