@@ -6,7 +6,7 @@
 import type { Api } from "grammy";
 import { setUserSession } from "../state.js";
 import type { QueueItem, UserState } from "../types.js";
-import { log, safeSend } from "../util/telegram.js";
+import { log, safeDelete, safeSend } from "../util/telegram.js";
 import { createEventDisplay, type EventDisplayState, handleAgentEvent } from "./events.js";
 
 /**
@@ -56,6 +56,12 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 	const bridge = userState.bridge;
 	if (!bridge) {
 		log("[QUEUE] No bridge available");
+		if (item.statusMessage) {
+			await safeDelete(api, item.statusMessage.chat_id, item.statusMessage.message_id);
+		}
+		if (item.message) {
+			await safeSend(api, item.message.chat.id, "❌ No agent connection. Try sending your message again.");
+		}
 		return;
 	}
 
