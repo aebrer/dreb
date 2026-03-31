@@ -312,33 +312,106 @@ describe("AgentSession background agent guardrails", () => {
 			expect(steerCalls.length).toBe(0);
 		});
 
-		it("bgTurnCounter resets on bg agent delivery", () => {
+		it("bgTurnCounter resets on bg agent delivery via _handleBackgroundComplete", () => {
 			const sessionAny = session as any;
-			expect(sessionAny._bgTurnCounter).toBe(0);
 
-			// Simulate incrementing (as if bg agents were running)
+			// Simulate bg agents having run — counter is elevated
 			sessionAny._bgTurnCounter = 5;
-			expect(sessionAny._bgTurnCounter).toBe(5);
 
-			// Verify the static limit
-			expect((AgentSession as any).BG_TURN_LIMIT).toBe(3);
+			// Deliver a non-cancelled bg agent result
+			sessionAny._handleBackgroundComplete(
+				"bg-1",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 0,
+					output: "done",
+					stderr: "",
+					errorMessage: null,
+				},
+				false,
+			);
+
+			// Counter should have been reset to 0 by the delivery
+			expect(sessionAny._bgTurnCounter).toBe(0);
 		});
 	});
 
 	describe("Layer C: steer vs followUp delivery", () => {
-		it("uses steer() not followUp() in the onBackgroundComplete handler", () => {
-			// The onBackgroundComplete callback is defined inline in _buildRuntime
-			// and is not directly accessible. We verify the code path indirectly:
-			// the agent-session.ts source uses `this.agent.steer(message)` when
-			// `this.agent.state.isStreaming` is true, and `this.agent.prompt(message)`
-			// when not streaming. This is a structural/code-level guarantee verified
-			// by reading the source. The important runtime behaviors (counter reset,
-			// sentinel scoping) are tested in other describe blocks.
+		it("uses steer() when agent is streaming during bg agent delivery", () => {
+			// Simulate agent currently streaming
+			Object.defineProperty(agent.state, "isStreaming", { value: true, configurable: true });
 
-			// Verify the delivery infrastructure is in place:
-			// steer and followUp are available on the agent
-			expect(typeof agent.steer).toBe("function");
-			expect(typeof agent.followUp).toBe("function");
+			const sessionAny = session as any;
+			sessionAny._handleBackgroundComplete(
+				"bg-1",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 0,
+					output: "result output",
+					stderr: "",
+					errorMessage: null,
+				},
+				false,
+			);
+
+			// Should have used steer (not followUp or prompt)
+			expect(steerCalls.length).toBe(1);
+			expect(steerCalls[0].content[0].text).toContain("Background agent bg-1");
+			expect(followUpCalls.length).toBe(0);
+
+			// Clean up
+			Object.defineProperty(agent.state, "isStreaming", { value: false, configurable: true });
+		});
+
+		it("does not trigger a response for cancelled bg agents", () => {
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt");
+			const appendSpy = vi.spyOn(agent, "appendMessage");
+
+			sessionAny._handleBackgroundComplete(
+				"bg-1",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 0,
+					output: "cancelled output",
+					stderr: "",
+					errorMessage: null,
+				},
+				true,
+			); // cancelled = true
+
+			// Should have appended the message but NOT triggered steer/prompt
+			expect(appendSpy).toHaveBeenCalledTimes(1);
+			expect(steerCalls.length).toBe(0);
+			expect(promptSpy).not.toHaveBeenCalled();
+			expect(followUpCalls.length).toBe(0);
+
+			promptSpy.mockRestore();
+			appendSpy.mockRestore();
+		});
+
+		it("does not reset bgTurnCounter for cancelled bg agents", () => {
+			const sessionAny = session as any;
+			sessionAny._bgTurnCounter = 3;
+
+			sessionAny._handleBackgroundComplete(
+				"bg-1",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 0,
+					output: "cancelled",
+					stderr: "",
+					errorMessage: null,
+				},
+				true,
+			); // cancelled = true
+
+			// Counter should NOT have been reset — cancellation doesn't mean work finished
+			expect(sessionAny._bgTurnCounter).toBe(3);
 		});
 	});
 

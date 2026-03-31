@@ -360,6 +360,89 @@ describe("endTurn on tool result", () => {
 		// Three LLM calls: endTurn tool → follow-up triggers new turn → echo tool → final response
 		expect(callIndex).toBe(3);
 	});
+
+	it("should pick up steering messages delivered during endTurn wind-down via outer-loop drain", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema> = {
+			name: "bg-launch",
+			label: "BG Launch",
+			description: "Launches background work",
+			parameters: toolSchema,
+			async execute() {
+				return {
+					content: [{ type: "text", text: "Background agent started." }],
+					details: {},
+					endTurn: true,
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+
+		let callIndex = 0;
+		// Track whether the inner loop has already drained steering (first call returns empty)
+		let innerSteeringDrained = false;
+		let outerSteeringDelivered = false;
+
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (callIndex === 0) {
+					// First call: tool call with endTurn
+					const message = createAssistantMessage(
+						[{ type: "toolCall", id: "tool-1", name: "bg-launch", arguments: { value: "go" } }],
+						"toolUse",
+					);
+					stream.push({ type: "done", reason: "toolUse", message });
+				} else {
+					// Second call (from outer-loop drain picking up the steering message): final response
+					const message = createAssistantMessage([{ type: "text", text: "Got the bg result" }]);
+					stream.push({ type: "done", reason: "stop", message });
+				}
+				callIndex++;
+			});
+			return stream;
+		};
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			getSteeringMessages: async () => {
+				// First call: inner loop drains steering before endTurn — nothing yet
+				if (!innerSteeringDrained) {
+					innerSteeringDrained = true;
+					return [];
+				}
+				// Second call: outer-loop drain after endTurn break — deliver the bg result
+				if (!outerSteeringDelivered) {
+					outerSteeringDelivered = true;
+					return [createUserMessage("bg agent result arrived during wind-down")];
+				}
+				return [];
+			},
+			getFollowUpMessages: async () => [],
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// Two LLM calls: endTurn tool → outer drain picks up steering → processes it → final response
+		expect(callIndex).toBe(2);
+
+		// The steering message should have been emitted
+		const messageEvents = events.filter((e) => e.type === "message_start" && (e as any).message?.role === "user");
+		const steeringFound = messageEvents.some(
+			(e) => (e as any).message?.content === "bg agent result arrived during wind-down",
+		);
+		expect(steeringFound).toBe(true);
+	});
 });
 
 describe("shouldContinue", () => {
