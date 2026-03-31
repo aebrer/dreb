@@ -271,10 +271,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 				break;
 			}
 
-			// Truly done — no background agents pending
-			state.done = true;
-
-			// Delete ephemeral status
+			// Delete ephemeral status before signaling done
 			if (state.statusMessageId) {
 				await state.editor.flush(state.chatId, state.statusMessageId);
 				await safeDelete(api, state.chatId, state.statusMessageId);
@@ -283,6 +280,10 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 
 			// Clean up editor
 			state.editor.clear();
+
+			// Signal done AFTER cleanup — waitForDone polls this flag,
+			// so setting it last ensures status message is deleted before DONE is sent
+			state.done = true;
 			break;
 		}
 

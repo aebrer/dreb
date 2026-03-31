@@ -3,7 +3,7 @@
  */
 
 import type { Bot } from "grammy";
-import { ensureBridge } from "../bridge-lifecycle.js";
+import { ensureBridgeWithSession } from "../bridge-lifecycle.js";
 import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
 import { log, safeSend } from "../util/telegram.js";
@@ -102,9 +102,9 @@ export function registerCommands(bot: Bot, config: Config, getUserState: (userId
 		const rawName = ctx.match[1].replace(/_/g, "-");
 		const args = ctx.match[2]?.trim() || "";
 
-		// Ensure bridge is alive
+		// Ensure bridge is alive and session is selected
 		try {
-			await ensureBridge(config, userState);
+			await ensureBridgeWithSession(config, userState);
 		} catch (e) {
 			await safeSend(ctx.api, chatId, `❌ Failed to start agent: ${e}`);
 			return;

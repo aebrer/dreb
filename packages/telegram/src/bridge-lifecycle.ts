@@ -12,7 +12,12 @@ import type { UserState } from "./types.js";
  */
 export async function ensureBridge(config: Config, userState: UserState): Promise<AgentBridge> {
 	if (!userState.bridge || !userState.bridge.isAlive) {
-		const bridge = new AgentBridge(config);
+		// Use effectiveCwd if set — preserves custom cwd across bridge crashes
+		const effectiveConfig =
+			userState.effectiveCwd && userState.effectiveCwd !== config.workingDir
+				? { ...config, workingDir: userState.effectiveCwd }
+				: config;
+		const bridge = new AgentBridge(effectiveConfig);
 		await bridge.start();
 		userState.bridge = bridge;
 
@@ -32,4 +37,47 @@ export async function ensureBridge(config: Config, userState: UserState): Promis
 	}
 
 	return userState.bridge;
+}
+
+/**
+ * Ensure bridge is alive AND a session is selected.
+ * Used by message/file handlers and skill commands before prompting.
+ */
+export async function ensureBridgeWithSession(config: Config, userState: UserState): Promise<AgentBridge> {
+	// Handle new session with custom working directory — requires a fresh bridge
+	if (userState.newSessionFlag && userState.newSessionCwd) {
+		const cwd = userState.newSessionCwd;
+		userState.newSessionFlag = false;
+		userState.newSessionCwd = null;
+
+		// Kill existing bridge and start a new one with the custom cwd
+		if (userState.bridge?.isAlive) {
+			await userState.bridge.stop();
+		}
+		userState.bridge = null;
+
+		const customConfig = { ...config, workingDir: cwd };
+		const bridge = await ensureBridge(customConfig, userState);
+		userState.effectiveCwd = cwd;
+		await bridge.newSession();
+		return bridge;
+	}
+
+	const bridge = await ensureBridge(config, userState);
+
+	// Track effective cwd (default from config on first bridge creation)
+	if (!userState.effectiveCwd) {
+		userState.effectiveCwd = config.workingDir;
+	}
+
+	// Handle session flags
+	if (userState.newSessionFlag) {
+		userState.newSessionFlag = false;
+		await bridge.newSession();
+	} else if (!bridge.sessionId) {
+		// First message — try to resume latest session
+		await bridge.resumeLatest();
+	}
+
+	return bridge;
 }

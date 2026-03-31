@@ -6,6 +6,7 @@
 import type { Api } from "grammy";
 import { setUserSession } from "../state.js";
 import type { QueueItem, UserState } from "../types.js";
+import { cleanupUploads } from "../util/files.js";
 import { log, safeDelete, safeSend } from "../util/telegram.js";
 import { createEventDisplay, type EventDisplayState, handleAgentEvent } from "./events.js";
 
@@ -71,9 +72,12 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 	// Create event display state
 	const display = createEventDisplay(api, chatId, replyToId, item.statusMessage?.message_id ?? null);
 
-	// Subscribe to events for this run
+	// Subscribe to events — serialize processing to prevent concurrent state mutations
+	let eventChain = Promise.resolve();
 	const unsubscribe = bridge.onEvent((event) => {
-		void handleAgentEvent(api, display, event);
+		eventChain = eventChain
+			.then(() => handleAgentEvent(api, display, event))
+			.catch((e) => log(`[EVENT] Error: ${e}`));
 	});
 
 	try {
@@ -102,12 +106,16 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 	if (userState.queue.length === 0 && !userState.stopRequested) {
 		await safeSend(api, chatId, "🦀 _dreb DONE_");
 	}
+
+	// Clean up old upload files (older than 1 hour)
+	cleanupUploads();
 }
 
 function waitForDone(display: EventDisplayState, timeout: number): Promise<void> {
 	if (display.done) return Promise.resolve();
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => {
+			clearInterval(check);
 			reject(new Error("Timeout waiting for agent completion"));
 		}, timeout);
 
