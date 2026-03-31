@@ -20,20 +20,20 @@ import { DebouncedEditor, log, safeDelete, safeSend, sendLong } from "../util/te
  */
 type RpcEvent = { type: string; [key: string]: any };
 
-// Tool emoji mapping
+// Tool emoji mapping (tool names are lowercase in definitions)
 const TOOL_EMOJI: Record<string, string> = {
-	Bash: "🔧",
-	Read: "📖",
-	Edit: "✏️",
-	Write: "📝",
-	Grep: "🔎",
+	bash: "🔧",
+	read: "📖",
+	edit: "✏️",
+	write: "📝",
+	grep: "🔎",
 	find: "🔍",
 	ls: "📂",
 	web_search: "🌐",
 	web_fetch: "🌐",
 	subagent: "🤖",
 	tasks_update: "📋",
-	Skill: "⚡",
+	skill: "⚡",
 };
 
 function toolEmoji(name: string): string {
@@ -44,18 +44,18 @@ function toolEmoji(name: string): string {
 function formatTool(name: string, args: Record<string, any>): string {
 	const emoji = toolEmoji(name);
 	switch (name) {
-		case "Bash": {
+		case "bash": {
 			const cmd = args.command || "";
-			return `${emoji} *Bash*\n\`${cmd.slice(0, 500)}\``;
+			return `${emoji} *bash*\n\`${cmd.slice(0, 500)}\``;
 		}
-		case "Read":
-			return `${emoji} *Read*: \`${args.path || args.file_path || "?"}\``;
-		case "Edit":
-			return `${emoji} *Edit*: \`${args.path || args.file_path || "?"}\``;
-		case "Write":
-			return `${emoji} *Write*: \`${args.path || args.file_path || "?"}\``;
-		case "Grep":
-			return `${emoji} *Grep*: \`${args.pattern || "?"}\``;
+		case "read":
+			return `${emoji} *read*: \`${args.path || "?"}\``;
+		case "edit":
+			return `${emoji} *edit*: \`${args.path || "?"}\``;
+		case "write":
+			return `${emoji} *write*: \`${args.path || "?"}\``;
+		case "grep":
+			return `${emoji} *grep*: \`${args.pattern || "?"}\``;
 		case "find":
 			return `${emoji} *find*: \`${args.pattern || "?"}\``;
 		case "ls":
@@ -66,8 +66,8 @@ function formatTool(name: string, args: Record<string, any>): string {
 			return `${emoji} *web\\_fetch*: ${(args.url || "?").slice(0, 80)}`;
 		case "subagent":
 			return `${emoji} *subagent* (${args.agent || "?"}): ${(args.task || args.tasks?.[0]?.task || "?").slice(0, 200)}`;
-		case "tasks_update":
-			return formatTaskList(args.tasks || []);
+		case "skill":
+			return `${emoji} *skill*: ${args.skill || "?"}`;
 		default:
 			return `${emoji} *${name}*`;
 	}
@@ -140,8 +140,12 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			const name = event.toolName || "?";
 			const args = event.args || {};
 			state.toolCount++;
-			const toolMsg = formatTool(name, args);
-			state.toolsSinceText.push(toolMsg);
+
+			// tasks_update is shown via the separate tasks_update event — skip from tool summary
+			if (name !== "tasks_update") {
+				const toolMsg = formatTool(name, args);
+				state.toolsSinceText.push(toolMsg);
+			}
 
 			// Update status with tool count and recent tools
 			updateStatus(state);
@@ -156,6 +160,14 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			if (!content || !Array.isArray(content)) break;
 
 			for (const block of content) {
+				// Display thinking blocks (collapsed summary)
+				if (block.type === "thinking" && block.thinking?.trim() && !block.redacted) {
+					const thinking = block.thinking.trim();
+					// Show a brief summary — full thinking would be overwhelming on mobile
+					const preview = thinking.length > 300 ? `${thinking.slice(0, 300)}…` : thinking;
+					await safeSend(api, state.chatId, `💭 _${preview}_`);
+				}
+
 				if (block.type === "text" && block.text?.trim()) {
 					const text = block.text.trim();
 
