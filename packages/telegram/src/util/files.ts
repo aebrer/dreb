@@ -46,9 +46,17 @@ export function extractSendFiles(text: string): [string, string[]] {
 }
 
 /**
- * Clean up the upload directory.
+ * Clean up the upload directory. Skips cleanup if there are pending file
+ * batches (3-second debounce timers) to avoid deleting files that haven't
+ * been consumed yet.
  */
 export function cleanupUploads(): void {
+	// Check if any file batches are still pending — their debounce timers
+	// haven't fired yet, so their files haven't been consumed by the queue
+	if (hasPendingBatches()) {
+		log("[FILES] Skipping cleanup — pending file batches");
+		return;
+	}
 	try {
 		if (existsSync(UPLOAD_DIR)) {
 			rmSync(UPLOAD_DIR, { recursive: true, force: true });
@@ -57,4 +65,16 @@ export function cleanupUploads(): void {
 	} catch (e) {
 		log(`[FILES] Cleanup failed: ${e}`);
 	}
+}
+
+/**
+ * Track whether file batches are pending so cleanupUploads can skip
+ * when files haven't been consumed yet.
+ */
+let _pendingBatchCount = 0;
+export function setPendingBatches(count: number): void {
+	_pendingBatchCount = count;
+}
+export function hasPendingBatches(): boolean {
+	return _pendingBatchCount > 0;
 }

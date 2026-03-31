@@ -247,7 +247,26 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 		case "background_agent_end": {
 			const { agentId } = event as any;
 			state.backgroundAgents.delete(agentId);
-			updateStatus(state);
+
+			// Safety net: if all background agents have finished and no retry is
+			// in progress, mark done. This prevents the 5-min activity timeout hang
+			// when result delivery fails (both prompt() and followUp() fail in the
+			// core agent-session, so no new agent_start/agent_end cycle fires).
+			if (state.backgroundAgents.size === 0 && !state.retryInProgress && !state.done) {
+				// Only mark done if the main agent has already finished its cycle
+				// (agent_end was received with backgroundAgents.size > 0, which
+				// skipped setting done). If agent is still streaming, the normal
+				// agent_end handler will manage done.
+				if (state.statusMessageId) {
+					await state.editor.flush(state.chatId, state.statusMessageId);
+					await safeDelete(api, state.chatId, state.statusMessageId);
+					state.statusMessageId = null;
+				}
+				state.editor.clear();
+				state.done = true;
+			} else {
+				updateStatus(state);
+			}
 			break;
 		}
 

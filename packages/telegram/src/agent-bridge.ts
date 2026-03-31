@@ -390,6 +390,10 @@ export class AgentBridge {
 			msg.includes("RPC process exited")
 		) {
 			log(`[BRIDGE] RPC process exited or hung: ${msg.slice(0, 100)}`);
+			// Kill the child process before dropping the reference to prevent orphans
+			if (this.client) {
+				this.client.stop().catch(() => {});
+			}
 			this.exited = true;
 			this.client = null;
 		}

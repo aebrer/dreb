@@ -5,7 +5,7 @@
 
 import type { Api, Context } from "grammy";
 import type { UserState } from "../types.js";
-import { saveUpload } from "../util/files.js";
+import { saveUpload, setPendingBatches } from "../util/files.js";
 import { log, safeSend } from "../util/telegram.js";
 import { enqueuePrompt } from "./message.js";
 
@@ -97,6 +97,7 @@ export async function handleFile(
 			timer: setTimeout(() => flushBatch(bufferKey, api, getUserState), BATCH_DELAY),
 		};
 		pendingBatches.set(bufferKey, batch);
+		setPendingBatches(pendingBatches.size);
 	}
 }
 
@@ -107,6 +108,7 @@ async function flushBatch(key: string, api: Api, getUserState: (userId: number) 
 	const batch = pendingBatches.get(key);
 	if (!batch) return;
 	pendingBatches.delete(key);
+	setPendingBatches(pendingBatches.size);
 
 	const userState = getUserState(batch.userId);
 	const n = batch.files.length;

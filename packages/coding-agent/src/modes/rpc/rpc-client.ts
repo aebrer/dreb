@@ -97,8 +97,13 @@ export class RpcClient {
 			this.stderr += data.toString();
 		});
 
-		// Detect process exit — reject pending requests so callers don't hang
-		this.process.on("exit", (code, signal) => {
+		// Detect process exit — reject pending requests so callers don't hang.
+		// Capture the process reference so stale handlers from a previous process
+		// don't clobber state after a stop()/start() cycle.
+		const procRef = this.process;
+		procRef.on("exit", (code, signal) => {
+			// Guard: skip if this handler belongs to an old, already-stopped process
+			if (this.process !== procRef) return;
 			this._dead = true;
 			for (const pending of this.pendingRequests.values()) {
 				pending.reject(new Error(`RPC process exited with code ${code}, signal ${signal}`));
@@ -143,7 +148,7 @@ export class RpcClient {
 		});
 
 		this.process = null;
-		this._dead = false;
+		this._dead = true;
 		this.pendingRequests.clear();
 	}
 

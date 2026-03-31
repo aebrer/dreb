@@ -675,6 +675,9 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 		void shutdown();
 	};
 	process.stdin.on("end", onInputEnd);
+	process.stdin.on("error", () => {
+		void shutdown();
+	});
 
 	detachInput = (() => {
 		const detachJsonl = attachJsonlLineReader(process.stdin, (line) => {
