@@ -506,6 +506,7 @@ export class AgentSession {
 			// but do NOT trigger a response (the user hit Esc to stop, not to ask a question)
 			try {
 				this.agent.appendMessage(message);
+				this.sessionManager.appendMessage(message);
 				this._emit({ type: "message_start", message });
 				this._emit({ type: "message_end", message });
 			} catch (err) {

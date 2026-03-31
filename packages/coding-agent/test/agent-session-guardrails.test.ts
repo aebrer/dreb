@@ -365,6 +365,34 @@ describe("AgentSession background agent guardrails", () => {
 			Object.defineProperty(agent.state, "isStreaming", { value: false, configurable: true });
 		});
 
+		it("uses prompt() when agent is not streaming during bg agent delivery", async () => {
+			// isStreaming is false by default — parent is idle
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+
+			sessionAny._handleBackgroundComplete(
+				"bg-2",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 0,
+					output: "result output",
+					stderr: "",
+					errorMessage: null,
+				},
+				false,
+			);
+
+			// Should have used prompt (not steer or followUp)
+			expect(promptSpy).toHaveBeenCalledTimes(1);
+			const promptMsg = promptSpy.mock.calls[0][0] as any;
+			expect(promptMsg.content[0].text).toContain("Background agent bg-2");
+			expect(steerCalls.length).toBe(0);
+			expect(followUpCalls.length).toBe(0);
+
+			promptSpy.mockRestore();
+		});
+
 		it("does not trigger a response for cancelled bg agents", () => {
 			const sessionAny = session as any;
 			const promptSpy = vi.spyOn(agent, "prompt");
