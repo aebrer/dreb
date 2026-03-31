@@ -1,0 +1,25 @@
+[Unit]
+Description=dreb Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node %h/projects/dreb/packages/telegram/dist/index.js
+WorkingDirectory=%h/projects/dreb
+Restart=on-failure
+RestartSec=5
+
+# Required
+Environment=TELEGRAM_BOT_TOKEN=YOUR_TOKEN_HERE
+Environment=ALLOWED_USER_IDS=YOUR_USER_ID_HERE
+
+# Optional — adjust paths and settings
+Environment=DREB_WORKING_DIR=%h
+Environment=DREB_PATH=%h/.local/bin/dreb
+Environment=DREB_TELEGRAM_SERVICE=dreb-telegram
+# Environment=DREB_PROVIDER=anthropic
+# Environment=DREB_MODEL=claude-sonnet-4
+
+[Install]
+WantedBy=default.target

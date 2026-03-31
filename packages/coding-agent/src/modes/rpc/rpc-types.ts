@@ -65,7 +65,13 @@ export type RpcCommand =
 	| { id?: string; type: "get_messages" }
 
 	// Commands (available for invocation via prompt)
-	| { id?: string; type: "get_commands" };
+	| { id?: string; type: "get_commands" }
+
+	// Session listing
+	| { id?: string; type: "list_sessions" }
+
+	// Version
+	| { id?: string; type: "get_version" };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -200,8 +206,44 @@ export type RpcResponse =
 			data: { commands: RpcSlashCommand[] };
 	  }
 
+	// Session listing
+	| {
+			id?: string;
+			type: "response";
+			command: "list_sessions";
+			success: true;
+			data: { sessions: RpcSessionInfo[] };
+	  }
+
+	// Version
+	| { id?: string; type: "response"; command: "get_version"; success: true; data: { version: string } }
+
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };
+
+// ============================================================================
+// Session Info (for list_sessions response)
+// ============================================================================
+
+/** Session metadata returned by list_sessions */
+export interface RpcSessionInfo {
+	/** Full path to the session JSONL file */
+	path: string;
+	/** Session UUID */
+	id: string;
+	/** Working directory where the session was started */
+	cwd: string;
+	/** User-defined display name */
+	name?: string;
+	/** ISO timestamp of session creation */
+	created: string;
+	/** ISO timestamp of last modification */
+	modified: string;
+	/** Number of messages in the session */
+	messageCount: number;
+	/** First user message text */
+	firstMessage: string;
+}
 
 // ============================================================================
 // Extension UI Events (stdout)

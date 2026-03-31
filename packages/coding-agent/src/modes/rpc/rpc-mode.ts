@@ -12,6 +12,7 @@
  */
 
 import * as crypto from "node:crypto";
+import { VERSION } from "../../config.js";
 import type { AgentSession } from "../../core/agent-session.js";
 import type {
 	ExtensionUIContext,
@@ -19,6 +20,7 @@ import type {
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import { SessionManager } from "../../core/session-manager.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
@@ -26,6 +28,7 @@ import type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
+	RpcSessionInfo,
 	RpcSessionState,
 	RpcSlashCommand,
 } from "./rpc-types.js";
@@ -540,6 +543,35 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			// =================================================================
 			// Commands (available for invocation via prompt)
 			// =================================================================
+
+			// =================================================================
+			// Session Listing
+			// =================================================================
+
+			case "list_sessions": {
+				const cwd = session.sessionManager.getCwd();
+				const sessionDir = session.sessionManager.getSessionDir();
+				const sessions = await SessionManager.list(cwd, sessionDir);
+				const data: RpcSessionInfo[] = sessions.map((s) => ({
+					path: s.path,
+					id: s.id,
+					cwd: s.cwd,
+					name: s.name,
+					created: s.created.toISOString(),
+					modified: s.modified.toISOString(),
+					messageCount: s.messageCount,
+					firstMessage: s.firstMessage,
+				}));
+				return success(id, "list_sessions", { sessions: data });
+			}
+
+			// =================================================================
+			// Version
+			// =================================================================
+
+			case "get_version": {
+				return success(id, "get_version", { version: VERSION });
+			}
 
 			case "get_commands": {
 				const commands: RpcSlashCommand[] = [];

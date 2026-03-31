@@ -707,6 +707,69 @@ Each command has:
 
 **Note**: Built-in TUI commands (`/settings`, `/hotkeys`, etc.) are not included. They are handled only in interactive mode and would not execute if sent via `prompt`.
 
+### Session Listing
+
+#### list_sessions
+
+List sessions for the current working directory. Returns sessions sorted by most recently modified first.
+
+```json
+{"type": "list_sessions"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "list_sessions",
+  "success": true,
+  "data": {
+    "sessions": [
+      {
+        "path": "/home/user/.dreb/agent/sessions/--home-user-project--/2024-01-15T10-30-00_abc123.jsonl",
+        "id": "abc123-def456-...",
+        "cwd": "/home/user/project",
+        "name": "feature-work",
+        "created": "2024-01-15T10:30:00.000Z",
+        "modified": "2024-01-15T11:45:00.000Z",
+        "messageCount": 12,
+        "firstMessage": "Help me refactor the auth module"
+      }
+    ]
+  }
+}
+```
+
+Each session has:
+- `path`: Full path to the session JSONL file (use with `switch_session`)
+- `id`: Session UUID
+- `cwd`: Working directory where the session was started
+- `name`: User-defined display name (optional)
+- `created`: ISO timestamp of session creation
+- `modified`: ISO timestamp of last modification
+- `messageCount`: Number of messages in the session
+- `firstMessage`: First user message text (for preview)
+
+### Version
+
+#### get_version
+
+Get the dreb version.
+
+```json
+{"type": "get_version"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_version",
+  "success": true,
+  "data": {"version": "1.7.4"}
+}
+```
+
 ## Events
 
 Events are streamed to stdout as JSON lines during agent operation. Events do NOT include an `id` field (only responses do).

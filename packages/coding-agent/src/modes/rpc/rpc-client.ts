@@ -11,7 +11,7 @@ import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
-import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.js";
+import type { RpcCommand, RpcResponse, RpcSessionInfo, RpcSessionState, RpcSlashCommand } from "./rpc-types.js";
 
 // ============================================================================
 // Types
@@ -378,6 +378,23 @@ export class RpcClient {
 	async getCommands(): Promise<RpcSlashCommand[]> {
 		const response = await this.send({ type: "get_commands" });
 		return this.getData<{ commands: RpcSlashCommand[] }>(response).commands;
+	}
+
+	/**
+	 * List sessions for the current working directory.
+	 * Returns sessions sorted by most recently modified first.
+	 */
+	async listSessions(): Promise<RpcSessionInfo[]> {
+		const response = await this.send({ type: "list_sessions" });
+		return this.getData<{ sessions: RpcSessionInfo[] }>(response).sessions;
+	}
+
+	/**
+	 * Get the dreb version.
+	 */
+	async getVersion(): Promise<string> {
+		const response = await this.send({ type: "get_version" });
+		return this.getData<{ version: string }>(response).version;
 	}
 
 	// =========================================================================
