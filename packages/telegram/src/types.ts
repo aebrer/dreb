@@ -28,8 +28,6 @@ export interface UserState {
 	processing: boolean;
 	/** Flag to start a fresh session on next message */
 	newSessionFlag: boolean;
-	/** Session ID to resume on next message */
-	resumeSessionPath: string | null;
 	/** Currently running background agents */
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether /stop was used (suppress DONE marker) */

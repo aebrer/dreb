@@ -66,8 +66,16 @@ export async function cmdResume(ctx: Context, userState: UserState, args: string
 	}
 
 	const session = matches[0];
-	userState.resumeSessionPath = session.path;
-	await safeSend(ctx.api, chatId, `🔄 Next message will resume session \`${session.id.slice(0, 8)}...\``);
+	const switched = await bridge.switchSession(session.path);
+	if (switched) {
+		await safeSend(
+			ctx.api,
+			chatId,
+			`✅ Resumed session \`${session.id.slice(0, 8)}...\`\nUse /recent to see recent messages.`,
+		);
+	} else {
+		await safeSend(ctx.api, chatId, `❌ Failed to switch to session \`${session.id.slice(0, 8)}...\``);
+	}
 }
 
 export async function cmdRecent(ctx: Context, userState: UserState, args: string): Promise<void> {

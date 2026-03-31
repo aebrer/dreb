@@ -20,7 +20,6 @@ function createUserState(): UserState {
 		queue: [],
 		processing: false,
 		newSessionFlag: false,
-		resumeSessionPath: null,
 		backgroundAgents: new Map(),
 		stopRequested: false,
 	};
@@ -64,10 +63,6 @@ async function ensureBridge(_userId: number, config: Config, userState: UserStat
 	if (userState.newSessionFlag) {
 		userState.newSessionFlag = false;
 		await userState.bridge.newSession();
-	} else if (userState.resumeSessionPath) {
-		const path = userState.resumeSessionPath;
-		userState.resumeSessionPath = null;
-		await userState.bridge.switchSession(path);
 	} else if (!userState.bridge.sessionId) {
 		// First message — try to resume latest session
 		await userState.bridge.resumeLatest();
