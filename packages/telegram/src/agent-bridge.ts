@@ -209,6 +209,14 @@ export class AgentBridge {
 	}
 
 	/**
+	 * Get available commands (skills, extensions, prompt templates).
+	 */
+	async getCommands(): Promise<any[]> {
+		if (!this.client) return [];
+		return this.client.getCommands();
+	}
+
+	/**
 	 * Compact context.
 	 */
 	async compact(): Promise<any> {
