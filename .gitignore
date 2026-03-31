@@ -5,3 +5,8 @@ node_modules/
 dist/
 *.tsbuildinfo
 packages/ai/src/models.generated.ts
+
+# Secrets — never commit tokens or credentials
+*.env
+.env*
+secrets/

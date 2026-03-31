@@ -149,8 +149,9 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 		}
 
 		case "message_end": {
-			// Extract text from the completed message
+			// Only display assistant messages — user messages are echoed back by RPC
 			const msg = event.message;
+			if (msg?.role !== "assistant") break;
 			const content = msg?.content;
 			if (!content || !Array.isArray(content)) break;
 

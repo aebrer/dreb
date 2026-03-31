@@ -3,9 +3,23 @@
  * One bridge per user, handles lifecycle, event subscription, and session management.
  */
 
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { RpcClient, type RpcSessionInfo } from "@dreb/coding-agent/rpc";
 import type { Config } from "./config.js";
 import { log } from "./util/telegram.js";
+
+/**
+ * Resolve the absolute path to the dreb CLI entry point.
+ * RpcClient defaults to "dist/cli.js" (relative to cwd), but we need
+ * the absolute path since the bot's working dir differs from the dreb repo.
+ */
+function resolveDrebCliPath(): string {
+	// import.meta.resolve finds @dreb/coding-agent/dist/index.js
+	const resolved = import.meta.resolve("@dreb/coding-agent");
+	const distDir = dirname(fileURLToPath(resolved));
+	return join(distDir, "cli.js");
+}
 
 /** RPC events include both AgentEvent and session-specific events */
 type RpcEvent = { type: string; [key: string]: any };
@@ -48,15 +62,11 @@ export class AgentBridge {
 	async start(): Promise<void> {
 		if (this.client) return;
 
-		const args: string[] = [];
-		if (this.config.provider) args.push("--provider", this.config.provider);
-		if (this.config.model) args.push("--model", this.config.model);
-
 		this.client = new RpcClient({
+			cliPath: resolveDrebCliPath(),
 			cwd: this.config.workingDir,
 			provider: this.config.provider,
 			model: this.config.model,
-			args,
 		});
 
 		this.exited = false;

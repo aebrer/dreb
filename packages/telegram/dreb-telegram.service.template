@@ -10,9 +10,9 @@ WorkingDirectory=%h/projects/dreb
 Restart=on-failure
 RestartSec=5
 
-# Required
-Environment=TELEGRAM_BOT_TOKEN=YOUR_TOKEN_HERE
-Environment=ALLOWED_USER_IDS=YOUR_USER_ID_HERE
+# Secrets — create this file with your tokens (chmod 600)
+# Required keys: TELEGRAM_BOT_TOKEN, ALLOWED_USER_IDS
+EnvironmentFile=%h/.dreb/secrets/telegram.env
 
 # Optional — adjust paths and settings
 Environment=DREB_WORKING_DIR=%h

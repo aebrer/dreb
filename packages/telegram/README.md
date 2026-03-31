@@ -24,24 +24,35 @@ Message [@userinfobot](https://t.me/userinfobot) to get your numeric user ID.
 | `DREB_PROVIDER` | | LLM provider (e.g., `anthropic`) |
 | `DREB_MODEL` | | Model ID (e.g., `claude-sonnet-4`) |
 
-### 4. Build and run
+### 4. Create secrets file
+
+The bot loads secrets from `~/.dreb/secrets/telegram.env` automatically — both when run directly and via systemd.
+
+```bash
+mkdir -p ~/.dreb/secrets
+cat > ~/.dreb/secrets/telegram.env << 'EOF'
+TELEGRAM_BOT_TOKEN=your-token-here
+ALLOWED_USER_IDS=your-user-id-here
+EOF
+chmod 600 ~/.dreb/secrets/telegram.env
+```
+
+This file is gitignored. Explicit environment variables take priority over the file.
+
+### 5. Build and run
 
 ```bash
 # From the monorepo root
 npm run build
 
-# Run directly
-TELEGRAM_BOT_TOKEN=... ALLOWED_USER_IDS=... node packages/telegram/dist/index.js
+# Run directly (auto-loads secrets from ~/.dreb/secrets/telegram.env)
+node packages/telegram/dist/index.js
 ```
 
-### 5. Systemd service (recommended)
-
-Copy the template and fill in your values:
+### 6. Systemd service (recommended)
 
 ```bash
 cp packages/telegram/dreb-telegram.service.template ~/.config/systemd/user/dreb-telegram.service
-# Edit the file: replace YOUR_TOKEN_HERE and YOUR_USER_ID_HERE
-
 systemctl --user daemon-reload
 systemctl --user enable --now dreb-telegram
 ```
