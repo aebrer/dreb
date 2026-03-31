@@ -192,6 +192,16 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	toolExecution?: ToolExecutionMode;
 
 	/**
+	 * Called before each LLM call in the inner loop. If it returns false,
+	 * the loop exits cleanly as if no more tool calls were pending.
+	 *
+	 * Use this to enforce turn limits or other dynamic stopping conditions.
+	 * The callback is NOT called before the very first LLM call of a run —
+	 * only before subsequent calls triggered by tool results or steering.
+	 */
+	shouldContinue?: () => boolean;
+
+	/**
 	 * Called before a tool is executed, after arguments have been validated.
 	 *
 	 * Return `{ block: true }` to prevent execution. The loop emits an error tool result instead.
@@ -264,6 +274,14 @@ export interface AgentToolResult<T> {
 	content: (TextContent | ImageContent)[];
 	// Details to be displayed in a UI or logged
 	details: T;
+	/**
+	 * When true, the agent loop will stop after processing all tool results
+	 * from the current assistant message. No further LLM call is made.
+	 *
+	 * Use this when a tool's result means the agent should yield control
+	 * (e.g., after launching background agents that will deliver results later).
+	 */
+	endTurn?: boolean;
 }
 
 // Callback for streaming tool execution updates

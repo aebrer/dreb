@@ -48,3 +48,8 @@ If no issues found, say "No findings — code looks correct and idiomatic." with
 - Explain *why* something is wrong, not just *what* is wrong.
 - Reference existing patterns in the codebase when suggesting alternatives.
 - Do NOT use `#N` notation in your output (GitHub auto-links it to issues). Use "finding N" or "item N" instead.
+
+
+## Constraints
+
+- **Never post to GitHub.** Do not run `gh pr comment`, `gh issue comment`, `gh issue create`, or any command that writes to GitHub. Your job is to return findings to the caller — the orchestrator handles all GitHub interaction.

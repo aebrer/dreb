@@ -56,3 +56,8 @@ If coverage looks solid, say "No findings — test coverage looks adequate." wit
 - Missing tests for trivial getters/setters are not findings. Missing tests for complex logic or error handling are.
 - If the project has no test infrastructure at all, note that as a single finding rather than listing every untested function.
 - Do NOT use `#N` notation in your output (GitHub auto-links it to issues). Use "finding N" or "item N" instead.
+
+
+## Constraints
+
+- **Never post to GitHub.** Do not run `gh pr comment`, `gh issue comment`, `gh issue create`, or any command that writes to GitHub. Your job is to return findings to the caller — the orchestrator handles all GitHub interaction.

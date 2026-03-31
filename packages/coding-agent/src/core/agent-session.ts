@@ -278,6 +278,14 @@ export class AgentSession {
 	// Session tasks (in-memory, lost on session end)
 	private _tasks: SessionTask[] = [];
 
+	// Background agent turn limiter (Layer D): counts LLM turns while bg agents are running.
+	// Reset when a bg agent delivers results. No limit when no bg agents are active.
+	private _bgTurnCounter = 0;
+	private static readonly BG_TURN_LIMIT = 3;
+
+	// Sentinel monitor state (Layer B): tracks whether we've already steered for this streaming response
+	private _sentinelSteered = false;
+
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
 	private _toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
@@ -304,6 +312,7 @@ export class AgentSession {
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
+		this._installBackgroundAgentGuardrails();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -372,6 +381,88 @@ export class AgentSession {
 				content: hookResult.content,
 				details: hookResult.details,
 			};
+		});
+	}
+
+	/**
+	 * Install guardrails for background agent interactions:
+	 * - Layer B: Sentinel monitor — steer if the parent model generates suspicious tokens
+	 * - Layer D: Turn limiter — restrict parent to N turns while bg agents are running
+	 */
+	private _installBackgroundAgentGuardrails(): void {
+		// Layer B: Sentinel monitor — detect hallucinated bg agent responses in streaming output
+		this.agent.subscribe((event) => {
+			if (event.type !== "message_update") return;
+			const ame = event.assistantMessageEvent;
+			if (ame.type !== "text_delta") return;
+
+			// Only activate when background agents are running
+			const bgRunning = getRunningBackgroundAgents();
+			if (bgRunning.length === 0) return;
+
+			// Don't steer twice for the same streaming response
+			if (this._sentinelSteered) return;
+
+			// Check the partial text accumulated so far for sentinel patterns
+			const partial = event.message as AssistantMessage;
+			const textContent = partial.content?.find((c: any) => c.type === "text");
+			const text = textContent && "text" in textContent ? (textContent as any).text : "";
+			if (text.includes("<background-agent-complete>") || text.includes("<details>")) {
+				this._sentinelSteered = true;
+				this.agent.steer({
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: "You appear to be fabricating a background agent response. Background agents have not completed yet — their results arrive as system messages. Stop generating and wait for real results. If you are intentionally writing HTML containing these tags (e.g. in a code block), acknowledge this and continue.",
+						},
+					],
+					timestamp: Date.now(),
+				});
+			}
+		});
+
+		// Reset sentinel flag at the start of each new assistant message
+		this.agent.subscribe((event) => {
+			if (event.type === "message_start" && (event.message as any).role === "assistant") {
+				this._sentinelSteered = false;
+			}
+		});
+
+		// Layer D: Turn limiter — cap parent turns while bg agents are running.
+		// Increment counter on each turn_end while bg agents are active.
+		this.agent.subscribe((event) => {
+			if (event.type !== "turn_end") return;
+			const bgRunning = getRunningBackgroundAgents();
+			if (bgRunning.length === 0) {
+				this._bgTurnCounter = 0;
+				return;
+			}
+			this._bgTurnCounter++;
+		});
+
+		// shouldContinue callback — checked before each subsequent LLM call
+		this.agent.setShouldContinue(() => {
+			const bgRunning = getRunningBackgroundAgents();
+			if (bgRunning.length === 0) {
+				this._bgTurnCounter = 0;
+				return true;
+			}
+			if (this._bgTurnCounter >= AgentSession.BG_TURN_LIMIT) {
+				// Inject a warning via steer so the model sees it next time
+				this.agent.steer({
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: `Turn limit reached — background agents are still running. Wait for their results before continuing. You have used ${this._bgTurnCounter} turns while background agents are active.`,
+						},
+					],
+					timestamp: Date.now(),
+				});
+				return false;
+			}
+			return true;
 		});
 	}
 
@@ -2378,10 +2469,14 @@ export class AgentSession {
 									);
 								}
 							} else {
+								// Reset bg turn counter on delivery — parent gets fresh turns
+								this._bgTurnCounter = 0;
+
 								// Normal completion — deliver and trigger a response
-								// If the agent is already streaming, queue as follow-up instead of prompting
+								// If the agent is already streaming, steer (injects after current tool calls)
+								// instead of followUp (waits until agent would fully stop)
 								if (this.agent.state.isStreaming) {
-									this.agent.followUp(message);
+									this.agent.steer(message);
 								} else {
 									// Fallback: if streaming started between the isStreaming check and this call, deliver as follow-up
 									this.agent.prompt(message).catch((promptErr) => {

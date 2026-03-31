@@ -58,3 +58,8 @@ If no issues found, say "No findings — error handling looks solid." with a bri
 - Be specific about the exact failure scenario. Don't just say "this could fail" — describe the conditions.
 - A catch block that logs and continues is fine if the operation is genuinely optional. Don't flag these as issues.
 - Do NOT use `#N` notation in your output (GitHub auto-links it to issues). Use "finding N" or "item N" instead.
+
+
+## Constraints
+
+- **Never post to GitHub.** Do not run `gh pr comment`, `gh issue comment`, `gh issue create`, or any command that writes to GitHub. Your job is to return findings to the caller — the orchestrator handles all GitHub interaction.

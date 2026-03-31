@@ -111,6 +111,12 @@ export interface AgentOptions {
 
 	/** Called after a tool finishes executing, before final tool events are emitted. */
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
+
+	/**
+	 * Called before each subsequent LLM call in the agent loop.
+	 * If it returns false, the loop exits cleanly.
+	 */
+	shouldContinue?: () => boolean;
 }
 
 export class Agent {
@@ -152,6 +158,7 @@ export class Agent {
 		context: AfterToolCallContext,
 		signal?: AbortSignal,
 	) => Promise<AfterToolCallResult | undefined>;
+	private _shouldContinue?: () => boolean;
 
 	constructor(opts: AgentOptions = {}) {
 		this._state = { ...this._state, ...opts.initialState };
@@ -168,6 +175,7 @@ export class Agent {
 		this._maxRetryDelayMs = opts.maxRetryDelayMs;
 		this._toolExecution = opts.toolExecution ?? "parallel";
 		this._beforeToolCall = opts.beforeToolCall;
+		this._shouldContinue = opts.shouldContinue;
 		this._afterToolCall = opts.afterToolCall;
 	}
 
@@ -251,6 +259,10 @@ export class Agent {
 			| undefined,
 	) {
 		this._afterToolCall = value;
+	}
+
+	setShouldContinue(value: (() => boolean) | undefined) {
+		this._shouldContinue = value;
 	}
 
 	get state(): AgentState {
@@ -539,6 +551,7 @@ export class Agent {
 			toolExecution: this._toolExecution,
 			beforeToolCall: this._beforeToolCall,
 			afterToolCall: this._afterToolCall,
+			shouldContinue: this._shouldContinue,
 			convertToLlm: this.convertToLlm,
 			transformContext: this.transformContext,
 			getApiKey: this.getApiKey,
