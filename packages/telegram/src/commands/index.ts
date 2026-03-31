@@ -37,19 +37,19 @@ export function registerCommands(bot: Bot, config: Config, getUserState: (userId
 
 	bot.command("sessions", (ctx) => {
 		const us = getUserState(ctx.from!.id);
-		return cmdSessions(ctx, us);
+		return cmdSessions(ctx, us, config);
 	});
 
 	bot.command("resume", (ctx) => {
 		const us = getUserState(ctx.from!.id);
 		const args = ctx.match as string;
-		return cmdResume(ctx, us, args);
+		return cmdResume(ctx, us, args, config);
 	});
 
 	bot.command("recent", (ctx) => {
 		const us = getUserState(ctx.from!.id);
 		const args = ctx.match as string;
-		return cmdRecent(ctx, us, args);
+		return cmdRecent(ctx, us, args, config);
 	});
 
 	bot.command("compact", (ctx) => {

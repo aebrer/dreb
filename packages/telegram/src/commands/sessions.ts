@@ -3,15 +3,20 @@
  */
 
 import type { Context } from "grammy";
+import type { AgentBridge } from "../agent-bridge.js";
+import { ensureBridge } from "../bridge-lifecycle.js";
+import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
 import { log, safeSend, sendLong } from "../util/telegram.js";
 
-export async function cmdSessions(ctx: Context, userState: UserState): Promise<void> {
+export async function cmdSessions(ctx: Context, userState: UserState, config: Config): Promise<void> {
 	const chatId = ctx.chat!.id;
-	const bridge = userState.bridge;
 
-	if (!bridge?.isAlive) {
-		await safeSend(ctx.api, chatId, "No active connection. Send a message first.");
+	let bridge: AgentBridge;
+	try {
+		bridge = await ensureBridge(config, userState);
+	} catch (e) {
+		await safeSend(ctx.api, chatId, `❌ Failed to start agent: ${e}`);
 		return;
 	}
 
@@ -38,17 +43,19 @@ export async function cmdSessions(ctx: Context, userState: UserState): Promise<v
 	await safeSend(ctx.api, chatId, lines.join("\n"));
 }
 
-export async function cmdResume(ctx: Context, userState: UserState, args: string): Promise<void> {
+export async function cmdResume(ctx: Context, userState: UserState, args: string, config: Config): Promise<void> {
 	const chatId = ctx.chat!.id;
-	const bridge = userState.bridge;
 
 	if (!args.trim()) {
 		await safeSend(ctx.api, chatId, "Usage: /resume <session\\_id>\nUse /sessions to list available sessions.");
 		return;
 	}
 
-	if (!bridge?.isAlive) {
-		await safeSend(ctx.api, chatId, "No active connection. Send a message first.");
+	let bridge: AgentBridge;
+	try {
+		bridge = await ensureBridge(config, userState);
+	} catch (e) {
+		await safeSend(ctx.api, chatId, `❌ Failed to start agent: ${e}`);
 		return;
 	}
 
@@ -78,12 +85,14 @@ export async function cmdResume(ctx: Context, userState: UserState, args: string
 	}
 }
 
-export async function cmdRecent(ctx: Context, userState: UserState, args: string): Promise<void> {
+export async function cmdRecent(ctx: Context, userState: UserState, args: string, config: Config): Promise<void> {
 	const chatId = ctx.chat!.id;
-	const bridge = userState.bridge;
 
-	if (!bridge?.isAlive) {
-		await safeSend(ctx.api, chatId, "No active session. Send a message first.");
+	let bridge: AgentBridge;
+	try {
+		bridge = await ensureBridge(config, userState);
+	} catch (e) {
+		await safeSend(ctx.api, chatId, `❌ Failed to start agent: ${e}`);
 		return;
 	}
 

@@ -3,7 +3,8 @@
  */
 
 import { Bot } from "grammy";
-import { AgentBridge } from "./agent-bridge.js";
+import type { AgentBridge } from "./agent-bridge.js";
+import { ensureBridge } from "./bridge-lifecycle.js";
 import { registerCommands, setMyCommands } from "./commands/index.js";
 import type { Config } from "./config.js";
 import { handleFile } from "./handlers/file.js";
@@ -35,40 +36,22 @@ function getUserState(userId: number): UserState {
 }
 
 /**
- * Ensure the user has an active agent bridge, starting one if needed.
- * Handles session resume logic (new session, resume by path, or continue latest).
+ * Ensure bridge is alive AND a session is selected.
+ * Used by message/file handlers before prompting.
  */
-async function ensureBridge(_userId: number, config: Config, userState: UserState): Promise<AgentBridge> {
-	if (!userState.bridge || !userState.bridge.isAlive) {
-		const bridge = new AgentBridge(config);
-		await bridge.start();
-		userState.bridge = bridge;
-
-		// Wire up background agent tracking
-		bridge.onEvent((event: any) => {
-			if (event.type === "background_agent_start") {
-				userState.backgroundAgents.set(event.agentId, {
-					agentId: event.agentId,
-					agentType: event.agentType,
-					taskSummary: event.taskSummary,
-					startTime: Date.now(),
-				});
-			} else if (event.type === "background_agent_end") {
-				userState.backgroundAgents.delete(event.agentId);
-			}
-		});
-	}
+async function ensureBridgeWithSession(config: Config, userState: UserState): Promise<AgentBridge> {
+	const bridge = await ensureBridge(config, userState);
 
 	// Handle session flags
 	if (userState.newSessionFlag) {
 		userState.newSessionFlag = false;
-		await userState.bridge.newSession();
-	} else if (!userState.bridge.sessionId) {
+		await bridge.newSession();
+	} else if (!bridge.sessionId) {
 		// First message — try to resume latest session
-		await userState.bridge.resumeLatest();
+		await bridge.resumeLatest();
 	}
 
-	return userState.bridge;
+	return bridge;
 }
 
 export function createBot(config: Config): Bot {
@@ -111,7 +94,7 @@ export function createBot(config: Config): Bot {
 
 		// Ensure bridge is alive and session is set up
 		try {
-			await ensureBridge(userId, config, userState);
+			await ensureBridgeWithSession(config, userState);
 		} catch (e) {
 			log(`[MSG] Bridge setup failed: ${e}`);
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Failed to start agent: ${e}`);
@@ -133,7 +116,7 @@ export function createBot(config: Config): Bot {
 
 		// Ensure bridge is alive
 		try {
-			await ensureBridge(userId, config, userState);
+			await ensureBridgeWithSession(config, userState);
 		} catch (e) {
 			log(`[FILE] Bridge setup failed: ${e}`);
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Failed to start agent: ${e}`);
