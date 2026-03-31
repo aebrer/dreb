@@ -24,7 +24,7 @@
 		"typescript",
 		"cli"
 	],
-	"author": "Mario Zechner",
+	"author": "Drew Brereton",
 	"license": "MIT",
 	"repository": {
 		"type": "git",

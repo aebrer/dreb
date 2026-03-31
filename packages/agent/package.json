@@ -26,7 +26,7 @@
 		"transport",
 		"state-management"
 	],
-	"author": "Mario Zechner",
+	"author": "Drew Brereton",
 	"license": "MIT",
 	"repository": {
 		"type": "git",

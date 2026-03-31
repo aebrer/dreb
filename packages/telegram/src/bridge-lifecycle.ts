@@ -57,8 +57,10 @@ export async function ensureBridgeWithSession(config: Config, userState: UserSta
 		userState.bridge = null;
 
 		const customConfig = { ...config, workingDir: cwd };
-		const bridge = await ensureBridge(customConfig, userState);
+		// Set effectiveCwd BEFORE ensureBridge so the stale-cwd override
+		// in ensureBridge doesn't clobber the user's chosen directory
 		userState.effectiveCwd = cwd;
+		const bridge = await ensureBridge(customConfig, userState);
 		await bridge.newSession();
 		return bridge;
 	}

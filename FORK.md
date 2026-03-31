@@ -4,7 +4,7 @@
 - **Repository:** https://github.com/badlogic/pi-mono
 - **Commit:** `fb10d9aef9c9f0b84e690482f044250c6fc2ce49`
 - **Date:** 2026-03-26
-- **License:** MIT (see LICENSE-pi-mono)
+- **License:** MIT — original copyright notice preserved in this file
 
 ## What was removed
 - `packages/mom/` — Slack bot (we're building Telegram via Carcin instead)
