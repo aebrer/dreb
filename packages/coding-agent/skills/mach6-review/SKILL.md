@@ -121,7 +121,7 @@ Update task: post-review → completed, assess → in_progress.
 
 ## Step 6: Independent assessment
 
-Launch a subagent with `agent: "independent-assessor"`. This is a **pre-existing agent definition** shipped with dreb — it has full codebase read access and defaults to `model: opus` (strongest tier). If your provider doesn't carry models matching "opus", pass a `model` override with your provider's strongest model (e.g., `glm-5-1` on z.ai).
+Launch a subagent with `agent: "independent-assessor"`. This is a **pre-existing agent definition** shipped with dreb — it has full codebase read access and defaults to `model: opus` (strongest tier). If your provider doesn't carry models matching "opus", pass a `model` override with your provider's strongest model (e.g., `glm-5.1` on z.ai).
 
 **Do NOT use the Sandbox agent for this step** — the Sandbox agent has no codebase access and cannot verify findings against actual code.
 
