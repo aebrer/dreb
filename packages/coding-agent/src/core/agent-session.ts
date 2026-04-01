@@ -60,6 +60,7 @@ import {
 	type TurnStartEvent,
 	wrapRegisteredTools,
 } from "./extensions/index.js";
+import { isForbiddenCommand } from "./forbidden-commands.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
@@ -348,6 +349,21 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.setBeforeToolCall(async ({ toolCall, args }) => {
+			// Check forbidden commands — this guard cannot be bypassed by extensions or skills
+			if (toolCall.name === "bash") {
+				const command = (args as Record<string, unknown>)?.command;
+				if (typeof command === "string") {
+					const customPatterns = this.settingsManager?.getForbiddenCommands();
+					const pattern = isForbiddenCommand(command, customPatterns);
+					if (pattern) {
+						return {
+							block: true as const,
+							reason: `Command blocked by forbidden-commands guard: "${pattern}" matched "${command}"`,
+						};
+					}
+				}
+			}
+
 			const runner = this._extensionRunner;
 			if (!runner?.hasHandlers("tool_call")) {
 				return undefined;

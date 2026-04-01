@@ -10,7 +10,9 @@ export DREB_NO_LOCAL_LLM=1
 LOG_FILE="/tmp/dreb-test-$(date +%s).log"
 
 echo "Running tests..."
-if npm test > "$LOG_FILE" 2>&1; then
+# NO_COLOR prevents vitest/chalk from emitting ANSI codes when CI=true forces
+# color output even through pipes — without this, grep patterns can't match.
+if NO_COLOR=1 npm test > "$LOG_FILE" 2>&1; then
     # Aggregate results across all test runners (vitest + node:test)
     # Vitest lines have leading whitespace: "      Tests  N passed | M skipped (T)"
     # Node test runner lines: "# tests N", "# pass N", "# fail N"
@@ -18,11 +20,19 @@ if npm test > "$LOG_FILE" 2>&1; then
     # Vitest format: "Tests  N failed | M passed" — "N failed" comes before "passed"
     VITEST_FAILED=$(grep -oP 'Tests\s+\K\d+(?=\s+failed)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
     VITEST_SKIPPED=$(grep -oP '\|\s+\K\d+(?=\s+skipped)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
-    NODE_PASSED=$(grep -P '^# pass ' "$LOG_FILE" | grep -oP '\d+' | awk '{s+=$1} END {print s+0}')
-    NODE_FAILED=$(grep -P '^# fail ' "$LOG_FILE" | grep -oP '\d+' | awk '{s+=$1} END {print s+0}')
+    # Node v24: "# pass N" / "# fail N" — Node v25: "ℹ pass N" / "ℹ fail N"
+    NODE_PASSED=$(grep -P '^(\s*#|ℹ)\s+pass\s' "$LOG_FILE" | grep -oP '\d+' | awk '{s+=$1} END {print s+0}')
+    NODE_FAILED=$(grep -P '^(\s*#|ℹ)\s+fail\s' "$LOG_FILE" | grep -oP '\d+' | awk '{s+=$1} END {print s+0}')
 
     TOTAL_PASSED=$((VITEST_PASSED + NODE_PASSED))
     TOTAL_FAILED=$((VITEST_FAILED + NODE_FAILED))
+
+    # Guard: zero tests discovered means something is wrong (misconfigured runners, broken imports, etc.)
+    if [ "$TOTAL_PASSED" -eq 0 ] && [ "$TOTAL_FAILED" -eq 0 ]; then
+        echo "ERROR: Zero tests discovered. Possible runner misconfiguration."
+        echo "  Full log: $LOG_FILE"
+        exit 1
+    fi
 
     echo "All tests passed."
     echo "  passed: $TOTAL_PASSED | failed: $TOTAL_FAILED | skipped: $VITEST_SKIPPED"
