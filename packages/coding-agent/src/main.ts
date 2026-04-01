@@ -29,7 +29,7 @@ import { SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 import { allTools } from "./core/tools/index.js";
-import { pruneSubagentSessions } from "./core/tools/subagent.js";
+
 import { runMigrations, showDeprecationWarnings } from "./migrations.js";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.js";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.js";
@@ -795,10 +795,6 @@ export async function main(args: string[]) {
 	// Create session manager based on CLI flags
 	let sessionManager = await createSessionManager(parsed, cwd, extensionsResult, settingsManager);
 	time("createSessionManager");
-
-	// Clean up old subagent session files (older than 7 days)
-	pruneSubagentSessions();
-	time("pruneSubagentSessions");
 
 	// Handle --resume: show session picker
 	if (parsed.resume) {

@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
@@ -387,24 +387,23 @@ async function spawnSubagent(
  * Returns the full path, or undefined if no session file was written
  * (e.g., subagent was killed before the first assistant message).
  */
-function discoverSessionFile(sessionDir: string, agentName: string): string | undefined {
+export function discoverSessionFile(sessionDir: string, agentName: string): string | undefined {
 	try {
 		if (!existsSync(sessionDir)) return undefined;
 		const files = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
 		if (files.length === 0) return undefined;
 		// Pick the most recently modified file (typically there's only one per subagent dir)
-		let best: { name: string; mtime: number } | undefined;
+		let best: { path: string; mtime: number } | undefined;
 		for (const f of files) {
 			const fullPath = join(sessionDir, f);
 			const mtime = statSync(fullPath).mtime.getTime();
 			if (!best || mtime > best.mtime) {
-				best = { name: f, mtime };
+				best = { path: fullPath, mtime };
 			}
 		}
 		if (best) {
-			const sessionFile = join(sessionDir, best.name);
-			console.error(`[subagent] session file: ${sessionFile} (agent=${agentName})`);
-			return sessionFile;
+			console.error(`[subagent] session file: ${best.path} (agent=${agentName})`);
+			return best.path;
 		}
 	} catch (err) {
 		console.error(
@@ -412,43 +411,6 @@ function discoverSessionFile(sessionDir: string, agentName: string): string | un
 		);
 	}
 	return undefined;
-}
-
-/** Default max age for subagent session cleanup: 7 days */
-const SUBAGENT_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
-/**
- * Remove subagent session subdirectories older than `maxAgeMs`.
- * Each subagent gets its own subdirectory under the subagent sessions root.
- * Safe to call at startup — errors are logged but never thrown.
- */
-export function pruneSubagentSessions(maxAgeMs: number = SUBAGENT_SESSION_MAX_AGE_MS): void {
-	try {
-		const baseDir = getSubagentSessionsDir();
-		if (!existsSync(baseDir)) return;
-		const now = Date.now();
-		const entries = readdirSync(baseDir);
-		let pruned = 0;
-		for (const entry of entries) {
-			const entryPath = join(baseDir, entry);
-			try {
-				const stat = statSync(entryPath);
-				if (stat.isDirectory() && now - stat.mtime.getTime() > maxAgeMs) {
-					rmSync(entryPath, { recursive: true, force: true });
-					pruned++;
-				}
-			} catch {
-				// Skip entries we can't stat or remove
-			}
-		}
-		if (pruned > 0) {
-			console.error(`[subagent] pruned ${pruned} old subagent session(s)`);
-		}
-	} catch (err) {
-		console.error(
-			`[subagent] failed to prune subagent sessions: ${err instanceof Error ? err.message : String(err)}`,
-		);
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -898,6 +860,9 @@ function formatSingleResult(result: SubagentResult): string {
 	} else if (result.exitCode === 0) {
 		text += "\n(No output)";
 	}
+	if (result.sessionFile) {
+		text += `\n\nSession log: ${result.sessionFile}`;
+	}
 	return text;
 }
 
@@ -1188,6 +1153,8 @@ export function createSubagentToolDefinition(
 							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
 							.join("\n\n---\n\n");
 						const failed = results.filter((r) => r.exitCode !== 0);
+						// Surface the last step's session file (or the failing step's) for the completion message
+						const lastSessionFile = results.findLast((r) => r.sessionFile)?.sessionFile;
 						return {
 							agent: "chain",
 							task: taskSummary,
@@ -1198,6 +1165,7 @@ export function createSubagentToolDefinition(
 								failed.length > 0
 									? `Chain stopped at step ${results.length} of ${chainSteps.length}: ${results[results.length - 1]?.errorMessage}`
 									: null,
+							sessionFile: lastSessionFile,
 						};
 					});
 

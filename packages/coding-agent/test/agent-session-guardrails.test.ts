@@ -441,6 +441,55 @@ describe("AgentSession background agent guardrails", () => {
 			// Counter should NOT have been reset — cancellation doesn't mean work finished
 			expect(sessionAny._bgTurnCounter).toBe(3);
 		});
+
+		it("includes session log path in completion message when sessionFile is set", () => {
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+
+			sessionAny._handleBackgroundComplete(
+				"bg-session",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 0,
+					output: "done",
+					stderr: "",
+					errorMessage: null,
+					sessionFile: "/tmp/test-session.jsonl",
+				},
+				false,
+			);
+
+			expect(promptSpy).toHaveBeenCalledTimes(1);
+			const promptMsg = promptSpy.mock.calls[0][0] as any;
+			expect(promptMsg.content[0].text).toContain("Session log: /tmp/test-session.jsonl");
+
+			promptSpy.mockRestore();
+		});
+
+		it("omits session log from completion message when sessionFile is not set", () => {
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+
+			sessionAny._handleBackgroundComplete(
+				"bg-no-session",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 0,
+					output: "done",
+					stderr: "",
+					errorMessage: null,
+				},
+				false,
+			);
+
+			expect(promptSpy).toHaveBeenCalledTimes(1);
+			const promptMsg = promptSpy.mock.calls[0][0] as any;
+			expect(promptMsg.content[0].text).not.toContain("Session log:");
+
+			promptSpy.mockRestore();
+		});
 	});
 
 	describe("Guardrail cleanup on dispose", () => {
