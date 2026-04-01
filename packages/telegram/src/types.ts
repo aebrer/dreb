@@ -31,6 +31,8 @@ export interface UserState {
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether /stop was used (suppress DONE marker) */
 	stopRequested: boolean;
+	/** Abort controller for the current processItem — signaled by /stop to break the wait */
+	currentAbort: AbortController | null;
 }
 
 export interface QueueItem {

@@ -116,9 +116,12 @@ export async function cmdStop(ctx: Context, api: Api, userState: UserState): Pro
 	userState.queue = [];
 	userState.stopRequested = true;
 
-	// Always abort the bridge when the user asks to stop — even if isStreaming is false,
-	// the RPC process may still be running (e.g., after timeout expired the waitForDone
-	// but didn't abort). This ensures a clean state for the next prompt.
+	// Signal the current processItem to resolve immediately
+	if (userState.currentAbort) {
+		userState.currentAbort.abort();
+	}
+
+	// Abort the bridge so the RPC process stops its current work
 	if (userState.bridge?.isAlive) {
 		await userState.bridge.abort();
 	}
