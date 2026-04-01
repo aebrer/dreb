@@ -104,8 +104,7 @@ export interface EventDisplayState {
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether agent has finished */
 	done: boolean;
-	/** Timestamp of last received event (for activity-based timeout) */
-	lastEventTime: number;
+
 	/** Debounced editor instance */
 	editor: DebouncedEditor;
 	/** Whether auto-retry is in progress (Layer 1: reactive) */
@@ -144,7 +143,6 @@ export function createEventDisplay(
 		tasks: [],
 		backgroundAgents: new Map(),
 		done: false,
-		lastEventTime: Date.now(),
 		editor: new DebouncedEditor(api),
 		retryInProgress: false,
 		retryAttempt: 0,
@@ -155,9 +153,6 @@ export function createEventDisplay(
  * Process an agent event and update the display.
  */
 export async function handleAgentEvent(api: Api, state: EventDisplayState, event: RpcEvent): Promise<void> {
-	// Stamp activity time on every event — used for activity-based timeout
-	state.lastEventTime = Date.now();
-
 	switch (event.type) {
 		case "tool_execution_start": {
 			const name = event.toolName || "?";
@@ -361,7 +356,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			// Clean up editor
 			state.editor.clear();
 
-			// Signal done AFTER cleanup — waitForDone polls this flag,
+			// Signal done AFTER cleanup — waitForCompletion checks this flag,
 			// so setting it last ensures status message is deleted before DONE is sent
 			state.done = true;
 			break;
