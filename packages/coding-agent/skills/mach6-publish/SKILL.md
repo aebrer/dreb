@@ -1,10 +1,10 @@
 ---
 name: mach6-publish
-description: "Pre-merge checks, merge PR, version bump, git tag, GitHub release with notes, changelog update. Verifies CI, conflicts, and review status before merging. Usage: mach6-publish 42"
+description: "Pre-merge checks, version bump, merge PR, git tag, GitHub release. Version bump happens BEFORE merge (on the feature branch) because master requires PRs. Usage: mach6-publish 42"
 argument-hint: "<pr-number>"
 ---
 
-# mach6-publish — Merge, Tag, and Release
+# mach6-publish — Version Bump, Merge, Tag, and Release
 
 **User input:** $ARGUMENTS
 
@@ -21,7 +21,7 @@ argument-hint: "<pr-number>"
 ```
 tasks_update([
   { id: "checks", title: "Pre-merge checks", status: "in_progress" },
-  { id: "prepare", title: "Apply pre-merge updates", status: "pending" },
+  { id: "version", title: "Version bump (on feature branch)", status: "pending" },
   { id: "merge", title: "Merge PR", status: "pending" },
   { id: "release", title: "Tag and release", status: "pending" }
 ])
@@ -30,6 +30,8 @@ tasks_update([
 ## Step 2: Pre-merge checks
 
 ```bash
+gh pr checkout <pr-number>
+git pull
 gh pr view <pr-number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,comments,body
 gh pr checks <pr-number>
 ```
@@ -50,41 +52,48 @@ If there are blocking issues, report them and suggest fixes:
 
 Check for contributing guidelines first:
 ```bash
-# Read first found: CONTRIBUTING.md, DEVELOPMENT.md, .github/CONTRIBUTING.md
+# Read first found: CONTRIBUTING.md, DEVELOPMENT.md, .github/CONTRIBUTING.md, AGENTS.md
 ```
 
 Then check if these need attention:
 - [ ] Documentation updated (if behavior changed) — check README, docs/, docstrings, help text
-- [ ] Version bumped (if project uses versioning — check package.json, Cargo.toml, pyproject.toml, etc.)
 - [ ] Changelog updated (if project maintains one — check CHANGELOG.md, CHANGES.md)
 - [ ] Tests passing locally
 
-Present the checklist to the user. If items need attention, note them.
+Present the checklist to the user. If items need attention, address them before proceeding.
 
-Update task: checks → completed, prepare → in_progress.
+Update task: checks → completed, version → in_progress.
 
-## Step 3: Apply pre-merge updates
+## Step 3: Version bump (on the feature branch — BEFORE merge)
 
-If the checklist identified needed updates (version bump, changelog entry, docs, etc.):
-1. Make the changes
-2. Commit and push
+**This step is mandatory for projects with versioning.** The version bump MUST happen on the feature branch and be pushed as part of the PR, because the default branch requires PRs for all changes — you cannot push commits directly to it.
 
-```bash
-git add <specific-files>
-git commit -m "chore: pre-merge updates for PR <number>
+1. Detect versioning:
+   ```bash
+   # Check for version files: package.json, Cargo.toml, pyproject.toml, version.txt, etc.
+   ```
 
-Co-Authored-By: Claude <noreply@anthropic.com>"
-git push
-```
+2. Determine the current version and what the new version should be. If the bump level isn't obvious from the PR context, **ask the user**:
+   - **Patch**: Bug fixes, minor improvements
+   - **Minor**: New features, non-breaking changes
+   - **Major**: Breaking changes
 
-For version bumps, if the bump level isn't obvious, ask the user:
-- **Patch**: Bug fixes, minor improvements
-- **Minor**: New features, non-breaking changes
-- **Major**: Breaking changes
+3. Apply the version bump. Check AGENTS.md / CONTRIBUTING.md for project-specific version bump procedures (e.g., sync scripts, build steps that embed the version).
 
-If no updates needed, skip this step.
+4. Commit and push on the feature branch:
+   ```bash
+   git add <version-files>
+   git commit -m "chore: bump version to <new-version>
+   
+   Co-Authored-By: Claude <noreply@anthropic.com>"
+   git push
+   ```
 
-Update task: prepare → completed, merge → in_progress.
+5. Wait for CI to pass on the version bump commit before proceeding to merge.
+
+If the project doesn't use versioning, skip this step.
+
+Update task: version → completed, merge → in_progress.
 
 ## Step 4: Merge
 
@@ -107,13 +116,22 @@ git branch -d <branch-name> 2>/dev/null
 
 Update task: merge → completed, release → in_progress.
 
-## Step 5: Release (optional)
+## Step 5: Tag and release
 
-Ask the user if they want to create a release:
+Ask the user if they want to create a GitHub release:
 - **Yes**: Proceed with tagging and release
-- **No**: Skip to cleanup
+- **No**: Skip — just create the tag
 
-If yes:
+### Always create the git tag
+
+The tag is created on the default branch after merge, using the version from Step 3:
+
+```bash
+git tag v<version>
+git push --tags
+```
+
+### If releasing
 
 1. Check existing releases for style:
    ```bash
@@ -121,17 +139,9 @@ If yes:
    gh release view <latest-tag>  # if releases exist
    ```
 
-2. Determine the version (from package.json, latest tag, or ask the user)
+2. Draft release notes from the PR description and comment thread. Match existing release note style.
 
-3. Create a git tag:
-   ```bash
-   git tag v<version>
-   git push --tags
-   ```
-
-4. Draft release notes from the PR description and comment thread. Match existing release note style.
-
-5. Present draft to user for approval, then create:
+3. Present draft to user for approval, then create:
    ```bash
    gh release create v<version> --title "v<version>" --notes "<release-notes>"
    ```

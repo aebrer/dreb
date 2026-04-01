@@ -21,13 +21,15 @@ This builds all packages in dependency order: tui → ai → agent → coding-ag
 
 **Every release MUST follow these steps in order. No exceptions.**
 
-1. **Bump version**: Update `version` in the root `package.json`
+**The version bump happens on the feature branch, BEFORE merge.** The default branch (master) requires PRs for all changes — you cannot push commits directly to it.
+
+1. **Bump version**: Update `version` in the root `package.json` (on the feature branch)
 2. **Sync**: Run `npm run sync-version` (or let `npm run build` do it — the build script runs `sync-version.sh` automatically)
 3. **Build**: Run `npm run build` to compile with the new version
 4. **Verify**: Launch the binary and confirm the TUI welcome message shows the correct version
-5. **Commit**: Commit the version bump (all `package.json` files touched by sync)
-6. **Tag**: Create a git tag matching the version: `git tag v<version>`
-7. **Push**: Push the commit and tag: `git push && git push --tags`
+5. **Commit & push**: Commit the version bump (all `package.json` files touched by sync) and push to the feature branch
+6. **Merge**: Merge the PR (squash) after CI passes
+7. **Tag**: On the default branch after merge: `git tag v<version> && git push --tags`
 
 **The version in `package.json` is the source of truth.** The TUI reads it at runtime via `config.ts`. If the version in `package.json` doesn't match the release, the TUI will show the wrong version to users.
 
