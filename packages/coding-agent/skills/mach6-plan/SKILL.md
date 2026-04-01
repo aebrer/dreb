@@ -53,7 +53,7 @@ Extract planning-relevant guidance: project layers, testing expectations, coding
 
 ## Step 4: Explore the codebase
 
-Launch 2-3 Explore subagents in parallel:
+Launch 2-3 Explore subagents in parallel. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a particularly large or complex codebase warrants a stronger tier).
 - **Similar features**: Find existing code that solves related problems, trace implementation patterns
 - **Architecture**: Map relevant architecture layers, abstractions, data flow
 - **Integration points**: Identify where new code connects to existing systems

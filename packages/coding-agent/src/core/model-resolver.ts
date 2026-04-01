@@ -279,6 +279,12 @@ export interface ResolveCliModelResult {
 	 * When set, model will be undefined.
 	 */
 	error: string | undefined;
+	/**
+	 * True when the model was constructed as a synthetic fallback (unknown model ID
+	 * with a known provider). Useful for subagent spawning where synthetic models
+	 * should be rejected in favor of trying the next fallback.
+	 */
+	isSyntheticFallback?: boolean;
 }
 
 /**
@@ -411,7 +417,13 @@ export function resolveCliModel(options: {
 			const fallbackWarning = warning
 				? `${warning} Model "${pattern}" not found for provider "${provider}". Using custom model id.`
 				: `Model "${pattern}" not found for provider "${provider}". Using custom model id.`;
-			return { model: fallbackModel, thinkingLevel: undefined, warning: fallbackWarning, error: undefined };
+			return {
+				model: fallbackModel,
+				thinkingLevel: undefined,
+				warning: fallbackWarning,
+				error: undefined,
+				isSyntheticFallback: true,
+			};
 		}
 	}
 

@@ -30,9 +30,11 @@ tasks_update([
 ## Step 2: Pre-merge checks
 
 ```bash
-gh pr view <pr-number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision
+gh pr view <pr-number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,comments,body
 gh pr checks <pr-number>
 ```
+
+Read ALL PR comments to understand the full history — plans, reviews, assessments, progress updates, and discussion.
 
 Verify:
 - [ ] CI is passing
@@ -40,9 +42,9 @@ Verify:
 - [ ] All review findings addressed (check for genuine items in latest assessment)
 
 If there are blocking issues, report them and suggest fixes:
-- **Failed CI**: `/skill:mach6-fix <pr-number> ci`
+- **Failed CI**: `/skill:mach6-implement <pr-number> ci`
 - **Merge conflicts**: Suggest resolving manually or rebasing
-- **Unaddressed findings**: `/skill:mach6-fix <pr-number>`
+- **Unaddressed findings**: `/skill:mach6-implement <pr-number>`
 
 ### Pre-merge checklist
 

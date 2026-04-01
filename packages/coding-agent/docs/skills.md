@@ -283,7 +283,7 @@ dreb ships with **mach6**, a development workflow that orchestrates the full iss
 | `mach6-plan` | Explore codebase, plan, create branch and draft PR |
 | `mach6-push` | Commit, push, post progress comment |
 | `mach6-review` | Multi-agent code review with independent assessment |
-| `mach6-fix` | Fix review findings or CI failures |
+| `mach6-implement` | Implement plans, fix review findings, or fix CI failures |
 | `mach6-publish` | Pre-merge checks, merge, tag, release |
 
 Built-in skills are always available and can be overridden by placing a skill with the same name in any [user or project location](#locations).

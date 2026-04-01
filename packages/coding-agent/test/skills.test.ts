@@ -452,7 +452,7 @@ describe("skills", () => {
 			expect(builtinNames).toContain("mach6-plan");
 			expect(builtinNames).toContain("mach6-push");
 			expect(builtinNames).toContain("mach6-review");
-			expect(builtinNames).toContain("mach6-fix");
+			expect(builtinNames).toContain("mach6-implement");
 			expect(builtinNames).toContain("mach6-publish");
 		});
 

@@ -52,7 +52,7 @@ Update task: read → completed, explore → in_progress.
 
 ### Step 3: Explore the codebase
 
-Launch 2-3 Explore subagents in parallel targeting different aspects:
+Launch 2-3 Explore subagents in parallel targeting different aspects. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a particularly complex issue warrants a stronger tier).
 - **Relevant code**: Find existing code related to the issue, trace implementation patterns
 - **Architecture**: Map relevant architecture layers, abstractions, data flow
 - **Prior work**: Check for related branches, PRs, or commits
