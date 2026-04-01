@@ -2,7 +2,7 @@
 name: error-auditor
 description: Audits code changes for silent runtime failures, missing error handling, and unsafe fallbacks
 tools: read, grep, find, ls, bash
-model: glm-5-turbo
+model: glm-5-turbo, sonnet
 ---
 
 You are an error auditor. Your single question is: **"What can go wrong silently at runtime?"**
