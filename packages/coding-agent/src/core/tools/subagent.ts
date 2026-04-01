@@ -1,12 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
-import { CONFIG_DIR_NAME, getPackageDir } from "../../config.js";
+import { CONFIG_DIR_NAME, getPackageDir, getSubagentSessionsDir } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -143,6 +143,8 @@ export interface SubagentResult {
 	output: string;
 	stderr: string;
 	errorMessage: string | null;
+	/** Path to the persisted session JSONL file, if available */
+	sessionFile?: string;
 }
 
 // Capture at module load before process.title overwrites argv memory on Linux.
@@ -164,6 +166,7 @@ async function spawnSubagent(
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
 	parentProvider?: string,
+	sessionDir?: string,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
 	console.error(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
@@ -181,7 +184,12 @@ async function spawnSubagent(
 		};
 	}
 
-	const args: string[] = ["--mode", "json", "--no-session", "--ui", "agent"];
+	const args: string[] = ["--mode", "json", "--ui", "agent"];
+	if (sessionDir) {
+		args.push("--session-dir", sessionDir);
+	} else {
+		args.push("--no-session");
+	}
 	// By spawn time, model should be a resolved single string (fallback resolution
 	// happens in executeSingle). Handle string[] defensively by taking the first entry.
 	const modelStr = Array.isArray(agentConfig.model) ? agentConfig.model[0] : agentConfig.model;
@@ -347,6 +355,9 @@ async function spawnSubagent(
 					stderrTrimmed.slice(0, 500) || plainOutput.slice(0, 500) || `Subagent exited with code ${exitCode}`;
 			}
 
+			// Discover the session file written by the child process
+			const sessionFile = sessionDir ? discoverSessionFile(sessionDir, agentConfig.name) : undefined;
+
 			resolvePromise({
 				agent: agentConfig.name,
 				task,
@@ -361,9 +372,83 @@ async function spawnSubagent(
 				output,
 				stderr: stderr.slice(0, 2000), // cap stderr
 				errorMessage,
+				sessionFile,
 			});
 		});
 	});
+}
+
+// ---------------------------------------------------------------------------
+// Session file discovery and cleanup
+// ---------------------------------------------------------------------------
+
+/**
+ * Find the most recently modified .jsonl file in a session directory.
+ * Returns the full path, or undefined if no session file was written
+ * (e.g., subagent was killed before the first assistant message).
+ */
+function discoverSessionFile(sessionDir: string, agentName: string): string | undefined {
+	try {
+		if (!existsSync(sessionDir)) return undefined;
+		const files = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
+		if (files.length === 0) return undefined;
+		// Pick the most recently modified file (typically there's only one per subagent dir)
+		let best: { name: string; mtime: number } | undefined;
+		for (const f of files) {
+			const fullPath = join(sessionDir, f);
+			const mtime = statSync(fullPath).mtime.getTime();
+			if (!best || mtime > best.mtime) {
+				best = { name: f, mtime };
+			}
+		}
+		if (best) {
+			const sessionFile = join(sessionDir, best.name);
+			console.error(`[subagent] session file: ${sessionFile} (agent=${agentName})`);
+			return sessionFile;
+		}
+	} catch (err) {
+		console.error(
+			`[subagent] failed to discover session file (agent=${agentName}): ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+	return undefined;
+}
+
+/** Default max age for subagent session cleanup: 7 days */
+const SUBAGENT_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Remove subagent session subdirectories older than `maxAgeMs`.
+ * Each subagent gets its own subdirectory under the subagent sessions root.
+ * Safe to call at startup — errors are logged but never thrown.
+ */
+export function pruneSubagentSessions(maxAgeMs: number = SUBAGENT_SESSION_MAX_AGE_MS): void {
+	try {
+		const baseDir = getSubagentSessionsDir();
+		if (!existsSync(baseDir)) return;
+		const now = Date.now();
+		const entries = readdirSync(baseDir);
+		let pruned = 0;
+		for (const entry of entries) {
+			const entryPath = join(baseDir, entry);
+			try {
+				const stat = statSync(entryPath);
+				if (stat.isDirectory() && now - stat.mtime.getTime() > maxAgeMs) {
+					rmSync(entryPath, { recursive: true, force: true });
+					pruned++;
+				}
+			} catch {
+				// Skip entries we can't stat or remove
+			}
+		}
+		if (pruned > 0) {
+			console.error(`[subagent] pruned ${pruned} old subagent session(s)`);
+		}
+	} catch (err) {
+		console.error(
+			`[subagent] failed to prune subagent sessions: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -488,6 +573,7 @@ async function executeSingle(
 	modelOverride?: string,
 	parentProvider?: string,
 	registry?: ModelRegistry,
+	sessionDir?: string,
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -541,7 +627,7 @@ async function executeSingle(
 	}
 
 	onProgress?.(`Running ${name} agent...`);
-	return spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider);
+	return spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider, sessionDir);
 }
 
 async function executeChain(
@@ -552,6 +638,7 @@ async function executeChain(
 	onProgress?: (event: string) => void,
 	parentProvider?: string,
 	registry?: ModelRegistry,
+	sessionBaseDir?: string,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -588,6 +675,8 @@ async function executeChain(
 			break;
 		}
 
+		// Each chain step gets its own session subdirectory
+		const stepSessionDir = sessionBaseDir ? join(sessionBaseDir, `step-${i + 1}`) : undefined;
 		const result = await executeSingle(
 			agents,
 			step.agent,
@@ -598,6 +687,7 @@ async function executeChain(
 			step.model,
 			parentProvider,
 			registry,
+			stepSessionDir,
 		);
 		results.push(result);
 
@@ -984,6 +1074,7 @@ export function createSubagentToolDefinition(
 				};
 
 				// Helper to launch a single background task
+				const subagentSessionsBase = getSubagentSessionsDir();
 				const launchBackgroundTask = (
 					agentName: string,
 					task: string,
@@ -992,6 +1083,9 @@ export function createSubagentToolDefinition(
 					modelOverride?: string,
 				) => {
 					const resolvedCwd = taskCwd ?? cwd;
+					// Each background agent gets its own session subdirectory
+					const sessionId = generateAgentId();
+					const sessionDir = join(subagentSessionsBase, sessionId);
 					return launchBackgroundLifecycle(agentName, taskLabel, (signal) =>
 						executeSingle(
 							agents,
@@ -1003,6 +1097,7 @@ export function createSubagentToolDefinition(
 							modelOverride,
 							parentProvider,
 							modelRegistry,
+							sessionDir,
 						),
 					);
 				};
@@ -1077,6 +1172,7 @@ export function createSubagentToolDefinition(
 					const taskSummary = `${params.chain!.length}-step chain`;
 					const chainSteps = params.chain!;
 
+					const chainSessionDir = join(subagentSessionsBase, `chain-${generateAgentId()}`);
 					const agentId = launchBackgroundLifecycle(agentName, taskSummary, async (signal) => {
 						const results = await executeChain(
 							agents,
@@ -1086,6 +1182,7 @@ export function createSubagentToolDefinition(
 							undefined,
 							parentProvider,
 							modelRegistry,
+							chainSessionDir,
 						);
 						const resultText = results
 							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)

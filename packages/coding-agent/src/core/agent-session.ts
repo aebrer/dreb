@@ -487,6 +487,9 @@ export class AgentSession {
 		if (result.output) {
 			parts.push(result.output);
 		}
+		if (result.sessionFile) {
+			parts.push(`Session log: ${result.sessionFile}`);
+		}
 		// Append status of other running agents so the model has awareness
 		const stillRunning = getRunningBackgroundAgents();
 		if (stillRunning.length > 0) {
