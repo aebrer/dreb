@@ -44,13 +44,15 @@ export async function ensureBridge(config: Config, userState: UserState): Promis
  * Used by message/file handlers and skill commands before prompting.
  */
 export async function ensureBridgeWithSession(config: Config, userState: UserState): Promise<AgentBridge> {
-	// Handle new session with custom working directory — requires a fresh bridge
-	if (userState.newSessionFlag && userState.newSessionCwd) {
-		const cwd = userState.newSessionCwd;
+	// Handle new session — always kill and recreate the bridge for clean state.
+	// For /new <path>: uses the user-specified directory.
+	// For /new (bare): preserves the current effectiveCwd.
+	if (userState.newSessionFlag) {
+		const cwd = userState.newSessionCwd ?? userState.effectiveCwd ?? config.workingDir;
 		userState.newSessionFlag = false;
 		userState.newSessionCwd = null;
 
-		// Kill existing bridge and start a new one with the custom cwd
+		// Kill existing bridge and start a new one with the resolved cwd
 		if (userState.bridge?.isAlive) {
 			await userState.bridge.stop();
 		}
@@ -58,7 +60,7 @@ export async function ensureBridgeWithSession(config: Config, userState: UserSta
 
 		const customConfig = { ...config, workingDir: cwd };
 		// Set effectiveCwd BEFORE ensureBridge so the stale-cwd override
-		// in ensureBridge doesn't clobber the user's chosen directory
+		// in ensureBridge doesn't clobber the resolved directory
 		userState.effectiveCwd = cwd;
 		const bridge = await ensureBridge(customConfig, userState);
 		await bridge.newSession();
@@ -72,12 +74,8 @@ export async function ensureBridgeWithSession(config: Config, userState: UserSta
 		userState.effectiveCwd = config.workingDir;
 	}
 
-	// Handle session flags
-	if (userState.newSessionFlag) {
-		userState.newSessionFlag = false;
-		await bridge.newSession();
-	} else if (!bridge.sessionId) {
-		// First message — try to resume latest session
+	// No session yet — try to resume latest
+	if (!bridge.sessionId) {
 		await bridge.resumeLatest();
 	}
 
