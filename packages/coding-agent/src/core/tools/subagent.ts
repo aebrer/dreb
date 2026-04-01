@@ -202,6 +202,21 @@ async function spawnSubagent(
 	}
 	args.push("-p", task);
 
+	// Early abort check — if the signal is already aborted (e.g. queued task whose
+	// AbortController was aborted while waiting on bgAcquire), bail out before
+	// spawning a child process that can never be killed. addEventListener("abort")
+	// on an already-aborted signal does NOT fire the callback in Node.js.
+	if (signal?.aborted) {
+		return {
+			agent: agentConfig.name,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: "",
+			errorMessage: "Aborted before spawn",
+		};
+	}
+
 	return new Promise<SubagentResult>((resolvePromise, rejectPromise) => {
 		let proc: ChildProcess;
 		try {
@@ -805,6 +820,17 @@ export function createSubagentToolDefinition(
 	const parentProvider = options?.parentProvider;
 	const modelRegistry = options?.modelRegistry;
 
+	// Discover agents at definition time to build the prompt guidelines.
+	// This is cheap (reads .md files) and the same call happens on every execute().
+	const knownAgents = discoverAgentTypes(cwd);
+	const agentListParts: string[] = [];
+	for (const [name, config] of knownAgents) {
+		const defaultTag = name === DEFAULT_AGENT ? " (default)" : "";
+		const desc = config.description || name;
+		agentListParts.push(`'${name}'${defaultTag} — ${desc}`);
+	}
+	const builtInAgentsLine = `Built-in agents: ${agentListParts.join("; ")}`;
+
 	return {
 		name: "subagent",
 		label: "subagent",
@@ -817,7 +843,7 @@ export function createSubagentToolDefinition(
 		promptGuidelines: [
 			"Use `subagent` to delegate focused, independent tasks to child agents",
 			"Available agent types can be discovered from ~/.dreb/agents/ and .dreb/agents/ markdown files",
-			"Built-in agents: 'Explore' (default) — read-only codebase exploration; 'Sandbox' — isolated analysis agent restricted to /tmp files only (no codebase access)",
+			builtInAgentsLine,
 			"Use parallel mode for independent tasks that can run concurrently",
 			"Use chain mode when each step depends on the previous step's output (reference with {previous})",
 			"All subagents run in background — the tool returns immediately and you are notified when each agent completes.",

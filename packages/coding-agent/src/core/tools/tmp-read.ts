@@ -6,6 +6,7 @@
  * this tool rejects any path that resolves outside /tmp at the tool level.
  */
 
+import { realpathSync } from "node:fs";
 import { resolve as normalizePath } from "node:path";
 import type { ToolDefinition } from "../extensions/types.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -39,9 +40,17 @@ export function createTmpReadToolDefinition(options?: ReadToolOptions): ToolDefi
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			// Validate the path resolves under /tmp BEFORE delegating to the real read tool.
-			// normalizePath collapses ".." components (e.g. /tmp/../etc/passwd → /etc/passwd)
-			// which resolveToCwd does not do for absolute paths.
-			const resolved = normalizePath(resolveToCwd(params.path, SANDBOX_CWD));
+			// normalizePath collapses ".." components (e.g. /tmp/../etc/passwd → /etc/passwd).
+			// realpathSync dereferences symlinks so /tmp/evil -> /etc/passwd is caught.
+			// Falls back to lexical check if the file doesn't exist yet (ENOENT).
+			const lexical = normalizePath(resolveToCwd(params.path, SANDBOX_CWD));
+			let resolved: string;
+			try {
+				resolved = realpathSync(lexical);
+			} catch {
+				// File doesn't exist — use lexical path (read will fail with ENOENT naturally)
+				resolved = lexical;
+			}
 			if (!isUnderTmp(resolved)) {
 				return {
 					content: [

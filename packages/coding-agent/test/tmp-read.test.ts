@@ -1,4 +1,5 @@
-import { describe, expect, test } from "vitest";
+import { mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createTmpReadToolDefinition } from "../src/core/tools/tmp-read.js";
 
 /**
@@ -84,6 +85,36 @@ describe("tmp_read path validation", () => {
 
 		test("/home/user/file is blocked", async () => {
 			const { blocked, text } = await readPath("/home/user/file");
+			expect(blocked).toBe(true);
+			expect(text).toContain("Access denied");
+		});
+	});
+
+	describe("blocked paths — symlink escapes", () => {
+		const testDir = "/tmp/dreb-tmp-read-test";
+		const symlinkPath = `${testDir}/symlink-escape`;
+		const targetPath = "/etc/hostname"; // a readable file outside /tmp
+
+		beforeAll(() => {
+			mkdirSync(testDir, { recursive: true });
+			try {
+				rmSync(symlinkPath);
+			} catch {
+				// ignore if doesn't exist
+			}
+			symlinkSync(targetPath, symlinkPath);
+		});
+
+		afterAll(() => {
+			try {
+				rmSync(testDir, { recursive: true });
+			} catch {
+				// cleanup best-effort
+			}
+		});
+
+		test("symlink under /tmp pointing outside /tmp is blocked", async () => {
+			const { blocked, text } = await readPath(symlinkPath);
 			expect(blocked).toBe(true);
 			expect(text).toContain("Access denied");
 		});

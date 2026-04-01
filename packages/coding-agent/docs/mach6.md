@@ -92,9 +92,9 @@ Implement a plan from a PR, or fix review findings / CI failures.
 /skill:mach6-implement 53 ci          # Fix CI failures
 ```
 
-**Implement mode** (PR number only): Reads the `<!-- mach6-plan -->` comment and implements the full plan — reading codebase, making changes, adding tests, and verifying.
+**Implement mode** (PR number only): Reads the `<!-- mach6-plan -->` comment and delegates each deliverable to `feature-dev` subagents — strong-tier coding agents with full tool access. Independent deliverables run in parallel.
 
-**Fix mode** (with finding numbers or `ci`): Reads review and assessment comments via HTML markers, applies batch sizing heuristics (~10 simple, ~6 moderate, ~3 complex fixes per batch), and suggests `/skill:mach6-push` then `/skill:mach6-review` after fixing.
+**Fix mode** (with finding numbers or `ci`): Reads review and assessment comments via HTML markers, delegates fixes to `feature-dev` subagents, applies batch sizing heuristics (~10 simple, ~6 moderate, ~3 complex fixes per batch), and suggests `/skill:mach6-push` then `/skill:mach6-review` after fixing.
 
 ### mach6-publish
 
@@ -110,7 +110,13 @@ Pre-merge checks, merge, tag, and release.
 - Merges with `--squash --delete-branch`
 - Optionally creates a git tag and GitHub release
 
-## Review Agents
+## Agents
+
+### feature-dev
+
+Strong general-purpose coding agent used by `mach6-implement` for plan implementation and fix application. Has full tool access (read, write, edit, grep, find, ls, bash) and uses a strong-tier model with provider fallback list. Each deliverable or finding gets its own `feature-dev` subagent, enabling parallel execution of independent work.
+
+### Review Agents
 
 Five specialized agents, each asking an orthogonal question. All use confidence scoring (only report findings ≥ 80).
 

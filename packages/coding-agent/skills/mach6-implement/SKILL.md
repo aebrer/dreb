@@ -71,23 +71,28 @@ Read all files mentioned in the plan. Understand the existing code before making
 
 ### Step 6i: Implement
 
-Work through each deliverable in the plan:
-1. Implement the changes described
-2. Follow existing project patterns and conventions
-3. Update task tracking as you complete each deliverable
+Use the `feature-dev` subagent to implement each deliverable. `feature-dev` is a **pre-existing agent definition** shipped with dreb — it has full tool access (read, write, edit, grep, find, ls, bash) and uses a strong-tier model with a provider fallback list. Do not override its model unless there's a specific reason.
 
-For large plans, implement features in dependency order — later features may depend on earlier ones.
+**For each deliverable in the plan**, launch a `feature-dev` subagent via the `subagent` tool. Provide each agent with:
+- The specific deliverable to implement (files to modify, what to change, expected behavior)
+- The full plan context and any relevant PR discussion
+- The list of files to read for understanding existing patterns
+- Instructions to run tests and linting after making changes
 
-### Step 7i: Add tests
+**Parallelism:** If deliverables are independent (don't modify the same files), run their `feature-dev` agents in parallel. If they have dependencies, use chain mode or run them sequentially — later features may depend on earlier ones.
 
-If the project has tests, add or update tests for each behavior change as specified in the plan.
+**Small plans (1-2 simple deliverables):** You may implement directly instead of delegating, if the changes are straightforward enough that subagent overhead isn't justified.
 
-### Step 8i: Verify
+Update task tracking as each deliverable completes.
 
+### Step 7i: Verify
+
+After all `feature-dev` agents complete:
 - Run the project's test suite
 - Run any linting/formatting tools
 - Build the project if applicable
 - Verify each deliverable from the plan is addressed
+- If any agent reported issues or partial completion, address the gaps
 
 Suggest next step: `/skill:mach6-push` then `/skill:mach6-review <pr-number>` for review.
 
@@ -139,17 +144,25 @@ If more than batch size, fix first batch and tell user to re-run.
 
 ### Step 6f: Implement fixes
 
-For each finding:
-1. Read the relevant code
-2. Understand the issue fully
-3. Implement the fix
-4. Update task tracking per finding
+Use the `feature-dev` subagent to implement fixes. `feature-dev` is a **pre-existing agent definition** shipped with dreb — it has full tool access and uses a strong-tier model with a provider fallback list. Do not override its model unless there's a specific reason.
 
-Defer out-of-scope items to new issues.
+**For each finding** (or batch of related findings), launch a `feature-dev` subagent with:
+- The finding description and the assessment's classification/reasoning
+- The specific files and code locations involved
+- Instructions on what to fix and how
+- Instructions to run tests after fixing
+
+**Parallelism:** If findings touch different files, run their `feature-dev` agents in parallel. If findings overlap (same file/function), batch them into a single agent.
+
+**Simple fixes** (typos, naming, one-line changes): You may fix these directly instead of delegating.
+
+Defer out-of-scope items to new issues. Update task tracking per finding.
 
 ### Step 7f: Verify
 
+After all `feature-dev` agents complete:
 - Run tests and linting
 - Verify each fix addresses its finding
+- If any agent reported issues, address the gaps
 
 Suggest next step: `/skill:mach6-push` then `/skill:mach6-review <pr-number>` for re-review.
