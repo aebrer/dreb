@@ -357,6 +357,8 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			}
 
 			case "abort": {
+				const { abortBackgroundAgents } = await import("../../core/tools/subagent.js");
+				abortBackgroundAgents();
 				await session.abort();
 				return success(id, "abort");
 			}
