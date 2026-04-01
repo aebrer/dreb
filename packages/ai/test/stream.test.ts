@@ -13,6 +13,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 import { StringEnum } from "../src/utils/typebox-helpers.js";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { ZAI_GLM_5_EXTENDED } from "./fixtures/zai-models.js";
 import { resolveApiKey } from "./oauth.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -613,8 +614,8 @@ describe("Generate E2E Tests", () => {
 		});
 	});
 
-	describe.skipIf(!process.env.OPENROUTER_API_KEY)("OpenRouter Provider (glm-4.5v via OpenAI Completions)", () => {
-		const llm = getModel("openrouter", "z-ai/glm-4.5v");
+	describe.skipIf(!process.env.OPENROUTER_API_KEY)("OpenRouter Provider (glm-5 via OpenAI Completions)", () => {
+		const llm = getModel("openrouter", "z-ai/glm-5");
 
 		it("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm);
@@ -723,7 +724,7 @@ describe("Generate E2E Tests", () => {
 	);
 
 	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider (glm-5 via OpenAI Completions)", () => {
-		const llm = getModel("zai", "glm-5");
+		const llm = ZAI_GLM_5_EXTENDED;
 
 		it("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm);

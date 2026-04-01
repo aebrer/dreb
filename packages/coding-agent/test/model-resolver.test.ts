@@ -378,11 +378,14 @@ describe("default model selection", () => {
 		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.4");
 	});
 
-	test("zai, minimax, and cerebras defaults track current models", () => {
-		expect(defaultModelPerProvider.zai).toBe("glm-5");
+	test("minimax and cerebras defaults track current models", () => {
 		expect(defaultModelPerProvider.minimax).toBe("MiniMax-M2.7");
 		expect(defaultModelPerProvider["minimax-cn"]).toBe("MiniMax-M2.7");
-		expect(defaultModelPerProvider.cerebras).toBe("zai-glm-4.7");
+		expect(defaultModelPerProvider.cerebras).toBe("gpt-oss-120b");
+	});
+
+	test("zai is not a built-in provider", () => {
+		expect("zai" in defaultModelPerProvider).toBe(false);
 	});
 
 	test("ai-gateway default is opus 4.6", () => {

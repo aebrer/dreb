@@ -1,6 +1,7 @@
 import type { AssistantMessage, Model, ToolResultMessage, UserMessage } from "@dreb/ai";
 import { findModel, getModel } from "@dreb/ai";
 import { describe, expect, it } from "vitest";
+import { ZAI_GLM_47_FLASH } from "../../ai/test/fixtures/zai-models.js";
 import { Agent } from "../src/index.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { calculateTool } from "./utils/calculate.js";
@@ -304,8 +305,8 @@ describe("Agent E2E Tests", () => {
 		});
 	});*/
 
-	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider (glm-4.5-air)", () => {
-		const model = getModel("zai", "glm-4.5-air");
+	describe.skipIf(!process.env.ZAI_API_KEY)("zAI Provider (glm-4.7-flash)", () => {
+		const model = ZAI_GLM_47_FLASH;
 
 		it("should handle basic text prompt", async () => {
 			await basicPrompt(model);

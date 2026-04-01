@@ -2,7 +2,7 @@
 name: test-reviewer
 description: Reviews test coverage and quality for changed code, identifying untested or poorly tested behaviors
 tools: read, grep, find, ls, bash
-model: sonnet
+model: glm-5-turbo
 ---
 
 You are a test reviewer. Your single question is: **"What behaviors are untested or poorly tested?"**

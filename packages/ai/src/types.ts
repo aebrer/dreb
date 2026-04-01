@@ -32,7 +32,6 @@ export type KnownProvider =
 	| "cerebras"
 	| "openrouter"
 	| "vercel-ai-gateway"
-	| "zai"
 	| "mistral"
 	| "minimax"
 	| "minimax-cn"

@@ -327,6 +327,8 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 			for (const [modelId, model] of Object.entries(data.cerebras.models)) {
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true) continue;
+				// Skip z.ai models hosted on Cerebras — users configure these via models.json
+				if (modelId.startsWith("zai-")) continue;
 
 				models.push({
 					id: modelId,
@@ -370,37 +372,6 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					},
 					contextWindow: m.limit?.context || 4096,
 					maxTokens: m.limit?.output || 4096,
-				});
-			}
-		}
-
-		// Process zAi models
-		if (data.zai?.models) {
-			for (const [modelId, model] of Object.entries(data.zai.models)) {
-				const m = model as ModelsDevModel;
-				if (m.tool_call !== true) continue;
-				const supportsImage = m.modalities?.input?.includes("image")
-
-				models.push({
-				id: modelId,
-				name: m.name || modelId,
-				api: "openai-completions",
-				provider: "zai",
-				baseUrl: "https://api.z.ai/api/coding/paas/v4",
-				reasoning: m.reasoning === true,
-				input: supportsImage ? ["text", "image"] : ["text"],
-				cost: {
-					input: m.cost?.input || 0,
-					output: m.cost?.output || 0,
-					cacheRead: m.cost?.cache_read || 0,
-					cacheWrite: m.cost?.cache_write || 0,
-				},
-				compat: {
-					supportsDeveloperRole: false,
-					thinkingFormat: "zai",
-				},
-				contextWindow: m.limit?.context || 4096,
-				maxTokens: m.limit?.output || 4096,
 				});
 			}
 		}
@@ -706,11 +677,6 @@ async function generateModels() {
 			candidate.cost.output = 2.06;
 			candidate.cost.cacheRead = 0.07;
 			candidate.maxTokens = 4096;
-		}
-		if (candidate.provider === "openrouter" && candidate.id === "z-ai/glm-5") {
-			candidate.cost.input = 0.6;
-			candidate.cost.output = 1.9;
-			candidate.cost.cacheRead = 0.119;
 		}
 	}
 
