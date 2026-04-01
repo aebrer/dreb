@@ -395,10 +395,14 @@ export function discoverSessionFile(sessionDir: string, agentName: string): stri
 		// Pick the most recently modified file (typically there's only one per subagent dir)
 		let best: { path: string; mtime: number } | undefined;
 		for (const f of files) {
-			const fullPath = join(sessionDir, f);
-			const mtime = statSync(fullPath).mtime.getTime();
-			if (!best || mtime > best.mtime) {
-				best = { path: fullPath, mtime };
+			try {
+				const fullPath = join(sessionDir, f);
+				const mtime = statSync(fullPath).mtime.getTime();
+				if (!best || mtime > best.mtime) {
+					best = { path: fullPath, mtime };
+				}
+			} catch {
+				// File disappeared or is a bad symlink — skip it, keep any valid candidate
 			}
 		}
 		if (best) {
@@ -1153,8 +1157,7 @@ export function createSubagentToolDefinition(
 							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
 							.join("\n\n---\n\n");
 						const failed = results.filter((r) => r.exitCode !== 0);
-						// Surface the last step's session file (or the failing step's) for the completion message
-						const lastSessionFile = results.findLast((r) => r.sessionFile)?.sessionFile;
+						// Per-step session logs are already embedded in resultText via formatSingleResult
 						return {
 							agent: "chain",
 							task: taskSummary,
@@ -1165,7 +1168,6 @@ export function createSubagentToolDefinition(
 								failed.length > 0
 									? `Chain stopped at step ${results.length} of ${chainSteps.length}: ${results[results.length - 1]?.errorMessage}`
 									: null,
-							sessionFile: lastSessionFile,
 						};
 					});
 
