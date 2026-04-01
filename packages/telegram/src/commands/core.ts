@@ -99,13 +99,7 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 }
 
 export async function cmdStop(ctx: Context, api: Api, userState: UserState): Promise<void> {
-	const hadProc = userState.bridge?.isStreaming;
 	const queuedCount = userState.queue.length;
-
-	if (!hadProc && queuedCount === 0 && !userState.processing) {
-		await ctx.reply("Nothing running to stop.");
-		return;
-	}
 
 	// Clear queue and clean up status messages
 	for (const item of userState.queue) {
@@ -121,15 +115,16 @@ export async function cmdStop(ctx: Context, api: Api, userState: UserState): Pro
 		userState.currentAbort.abort();
 	}
 
-	// Abort the bridge so the RPC process stops its current work
+	// Abort current agent activity — like pressing Esc in the TUI.
+	// This stops the agent, not the bridge. Session stays connected.
 	if (userState.bridge?.isAlive) {
 		await userState.bridge.abort();
 	}
 
 	const parts: string[] = [];
-	if (hadProc || userState.processing) parts.push("interrupted current task");
+	if (userState.processing || userState.bridge?.isStreaming) parts.push("interrupted current task");
 	if (queuedCount > 0) parts.push(`cleared ${queuedCount} queued message(s)`);
-	await ctx.reply(`🛑 Stopped — ${parts.join(", ")}.`);
+	await ctx.reply(parts.length > 0 ? `🛑 Stopped — ${parts.join(", ")}.` : "🛑 Stopped.");
 }
 
 export async function cmdRestart(ctx: Context, config: Config): Promise<void> {
