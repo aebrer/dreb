@@ -41,18 +41,16 @@ git pull
 
 ## Implement Mode (PR number only)
 
-### Step 3i: Read the plan
+### Step 3i: Read the plan and full PR context
 
+Read ALL PR comments and the PR body to get complete context:
 ```bash
-gh pr view <pr-number> --json comments --jq '.comments[] | select(.body | contains("<!-- mach6-plan -->")) | .body'
+gh pr view <pr-number> --json title,body,comments
 ```
 
-If no plan comment exists, tell the user and suggest running `/skill:mach6-plan` first.
+Find the plan comment (contains `<!-- mach6-plan -->` marker) from the comments. If no plan comment exists, tell the user and suggest running `/skill:mach6-plan` first.
 
-Also read the issue linked to the PR for additional context:
-```bash
-gh pr view <pr-number> --json body --jq '.body'
-```
+Also read any progress updates, prior review findings, assessments, and discussion — all of this context informs implementation.
 
 ### Step 4i: Set up task tracking
 
@@ -120,16 +118,16 @@ Read the failed CI logs and identify issues. Extract test failures, stack traces
 
 #### If finding numbers were specified:
 
+Read ALL PR comments to get full context:
 ```bash
-gh pr view <pr-number> --json comments --jq '.comments[] | select(.body | contains("<!-- mach6-review -->")) | .body'
-gh pr view <pr-number> --json comments --jq '.comments[] | select(.body | contains("<!-- mach6-assessment -->")) | .body'
+gh pr view <pr-number> --json title,body,comments
 ```
 
-Extract the specific findings to fix.
+Find the review (`<!-- mach6-review -->`) and assessment (`<!-- mach6-assessment -->`) comments, then extract the specific findings to fix. Prior progress comments and discussion may also provide useful context.
 
 #### If no finding numbers and not `ci`:
 
-Read all review/assessment comments, present genuine findings, and ask which to fix.
+Read ALL PR comments, find review/assessment comments, present genuine findings, and ask which to fix.
 
 ### Step 5f: Batch sizing
 

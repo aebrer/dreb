@@ -43,13 +43,13 @@ gh pr checkout <pr-number>
 git pull
 ```
 
-Gather PR context:
+Gather PR context — read ALL comments, not just specific markers:
 ```bash
 gh pr view <pr-number> --json title,body,comments,files
 gh pr diff <pr-number>
 ```
 
-Read the PR description, linked issue, and any plan comments. Identify changed files and their content.
+Read the PR description, ALL comments (plans, progress updates, prior reviews, discussion), and the linked issue. This full context must be provided to review agents so they understand what was intended and what has already been discussed.
 
 Update task: prepare → completed, review → in_progress.
 

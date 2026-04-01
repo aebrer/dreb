@@ -30,9 +30,11 @@ tasks_update([
 ## Step 2: Pre-merge checks
 
 ```bash
-gh pr view <pr-number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision
+gh pr view <pr-number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,comments,body
 gh pr checks <pr-number>
 ```
+
+Read ALL PR comments to understand the full history — plans, reviews, assessments, progress updates, and discussion.
 
 Verify:
 - [ ] CI is passing
