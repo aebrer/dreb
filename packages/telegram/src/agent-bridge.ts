@@ -402,28 +402,12 @@ export class AgentBridge {
 	private async ensureAlive(): Promise<void> {
 		if (!this.client || this.exited) {
 			log("[BRIDGE] Restarting dead RPC process");
-			const hadSession = this._sessionFile;
 			this.client = null;
 			this.exited = false;
 			await this.start();
-
-			// Re-select the session that was active before the crash
-			if (hadSession) {
-				try {
-					const switched = await this.switchSession(hadSession);
-					if (switched) {
-						log(`[BRIDGE] Re-selected session after restart: ${this._sessionId?.slice(0, 8)}`);
-					} else {
-						log("[BRIDGE] Failed to re-select session, will use fresh session");
-						this._sessionFile = undefined;
-						this._sessionId = undefined;
-					}
-				} catch (e) {
-					log(`[BRIDGE] Error re-selecting session: ${e}`);
-					this._sessionFile = undefined;
-					this._sessionId = undefined;
-				}
-			}
+			// Session selection is handled by ensureBridgeWithSession — not here.
+			// The previous session is still the latest and will be picked up by
+			// resumeLatest() on the next message.
 		}
 	}
 }

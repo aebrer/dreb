@@ -24,6 +24,7 @@ function createUserState(): UserState {
 		effectiveCwd: null,
 		backgroundAgents: new Map(),
 		stopRequested: false,
+		currentAbort: null,
 	};
 }
 
