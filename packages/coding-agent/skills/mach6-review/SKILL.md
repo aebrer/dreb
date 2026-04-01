@@ -43,6 +43,11 @@ gh pr checkout <pr-number>
 git pull
 ```
 
+Mark the PR as ready for review (it was opened as a draft by mach6-plan):
+```bash
+gh pr ready <pr-number>
+```
+
 Gather PR context — read ALL comments, not just specific markers:
 ```bash
 gh pr view <pr-number> --json title,body,comments,files
