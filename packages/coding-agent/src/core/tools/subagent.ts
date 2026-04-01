@@ -31,7 +31,9 @@ interface AgentTypeConfig {
 
 const DEFAULT_AGENT = "Explore";
 
-function parseAgentFrontmatter(content: string): { ok: true; config: AgentTypeConfig } | { ok: false; error: string } {
+export function parseAgentFrontmatter(
+	content: string,
+): { ok: true; config: AgentTypeConfig } | { ok: false; error: string } {
 	const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
 	if (!fmMatch) return { ok: false, error: "missing --- frontmatter delimiters" };
 
@@ -358,7 +360,7 @@ async function spawnSubagent(
  * returns the first one that resolves successfully. If all fail, returns the
  * last error. Single strings are treated as a one-element list.
  */
-function resolveModelWithFallbacks(
+export function resolveModelWithFallbacks(
 	models: string | string[],
 	parentProvider: string | undefined,
 	registry: ModelRegistry | undefined,
@@ -379,7 +381,7 @@ function resolveModelWithFallbacks(
 	return { ok: false, error: lastError };
 }
 
-function resolveModelStringSingle(
+export function resolveModelStringSingle(
 	modelStr: string,
 	parentProvider: string | undefined,
 	registry: ModelRegistry | undefined,
@@ -403,13 +405,11 @@ function resolveModelStringSingle(
 		return { ok: false, error: `Model "${modelStr}" not found. Use --list-models to see available models.` };
 	}
 
-	// FRAGILE: This string must match the warning text in model-resolver.ts
-	// buildFallbackModel path (line ~446). resolveCliModel creates a synthetic
-	// model for any unknown ID when a provider is specified (designed for
-	// custom/self-hosted models like Ollama). For subagents this causes silent
-	// failures — reject it.
-	// TODO: Replace with a structured flag like `isSyntheticFallback` on ResolveCliModelResult.
-	if (resolved.warning?.includes("Using custom model id.")) {
+	// resolveCliModel creates a synthetic model for any unknown ID when a
+	// provider is specified (designed for custom/self-hosted models like Ollama).
+	// For subagents this causes silent failures — reject synthetic fallbacks
+	// so the next model in the fallback list is tried instead.
+	if (resolved.isSyntheticFallback) {
 		return {
 			ok: false,
 			error: `Model "${modelStr}" not found for provider "${resolved.model.provider}". Use --list-models to see available models.`,
@@ -872,30 +872,31 @@ export function createSubagentToolDefinition(
 					};
 				}
 
-				// Helper to launch a single background task with its own agent ID and lifecycle
-				const launchBackgroundTask = (
+				/**
+				 * Shared lifecycle for all background launches: generates agent ID,
+				 * sets up registry/abort/notification, gates on the concurrency
+				 * semaphore, and handles errors. The caller provides the actual
+				 * work via `runFn(signal)` which must return a SubagentResult.
+				 */
+				const launchBackgroundLifecycle = (
 					agentName: string,
-					task: string,
-					taskLabel: string,
-					taskCwd?: string,
-					modelOverride?: string,
-				) => {
-					const resolvedCwd = taskCwd ?? cwd;
+					taskSummary: string,
+					runFn: (signal: AbortSignal) => Promise<SubagentResult>,
+				): string => {
 					const agentId = generateAgentId();
 					const bgAbort = new AbortController();
 					backgroundAgentRegistry.set(agentId, {
 						agentId,
 						agentType: agentName,
-						taskSummary: taskLabel,
+						taskSummary,
 						startedAt: Date.now(),
 						status: "running",
 					});
 					backgroundAbortControllers.set(agentId, bgAbort);
-					onBackgroundStart?.(agentId, agentName, taskLabel);
+					onBackgroundStart?.(agentId, agentName, taskSummary);
 
 					const bgSignal = bgAbort.signal;
 
-					// Safe wrapper — prevents onBackgroundComplete errors from propagating
 					const safeNotify = (result: SubagentResult) => {
 						try {
 							onBackgroundComplete(agentId, result, bgSignal.aborted);
@@ -909,19 +910,8 @@ export function createSubagentToolDefinition(
 					const run = async () => {
 						await bgAcquire();
 						try {
-							const result = await executeSingle(
-								agents,
-								agentName === DEFAULT_AGENT ? undefined : agentName,
-								task,
-								resolvedCwd,
-								bgSignal,
-								undefined,
-								modelOverride,
-								parentProvider,
-								modelRegistry,
-							);
+							const result = await runFn(bgSignal);
 							const entry = backgroundAgentRegistry.get(agentId);
-							// Don't overwrite status if abort already set it to "failed"
 							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
 							backgroundAbortControllers.delete(agentId);
 							safeNotify(result);
@@ -931,7 +921,7 @@ export function createSubagentToolDefinition(
 							backgroundAbortControllers.delete(agentId);
 							safeNotify({
 								agent: agentName,
-								task,
+								task: taskSummary,
 								exitCode: 1,
 								output: "",
 								stderr: "",
@@ -943,7 +933,7 @@ export function createSubagentToolDefinition(
 					};
 					run().catch((err) => {
 						console.error(
-							`[subagent] Unhandled background agent error (${agentId}): ${err instanceof Error ? err.message : String(err)}`,
+							`[subagent] Unhandled background error (${agentId}): ${err instanceof Error ? err.message : String(err)}`,
 						);
 						const entry = backgroundAgentRegistry.get(agentId);
 						if (entry && entry.status === "running") entry.status = "failed";
@@ -953,7 +943,7 @@ export function createSubagentToolDefinition(
 								agentId,
 								{
 									agent: agentName,
-									task,
+									task: taskSummary,
 									exitCode: 1,
 									output: "",
 									stderr: "",
@@ -963,12 +953,36 @@ export function createSubagentToolDefinition(
 							);
 						} catch (notifyErr) {
 							console.error(
-								`[subagent] CRITICAL: Last-resort notification failed for background agent ${agentId}: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`,
+								`[subagent] CRITICAL: Last-resort notification failed for ${agentId}: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`,
 							);
 						}
 					});
 
 					return agentId;
+				};
+
+				// Helper to launch a single background task
+				const launchBackgroundTask = (
+					agentName: string,
+					task: string,
+					taskLabel: string,
+					taskCwd?: string,
+					modelOverride?: string,
+				) => {
+					const resolvedCwd = taskCwd ?? cwd;
+					return launchBackgroundLifecycle(agentName, taskLabel, (signal) =>
+						executeSingle(
+							agents,
+							agentName === DEFAULT_AGENT ? undefined : agentName,
+							task,
+							resolvedCwd,
+							signal,
+							undefined,
+							modelOverride,
+							parentProvider,
+							modelRegistry,
+						),
+					);
 				};
 
 				if (params.task) {
@@ -1037,99 +1051,35 @@ export function createSubagentToolDefinition(
 					};
 				} else {
 					// Chain mode — sequential, stays as one agent since steps depend on each other
-					const agentId = generateAgentId();
 					const agentName = params.chain![0].agent || DEFAULT_AGENT;
 					const taskSummary = `${params.chain!.length}-step chain`;
-					const bgAbort = new AbortController();
-					backgroundAgentRegistry.set(agentId, {
-						agentId,
-						agentType: agentName,
-						taskSummary,
-						startedAt: Date.now(),
-						status: "running",
-					});
-					backgroundAbortControllers.set(agentId, bgAbort);
-					onBackgroundStart?.(agentId, agentName, taskSummary);
+					const chainSteps = params.chain!;
 
-					const bgSignal = bgAbort.signal;
-					const safeNotify = (result: SubagentResult) => {
-						try {
-							onBackgroundComplete(agentId, result, bgSignal.aborted);
-						} catch (err) {
-							console.error(
-								`[subagent] onBackgroundComplete threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
-							);
-						}
-					};
-					const runChain = async () => {
-						try {
-							const results = await executeChain(
-								agents,
-								params.chain!,
-								cwd,
-								bgSignal,
-								undefined,
-								parentProvider,
-								modelRegistry,
-							);
-							const resultText = results
-								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
-								.join("\n\n---\n\n");
-							const failed = results.filter((r) => r.exitCode !== 0);
-							const result: SubagentResult = {
-								agent: "chain",
-								task: taskSummary,
-								exitCode: failed.length > 0 ? 1 : 0,
-								output: resultText,
-								stderr: "",
-								errorMessage:
-									failed.length > 0
-										? `Chain stopped at step ${results.length} of ${params.chain!.length}: ${results[results.length - 1]?.errorMessage}`
-										: null,
-							};
-							const entry = backgroundAgentRegistry.get(agentId);
-							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
-							backgroundAbortControllers.delete(agentId);
-							safeNotify(result);
-						} catch (err) {
-							const entry = backgroundAgentRegistry.get(agentId);
-							if (entry && !bgSignal.aborted) entry.status = "failed";
-							backgroundAbortControllers.delete(agentId);
-							safeNotify({
-								agent: agentName,
-								task: taskSummary,
-								exitCode: 1,
-								output: "",
-								stderr: "",
-								errorMessage: err instanceof Error ? err.message : String(err),
-							});
-						}
-					};
-					runChain().catch((err) => {
-						console.error(
-							`[subagent] Unhandled background chain error (${agentId}): ${err instanceof Error ? err.message : String(err)}`,
+					const agentId = launchBackgroundLifecycle(agentName, taskSummary, async (signal) => {
+						const results = await executeChain(
+							agents,
+							chainSteps,
+							cwd,
+							signal,
+							undefined,
+							parentProvider,
+							modelRegistry,
 						);
-						const entry = backgroundAgentRegistry.get(agentId);
-						if (entry && entry.status === "running") entry.status = "failed";
-						backgroundAbortControllers.delete(agentId);
-						try {
-							onBackgroundComplete(
-								agentId,
-								{
-									agent: agentName,
-									task: taskSummary,
-									exitCode: 1,
-									output: "",
-									stderr: "",
-									errorMessage: `Internal error: ${err instanceof Error ? err.message : String(err)}`,
-								},
-								bgSignal.aborted,
-							);
-						} catch (notifyErr) {
-							console.error(
-								`[subagent] CRITICAL: Last-resort notification failed for background chain ${agentId}: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`,
-							);
-						}
+						const resultText = results
+							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
+							.join("\n\n---\n\n");
+						const failed = results.filter((r) => r.exitCode !== 0);
+						return {
+							agent: "chain",
+							task: taskSummary,
+							exitCode: failed.length > 0 ? 1 : 0,
+							output: resultText,
+							stderr: "",
+							errorMessage:
+								failed.length > 0
+									? `Chain stopped at step ${results.length} of ${chainSteps.length}: ${results[results.length - 1]?.errorMessage}`
+									: null,
+						};
 					});
 
 					return {
@@ -1139,7 +1089,7 @@ export function createSubagentToolDefinition(
 								text: `Background chain ${agentId} started (${taskSummary}). You will be notified when it completes.`,
 							},
 						],
-						details: { mode: "chain", agentCount: params.chain!.length } as SubagentToolDetails,
+						details: { mode: "chain", agentCount: chainSteps.length } as SubagentToolDetails,
 						endTurn: true,
 					};
 				}

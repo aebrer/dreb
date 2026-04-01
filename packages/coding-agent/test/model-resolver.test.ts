@@ -372,6 +372,41 @@ describe("resolveCliModel", () => {
 	});
 });
 
+describe("synthetic fallback detection", () => {
+	test("isSyntheticFallback is set for unknown model with known provider", () => {
+		const registry = {
+			getAll: () => allModels,
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+
+		const result = resolveCliModel({
+			cliProvider: "anthropic",
+			cliModel: "nonexistent-model-xyz",
+			modelRegistry: registry,
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.model).toBeDefined();
+		expect(result.isSyntheticFallback).toBe(true);
+		expect(result.warning).toContain("Using custom model id.");
+	});
+
+	test("isSyntheticFallback is not set for known models", () => {
+		const registry = {
+			getAll: () => allModels,
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+
+		const result = resolveCliModel({
+			cliProvider: "anthropic",
+			cliModel: "claude-sonnet-4-5",
+			modelRegistry: registry,
+		});
+
+		expect(result.error).toBeUndefined();
+		expect(result.model).toBeDefined();
+		expect(result.isSyntheticFallback).toBeUndefined();
+	});
+});
+
 describe("default model selection", () => {
 	test("openai defaults are gpt-5.4", () => {
 		expect(defaultModelPerProvider.openai).toBe("gpt-5.4");
