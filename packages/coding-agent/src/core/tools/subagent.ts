@@ -688,7 +688,7 @@ const taskItemSchema = Type.Object({
 	model: Type.Optional(
 		Type.String({
 			description:
-				"Model override for this task (e.g., 'glm-5-turbo', 'glm-4.7-flash'). Takes precedence over agent definition model.",
+				"Model override for this task. Takes precedence over agent definition model. Note: a single-string override discards the agent's fallback list.",
 		}),
 	),
 });
@@ -699,7 +699,7 @@ const subagentSchema = Type.Object({
 	model: Type.Optional(
 		Type.String({
 			description:
-				"Model override (e.g., 'glm-5-turbo', 'glm-4.7-flash'). Takes precedence over agent definition model. For parallel/chain, set per-task instead.",
+				"Model override. Takes precedence over agent definition model. Note: a single-string override discards the agent's fallback list. For parallel/chain, set per-task instead.",
 		}),
 	),
 	tasks: Type.Optional(
@@ -849,13 +849,9 @@ export function createSubagentToolDefinition(
 			"All subagents run in background — the tool returns immediately and you are notified when each agent completes.",
 			"Subagents have their own context window — provide enough context in the task prompt",
 			"Each agent notifies independently when done — completion messages include a list of any still-running agents. If you need their results before proceeding, stop generating — do not output anything, do not launch filler work. Your turn ends, and when an agent completes, its result arrives as a new message that resumes your turn automatically.",
-			"Agent definitions specify a `model` field with an explicit model ID (e.g., 'glm-5-turbo', 'glm-5.1'). Per-invocation `model` overrides always take precedence over agent definition models. For parallel/chain, set per-task.",
-			"Agent definitions can specify a fallback list of models (comma-separated or YAML list). The spawner tries each in order and uses the first one that resolves successfully. This lets agents work across different provider configs.",
-			"**Model routing by task type** — default to cheap/fast models and only escalate when needed. Fast-tier models handle most subagent work well:" +
-				"\n  - **Fast tier** (glm-4.7-flash): file discovery, grep, listing, navigation, code reading, summarization, exploration, mechanical transforms" +
-				"\n  - **Mid tier** (glm-5-turbo): code generation, implementation, refactoring, test writing, documentation" +
-				"\n  - **Strong tier** (glm-5.1): code review, architecture decisions, complex multi-step reasoning, evaluation, novel design" +
-				"\n  Most subagent tasks are exploration or mechanical work — use fast tier by default. Only escalate to mid/strong when the task requires judgment or creativity.",
+			"Agent definitions specify a `model` field with a provider fallback list (comma-separated or YAML list). The spawner tries each in order and uses the first one that resolves for the current provider. This makes agents portable across providers.",
+			"Per-invocation `model` overrides take precedence but **discard the entire fallback list** — if the single override model isn't available on the current provider, the agent fails. Only override when you have a specific reason (e.g. escalating to a stronger tier for a complex task).",
+			"**Model routing** — agent definitions already specify the right tier for their role. Most subagent tasks (exploration, file discovery, grep, navigation, summarization) are handled well by the defaults. Do not override the model unless the task genuinely requires a different capability tier than what the agent definition provides.",
 		],
 		parameters: subagentSchema,
 
