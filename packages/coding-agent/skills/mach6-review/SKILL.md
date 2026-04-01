@@ -15,7 +15,7 @@ argument-hint: "<pr-number> [code|errors|tests|completeness|simplify]"
 3. **No `#N` in comment bodies** — Use "finding 3", "item 3", "stage 2" etc. instead.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
 
-**Important: Do NOT fix any issues in this session. Fixes happen via `/skill:mach6-fix`.**
+**Important: Do NOT fix any issues in this session. Fixes happen via `/skill:mach6-implement`.**
 
 ## Step 1: Set up task tracking
 
@@ -181,5 +181,5 @@ gh issue create --title "<title>" --body "<body referencing PR and finding>"
 Update task: summary → completed.
 
 Suggest next step:
-- If genuine issues: `/skill:mach6-fix <pr-number> <finding-numbers>`
+- If genuine issues: `/skill:mach6-implement <pr-number> <finding-numbers>`
 - If all clear: `/skill:mach6-publish <pr-number>`

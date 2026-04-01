@@ -40,9 +40,9 @@ Verify:
 - [ ] All review findings addressed (check for genuine items in latest assessment)
 
 If there are blocking issues, report them and suggest fixes:
-- **Failed CI**: `/skill:mach6-fix <pr-number> ci`
+- **Failed CI**: `/skill:mach6-implement <pr-number> ci`
 - **Merge conflicts**: Suggest resolving manually or rebasing
-- **Unaddressed findings**: `/skill:mach6-fix <pr-number>`
+- **Unaddressed findings**: `/skill:mach6-implement <pr-number>`
 
 ### Pre-merge checklist
 

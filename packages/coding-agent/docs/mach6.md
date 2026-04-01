@@ -12,7 +12,7 @@ Inspired by [mach10](https://github.com/LeanAndMean/mach10) (MIT, by Kevin Ryan)
 # ... implement the plan ...
 /skill:mach6-push              # Commit, push, post progress
 /skill:mach6-review 53         # Multi-agent code review
-/skill:mach6-fix 53 1,2        # Fix review findings
+/skill:mach6-implement 53 1,2   # Fix review findings
 /skill:mach6-push              # Push fixes
 /skill:mach6-review 53         # Re-review (repeat until clean)
 /skill:mach6-publish 53        # Merge, tag, release
@@ -82,19 +82,19 @@ Produces two PR comments:
 
 See [Review Agents](#review-agents) below.
 
-### mach6-fix
+### mach6-implement
 
-Fix review findings or CI failures.
+Implement a plan from a PR, or fix review findings / CI failures.
 
 ```
-/skill:mach6-fix 53 1,2,3       # Fix specific findings
-/skill:mach6-fix 53 ci          # Fix CI failures
-/skill:mach6-fix 53             # Show findings, ask which to fix
+/skill:mach6-implement 53             # Implement the plan on PR 53
+/skill:mach6-implement 53 1,2,3       # Fix specific review findings
+/skill:mach6-implement 53 ci          # Fix CI failures
 ```
 
-- Reads review and assessment comments via HTML markers
-- Applies batch sizing heuristics (~10 simple, ~6 moderate, ~3 complex fixes per batch)
-- Suggests `/skill:mach6-push` then `/skill:mach6-review` after fixing
+**Implement mode** (PR number only): Reads the `<!-- mach6-plan -->` comment and implements the full plan — reading codebase, making changes, adding tests, and verifying.
+
+**Fix mode** (with finding numbers or `ci`): Reads review and assessment comments via HTML markers, applies batch sizing heuristics (~10 simple, ~6 moderate, ~3 complex fixes per batch), and suggests `/skill:mach6-push` then `/skill:mach6-review` after fixing.
 
 ### mach6-publish
 

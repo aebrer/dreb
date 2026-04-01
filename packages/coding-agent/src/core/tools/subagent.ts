@@ -24,7 +24,8 @@ interface AgentTypeConfig {
 	name: string;
 	description: string;
 	tools?: string;
-	model?: string;
+	/** Single model ID or ordered fallback list. First resolvable model wins. */
+	model?: string | string[];
 	systemPrompt: string;
 }
 
@@ -59,6 +60,27 @@ function parseAgentFrontmatter(content: string): { ok: true; config: AgentTypeCo
 		return match?.[1].trim();
 	};
 
+	/** Parse `model` field — supports single string, comma-separated, or YAML list syntax. */
+	const getModel = (): string | string[] | undefined => {
+		// First check for YAML list syntax (indented lines starting with "- ")
+		const listMatch = frontmatter.match(/^model:\s*\n((?:\s+-\s+.+\n?)+)/m);
+		if (listMatch) {
+			const items = listMatch[1]
+				.split("\n")
+				.map((line) => line.replace(/^\s+-\s+/, "").trim())
+				.filter(Boolean);
+			return items.length > 1 ? items : items[0];
+		}
+		// Inline value — check for comma-separated list
+		const value = get("model");
+		if (!value) return undefined;
+		if (value.includes(",")) {
+			const items = value.split(",").map((s) => s.trim()).filter(Boolean);
+			return items.length > 1 ? items : items[0];
+		}
+		return value;
+	};
+
 	const name = get("name");
 	if (!name) return { ok: false, error: "missing required 'name' field in frontmatter" };
 
@@ -68,7 +90,7 @@ function parseAgentFrontmatter(content: string): { ok: true; config: AgentTypeCo
 			name,
 			description: get("description") || "",
 			tools: get("tools"),
-			model: get("model"),
+			model: getModel(),
 			systemPrompt: body,
 		},
 	};
@@ -177,12 +199,15 @@ async function spawnSubagent(
 	}
 
 	const args: string[] = ["--mode", "json", "--no-session", "--ui", "agent"];
-	if (agentConfig.model) {
-		args.push("--model", agentConfig.model);
+	// By spawn time, model should be a resolved single string (fallback resolution
+	// happens in executeSingle). Handle string[] defensively by taking the first entry.
+	const modelStr = Array.isArray(agentConfig.model) ? agentConfig.model[0] : agentConfig.model;
+	if (modelStr) {
+		args.push("--model", modelStr);
 		// When the model string doesn't already specify a provider (no "/"),
 		// inherit the parent's provider to prevent fuzzy matching from picking
 		// an unauthenticated provider (e.g. Bedrock instead of Anthropic).
-		if (parentProvider && !agentConfig.model.includes("/")) {
+		if (parentProvider && !modelStr.includes("/")) {
 			args.push("--provider", parentProvider);
 		}
 	}
@@ -327,7 +352,7 @@ async function spawnSubagent(
 			resolvePromise({
 				agent: agentConfig.name,
 				task,
-				model: resolvedModel ?? (exitCode === 0 ? agentConfig.model : undefined),
+				model: resolvedModel ?? (exitCode === 0 ? (Array.isArray(agentConfig.model) ? agentConfig.model[0] : agentConfig.model) : undefined),
 				exitCode,
 				output,
 				stderr: stderr.slice(0, 2000), // cap stderr
@@ -347,6 +372,37 @@ async function spawnSubagent(
  * passes the string through unvalidated (backward compat).
  */
 function resolveModelString(
+	modelStr: string,
+	parentProvider: string | undefined,
+	registry: ModelRegistry | undefined,
+): { ok: true; modelId: string; provider?: string } | { ok: false; error: string } {
+	return resolveModelStringSingle(modelStr, parentProvider, registry);
+}
+
+/**
+ * Resolve a model fallback list against the registry. Tries each model in order,
+ * returns the first one that resolves successfully. If all fail, returns the
+ * last error. Single strings are treated as a one-element list.
+ */
+function resolveModelWithFallbacks(
+	models: string | string[],
+	parentProvider: string | undefined,
+	registry: ModelRegistry | undefined,
+): { ok: true; modelId: string; provider?: string } | { ok: false; error: string } {
+	const modelList = Array.isArray(models) ? models : [models];
+	let lastError = "";
+	for (const modelStr of modelList) {
+		const result = resolveModelStringSingle(modelStr, parentProvider, registry);
+		if (result.ok) return result;
+		lastError = result.error;
+	}
+	if (modelList.length > 1) {
+		return { ok: false, error: `None of the fallback models resolved: ${modelList.join(", ")}. Last error: ${lastError}` };
+	}
+	return { ok: false, error: lastError };
+}
+
+function resolveModelStringSingle(
 	modelStr: string,
 	parentProvider: string | undefined,
 	registry: ModelRegistry | undefined,
@@ -464,17 +520,18 @@ async function executeSingle(
 			errorMessage: `Task prompt too long (${task.length} chars, max ${MAX_TASK_LENGTH}). Shorten the prompt.`,
 		};
 	}
-	// Per-invocation model override takes precedence over agent definition model
-	const modelStr = modelOverride || config.model;
-	let effectiveConfig = modelOverride ? { ...config, model: modelOverride } : config;
+	// Per-invocation model override takes precedence over agent definition model.
+	// Override is always a single string; agent config may be a string or fallback list.
+	const modelSpec = modelOverride || config.model;
+	let effectiveConfig: AgentTypeConfig = modelOverride ? { ...config, model: modelOverride } : config;
 	let resolvedProvider = parentProvider;
 
-	// Resolve and validate the model string against the registry before spawning.
+	// Resolve and validate the model against the registry before spawning.
 	// This catches typos and invalid model names immediately instead of failing
 	// silently in the child process. Also passes the canonical model ID to the
 	// child, avoiding fuzzy matching entirely.
-	if (modelStr) {
-		const resolved = resolveModelString(modelStr, parentProvider, registry);
+	if (modelSpec) {
+		const resolved = resolveModelWithFallbacks(modelSpec, parentProvider, registry);
 		if (!resolved.ok) {
 			return {
 				agent: name,
@@ -887,6 +944,7 @@ export function createSubagentToolDefinition(
 			"Subagents have their own context window — provide enough context in the task prompt",
 			"Each background agent notifies independently when done — completion messages include a list of any still-running agents. If you need their results before proceeding, stop generating — do not output anything, do not launch filler work. Your turn ends, and when a background agent completes, its result arrives as a new message that resumes your turn automatically.",
 			"Agent definitions specify a `model` field with an explicit model ID (e.g., 'glm-5-turbo', 'glm-5.1'). Per-invocation `model` overrides always take precedence over agent definition models. For parallel/chain, set per-task.",
+			"Agent definitions can specify a fallback list of models (comma-separated or YAML list). The spawner tries each in order and uses the first one that resolves successfully. This lets agents work across different provider configs.",
 			"**Model routing by task type** — default to cheap/fast models and only escalate when needed. Fast-tier models handle most subagent work well:" +
 				"\n  - **Fast tier** (glm-4.7-flash): file discovery, grep, listing, navigation, code reading, summarization, exploration, mechanical transforms" +
 				"\n  - **Mid tier** (glm-5-turbo): code generation, implementation, refactoring, test writing, documentation" +
