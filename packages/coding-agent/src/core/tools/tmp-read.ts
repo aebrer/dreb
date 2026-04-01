@@ -6,6 +6,7 @@
  * this tool rejects any path that resolves outside /tmp at the tool level.
  */
 
+import { resolve as normalizePath } from "node:path";
 import type { ToolDefinition } from "../extensions/types.js";
 import { resolveToCwd } from "./path-utils.js";
 import { createReadToolDefinition, type ReadToolOptions } from "./read.js";
@@ -37,8 +38,10 @@ export function createTmpReadToolDefinition(options?: ReadToolOptions): ToolDefi
 		],
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			// Validate the path resolves under /tmp BEFORE delegating to the real read tool
-			const resolved = resolveToCwd(params.path, SANDBOX_CWD);
+			// Validate the path resolves under /tmp BEFORE delegating to the real read tool.
+			// normalizePath collapses ".." components (e.g. /tmp/../etc/passwd → /etc/passwd)
+			// which resolveToCwd does not do for absolute paths.
+			const resolved = normalizePath(resolveToCwd(params.path, SANDBOX_CWD));
 			if (!isUnderTmp(resolved)) {
 				return {
 					content: [
