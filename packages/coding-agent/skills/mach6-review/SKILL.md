@@ -57,7 +57,7 @@ Update task: prepare → completed, review → in_progress.
 
 **Available review agents:**
 
-These agents are **pre-existing agent definitions** shipped with dreb — do not redefine them inline. Reference them by name via the `agent` parameter in `subagent`. Review agents default to `glm-5-turbo` (mid-tier). The independent assessor uses `glm-5.1` (strongest).
+These agents are **pre-existing agent definitions** shipped with dreb — do not redefine them inline. Reference them by name via the `agent` parameter in `subagent`. Each agent definition already specifies a model with a provider fallback list — the defaults work across providers and are fine for most reviews. Override the model only when there's a good reason (e.g. a particularly complex or security-sensitive review warrants a stronger tier); note that a single-string override discards the fallback list, so prefer provider-prefixed IDs (e.g. `anthropic/claude-opus-4-6`) when overriding.
 
 | Agent | Question | When to run |
 |---|---|---|
@@ -74,7 +74,7 @@ These agents are **pre-existing agent definitions** shipped with dreb — do not
 - `completeness` → completeness-checker
 - `simplify` → simplifier
 
-**For each agent**, launch via the `subagent` tool with `background=true`. Run `code-reviewer`, `error-auditor`, `test-reviewer`, and `completeness-checker` in parallel. Run `simplifier` after the others complete.
+**For each agent**, launch via the `subagent` tool. Run `code-reviewer`, `error-auditor`, `test-reviewer`, and `completeness-checker` in parallel. Run `simplifier` after the others complete.
 
 Provide each agent with:
 - The list of changed files with paths
@@ -121,7 +121,7 @@ Update task: post-review → completed, assess → in_progress.
 
 ## Step 6: Independent assessment
 
-Launch a subagent with `agent: "independent-assessor"`. This is a **pre-existing agent definition** shipped with dreb — it has full codebase read access and defaults to `glm-5.1` (strongest tier).
+Launch a subagent with `agent: "independent-assessor"`. This is a **pre-existing agent definition** shipped with dreb — it has full codebase read access and uses the strongest available model via its own fallback list. The default is fine for most cases.
 
 **Do NOT use the Sandbox agent for this step** — the Sandbox agent has no codebase access and cannot verify findings against actual code.
 
