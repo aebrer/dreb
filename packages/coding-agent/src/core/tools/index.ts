@@ -92,6 +92,7 @@ export {
 	type TasksToolInput,
 	type TasksUpdateCallback,
 } from "./tasks.js";
+export { createTmpReadToolDefinition } from "./tmp-read.js";
 export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -156,6 +157,7 @@ import {
 	subagentToolDefinition,
 } from "./subagent.js";
 import { createTasksToolDefinition, type TasksUpdateCallback } from "./tasks.js";
+import { createTmpReadToolDefinition } from "./tmp-read.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import {
 	createWebFetchTool,
@@ -175,6 +177,9 @@ export type ToolDef = ToolDefinition<any, any>;
 export const codingTools: Tool[] = [readTool, bashTool, editTool, writeTool];
 export const readOnlyTools: Tool[] = [readTool, grepTool, findTool, lsTool];
 
+const tmpReadToolDefinition = createTmpReadToolDefinition();
+const tmpReadTool = wrapToolDefinition(tmpReadToolDefinition);
+
 export const allTools = {
 	read: readTool,
 	bash: bashTool,
@@ -186,6 +191,7 @@ export const allTools = {
 	web_search: webSearchTool,
 	web_fetch: webFetchTool,
 	subagent: subagentTool,
+	tmp_read: tmpReadTool,
 };
 
 export const allToolDefinitions = {
@@ -199,6 +205,7 @@ export const allToolDefinitions = {
 	web_search: webSearchToolDefinition,
 	web_fetch: webFetchToolDefinition,
 	subagent: subagentToolDefinition,
+	tmp_read: tmpReadToolDefinition,
 };
 
 export type ToolName = keyof typeof allTools;
@@ -241,6 +248,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		web_search: createWebSearchToolDefinition(cwd),
 		web_fetch: createWebFetchToolDefinition(cwd),
 		subagent: createSubagentToolDefinition(cwd, options?.subagent),
+		tmp_read: createTmpReadToolDefinition(options?.read),
 	};
 	if (options?.skill) {
 		tools.skill = createSkillToolDefinition(cwd, options.skill);
@@ -276,6 +284,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		web_search: createWebSearchTool(cwd),
 		web_fetch: createWebFetchTool(cwd),
 		subagent: createSubagentTool(cwd, options?.subagent),
+		tmp_read: wrapToolDefinition(createTmpReadToolDefinition(options?.read)),
 	};
 	if (options?.skill) {
 		tools.skill = createSkillTool(cwd, options.skill);

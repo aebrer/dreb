@@ -31,23 +31,6 @@ interface AgentTypeConfig {
 
 const DEFAULT_AGENT = "Explore";
 
-const BUILTIN_AGENTS: Record<string, AgentTypeConfig> = {
-	Explore: {
-		name: "Explore",
-		description: "Codebase exploration — find files, search code, answer questions. Read-only.",
-		tools: "read,grep,find,ls,bash",
-		systemPrompt:
-			"You are a codebase exploration agent. Your job is to quickly find information in the codebase and report back concisely.\n\nRules:\n- Do NOT modify any files\n- Be thorough but concise in your findings\n- If you can't find what you're looking for, say so explicitly",
-	},
-	Sandbox: {
-		name: "Sandbox",
-		description: "Sandboxed analysis agent restricted to /tmp files only (no codebase access).",
-		tools: "read",
-		systemPrompt:
-			"You are a sandboxed analysis agent. You have NO access to the project codebase.\n\nRules:\n- You can ONLY read files under /tmp/\n- Do NOT attempt to access any files outside /tmp/\n- All input data will be provided in the task prompt or in /tmp/ files\n- Analyze, summarize, and reason about the data you are given",
-	},
-};
-
 function parseAgentFrontmatter(content: string): { ok: true; config: AgentTypeConfig } | { ok: false; error: string } {
 	const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
 	if (!fmMatch) return { ok: false, error: "missing --- frontmatter delimiters" };
@@ -102,12 +85,7 @@ function parseAgentFrontmatter(content: string): { ok: true; config: AgentTypeCo
 function discoverAgentTypes(cwd: string): Map<string, AgentTypeConfig> {
 	const agents = new Map<string, AgentTypeConfig>();
 
-	// Built-in agents as defaults
-	for (const [key, config] of Object.entries(BUILTIN_AGENTS)) {
-		agents.set(key, config);
-	}
-
-	// Package-bundled agents (shipped with dreb — overrides hardcoded defaults, but overridden by user/project agents)
+	// Package-bundled agents (shipped with dreb — the canonical source of truth for built-in agents)
 	const packageAgentsDir = join(getPackageDir(), "agents");
 	loadAgentsFromDir(packageAgentsDir, agents);
 
