@@ -112,6 +112,24 @@ describe("isForbiddenCommand", () => {
 		it("allows grep for --admin in file", () => {
 			expect(isForbiddenCommand('grep -- "--admin" config.txt')).toBeUndefined();
 		});
+
+		it("does not split on operators inside double-quoted strings", () => {
+			// The && is inside quotes — should not split, should not false-positive
+			expect(isForbiddenCommand('echo "hello && git push --force"')).toBeUndefined();
+		});
+
+		it("does not split on operators inside single-quoted strings", () => {
+			expect(isForbiddenCommand("echo 'hello ; git push --force'")).toBeUndefined();
+		});
+
+		it("splits correctly when operators are outside quotes", () => {
+			// Real operator outside quotes should still split and catch
+			expect(isForbiddenCommand('echo "hello" && git push --force')).toBe("^git push.*(-f\\b|--force)");
+		});
+
+		it("handles mixed quoted and unquoted operators", () => {
+			expect(isForbiddenCommand('echo "a && b" && echo "c ; d"')).toBeUndefined();
+		});
 	});
 
 	describe("custom patterns from settings", () => {
@@ -141,6 +159,56 @@ describe("isForbiddenCommand", () => {
 
 		it("custom patterns apply to each segment independently", () => {
 			expect(isForbiddenCommand("echo hello && rm -rf /", ["^rm -rf /"])).toBe("^rm -rf /");
+		});
+	});
+
+	describe("subshell wrappers (finding 1 fix)", () => {
+		it("blocks command inside $() wrapper", () => {
+			expect(isForbiddenCommand("$(git push --force)")).toBe("^git push.*(-f\\b|--force)");
+		});
+
+		it("blocks command inside () wrapper", () => {
+			expect(isForbiddenCommand("(git push -f)")).toBe("^git push.*(-f\\b|--force)");
+		});
+
+		it("blocks command inside backtick wrapper", () => {
+			expect(isForbiddenCommand("`gh pr merge 93 --admin`")).toBe("^gh pr merge.*--admin");
+		});
+
+		it("blocks subshell after chained operator", () => {
+			expect(isForbiddenCommand("cd /tmp && $(git push --force)")).toBe("^git push.*(-f\\b|--force)");
+		});
+
+		it("blocks assignment with subshell containing dangerous command", () => {
+			// result=$(git push --force) — the $() wrapper is not the whole segment,
+			// but stripSubshellWrapper should still catch it via unwrapping
+			expect(isForbiddenCommand("result=$(git push --force)")).toBe("^git push.*(-f\\b|--force)");
+		});
+
+		it("allows safe subshell commands", () => {
+			expect(isForbiddenCommand("$(echo hello)")).toBeUndefined();
+			expect(isForbiddenCommand("`cat file.txt`")).toBeUndefined();
+		});
+	});
+
+	describe("non-array extraPatterns (finding 2 fix)", () => {
+		it("ignores string extraPatterns instead of spreading into chars", () => {
+			// A string "rm -rf /" should be ignored, not spread into ['r', 'm', ' ', '-', 'r', 'f', ' ', '/']
+			expect(isForbiddenCommand("npm run build", "rm -rf /" as unknown as string[])).toBeUndefined();
+		});
+
+		it("ignores null extraPatterns", () => {
+			expect(isForbiddenCommand("npm test", null as unknown as string[])).toBeUndefined();
+		});
+
+		it("still blocks defaults when extraPatterns is invalid type", () => {
+			expect(isForbiddenCommand("git push --force", "rm -rf /" as unknown as string[])).toBe(
+				"^git push.*(-f\\b|--force)",
+			);
+		});
+
+		it("handles empty array", () => {
+			expect(isForbiddenCommand("npm test", [])).toBeUndefined();
 		});
 	});
 
