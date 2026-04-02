@@ -48,7 +48,15 @@ async function processQueue(api: Api, userState: UserState): Promise<void> {
 }
 
 /**
- * Process a single queue item — send prompt, wait for completion.
+ * Process a single queue item.
+ *
+ * Two paths:
+ * - **Steering** (agent is streaming): inject via bridge.steer(), acknowledge, return immediately.
+ *   The active processItem that started the run continues receiving events.
+ * - **Normal** (agent idle): send via bridge.prompt(), wait for completion.
+ *
+ * Multiple steering messages accumulate in the agent's steering queue and are
+ * batch-delivered at the next tool-call boundary — matching TUI behavior.
  */
 async function processItem(api: Api, userState: UserState, item: QueueItem): Promise<void> {
 	const bridge = userState.bridge;
@@ -64,6 +72,28 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 	}
 
 	const chatId = item.message!.chat.id;
+
+	// Steering path — agent is already streaming, inject mid-run
+	if (bridge.isStreaming) {
+		// Delete the ephemeral status message (e.g. "🧠 Thinking...")
+		if (item.statusMessage) {
+			await safeDelete(api, item.statusMessage.chat_id, item.statusMessage.message_id);
+		}
+
+		try {
+			await bridge.steer(item.prompt, item.images);
+			// Acknowledge steering — TUI parity (shows queued steering messages inline)
+			await safeSend(api, chatId, `↩️ _Steering:_ ${item.prompt.slice(0, 200)}`);
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			if (!userState.stopRequested) {
+				await safeSend(api, chatId, `❌ Steering error: ${msg.slice(0, 200)}`);
+			}
+		}
+		return;
+	}
+
+	// Normal path — agent is idle, start a new run
 	const replyToId = item.message!.message_id;
 
 	// Create event display state
@@ -106,8 +136,8 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 		userState.currentAbort = null;
 	}
 
-	// Send DONE for this item (if queue is empty and not stopped)
-	if (userState.queue.length === 0 && !userState.stopRequested) {
+	// Send DONE when agent is truly done (not streaming, queue empty, not stopped)
+	if (userState.queue.length === 0 && !bridge.isStreaming && !userState.stopRequested) {
 		await safeSend(api, chatId, "🦀 _dreb DONE_");
 	}
 }

@@ -173,6 +173,33 @@ export class AgentBridge {
 	}
 
 	/**
+	 * Queue a steering message to interrupt the agent mid-run.
+	 * The agent injects it after the current tool-call batch finishes.
+	 */
+	async steer(message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
+		await this.ensureAlive();
+		try {
+			await this.client!.steer(message, images);
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
+	}
+
+	/**
+	 * Queue a follow-up message for after the agent finishes its current run.
+	 */
+	async followUp(message: string, images?: Array<{ type: "image"; data: string; mimeType: string }>): Promise<void> {
+		await this.ensureAlive();
+		try {
+			await this.client!.followUp(message, images);
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
+	}
+
+	/**
 	 * Abort the current operation.
 	 */
 	async abort(): Promise<void> {
