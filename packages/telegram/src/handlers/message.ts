@@ -44,7 +44,12 @@ async function drainOutbox(api: Api, userState: UserState): Promise<void> {
 
 			let success: boolean;
 			if (item.long) {
-				success = await sendLong(api, item.chatId, item.text);
+				// sendLong returns remaining undelivered text (empty = all delivered).
+				// On partial failure, update item.text to only the undelivered tail
+				// so retries don't resend already-delivered chunks.
+				const remaining = await sendLong(api, item.chatId, item.text);
+				success = remaining === "";
+				if (!success) item.text = remaining;
 			} else {
 				const msgId = await safeSend(api, item.chatId, item.text);
 				success = msgId !== 0;
@@ -159,23 +164,28 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 			.then(() => handleAgentEvent(send, api, display, event))
 			.catch((e) => log(`[EVENT] Error: ${e}`));
 
-		// Handle turn completion
+		// Handle turn completion — checks run INSIDE the eventChain so they
+		// execute after handleAgentEvent has updated display state (e.g.
+		// retryInProgress set by auto_retry_start that arrives right after agent_end).
 		if (event.type === "agent_end") {
 			parentAgentDone = true;
-			// Don't finalize if BG agents or auto-retry still active.
-			if (userState.backgroundAgents.size > 0 || display.retryInProgress) {
-				return;
-			}
-			chainCompletion(display);
+			eventChain = eventChain.then(() => {
+				if (userState.backgroundAgents.size > 0 || display.retryInProgress) {
+					return;
+				}
+				chainCompletion(display);
+			});
 		}
 
 		// Re-trigger completion when the last BG agent finishes.
 		// agent_end already fired but skipped completion because BG agents were running.
 		// Now that the last one is done, finalize.
 		if (event.type === "background_agent_end") {
-			if (parentAgentDone && userState.backgroundAgents.size === 0 && !bridge.isStreaming) {
-				chainCompletion(display);
-			}
+			eventChain = eventChain.then(() => {
+				if (parentAgentDone && userState.backgroundAgents.size === 0 && !bridge.isStreaming) {
+					chainCompletion(display);
+				}
+			});
 		}
 
 		// Reset parentAgentDone when a new run starts (e.g. user sends another message)

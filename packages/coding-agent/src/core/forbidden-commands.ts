@@ -22,6 +22,7 @@ const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
 	"^gh pr merge.*--admin", // bypass branch protection
 	"^git push.*(-f\\b|--force)", // force push (includes --force-with-lease)
 	"^gh api.*bypass", // API calls with bypass flag
+	"HUSKY=0", // bypass pre-commit hooks
 ];
 
 /**

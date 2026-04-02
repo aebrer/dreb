@@ -194,6 +194,27 @@ export async function handleAgentEvent(
 				break;
 			}
 
+			// Show background agent completion results — these arrive as user
+			// messages injected by agent-session.ts via prompt()/steer() and
+			// contain the actual subagent output the model sees.
+			if (msg?.role === "user") {
+				const content = msg?.content;
+				if (content && Array.isArray(content)) {
+					for (const block of content) {
+						if (block.type === "text" && block.text?.includes("<background-agent-complete>")) {
+							// Extract the content between the XML tags
+							const match = block.text.match(
+								/<background-agent-complete>\n?([\s\S]*?)\n?<\/background-agent-complete>/,
+							);
+							if (match?.[1]?.trim()) {
+								send(`🤖 *Background agent complete:*\n${match[1].trim()}`, true);
+							}
+						}
+					}
+				}
+				break;
+			}
+
 			// Only display assistant messages — user messages are echoed back by RPC
 			if (msg?.role !== "assistant") break;
 			const content = msg?.content;

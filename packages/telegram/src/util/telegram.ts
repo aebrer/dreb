@@ -53,24 +53,24 @@ export async function safeSend(api: Api, chatId: number, text: string, replyToId
 
 /**
  * Send a long message, splitting at newline boundaries.
- * Returns true if ALL chunks were delivered, false if any failed.
+ * Stops on first chunk failure to avoid resending already-delivered chunks
+ * on retry. Returns the remaining (undelivered) text, or empty string if
+ * everything was delivered.
  */
-export async function sendLong(api: Api, chatId: number, text: string, replyToId?: number): Promise<boolean> {
-	let allDelivered = true;
+export async function sendLong(api: Api, chatId: number, text: string, replyToId?: number): Promise<string> {
 	while (text) {
 		if (text.length <= SAFE_LENGTH) {
 			const msgId = await safeSend(api, chatId, text, replyToId);
-			if (msgId === 0) allDelivered = false;
-			break;
+			return msgId === 0 ? text : "";
 		}
 		let splitAt = text.lastIndexOf("\n", SAFE_LENGTH);
 		if (splitAt < 2000) splitAt = SAFE_LENGTH;
 		const msgId = await safeSend(api, chatId, text.slice(0, splitAt), replyToId);
-		if (msgId === 0) allDelivered = false;
+		if (msgId === 0) return text; // Stop — return full remaining text including this failed chunk
 		text = text.slice(splitAt).replace(/^\n+/, "");
 		replyToId = undefined; // Only reply to the first chunk
 	}
-	return allDelivered;
+	return "";
 }
 
 /**
