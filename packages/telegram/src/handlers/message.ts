@@ -106,9 +106,12 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 
 	let eventChain = Promise.resolve();
 	let parentAgentDone = false; // true after agent_end fires (even if BG agents still running)
+	let completionFired = false; // prevents double DONE when agent_end and background_agent_end race
 
 	/** Chain the completion sequence — session persist, cleanup, DONE marker */
 	function chainCompletion(display: EventDisplayState) {
+		if (completionFired) return;
+		completionFired = true;
 		eventChain = eventChain
 			.then(async () => {
 				// Persist session
@@ -188,9 +191,10 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 			});
 		}
 
-		// Reset parentAgentDone when a new run starts (e.g. user sends another message)
+		// Reset state when a new run starts (e.g. user sends another message)
 		if (event.type === "agent_start") {
 			parentAgentDone = false;
+			completionFired = false;
 		}
 	});
 }

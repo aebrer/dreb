@@ -10,12 +10,16 @@ const SAFE_LENGTH = 4000; // Leave room for markdown overhead (Telegram max is 4
  * Wrap a promise with a timeout. Rejects with an error if the promise
  * doesn't settle within `ms` milliseconds. Used to prevent Telegram API
  * calls from hanging the event chain indefinitely.
+ *
+ * The timer is cleared when the promise settles to avoid accumulating
+ * stale timers in the Node.js timer heap during heavy message runs.
  */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-	return Promise.race([
-		promise,
-		new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Telegram API timeout after ${ms}ms`)), ms)),
-	]);
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+	let timer: ReturnType<typeof setTimeout>;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`Telegram API timeout after ${ms}ms`)), ms);
+	});
+	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer!));
 }
 
 const API_TIMEOUT = 15_000; // 15s per Telegram API call
@@ -35,7 +39,15 @@ export async function safeSend(api: Api, chatId: number, text: string, replyToId
 			API_TIMEOUT,
 		);
 		return msg.message_id;
-	} catch {
+	} catch (e) {
+		// Only retry as plain text for Markdown parse errors (Telegram 400).
+		// For timeouts/network errors, the original request may still be in-flight —
+		// retrying would risk delivering duplicate messages. Return 0 and let
+		// the outbox retry loop handle it.
+		if (!isTelegramParseError(e)) {
+			log(`[WARN] Failed to send message: ${e}`);
+			return 0;
+		}
 		try {
 			const msg = await withTimeout(
 				api.sendMessage(chatId, text, {
@@ -44,11 +56,27 @@ export async function safeSend(api: Api, chatId: number, text: string, replyToId
 				API_TIMEOUT,
 			);
 			return msg.message_id;
-		} catch (e) {
-			log(`[WARN] Failed to send message (possibly timed out): ${e}`);
+		} catch (e2) {
+			log(`[WARN] Failed to send message (plain text fallback): ${e2}`);
 			return 0;
 		}
 	}
+}
+
+/**
+ * Check if an error is a Telegram API parse error (HTTP 400 for bad Markdown).
+ * These are safe to retry as plain text because the original request definitively
+ * failed — Telegram won't deliver it. Timeouts and network errors are NOT safe
+ * to retry immediately because the in-flight request may still succeed.
+ */
+function isTelegramParseError(e: unknown): boolean {
+	if (!e || typeof e !== "object") return false;
+	// grammy HttpError has error_code
+	const code = (e as any).error_code ?? (e as any).status ?? (e as any).statusCode;
+	if (code === 400) return true;
+	// Fallback: check message for common Telegram parse error text
+	const msg = (e as any).message ?? String(e);
+	return typeof msg === "string" && msg.includes("can't parse entities");
 }
 
 /**
