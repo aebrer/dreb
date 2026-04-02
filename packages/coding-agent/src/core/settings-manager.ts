@@ -95,6 +95,7 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
+	forbiddenCommands?: string[]; // Regex patterns for commands blocked by the forbidden-commands guard
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -954,5 +955,9 @@ export class SettingsManager {
 
 	getCodeBlockIndent(): string {
 		return this.settings.markdown?.codeBlockIndent ?? "  ";
+	}
+
+	getForbiddenCommands(): string[] | undefined {
+		return this.settings.forbiddenCommands;
 	}
 }

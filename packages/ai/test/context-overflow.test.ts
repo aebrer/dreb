@@ -11,9 +11,8 @@
  * The isContextOverflow() function must return true for all providers.
  */
 
-import type { ChildProcess } from "child_process";
-import { execSync, spawn } from "child_process";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { execSync } from "child_process";
+import { describe, expect, it } from "vitest";
 import { findModel, getModel } from "../src/models.js";
 import { complete } from "../src/stream.js";
 import type { AssistantMessage, Context, Model, Usage } from "../src/types.js";
@@ -543,78 +542,32 @@ describe("Context overflow error handling", () => {
 	// Ollama (local)
 	// =============================================================================
 
-	// Check if ollama is installed and local LLM tests are enabled
-	let ollamaInstalled = false;
+	// Check if ollama service is running and has the required model.
+	// `ollama list` fails if the server isn't reachable; grep fails if the model isn't available.
+	// Both must succeed for tests to run — no silent skips, no auto-pull, no server lifecycle management.
+	let ollamaReady = false;
 	if (!process.env.DREB_NO_LOCAL_LLM) {
 		try {
-			execSync("which ollama", { stdio: "ignore" });
-			ollamaInstalled = true;
+			execSync("ollama list | grep -q 'gpt-oss'", { stdio: "ignore" });
+			ollamaReady = true;
 		} catch {
-			ollamaInstalled = false;
+			ollamaReady = false;
 		}
 	}
 
-	describe.skipIf(!ollamaInstalled)("Ollama (local)", () => {
-		let ollamaProcess: ChildProcess | null = null;
-		let model: Model<"openai-completions">;
-
-		beforeAll(async () => {
-			// Check if model is available, if not pull it
-			try {
-				execSync("ollama list | grep -q 'gpt-oss:20b'", { stdio: "ignore" });
-			} catch {
-				console.log("Pulling gpt-oss:20b model for Ollama overflow tests...");
-				try {
-					execSync("ollama pull gpt-oss:20b", { stdio: "inherit" });
-				} catch (_e) {
-					console.warn("Failed to pull gpt-oss:20b model, tests will be skipped");
-					return;
-				}
-			}
-
-			// Start ollama server
-			ollamaProcess = spawn("ollama", ["serve"], {
-				detached: false,
-				stdio: "ignore",
-			});
-
-			// Wait for server to be ready
-			await new Promise<void>((resolve) => {
-				const checkServer = async () => {
-					try {
-						const response = await fetch("http://localhost:11434/api/tags");
-						if (response.ok) {
-							resolve();
-						} else {
-							setTimeout(checkServer, 500);
-						}
-					} catch {
-						setTimeout(checkServer, 500);
-					}
-				};
-				setTimeout(checkServer, 1000);
-			});
-
-			model = {
-				id: "gpt-oss:20b",
-				api: "openai-completions",
-				provider: "ollama",
-				baseUrl: "http://localhost:11434/v1",
-				reasoning: true,
-				input: ["text"],
-				contextWindow: 128000,
-				maxTokens: 16000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				name: "Ollama GPT-OSS 20B",
-			};
-		}, 60000);
-
-		afterAll(() => {
-			if (ollamaProcess) {
-				ollamaProcess.kill("SIGTERM");
-				ollamaProcess = null;
-			}
-		});
+	describe.skipIf(!ollamaReady)("Ollama (local)", () => {
+		const model: Model<"openai-completions"> = {
+			id: "gpt-oss:20b",
+			api: "openai-completions",
+			provider: "ollama",
+			baseUrl: "http://localhost:11434/v1",
+			reasoning: true,
+			input: ["text"],
+			contextWindow: 128000,
+			maxTokens: 16000,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			name: "Ollama GPT-OSS 20B",
+		};
 
 		it("gpt-oss:20b - should detect overflow via isContextOverflow (ollama silently truncates)", async () => {
 			const result = await testContextOverflow(model, "ollama");
