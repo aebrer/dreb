@@ -9,7 +9,7 @@ import type { Config } from "./config.js";
 import { handleFile } from "./handlers/file.js";
 import { sendPrompt } from "./handlers/message.js";
 import type { UserState } from "./types.js";
-import { log, safeSend } from "./util/telegram.js";
+import { log, safeDelete, safeSend } from "./util/telegram.js";
 
 /** Per-user state store */
 const userStates = new Map<number, UserState>();
@@ -79,6 +79,7 @@ export function createBot(config: Config): Bot {
 			await ensureBridgeWithSession(config, userState);
 		} catch (e) {
 			log(`[MSG] Bridge setup failed: ${e}`);
+			if (statusMessageId) void safeDelete(ctx.api, ctx.chat!.id, statusMessageId);
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Failed to start agent: ${e}`);
 			return;
 		}

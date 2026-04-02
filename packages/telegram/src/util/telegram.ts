@@ -19,6 +19,10 @@ export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 	const timeout = new Promise<never>((_, reject) => {
 		timer = setTimeout(() => reject(new Error(`Telegram API timeout after ${ms}ms`)), ms);
 	});
+	// Prevent unhandled rejection from the slow promise if the timeout wins.
+	// Without this, a late rejection after timeout becomes an unhandled rejection
+	// which crashes the process in Node.js >= 15.
+	promise.catch(() => {});
 	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer!));
 }
 

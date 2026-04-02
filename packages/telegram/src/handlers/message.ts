@@ -173,7 +173,7 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 		if (event.type === "agent_end") {
 			parentAgentDone = true;
 			eventChain = eventChain.then(() => {
-				if (userState.backgroundAgents.size > 0 || display.retryInProgress) {
+				if (userState.backgroundAgents.size > 0 || display.retryInProgress || display.pendingRetry) {
 					return;
 				}
 				chainCompletion(display);

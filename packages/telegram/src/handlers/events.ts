@@ -109,8 +109,10 @@ export interface EventDisplayState {
 	done: boolean;
 	/** Debounced editor instance */
 	editor: DebouncedEditor;
-	/** Whether auto-retry is in progress (Layer 1: reactive) */
+	/** Whether auto-retry is in progress (Layer 1: reactive — set by auto_retry_start) */
 	retryInProgress: boolean;
+	/** Whether a retry is expected (Layer 2: predictive — set by agent_end when error looks retryable) */
+	pendingRetry: boolean;
 	/** Current retry attempt number for display */
 	retryAttempt: number;
 }
@@ -147,6 +149,7 @@ export function createEventDisplay(
 		done: false,
 		editor: new DebouncedEditor(api),
 		retryInProgress: false,
+		pendingRetry: false,
 		retryAttempt: 0,
 	};
 }
@@ -311,6 +314,7 @@ export async function handleAgentEvent(
 		case "auto_retry_start": {
 			const { attempt, maxAttempts, delayMs, errorMessage } = event as any;
 			state.retryInProgress = true;
+			state.pendingRetry = false; // Layer 1 has taken over from Layer 2
 			state.retryAttempt = attempt;
 			const delaySec = Math.round(delayMs / 1000);
 			const shortErr = errorMessage?.length > 80 ? `${errorMessage.slice(0, 80)}…` : errorMessage;
@@ -373,6 +377,10 @@ export async function handleAgentEvent(
 			// looks retryable (Layer 2 — defensive catch in case events were missed).
 			// The core will emit a new agent_start/agent_end cycle for the retry.
 			if (state.retryInProgress || errorIsRetryable) {
+				// Signal that a retry is expected — the completion check in
+				// ensureSubscribed needs this because it runs in the eventChain
+				// BEFORE auto_retry_start has been processed.
+				if (errorIsRetryable) state.pendingRetry = true;
 				// Reset per-cycle state for the next agent loop
 				state.textBlocks = [];
 				state.toolCount = 0;
