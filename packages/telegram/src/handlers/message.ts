@@ -83,6 +83,10 @@ async function reconcileMessages(
 					await sendLong(api, chatId, text);
 				}
 			}
+			// Mark these as displayed so we don't resend them next time
+			if (display) {
+				display.displayedMsgIndex = assistantMessages.length;
+			}
 		}
 
 		// Update the persistent count
@@ -120,6 +124,21 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 	let lastEventProcessed = Date.now();
 	let pendingCount = 0;
 	const STUCK_THRESHOLD = 30_000; // 30s without progress = stuck
+
+	// Periodic reconciliation — runs OUTSIDE the eventChain on its own timer.
+	// If the event pipeline drops messages (stuck chain, Telegram API issues,
+	// display swap races), this catches them without waiting for user action.
+	const RECONCILE_INTERVAL = 5_000; // 5s
+	const reconcileTimer = setInterval(() => {
+		if (!bridge.isAlive) {
+			clearInterval(reconcileTimer);
+			return;
+		}
+		const display = displays.get(userState);
+		if (!display) return;
+		// Fire-and-forget — runs independently of the eventChain
+		void reconcileMessages(api, display.chatId, bridge, userState, display);
+	}, RECONCILE_INTERVAL);
 
 	bridge.onEvent((event) => {
 		// Capture display at event arrival time — even if a new prompt
