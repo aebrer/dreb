@@ -92,8 +92,11 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 
 					cleanupUploads();
 
-					// DONE marker — only when truly idle and not stopped
+					// DONE marker — only when truly idle and not stopped.
+					// Brief delay lets in-flight Telegram API calls (text edits,
+					// status deletes) settle before DONE appears in the chat.
 					if (!bridge.isStreaming && !userState.stopRequested) {
+						await new Promise((r) => setTimeout(r, 150));
 						await safeSend(api, display.chatId, "🦀 _dreb DONE_");
 					}
 				})
