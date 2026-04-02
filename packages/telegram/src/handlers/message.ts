@@ -3,12 +3,12 @@
  *
  * Two paths (matching TUI parity):
  * - **Steering**: agent is streaming → inject mid-run via steer()
- * - **Normal**: agent is idle → fire prompt, return immediately
+ * - **Normal**: agent is idle → create display, fire prompt, return
  *
- * The handler never blocks — grammy processes updates sequentially, so
- * we must return immediately to allow subsequent messages (steering, /stop)
- * to be processed. The prompt cycle runs in the background; events flow
- * via async subscriptions.
+ * A single persistent event subscription per bridge handles all event
+ * delivery, DONE markers, and session persistence. sendPrompt just swaps
+ * the display target and fires the prompt — no per-prompt subscription
+ * lifecycle, no background cycles, no turnResolver. Same as the TUI.
  */
 
 import type { Api } from "grammy";
@@ -17,12 +17,95 @@ import { setUserSession } from "../state.js";
 import type { UserState } from "../types.js";
 import { cleanupUploads } from "../util/files.js";
 import { log, safeDelete, safeSend } from "../util/telegram.js";
-import { createEventDisplay, handleAgentEvent } from "./events.js";
+import { createEventDisplay, type EventDisplayState, handleAgentEvent } from "./events.js";
+
+/** Track which bridges have a persistent event subscription */
+const subscribedBridges = new WeakSet<AgentBridge>();
+
+/** Current display state per user — swapped on each new prompt */
+const displays = new Map<UserState, EventDisplayState>();
+
+/** Track userId for session persistence (set by sendPrompt, used by completion handler) */
+const userIds = new Map<UserState, number>();
+
+/**
+ * Ensure a persistent event subscription exists for this bridge.
+ * Called once per bridge lifetime — handles all event delivery,
+ * DONE markers, session persistence, and cleanup.
+ */
+function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): void {
+	if (subscribedBridges.has(bridge)) return;
+	subscribedBridges.add(bridge);
+
+	// New bridge — clear stale state from any previous bridge
+	userState.promptInFlight = false;
+	displays.delete(userState);
+
+	let eventChain = Promise.resolve();
+
+	bridge.onEvent((event) => {
+		// Capture display at event arrival time — even if a new prompt
+		// replaces the display later, this event uses the correct one.
+		const display = displays.get(userState);
+		if (!display) return;
+
+		// Clear promptInFlight on first event after a prompt
+		if (userState.promptInFlight) {
+			userState.promptInFlight = false;
+		}
+
+		// Queue event processing (serialized to prevent concurrent state mutations)
+		eventChain = eventChain
+			.then(() => handleAgentEvent(api, display, event))
+			.catch((e) => log(`[EVENT] Error: ${e}`));
+
+		// Handle turn completion
+		if (event.type === "agent_end") {
+			// Don't finalize if BG agents or auto-retry still active.
+			// Check userState.backgroundAgents (persistent, tracked by bridge-lifecycle)
+			// NOT display.backgroundAgents (per-display, lost on display swap).
+			if (userState.backgroundAgents.size > 0 || display.retryInProgress) {
+				return;
+			}
+
+			// Chain completion after the event is processed
+			eventChain = eventChain
+				.then(async () => {
+					// Only clean up if this display is still active
+					// (a new prompt may have already replaced it)
+					if (displays.get(userState) === display) {
+						displays.delete(userState);
+					}
+
+					// Persist session
+					if (bridge.isAlive) {
+						try {
+							await bridge.refreshSessionInfo();
+							const userId = userIds.get(userState);
+							if (bridge.sessionFile && userId) {
+								setUserSession(userId, bridge.sessionFile);
+							}
+						} catch (e) {
+							log(`[EVENT] Session refresh error: ${e}`);
+						}
+					}
+
+					cleanupUploads();
+
+					// DONE marker — only when truly idle and not stopped
+					if (!bridge.isStreaming && !userState.stopRequested) {
+						await safeSend(api, display.chatId, "🦀 _dreb DONE_");
+					}
+				})
+				.catch((e) => log(`[EVENT] Completion error: ${e}`));
+		}
+	});
+}
 
 /**
  * Send a prompt to the agent. If the agent is streaming, steers instead.
  *
- * Returns immediately — the prompt cycle runs in the background.
+ * Returns immediately — the persistent subscription handles event delivery.
  */
 export function sendPrompt(
 	api: Api,
@@ -46,9 +129,12 @@ export function sendPrompt(
 		return;
 	}
 
+	// Ensure persistent subscription exists for this bridge
+	ensureSubscribed(api, userState, bridge);
+
 	// Steering path — agent is actively streaming (same check as TUI).
 	// promptInFlight covers the race window between prompt() and agent_start.
-	if (bridge.isStreaming || userState.promptInFlight || userState.processing) {
+	if (bridge.isStreaming || userState.promptInFlight) {
 		if (opts.statusMessageId) {
 			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
@@ -64,140 +150,21 @@ export function sendPrompt(
 		return;
 	}
 
-	// Normal path — agent is idle, start a new run (fire and forget)
-	userState.processing = true;
+	// Normal path — create new display, fire prompt, return immediately
 	userState.promptInFlight = true;
 	userState.stopRequested = false;
-
-	// Turn tracker — resolves when the agent finishes this turn (agent_end).
-	// Guarded: won't resolve while background agents or auto-retry are active,
-	// keeping the event subscription alive for their results.
-	const turnDone = new Promise<void>((resolve) => {
-		userState.turnResolver = resolve;
-	});
+	if (opts.userId) userIds.set(userState, opts.userId);
 
 	const display = createEventDisplay(api, opts.chatId, opts.replyToId, opts.statusMessageId);
+	displays.set(userState, display);
 
-	// Subscribe to events
-	let eventChain = Promise.resolve();
-	const unsubscribe = bridge.onEvent((event) => {
-		// Clear promptInFlight on first event
-		if (userState.promptInFlight) {
-			userState.promptInFlight = false;
-		}
-		// Resolve turnDone on agent_end — the agent finished its response.
-		// Don't resolve if BG agents or auto-retry are still active —
-		// their results need this subscription alive.
-		// events.ts handles per-cycle state reset in this case.
-		if (event.type === "agent_end" && userState.turnResolver) {
-			if (display.backgroundAgents.size > 0 || display.retryInProgress) {
-				// Keep subscription alive, let handleAgentEvent reset per-cycle state
-			} else {
-				userState.turnResolver();
-				userState.turnResolver = null;
-			}
-		}
-		eventChain = eventChain
-			.then(() => handleAgentEvent(api, display, event))
-			.catch((e) => log(`[EVENT] Error: ${e}`));
-	});
-
-	// Abort controller for /stop
-	const abort = new AbortController();
-	userState.currentAbort = abort;
-
-	// Fire the prompt cycle in the background
-	runPromptCycle(api, userState, bridge, opts, display, unsubscribe, abort, turnDone).catch((e) => {
-		log(`[PROMPT] Cycle error: ${e}`);
-	});
-}
-
-/**
- * Run the full prompt cycle: send prompt → wait for turn end → cleanup.
- *
- * "Turn end" means the agent finished its current response (agent_end), NOT
- * that all background agents are done. BG agents deliver results via the
- * agent core's own steer()/prompt() mechanism — they trigger new agent_start/
- * agent_end cycles that the event subscription handles independently.
- *
- * Runs entirely in the background — never blocks the message handler.
- */
-async function runPromptCycle(
-	api: Api,
-	userState: UserState,
-	bridge: AgentBridge,
-	opts: {
-		chatId: number;
-		replyToId: number;
-		userId?: number;
-		prompt: string;
-		images?: Array<{ type: "image"; data: string; mimeType: string }>;
-		statusMessageId: number | null;
-	},
-	_display: ReturnType<typeof createEventDisplay>,
-	unsubscribe: () => void,
-	abort: AbortController,
-	turnDone: Promise<void>,
-): Promise<void> {
-	try {
-		await bridge.prompt(opts.prompt, opts.images);
-
-		// Wait for agent_end OR abort OR bridge death
-		await Promise.race([
-			turnDone,
-			new Promise<void>((resolve) => {
-				const signal = abort.signal;
-
-				// Bridge death detection
-				const deathCheck = setInterval(() => {
-					if (!bridge.isAlive) {
-						clearInterval(deathCheck);
-						clearTimeout(abortTimeout);
-						signal.removeEventListener("abort", onAbort);
-						resolve();
-					}
-				}, 500);
-
-				// Abort signal (/stop)
-				const onAbort = () => {
-					clearInterval(deathCheck);
-					clearTimeout(abortTimeout);
-					resolve();
-				};
-				signal.addEventListener("abort", onAbort, { once: true });
-
-				// Safety: if turnDone never resolves (shouldn't happen), don't leak
-				const abortTimeout = setTimeout(() => {
-					clearInterval(deathCheck);
-					signal.removeEventListener("abort", onAbort);
-					resolve();
-				}, 300000); // 5 min safety
-			}),
-		]);
-
-		// Update session info and persist
-		if (bridge.isAlive) {
-			await bridge.refreshSessionInfo();
-			if (bridge.sessionFile && opts.userId) {
-				setUserSession(opts.userId, bridge.sessionFile);
-			}
-		}
-	} catch (e) {
+	bridge.prompt(opts.prompt, opts.images).catch((e) => {
 		const msg = e instanceof Error ? e.message : String(e);
 		if (!userState.stopRequested) {
-			await safeSend(api, opts.chatId, `❌ Error: ${msg.slice(0, 200)}`);
+			void safeSend(api, opts.chatId, `❌ Error: ${msg.slice(0, 200)}`);
 		}
-	} finally {
-		unsubscribe();
-		userState.currentAbort = null;
 		userState.promptInFlight = false;
-		userState.processing = false;
-		userState.turnResolver = null;
+		displays.delete(userState);
 		cleanupUploads();
-	}
-
-	// Send DONE when agent is truly idle (not streaming, not stopped)
-	if (!bridge.isStreaming && !userState.stopRequested) {
-		await safeSend(api, opts.chatId, "🦀 _dreb DONE_");
-	}
+	});
 }

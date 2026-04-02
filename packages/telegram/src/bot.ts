@@ -17,15 +17,12 @@ const userStates = new Map<number, UserState>();
 function createUserState(): UserState {
 	return {
 		bridge: null,
-		processing: false,
 		promptInFlight: false,
 		newSessionFlag: false,
 		newSessionCwd: null,
 		effectiveCwd: null,
 		backgroundAgents: new Map(),
 		stopRequested: false,
-		currentAbort: null,
-		turnResolver: null,
 	};
 }
 
@@ -64,7 +61,7 @@ export function createBot(config: Config): Bot {
 
 		const userId = ctx.from!.id;
 		const userState = getUserState(userId);
-		const isBusy = userState.processing || userState.bridge?.isStreaming;
+		const isBusy = userState.bridge?.isStreaming || userState.promptInFlight;
 
 		// Show status immediately
 		const statusText = isBusy ? "↩️ _Steering..._" : "🧠 _Thinking..._";

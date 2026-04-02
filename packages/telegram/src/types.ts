@@ -16,8 +16,6 @@ export interface TrackedAgent {
 export interface UserState {
 	/** Active agent bridge (RPC process) */
 	bridge: AgentBridge | null;
-	/** Whether a prompt cycle is running (prompt sent, waiting for completion) */
-	processing: boolean;
 	/** Covers the race window between prompt() call and agent_start event */
 	promptInFlight: boolean;
 	/** Flag to start a fresh session on next message */
@@ -30,10 +28,6 @@ export interface UserState {
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether /stop was used (suppress DONE marker) */
 	stopRequested: boolean;
-	/** Abort controller for the current prompt cycle — signaled by /stop to break the wait */
-	currentAbort: AbortController | null;
-	/** Resolves on agent_end — used to signal turn completion without waiting for BG agents */
-	turnResolver: (() => void) | null;
 }
 
 /** Session info for persistence across bot restarts */

@@ -124,7 +124,7 @@ async function flushBatch(key: string, api: Api, getUserState: (userId: number) 
 
 	// Update status (non-critical, after send)
 	if (batch.statusMessageId) {
-		const isBusy = userState.processing || userState.bridge?.isStreaming;
+		const isBusy = userState.bridge?.isStreaming || userState.promptInFlight;
 		const indicator = isBusy ? "↩️ _Steering..._" : "🧠 _Processing..._";
 		const status =
 			n === 1

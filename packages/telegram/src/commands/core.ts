@@ -101,11 +101,6 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 export async function cmdStop(ctx: Context, _api: Api, userState: UserState): Promise<void> {
 	userState.stopRequested = true;
 
-	// Signal the current prompt cycle to resolve immediately
-	if (userState.currentAbort) {
-		userState.currentAbort.abort();
-	}
-
 	// Abort current agent activity — like pressing Esc in the TUI.
 	// This stops the agent, not the bridge. Session stays connected.
 	if (userState.bridge?.isAlive) {
@@ -113,7 +108,7 @@ export async function cmdStop(ctx: Context, _api: Api, userState: UserState): Pr
 	}
 
 	const parts: string[] = [];
-	if (userState.processing || userState.bridge?.isStreaming) parts.push("interrupted current task");
+	if (userState.bridge?.isStreaming || userState.promptInFlight) parts.push("interrupted current task");
 	await ctx.reply(parts.length > 0 ? `🛑 Stopped — ${parts.join(", ")}.` : "🛑 Stopped.");
 }
 
