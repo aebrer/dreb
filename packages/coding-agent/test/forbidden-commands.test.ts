@@ -212,6 +212,37 @@ describe("isForbiddenCommand", () => {
 		});
 	});
 
+	describe("escaped backslashes before closing quotes", () => {
+		it("correctly handles escaped backslash before closing quote (double quotes)", () => {
+			// echo "\\" && git push --force — the \\ is a literal backslash,
+			// " closes the string, && is a real operator
+			expect(isForbiddenCommand('echo "\\\\" && git push --force')).toBe("^git push.*(-f\\b|--force)");
+		});
+
+		it("correctly handles escaped backslash before closing quote (single quotes)", () => {
+			// Note: bash single quotes don't allow \', but our masker should still
+			// handle the backslash counting correctly for robustness
+			expect(isForbiddenCommand("echo '\\\\' && git push --force")).toBe("^git push.*(-f\\b|--force)");
+		});
+
+		it("correctly handles escaped quote (odd backslashes)", () => {
+			// \\" inside quotes — 2 backslashes + escaped quote = literal "
+			// The " is NOT a closing quote, so we're still in the string
+			expect(isForbiddenCommand('echo "hello\\\\"  && git push --force')).toBe("^git push.*(-f\\b|--force)");
+		});
+
+		it("correctly handles triple backslash before quote (escaped)", () => {
+			// \\\" — 3 backslashes: escaped backslash + escaped quote
+			// The " IS escaped, so we're still inside the string
+			expect(isForbiddenCommand('echo "hello\\\\\\" && safe')).toBeUndefined();
+		});
+
+		it("simple escaped quote is still treated as escaped", () => {
+			// \" — 1 backslash, odd → the " is escaped, we stay in the string
+			expect(isForbiddenCommand('echo "hello\\" && git push --force"')).toBeUndefined();
+		});
+	});
+
 	describe("edge cases", () => {
 		it("returns undefined for empty command", () => {
 			expect(isForbiddenCommand("")).toBeUndefined();

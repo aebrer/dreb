@@ -29,7 +29,9 @@ const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
  * characters within quotes with underscores. This prevents shell operators
  * inside quoted strings from causing false splits.
  *
- * Handles escaped quotes (\", \') within strings.
+ * Handles escaped quotes (\", \') within strings. Correctly counts
+ * consecutive backslashes before a quote — an even count means the quote
+ * is real (e.g. `\\"` is escaped-backslash + closing quote).
  */
 function maskQuotedContent(command: string): string {
 	let result = "";
@@ -38,13 +40,16 @@ function maskQuotedContent(command: string): string {
 
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
-		const prev = i > 0 ? command[i - 1] : "";
 
-		if (ch === "'" && !inDouble && prev !== "\\") {
-			inSingle = !inSingle;
+		if (ch === "'" && !inDouble) {
+			if (!isEscaped(command, i)) {
+				inSingle = !inSingle;
+			}
 			result += ch;
-		} else if (ch === '"' && !inSingle && prev !== "\\") {
-			inDouble = !inDouble;
+		} else if (ch === '"' && !inSingle) {
+			if (!isEscaped(command, i)) {
+				inDouble = !inDouble;
+			}
 			result += ch;
 		} else if (inSingle || inDouble) {
 			// Replace content inside quotes with a safe character
@@ -56,6 +61,24 @@ function maskQuotedContent(command: string): string {
 	}
 
 	return result;
+}
+
+/**
+ * Check if the character at position `i` is escaped by counting consecutive
+ * trailing backslashes. If the count is odd, the character is escaped.
+ * If even (including zero), it is not escaped.
+ *
+ * e.g. `\\"` → 2 backslashes → even → `"` is NOT escaped (real quote)
+ *      `\\\"` → 3 backslashes → odd → `"` IS escaped (literal quote)
+ */
+function isEscaped(str: string, i: number): boolean {
+	let count = 0;
+	let j = i - 1;
+	while (j >= 0 && str[j] === "\\") {
+		count++;
+		j--;
+	}
+	return count % 2 === 1;
 }
 
 /**
