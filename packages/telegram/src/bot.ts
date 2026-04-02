@@ -23,6 +23,7 @@ function createUserState(): UserState {
 		effectiveCwd: null,
 		backgroundAgents: new Map(),
 		stopRequested: false,
+		lastKnownMsgCount: 0,
 	};
 }
 

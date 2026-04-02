@@ -47,6 +47,7 @@ function createUserState(overrides?: Partial<UserState>): UserState {
 		effectiveCwd: null,
 		backgroundAgents: new Map(),
 		stopRequested: false,
+		lastKnownMsgCount: 0,
 		...overrides,
 	};
 }

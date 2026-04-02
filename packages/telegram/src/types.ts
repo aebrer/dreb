@@ -28,6 +28,8 @@ export interface UserState {
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether /stop was used (suppress DONE marker) */
 	stopRequested: boolean;
+	/** Last known session message count — for reconciliation */
+	lastKnownMsgCount: number;
 }
 
 /** Session info for persistence across bot restarts */

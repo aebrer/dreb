@@ -104,6 +104,8 @@ export interface EventDisplayState {
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether agent has finished */
 	done: boolean;
+	/** Index of the next assistant message to display (for reconciliation) */
+	displayedMsgIndex: number;
 
 	/** Debounced editor instance */
 	editor: DebouncedEditor;
@@ -143,6 +145,7 @@ export function createEventDisplay(
 		tasks: [],
 		backgroundAgents: new Map(),
 		done: false,
+		displayedMsgIndex: 0,
 		editor: new DebouncedEditor(api),
 		retryInProgress: false,
 		retryAttempt: 0,
@@ -218,6 +221,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 					}
 				}
 			}
+			state.displayedMsgIndex++;
 			break;
 		}
 

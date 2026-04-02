@@ -7,24 +7,44 @@ import type { Api } from "grammy";
 const SAFE_LENGTH = 4000; // Leave room for markdown overhead (Telegram max is 4096)
 
 /**
+ * Wrap a promise with a timeout. Rejects with an error if the promise
+ * doesn't settle within `ms` milliseconds. Used to prevent Telegram API
+ * calls from hanging the event chain indefinitely.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Telegram API timeout after ${ms}ms`)), ms)),
+	]);
+}
+
+const API_TIMEOUT = 15_000; // 15s per Telegram API call
+
+/**
  * Send a message, falling back to plain text if Markdown fails.
  */
 export async function safeSend(api: Api, chatId: number, text: string, replyToId?: number): Promise<number> {
 	text = truncate(text, SAFE_LENGTH);
 	try {
-		const msg = await api.sendMessage(chatId, text, {
-			parse_mode: "Markdown",
-			...(replyToId ? { reply_parameters: { message_id: replyToId } } : {}),
-		});
+		const msg = await withTimeout(
+			api.sendMessage(chatId, text, {
+				parse_mode: "Markdown",
+				...(replyToId ? { reply_parameters: { message_id: replyToId } } : {}),
+			}),
+			API_TIMEOUT,
+		);
 		return msg.message_id;
 	} catch {
 		try {
-			const msg = await api.sendMessage(chatId, text, {
-				...(replyToId ? { reply_parameters: { message_id: replyToId } } : {}),
-			});
+			const msg = await withTimeout(
+				api.sendMessage(chatId, text, {
+					...(replyToId ? { reply_parameters: { message_id: replyToId } } : {}),
+				}),
+				API_TIMEOUT,
+			);
 			return msg.message_id;
 		} catch (e) {
-			log(`[WARN] Failed to send message: ${e}`);
+			log(`[WARN] Failed to send message (possibly timed out): ${e}`);
 			return 0;
 		}
 	}
@@ -53,11 +73,11 @@ export async function sendLong(api: Api, chatId: number, text: string, replyToId
 export async function safeEdit(api: Api, chatId: number, messageId: number, text: string): Promise<boolean> {
 	text = truncate(text, SAFE_LENGTH);
 	try {
-		await api.editMessageText(chatId, messageId, text, { parse_mode: "Markdown" });
+		await withTimeout(api.editMessageText(chatId, messageId, text, { parse_mode: "Markdown" }), API_TIMEOUT);
 		return true;
 	} catch {
 		try {
-			await api.editMessageText(chatId, messageId, text);
+			await withTimeout(api.editMessageText(chatId, messageId, text), API_TIMEOUT);
 			return true;
 		} catch {
 			return false;
@@ -70,7 +90,7 @@ export async function safeEdit(api: Api, chatId: number, messageId: number, text
  */
 export async function safeDelete(api: Api, chatId: number, messageId: number): Promise<void> {
 	try {
-		await api.deleteMessage(chatId, messageId);
+		await withTimeout(api.deleteMessage(chatId, messageId), API_TIMEOUT);
 	} catch {
 		// Ignore — message may already be deleted or too old
 	}
