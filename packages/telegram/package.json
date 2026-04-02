@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/telegram",
-	"version": "1.12.0",
+	"version": "1.12.1",
 	"description": "Telegram bot frontend for dreb coding agent",
 	"type": "module",
 	"main": "./dist/index.js",
