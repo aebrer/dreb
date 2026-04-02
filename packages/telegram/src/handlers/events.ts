@@ -10,7 +10,10 @@ import type { Api } from "grammy";
 import { InputFile } from "grammy";
 import type { TrackedAgent } from "../types.js";
 import { extractSendFiles } from "../util/files.js";
-import { DebouncedEditor, log, safeDelete, safeSend, sendLong } from "../util/telegram.js";
+import { DebouncedEditor, log, safeDelete } from "../util/telegram.js";
+
+/** Callback to queue a message for delivery — never blocks the event chain */
+export type SendFn = (text: string, long?: boolean) => void;
 
 /**
  * RPC events include both core AgentEvent and session-specific events
@@ -104,9 +107,6 @@ export interface EventDisplayState {
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether agent has finished */
 	done: boolean;
-	/** Index of the next assistant message to display (for reconciliation) */
-	displayedMsgIndex: number;
-
 	/** Debounced editor instance */
 	editor: DebouncedEditor;
 	/** Whether auto-retry is in progress (Layer 1: reactive) */
@@ -145,7 +145,6 @@ export function createEventDisplay(
 		tasks: [],
 		backgroundAgents: new Map(),
 		done: false,
-		displayedMsgIndex: 0,
 		editor: new DebouncedEditor(api),
 		retryInProgress: false,
 		retryAttempt: 0,
@@ -155,7 +154,12 @@ export function createEventDisplay(
 /**
  * Process an agent event and update the display.
  */
-export async function handleAgentEvent(api: Api, state: EventDisplayState, event: RpcEvent): Promise<void> {
+export async function handleAgentEvent(
+	send: SendFn,
+	api: Api,
+	state: EventDisplayState,
+	event: RpcEvent,
+): Promise<void> {
 	switch (event.type) {
 		case "tool_execution_start": {
 			const name = event.toolName || "?";
@@ -186,7 +190,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 					const thinking = block.thinking.trim();
 					// Show a brief summary — full thinking would be overwhelming on mobile
 					const preview = thinking.length > 300 ? `${thinking.slice(0, 300)}…` : thinking;
-					await safeSend(api, state.chatId, `💭 _${preview}_`);
+					send(`💭 _${preview}_`);
 				}
 
 				if (block.type === "text" && block.text?.trim()) {
@@ -195,7 +199,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 					// Flush accumulated tools as permanent summary
 					if (state.toolsSinceText.length > 0) {
 						const summary = `📋 *${state.toolsSinceText.length} tools*:\n${state.toolsSinceText.join("\n")}`;
-						await safeSend(api, state.chatId, summary.slice(0, 4000));
+						send(summary.slice(0, 4000));
 						state.toolsSinceText = [];
 					}
 
@@ -205,7 +209,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 					// Check for file send markers
 					const [cleanText, filePaths] = extractSendFiles(text);
 					if (cleanText) {
-						await sendLong(api, state.chatId, cleanText);
+						send(cleanText, true);
 					}
 
 					// Send any requested files (silently skip non-existent paths —
@@ -221,7 +225,6 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 					}
 				}
 			}
-			state.displayedMsgIndex++;
 			break;
 		}
 
@@ -262,7 +265,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			if (result) {
 				const before = result.tokensBefore || 0;
 				const msg = `🗜 Context compacted (was ${Math.round(before / 1000)}k tokens)`;
-				await safeSend(api, state.chatId, msg);
+				send(msg);
 			}
 			break;
 		}
@@ -287,7 +290,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			state.retryAttempt = 0;
 			if (!success && finalError) {
 				// Max retries exhausted — show final error
-				await safeSend(api, state.chatId, `❌ _Retry failed (${attempt} attempts):_ ${finalError.slice(0, 400)}`);
+				send(`❌ _Retry failed (${attempt} attempts):_ ${finalError.slice(0, 400)}`);
 			}
 			// On success, the retry's agent_start/agent_end cycle will handle display normally
 			break;
@@ -297,7 +300,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			// Flush any remaining tools
 			if (state.toolsSinceText.length > 0) {
 				const summary = `📋 *${state.toolsSinceText.length} tools*:\n${state.toolsSinceText.join("\n")}`;
-				await safeSend(api, state.chatId, summary.slice(0, 4000));
+				send(summary.slice(0, 4000));
 				state.toolsSinceText = [];
 			}
 
@@ -323,12 +326,12 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 						errLower.includes("connection") || errLower.includes("timeout") || errLower.includes("network")
 							? "\n_Provider may be down — try /model to switch._"
 							: "";
-					await safeSend(api, state.chatId, `❌ ${prefix}${errorMsg.errorMessage.slice(0, 400)}${hint}`);
+					send(`❌ ${prefix}${errorMsg.errorMessage.slice(0, 400)}${hint}`);
 				}
 			} else if (state.textBlocks.length === 0 && state.backgroundAgents.size === 0) {
 				// Only show "(No response)" when truly done — not between agent cycles
 				if (!state.retryInProgress && !errorIsRetryable) {
-					await safeSend(api, state.chatId, "(No response)");
+					send("(No response)");
 				}
 			}
 
@@ -370,7 +373,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 		case "response": {
 			const resp = event as any;
 			if (!resp.success && resp.error) {
-				await safeSend(api, state.chatId, `❌ ${resp.error.slice(0, 500)}`);
+				send(`❌ ${resp.error.slice(0, 500)}`);
 			}
 			break;
 		}

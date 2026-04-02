@@ -28,8 +28,8 @@ export interface UserState {
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether /stop was used (suppress DONE marker) */
 	stopRequested: boolean;
-	/** Last known session message count — for reconciliation */
-	lastKnownMsgCount: number;
+	/** Messages waiting to be delivered to Telegram — drained by a delivery loop */
+	outbox: Array<{ chatId: number; text: string; long?: boolean; retries?: number }>;
 }
 
 /** Session info for persistence across bot restarts */
