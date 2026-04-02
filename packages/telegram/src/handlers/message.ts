@@ -44,9 +44,7 @@ async function drainOutbox(api: Api, userState: UserState): Promise<void> {
 
 			let success: boolean;
 			if (item.long) {
-				// sendLong splits and calls safeSend internally — if it completes, it's delivered
-				await sendLong(api, item.chatId, item.text);
-				success = true;
+				success = await sendLong(api, item.chatId, item.text);
 			} else {
 				const msgId = await safeSend(api, item.chatId, item.text);
 				success = msgId !== 0;
@@ -102,6 +100,37 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 	displays.delete(userState);
 
 	let eventChain = Promise.resolve();
+	let parentAgentDone = false; // true after agent_end fires (even if BG agents still running)
+
+	/** Chain the completion sequence — session persist, cleanup, DONE marker */
+	function chainCompletion(display: EventDisplayState) {
+		eventChain = eventChain
+			.then(async () => {
+				// Persist session
+				if (bridge.isAlive) {
+					try {
+						await bridge.refreshSessionInfo();
+						const userId = userIds.get(userState);
+						if (bridge.sessionFile && userId) {
+							setUserSession(userId, bridge.sessionFile);
+						}
+					} catch (e) {
+						log(`[EVENT] Session refresh error: ${e}`);
+					}
+				}
+
+				cleanupUploads();
+
+				// DONE marker — only when truly idle and not stopped.
+				// Brief delay lets in-flight delivery (outbox drain) settle
+				// before DONE appears in the chat.
+				if (!bridge.isStreaming && !userState.stopRequested) {
+					await new Promise((r) => setTimeout(r, 150));
+					enqueueSend(api, userState, display.chatId, "🦀 _dreb DONE_");
+				}
+			})
+			.catch((e) => log(`[EVENT] Completion error: ${e}`));
+	}
 
 	bridge.onEvent((event) => {
 		// Capture display at event arrival time — even if a new prompt
@@ -132,38 +161,26 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 
 		// Handle turn completion
 		if (event.type === "agent_end") {
+			parentAgentDone = true;
 			// Don't finalize if BG agents or auto-retry still active.
 			if (userState.backgroundAgents.size > 0 || display.retryInProgress) {
 				return;
 			}
+			chainCompletion(display);
+		}
 
-			// Chain completion after the event is processed.
-			eventChain = eventChain
-				.then(async () => {
-					// Persist session
-					if (bridge.isAlive) {
-						try {
-							await bridge.refreshSessionInfo();
-							const userId = userIds.get(userState);
-							if (bridge.sessionFile && userId) {
-								setUserSession(userId, bridge.sessionFile);
-							}
-						} catch (e) {
-							log(`[EVENT] Session refresh error: ${e}`);
-						}
-					}
+		// Re-trigger completion when the last BG agent finishes.
+		// agent_end already fired but skipped completion because BG agents were running.
+		// Now that the last one is done, finalize.
+		if (event.type === "background_agent_end") {
+			if (parentAgentDone && userState.backgroundAgents.size === 0 && !bridge.isStreaming) {
+				chainCompletion(display);
+			}
+		}
 
-					cleanupUploads();
-
-					// DONE marker — only when truly idle and not stopped.
-					// Brief delay lets in-flight delivery (outbox drain) settle
-					// before DONE appears in the chat.
-					if (!bridge.isStreaming && !userState.stopRequested) {
-						await new Promise((r) => setTimeout(r, 150));
-						enqueueSend(api, userState, display.chatId, "🦀 _dreb DONE_");
-					}
-				})
-				.catch((e) => log(`[EVENT] Completion error: ${e}`));
+		// Reset parentAgentDone when a new run starts (e.g. user sends another message)
+		if (event.type === "agent_start") {
+			parentAgentDone = false;
 		}
 	});
 }
@@ -205,6 +222,7 @@ export function sendPrompt(
 	// Steering path — agent is actively streaming (same check as TUI).
 	// promptInFlight covers the race window between prompt() and agent_start.
 	if (bridge.isStreaming || userState.promptInFlight) {
+		userState.stopRequested = false;
 		if (opts.statusMessageId) {
 			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}

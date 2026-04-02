@@ -178,8 +178,23 @@ export async function handleAgentEvent(
 		}
 
 		case "message_end": {
-			// Only display assistant messages — user messages are echoed back by RPC
 			const msg = event.message;
+
+			// Show subagent results — the parent agent references these but the
+			// Telegram user can't see them otherwise. Send the full content.
+			if (msg?.role === "toolResult" && msg?.toolName === "subagent") {
+				const content = msg?.content;
+				if (content && Array.isArray(content)) {
+					for (const block of content) {
+						if (block.type === "text" && block.text?.trim()) {
+							send(`🤖 *Subagent result:*\n${block.text.trim()}`, true);
+						}
+					}
+				}
+				break;
+			}
+
+			// Only display assistant messages — user messages are echoed back by RPC
 			if (msg?.role !== "assistant") break;
 			const content = msg?.content;
 			if (!content || !Array.isArray(content)) break;
@@ -188,9 +203,7 @@ export async function handleAgentEvent(
 				// Display thinking blocks (collapsed summary)
 				if (block.type === "thinking" && block.thinking?.trim() && !block.redacted) {
 					const thinking = block.thinking.trim();
-					// Show a brief summary — full thinking would be overwhelming on mobile
-					const preview = thinking.length > 300 ? `${thinking.slice(0, 300)}…` : thinking;
-					send(`💭 _${preview}_`);
+					send(`💭 _${thinking}_`, true);
 				}
 
 				if (block.type === "text" && block.text?.trim()) {
@@ -199,7 +212,7 @@ export async function handleAgentEvent(
 					// Flush accumulated tools as permanent summary
 					if (state.toolsSinceText.length > 0) {
 						const summary = `📋 *${state.toolsSinceText.length} tools*:\n${state.toolsSinceText.join("\n")}`;
-						send(summary.slice(0, 4000));
+						send(summary, true);
 						state.toolsSinceText = [];
 					}
 
@@ -290,7 +303,7 @@ export async function handleAgentEvent(
 			state.retryAttempt = 0;
 			if (!success && finalError) {
 				// Max retries exhausted — show final error
-				send(`❌ _Retry failed (${attempt} attempts):_ ${finalError.slice(0, 400)}`);
+				send(`❌ _Retry failed (${attempt} attempts):_ ${finalError}`, true);
 			}
 			// On success, the retry's agent_start/agent_end cycle will handle display normally
 			break;
@@ -300,7 +313,7 @@ export async function handleAgentEvent(
 			// Flush any remaining tools
 			if (state.toolsSinceText.length > 0) {
 				const summary = `📋 *${state.toolsSinceText.length} tools*:\n${state.toolsSinceText.join("\n")}`;
-				send(summary.slice(0, 4000));
+				send(summary, true);
 				state.toolsSinceText = [];
 			}
 
@@ -326,7 +339,7 @@ export async function handleAgentEvent(
 						errLower.includes("connection") || errLower.includes("timeout") || errLower.includes("network")
 							? "\n_Provider may be down — try /model to switch._"
 							: "";
-					send(`❌ ${prefix}${errorMsg.errorMessage.slice(0, 400)}${hint}`);
+					send(`❌ ${prefix}${errorMsg.errorMessage}${hint}`, true);
 				}
 			} else if (state.textBlocks.length === 0 && state.backgroundAgents.size === 0) {
 				// Only show "(No response)" when truly done — not between agent cycles
@@ -373,7 +386,7 @@ export async function handleAgentEvent(
 		case "response": {
 			const resp = event as any;
 			if (!resp.success && resp.error) {
-				send(`❌ ${resp.error.slice(0, 500)}`);
+				send(`❌ ${resp.error}`, true);
 			}
 			break;
 		}

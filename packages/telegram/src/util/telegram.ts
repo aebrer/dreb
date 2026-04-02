@@ -24,7 +24,8 @@ const API_TIMEOUT = 15_000; // 15s per Telegram API call
  * Send a message, falling back to plain text if Markdown fails.
  */
 export async function safeSend(api: Api, chatId: number, text: string, replyToId?: number): Promise<number> {
-	text = truncate(text, SAFE_LENGTH);
+	// Truncate to Telegram's limit — callers sending long content should use sendLong instead
+	if (text.length > SAFE_LENGTH) text = truncate(text, SAFE_LENGTH);
 	try {
 		const msg = await withTimeout(
 			api.sendMessage(chatId, text, {
@@ -52,19 +53,24 @@ export async function safeSend(api: Api, chatId: number, text: string, replyToId
 
 /**
  * Send a long message, splitting at newline boundaries.
+ * Returns true if ALL chunks were delivered, false if any failed.
  */
-export async function sendLong(api: Api, chatId: number, text: string, replyToId?: number): Promise<void> {
+export async function sendLong(api: Api, chatId: number, text: string, replyToId?: number): Promise<boolean> {
+	let allDelivered = true;
 	while (text) {
 		if (text.length <= SAFE_LENGTH) {
-			await safeSend(api, chatId, text, replyToId);
+			const msgId = await safeSend(api, chatId, text, replyToId);
+			if (msgId === 0) allDelivered = false;
 			break;
 		}
 		let splitAt = text.lastIndexOf("\n", SAFE_LENGTH);
 		if (splitAt < 2000) splitAt = SAFE_LENGTH;
-		await safeSend(api, chatId, text.slice(0, splitAt), replyToId);
+		const msgId = await safeSend(api, chatId, text.slice(0, splitAt), replyToId);
+		if (msgId === 0) allDelivered = false;
 		text = text.slice(splitAt).replace(/^\n+/, "");
 		replyToId = undefined; // Only reply to the first chunk
 	}
+	return allDelivered;
 }
 
 /**
