@@ -159,6 +159,16 @@ export function sendPrompt(
 	if (opts.userId) userIds.set(userState, opts.userId);
 
 	const display = createEventDisplay(api, opts.chatId, opts.replyToId, opts.statusMessageId);
+
+	// Sync BG agent state — the display needs to know about running agents
+	// so events.ts doesn't prematurely finalize on agent_end (flush editor,
+	// delete status, set done). Without this, a new display created while
+	// BG agents are running would have an empty backgroundAgents map,
+	// causing events.ts to think the turn is over.
+	for (const [id, agent] of userState.backgroundAgents) {
+		display.backgroundAgents.set(id, agent);
+	}
+
 	displays.set(userState, display);
 
 	bridge.prompt(opts.prompt, opts.images).catch((e) => {
