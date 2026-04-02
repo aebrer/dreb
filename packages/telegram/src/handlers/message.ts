@@ -48,7 +48,7 @@ export function sendPrompt(
 
 	// Steering path — agent is actively streaming (same check as TUI).
 	// promptInFlight covers the race window between prompt() and agent_start.
-	if (bridge.isStreaming || userState.promptInFlight) {
+	if (bridge.isStreaming || userState.promptInFlight || userState.processing) {
 		if (opts.statusMessageId) {
 			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
@@ -70,7 +70,8 @@ export function sendPrompt(
 	userState.stopRequested = false;
 
 	// Turn tracker — resolves when the agent finishes this turn (agent_end).
-	// Not tied to background agents — they deliver results via the agent core.
+	// Guarded: won't resolve while background agents or auto-retry are active,
+	// keeping the event subscription alive for their results.
 	const turnDone = new Promise<void>((resolve) => {
 		userState.turnResolver = resolve;
 	});
@@ -85,10 +86,16 @@ export function sendPrompt(
 			userState.promptInFlight = false;
 		}
 		// Resolve turnDone on agent_end — the agent finished its response.
-		// BG agents may still be running, but that's handled by the core.
+		// Don't resolve if BG agents or auto-retry are still active —
+		// their results need this subscription alive.
+		// events.ts handles per-cycle state reset in this case.
 		if (event.type === "agent_end" && userState.turnResolver) {
-			userState.turnResolver();
-			userState.turnResolver = null;
+			if (display.backgroundAgents.size > 0 || display.retryInProgress) {
+				// Keep subscription alive, let handleAgentEvent reset per-cycle state
+			} else {
+				userState.turnResolver();
+				userState.turnResolver = null;
+			}
 		}
 		eventChain = eventChain
 			.then(() => handleAgentEvent(api, display, event))

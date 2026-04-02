@@ -30,7 +30,7 @@ export async function cmdStart(ctx: Context): Promise<void> {
 			"/thinking \\[level\\] — View/set thinking\n" +
 			"/skills — List available skills\n\n" +
 			"*Control:*\n" +
-			"/stop — Interrupt & clear queue\n" +
+			"/stop — Interrupt current task\n" +
 			"/restart — Restart the bot",
 		{ parse_mode: "Markdown" },
 	);
