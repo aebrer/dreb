@@ -3,13 +3,16 @@
  *
  * Two paths:
  * - **Steering**: agent is streaming → inject mid-run via steer()
- * - **Normal**: agent is idle → prompt + wait for completion
+ * - **Normal**: agent is idle → fire prompt, return immediately
  *
- * No queue — matches TUI parity. The agent core handles batching of
- * multiple steering messages internally.
+ * The handler never blocks — grammy processes updates sequentially, so
+ * we must return immediately to allow subsequent messages (steering, /stop)
+ * to be processed. The prompt cycle runs in the background; events flow
+ * via async subscriptions.
  */
 
 import type { Api } from "grammy";
+import type { AgentBridge } from "../agent-bridge.js";
 import { setUserSession } from "../state.js";
 import type { UserState } from "../types.js";
 import { cleanupUploads } from "../util/files.js";
@@ -19,9 +22,9 @@ import { createEventDisplay, handleAgentEvent } from "./events.js";
 /**
  * Send a prompt to the agent. If the agent is streaming, steers instead.
  *
- * @returns true if the message was handled (steered or prompted)
+ * Returns immediately — the prompt cycle runs in the background.
  */
-export async function sendPrompt(
+export function sendPrompt(
 	api: Api,
 	userState: UserState,
 	opts: {
@@ -32,41 +35,41 @@ export async function sendPrompt(
 		images?: Array<{ type: "image"; data: string; mimeType: string }>;
 		statusMessageId: number | null;
 	},
-): Promise<boolean> {
+): void {
 	const bridge = userState.bridge;
 	if (!bridge) {
 		log("[PROMPT] No bridge available");
 		if (opts.statusMessageId) {
-			await safeDelete(api, opts.chatId, opts.statusMessageId);
+			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
-		await safeSend(api, opts.chatId, "❌ No agent connection. Try sending your message again.");
-		return false;
+		void safeSend(api, opts.chatId, "❌ No agent connection. Try sending your message again.");
+		return;
 	}
 
 	// Steering path — agent is already streaming, inject mid-run
 	if (bridge.isStreaming) {
 		if (opts.statusMessageId) {
-			await safeDelete(api, opts.chatId, opts.statusMessageId);
+			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
-		try {
-			await bridge.steer(opts.prompt, opts.images);
-			await safeSend(api, opts.chatId, `↩️ _Steering:_ ${opts.prompt.slice(0, 200)}`);
-		} catch (e) {
-			const msg = e instanceof Error ? e.message : String(e);
-			if (!userState.stopRequested) {
-				await safeSend(api, opts.chatId, `❌ Steering error: ${msg.slice(0, 200)}`);
-			}
-		}
-		return true;
+		bridge
+			.steer(opts.prompt, opts.images)
+			.then(() => safeSend(api, opts.chatId, `↩️ _Steering:_ ${opts.prompt.slice(0, 200)}`))
+			.catch((e) => {
+				const msg = e instanceof Error ? e.message : String(e);
+				if (!userState.stopRequested) {
+					void safeSend(api, opts.chatId, `❌ Steering error: ${msg.slice(0, 200)}`);
+				}
+			});
+		return;
 	}
 
-	// Normal path — agent is idle, start a new run
+	// Normal path — agent is idle, start a new run (fire and forget)
 	userState.processing = true;
 	userState.stopRequested = false;
 
 	const display = createEventDisplay(api, opts.chatId, opts.replyToId, opts.statusMessageId);
 
-	// Subscribe to events — serialize processing to prevent concurrent state mutations
+	// Subscribe to events
 	let eventChain = Promise.resolve();
 	const unsubscribe = bridge.onEvent((event) => {
 		eventChain = eventChain
@@ -74,15 +77,41 @@ export async function sendPrompt(
 			.catch((e) => log(`[EVENT] Error: ${e}`));
 	});
 
-	// Create an abort controller — /stop can signal it
+	// Abort controller for /stop
 	const abort = new AbortController();
 	userState.currentAbort = abort;
 
+	// Fire the prompt cycle in the background
+	runPromptCycle(api, userState, bridge, opts, display, unsubscribe, abort).catch((e) => {
+		log(`[PROMPT] Cycle error: ${e}`);
+	});
+}
+
+/**
+ * Run the full prompt cycle: send prompt → wait for completion → cleanup.
+ * Runs entirely in the background — never blocks the message handler.
+ */
+async function runPromptCycle(
+	api: Api,
+	userState: UserState,
+	bridge: AgentBridge,
+	opts: {
+		chatId: number;
+		replyToId: number;
+		userId?: number;
+		prompt: string;
+		images?: Array<{ type: "image"; data: string; mimeType: string }>;
+		statusMessageId: number | null;
+	},
+	display: ReturnType<typeof createEventDisplay>,
+	unsubscribe: () => void,
+	abort: AbortController,
+): Promise<void> {
 	try {
 		await bridge.prompt(opts.prompt, opts.images);
 		await waitForCompletion(display, bridge, abort.signal);
 
-		// Update session info after completion and persist for reconnect
+		// Update session info and persist
 		if (bridge.isAlive) {
 			await bridge.refreshSessionInfo();
 			if (bridge.sessionFile && opts.userId) {
@@ -105,8 +134,6 @@ export async function sendPrompt(
 	if (!bridge.isStreaming && !userState.stopRequested) {
 		await safeSend(api, opts.chatId, "🦀 _dreb DONE_");
 	}
-
-	return true;
 }
 
 /**

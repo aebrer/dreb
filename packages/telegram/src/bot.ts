@@ -83,7 +83,7 @@ export function createBot(config: Config): Bot {
 			return;
 		}
 
-		await sendPrompt(ctx.api, userState, {
+		sendPrompt(ctx.api, userState, {
 			chatId: ctx.chat!.id,
 			replyToId: ctx.message.message_id,
 			userId,
