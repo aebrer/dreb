@@ -47,7 +47,10 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 		// Capture display at event arrival time — even if a new prompt
 		// replaces the display later, this event uses the correct one.
 		const display = displays.get(userState);
-		if (!display) return;
+		if (!display) {
+			log(`[EVENT] No display for event: ${event.type} — dropped`);
+			return;
+		}
 
 		// Clear promptInFlight on first event after a prompt
 		if (userState.promptInFlight) {
@@ -68,15 +71,12 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 				return;
 			}
 
-			// Chain completion after the event is processed
+			// Chain completion after the event is processed.
+			// Do NOT delete the display — it persists until replaced by a
+			// new sendPrompt. This matches TUI behavior (display is never
+			// destroyed) and prevents lost events from races or BG agents.
 			eventChain = eventChain
 				.then(async () => {
-					// Only clean up if this display is still active
-					// (a new prompt may have already replaced it)
-					if (displays.get(userState) === display) {
-						displays.delete(userState);
-					}
-
 					// Persist session
 					if (bridge.isAlive) {
 						try {
