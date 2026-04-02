@@ -1,103 +1,70 @@
 /**
- * Message handler — queues user messages and processes them sequentially.
- * Only one agent prompt runs at a time per user.
+ * Message handler — sends user messages directly to the agent.
+ *
+ * Two paths:
+ * - **Steering**: agent is streaming → inject mid-run via steer()
+ * - **Normal**: agent is idle → prompt + wait for completion
+ *
+ * No queue — matches TUI parity. The agent core handles batching of
+ * multiple steering messages internally.
  */
 
 import type { Api } from "grammy";
 import { setUserSession } from "../state.js";
-import type { QueueItem, UserState } from "../types.js";
+import type { UserState } from "../types.js";
 import { cleanupUploads } from "../util/files.js";
 import { log, safeDelete, safeSend } from "../util/telegram.js";
-import { createEventDisplay, type EventDisplayState, handleAgentEvent } from "./events.js";
+import { createEventDisplay, handleAgentEvent } from "./events.js";
 
 /**
- * Enqueue a prompt for processing. Starts the queue processor if not running.
- */
-export function enqueuePrompt(api: Api, userState: UserState, item: QueueItem): void {
-	userState.queue.push(item);
-
-	if (!userState.processing) {
-		userState.processing = true;
-		void processQueue(api, userState);
-	}
-}
-
-/**
- * Process the queue sequentially — one prompt at a time.
- */
-async function processQueue(api: Api, userState: UserState): Promise<void> {
-	try {
-		while (userState.queue.length > 0) {
-			const item = userState.queue.shift()!;
-			userState.stopRequested = false;
-
-			if (item.wasQueued && item.message) {
-				await safeSend(api, item.message.chat.id, `📨 _Processing queued message:_ ${item.prompt.slice(0, 200)}`);
-			}
-
-			await processItem(api, userState, item);
-		}
-	} catch (e) {
-		log(`[QUEUE] Processor error: ${e}`);
-	} finally {
-		userState.processing = false;
-
-		// Clean up upload files after queue is fully drained
-		cleanupUploads();
-	}
-}
-
-/**
- * Process a single queue item.
+ * Send a prompt to the agent. If the agent is streaming, steers instead.
  *
- * Two paths:
- * - **Steering** (agent is streaming): inject via bridge.steer(), acknowledge, return immediately.
- *   The active processItem that started the run continues receiving events.
- * - **Normal** (agent idle): send via bridge.prompt(), wait for completion.
- *
- * Multiple steering messages accumulate in the agent's steering queue and are
- * batch-delivered at the next tool-call boundary — matching TUI behavior.
+ * @returns true if the message was handled (steered or prompted)
  */
-async function processItem(api: Api, userState: UserState, item: QueueItem): Promise<void> {
+export async function sendPrompt(
+	api: Api,
+	userState: UserState,
+	opts: {
+		chatId: number;
+		replyToId: number;
+		userId?: number;
+		prompt: string;
+		images?: Array<{ type: "image"; data: string; mimeType: string }>;
+		statusMessageId: number | null;
+	},
+): Promise<boolean> {
 	const bridge = userState.bridge;
 	if (!bridge) {
-		log("[QUEUE] No bridge available");
-		if (item.statusMessage) {
-			await safeDelete(api, item.statusMessage.chat_id, item.statusMessage.message_id);
+		log("[PROMPT] No bridge available");
+		if (opts.statusMessageId) {
+			await safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
-		if (item.message) {
-			await safeSend(api, item.message.chat.id, "❌ No agent connection. Try sending your message again.");
-		}
-		return;
+		await safeSend(api, opts.chatId, "❌ No agent connection. Try sending your message again.");
+		return false;
 	}
-
-	const chatId = item.message!.chat.id;
 
 	// Steering path — agent is already streaming, inject mid-run
 	if (bridge.isStreaming) {
-		// Delete the ephemeral status message (e.g. "🧠 Thinking...")
-		if (item.statusMessage) {
-			await safeDelete(api, item.statusMessage.chat_id, item.statusMessage.message_id);
+		if (opts.statusMessageId) {
+			await safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
-
 		try {
-			await bridge.steer(item.prompt, item.images);
-			// Acknowledge steering — TUI parity (shows queued steering messages inline)
-			await safeSend(api, chatId, `↩️ _Steering:_ ${item.prompt.slice(0, 200)}`);
+			await bridge.steer(opts.prompt, opts.images);
+			await safeSend(api, opts.chatId, `↩️ _Steering:_ ${opts.prompt.slice(0, 200)}`);
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
 			if (!userState.stopRequested) {
-				await safeSend(api, chatId, `❌ Steering error: ${msg.slice(0, 200)}`);
+				await safeSend(api, opts.chatId, `❌ Steering error: ${msg.slice(0, 200)}`);
 			}
 		}
-		return;
+		return true;
 	}
 
 	// Normal path — agent is idle, start a new run
-	const replyToId = item.message!.message_id;
+	userState.processing = true;
+	userState.stopRequested = false;
 
-	// Create event display state
-	const display = createEventDisplay(api, chatId, replyToId, item.statusMessage?.message_id ?? null);
+	const display = createEventDisplay(api, opts.chatId, opts.replyToId, opts.statusMessageId);
 
 	// Subscribe to events — serialize processing to prevent concurrent state mutations
 	let eventChain = Promise.resolve();
@@ -107,39 +74,39 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
 			.catch((e) => log(`[EVENT] Error: ${e}`));
 	});
 
-	// Create an abort controller for this item — /stop can signal it
+	// Create an abort controller — /stop can signal it
 	const abort = new AbortController();
 	userState.currentAbort = abort;
 
 	try {
-		// Send the prompt
-		await bridge.prompt(item.prompt, item.images);
-
-		// Wait for completion — resolved by agent_end, bridge death, or /stop signal
+		await bridge.prompt(opts.prompt, opts.images);
 		await waitForCompletion(display, bridge, abort.signal);
 
 		// Update session info after completion and persist for reconnect
 		if (bridge.isAlive) {
 			await bridge.refreshSessionInfo();
-			if (bridge.sessionFile) {
-				const userId = item.message?.from?.id;
-				if (userId) setUserSession(userId, bridge.sessionFile);
+			if (bridge.sessionFile && opts.userId) {
+				setUserSession(opts.userId, bridge.sessionFile);
 			}
 		}
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		if (!userState.stopRequested) {
-			await safeSend(api, chatId, `❌ Error: ${msg.slice(0, 200)}`);
+			await safeSend(api, opts.chatId, `❌ Error: ${msg.slice(0, 200)}`);
 		}
 	} finally {
 		unsubscribe();
 		userState.currentAbort = null;
+		userState.processing = false;
+		cleanupUploads();
 	}
 
-	// Send DONE when agent is truly done (not streaming, queue empty, not stopped)
-	if (userState.queue.length === 0 && !bridge.isStreaming && !userState.stopRequested) {
-		await safeSend(api, chatId, "🦀 _dreb DONE_");
+	// Send DONE when agent is truly done
+	if (!bridge.isStreaming && !userState.stopRequested) {
+		await safeSend(api, opts.chatId, "🦀 _dreb DONE_");
 	}
+
+	return true;
 }
 
 /**
@@ -151,7 +118,7 @@ async function processItem(api: Api, userState: UserState, item: QueueItem): Pro
  * No timeouts — matches TUI parity. The user can always /stop to interrupt.
  */
 function waitForCompletion(
-	display: EventDisplayState,
+	display: { done: boolean },
 	bridge: { isAlive: boolean },
 	signal: AbortSignal,
 ): Promise<void> {

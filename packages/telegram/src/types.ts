@@ -2,7 +2,6 @@
  * Bot-specific types for the Telegram frontend.
  */
 
-import type { Context } from "grammy";
 import type { AgentBridge } from "./agent-bridge.js";
 
 /** Tracked background agent */
@@ -17,9 +16,7 @@ export interface TrackedAgent {
 export interface UserState {
 	/** Active agent bridge (RPC process) */
 	bridge: AgentBridge | null;
-	/** Message queue — one prompt at a time */
-	queue: QueueItem[];
-	/** Whether the queue processor is running */
+	/** Whether a prompt cycle is running (prompt sent, waiting for completion) */
 	processing: boolean;
 	/** Flag to start a fresh session on next message */
 	newSessionFlag: boolean;
@@ -31,21 +28,8 @@ export interface UserState {
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether /stop was used (suppress DONE marker) */
 	stopRequested: boolean;
-	/** Abort controller for the current processItem — signaled by /stop to break the wait */
+	/** Abort controller for the current prompt cycle — signaled by /stop to break the wait */
 	currentAbort: AbortController | null;
-}
-
-export interface QueueItem {
-	/** The Telegram message object */
-	message: Context["message"];
-	/** Text or file prompt to send to dreb */
-	prompt: string;
-	/** Optional images (base64) for the RPC prompt */
-	images?: Array<{ type: "image"; data: string; mimeType: string }>;
-	/** The ephemeral status message to edit */
-	statusMessage: { chat_id: number; message_id: number } | null;
-	/** Whether this item was queued (vs immediate) */
-	wasQueued: boolean;
 }
 
 /** Session info for persistence across bot restarts */

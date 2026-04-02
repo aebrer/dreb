@@ -41,7 +41,6 @@ function createConfig(overrides?: Partial<Config>): Config {
 function createUserState(overrides?: Partial<UserState>): UserState {
 	return {
 		bridge: null,
-		queue: [],
 		processing: false,
 		newSessionFlag: false,
 		newSessionCwd: null,

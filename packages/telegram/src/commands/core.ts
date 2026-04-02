@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import type { Api, Context } from "grammy";
 import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
-import { log, safeDelete, safeSend } from "../util/telegram.js";
+import { log, safeSend } from "../util/telegram.js";
 
 export async function cmdStart(ctx: Context): Promise<void> {
 	await ctx.reply(
@@ -98,19 +98,10 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 	}
 }
 
-export async function cmdStop(ctx: Context, api: Api, userState: UserState): Promise<void> {
-	const queuedCount = userState.queue.length;
-
-	// Clear queue and clean up status messages
-	for (const item of userState.queue) {
-		if (item.statusMessage) {
-			await safeDelete(api, item.statusMessage.chat_id, item.statusMessage.message_id);
-		}
-	}
-	userState.queue = [];
+export async function cmdStop(ctx: Context, _api: Api, userState: UserState): Promise<void> {
 	userState.stopRequested = true;
 
-	// Signal the current processItem to resolve immediately
+	// Signal the current prompt cycle to resolve immediately
 	if (userState.currentAbort) {
 		userState.currentAbort.abort();
 	}
@@ -123,7 +114,6 @@ export async function cmdStop(ctx: Context, api: Api, userState: UserState): Pro
 
 	const parts: string[] = [];
 	if (userState.processing || userState.bridge?.isStreaming) parts.push("interrupted current task");
-	if (queuedCount > 0) parts.push(`cleared ${queuedCount} queued message(s)`);
 	await ctx.reply(parts.length > 0 ? `🛑 Stopped — ${parts.join(", ")}.` : "🛑 Stopped.");
 }
 
