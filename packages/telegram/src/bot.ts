@@ -18,12 +18,14 @@ function createUserState(): UserState {
 	return {
 		bridge: null,
 		processing: false,
+		promptInFlight: false,
 		newSessionFlag: false,
 		newSessionCwd: null,
 		effectiveCwd: null,
 		backgroundAgents: new Map(),
 		stopRequested: false,
 		currentAbort: null,
+		turnResolver: null,
 	};
 }
 

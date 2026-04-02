@@ -1,7 +1,7 @@
 /**
  * Message handler — sends user messages directly to the agent.
  *
- * Two paths:
+ * Two paths (matching TUI parity):
  * - **Steering**: agent is streaming → inject mid-run via steer()
  * - **Normal**: agent is idle → fire prompt, return immediately
  *
@@ -46,8 +46,9 @@ export function sendPrompt(
 		return;
 	}
 
-	// Steering path — agent is already streaming, inject mid-run
-	if (bridge.isStreaming) {
+	// Steering path — agent is actively streaming (same check as TUI).
+	// promptInFlight covers the race window between prompt() and agent_start.
+	if (bridge.isStreaming || userState.promptInFlight) {
 		if (opts.statusMessageId) {
 			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
@@ -65,13 +66,30 @@ export function sendPrompt(
 
 	// Normal path — agent is idle, start a new run (fire and forget)
 	userState.processing = true;
+	userState.promptInFlight = true;
 	userState.stopRequested = false;
+
+	// Turn tracker — resolves when the agent finishes this turn (agent_end).
+	// Not tied to background agents — they deliver results via the agent core.
+	const turnDone = new Promise<void>((resolve) => {
+		userState.turnResolver = resolve;
+	});
 
 	const display = createEventDisplay(api, opts.chatId, opts.replyToId, opts.statusMessageId);
 
 	// Subscribe to events
 	let eventChain = Promise.resolve();
 	const unsubscribe = bridge.onEvent((event) => {
+		// Clear promptInFlight on first event
+		if (userState.promptInFlight) {
+			userState.promptInFlight = false;
+		}
+		// Resolve turnDone on agent_end — the agent finished its response.
+		// BG agents may still be running, but that's handled by the core.
+		if (event.type === "agent_end" && userState.turnResolver) {
+			userState.turnResolver();
+			userState.turnResolver = null;
+		}
 		eventChain = eventChain
 			.then(() => handleAgentEvent(api, display, event))
 			.catch((e) => log(`[EVENT] Error: ${e}`));
@@ -82,13 +100,19 @@ export function sendPrompt(
 	userState.currentAbort = abort;
 
 	// Fire the prompt cycle in the background
-	runPromptCycle(api, userState, bridge, opts, display, unsubscribe, abort).catch((e) => {
+	runPromptCycle(api, userState, bridge, opts, display, unsubscribe, abort, turnDone).catch((e) => {
 		log(`[PROMPT] Cycle error: ${e}`);
 	});
 }
 
 /**
- * Run the full prompt cycle: send prompt → wait for completion → cleanup.
+ * Run the full prompt cycle: send prompt → wait for turn end → cleanup.
+ *
+ * "Turn end" means the agent finished its current response (agent_end), NOT
+ * that all background agents are done. BG agents deliver results via the
+ * agent core's own steer()/prompt() mechanism — they trigger new agent_start/
+ * agent_end cycles that the event subscription handles independently.
+ *
  * Runs entirely in the background — never blocks the message handler.
  */
 async function runPromptCycle(
@@ -103,13 +127,46 @@ async function runPromptCycle(
 		images?: Array<{ type: "image"; data: string; mimeType: string }>;
 		statusMessageId: number | null;
 	},
-	display: ReturnType<typeof createEventDisplay>,
+	_display: ReturnType<typeof createEventDisplay>,
 	unsubscribe: () => void,
 	abort: AbortController,
+	turnDone: Promise<void>,
 ): Promise<void> {
 	try {
 		await bridge.prompt(opts.prompt, opts.images);
-		await waitForCompletion(display, bridge, abort.signal);
+
+		// Wait for agent_end OR abort OR bridge death
+		await Promise.race([
+			turnDone,
+			new Promise<void>((resolve) => {
+				const signal = abort.signal;
+
+				// Bridge death detection
+				const deathCheck = setInterval(() => {
+					if (!bridge.isAlive) {
+						clearInterval(deathCheck);
+						clearTimeout(abortTimeout);
+						signal.removeEventListener("abort", onAbort);
+						resolve();
+					}
+				}, 500);
+
+				// Abort signal (/stop)
+				const onAbort = () => {
+					clearInterval(deathCheck);
+					clearTimeout(abortTimeout);
+					resolve();
+				};
+				signal.addEventListener("abort", onAbort, { once: true });
+
+				// Safety: if turnDone never resolves (shouldn't happen), don't leak
+				const abortTimeout = setTimeout(() => {
+					clearInterval(deathCheck);
+					signal.removeEventListener("abort", onAbort);
+					resolve();
+				}, 300000); // 5 min safety
+			}),
+		]);
 
 		// Update session info and persist
 		if (bridge.isAlive) {
@@ -126,45 +183,14 @@ async function runPromptCycle(
 	} finally {
 		unsubscribe();
 		userState.currentAbort = null;
+		userState.promptInFlight = false;
 		userState.processing = false;
+		userState.turnResolver = null;
 		cleanupUploads();
 	}
 
-	// Send DONE when agent is truly done
+	// Send DONE when agent is truly idle (not streaming, not stopped)
 	if (!bridge.isStreaming && !userState.stopRequested) {
 		await safeSend(api, opts.chatId, "🦀 _dreb DONE_");
 	}
-}
-
-/**
- * Wait for the agent to finish. Resolves when any of these occur:
- * - `display.done` is set (agent_end event processed)
- * - The bridge dies (RPC process crashed)
- * - The abort signal fires (/stop command)
- *
- * No timeouts — matches TUI parity. The user can always /stop to interrupt.
- */
-function waitForCompletion(
-	display: { done: boolean },
-	bridge: { isAlive: boolean },
-	signal: AbortSignal,
-): Promise<void> {
-	if (display.done) return Promise.resolve();
-	if (signal.aborted) return Promise.resolve();
-
-	return new Promise((resolve) => {
-		const timer = setInterval(() => {
-			if (display.done || signal.aborted || !bridge.isAlive) {
-				clearInterval(timer);
-				signal.removeEventListener("abort", onAbort);
-				resolve();
-			}
-		}, 500);
-
-		function onAbort() {
-			clearInterval(timer);
-			resolve();
-		}
-		signal.addEventListener("abort", onAbort, { once: true });
-	});
 }
