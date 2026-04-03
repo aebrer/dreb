@@ -235,13 +235,32 @@ export function sendPrompt(
 	// Ensure persistent subscription exists for this bridge
 	ensureSubscribed(api, userState, bridge);
 
-	// Buddy: auto-init controller (loads from shared buddy.json),
-	// then capture context, reset idle, check name-call
+	// Buddy: auto-init controller (loads from shared buddy.json)
 	if (!userState.buddyController) {
 		ensureBuddyController(api, userState, opts.chatId);
 	}
+
+	// Name-call interception: if the message contains the buddy's name,
+	// handle it as a buddy interaction only — don't send to the agent.
+	// Matches TUI behavior where name-call messages are excluded from agent context.
+	if (userState.buddyController?.detectNameCall(opts.prompt)) {
+		// Clean up the status message (won't be needed)
+		if (opts.statusMessageId) {
+			void safeDelete(api, opts.chatId, opts.statusMessageId);
+		}
+		// Capture context + reset idle, then let the buddy respond
+		userState.buddyController.appendContext(`User: ${opts.prompt}`);
+		userState.buddyController.markActivity();
+		userState.buddyController.resetIdleTimer();
+		userState.buddyController.handleNameCall(opts.prompt).catch(() => {});
+		return;
+	}
+
+	// Capture user message for buddy context and reset idle timer
 	if (userState.buddyController) {
-		userState.buddyController.processUserMessage(opts.prompt);
+		userState.buddyController.appendContext(`User: ${opts.prompt}`);
+		userState.buddyController.markActivity();
+		userState.buddyController.resetIdleTimer();
 	}
 
 	// Steering path — agent is actively streaming (same check as TUI).
