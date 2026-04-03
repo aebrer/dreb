@@ -2169,6 +2169,14 @@ export class InteractiveMode {
 				}
 			}
 
+			// Name-call detection for buddy (must run before all early-return paths)
+			const buddyName = this.buddyManager.getName();
+			if (buddyName && text.toLowerCase().includes(buddyName.toLowerCase()) && this.buddyComponent) {
+				this.editor.setText("");
+				this.handleBuddyNameCall().catch(() => {});
+				return;
+			}
+
 			// Queue input during compaction (extension commands execute immediately)
 			if (this.session.isCompacting) {
 				if (this.isExtensionCommand(text)) {
@@ -2193,13 +2201,6 @@ export class InteractiveMode {
 			}
 
 			// Normal message submission
-
-			// Name-call detection for buddy
-			const buddyName = this.buddyManager.getName();
-			if (buddyName && text.toLowerCase().includes(buddyName.toLowerCase()) && this.buddyComponent) {
-				this.handleBuddyNameCall().catch(() => {});
-				return;
-			}
 
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
