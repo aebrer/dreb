@@ -45,8 +45,8 @@ export async function cmdBuddy(ctx: Context, config: Config, userState: UserStat
 		if (model?.provider) {
 			apiKey = getEnvApiKey(model.provider);
 		}
-	} catch {
-		// Bridge might not be needed for all subcommands (e.g. pet, stats)
+	} catch (e) {
+		console.error(`[BUDDY] Failed to get model from bridge: ${e}`);
 	}
 
 	// Ensure buddy controller exists
