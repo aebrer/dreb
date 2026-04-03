@@ -57,9 +57,10 @@ BACKSTORY: <2-3 sentence elaborate fictional backstory — funny, absurd, or dra
 /** Prompt for buddy reactions via Ollama */
 const REACTION_PROMPT = `You are {name}, a {species} companion in a terminal coding app. You are {personality}. Your backstory: {backstory}
 
-React to this event with a short, in-character quip. Feel free to reference your past experiences. Max 20 words. No quotes, no prefixes, just the quip.
+Something just happened. React with a short, in-character quip based on the context below. Be specific — reference what actually happened, not just that something happened. Max 20 words. No quotes, no prefixes, just the quip.
 
-Event: {event}`;
+Context:
+{event}`;
 
 const NAME_CALL_PROMPT = `You are {name}, a {species} companion in a terminal coding app. You are {personality}. Your backstory: {backstory}
 

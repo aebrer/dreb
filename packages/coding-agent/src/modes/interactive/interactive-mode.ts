@@ -239,7 +239,8 @@ export class InteractiveMode {
 	private buddyComponent: BuddyComponent | null = null;
 	private lastReactionTime = 0;
 	private static readonly REACTION_COOLDOWN_MS = 60000;
-	private lastSubmittedText = "";
+	private buddyContextBuffer: string[] = [];
+	private static readonly BUDDY_CONTEXT_MAX_ENTRIES = 20;
 	private buddyIdleTimer: ReturnType<typeof setTimeout> | null = null;
 	private static readonly BUDDY_IDLE_MS = 30000;
 
@@ -2216,7 +2217,7 @@ export class InteractiveMode {
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.session.isStreaming) {
-				this.lastSubmittedText = text;
+				this.appendBuddyContext(`User: ${text}`);
 				this.resetBuddyIdleTimer();
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
@@ -2231,7 +2232,7 @@ export class InteractiveMode {
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
 
-			this.lastSubmittedText = text;
+			this.appendBuddyContext(`User: ${text}`);
 			this.resetBuddyIdleTimer();
 
 			if (this.onInputCallback) {
@@ -2377,6 +2378,22 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 					this.footer.invalidate();
 				}
+				// Capture assistant response for buddy context
+				if (event.message.role === "assistant") {
+					const textParts = event.message.content
+						.filter((c): c is { type: "text"; text: string } => c.type === "text")
+						.map((c) => c.text)
+						.join("")
+						.slice(0, 200);
+					if (textParts) {
+						this.appendBuddyContext(`Assistant: ${textParts}`);
+					}
+					const toolCalls = event.message.content.filter((c) => c.type === "toolCall");
+					if (toolCalls.length > 0) {
+						const tools = toolCalls.map((c) => (c as { type: "toolCall"; name: string }).name).join(", ");
+						this.appendBuddyContext(`Called tools: ${tools}`);
+					}
+				}
 				this.ui.requestRender();
 				break;
 
@@ -2425,6 +2442,22 @@ export class InteractiveMode {
 						typeof errorDetail === "string" ? errorDetail.slice(0, 200) : String(errorDetail).slice(0, 200);
 					this.triggerBuddyReaction(`Tool "${event.toolName}" failed: ${errorText}`).catch(() => {});
 				}
+				// Capture tool result for buddy context
+				{
+					const status = event.isError ? "failed" : "completed";
+					const output = event.result?.output || event.result?.content;
+					const outputText =
+						typeof output === "string"
+							? output.slice(0, 100)
+							: Array.isArray(output)
+								? output
+										.filter((c: any) => c.type === "text")
+										.map((c: any) => c.text)
+										.join("")
+										.slice(0, 100)
+								: "";
+					this.appendBuddyContext(`Tool ${event.toolName} ${status}${outputText ? `: ${outputText}` : ""}`);
+				}
 				break;
 			}
 
@@ -2445,8 +2478,7 @@ export class InteractiveMode {
 
 				// Buddy reaction: session wrap-up quip
 				if (this.buddyComponent) {
-					const lastUserMsg = this.lastSubmittedText || "a task";
-					this.triggerBuddyReaction(`The agent just finished responding to: "${lastUserMsg}"`).catch(() => {});
+					this.triggerBuddyReaction("The agent finished responding.").catch(() => {});
 				}
 
 				this.ui.requestRender();
@@ -4777,12 +4809,18 @@ export class InteractiveMode {
 		}
 	}
 
-	private buildBuddyContext(): string {
-		const lastMsg = this.lastSubmittedText;
-		if (lastMsg) {
-			return `Last user message: "${lastMsg.slice(0, 100)}"`;
+	private appendBuddyContext(entry: string): void {
+		this.buddyContextBuffer.push(entry);
+		if (this.buddyContextBuffer.length > InteractiveMode.BUDDY_CONTEXT_MAX_ENTRIES) {
+			this.buddyContextBuffer.shift();
 		}
-		return "No recent activity.";
+	}
+
+	private buildBuddyContext(): string {
+		if (this.buddyContextBuffer.length === 0) {
+			return "No recent activity.";
+		}
+		return this.buddyContextBuffer.join("\n");
 	}
 
 	private resetBuddyIdleTimer(): void {
@@ -4792,7 +4830,7 @@ export class InteractiveMode {
 		this.buddyIdleTimer = setTimeout(() => {
 			if (this.buddyComponent) {
 				const ctx = this.buildBuddyContext();
-				this.triggerBuddyReaction(`The user has been idle for 30 seconds. ${ctx}`).catch(() => {});
+				this.triggerBuddyReaction(`It's been quiet for a moment. Recent activity:\n${ctx}`).catch(() => {});
 			}
 		}, InteractiveMode.BUDDY_IDLE_MS);
 	}
