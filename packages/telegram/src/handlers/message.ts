@@ -13,6 +13,7 @@
 
 import type { Api } from "grammy";
 import type { AgentBridge } from "../agent-bridge.js";
+import { ensureBuddyController } from "../commands/buddy.js";
 import { setUserSession } from "../state.js";
 import type { UserState } from "../types.js";
 import { cleanupUploads } from "../util/files.js";
@@ -234,7 +235,11 @@ export function sendPrompt(
 	// Ensure persistent subscription exists for this bridge
 	ensureSubscribed(api, userState, bridge);
 
-	// Buddy: capture context, reset idle, check name-call
+	// Buddy: auto-init controller (loads from shared buddy.json),
+	// then capture context, reset idle, check name-call
+	if (!userState.buddyController) {
+		ensureBuddyController(api, userState, opts.chatId);
+	}
 	if (userState.buddyController) {
 		userState.buddyController.processUserMessage(opts.prompt);
 	}

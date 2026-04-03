@@ -11,6 +11,25 @@ import { enqueueSend } from "../handlers/message.js";
 import type { UserState } from "../types.js";
 import { safeSend } from "../util/telegram.js";
 
+/**
+ * Ensure the user has a buddy controller, creating one if needed.
+ *
+ * The controller auto-loads from the shared buddy.json on creation,
+ * so it picks up any buddy hatched in the TUI (and vice versa).
+ *
+ * @param api — grammy Api for chat actions
+ * @param userState — per-user state (controller stored here)
+ * @param chatId — Telegram chat ID (private chat = user ID)
+ */
+export function ensureBuddyController(api: any, userState: UserState, chatId: number): void {
+	if (userState.buddyController) return;
+
+	const send = (text: string, long?: boolean) => {
+		enqueueSend(api, userState, chatId, text, long);
+	};
+	userState.buddyController = createTelegramBuddyController(send, api, chatId);
+}
+
 export async function cmdBuddy(ctx: Context, config: Config, userState: UserState): Promise<void> {
 	const chatId = ctx.chat!.id;
 	const args = (ctx.match as string)?.trim() ?? "";
@@ -30,13 +49,8 @@ export async function cmdBuddy(ctx: Context, config: Config, userState: UserStat
 		// Bridge might not be needed for all subcommands (e.g. pet, stats)
 	}
 
-	// Get or create buddy controller lazily
-	if (!userState.buddyController) {
-		const send = (text: string, long?: boolean) => {
-			enqueueSend(ctx.api, userState, chatId, text, long);
-		};
-		userState.buddyController = createTelegramBuddyController(send, ctx.api, chatId);
-	}
+	// Ensure buddy controller exists
+	ensureBuddyController(ctx.api, userState, chatId);
 
 	const controller = userState.buddyController;
 	const result = await controller.handleCommand(subcommand, model, apiKey);
