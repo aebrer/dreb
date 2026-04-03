@@ -127,5 +127,9 @@ export function createTelegramBuddyController(send: SendFn, api: Api, chatId: nu
 		reactionsPerHour: 3,
 	});
 
+	// Auto-load buddy from shared buddy.json (same file TUI uses).
+	// If a buddy exists and is visible, it'll be active immediately.
+	controller.start();
+
 	return controller;
 }
