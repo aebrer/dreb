@@ -68,6 +68,164 @@ afterEach(() => {
 });
 
 // ===========================================================================
+// Enabled flag gating
+// ===========================================================================
+describe("enabled flag", () => {
+	it("should be true by default", () => {
+		const { controller } = createTestController();
+		expect(controller.enabled).toBe(true);
+	});
+
+	it("should be set to false by handleCommand('off')", async () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		await controller.handleCommand("off");
+		expect(controller.enabled).toBe(false);
+	});
+
+	it("should suppress triggerReaction when disabled", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		const reactSpy = vi.spyOn(manager, "react").mockResolvedValue("quip");
+		controller.enabled = false;
+
+		await controller.triggerReaction("something happened");
+		expect(reactSpy).not.toHaveBeenCalled();
+		expect(callbacks.onThinkingStart).not.toHaveBeenCalled();
+		expect(callbacks.onSpeech).not.toHaveBeenCalled();
+	});
+
+	it("should suppress detectNameCall when disabled", () => {
+		writeStoredBuddy({ name: "Zorp" });
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		controller.enabled = false;
+		expect(controller.detectNameCall("Hey Zorp!")).toBe(false);
+	});
+
+	it("should suppress handleNameCall when disabled", async () => {
+		writeStoredBuddy({ name: "Zorp" });
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		const nameCallSpy = vi.spyOn(manager, "respondToNameCall");
+		controller.enabled = false;
+
+		await controller.handleNameCall("Hey Zorp!");
+		expect(nameCallSpy).not.toHaveBeenCalled();
+		expect(callbacks.onThinkingStart).not.toHaveBeenCalled();
+	});
+
+	it("should suppress resetIdleTimer when disabled", () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		controller.enabled = false;
+		controller.resetIdleTimer();
+		expect((controller as any).idleTimer).toBeNull();
+	});
+
+	it("should still capture context in handleEvent when disabled", () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		controller.enabled = false;
+
+		controller.handleEvent({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "Hello" }],
+			},
+		});
+
+		expect(controller.buildContext()).toContain("Assistant: Hello");
+	});
+
+	it("should suppress reaction in handleEvent when disabled (tool error)", () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		const reactSpy = vi.spyOn(manager, "react").mockResolvedValue("quip");
+		controller.enabled = false;
+
+		controller.handleEvent({
+			type: "tool_execution_end",
+			toolName: "bash",
+			toolCallId: "1",
+			result: { content: [{ type: "text", text: "error!" }] },
+			isError: true,
+		});
+
+		// Context still captured
+		expect(controller.buildContext()).toContain("Tool bash failed");
+		// But no reaction
+		expect(reactSpy).not.toHaveBeenCalled();
+	});
+
+	it("should suppress reaction in handleEvent when disabled (agent_end)", () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		const reactSpy = vi.spyOn(manager, "react").mockResolvedValue("quip");
+		controller.enabled = false;
+
+		controller.handleEvent({ type: "agent_end", messages: [] });
+		expect(reactSpy).not.toHaveBeenCalled();
+	});
+
+	it("should re-enable via handleCommand default", async () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		// Disable via off
+		await controller.handleCommand("off");
+		expect(controller.enabled).toBe(false);
+
+		// Re-enable via default (bare /buddy)
+		const result = await controller.handleCommand("");
+		expect(result.type).toBe("show");
+		expect(controller.enabled).toBe(true);
+	});
+
+	it("should re-enable reactions after re-enable", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		// Disable
+		await controller.handleCommand("off");
+
+		// Re-enable
+		await controller.handleCommand("");
+
+		// Now reactions should work
+		vi.spyOn(manager, "react").mockResolvedValue("I'm back!");
+		await controller.triggerReaction("test event");
+		expect(callbacks.onSpeech).toHaveBeenCalledWith("I'm back!");
+	});
+
+	it("should be set to false by start() when buddy is hidden", () => {
+		writeStoredBuddy({ visible: false });
+		const { controller } = createTestController();
+
+		const result = controller.start();
+		expect(result).toBeNull();
+		expect(controller.enabled).toBe(false);
+	});
+});
+
+// ===========================================================================
 // Context buffer
 // ===========================================================================
 describe("context buffer", () => {

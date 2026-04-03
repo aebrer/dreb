@@ -240,27 +240,19 @@ export function sendPrompt(
 		ensureBuddyController(api, userState, opts.chatId, userState.config);
 	}
 
-	// Name-call interception: if the message contains the buddy's name,
-	// handle it as a buddy interaction only — don't send to the agent.
-	// Matches TUI behavior where name-call messages are excluded from agent context.
-	if (userState.buddyController?.detectNameCall(opts.prompt)) {
+	// Buddy: capture context, reset idle, and check for name-call interception.
+	// processUserMessage handles all three plus name-call detection.
+	// If it's a name-call, the buddy responds and we skip the agent entirely.
+	const isNameCall = userState.buddyController?.detectNameCall(opts.prompt);
+	if (isNameCall) {
 		// Clean up the status message (won't be needed)
 		if (opts.statusMessageId) {
 			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
-		// Capture context + reset idle, then let the buddy respond
-		userState.buddyController.appendContext(`User: ${opts.prompt}`);
-		userState.buddyController.markActivity();
-		userState.buddyController.resetIdleTimer();
-		userState.buddyController.handleNameCall(opts.prompt).catch(() => {});
-		return;
 	}
-
-	// Capture user message for buddy context and reset idle timer
-	if (userState.buddyController) {
-		userState.buddyController.appendContext(`User: ${opts.prompt}`);
-		userState.buddyController.markActivity();
-		userState.buddyController.resetIdleTimer();
+	userState.buddyController?.processUserMessage(opts.prompt);
+	if (isNameCall) {
+		return;
 	}
 
 	// Steering path — agent is actively streaming (same check as TUI).

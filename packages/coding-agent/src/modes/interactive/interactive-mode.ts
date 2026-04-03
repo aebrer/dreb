@@ -2241,12 +2241,14 @@ export class InteractiveMode {
 				return;
 			}
 
+			// Capture user message for buddy context and reset idle timer
+			this.buddyController.appendContext(`User: ${text}`);
+			this.buddyController.markActivity();
+			this.buddyController.resetIdleTimer();
+
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.session.isStreaming) {
-				this.buddyController.appendContext(`User: ${text}`);
-				this.buddyController.markActivity();
-				this.buddyController.resetIdleTimer();
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
 				await this.session.prompt(text, { streamingBehavior: "steer" });
@@ -2259,10 +2261,6 @@ export class InteractiveMode {
 
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
-
-			this.buddyController.appendContext(`User: ${text}`);
-			this.buddyController.markActivity();
-			this.buddyController.resetIdleTimer();
 
 			if (this.onInputCallback) {
 				this.onInputCallback(text);
