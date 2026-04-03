@@ -39,6 +39,7 @@ import {
 import { spawn, spawnSync } from "child_process";
 import { APP_NAME, getAgentDir, getAuthPath, getDebugLogPath, getUpdateInstruction, VERSION } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
+import { BuddyManager } from "../../core/buddy/buddy-manager.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -68,6 +69,7 @@ import { AssistantMessageComponent } from "./components/assistant-message.js";
 import { BashExecutionComponent } from "./components/bash-execution.js";
 import { BorderedLoader } from "./components/bordered-loader.js";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.js";
+import { BuddyComponent } from "./components/buddy-component.js";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { CustomMessageComponent } from "./components/custom-message.js";
@@ -231,6 +233,12 @@ export class InteractiveMode {
 
 	// Custom header from extension (undefined = use built-in header)
 	private customHeader: (Component & { dispose?(): void }) | undefined = undefined;
+
+	// Buddy companion
+	private buddyManager = new BuddyManager();
+	private buddyComponent: BuddyComponent | null = null;
+	private lastReactionTime = 0;
+	private static readonly REACTION_COOLDOWN_MS = 60000;
 
 	// Convenience accessors
 	private get agent() {
@@ -520,6 +528,12 @@ export class InteractiveMode {
 
 		// Subscribe to agent events
 		this.subscribeToAgent();
+
+		// Auto-load buddy if one exists
+		const existingBuddy = this.buddyManager.load();
+		if (existingBuddy && existingBuddy.visible !== false) {
+			this.mountBuddy(existingBuddy);
+		}
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -2120,6 +2134,12 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/buddy" || text.startsWith("/buddy ")) {
+				const subcommand = text.startsWith("/buddy ") ? text.slice(7).trim() : "";
+				this.editor.setText("");
+				await this.handleBuddyCommand(subcommand);
+				return;
+			}
 			if (text === "/resume") {
 				this.showSessionSelector();
 				this.editor.setText("");
@@ -2173,6 +2193,13 @@ export class InteractiveMode {
 			}
 
 			// Normal message submission
+
+			// Name-call detection for buddy
+			const buddyName = this.buddyManager.getName();
+			if (buddyName && text.toLowerCase().includes(buddyName.toLowerCase()) && this.buddyComponent) {
+				this.handleBuddyNameCall().catch(() => {});
+			}
+
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
 
@@ -2360,6 +2387,10 @@ export class InteractiveMode {
 					this.pendingTools.delete(event.toolCallId);
 					this.ui.requestRender();
 				}
+				// Buddy reaction: tool error
+				if (event.isError && this.buddyComponent) {
+					this.triggerBuddyReaction(`A tool (${event.toolName}) just failed with an error.`).catch(() => {});
+				}
 				break;
 			}
 
@@ -2377,6 +2408,11 @@ export class InteractiveMode {
 				this.pendingTools.clear();
 
 				await this.checkShutdownRequested();
+
+				// Buddy reaction: session wrap-up quip
+				if (this.buddyComponent) {
+					this.triggerBuddyReaction("The agent just finished responding to the user.").catch(() => {});
+				}
 
 				this.ui.requestRender();
 				break;
@@ -4569,11 +4605,127 @@ export class InteractiveMode {
 		return result;
 	}
 
+	// =========================================================================
+	// Buddy companion handlers
+	// =========================================================================
+
+	private async handleBuddyCommand(subcommand: string): Promise<void> {
+		const model = this.session.model;
+		if (!model) {
+			this.showError("No model available. Set a model first with /model.");
+			return;
+		}
+
+		switch (subcommand) {
+			case "pet": {
+				if (!this.buddyComponent) {
+					this.showWarning("No buddy to pet! Use /buddy to hatch one first.");
+					return;
+				}
+				this.buddyComponent.pet();
+				this.ui.requestRender();
+				break;
+			}
+			case "reroll": {
+				const state = await this.buddyManager.reroll(model);
+				if (this.buddyComponent) {
+					this.buddyComponent.updateState(state);
+				}
+				this.showBuddyHatchMessage(state);
+				this.ui.requestRender();
+				break;
+			}
+			case "off": {
+				this.buddyManager.setVisible(false);
+				this.removeBuddy();
+				this.chatContainer.addChild(new Spacer(1));
+				this.chatContainer.addChild(
+					new Text(theme.fg("muted", "Buddy hidden. Use /buddy to bring them back."), 1, 0),
+				);
+				this.ui.requestRender();
+				break;
+			}
+			default: {
+				// No subcommand: hatch or show
+				if (this.buddyComponent) {
+					// Already showing — do nothing
+					return;
+				}
+
+				// Try to load existing buddy
+				const existing = this.buddyManager.load();
+				if (existing && existing.visible !== false) {
+					this.mountBuddy(existing);
+					return;
+				}
+
+				// Hatch new buddy
+				const state = await this.buddyManager.hatch(model);
+				this.mountBuddy(state);
+				this.showBuddyHatchMessage(state);
+				break;
+			}
+		}
+	}
+
+	private mountBuddy(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
+		// Remove existing if any
+		this.removeBuddy();
+
+		this.buddyComponent = new BuddyComponent(this.ui, state);
+		this.extensionWidgetsBelow.set("__buddy__", this.buddyComponent);
+		this.renderWidgets();
+	}
+
+	private removeBuddy(): void {
+		if (this.buddyComponent) {
+			this.buddyComponent.dispose();
+			this.buddyComponent = null;
+		}
+		this.extensionWidgetsBelow.delete("__buddy__");
+		this.renderWidgets();
+	}
+
+	private showBuddyHatchMessage(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
+		this.chatContainer.addChild(new Spacer(1));
+		const shinyMark = state.shiny ? " ✨ SHINY!" : "";
+		const lines = [
+			theme.fg("accent", `🥚 A ${state.rarity} ${state.species} hatched!${shinyMark}`),
+			theme.fg("muted", `Meet ${theme.bold(state.name)} — ${state.personality}`),
+			"",
+			theme.fg("muted", "Use /buddy pet to show love, /buddy reroll to try again."),
+		].join("\n");
+		this.chatContainer.addChild(new Text(lines, 1, 0));
+		this.ui.requestRender();
+	}
+
+	private async triggerBuddyReaction(event: string): Promise<void> {
+		// Throttle: max 1 reaction per 60s
+		const now = Date.now();
+		if (now - this.lastReactionTime < InteractiveMode.REACTION_COOLDOWN_MS) return;
+
+		const quip = await this.buddyManager.react(event);
+		if (quip && this.buddyComponent) {
+			this.lastReactionTime = now;
+			this.buddyComponent.showSpeech(quip);
+		}
+	}
+
+	private async handleBuddyNameCall(): Promise<void> {
+		if (!this.buddyComponent) return;
+
+		const response = await this.buddyManager.respondToNameCall();
+		if (response) {
+			this.buddyComponent.showSpeech(response);
+		}
+	}
+
 	stop(): void {
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
 		}
+		this.removeBuddy();
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();
