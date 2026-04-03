@@ -42,8 +42,12 @@ export async function cmdBuddy(ctx: Context, config: Config, userState: UserStat
 		const bridge = await ensureBridgeWithSession(config, userState);
 		const state = await bridge.getState();
 		model = state?.model;
+		console.error(
+			`[BUDDY] state keys: ${state ? Object.keys(state).join(",") : "null"}, model: ${model ? `${model.provider}/${model.id}` : "undefined"}`,
+		);
 		if (model?.provider) {
 			apiKey = getEnvApiKey(model.provider);
+			console.error(`[BUDDY] apiKey resolved: ${apiKey ? "yes" : "no"} (provider: ${model.provider})`);
 		}
 	} catch (e) {
 		console.error(`[BUDDY] Failed to get model from bridge: ${e}`);
