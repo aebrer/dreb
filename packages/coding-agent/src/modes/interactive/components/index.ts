@@ -4,6 +4,7 @@ export { AssistantMessageComponent } from "./assistant-message.js";
 export { BashExecutionComponent } from "./bash-execution.js";
 export { BorderedLoader } from "./bordered-loader.js";
 export { BranchSummaryMessageComponent } from "./branch-summary-message.js";
+export { BuddyComponent } from "./buddy-component.js";
 export { CompactionSummaryMessageComponent } from "./compaction-summary-message.js";
 export { CustomEditor } from "./custom-editor.js";
 export { CustomMessageComponent } from "./custom-message.js";

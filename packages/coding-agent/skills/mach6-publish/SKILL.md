@@ -13,8 +13,7 @@ argument-hint: "<pr-number>"
 1. **GitHub as shared memory** — All context lives on the PR.
 2. **No `#N` in comment bodies** — Use "finding 3", "item 3" etc. instead.
 3. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
-4. **Co-authored-by** — Include `Co-Authored-By: Claude <noreply@anthropic.com>` in commit messages.
-5. **Task tracking** — Use the `tasks_update` tool to show progress.
+4. **Task tracking** — Use the `tasks_update` tool to show progress.
 
 ## Step 1: Set up task tracking
 
@@ -83,9 +82,7 @@ Update task: checks → completed, version → in_progress.
 4. Commit and push on the feature branch:
    ```bash
    git add <version-files>
-   git commit -m "chore: bump version to <new-version>
-   
-   Co-Authored-By: Claude <noreply@anthropic.com>"
+   git commit -m "chore: bump version to <new-version>"
    git push
    ```
 

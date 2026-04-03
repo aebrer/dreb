@@ -39,6 +39,8 @@ import {
 import { spawn, spawnSync } from "child_process";
 import { APP_NAME, getAgentDir, getAuthPath, getDebugLogPath, getUpdateInstruction, VERSION } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
+import { BuddyManager, checkOllama } from "../../core/buddy/buddy-manager.js";
+import { Rarity, Stat } from "../../core/buddy/buddy-types.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -68,6 +70,7 @@ import { AssistantMessageComponent } from "./components/assistant-message.js";
 import { BashExecutionComponent } from "./components/bash-execution.js";
 import { BorderedLoader } from "./components/bordered-loader.js";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.js";
+import { BuddyComponent } from "./components/buddy-component.js";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { CustomMessageComponent } from "./components/custom-message.js";
@@ -232,6 +235,16 @@ export class InteractiveMode {
 	// Custom header from extension (undefined = use built-in header)
 	private customHeader: (Component & { dispose?(): void }) | undefined = undefined;
 
+	// Buddy companion
+	private buddyManager = new BuddyManager();
+	private buddyComponent: BuddyComponent | null = null;
+	private lastReactionTime = 0;
+	private static readonly REACTION_COOLDOWN_MS = 60000;
+	private buddyContextBuffer: string[] = [];
+	private static readonly BUDDY_CONTEXT_MAX_ENTRIES = 20;
+	private buddyIdleTimer: ReturnType<typeof setTimeout> | null = null;
+	private static readonly BUDDY_IDLE_MS = 30000;
+
 	// Convenience accessors
 	private get agent() {
 		return this.session.agent;
@@ -368,6 +381,20 @@ export class InteractiveMode {
 					label: item.id,
 					description: item.provider,
 				}));
+			};
+		}
+
+		const buddyCommand = slashCommands.find((command) => command.name === "buddy");
+		if (buddyCommand) {
+			buddyCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const subcommands = [
+					{ value: "pet", label: "pet", description: "Show your buddy some love" },
+					{ value: "reroll", label: "reroll", description: "Re-roll for a new buddy" },
+					{ value: "off", label: "off", description: "Hide your buddy" },
+					{ value: "stats", label: "stats", description: "View buddy profile" },
+				];
+				const filtered = prefix ? subcommands.filter((s) => s.value.startsWith(prefix.toLowerCase())) : subcommands;
+				return filtered.length > 0 ? filtered : null;
 			};
 		}
 
@@ -520,6 +547,12 @@ export class InteractiveMode {
 
 		// Subscribe to agent events
 		this.subscribeToAgent();
+
+		// Auto-load buddy if one exists
+		const existingBuddy = this.buddyManager.load();
+		if (existingBuddy && existingBuddy.visible !== false) {
+			this.mountBuddy(existingBuddy);
+		}
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -1369,6 +1402,11 @@ export class InteractiveMode {
 	}
 
 	private resetExtensionUI(): void {
+		// Preserve buddy across reload — clearExtensionWidgets would dispose
+		// it without nulling buddyComponent, leaving a stale reference
+		const buddyState = this.buddyComponent ? this.buddyManager.getState() : null;
+		this.removeBuddy();
+
 		if (this.extensionSelector) {
 			this.hideExtensionSelector();
 		}
@@ -1390,6 +1428,11 @@ export class InteractiveMode {
 		this.updateTerminalTitle();
 		if (this.loadingAnimation) {
 			this.loadingAnimation.setMessage(`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`);
+		}
+
+		// Re-mount buddy so it survives reload
+		if (buddyState) {
+			this.mountBuddy(buddyState);
 		}
 	}
 
@@ -2120,6 +2163,12 @@ export class InteractiveMode {
 				this.editor.setText("");
 				return;
 			}
+			if (text === "/buddy" || text.startsWith("/buddy ")) {
+				const subcommand = text.startsWith("/buddy ") ? text.slice(7).trim() : "";
+				this.editor.setText("");
+				await this.handleBuddyCommand(subcommand);
+				return;
+			}
 			if (text === "/resume") {
 				this.showSessionSelector();
 				this.editor.setText("");
@@ -2149,6 +2198,22 @@ export class InteractiveMode {
 				}
 			}
 
+			// Name-call detection for buddy (must run before all early-return paths)
+			const buddyName = this.buddyManager.getName();
+			if (buddyName && this.buddyComponent) {
+				try {
+					const nameRegex = new RegExp(`\\b${buddyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+					if (nameRegex.test(text)) {
+						this.editor.setText("");
+						const recentContext = this.buildBuddyContext();
+						this.handleBuddyNameCall(text, recentContext).catch(() => {});
+						return;
+					}
+				} catch {
+					// Regex construction failed, skip name detection
+				}
+			}
+
 			// Queue input during compaction (extension commands execute immediately)
 			if (this.session.isCompacting) {
 				if (this.isExtensionCommand(text)) {
@@ -2164,6 +2229,8 @@ export class InteractiveMode {
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.session.isStreaming) {
+				this.appendBuddyContext(`User: ${text}`);
+				this.resetBuddyIdleTimer();
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
 				await this.session.prompt(text, { streamingBehavior: "steer" });
@@ -2173,8 +2240,12 @@ export class InteractiveMode {
 			}
 
 			// Normal message submission
+
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
+
+			this.appendBuddyContext(`User: ${text}`);
+			this.resetBuddyIdleTimer();
 
 			if (this.onInputCallback) {
 				this.onInputCallback(text);
@@ -2319,6 +2390,22 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 					this.footer.invalidate();
 				}
+				// Capture assistant response for buddy context
+				if (event.message.role === "assistant") {
+					const textParts = event.message.content
+						.filter((c): c is { type: "text"; text: string } => c.type === "text")
+						.map((c) => c.text)
+						.join("")
+						.slice(0, 200);
+					if (textParts) {
+						this.appendBuddyContext(`Assistant: ${textParts}`);
+					}
+					const toolCalls = event.message.content.filter((c) => c.type === "toolCall");
+					if (toolCalls.length > 0) {
+						const tools = toolCalls.map((c) => (c as { type: "toolCall"; name: string }).name).join(", ");
+						this.appendBuddyContext(`Called tools: ${tools}`);
+					}
+				}
 				this.ui.requestRender();
 				break;
 
@@ -2360,6 +2447,38 @@ export class InteractiveMode {
 					this.pendingTools.delete(event.toolCallId);
 					this.ui.requestRender();
 				}
+				// Buddy reaction: tool error
+				if (event.isError && this.buddyComponent) {
+					const result = event.result;
+					let errorText = "unknown error";
+					if (result?.content && Array.isArray(result.content)) {
+						errorText = result.content
+							.filter((c: any) => c.type === "text")
+							.map((c: any) => c.text)
+							.join("")
+							.slice(0, 200);
+					} else if (typeof result?.error === "string") {
+						errorText = result.error.slice(0, 200);
+					}
+					if (!errorText) errorText = "unknown error";
+					this.triggerBuddyReaction(`Tool "${event.toolName}" failed: ${errorText}`).catch(() => {});
+				}
+				// Capture tool result for buddy context
+				{
+					const status = event.isError ? "failed" : "completed";
+					const output = event.result?.output || event.result?.content;
+					const outputText =
+						typeof output === "string"
+							? output.slice(0, 100)
+							: Array.isArray(output)
+								? output
+										.filter((c: any) => c.type === "text")
+										.map((c: any) => c.text)
+										.join("")
+										.slice(0, 100)
+								: "";
+					this.appendBuddyContext(`Tool ${event.toolName} ${status}${outputText ? `: ${outputText}` : ""}`);
+				}
 				break;
 			}
 
@@ -2377,6 +2496,11 @@ export class InteractiveMode {
 				this.pendingTools.clear();
 
 				await this.checkShutdownRequested();
+
+				// Buddy reaction: session wrap-up quip
+				if (this.buddyComponent) {
+					this.triggerBuddyReaction("The agent finished responding.").catch(() => {});
+				}
 
 				this.ui.requestRender();
 				break;
@@ -4569,11 +4693,301 @@ export class InteractiveMode {
 		return result;
 	}
 
+	// =========================================================================
+	// Buddy companion handlers
+	// =========================================================================
+
+	private async handleBuddyCommand(subcommand: string): Promise<void> {
+		try {
+			const model = this.session.model;
+			if (!model) {
+				this.showError("No model available. Set a model first with /model.");
+				return;
+			}
+
+			const apiKey = await this.session.modelRegistry.getApiKey(model);
+			if (!apiKey) {
+				this.showError("No API key available. Set a model with /model first.");
+				return;
+			}
+
+			this.resetBuddyIdleTimer();
+
+			switch (subcommand) {
+				case "pet": {
+					if (!this.buddyComponent) {
+						this.showWarning("No buddy to pet! Use /buddy to hatch one first.");
+						return;
+					}
+					this.buddyComponent.pet();
+					this.ui.requestRender();
+					break;
+				}
+				case "reroll": {
+					if (!this.buddyManager.hasStoredBuddy()) {
+						this.showWarning("No buddy to reroll! Use /buddy to hatch one first.");
+						return;
+					}
+					this.buddyComponent?.showThinking("rerolling");
+					try {
+						const state = await this.buddyManager.reroll(model, apiKey);
+						this.buddyComponent?.hideThinking();
+						await this.playHatchAnimation();
+						this.mountBuddy(state);
+						this.showBuddyHatchMessage(state);
+						this.ui.requestRender();
+					} catch (err) {
+						this.buddyComponent?.hideThinking();
+						throw err;
+					}
+					break;
+				}
+				case "stats": {
+					if (!this.buddyComponent) {
+						this.showWarning("No buddy to show stats for! Use /buddy to hatch one first.");
+						return;
+					}
+					const state = this.buddyManager.getState();
+					if (!state) return;
+					this.showBuddyStatsPanel(state);
+					break;
+				}
+				case "off": {
+					this.buddyManager.setVisible(false);
+					this.removeBuddy();
+					this.chatContainer.addChild(new Spacer(1));
+					this.chatContainer.addChild(
+						new Text(theme.fg("muted", "Buddy hidden. Use /buddy to bring them back."), 1, 0),
+					);
+					this.ui.requestRender();
+					break;
+				}
+				default: {
+					// No subcommand: hatch or show
+					if (this.buddyComponent) {
+						// Already showing — do nothing
+						return;
+					}
+
+					// Try to load existing buddy
+					const existing = this.buddyManager.load();
+					if (existing) {
+						if (existing.visible === false) {
+							// Restore hidden buddy
+							this.buddyManager.setVisible(true);
+							existing.visible = true;
+						}
+						this.mountBuddy(existing);
+						return;
+					}
+
+					// Hatch new buddy with animation
+					const hatchState = await this.buddyManager.hatch(model, apiKey);
+					await this.playHatchAnimation();
+					this.mountBuddy(hatchState);
+					this.showBuddyHatchMessage(hatchState);
+					break;
+				}
+			}
+		} catch (err) {
+			this.showError(`Buddy error: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	private mountBuddy(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
+		// Remove existing if any
+		this.removeBuddy();
+
+		this.buddyComponent = new BuddyComponent(this.ui, state);
+		this.extensionWidgetsBelow.set("__buddy__", this.buddyComponent);
+		this.renderWidgets();
+	}
+
+	private removeBuddy(): void {
+		if (this.buddyIdleTimer) {
+			clearTimeout(this.buddyIdleTimer);
+			this.buddyIdleTimer = null;
+		}
+		if (this.buddyComponent) {
+			this.buddyComponent.dispose();
+			this.buddyComponent = null;
+		}
+		this.extensionWidgetsBelow.delete("__buddy__");
+		this.renderWidgets();
+	}
+
+	private showBuddyHatchMessage(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
+		this.chatContainer.addChild(new Spacer(1));
+		const shinyMark = state.shiny ? " ✨ SHINY!" : "";
+		const md = [
+			`🥚 A **${state.rarity}** ${state.species} hatched!${shinyMark}`,
+			`Meet **${state.name}** — ${state.personality}`,
+			`*Backstory: ${state.backstory}*`,
+			"",
+			"Use `/buddy pet` to show love, `/buddy reroll` to try again.",
+		].join("\n");
+		this.chatContainer.addChild(new Markdown(md, 1, 0, this.getMarkdownThemeWithSettings()));
+
+		// Check Ollama availability and warn if missing
+		this.checkOllamaAndWarn();
+
+		this.ui.requestRender();
+	}
+
+	private async checkOllamaAndWarn(): Promise<void> {
+		const status = await checkOllama();
+		if (!status.available) {
+			const msg = status.error
+				? `⚠️ Buddy reactions unavailable: ${status.error}`
+				: "⚠️ Buddy reactions require Ollama. Install it at https://ollama.com and run: ollama pull llama3.2";
+			this.chatContainer.addChild(new Text(theme.fg("warning", msg), 1, 0));
+			this.ui.requestRender();
+		}
+	}
+
+	private showBuddyStatsPanel(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
+		this.chatContainer.addChild(new Spacer(1));
+
+		const shinyMark = state.shiny ? " ✨ SHINY!" : "";
+		const header = theme.fg("accent", `╭─ ${state.name} ${shinyMark} ─────────────────────────╮`);
+		const footer = theme.fg("accent", `╰──────────────────────────────────╯`);
+
+		const statLines = (Object.values(Stat) as Stat[]).map((s) => {
+			const val = state.stats[s];
+			const filled = Math.round(val / 10);
+			const empty = 10 - filled;
+			const bar = "█".repeat(filled) + "░".repeat(empty);
+			const color: "success" | "warning" | "error" = val >= 70 ? "success" : val >= 40 ? "warning" : "error";
+			return theme.fg("muted", `│ ${s.padEnd(12)}`) + theme.fg(color, bar) + theme.fg("muted", " │");
+		});
+
+		const personality = state.personality.replace(/\n/g, " ");
+		const backstory = state.backstory.replace(/\n/g, " ");
+		const lines = [
+			header,
+			theme.fg("muted", `│ Species:    `) + theme.bold(state.species),
+			theme.fg("muted", `│ Rarity:     `) + theme.fg(this.rarityColor(state.rarity), state.rarity),
+			theme.fg("muted", `│ Eyes:       ${state.eyeStyle}  Hat: ${state.hat || "none"}`),
+			theme.fg(
+				"muted",
+				`│ Hatched:    ${state.hatchedAt ? new Date(state.hatchedAt).toLocaleDateString() : "unknown"}`,
+			),
+			theme.fg("muted", `│ Re-rolls:   ${state.rerollCount}`),
+			"│",
+			theme.fg("muted", "│ Stats:"),
+			...statLines,
+			"│",
+			theme.fg("muted", `│ Personality: ${personality}`),
+			theme.fg("muted", `│ Backstory:  ${backstory}`),
+			footer,
+		].join("\n");
+
+		this.chatContainer.addChild(new Text(lines, 1, 0));
+		this.ui.requestRender();
+	}
+
+	private rarityColor(rarity: Rarity): "muted" | "success" | "accent" | "warning" | "error" {
+		switch (rarity) {
+			case Rarity.COMMON:
+				return "muted";
+			case Rarity.UNCOMMON:
+				return "success";
+			case Rarity.RARE:
+				return "accent";
+			case Rarity.EPIC:
+				return "warning";
+			case Rarity.LEGENDARY:
+				return "error";
+		}
+	}
+
+	private async triggerBuddyReaction(event: string): Promise<void> {
+		// Throttle: max 1 reaction per 60s
+		const now = Date.now();
+		if (now - this.lastReactionTime < InteractiveMode.REACTION_COOLDOWN_MS) return;
+
+		this.buddyComponent?.showThinking();
+		try {
+			const quip = await this.buddyManager.react(event);
+			this.buddyComponent?.hideThinking();
+			if (quip && this.buddyComponent) {
+				this.lastReactionTime = now;
+				this.buddyComponent.showSpeech(quip);
+			}
+		} catch {
+			this.buddyComponent?.hideThinking();
+		}
+	}
+
+	private async handleBuddyNameCall(userMessage: string, recentContext: string): Promise<void> {
+		if (!this.buddyComponent) return;
+
+		this.buddyComponent.showThinking();
+		try {
+			const response = await this.buddyManager.respondToNameCall(userMessage, recentContext);
+			this.buddyComponent.hideThinking();
+			if (response) {
+				this.buddyComponent.showSpeech(response);
+			}
+		} catch {
+			this.buddyComponent.hideThinking();
+		}
+	}
+
+	private appendBuddyContext(entry: string): void {
+		this.buddyContextBuffer.push(entry);
+		if (this.buddyContextBuffer.length > InteractiveMode.BUDDY_CONTEXT_MAX_ENTRIES) {
+			this.buddyContextBuffer.shift();
+		}
+	}
+
+	private buildBuddyContext(): string {
+		if (this.buddyContextBuffer.length === 0) {
+			return "No recent activity.";
+		}
+		return this.buddyContextBuffer.join("\n");
+	}
+
+	private resetBuddyIdleTimer(): void {
+		if (this.buddyIdleTimer) {
+			clearTimeout(this.buddyIdleTimer);
+		}
+		this.buddyIdleTimer = setTimeout(() => {
+			if (this.buddyComponent) {
+				const ctx = this.buildBuddyContext();
+				this.triggerBuddyReaction(`It's been quiet for a moment. Recent activity:\n${ctx}`).catch(() => {});
+			}
+		}, InteractiveMode.BUDDY_IDLE_MS);
+	}
+
+	private playHatchAnimation(): Promise<void> {
+		return new Promise((resolve) => {
+			// Frame 1: egg
+			this.chatContainer.addChild(new Text(theme.fg("accent", "🥚 ..."), 1, 0));
+			this.ui.requestRender();
+
+			setTimeout(() => {
+				// Frame 2: cracking
+				this.chatContainer.addChild(new Text(theme.fg("accent", "🥚 *crack*"), 1, 0));
+				this.ui.requestRender();
+
+				setTimeout(() => {
+					resolve();
+				}, 1000);
+			}, 1000);
+		});
+	}
+
 	stop(): void {
+		if (this.buddyIdleTimer) {
+			clearTimeout(this.buddyIdleTimer);
+			this.buddyIdleTimer = null;
+		}
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
 		}
+		this.removeBuddy();
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();

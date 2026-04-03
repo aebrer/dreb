@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `/buddy` terminal companion — an ASCII art companion that lives alongside you during coding sessions. 18 species with rarity tiers, deterministic generation via seeded PRNG, LLM-generated personality and backstory, Ollama-powered speech bubble reactions to tool errors and session events, idle timer reactions, name-call detection, pet hearts animation, and stat display. Companion state persists across sessions. ([#98](https://github.com/aebrer/dreb/issues/98))
+
 - Added skill system enhancements: `argument-hint` frontmatter field shown in `/` menu autocomplete, `user-invocable` field to hide skills from the `/` menu while keeping them available to the model, `disable-model-invocation` field to restrict skills to user-only invocation, and a dedicated `skill` tool for model-invocable skill execution with full content substitution (`$ARGUMENTS`, `$0`..`$N`, `$@`, `${@:N}`, `${DREB_SKILL_DIR}`, `${DREB_SESSION_ID}`) ([#7](https://github.com/aebrer/dreb/issues/7))
 - Added `sessionDir` setting support in global and project `settings.json` so session storage can be configured without passing `--session-dir` on every invocation ([#2598](https://github.com/badlogic/pi-mono/pull/2598) by [@smcllns](https://github.com/smcllns))
 
