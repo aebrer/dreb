@@ -82,6 +82,34 @@ describe("isForbiddenCommand", () => {
 		});
 	});
 
+	describe("git commit --no-verify (bypass pre-commit hooks)", () => {
+		const NO_VERIFY_PATTERN = "^git\\s+commit.*--no-verify";
+
+		it("blocks git commit --no-verify", () => {
+			expect(isForbiddenCommand('git commit -m "msg" --no-verify')).toBe(NO_VERIFY_PATTERN);
+		});
+
+		it("blocks git commit --no-verify -m msg", () => {
+			expect(isForbiddenCommand('git commit --no-verify -m "msg"')).toBe(NO_VERIFY_PATTERN);
+		});
+
+		it("blocks git commit --no-verify after &&", () => {
+			expect(isForbiddenCommand('npm run build && git commit --no-verify -m "msg"')).toBe(NO_VERIFY_PATTERN);
+		});
+
+		it("allows git commit without --no-verify", () => {
+			expect(isForbiddenCommand('git commit -m "msg"')).toBeUndefined();
+		});
+
+		it("allows git commit --allow-empty", () => {
+			expect(isForbiddenCommand('git commit --allow-empty -m "msg"')).toBeUndefined();
+		});
+
+		it("does not false-positive on grep for --no-verify", () => {
+			expect(isForbiddenCommand("grep --no-verify config.txt")).toBeUndefined();
+		});
+	});
+
 	describe("command chaining (&&, ||, ;, |)", () => {
 		it("blocks dangerous command after && ", () => {
 			expect(isForbiddenCommand("cd /tmp && git push --force")).toBe("^git push.*(-f\\b|--force)");

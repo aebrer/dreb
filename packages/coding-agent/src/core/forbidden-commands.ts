@@ -23,6 +23,7 @@ const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
 	"^git push.*(-f\\b|--force)", // force push (includes --force-with-lease)
 	"^gh api.*bypass", // API calls with bypass flag
 	"^(?:export\\s+)?HUSKY=0", // bypass pre-commit hooks (anchored with optional export prefix)
+	"^git\\s+commit.*--no-verify", // bypass pre-commit hooks via --no-verify flag
 ];
 
 /**
