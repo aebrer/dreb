@@ -15,10 +15,15 @@ const TEST_DIR = join(tmpdir(), "dreb-buddy-controller-test");
 
 /** Create a BuddyController with mock callbacks for testing */
 function createTestController(config?: { activityGateMs?: number; reactionsPerHour?: number }) {
+	const onHatch = vi.fn();
+	const onReroll = vi.fn();
+
 	const callbacks: BuddyCallbacks = {
 		onSpeech: vi.fn(),
 		onThinkingStart: vi.fn(),
 		onThinkingEnd: vi.fn(),
+		onHatch,
+		onReroll,
 	};
 
 	const manager = new BuddyManager();
@@ -444,11 +449,12 @@ describe("handleCommand", () => {
 		}
 	});
 
-	it("should return error for hatch with no model", async () => {
-		const { controller } = createTestController();
+	it("should return error for hatch when onHatch throws", async () => {
+		const { controller, callbacks } = createTestController();
+		(callbacks.onHatch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("No model available"));
 		const result = await controller.handleCommand("");
 		expect(result.type).toBe("error");
-		if (result.type === "error") expect(result.message).toContain("No model");
+		if (result.type === "error") expect(result.message).toContain("No model available");
 	});
 
 	it("should return off result and mark buddy invisible", async () => {

@@ -27,7 +27,7 @@ async function reconnectUsers(config: import("./config.js").Config): Promise<voi
 		}
 
 		try {
-			const userState = getUserState(userId);
+			const userState = getUserState(userId, config);
 			const bridge = await ensureBridge(config, userState);
 			const switched = await bridge.switchSession(sessionPath);
 			if (switched) {
@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 
 	// Refresh command menu with dynamic skill commands from the first available bridge
 	for (const userId of config.allowedUserIds) {
-		const userState = getUserState(userId);
+		const userState = getUserState(userId, config);
 		if (userState.bridge?.isAlive) {
 			await refreshCommandsWithSkills(bot, userState.bridge);
 			break; // Only need one bridge to query skills

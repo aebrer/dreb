@@ -419,6 +419,39 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				return success(id, "get_available_models", { models });
 			}
 
+			case "buddy_hatch": {
+				const model = session.model;
+				if (!model) {
+					return error(id, "buddy_hatch", "No model available. Set a model first.");
+				}
+				const apiKey = await session.modelRegistry.getApiKey(model);
+				if (!apiKey) {
+					return error(id, "buddy_hatch", "No API key available for the current model.");
+				}
+				const { BuddyManager } = await import("../../core/buddy/buddy-manager.js");
+				const manager = new BuddyManager();
+				const state = await manager.hatch(model, apiKey);
+				return success(id, "buddy_hatch", { state });
+			}
+
+			case "buddy_reroll": {
+				const model = session.model;
+				if (!model) {
+					return error(id, "buddy_reroll", "No model available. Set a model first.");
+				}
+				const apiKey = await session.modelRegistry.getApiKey(model);
+				if (!apiKey) {
+					return error(id, "buddy_reroll", "No API key available for the current model.");
+				}
+				const { BuddyManager } = await import("../../core/buddy/buddy-manager.js");
+				const manager = new BuddyManager();
+				if (!manager.hasStoredBuddy()) {
+					return error(id, "buddy_reroll", "No buddy to reroll. Use hatch first.");
+				}
+				const state = await manager.reroll(model, apiKey);
+				return success(id, "buddy_reroll", { state });
+			}
+
 			// =================================================================
 			// Thinking
 			// =================================================================

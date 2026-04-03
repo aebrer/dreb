@@ -85,6 +85,7 @@ function createApi() {
 function createUserState(overrides?: Partial<UserState>): UserState {
 	return {
 		bridge: null,
+		config: { botToken: "test", allowedUserIds: [], workingDir: "/tmp", drebPath: "dreb", serviceName: "test" },
 		promptInFlight: false,
 		newSessionFlag: false,
 		newSessionCwd: null,

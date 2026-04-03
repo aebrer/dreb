@@ -2,9 +2,7 @@
  * /buddy command — manage the buddy companion in Telegram.
  */
 
-import { getEnvApiKey } from "@dreb/ai";
 import type { Context } from "grammy";
-import { ensureBridgeWithSession } from "../bridge-lifecycle.js";
 import type { Config } from "../config.js";
 import { createTelegramBuddyController, formatBuddyHatch, formatBuddyStats } from "../handlers/buddy.js";
 import { enqueueSend } from "../handlers/message.js";
@@ -20,14 +18,15 @@ import { safeSend } from "../util/telegram.js";
  * @param api — grammy Api for chat actions
  * @param userState — per-user state (controller stored here)
  * @param chatId — Telegram chat ID (private chat = user ID)
+ * @param config — bot config (for bridge resolution in hatch/reroll)
  */
-export function ensureBuddyController(api: any, userState: UserState, chatId: number): void {
+export function ensureBuddyController(api: any, userState: UserState, chatId: number, config: Config): void {
 	if (userState.buddyController) return;
 
 	const send = (text: string, long?: boolean) => {
 		enqueueSend(api, userState, chatId, text, long);
 	};
-	userState.buddyController = createTelegramBuddyController(send, api, chatId);
+	userState.buddyController = createTelegramBuddyController(send, api, chatId, config, userState);
 }
 
 export async function cmdBuddy(ctx: Context, config: Config, userState: UserState): Promise<void> {
@@ -35,35 +34,22 @@ export async function cmdBuddy(ctx: Context, config: Config, userState: UserStat
 	const args = (ctx.match as string)?.trim() ?? "";
 	const subcommand = args.split(/\s+/)[0]?.toLowerCase() ?? "";
 
-	// Ensure bridge for model/apiKey access
-	let model: any;
-	let apiKey: string | undefined;
-	try {
-		const bridge = await ensureBridgeWithSession(config, userState);
-		const state = await bridge.getState();
-		model = state?.model;
-		if (model?.provider) {
-			apiKey = getEnvApiKey(model.provider);
-		}
-	} catch {
-		// Bridge might not be needed for all subcommands (e.g. pet, stats)
-	}
-
 	// Ensure buddy controller exists
-	ensureBuddyController(ctx.api, userState, chatId);
+	ensureBuddyController(ctx.api, userState, chatId, config);
 
 	const controller = userState.buddyController;
-	const result = await controller.handleCommand(subcommand, model, apiKey);
+	const result = await controller.handleCommand(subcommand);
 
 	switch (result.type) {
 		case "hatch":
 		case "reroll": {
+			// Reload manager state after RPC hatch/reroll changed buddy.json
+			controller.manager.load();
 			await safeSend(ctx.api, chatId, formatBuddyHatch(result.state));
-			// Heart reaction on the command message
 			try {
 				await ctx.api.setMessageReaction(chatId, ctx.message!.message_id, [{ type: "emoji", emoji: "❤" }]);
 			} catch {
-				// Reactions not available in all chats
+				/* Reactions not available in all chats */
 			}
 			break;
 		}

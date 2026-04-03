@@ -237,7 +237,7 @@ export function sendPrompt(
 
 	// Buddy: auto-init controller (loads from shared buddy.json)
 	if (!userState.buddyController) {
-		ensureBuddyController(api, userState, opts.chatId);
+		ensureBuddyController(api, userState, opts.chatId, userState.config);
 	}
 
 	// Name-call interception: if the message contains the buddy's name,

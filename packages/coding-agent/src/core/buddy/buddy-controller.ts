@@ -24,6 +24,10 @@ export interface BuddyCallbacks {
 	onThinkingStart: () => void;
 	/** Hide the thinking/loading indicator */
 	onThinkingEnd: () => void;
+	/** Hatch a new buddy — frontend resolves API key and calls manager.hatch() */
+	onHatch: (manager: BuddyManager) => Promise<BuddyState>;
+	/** Reroll the buddy — frontend resolves API key and calls manager.reroll() */
+	onReroll: (manager: BuddyManager) => Promise<BuddyState>;
 }
 
 /** Configuration for buddy behavior — differs between TUI and Telegram */
@@ -321,9 +325,9 @@ export class BuddyController {
 
 	/**
 	 * Handle a /buddy command. Returns a result object for the frontend to render.
-	 * Requires model and apiKey for hatch/reroll operations.
+	 * Hatch/reroll are delegated to the frontend via onHatch/onReroll callbacks.
 	 */
-	async handleCommand(subcommand: string, model?: any, apiKey?: string): Promise<BuddyCommandResult> {
+	async handleCommand(subcommand: string): Promise<BuddyCommandResult> {
 		switch (subcommand) {
 			case "pet": {
 				if (!this.manager.getState()) {
@@ -335,12 +339,9 @@ export class BuddyController {
 				if (!this.manager.hasStoredBuddy()) {
 					return { type: "warning", message: "No buddy to reroll! Use /buddy to hatch one first." };
 				}
-				if (!model || !apiKey) {
-					return { type: "error", message: "No model available. Set a model first." };
-				}
 				this.callbacks.onThinkingStart();
 				try {
-					const state = await this.manager.reroll(model, apiKey);
+					const state = await this.callbacks.onReroll(this.manager);
 					this.callbacks.onThinkingEnd();
 					this.enabled = true;
 					return { type: "reroll", state };
@@ -366,6 +367,7 @@ export class BuddyController {
 				// No subcommand: hatch or show
 				if (this.manager.getState()) {
 					// Already showing — just enable and return
+					this.manager.setVisible(true);
 					this.enabled = true;
 					return { type: "show", state: this.manager.getState()! };
 				}
@@ -373,17 +375,15 @@ export class BuddyController {
 				// Try to load existing buddy
 				const existing = this.manager.load();
 				if (existing) {
+					this.manager.setVisible(true);
 					this.enabled = true;
 					return { type: "show", state: existing };
 				}
 
 				// Hatch new buddy
-				if (!model || !apiKey) {
-					return { type: "error", message: "No model available. Set a model first." };
-				}
 				this.callbacks.onThinkingStart();
 				try {
-					const hatchState = await this.manager.hatch(model, apiKey);
+					const hatchState = await this.callbacks.onHatch(this.manager);
 					this.callbacks.onThinkingEnd();
 					this.enabled = true;
 					return { type: "hatch", state: hatchState };

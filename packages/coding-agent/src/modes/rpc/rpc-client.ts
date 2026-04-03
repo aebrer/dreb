@@ -253,6 +253,24 @@ export class RpcClient {
 	}
 
 	/**
+	 * Hatch a new buddy companion. Runs inside the agent process
+	 * so API keys never leave the process boundary.
+	 */
+	async buddyHatch(): Promise<import("../../core/buddy/buddy-types.js").BuddyState> {
+		const response = await this.send({ type: "buddy_hatch" });
+		return this.getData<{ state: import("../../core/buddy/buddy-types.js").BuddyState }>(response).state;
+	}
+
+	/**
+	 * Reroll the buddy companion. Runs inside the agent process
+	 * so API keys never leave the process boundary.
+	 */
+	async buddyReroll(): Promise<import("../../core/buddy/buddy-types.js").BuddyState> {
+		const response = await this.send({ type: "buddy_reroll" });
+		return this.getData<{ state: import("../../core/buddy/buddy-types.js").BuddyState }>(response).state;
+	}
+
+	/**
 	 * Set thinking level.
 	 */
 	async setThinkingLevel(level: ThinkingLevel): Promise<void> {

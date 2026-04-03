@@ -3,6 +3,7 @@
  */
 
 import type { AgentBridge } from "./agent-bridge.js";
+import type { Config } from "./config.js";
 
 /** Tracked background agent */
 export interface TrackedAgent {
@@ -16,6 +17,8 @@ export interface TrackedAgent {
 export interface UserState {
 	/** Active agent bridge (RPC process) */
 	bridge: AgentBridge | null;
+	/** Bot config — needed by buddy controller for RPC hatch/reroll */
+	config: Config;
 	/** Covers the race window between prompt() call and agent_start event */
 	promptInFlight: boolean;
 	/** Flag to start a fresh session on next message */

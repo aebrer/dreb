@@ -269,6 +269,20 @@ export class InteractiveMode {
 				onThinkingEnd: () => {
 					this.buddyComponent?.hideThinking();
 				},
+				onHatch: async (manager) => {
+					const model = this.session.model;
+					if (!model) throw new Error("No model available. Set a model first.");
+					const apiKey = await this.session.modelRegistry.getApiKey(model);
+					if (!apiKey) throw new Error("No API key available for the current model.");
+					return manager.hatch(model, apiKey);
+				},
+				onReroll: async (manager) => {
+					const model = this.session.model;
+					if (!model) throw new Error("No model available. Set a model first.");
+					const apiKey = await this.session.modelRegistry.getApiKey(model);
+					if (!apiKey) throw new Error("No API key available for the current model.");
+					return manager.reroll(model, apiKey);
+				},
 			},
 			{ idleTimeoutMs: 30000, reactionCooldownMs: 60000, contextMaxEntries: 20 },
 		);
@@ -4656,10 +4670,18 @@ export class InteractiveMode {
 
 	private async handleBuddyCommand(subcommand: string): Promise<void> {
 		try {
-			const model = this.session.model;
-			const apiKey = model ? await this.session.modelRegistry.getApiKey(model) : undefined;
+			// Show "hatching/rerolling..." animation BEFORE the LLM call
+			// so the user sees feedback while waiting
+			const needsAnimation = subcommand === "reroll" || subcommand === "";
+			let finishAnimation: (() => void) | undefined;
+			if (needsAnimation) {
+				finishAnimation = this.startHatchAnimation(subcommand === "reroll" ? "reroll" : "hatch");
+			}
 
-			const result = await this.buddyController.handleCommand(subcommand, model, apiKey);
+			const result = await this.buddyController.handleCommand(subcommand);
+
+			// Stop animation before showing the result
+			finishAnimation?.();
 
 			switch (result.type) {
 				case "pet": {
@@ -4830,6 +4852,36 @@ export class InteractiveMode {
 				}, 1000);
 			}, 1000);
 		});
+	}
+
+	/** Start hatch/reroll animation — returns a cleanup function to stop it */
+	private startHatchAnimation(kind: "hatch" | "reroll"): () => void {
+		const label = kind === "reroll" ? "rerolling..." : "hatching...";
+		const frames = [
+			theme.fg("accent", `🥚 ${label}`),
+			theme.fg("accent", `🥚 *crack* ${label}`),
+			theme.fg("warning", `✨ almost...`),
+		];
+
+		let frame = 0;
+		const text = new Text(frames[0], 1, 0);
+		this.chatContainer.addChild(text);
+		this.ui.requestRender();
+
+		const interval = setInterval(() => {
+			frame++;
+			if (frame < frames.length) {
+				text.setText(frames[frame]);
+				this.ui.requestRender();
+			}
+		}, 1000);
+
+		return () => {
+			clearInterval(interval);
+			// Remove the animation text — real result will replace it
+			const idx = this.chatContainer.children.indexOf(text);
+			if (idx !== -1) this.chatContainer.children.splice(idx, 1);
+		};
 	}
 
 	stop(): void {

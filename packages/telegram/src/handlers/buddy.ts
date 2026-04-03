@@ -6,6 +6,9 @@
 import type { BuddyCallbacks, BuddyState } from "@dreb/coding-agent/buddy";
 import { BuddyController, BuddyManager, STAT_NAMES, type Stat } from "@dreb/coding-agent/buddy";
 import type { Api } from "grammy";
+import { ensureBridgeWithSession } from "../bridge-lifecycle.js";
+import type { Config } from "../config.js";
+import type { UserState } from "../types.js";
 import type { SendFn } from "./events.js";
 
 // ---------------------------------------------------------------------------
@@ -116,8 +119,16 @@ export function formatBuddySpeech(name: string, species: string, text: string): 
  * @param send — outbox send function (enqueueSend) for reliable delivery
  * @param api — grammy Api instance for chat actions and reactions
  * @param chatId — Telegram chat ID for this user
+ * @param config — bot config (for bridge resolution in hatch/reroll)
+ * @param userState — per-user state (for bridge resolution in hatch/reroll)
  */
-export function createTelegramBuddyController(send: SendFn, api: Api, chatId: number): BuddyController {
+export function createTelegramBuddyController(
+	send: SendFn,
+	api: Api,
+	chatId: number,
+	config: Config,
+	userState: UserState,
+): BuddyController {
 	const manager = new BuddyManager();
 
 	const callbacks: BuddyCallbacks = {
@@ -133,6 +144,14 @@ export function createTelegramBuddyController(send: SendFn, api: Api, chatId: nu
 		},
 		onThinkingEnd(): void {
 			// No-op — can't cancel a chat action in Telegram
+		},
+		async onHatch(_mgr): Promise<BuddyState> {
+			const bridge = await ensureBridgeWithSession(config, userState);
+			return bridge.buddyHatch();
+		},
+		async onReroll(_mgr): Promise<BuddyState> {
+			const bridge = await ensureBridgeWithSession(config, userState);
+			return bridge.buddyReroll();
 		},
 	};
 
