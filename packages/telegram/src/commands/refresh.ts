@@ -22,7 +22,7 @@ export const STATIC_COMMANDS: Array<{ command: string; description: string }> = 
 	{ command: "thinking", description: "View/set thinking level" },
 	{ command: "agents", description: "Background subagents" },
 	{ command: "cwd", description: "Working directory" },
-	{ command: "stop", description: "Interrupt & clear queue" },
+	{ command: "stop", description: "Interrupt current task" },
 	{ command: "restart", description: "Restart the bot" },
 ];
 

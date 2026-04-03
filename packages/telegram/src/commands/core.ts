@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import type { Api, Context } from "grammy";
 import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
-import { log, safeDelete, safeSend } from "../util/telegram.js";
+import { log, safeSend } from "../util/telegram.js";
 
 export async function cmdStart(ctx: Context): Promise<void> {
 	await ctx.reply(
@@ -30,7 +30,7 @@ export async function cmdStart(ctx: Context): Promise<void> {
 			"/thinking \\[level\\] — View/set thinking\n" +
 			"/skills — List available skills\n\n" +
 			"*Control:*\n" +
-			"/stop — Interrupt & clear queue\n" +
+			"/stop — Interrupt current task\n" +
 			"/restart — Restart the bot",
 		{ parse_mode: "Markdown" },
 	);
@@ -98,22 +98,8 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 	}
 }
 
-export async function cmdStop(ctx: Context, api: Api, userState: UserState): Promise<void> {
-	const queuedCount = userState.queue.length;
-
-	// Clear queue and clean up status messages
-	for (const item of userState.queue) {
-		if (item.statusMessage) {
-			await safeDelete(api, item.statusMessage.chat_id, item.statusMessage.message_id);
-		}
-	}
-	userState.queue = [];
+export async function cmdStop(ctx: Context, _api: Api, userState: UserState): Promise<void> {
 	userState.stopRequested = true;
-
-	// Signal the current processItem to resolve immediately
-	if (userState.currentAbort) {
-		userState.currentAbort.abort();
-	}
 
 	// Abort current agent activity — like pressing Esc in the TUI.
 	// This stops the agent, not the bridge. Session stays connected.
@@ -122,8 +108,7 @@ export async function cmdStop(ctx: Context, api: Api, userState: UserState): Pro
 	}
 
 	const parts: string[] = [];
-	if (userState.processing || userState.bridge?.isStreaming) parts.push("interrupted current task");
-	if (queuedCount > 0) parts.push(`cleared ${queuedCount} queued message(s)`);
+	if (userState.bridge?.isStreaming || userState.promptInFlight) parts.push("interrupted current task");
 	await ctx.reply(parts.length > 0 ? `🛑 Stopped — ${parts.join(", ")}.` : "🛑 Stopped.");
 }
 

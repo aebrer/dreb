@@ -7,7 +7,7 @@ import type { Api, Context } from "grammy";
 import type { UserState } from "../types.js";
 import { saveUpload, setPendingBatches } from "../util/files.js";
 import { log, safeSend } from "../util/telegram.js";
-import { enqueuePrompt } from "./message.js";
+import { sendPrompt } from "./message.js";
 
 /** Pending file batch */
 interface FileBatch {
@@ -113,19 +113,19 @@ async function flushBatch(key: string, api: Api, getUserState: (userId: number) 
 
 	log(`[FILE] Flushing batch: ${n} file(s) for user ${batch.userId}`);
 
-	// Enqueue BEFORE any async operations — prevents cleanupUploads race where
-	// the queue's finally block could delete upload files during an await yield
-	enqueuePrompt(api, userState, {
-		message: { chat: { id: batch.chatId }, message_id: batch.replyToId, from: { id: batch.userId } } as any,
+	// Send BEFORE any async operations — prevents cleanupUploads race
+	sendPrompt(api, userState, {
+		chatId: batch.chatId,
+		replyToId: batch.replyToId,
+		userId: batch.userId,
 		prompt,
-		statusMessage: batch.statusMessageId ? { chat_id: batch.chatId, message_id: batch.statusMessageId } : null,
-		wasQueued: userState.processing,
+		statusMessageId: batch.statusMessageId,
 	});
 
-	// Update status (non-critical, after enqueue)
+	// Update status (non-critical, after send)
 	if (batch.statusMessageId) {
-		const isBusy = userState.processing;
-		const indicator = isBusy ? "📋 _Queued..._" : "🧠 _Processing..._";
+		const isBusy = userState.bridge?.isStreaming || userState.promptInFlight;
+		const indicator = isBusy ? "↩️ _Steering..._" : "🧠 _Processing..._";
 		const status =
 			n === 1
 				? `📥 Downloaded: \`${fileNames}\`\n${indicator}`

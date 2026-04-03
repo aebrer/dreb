@@ -58,6 +58,30 @@ describe("isForbiddenCommand", () => {
 		});
 	});
 
+	describe("HUSKY=0 (bypass pre-commit hooks)", () => {
+		const HUSKY_PATTERN = "^(?:export\\s+)?HUSKY=0";
+
+		it("blocks HUSKY=0 as env prefix", () => {
+			expect(isForbiddenCommand('HUSKY=0 git commit -m "msg"')).toBe(HUSKY_PATTERN);
+		});
+
+		it("blocks HUSKY=0 in compound command", () => {
+			expect(isForbiddenCommand("cd repo && HUSKY=0 git commit -m fix")).toBe(HUSKY_PATTERN);
+		});
+
+		it("blocks export HUSKY=0", () => {
+			expect(isForbiddenCommand("export HUSKY=0")).toBe(HUSKY_PATTERN);
+		});
+
+		it("allows grep for HUSKY=0 in files (no false positive)", () => {
+			expect(isForbiddenCommand("grep HUSKY=0 .husky/pre-commit")).toBeUndefined();
+		});
+
+		it("allows git log searching for HUSKY=0", () => {
+			expect(isForbiddenCommand('git log --grep="HUSKY=0"')).toBeUndefined();
+		});
+	});
+
 	describe("command chaining (&&, ||, ;, |)", () => {
 		it("blocks dangerous command after && ", () => {
 			expect(isForbiddenCommand("cd /tmp && git push --force")).toBe("^git push.*(-f\\b|--force)");

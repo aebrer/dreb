@@ -10,7 +10,10 @@ import type { Api } from "grammy";
 import { InputFile } from "grammy";
 import type { TrackedAgent } from "../types.js";
 import { extractSendFiles } from "../util/files.js";
-import { DebouncedEditor, log, safeDelete, safeSend, sendLong } from "../util/telegram.js";
+import { DebouncedEditor, log, safeDelete } from "../util/telegram.js";
+
+/** Callback to queue a message for delivery — never blocks the event chain */
+export type SendFn = (text: string, long?: boolean) => void;
 
 /**
  * RPC events include both core AgentEvent and session-specific events
@@ -104,11 +107,12 @@ export interface EventDisplayState {
 	backgroundAgents: Map<string, TrackedAgent>;
 	/** Whether agent has finished */
 	done: boolean;
-
 	/** Debounced editor instance */
 	editor: DebouncedEditor;
-	/** Whether auto-retry is in progress (Layer 1: reactive) */
+	/** Whether auto-retry is in progress (Layer 1: reactive — set by auto_retry_start) */
 	retryInProgress: boolean;
+	/** Whether a retry is expected (Layer 2: predictive — set by agent_end when error looks retryable) */
+	pendingRetry: boolean;
 	/** Current retry attempt number for display */
 	retryAttempt: number;
 }
@@ -145,6 +149,7 @@ export function createEventDisplay(
 		done: false,
 		editor: new DebouncedEditor(api),
 		retryInProgress: false,
+		pendingRetry: false,
 		retryAttempt: 0,
 	};
 }
@@ -152,7 +157,12 @@ export function createEventDisplay(
 /**
  * Process an agent event and update the display.
  */
-export async function handleAgentEvent(api: Api, state: EventDisplayState, event: RpcEvent): Promise<void> {
+export async function handleAgentEvent(
+	send: SendFn,
+	api: Api,
+	state: EventDisplayState,
+	event: RpcEvent,
+): Promise<void> {
 	switch (event.type) {
 		case "tool_execution_start": {
 			const name = event.toolName || "?";
@@ -171,8 +181,44 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 		}
 
 		case "message_end": {
-			// Only display assistant messages — user messages are echoed back by RPC
 			const msg = event.message;
+
+			// Show subagent results — the parent agent references these but the
+			// Telegram user can't see them otherwise. Send the full content.
+			if (msg?.role === "toolResult" && msg?.toolName === "subagent") {
+				const content = msg?.content;
+				if (content && Array.isArray(content)) {
+					for (const block of content) {
+						if (block.type === "text" && block.text?.trim()) {
+							send(`🤖 *Subagent result:*\n${block.text.trim()}`, true);
+						}
+					}
+				}
+				break;
+			}
+
+			// Show background agent completion results — these arrive as user
+			// messages injected by agent-session.ts via prompt()/steer() and
+			// contain the actual subagent output the model sees.
+			if (msg?.role === "user") {
+				const content = msg?.content;
+				if (content && Array.isArray(content)) {
+					for (const block of content) {
+						if (block.type === "text" && block.text?.includes("<background-agent-complete>")) {
+							// Extract the content between the XML tags
+							const match = block.text.match(
+								/<background-agent-complete>\n?([\s\S]*?)\n?<\/background-agent-complete>/,
+							);
+							if (match?.[1]?.trim()) {
+								send(`🤖 *Background agent complete:*\n${match[1].trim()}`, true);
+							}
+						}
+					}
+				}
+				break;
+			}
+
+			// Only display assistant messages — user messages are echoed back by RPC
 			if (msg?.role !== "assistant") break;
 			const content = msg?.content;
 			if (!content || !Array.isArray(content)) break;
@@ -181,9 +227,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 				// Display thinking blocks (collapsed summary)
 				if (block.type === "thinking" && block.thinking?.trim() && !block.redacted) {
 					const thinking = block.thinking.trim();
-					// Show a brief summary — full thinking would be overwhelming on mobile
-					const preview = thinking.length > 300 ? `${thinking.slice(0, 300)}…` : thinking;
-					await safeSend(api, state.chatId, `💭 _${preview}_`);
+					send(`💭 _${thinking}_`, true);
 				}
 
 				if (block.type === "text" && block.text?.trim()) {
@@ -192,7 +236,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 					// Flush accumulated tools as permanent summary
 					if (state.toolsSinceText.length > 0) {
 						const summary = `📋 *${state.toolsSinceText.length} tools*:\n${state.toolsSinceText.join("\n")}`;
-						await safeSend(api, state.chatId, summary.slice(0, 4000));
+						send(summary, true);
 						state.toolsSinceText = [];
 					}
 
@@ -202,7 +246,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 					// Check for file send markers
 					const [cleanText, filePaths] = extractSendFiles(text);
 					if (cleanText) {
-						await sendLong(api, state.chatId, cleanText);
+						send(cleanText, true);
 					}
 
 					// Send any requested files (silently skip non-existent paths —
@@ -258,7 +302,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			if (result) {
 				const before = result.tokensBefore || 0;
 				const msg = `🗜 Context compacted (was ${Math.round(before / 1000)}k tokens)`;
-				await safeSend(api, state.chatId, msg);
+				send(msg);
 			}
 			break;
 		}
@@ -270,6 +314,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 		case "auto_retry_start": {
 			const { attempt, maxAttempts, delayMs, errorMessage } = event as any;
 			state.retryInProgress = true;
+			state.pendingRetry = false; // Layer 1 has taken over from Layer 2
 			state.retryAttempt = attempt;
 			const delaySec = Math.round(delayMs / 1000);
 			const shortErr = errorMessage?.length > 80 ? `${errorMessage.slice(0, 80)}…` : errorMessage;
@@ -283,7 +328,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			state.retryAttempt = 0;
 			if (!success && finalError) {
 				// Max retries exhausted — show final error
-				await safeSend(api, state.chatId, `❌ _Retry failed (${attempt} attempts):_ ${finalError.slice(0, 400)}`);
+				send(`❌ _Retry failed (${attempt} attempts):_ ${finalError}`, true);
 			}
 			// On success, the retry's agent_start/agent_end cycle will handle display normally
 			break;
@@ -293,7 +338,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			// Flush any remaining tools
 			if (state.toolsSinceText.length > 0) {
 				const summary = `📋 *${state.toolsSinceText.length} tools*:\n${state.toolsSinceText.join("\n")}`;
-				await safeSend(api, state.chatId, summary.slice(0, 4000));
+				send(summary, true);
 				state.toolsSinceText = [];
 			}
 
@@ -319,12 +364,12 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 						errLower.includes("connection") || errLower.includes("timeout") || errLower.includes("network")
 							? "\n_Provider may be down — try /model to switch._"
 							: "";
-					await safeSend(api, state.chatId, `❌ ${prefix}${errorMsg.errorMessage.slice(0, 400)}${hint}`);
+					send(`❌ ${prefix}${errorMsg.errorMessage}${hint}`, true);
 				}
 			} else if (state.textBlocks.length === 0 && state.backgroundAgents.size === 0) {
 				// Only show "(No response)" when truly done — not between agent cycles
 				if (!state.retryInProgress && !errorIsRetryable) {
-					await safeSend(api, state.chatId, "(No response)");
+					send("(No response)");
 				}
 			}
 
@@ -332,6 +377,10 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 			// looks retryable (Layer 2 — defensive catch in case events were missed).
 			// The core will emit a new agent_start/agent_end cycle for the retry.
 			if (state.retryInProgress || errorIsRetryable) {
+				// Signal that a retry is expected — the completion check in
+				// ensureSubscribed needs this because it runs in the eventChain
+				// BEFORE auto_retry_start has been processed.
+				if (errorIsRetryable) state.pendingRetry = true;
 				// Reset per-cycle state for the next agent loop
 				state.textBlocks = [];
 				state.toolCount = 0;
@@ -366,7 +415,7 @@ export async function handleAgentEvent(api: Api, state: EventDisplayState, event
 		case "response": {
 			const resp = event as any;
 			if (!resp.success && resp.error) {
-				await safeSend(api, state.chatId, `❌ ${resp.error.slice(0, 500)}`);
+				send(`❌ ${resp.error}`, true);
 			}
 			break;
 		}

@@ -122,13 +122,14 @@ export function registerCommands(bot: Bot, config: Config, getUserState: (userId
 			log(`[SKILL] Failed to send status: ${e}`);
 		}
 
-		// Import enqueuePrompt dynamically to avoid circular deps
-		const { enqueuePrompt } = await import("../handlers/message.js");
-		enqueuePrompt(ctx.api, userState, {
-			message: ctx.message!,
+		// Import sendPrompt dynamically to avoid circular deps
+		const { sendPrompt } = await import("../handlers/message.js");
+		sendPrompt(ctx.api, userState, {
+			chatId: ctx.chat!.id,
+			replyToId: ctx.message!.message_id,
+			userId: ctx.from!.id,
 			prompt,
-			statusMessage: statusMsg,
-			wasQueued: userState.processing,
+			statusMessageId: statusMsg?.message_id ?? null,
 		});
 	});
 }

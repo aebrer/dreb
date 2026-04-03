@@ -1,146 +1,282 @@
 /**
- * Message handler — queues user messages and processes them sequentially.
- * Only one agent prompt runs at a time per user.
+ * Message handler — sends user messages directly to the agent.
+ *
+ * Two paths (matching TUI parity):
+ * - **Steering**: agent is streaming → inject mid-run via steer()
+ * - **Normal**: agent is idle → create display, fire prompt, return
+ *
+ * Architecture:
+ * - Event chain processes events and pushes text to userState.outbox (never blocks on Telegram I/O)
+ * - Delivery loop drains outbox to Telegram independently, with retries on failure
+ * - Persistent event subscription per bridge handles DONE markers and session persistence
  */
 
 import type { Api } from "grammy";
+import type { AgentBridge } from "../agent-bridge.js";
 import { setUserSession } from "../state.js";
-import type { QueueItem, UserState } from "../types.js";
+import type { UserState } from "../types.js";
 import { cleanupUploads } from "../util/files.js";
-import { log, safeDelete, safeSend } from "../util/telegram.js";
+import { log, safeDelete, safeSend, sendLong } from "../util/telegram.js";
 import { createEventDisplay, type EventDisplayState, handleAgentEvent } from "./events.js";
 
-/**
- * Enqueue a prompt for processing. Starts the queue processor if not running.
- */
-export function enqueuePrompt(api: Api, userState: UserState, item: QueueItem): void {
-	userState.queue.push(item);
+// ---------------------------------------------------------------------------
+// Delivery loop — drains userState.outbox to Telegram, retries on failure
+// ---------------------------------------------------------------------------
 
-	if (!userState.processing) {
-		userState.processing = true;
-		void processQueue(api, userState);
-	}
-}
+const MAX_RETRIES = 5;
+const RETRY_DELAY = 2_000;
+
+/** Track which users have an active delivery loop */
+const activeDeliveryLoops = new WeakSet<UserState>();
 
 /**
- * Process the queue sequentially — one prompt at a time.
+ * Start draining the outbox. Runs independently of the event chain.
+ * Self-terminates when the outbox is empty; restarts on next push.
  */
-async function processQueue(api: Api, userState: UserState): Promise<void> {
+async function drainOutbox(api: Api, userState: UserState): Promise<void> {
+	if (activeDeliveryLoops.has(userState)) return; // already draining
+	activeDeliveryLoops.add(userState);
+
 	try {
-		while (userState.queue.length > 0) {
-			const item = userState.queue.shift()!;
-			userState.stopRequested = false;
+		while (userState.outbox.length > 0) {
+			const item = userState.outbox[0];
+			item.retries = (item.retries ?? 0) + 1;
 
-			if (item.wasQueued && item.message) {
-				await safeSend(api, item.message.chat.id, `📨 _Processing queued message:_ ${item.prompt.slice(0, 200)}`);
+			let success: boolean;
+			if (item.long) {
+				// sendLong returns remaining undelivered text (empty = all delivered).
+				// On partial failure, update item.text to only the undelivered tail
+				// so retries don't resend already-delivered chunks.
+				const remaining = await sendLong(api, item.chatId, item.text);
+				success = remaining === "";
+				if (!success) item.text = remaining;
+			} else {
+				const msgId = await safeSend(api, item.chatId, item.text);
+				success = msgId !== 0;
 			}
 
-			await processItem(api, userState, item);
+			if (success) {
+				userState.outbox.shift();
+			} else if (item.retries >= MAX_RETRIES) {
+				log(`[DELIVER] Giving up on message after ${MAX_RETRIES} retries: ${item.text.slice(0, 100)}`);
+				userState.outbox.shift();
+			} else {
+				// Retry after delay
+				await new Promise((r) => setTimeout(r, RETRY_DELAY));
+			}
 		}
 	} catch (e) {
-		log(`[QUEUE] Processor error: ${e}`);
+		log(`[DELIVER] Drain error: ${e}`);
 	} finally {
-		userState.processing = false;
-
-		// Clean up upload files after queue is fully drained
-		cleanupUploads();
+		activeDeliveryLoops.delete(userState);
 	}
 }
 
+/** Push a message to the outbox and kick the delivery loop */
+function enqueueSend(api: Api, userState: UserState, chatId: number, text: string, long?: boolean): void {
+	userState.outbox.push({ chatId, text, long });
+	void drainOutbox(api, userState);
+}
+
+// ---------------------------------------------------------------------------
+// Persistent event subscription
+// ---------------------------------------------------------------------------
+
+/** Track which bridges have a persistent event subscription */
+const subscribedBridges = new WeakSet<AgentBridge>();
+
+/** Current display state per user — swapped on each new prompt */
+const displays = new Map<UserState, EventDisplayState>();
+
+/** Track userId for session persistence (set by sendPrompt, used by completion handler) */
+const userIds = new Map<UserState, number>();
+
 /**
- * Process a single queue item — send prompt, wait for completion.
+ * Ensure a persistent event subscription exists for this bridge.
+ * Called once per bridge lifetime — handles all event delivery,
+ * DONE markers, session persistence, and cleanup.
  */
-async function processItem(api: Api, userState: UserState, item: QueueItem): Promise<void> {
+function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): void {
+	if (subscribedBridges.has(bridge)) return;
+	subscribedBridges.add(bridge);
+
+	// New bridge — clear stale state from any previous bridge
+	userState.promptInFlight = false;
+	displays.delete(userState);
+
+	let eventChain = Promise.resolve();
+	let parentAgentDone = false; // true after agent_end fires (even if BG agents still running)
+	let completionFired = false; // prevents double DONE when agent_end and background_agent_end race
+
+	/** Chain the completion sequence — session persist, cleanup, DONE marker */
+	function chainCompletion(display: EventDisplayState) {
+		if (completionFired) return;
+		completionFired = true;
+		eventChain = eventChain
+			.then(async () => {
+				// Persist session
+				if (bridge.isAlive) {
+					try {
+						await bridge.refreshSessionInfo();
+						const userId = userIds.get(userState);
+						if (bridge.sessionFile && userId) {
+							setUserSession(userId, bridge.sessionFile);
+						}
+					} catch (e) {
+						log(`[EVENT] Session refresh error: ${e}`);
+					}
+				}
+
+				cleanupUploads();
+
+				// DONE marker — only when truly idle and not stopped.
+				// Brief delay lets in-flight delivery (outbox drain) settle
+				// before DONE appears in the chat.
+				if (!bridge.isStreaming && !userState.stopRequested) {
+					await new Promise((r) => setTimeout(r, 150));
+					enqueueSend(api, userState, display.chatId, "🦀 _dreb DONE_");
+				}
+			})
+			.catch((e) => log(`[EVENT] Completion error: ${e}`));
+	}
+
+	bridge.onEvent((event) => {
+		// Capture display at event arrival time — even if a new prompt
+		// replaces the display later, this event uses the correct one.
+		const display = displays.get(userState);
+		if (!display) {
+			log(`[EVENT] No display for event: ${event.type} — dropped`);
+			return;
+		}
+
+		// Clear promptInFlight on first event after a prompt
+		if (userState.promptInFlight) {
+			userState.promptInFlight = false;
+		}
+
+		// Build a send callback that pushes to the outbox — captures chatId
+		// at event arrival time (same snapshot as display).
+		const send = (text: string, long?: boolean) => {
+			enqueueSend(api, userState, display.chatId, text, long);
+		};
+
+		// Queue event processing — the chain never blocks on Telegram I/O.
+		// handleAgentEvent pushes permanent messages to outbox via send(),
+		// only ephemeral operations (status edits, file sends) go inline.
+		eventChain = eventChain
+			.then(() => handleAgentEvent(send, api, display, event))
+			.catch((e) => log(`[EVENT] Error: ${e}`));
+
+		// Handle turn completion — checks run INSIDE the eventChain so they
+		// execute after handleAgentEvent has updated display state (e.g.
+		// retryInProgress set by auto_retry_start that arrives right after agent_end).
+		if (event.type === "agent_end") {
+			parentAgentDone = true;
+			eventChain = eventChain.then(() => {
+				if (userState.backgroundAgents.size > 0 || display.retryInProgress || display.pendingRetry) {
+					return;
+				}
+				chainCompletion(display);
+			});
+		}
+
+		// Re-trigger completion when the last BG agent finishes.
+		// agent_end already fired but skipped completion because BG agents were running.
+		// Now that the last one is done, finalize.
+		if (event.type === "background_agent_end") {
+			eventChain = eventChain.then(() => {
+				if (parentAgentDone && userState.backgroundAgents.size === 0 && !bridge.isStreaming) {
+					chainCompletion(display);
+				}
+			});
+		}
+
+		// Reset state when a new run starts (e.g. user sends another message)
+		if (event.type === "agent_start") {
+			parentAgentDone = false;
+			completionFired = false;
+		}
+	});
+}
+
+// ---------------------------------------------------------------------------
+// sendPrompt — steering vs normal path
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a prompt to the agent. If the agent is streaming, steers instead.
+ *
+ * Returns immediately — the persistent subscription handles event delivery.
+ */
+export function sendPrompt(
+	api: Api,
+	userState: UserState,
+	opts: {
+		chatId: number;
+		replyToId: number;
+		userId?: number;
+		prompt: string;
+		images?: Array<{ type: "image"; data: string; mimeType: string }>;
+		statusMessageId: number | null;
+	},
+): void {
 	const bridge = userState.bridge;
 	if (!bridge) {
-		log("[QUEUE] No bridge available");
-		if (item.statusMessage) {
-			await safeDelete(api, item.statusMessage.chat_id, item.statusMessage.message_id);
+		log("[PROMPT] No bridge available");
+		if (opts.statusMessageId) {
+			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
-		if (item.message) {
-			await safeSend(api, item.message.chat.id, "❌ No agent connection. Try sending your message again.");
-		}
+		void safeSend(api, opts.chatId, "❌ No agent connection. Try sending your message again.");
 		return;
 	}
 
-	const chatId = item.message!.chat.id;
-	const replyToId = item.message!.message_id;
+	// Ensure persistent subscription exists for this bridge
+	ensureSubscribed(api, userState, bridge);
 
-	// Create event display state
-	const display = createEventDisplay(api, chatId, replyToId, item.statusMessage?.message_id ?? null);
-
-	// Subscribe to events — serialize processing to prevent concurrent state mutations
-	let eventChain = Promise.resolve();
-	const unsubscribe = bridge.onEvent((event) => {
-		eventChain = eventChain
-			.then(() => handleAgentEvent(api, display, event))
-			.catch((e) => log(`[EVENT] Error: ${e}`));
-	});
-
-	// Create an abort controller for this item — /stop can signal it
-	const abort = new AbortController();
-	userState.currentAbort = abort;
-
-	try {
-		// Send the prompt
-		await bridge.prompt(item.prompt, item.images);
-
-		// Wait for completion — resolved by agent_end, bridge death, or /stop signal
-		await waitForCompletion(display, bridge, abort.signal);
-
-		// Update session info after completion and persist for reconnect
-		if (bridge.isAlive) {
-			await bridge.refreshSessionInfo();
-			if (bridge.sessionFile) {
-				const userId = item.message?.from?.id;
-				if (userId) setUserSession(userId, bridge.sessionFile);
-			}
+	// Steering path — agent is actively streaming (same check as TUI).
+	// promptInFlight covers the race window between prompt() and agent_start.
+	if (bridge.isStreaming || userState.promptInFlight) {
+		userState.stopRequested = false;
+		if (opts.statusMessageId) {
+			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
-	} catch (e) {
+		bridge
+			.steer(opts.prompt, opts.images)
+			.then(() => safeSend(api, opts.chatId, `↩️ _Steering:_ ${opts.prompt.slice(0, 200)}`))
+			.catch((e) => {
+				const msg = e instanceof Error ? e.message : String(e);
+				if (!userState.stopRequested) {
+					void safeSend(api, opts.chatId, `❌ Steering error: ${msg.slice(0, 200)}`);
+				}
+			});
+		return;
+	}
+
+	// Normal path — create new display, fire prompt, return immediately
+	userState.promptInFlight = true;
+	userState.stopRequested = false;
+	if (opts.userId) userIds.set(userState, opts.userId);
+
+	const display = createEventDisplay(api, opts.chatId, opts.replyToId, opts.statusMessageId);
+
+	// Sync BG agent state — the display needs to know about running agents
+	// so events.ts doesn't prematurely finalize on agent_end (flush editor,
+	// delete status, set done). Without this, a new display created while
+	// BG agents are running would have an empty backgroundAgents map,
+	// causing events.ts to think the turn is over.
+	for (const [id, agent] of userState.backgroundAgents) {
+		display.backgroundAgents.set(id, agent);
+	}
+
+	displays.set(userState, display);
+
+	bridge.prompt(opts.prompt, opts.images).catch((e) => {
 		const msg = e instanceof Error ? e.message : String(e);
 		if (!userState.stopRequested) {
-			await safeSend(api, chatId, `❌ Error: ${msg.slice(0, 200)}`);
+			void safeSend(api, opts.chatId, `❌ Error: ${msg.slice(0, 200)}`);
 		}
-	} finally {
-		unsubscribe();
-		userState.currentAbort = null;
-	}
-
-	// Send DONE for this item (if queue is empty and not stopped)
-	if (userState.queue.length === 0 && !userState.stopRequested) {
-		await safeSend(api, chatId, "🦀 _dreb DONE_");
-	}
-}
-
-/**
- * Wait for the agent to finish. Resolves when any of these occur:
- * - `display.done` is set (agent_end event processed)
- * - The bridge dies (RPC process crashed)
- * - The abort signal fires (/stop command)
- *
- * No timeouts — matches TUI parity. The user can always /stop to interrupt.
- */
-function waitForCompletion(
-	display: EventDisplayState,
-	bridge: { isAlive: boolean },
-	signal: AbortSignal,
-): Promise<void> {
-	if (display.done) return Promise.resolve();
-	if (signal.aborted) return Promise.resolve();
-
-	return new Promise((resolve) => {
-		const timer = setInterval(() => {
-			if (display.done || signal.aborted || !bridge.isAlive) {
-				clearInterval(timer);
-				signal.removeEventListener("abort", onAbort);
-				resolve();
-			}
-		}, 500);
-
-		function onAbort() {
-			clearInterval(timer);
-			resolve();
-		}
-		signal.addEventListener("abort", onAbort, { once: true });
+		userState.promptInFlight = false;
+		displays.delete(userState);
+		cleanupUploads();
 	});
 }
