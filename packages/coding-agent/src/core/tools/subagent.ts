@@ -727,8 +727,8 @@ export interface SubagentToolOptions {
 	onBackgroundStart?: (agentId: string, agentType: string, taskSummary: string) => void;
 	/** Called when a background subagent completes with its result. `cancelled` is true if the user aborted it. */
 	onBackgroundComplete?: (agentId: string, result: SubagentResult, cancelled: boolean) => void;
-	/** Parent session's provider (e.g. "anthropic"). Passed as --provider to child processes to constrain model resolution. */
-	parentProvider?: string;
+	/** Parent session's current provider (e.g. "anthropic"). Called at each invocation to get the live value after mid-session model switches. */
+	parentProvider?: () => string | undefined;
 	/** Model registry for validating model names before spawning child processes. */
 	modelRegistry?: ModelRegistry;
 }
@@ -876,7 +876,7 @@ export function createSubagentToolDefinition(
 ): ToolDefinition<typeof subagentSchema, SubagentToolDetails | undefined> {
 	const onBackgroundStart = options?.onBackgroundStart;
 	const onBackgroundComplete = options?.onBackgroundComplete;
-	const parentProvider = options?.parentProvider;
+	const getParentProvider = options?.parentProvider ?? (() => undefined);
 	const modelRegistry = options?.modelRegistry;
 
 	// Discover agents at definition time to build the prompt guidelines.
@@ -1064,7 +1064,7 @@ export function createSubagentToolDefinition(
 							signal,
 							undefined,
 							modelOverride,
-							parentProvider,
+							getParentProvider(),
 							modelRegistry,
 							sessionDir,
 						),
@@ -1149,7 +1149,7 @@ export function createSubagentToolDefinition(
 							cwd,
 							signal,
 							undefined,
-							parentProvider,
+							getParentProvider(),
 							modelRegistry,
 							chainSessionDir,
 						);

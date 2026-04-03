@@ -2552,7 +2552,7 @@ export class AgentSession {
 						},
 					},
 					subagent: {
-						parentProvider: this.model?.provider,
+						parentProvider: () => this.model?.provider,
 						modelRegistry: this._modelRegistry,
 						onBackgroundStart: (agentId, agentType, taskSummary) => {
 							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary });
