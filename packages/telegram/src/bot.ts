@@ -24,6 +24,7 @@ function createUserState(): UserState {
 		backgroundAgents: new Map(),
 		stopRequested: false,
 		outbox: [],
+		buddyController: null,
 	};
 }
 

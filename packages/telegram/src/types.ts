@@ -30,6 +30,8 @@ export interface UserState {
 	stopRequested: boolean;
 	/** Messages waiting to be delivered to Telegram — drained by a delivery loop */
 	outbox: Array<{ chatId: number; text: string; long?: boolean; retries?: number }>;
+	/** Buddy controller — any to avoid import of @dreb/coding-agent/buddy */
+	buddyController: any;
 }
 
 /** Session info for persistence across bot restarts */

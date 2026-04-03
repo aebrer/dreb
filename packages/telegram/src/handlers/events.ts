@@ -115,6 +115,8 @@ export interface EventDisplayState {
 	pendingRetry: boolean;
 	/** Current retry attempt number for display */
 	retryAttempt: number;
+	/** Buddy controller — receives agent events for context + reactions */
+	buddyController?: any;
 }
 
 /**
@@ -177,6 +179,8 @@ export async function handleAgentEvent(
 
 			// Update status with tool count and recent tools
 			updateStatus(state);
+			// Feed event to buddy controller for context capture + reactions
+			state.buddyController?.handleEvent(event);
 			break;
 		}
 
@@ -262,6 +266,8 @@ export async function handleAgentEvent(
 					}
 				}
 			}
+			// Feed event to buddy controller for context capture + reactions
+			state.buddyController?.handleEvent(event);
 			break;
 		}
 
@@ -372,6 +378,9 @@ export async function handleAgentEvent(
 					send("(No response)");
 				}
 			}
+
+			// Feed event to buddy controller for context capture + reactions
+			state.buddyController?.handleEvent(event);
 
 			// Don't mark done if auto-retry is in progress (Layer 1) or the error
 			// looks retryable (Layer 2 — defensive catch in case events were missed).

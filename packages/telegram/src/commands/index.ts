@@ -8,6 +8,7 @@ import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
 import { log, safeSend } from "../util/telegram.js";
 import { cmdAgents, cmdCompact, cmdModel, cmdStats, cmdThinking } from "./agent.js";
+import { cmdBuddy } from "./buddy.js";
 import { cmdCwd, cmdNew, cmdRestart, cmdStart, cmdStatus, cmdStop } from "./core.js";
 import { STATIC_COMMANDS } from "./refresh.js";
 import { cmdRecent, cmdResume, cmdSessions } from "./sessions.js";
@@ -89,6 +90,11 @@ export function registerCommands(bot: Bot, config: Config, getUserState: (userId
 		const us = getUserState(ctx.from!.id);
 		const args = ctx.match as string;
 		return cmdThinking(ctx, us, args);
+	});
+
+	bot.command("buddy", (ctx) => {
+		const us = getUserState(ctx.from!.id);
+		return cmdBuddy(ctx, config, us);
 	});
 
 	// Dynamic skill commands: /skill_<name> [args]
