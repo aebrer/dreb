@@ -19,6 +19,7 @@ import { STAT_NAMES } from "./buddy-types.js";
 
 const BUDDY_SALT = "dreb-buddy-v1";
 const BUDDY_FILENAME = "buddy.json";
+const DEFAULT_BACKSTORY = "A mysterious past shrouded in legend.";
 
 /** Ollama model config for buddy reactions */
 const OLLAMA_MODEL: Model<"openai-completions"> = {
@@ -39,23 +40,33 @@ const OLLAMA_MODEL: Model<"openai-completions"> = {
 };
 
 /** Prompt for soul generation (uses parent LLM, not Ollama) */
-const SOUL_GENERATION_PROMPT = `You are generating a companion character for a coding assistant terminal app. Based on the species, rarity, and stats below, generate a creative name (one word, max 12 chars) and a one-sentence personality description.
+const SOUL_GENERATION_PROMPT = `You are generating a companion character for a coding assistant terminal app. Based on the species, rarity, and stats below, generate a creative name, a one-sentence personality description, and a funny fictional backstory.
 
 Species: {species}
 Rarity: {rarity}
 Stats: {stats}
 Shiny: {shiny}
 
+The name must NOT be a common English word, programming keyword, tool name, or command. It should be unique and distinctive — a proper noun that won't appear in normal conversation. Minimum 4 characters. Do not use species name as the name.
+
 Respond in EXACTLY this format:
 NAME: <name>
-PERSONALITY: <one sentence personality>`;
+PERSONALITY: <one sentence personality>
+BACKSTORY: <2-3 sentence elaborate fictional backstory — funny, absurd, or dramatic. Include specific events, places, former occupations>`;
 
 /** Prompt for buddy reactions via Ollama */
-const REACTION_PROMPT = `You are {name}, a {species} companion in a terminal coding app. You are {personality}. React to this event with a short, in-character quip (max 20 words). No quotes, no prefixes, just the quip.
+const REACTION_PROMPT = `You are {name}, a {species} companion in a terminal coding app. You are {personality}. Your backstory: {backstory}
+
+React to this event with a short, in-character quip. Feel free to reference your past experiences. Max 20 words. No quotes, no prefixes, just the quip.
 
 Event: {event}`;
 
-const NAME_CALL_PROMPT = `You are {name}, a {species} companion in a terminal coding app. You are {personality}. The user called your name. Respond with a short, friendly greeting (max 25 words). No quotes, no prefixes, just your response.`;
+const NAME_CALL_PROMPT = `You are {name}, a {species} companion in a terminal coding app. You are {personality}. Your backstory: {backstory}
+
+The user just said: "{message}"
+Recent context: {context}
+
+Respond to what the user said directly. Be in-character, reference your backstory occasionally. Max 30 words. No quotes, no prefixes, just your response.`;
 
 // =============================================================================
 // Ollama availability
@@ -117,6 +128,7 @@ function loadStored(): StoredCompanion | null {
 				rerollCount: data.rerollCount,
 				name: data.name,
 				personality: data.personality,
+				backstory: typeof data.backstory === "string" ? data.backstory : DEFAULT_BACKSTORY,
 				hatchedAt: data.hatchedAt ?? new Date().toISOString(),
 				visible: data.visible !== false,
 			};
@@ -166,13 +178,14 @@ function rollBones(rerollCount: number): CompanionBones {
 // =============================================================================
 
 /**
- * Generate a soul (name + personality) using the parent LLM.
+ * Generate a soul (name + personality + backstory) using the parent LLM.
  * Only called on first hatch or reroll.
  */
 async function generateSoul(
 	bones: CompanionBones,
 	parentModel: Model<"openai-completions">,
-): Promise<{ name: string; personality: string }> {
+	apiKey: string,
+): Promise<{ name: string; personality: string; backstory: string }> {
 	const statsStr = STAT_NAMES.map((s) => `${s}: ${bones.stats[s]}`).join(", ");
 	const prompt = SOUL_GENERATION_PROMPT.replace("{species}", bones.species)
 		.replace("{rarity}", bones.rarity)
@@ -185,28 +198,31 @@ async function generateSoul(
 	};
 
 	try {
-		const response = await completeSimple(parentModel, context);
+		const response = await completeSimple(parentModel, context, { apiKey });
 		const text = response.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
 			.map((c) => c.text)
 			.join("");
 
-		// Parse NAME: ... and PERSONALITY: ...
+		// Parse NAME: ... and PERSONALITY: ... and BACKSTORY: ...
 		const nameMatch = text.match(/NAME:\s*(.+)/i);
 		const personalityMatch = text.match(/PERSONALITY:\s*(.+)/i);
+		const backstoryMatch = text.match(/BACKSTORY:\s*(.+)/i);
 
 		let name = nameMatch?.[1]?.trim() ?? bones.species;
 		const personality = personalityMatch?.[1]?.trim() ?? `A ${bones.rarity} ${bones.species} companion.`;
+		const backstory = backstoryMatch?.[1]?.trim() ?? DEFAULT_BACKSTORY;
 
 		// Enforce name length
 		if (name.length > 12) name = name.slice(0, 12);
 
-		return { name, personality };
+		return { name, personality, backstory };
 	} catch {
 		// Fallback if LLM fails
 		return {
 			name: bones.species,
 			personality: `A ${bones.rarity} ${bones.species} companion.`,
+			backstory: DEFAULT_BACKSTORY,
 		};
 	}
 }
@@ -219,10 +235,9 @@ export class BuddyManager {
 	private state: BuddyState | null = null;
 	private ollamaStatus: OllamaStatus | null = null;
 
-	/** Get current buddy state (loads from disk if needed) */
+	/** Get current buddy state (null if not loaded) */
 	getState(): BuddyState | null {
-		if (this.state) return this.state;
-		return null;
+		return this.state;
 	}
 
 	/** Check if buddy exists on disk */
@@ -248,17 +263,18 @@ export class BuddyManager {
 	 * Hatch a new buddy. Generates bones, then uses parent LLM for soul.
 	 * Returns the new state.
 	 */
-	async hatch(parentModel: Model<"openai-completions">): Promise<BuddyState> {
+	async hatch(parentModel: Model<"openai-completions">, apiKey: string): Promise<BuddyState> {
 		const stored = loadStored();
 		const rerollCount = stored?.rerollCount ?? 0;
 
 		const bones = rollBones(rerollCount);
-		const { name, personality } = await generateSoul(bones, parentModel);
+		const { name, personality, backstory } = await generateSoul(bones, parentModel, apiKey);
 
 		const newStored: StoredCompanion = {
 			rerollCount,
 			name,
 			personality,
+			backstory,
 			hatchedAt: new Date().toISOString(),
 			visible: true,
 		};
@@ -271,17 +287,18 @@ export class BuddyManager {
 	/**
 	 * Reroll the buddy — new bones + new soul.
 	 */
-	async reroll(parentModel: Model<"openai-completions">): Promise<BuddyState> {
+	async reroll(parentModel: Model<"openai-completions">, apiKey: string): Promise<BuddyState> {
 		const stored = loadStored();
 		const newRerollCount = (stored?.rerollCount ?? 0) + 1;
 
 		const bones = rollBones(newRerollCount);
-		const { name, personality } = await generateSoul(bones, parentModel);
+		const { name, personality, backstory } = await generateSoul(bones, parentModel, apiKey);
 
 		const newStored: StoredCompanion = {
 			rerollCount: newRerollCount,
 			name,
 			personality,
+			backstory,
 			hatchedAt: new Date().toISOString(),
 			visible: true,
 		};
@@ -308,12 +325,10 @@ export class BuddyManager {
 	}
 
 	/**
-	 * Generate a reaction to an event using Ollama.
-	 * Returns null if Ollama is unavailable.
+	 * Shared Ollama chat helper. Checks availability, picks model, runs completion.
+	 * Returns the response text, or null if Ollama is unavailable.
 	 */
-	async react(event: string): Promise<string | null> {
-		if (!this.state) return null;
-
+	private async ollamaChat(context: Context): Promise<string | null> {
 		// Check Ollama lazily, retry if previously unavailable
 		if (!this.ollamaStatus || !this.ollamaStatus.available) {
 			this.ollamaStatus = await checkOllama();
@@ -327,9 +342,31 @@ export class BuddyManager {
 			name: `${modelName} (Ollama)`,
 		};
 
+		const response = await completeSimple(model, context, {
+			apiKey: "ollama",
+			signal: AbortSignal.timeout(15000),
+		});
+
+		if (response.stopReason === "error") return null;
+
+		return response.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map((c) => c.text)
+			.join("")
+			.trim();
+	}
+
+	/**
+	 * Generate a reaction to an event using Ollama.
+	 * Returns null if Ollama is unavailable.
+	 */
+	async react(event: string): Promise<string | null> {
+		if (!this.state) return null;
+
 		const prompt = REACTION_PROMPT.replace("{name}", this.state.name)
 			.replace("{species}", this.state.species)
 			.replace("{personality}", this.state.personality)
+			.replace("{backstory}", this.state.backstory)
 			.replace("{event}", event);
 
 		const context: Context = {
@@ -338,15 +375,7 @@ export class BuddyManager {
 		};
 
 		try {
-			const response = await completeSimple(model, context, { apiKey: "ollama" });
-			if (response.stopReason === "error") return null;
-
-			const text = response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("")
-				.trim();
-
+			const text = await this.ollamaChat(context);
 			return text || null;
 		} catch {
 			return null;
@@ -357,44 +386,26 @@ export class BuddyManager {
 	 * Respond to the user calling the buddy's name.
 	 * Uses Ollama for the response.
 	 */
-	async respondToNameCall(): Promise<string | null> {
+	async respondToNameCall(userMessage: string, recentContext: string): Promise<string | null> {
 		if (!this.state) return null;
-
-		// Check Ollama lazily, retry if previously unavailable
-		if (!this.ollamaStatus || !this.ollamaStatus.available) {
-			this.ollamaStatus = await checkOllama();
-		}
-		if (!this.ollamaStatus.available) return `${this.state.name} wiggles happily!`;
-
-		const modelName = pickOllamaModel(this.ollamaStatus.models);
-		const model: Model<"openai-completions"> = {
-			...OLLAMA_MODEL,
-			id: modelName,
-			name: `${modelName} (Ollama)`,
-		};
 
 		const prompt = NAME_CALL_PROMPT.replace("{name}", this.state.name)
 			.replace("{species}", this.state.species)
-			.replace("{personality}", this.state.personality);
+			.replace("{personality}", this.state.personality)
+			.replace("{backstory}", this.state.backstory)
+			.replace("{message}", userMessage)
+			.replace("{context}", recentContext);
 
 		const context: Context = {
-			systemPrompt: "Respond with a short friendly greeting. Max 25 words.",
+			systemPrompt: "Respond with a short friendly greeting. Max 30 words.",
 			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 		};
 
 		try {
-			const response = await completeSimple(model, context, { apiKey: "ollama" });
-			if (response.stopReason === "error") return `${this.state.name} wiggles happily!`;
-
-			const text = response.content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("")
-				.trim();
-
-			return text || `${this.state.name} wiggles happily!`;
+			const text = await this.ollamaChat(context);
+			return text || `${this.state.name} wiggles happily at you!`;
 		} catch {
-			return `${this.state.name} wiggles happily!`;
+			return `${this.state.name} wiggles happily at you!`;
 		}
 	}
 

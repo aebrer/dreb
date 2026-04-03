@@ -81,7 +81,7 @@ const SPECIES_DEFS: Record<SpeciesName, SpeciesDef> = {
 		name: "Owl",
 		rarityFloor: Rarity.UNCOMMON,
 		frames: [
-			["  ,___,   ", "  {O}{O}   ", "  ([V])   ", ' ,"   ",  ', "  \\___/   "],
+			["  ,___,   ", "  {E}{E}   ", "  ([V])   ", ' ,"   ",  ', "  \\___/   "],
 			["  ,___,   ", "  {E}{E}   ", "  ([_])   ", ' ,"   ",  ', "  \\___/   "],
 			["  ,___,   ", "  {E}{E}   ", "  ([v])   ", ' ,"   ",  ', "  \\___/   "],
 		],

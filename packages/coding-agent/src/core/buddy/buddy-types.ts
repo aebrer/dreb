@@ -48,10 +48,10 @@ export const HATS = [
 	"🎩",
 	"👑",
 	"🎓",
-	"🎩",
 	"🧢",
 	"👒",
 	"⛑️",
+	"🪖",
 ] as const;
 
 /** Species identifiers */
@@ -90,6 +90,7 @@ export interface StoredCompanion {
 	rerollCount: number;
 	name: string;
 	personality: string;
+	backstory: string;
 	hatchedAt: string;
 	visible: boolean;
 }

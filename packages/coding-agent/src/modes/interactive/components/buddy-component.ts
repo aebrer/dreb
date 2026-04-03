@@ -148,22 +148,9 @@ export class BuddyComponent implements Component {
 			lines.push(" ".repeat(hatPad) + this.state.hat);
 		}
 
-		// Sprite lines with optional hearts overlay
+		// Sprite lines
 		const spriteWidth = getSpeciesWidth(this.state.species);
-		for (let i = 0; i < rendered.length; i++) {
-			const line = rendered[i];
-
-			// Overlay hearts
-			if (this.isPetting) {
-				for (const heart of this.hearts) {
-					if (heart.y === i && heart.x >= 0 && heart.x < line.length) {
-						// This is a simple overlay — in practice we'll show hearts above
-					}
-				}
-			}
-
-			lines.push(line);
-		}
+		lines.push(...rendered);
 
 		// Heart animation line above sprite
 		if (this.isPetting && this.hearts.length > 0) {

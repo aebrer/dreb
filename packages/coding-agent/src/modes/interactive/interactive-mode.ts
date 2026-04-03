@@ -239,6 +239,9 @@ export class InteractiveMode {
 	private buddyComponent: BuddyComponent | null = null;
 	private lastReactionTime = 0;
 	private static readonly REACTION_COOLDOWN_MS = 60000;
+	private lastSubmittedText = "";
+	private buddyIdleTimer: ReturnType<typeof setTimeout> | null = null;
+	private static readonly BUDDY_IDLE_MS = 30000;
 
 	// Convenience accessors
 	private get agent() {
@@ -376,6 +379,19 @@ export class InteractiveMode {
 					label: item.id,
 					description: item.provider,
 				}));
+			};
+		}
+
+		const buddyCommand = slashCommands.find((command) => command.name === "buddy");
+		if (buddyCommand) {
+			buddyCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const subcommands = [
+					{ value: "pet", label: "pet", description: "Show your buddy some love" },
+					{ value: "reroll", label: "reroll", description: "Re-roll for a new buddy" },
+					{ value: "off", label: "off", description: "Hide your buddy" },
+				];
+				const filtered = prefix ? subcommands.filter((s) => s.value.startsWith(prefix.toLowerCase())) : subcommands;
+				return filtered.length > 0 ? filtered : null;
 			};
 		}
 
@@ -2171,10 +2187,18 @@ export class InteractiveMode {
 
 			// Name-call detection for buddy (must run before all early-return paths)
 			const buddyName = this.buddyManager.getName();
-			if (buddyName && text.toLowerCase().includes(buddyName.toLowerCase()) && this.buddyComponent) {
-				this.editor.setText("");
-				this.handleBuddyNameCall().catch(() => {});
-				return;
+			if (buddyName && this.buddyComponent) {
+				try {
+					const nameRegex = new RegExp(`\\b${buddyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+					if (nameRegex.test(text)) {
+						this.editor.setText("");
+						const recentContext = this.buildBuddyContext();
+						this.handleBuddyNameCall(text, recentContext).catch(() => {});
+						return;
+					}
+				} catch {
+					// Regex construction failed, skip name detection
+				}
 			}
 
 			// Queue input during compaction (extension commands execute immediately)
@@ -2192,6 +2216,8 @@ export class InteractiveMode {
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing
 			if (this.session.isStreaming) {
+				this.lastSubmittedText = text;
+				this.resetBuddyIdleTimer();
 				this.editor.addToHistory?.(text);
 				this.editor.setText("");
 				await this.session.prompt(text, { streamingBehavior: "steer" });
@@ -2204,6 +2230,9 @@ export class InteractiveMode {
 
 			// First, move any pending bash components to chat
 			this.flushPendingBashComponents();
+
+			this.lastSubmittedText = text;
+			this.resetBuddyIdleTimer();
 
 			if (this.onInputCallback) {
 				this.onInputCallback(text);
@@ -2391,7 +2420,10 @@ export class InteractiveMode {
 				}
 				// Buddy reaction: tool error
 				if (event.isError && this.buddyComponent) {
-					this.triggerBuddyReaction(`A tool (${event.toolName}) just failed with an error.`).catch(() => {});
+					const errorDetail = event.result?.error || event.result?.output || "unknown error";
+					const errorText =
+						typeof errorDetail === "string" ? errorDetail.slice(0, 200) : String(errorDetail).slice(0, 200);
+					this.triggerBuddyReaction(`Tool "${event.toolName}" failed: ${errorText}`).catch(() => {});
 				}
 				break;
 			}
@@ -2413,7 +2445,8 @@ export class InteractiveMode {
 
 				// Buddy reaction: session wrap-up quip
 				if (this.buddyComponent) {
-					this.triggerBuddyReaction("The agent just finished responding to the user.").catch(() => {});
+					const lastUserMsg = this.lastSubmittedText || "a task";
+					this.triggerBuddyReaction(`The agent just finished responding to: "${lastUserMsg}"`).catch(() => {});
 				}
 
 				this.ui.requestRender();
@@ -4619,6 +4652,14 @@ export class InteractiveMode {
 				return;
 			}
 
+			const apiKey = await this.session.modelRegistry.getApiKey(model);
+			if (!apiKey) {
+				this.showError("No API key available. Set a model with /model first.");
+				return;
+			}
+
+			this.resetBuddyIdleTimer();
+
 			switch (subcommand) {
 				case "pet": {
 					if (!this.buddyComponent) {
@@ -4630,7 +4671,8 @@ export class InteractiveMode {
 					break;
 				}
 				case "reroll": {
-					const state = await this.buddyManager.reroll(model);
+					const state = await this.buddyManager.reroll(model, apiKey);
+					await this.playHatchAnimation();
 					this.mountBuddy(state);
 					this.showBuddyHatchMessage(state);
 					this.ui.requestRender();
@@ -4665,10 +4707,11 @@ export class InteractiveMode {
 						return;
 					}
 
-					// Hatch new buddy
-					const state = await this.buddyManager.hatch(model);
-					this.mountBuddy(state);
-					this.showBuddyHatchMessage(state);
+					// Hatch new buddy with animation
+					const hatchState = await this.buddyManager.hatch(model, apiKey);
+					await this.playHatchAnimation();
+					this.mountBuddy(hatchState);
+					this.showBuddyHatchMessage(hatchState);
 					break;
 				}
 			}
@@ -4687,6 +4730,10 @@ export class InteractiveMode {
 	}
 
 	private removeBuddy(): void {
+		if (this.buddyIdleTimer) {
+			clearTimeout(this.buddyIdleTimer);
+			this.buddyIdleTimer = null;
+		}
 		if (this.buddyComponent) {
 			this.buddyComponent.dispose();
 			this.buddyComponent = null;
@@ -4701,6 +4748,7 @@ export class InteractiveMode {
 		const lines = [
 			theme.fg("accent", `🥚 A ${state.rarity} ${state.species} hatched!${shinyMark}`),
 			theme.fg("muted", `Meet ${theme.bold(state.name)} — ${state.personality}`),
+			theme.fg("muted", `Backstory: ${state.backstory}`),
 			"",
 			theme.fg("muted", "Use /buddy pet to show love, /buddy reroll to try again."),
 		].join("\n");
@@ -4720,16 +4768,58 @@ export class InteractiveMode {
 		}
 	}
 
-	private async handleBuddyNameCall(): Promise<void> {
+	private async handleBuddyNameCall(userMessage: string, recentContext: string): Promise<void> {
 		if (!this.buddyComponent) return;
 
-		const response = await this.buddyManager.respondToNameCall();
+		const response = await this.buddyManager.respondToNameCall(userMessage, recentContext);
 		if (response) {
 			this.buddyComponent.showSpeech(response);
 		}
 	}
 
+	private buildBuddyContext(): string {
+		const lastMsg = this.lastSubmittedText;
+		if (lastMsg) {
+			return `Last user message: "${lastMsg.slice(0, 100)}"`;
+		}
+		return "No recent activity.";
+	}
+
+	private resetBuddyIdleTimer(): void {
+		if (this.buddyIdleTimer) {
+			clearTimeout(this.buddyIdleTimer);
+		}
+		this.buddyIdleTimer = setTimeout(() => {
+			if (this.buddyComponent) {
+				const ctx = this.buildBuddyContext();
+				this.triggerBuddyReaction(`The user has been idle for 30 seconds. ${ctx}`).catch(() => {});
+			}
+		}, InteractiveMode.BUDDY_IDLE_MS);
+	}
+
+	private playHatchAnimation(): Promise<void> {
+		return new Promise((resolve) => {
+			// Frame 1: egg
+			this.chatContainer.addChild(new Text(theme.fg("accent", "🥚 ..."), 1, 0));
+			this.ui.requestRender();
+
+			setTimeout(() => {
+				// Frame 2: cracking
+				this.chatContainer.addChild(new Text(theme.fg("accent", "🥚 *crack*"), 1, 0));
+				this.ui.requestRender();
+
+				setTimeout(() => {
+					resolve();
+				}, 1000);
+			}, 1000);
+		});
+	}
+
 	stop(): void {
+		if (this.buddyIdleTimer) {
+			clearTimeout(this.buddyIdleTimer);
+			this.buddyIdleTimer = null;
+		}
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
 			this.loadingAnimation = undefined;
