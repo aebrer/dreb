@@ -14,8 +14,7 @@ argument-hint: "[commit message]"
 2. **HTML markers** — Use `<!-- mach6-progress -->` as the first line of progress comment bodies.
 3. **No `#N` in comment bodies** — Use "finding 3", "item 3", "stage 2" etc. instead.
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets (.env, credentials, tokens, keys).
-5. **Co-authored-by** — Include `Co-Authored-By: Claude <noreply@anthropic.com>` in commit messages.
-6. **Task tracking** — Use the `tasks_update` tool to show progress.
+5. **Task tracking** — Use the `tasks_update` tool to show progress.
 
 ## Step 1: Set up task tracking
 
@@ -51,12 +50,9 @@ Generate a commit message that:
 - Follows the repository's existing style
 - Summarizes the nature of the changes
 - Uses the user's override message if provided
-- Includes `Co-Authored-By: Claude <noreply@anthropic.com>`
 
 ```bash
-git commit -m "<message>
-
-Co-Authored-By: Claude <noreply@anthropic.com>"
+git commit -m "<message>"
 ```
 
 Update task: commit → completed, push → in_progress.

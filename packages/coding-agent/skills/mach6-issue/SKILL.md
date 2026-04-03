@@ -14,9 +14,8 @@ argument-hint: "[issue-number | description]"
 2. **HTML markers** — Use `<!-- mach6-assessment -->`, `<!-- mach6-plan -->`, `<!-- mach6-review -->`, `<!-- mach6-progress -->` as the first line of comment bodies for reliable discovery.
 3. **No `#N` in comment bodies** — GitHub auto-links `#N` to issues/PRs. Use "finding 3", "item 3", "stage 2" etc. instead.
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets (.env, credentials, tokens, keys).
-5. **Co-authored-by** — Include `Co-Authored-By: Claude <noreply@anthropic.com>` in commit messages.
-6. **Task tracking** — Use the `tasks_update` tool to show progress through multi-step commands.
-7. **Project conventions** — Check for CLAUDE.md, AGENTS.md, .dreb/CONTEXT.md, and CONTRIBUTING.md before planning or implementing.
+5. **Task tracking** — Use the `tasks_update` tool to show progress through multi-step commands.
+6. **Project conventions** — Check for CLAUDE.md, AGENTS.md, .dreb/CONTEXT.md, and CONTRIBUTING.md before planning or implementing.
 
 ## Determine Mode
 
