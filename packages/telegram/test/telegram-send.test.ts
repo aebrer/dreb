@@ -177,7 +177,7 @@ describe("sendLong", () => {
 		});
 
 		// Build text that needs 2+ chunks
-		const chunk1 = "A".repeat(3500) + "\n";
+		const chunk1 = `${"A".repeat(3500)}\n`;
 		const chunk2 = "B".repeat(3500);
 		const fullText = chunk1 + chunk2;
 

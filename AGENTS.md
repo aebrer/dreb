@@ -39,6 +39,10 @@ This builds all packages in dependency order: tui → ai → agent → coding-ag
 
 **Don't defer parts of categorical work.** If the task is "fix docs," fix ALL docs — don't cherry-pick the easy ones and punt the rest to a follow-up. Same applies to failing tests and discovered bugs: if you find it during the work, fix it now. "Out of scope" is not an excuse to ship known-broken things.
 
+## No Ignoring Pre-Existing Failures
+
+**There is no such thing as a "pre-existing" test or lint failure that's okay to ignore.** If a test fails or a linter complains — whether it's in files you touched or not — it gets fixed. No bypassing with `--no-verify`, no rationalizing that it's "unrelated," no deferring to a future PR. If CI would fail on it, it's your problem now.
+
 ## Testing
 
 ```bash
