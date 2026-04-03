@@ -337,16 +337,22 @@ describe("handleEvent", () => {
 		expect(reactSpy).toHaveBeenCalled();
 	});
 
-	it("should trigger reaction on agent_end", () => {
+	it("should trigger reaction on agent_end with context", () => {
 		writeStoredBuddy();
 		const { controller, manager } = createTestController();
 		manager.load();
+
+		// Seed some context so we can verify it's passed through
+		controller.appendContext("User: fix the bug");
+		controller.appendContext("Assistant: I found the issue");
 
 		const reactSpy = vi.spyOn(manager, "react").mockResolvedValue("nice work!");
 
 		controller.handleEvent({ type: "agent_end", messages: [] });
 
-		expect(reactSpy).toHaveBeenCalledWith("The agent finished responding.");
+		expect(reactSpy).toHaveBeenCalledWith(
+			"The agent finished responding. Recent activity:\nUser: fix the bug\nAssistant: I found the issue",
+		);
 	});
 
 	it("should skip events when no buddy loaded", () => {

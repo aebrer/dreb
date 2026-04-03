@@ -279,7 +279,8 @@ export class BuddyController {
 			}
 
 			case "agent_end": {
-				this.triggerReaction("The agent finished responding.").catch(() => {});
+				const ctx = this.buildContext();
+				this.triggerReaction(`The agent finished responding. Recent activity:\n${ctx}`).catch(() => {});
 				break;
 			}
 		}
