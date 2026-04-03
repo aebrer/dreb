@@ -246,8 +246,8 @@ describe("BuddyManager.hatch()", () => {
 
 		restore();
 
-		expect(state.name.length).toBeLessThanOrEqual(12);
-		expect(state.name).toBe("SuperCalifra");
+		expect(state.name.length).toBeLessThanOrEqual(8);
+		expect(state.name).toBe("SuperCal");
 	});
 
 	it("starts with rerollCount 0 when no existing buddy", async () => {

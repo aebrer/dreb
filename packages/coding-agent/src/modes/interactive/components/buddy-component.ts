@@ -39,6 +39,11 @@ export class BuddyComponent implements Component {
 	private petTimeout: ReturnType<typeof setTimeout> | null = null;
 	private hearts: Array<{ x: number; y: number; char: string; life: number }> = [];
 
+	// Thinking indicator
+	private thinkingLabel: string | null = null;
+	private thinkingDots = 0;
+	private static readonly THINKING_DOT_COUNT = 4; // cycles 0,1,2,3 → ".", "..", "...", "...."
+
 	// Cached render
 	private cachedLines: string[] = [];
 	private cachedWidth = 0;
@@ -100,6 +105,22 @@ export class BuddyComponent implements Component {
 		this.ui.requestRender();
 	}
 
+	/** Show a pulsing thinking indicator with optional label */
+	showThinking(label?: string): void {
+		this.thinkingLabel = label ?? null;
+		this.thinkingDots = 0;
+		this.bumpVersion();
+		this.ui.requestRender();
+	}
+
+	/** Hide the thinking indicator */
+	hideThinking(): void {
+		this.thinkingLabel = null;
+		this.thinkingDots = 0;
+		this.bumpVersion();
+		this.ui.requestRender();
+	}
+
 	invalidate(): void {
 		this.cachedWidth = 0;
 	}
@@ -122,6 +143,7 @@ export class BuddyComponent implements Component {
 
 	dispose(): void {
 		this.stopAnimation();
+		this.thinkingLabel = null;
 		if (this.speechTimeout) {
 			clearTimeout(this.speechTimeout);
 			this.speechTimeout = null;
@@ -181,6 +203,13 @@ export class BuddyComponent implements Component {
 		});
 		lines.push(` ${statParts.join(" ")}`);
 
+		// Thinking indicator
+		if (this.thinkingLabel !== null) {
+			const dots = ".".repeat((this.thinkingDots % BuddyComponent.THINKING_DOT_COUNT) + 1);
+			const label = this.thinkingLabel || "thinking";
+			lines.push(` ${theme.fg("muted", `💭 ${label}${dots}`)}`);
+		}
+
 		// Speech bubble (beside or below sprite)
 		if (this.speechText) {
 			const bubbleLines = this.formatSpeechBubble(this.speechText, Math.min(width - 4, 60));
@@ -210,6 +239,10 @@ export class BuddyComponent implements Component {
 			const maxQuip = Math.max(10, width - face.length - this.state.name.length - 6);
 			const quip = this.speechText.length > maxQuip ? `${this.speechText.slice(0, maxQuip - 1)}…` : this.speechText;
 			lines.push(` ${face} ${name}: ${theme.fg("accent", quip)}`);
+		} else if (this.thinkingLabel !== null) {
+			const dots = ".".repeat((this.thinkingDots % BuddyComponent.THINKING_DOT_COUNT) + 1);
+			const label = this.thinkingLabel || "thinking";
+			lines.push(` ${face} ${name} ${theme.fg("muted", `💭 ${label}${dots}`)}`);
 		} else {
 			lines.push(` ${face} ${name}`);
 		}
@@ -224,6 +257,11 @@ export class BuddyComponent implements Component {
 	private startAnimation(): void {
 		this.interval = setInterval(() => {
 			this.currentFrame = (this.currentFrame + 1) % this.totalFrames;
+
+			// Tick thinking dots
+			if (this.thinkingLabel !== null) {
+				this.thinkingDots = (this.thinkingDots + 1) % BuddyComponent.THINKING_DOT_COUNT;
+			}
 
 			// Tick hearts
 			if (this.isPetting) {
@@ -278,6 +316,7 @@ export class BuddyComponent implements Component {
 	}
 
 	private formatSpeechBubble(text: string, maxWidth: number): string[] {
+		if (!text.trim()) return [];
 		const lines: string[] = [];
 		const words = text.split(" ");
 		let currentLine = "";

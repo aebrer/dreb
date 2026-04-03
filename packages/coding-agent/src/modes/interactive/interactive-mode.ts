@@ -40,6 +40,7 @@ import { spawn, spawnSync } from "child_process";
 import { APP_NAME, getAgentDir, getAuthPath, getDebugLogPath, getUpdateInstruction, VERSION } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
 import { BuddyManager } from "../../core/buddy/buddy-manager.js";
+import { Rarity, Stat } from "../../core/buddy/buddy-types.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -390,6 +391,7 @@ export class InteractiveMode {
 					{ value: "pet", label: "pet", description: "Show your buddy some love" },
 					{ value: "reroll", label: "reroll", description: "Re-roll for a new buddy" },
 					{ value: "off", label: "off", description: "Hide your buddy" },
+					{ value: "stats", label: "stats", description: "View buddy profile" },
 				];
 				const filtered = prefix ? subcommands.filter((s) => s.value.startsWith(prefix.toLowerCase())) : subcommands;
 				return filtered.length > 0 ? filtered : null;
@@ -1400,6 +1402,11 @@ export class InteractiveMode {
 	}
 
 	private resetExtensionUI(): void {
+		// Preserve buddy across reload — clearExtensionWidgets would dispose
+		// it without nulling buddyComponent, leaving a stale reference
+		const buddyState = this.buddyComponent ? this.buddyManager.getState() : null;
+		this.removeBuddy();
+
 		if (this.extensionSelector) {
 			this.hideExtensionSelector();
 		}
@@ -1421,6 +1428,11 @@ export class InteractiveMode {
 		this.updateTerminalTitle();
 		if (this.loadingAnimation) {
 			this.loadingAnimation.setMessage(`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`);
+		}
+
+		// Re-mount buddy so it survives reload
+		if (buddyState) {
+			this.mountBuddy(buddyState);
 		}
 	}
 
@@ -4703,11 +4715,28 @@ export class InteractiveMode {
 					break;
 				}
 				case "reroll": {
-					const state = await this.buddyManager.reroll(model, apiKey);
-					await this.playHatchAnimation();
-					this.mountBuddy(state);
-					this.showBuddyHatchMessage(state);
-					this.ui.requestRender();
+					this.buddyComponent?.showThinking("rerolling");
+					try {
+						const state = await this.buddyManager.reroll(model, apiKey);
+						this.buddyComponent?.hideThinking();
+						await this.playHatchAnimation();
+						this.mountBuddy(state);
+						this.showBuddyHatchMessage(state);
+						this.ui.requestRender();
+					} catch (err) {
+						this.buddyComponent?.hideThinking();
+						throw err;
+					}
+					break;
+				}
+				case "stats": {
+					if (!this.buddyComponent) {
+						this.showWarning("No buddy to show stats for! Use /buddy to hatch one first.");
+						return;
+					}
+					const state = this.buddyManager.getState();
+					if (!state) return;
+					this.showBuddyStatsPanel(state);
 					break;
 				}
 				case "off": {
@@ -4788,24 +4817,90 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private showBuddyStatsPanel(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
+		this.chatContainer.addChild(new Spacer(1));
+
+		const shinyMark = state.shiny ? " ✨ SHINY!" : "";
+		const header = theme.fg("accent", `╭─ ${state.name} ${shinyMark} ─────────────────────────╮`);
+		const footer = theme.fg("accent", `╰──────────────────────────────────╯`);
+
+		const statLines = (Object.values(Stat) as Stat[]).map((s) => {
+			const val = state.stats[s];
+			const filled = Math.round(val / 10);
+			const empty = 10 - filled;
+			const bar = "█".repeat(filled) + "░".repeat(empty);
+			const color: "success" | "warning" | "error" = val >= 70 ? "success" : val >= 40 ? "warning" : "error";
+			return theme.fg("muted", `│ ${s.padEnd(12)}`) + theme.fg(color, bar) + theme.fg("muted", " │");
+		});
+
+		const lines = [
+			header,
+			theme.fg("muted", `│ Species:    `) + theme.bold(state.species),
+			theme.fg("muted", `│ Rarity:     `) + theme.fg(this.rarityColor(state.rarity), state.rarity),
+			theme.fg("muted", `│ Eyes:       ${state.eyeStyle}  Hat: ${state.hat || "none"}`),
+			theme.fg(
+				"muted",
+				`│ Hatched:    ${state.hatchedAt ? new Date(state.hatchedAt).toLocaleDateString() : "unknown"}`,
+			),
+			theme.fg("muted", `│ Re-rolls:   ${state.rerollCount}`),
+			"│",
+			theme.fg("muted", "│ Stats:"),
+			...statLines,
+			"│",
+			theme.fg("muted", `│ Personality: ${state.personality}`),
+			theme.fg("muted", `│ Backstory:  ${state.backstory}`),
+			footer,
+		].join("\n");
+
+		this.chatContainer.addChild(new Text(lines, 1, 0));
+		this.ui.requestRender();
+	}
+
+	private rarityColor(rarity: Rarity): "muted" | "success" | "accent" | "warning" | "error" {
+		switch (rarity) {
+			case Rarity.COMMON:
+				return "muted";
+			case Rarity.UNCOMMON:
+				return "success";
+			case Rarity.RARE:
+				return "accent";
+			case Rarity.EPIC:
+				return "warning";
+			case Rarity.LEGENDARY:
+				return "error";
+		}
+	}
+
 	private async triggerBuddyReaction(event: string): Promise<void> {
 		// Throttle: max 1 reaction per 60s
 		const now = Date.now();
 		if (now - this.lastReactionTime < InteractiveMode.REACTION_COOLDOWN_MS) return;
 
-		const quip = await this.buddyManager.react(event);
-		if (quip && this.buddyComponent) {
-			this.lastReactionTime = now;
-			this.buddyComponent.showSpeech(quip);
+		this.buddyComponent?.showThinking();
+		try {
+			const quip = await this.buddyManager.react(event);
+			this.buddyComponent?.hideThinking();
+			if (quip && this.buddyComponent) {
+				this.lastReactionTime = now;
+				this.buddyComponent.showSpeech(quip);
+			}
+		} catch {
+			this.buddyComponent?.hideThinking();
 		}
 	}
 
 	private async handleBuddyNameCall(userMessage: string, recentContext: string): Promise<void> {
 		if (!this.buddyComponent) return;
 
-		const response = await this.buddyManager.respondToNameCall(userMessage, recentContext);
-		if (response) {
-			this.buddyComponent.showSpeech(response);
+		this.buddyComponent.showThinking();
+		try {
+			const response = await this.buddyManager.respondToNameCall(userMessage, recentContext);
+			this.buddyComponent.hideThinking();
+			if (response) {
+				this.buddyComponent.showSpeech(response);
+			}
+		} catch {
+			this.buddyComponent.hideThinking();
 		}
 	}
 

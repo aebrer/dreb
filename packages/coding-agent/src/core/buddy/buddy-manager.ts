@@ -47,7 +47,7 @@ Rarity: {rarity}
 Stats: {stats}
 Shiny: {shiny}
 
-The name must NOT be a common English word, programming keyword, tool name, or command. It should be unique and distinctive — a proper noun that won't appear in normal conversation. Minimum 4 characters. Do not use species name as the name.
+The name must NOT be a common English word, programming keyword, tool name, or command. It should be unique and distinctive — a proper noun that won't appear in normal conversation. The name must be 4-8 characters and easy to type on a QWERTY keyboard — use only common letters (a-z, avoid q, x, z, j). Do not use species name as the name.
 
 Respond in EXACTLY this format:
 NAME: <name>
@@ -208,14 +208,16 @@ async function generateSoul(
 		// Parse NAME: ... and PERSONALITY: ... and BACKSTORY: ...
 		const nameMatch = text.match(/NAME:\s*(.+)/i);
 		const personalityMatch = text.match(/PERSONALITY:\s*(.+)/i);
-		const backstoryMatch = text.match(/BACKSTORY:\s*(.+)/i);
+		const backstoryMatch = text.match(/BACKSTORY:\s*([\s\S]+)/i);
 
 		let name = nameMatch?.[1]?.trim() ?? bones.species;
 		const personality = personalityMatch?.[1]?.trim() ?? `A ${bones.rarity} ${bones.species} companion.`;
-		const backstory = backstoryMatch?.[1]?.trim() ?? DEFAULT_BACKSTORY;
+		const rawBackstory = backstoryMatch?.[1]?.trim() ?? DEFAULT_BACKSTORY;
+		// Truncate backstory to 300 chars (multi-line capture can be long)
+		const backstory = rawBackstory.length > 300 ? `${rawBackstory.slice(0, 297)}...` : rawBackstory;
 
 		// Enforce name length
-		if (name.length > 12) name = name.slice(0, 12);
+		if (name.length > 8) name = name.slice(0, 8);
 
 		return { name, personality, backstory };
 	} catch {
