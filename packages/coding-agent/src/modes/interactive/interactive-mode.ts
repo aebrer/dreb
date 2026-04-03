@@ -2198,6 +2198,7 @@ export class InteractiveMode {
 			const buddyName = this.buddyManager.getName();
 			if (buddyName && text.toLowerCase().includes(buddyName.toLowerCase()) && this.buddyComponent) {
 				this.handleBuddyNameCall().catch(() => {});
+				return;
 			}
 
 			// First, move any pending bash components to chat
@@ -4610,61 +4611,68 @@ export class InteractiveMode {
 	// =========================================================================
 
 	private async handleBuddyCommand(subcommand: string): Promise<void> {
-		const model = this.session.model;
-		if (!model) {
-			this.showError("No model available. Set a model first with /model.");
-			return;
-		}
+		try {
+			const model = this.session.model;
+			if (!model) {
+				this.showError("No model available. Set a model first with /model.");
+				return;
+			}
 
-		switch (subcommand) {
-			case "pet": {
-				if (!this.buddyComponent) {
-					this.showWarning("No buddy to pet! Use /buddy to hatch one first.");
-					return;
+			switch (subcommand) {
+				case "pet": {
+					if (!this.buddyComponent) {
+						this.showWarning("No buddy to pet! Use /buddy to hatch one first.");
+						return;
+					}
+					this.buddyComponent.pet();
+					this.ui.requestRender();
+					break;
 				}
-				this.buddyComponent.pet();
-				this.ui.requestRender();
-				break;
-			}
-			case "reroll": {
-				const state = await this.buddyManager.reroll(model);
-				if (this.buddyComponent) {
-					this.buddyComponent.updateState(state);
+				case "reroll": {
+					const state = await this.buddyManager.reroll(model);
+					this.mountBuddy(state);
+					this.showBuddyHatchMessage(state);
+					this.ui.requestRender();
+					break;
 				}
-				this.showBuddyHatchMessage(state);
-				this.ui.requestRender();
-				break;
-			}
-			case "off": {
-				this.buddyManager.setVisible(false);
-				this.removeBuddy();
-				this.chatContainer.addChild(new Spacer(1));
-				this.chatContainer.addChild(
-					new Text(theme.fg("muted", "Buddy hidden. Use /buddy to bring them back."), 1, 0),
-				);
-				this.ui.requestRender();
-				break;
-			}
-			default: {
-				// No subcommand: hatch or show
-				if (this.buddyComponent) {
-					// Already showing — do nothing
-					return;
+				case "off": {
+					this.buddyManager.setVisible(false);
+					this.removeBuddy();
+					this.chatContainer.addChild(new Spacer(1));
+					this.chatContainer.addChild(
+						new Text(theme.fg("muted", "Buddy hidden. Use /buddy to bring them back."), 1, 0),
+					);
+					this.ui.requestRender();
+					break;
 				}
+				default: {
+					// No subcommand: hatch or show
+					if (this.buddyComponent) {
+						// Already showing — do nothing
+						return;
+					}
 
-				// Try to load existing buddy
-				const existing = this.buddyManager.load();
-				if (existing && existing.visible !== false) {
-					this.mountBuddy(existing);
-					return;
-				}
+					// Try to load existing buddy
+					const existing = this.buddyManager.load();
+					if (existing) {
+						if (existing.visible === false) {
+							// Restore hidden buddy
+							this.buddyManager.setVisible(true);
+							existing.visible = true;
+						}
+						this.mountBuddy(existing);
+						return;
+					}
 
-				// Hatch new buddy
-				const state = await this.buddyManager.hatch(model);
-				this.mountBuddy(state);
-				this.showBuddyHatchMessage(state);
-				break;
+					// Hatch new buddy
+					const state = await this.buddyManager.hatch(model);
+					this.mountBuddy(state);
+					this.showBuddyHatchMessage(state);
+					break;
+				}
 			}
+		} catch (err) {
+			this.showError(`Buddy error: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 

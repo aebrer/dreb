@@ -9,8 +9,9 @@
 import type { Context, Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir, hostname } from "os";
+import { hostname } from "os";
 import { join } from "path";
+import { getAgentDir } from "../../config.js";
 import { createBuddyRng } from "./buddy-prng.js";
 import { rollEyes, rollHat, rollSpecies, rollStats } from "./buddy-species.js";
 import type { BuddyState, CompanionBones, StoredCompanion } from "./buddy-types.js";
@@ -72,7 +73,7 @@ export interface OllamaStatus {
  */
 export async function checkOllama(): Promise<OllamaStatus> {
 	try {
-		const res = await fetch("http://localhost:11434/api/tags");
+		const res = await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(3000) });
 		if (!res.ok) {
 			return { available: false, models: [], error: `Ollama returned ${res.status}` };
 		}
@@ -98,14 +99,7 @@ function pickOllamaModel(models: string[]): string {
 // =============================================================================
 
 function getBuddyPath(): string {
-	// Use ~/.dreb/agent/buddy.json consistent with other config paths
-	const configDir = process.env.DREB_CODING_AGENT_DIR;
-	const agentDir = configDir
-		? configDir.startsWith("~/")
-			? homedir() + configDir.slice(1)
-			: configDir
-		: join(homedir(), ".dreb", "agent");
-	return join(agentDir, BUDDY_FILENAME);
+	return join(getAgentDir(), BUDDY_FILENAME);
 }
 
 function loadStored(): StoredCompanion | null {
@@ -320,8 +314,8 @@ export class BuddyManager {
 	async react(event: string): Promise<string | null> {
 		if (!this.state) return null;
 
-		// Check Ollama lazily
-		if (!this.ollamaStatus) {
+		// Check Ollama lazily, retry if previously unavailable
+		if (!this.ollamaStatus || !this.ollamaStatus.available) {
 			this.ollamaStatus = await checkOllama();
 		}
 		if (!this.ollamaStatus.available) return null;
@@ -366,8 +360,8 @@ export class BuddyManager {
 	async respondToNameCall(): Promise<string | null> {
 		if (!this.state) return null;
 
-		// Check Ollama lazily
-		if (!this.ollamaStatus) {
+		// Check Ollama lazily, retry if previously unavailable
+		if (!this.ollamaStatus || !this.ollamaStatus.available) {
 			this.ollamaStatus = await checkOllama();
 		}
 		if (!this.ollamaStatus.available) return `${this.state.name} wiggles happily!`;
