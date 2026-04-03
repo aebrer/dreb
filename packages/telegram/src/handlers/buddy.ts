@@ -67,28 +67,43 @@ export function formatBuddyHatch(state: BuddyState): string {
  */
 export function formatBuddyStats(state: BuddyState): string {
 	const emoji = speciesEmoji(state.species);
-	const shiny = state.shiny ? " ✨" : "";
+	const shiny = state.shiny ? " ✨ SHINY!" : "";
 	const maxBar = 10;
+	const personality = state.personality.replace(/\n/g, " ");
+	const backstory = state.backstory.replace(/\n/g, " ");
+	const hatched = state.hatchedAt ? new Date(state.hatchedAt).toLocaleDateString() : "unknown";
 
-	const lines = [`${emoji} *${state.name}* (${state.species} · ${state.rarity}${shiny})`, "```"];
-
-	for (const stat of STAT_NAMES) {
-		const value = state.stats[stat as Stat];
+	const statLines = STAT_NAMES.map((s: string) => {
+		const value = state.stats[s as Stat];
 		const filled = Math.round((value / 100) * maxBar);
 		const bar = "█".repeat(filled) + "░".repeat(maxBar - filled);
-		const label = stat.padEnd(12);
-		lines.push(`${label} ${bar} ${value}`);
-	}
+		return `│ ${s.padEnd(12)} ${bar} ${value}`;
+	});
 
-	lines.push("```");
-	return lines.join("\n");
+	return [
+		`\`\`\``,
+		`╭─ ${emoji} ${state.name} ${shiny} ──────────────────╮`,
+		`│ Species:    ${state.species}`,
+		`│ Rarity:     ${state.rarity}`,
+		`│ Eyes:       ${state.eyeStyle}  Hat: ${state.hat || "none"}`,
+		`│ Hatched:    ${hatched}`,
+		`│ Re-rolls:   ${state.rerollCount}`,
+		`│`,
+		`│ Stats:`,
+		...statLines,
+		`│`,
+		`│ Personality: ${personality}`,
+		`│ Backstory:  ${backstory}`,
+		`╰──────────────────────────────────╯`,
+		`\`\`\``,
+	].join("\n");
 }
 
 /**
  * Format a buddy speech/reaction message.
  */
-export function formatBuddySpeech(name: string, text: string): string {
-	return `🐣 ${name}: "${text}"`;
+export function formatBuddySpeech(name: string, species: string, text: string): string {
+	return `${speciesEmoji(species)} ${name}: "${text}"`;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +123,9 @@ export function createTelegramBuddyController(send: SendFn, api: Api, chatId: nu
 	const callbacks: BuddyCallbacks = {
 		onSpeech(text: string): void {
 			const name = manager.getName() ?? "Buddy";
-			send(formatBuddySpeech(name, text));
+			const state = manager.getState();
+			const species = state?.species ?? "";
+			send(formatBuddySpeech(name, species, text));
 		},
 		onThinkingStart(): void {
 			// Fire-and-forget typing indicator
