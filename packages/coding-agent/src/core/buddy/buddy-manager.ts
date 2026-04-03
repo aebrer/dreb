@@ -212,9 +212,7 @@ async function generateSoul(
 
 		let name = nameMatch?.[1]?.trim() ?? bones.species;
 		const personality = personalityMatch?.[1]?.trim() ?? `A ${bones.rarity} ${bones.species} companion.`;
-		const rawBackstory = backstoryMatch?.[1]?.trim() ?? DEFAULT_BACKSTORY;
-		// Truncate backstory to 300 chars (multi-line capture can be long)
-		const backstory = rawBackstory.length > 300 ? `${rawBackstory.slice(0, 297)}...` : rawBackstory;
+		const backstory = backstoryMatch?.[1]?.trim() ?? DEFAULT_BACKSTORY;
 
 		// Enforce name length
 		if (name.length > 8) name = name.slice(0, 8);
