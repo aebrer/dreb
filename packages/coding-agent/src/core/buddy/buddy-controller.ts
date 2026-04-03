@@ -57,6 +57,9 @@ export class BuddyController {
 	private idleTimer: ReturnType<typeof setTimeout> | null = null;
 	private lastActivityTime = 0;
 	private reactionTimestamps: number[] = []; // for budget tracking
+	/** When false, all active functionality is disabled: no reactions, name-calls,
+	 *  idle timer, or Ollama calls. Context capture (passive) still happens. */
+	enabled = true;
 
 	readonly manager: BuddyManager;
 	private readonly callbacks: BuddyCallbacks;
@@ -109,10 +112,11 @@ export class BuddyController {
 			clearTimeout(this.idleTimer);
 		}
 
+		if (!this.enabled) return;
+
 		// Activity gating: skip idle timer if user has been inactive too long
 		if (this.config.activityGateMs > 0 && this.lastActivityTime > 0) {
 			const elapsed = Date.now() - this.lastActivityTime;
-			// If last activity was > activityGateMs ago, don't start the timer
 			if (elapsed > this.config.activityGateMs) {
 				this.idleTimer = null;
 				return;
@@ -138,6 +142,8 @@ export class BuddyController {
 
 	/** Check if a reaction is allowed under current throttle and budget */
 	private canReact(): boolean {
+		if (!this.enabled) return false;
+
 		const now = Date.now();
 
 		// Cooldown throttle
@@ -160,6 +166,7 @@ export class BuddyController {
 	/**
 	 * Trigger a buddy reaction. Throttled by cooldown and budget.
 	 * Calls onThinkingStart/End and onSpeech callbacks.
+	 * No-op if disabled.
 	 */
 	async triggerReaction(event: string): Promise<void> {
 		if (!this.canReact()) return;
@@ -180,9 +187,10 @@ export class BuddyController {
 
 	/**
 	 * Handle a name-call from the user.
-	 * Returns the buddy's response (or null if no buddy / error).
+	 * No-op if disabled — returns immediately without calling Ollama.
 	 */
 	async handleNameCall(userMessage: string): Promise<void> {
+		if (!this.enabled) return;
 		const state = this.manager.getState();
 		if (!state) return;
 
@@ -198,8 +206,10 @@ export class BuddyController {
 		}
 	}
 
-	/** Check if a message contains the buddy's name (word-boundary matching) */
+	/** Check if a message contains the buddy's name (word-boundary matching).
+	 *  Returns false if disabled. */
 	detectNameCall(text: string): boolean {
+		if (!this.enabled) return false;
 		const name = this.manager.getName();
 		if (!name) return false;
 		try {
@@ -218,6 +228,8 @@ export class BuddyController {
 	/**
 	 * Process an agent event for buddy context capture and reaction triggers.
 	 * The host calls this from its event handler.
+	 *
+	 * Context capture always happens. Reactions are gated by `enabled`.
 	 */
 	handleEvent(event: { type: string; [key: string]: any }): void {
 		const state = this.manager.getState();
@@ -244,7 +256,7 @@ export class BuddyController {
 			}
 
 			case "tool_execution_end": {
-				// Context capture
+				// Context capture (always)
 				const status = event.isError ? "failed" : "completed";
 				const output = event.result?.output || event.result?.content;
 				const outputText =
@@ -259,8 +271,8 @@ export class BuddyController {
 							: "";
 				this.appendContext(`Tool ${event.toolName} ${status}${outputText ? `: ${outputText}` : ""}`);
 
-				// Reaction on error
-				if (event.isError) {
+				// Reaction on error (gated by enabled)
+				if (event.isError && this.enabled) {
 					let errorText = "unknown error";
 					const result = event.result;
 					if (result?.content && Array.isArray(result.content)) {
@@ -279,8 +291,10 @@ export class BuddyController {
 			}
 
 			case "agent_end": {
-				const ctx = this.buildContext();
-				this.triggerReaction(`The agent finished responding. Recent activity:\n${ctx}`).catch(() => {});
+				if (this.enabled) {
+					const ctx = this.buildContext();
+					this.triggerReaction(`The agent finished responding. Recent activity:\n${ctx}`).catch(() => {});
+				}
 				break;
 			}
 		}
@@ -288,13 +302,14 @@ export class BuddyController {
 
 	/**
 	 * Process a user message — captures context, resets idle, checks name-call.
+	 * Context capture always happens. Active features gated by `enabled`.
 	 */
 	processUserMessage(text: string): void {
 		this.appendContext(`User: ${text}`);
 		this.markActivity();
 		this.resetIdleTimer();
 
-		// Name-call detection
+		// Name-call detection (gated by enabled via detectNameCall)
 		if (this.detectNameCall(text)) {
 			this.handleNameCall(text).catch(() => {});
 		}
@@ -309,8 +324,6 @@ export class BuddyController {
 	 * Requires model and apiKey for hatch/reroll operations.
 	 */
 	async handleCommand(subcommand: string, model?: any, apiKey?: string): Promise<BuddyCommandResult> {
-		this.resetIdleTimer();
-
 		switch (subcommand) {
 			case "pet": {
 				if (!this.manager.getState()) {
@@ -329,6 +342,7 @@ export class BuddyController {
 				try {
 					const state = await this.manager.reroll(model, apiKey);
 					this.callbacks.onThinkingEnd();
+					this.enabled = true;
 					return { type: "reroll", state };
 				} catch (err) {
 					this.callbacks.onThinkingEnd();
@@ -344,23 +358,22 @@ export class BuddyController {
 			}
 			case "off": {
 				this.manager.setVisible(false);
+				this.enabled = false;
 				this.stop();
 				return { type: "off" };
 			}
 			default: {
 				// No subcommand: hatch or show
 				if (this.manager.getState()) {
-					// Already showing — return show
+					// Already showing — just enable and return
+					this.enabled = true;
 					return { type: "show", state: this.manager.getState()! };
 				}
 
 				// Try to load existing buddy
 				const existing = this.manager.load();
 				if (existing) {
-					if (existing.visible === false) {
-						this.manager.setVisible(true);
-						existing.visible = true;
-					}
+					this.enabled = true;
 					return { type: "show", state: existing };
 				}
 
@@ -372,6 +385,7 @@ export class BuddyController {
 				try {
 					const hatchState = await this.manager.hatch(model, apiKey);
 					this.callbacks.onThinkingEnd();
+					this.enabled = true;
 					return { type: "hatch", state: hatchState };
 				} catch (err) {
 					this.callbacks.onThinkingEnd();
@@ -385,13 +399,21 @@ export class BuddyController {
 	// Lifecycle
 	// =========================================================================
 
-	/** Start the controller — auto-load buddy if one exists */
+	/** Start the controller — auto-load buddy if one exists and is visible */
 	start(): BuddyState | null {
 		const existing = this.manager.load();
-		return existing && existing.visible !== false ? existing : null;
+		if (existing && existing.visible !== false) {
+			this.enabled = true;
+			return existing;
+		}
+		// Buddy exists but is hidden — load state but stay disabled
+		if (existing) {
+			this.enabled = false;
+		}
+		return null;
 	}
 
-	/** Stop the controller — clear timers, reset state */
+	/** Stop the controller — clear timers */
 	stop(): void {
 		if (this.idleTimer) {
 			clearTimeout(this.idleTimer);
@@ -399,11 +421,12 @@ export class BuddyController {
 		}
 	}
 
-	/** Full reset — clear context buffer, idle timer, and reaction budget */
+	/** Full reset — clear context buffer, idle timer, reaction budget, and re-enable */
 	reset(): void {
 		this.stop();
 		this.contextBuffer = [];
 		this.lastReactionTime = 0;
 		this.reactionTimestamps = [];
+		this.enabled = true;
 	}
 }
