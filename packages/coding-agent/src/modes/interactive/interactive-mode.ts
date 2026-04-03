@@ -39,7 +39,7 @@ import {
 import { spawn, spawnSync } from "child_process";
 import { APP_NAME, getAgentDir, getAuthPath, getDebugLogPath, getUpdateInstruction, VERSION } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
-import { BuddyManager } from "../../core/buddy/buddy-manager.js";
+import { BuddyManager, checkOllama } from "../../core/buddy/buddy-manager.js";
 import { Rarity, Stat } from "../../core/buddy/buddy-types.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
@@ -2449,9 +2449,18 @@ export class InteractiveMode {
 				}
 				// Buddy reaction: tool error
 				if (event.isError && this.buddyComponent) {
-					const errorDetail = event.result?.error || event.result?.output || "unknown error";
-					const errorText =
-						typeof errorDetail === "string" ? errorDetail.slice(0, 200) : String(errorDetail).slice(0, 200);
+					const result = event.result;
+					let errorText = "unknown error";
+					if (result?.content && Array.isArray(result.content)) {
+						errorText = result.content
+							.filter((c: any) => c.type === "text")
+							.map((c: any) => c.text)
+							.join("")
+							.slice(0, 200);
+					} else if (typeof result?.error === "string") {
+						errorText = result.error.slice(0, 200);
+					}
+					if (!errorText) errorText = "unknown error";
 					this.triggerBuddyReaction(`Tool "${event.toolName}" failed: ${errorText}`).catch(() => {});
 				}
 				// Capture tool result for buddy context
@@ -4715,6 +4724,10 @@ export class InteractiveMode {
 					break;
 				}
 				case "reroll": {
+					if (!this.buddyManager.hasStoredBuddy()) {
+						this.showWarning("No buddy to reroll! Use /buddy to hatch one first.");
+						return;
+					}
 					this.buddyComponent?.showThinking("rerolling");
 					try {
 						const state = await this.buddyManager.reroll(model, apiKey);
@@ -4806,15 +4819,30 @@ export class InteractiveMode {
 	private showBuddyHatchMessage(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
 		this.chatContainer.addChild(new Spacer(1));
 		const shinyMark = state.shiny ? " ✨ SHINY!" : "";
-		const lines = [
-			theme.fg("accent", `🥚 A ${state.rarity} ${state.species} hatched!${shinyMark}`),
-			theme.fg("muted", `Meet ${theme.bold(state.name)} — ${state.personality}`),
-			theme.fg("muted", `Backstory: ${state.backstory}`),
+		const md = [
+			`🥚 A **${state.rarity}** ${state.species} hatched!${shinyMark}`,
+			`Meet **${state.name}** — ${state.personality}`,
+			`*Backstory: ${state.backstory}*`,
 			"",
-			theme.fg("muted", "Use /buddy pet to show love, /buddy reroll to try again."),
+			"Use `/buddy pet` to show love, `/buddy reroll` to try again.",
 		].join("\n");
-		this.chatContainer.addChild(new Text(lines, 1, 0));
+		this.chatContainer.addChild(new Markdown(md, 1, 0, this.getMarkdownThemeWithSettings()));
+
+		// Check Ollama availability and warn if missing
+		this.checkOllamaAndWarn();
+
 		this.ui.requestRender();
+	}
+
+	private async checkOllamaAndWarn(): Promise<void> {
+		const status = await checkOllama();
+		if (!status.available) {
+			const msg = status.error
+				? `⚠️ Buddy reactions unavailable: ${status.error}`
+				: "⚠️ Buddy reactions require Ollama. Install it at https://ollama.com and run: ollama pull llama3.2";
+			this.chatContainer.addChild(new Text(theme.fg("warning", msg), 1, 0));
+			this.ui.requestRender();
+		}
 	}
 
 	private showBuddyStatsPanel(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
@@ -4833,6 +4861,8 @@ export class InteractiveMode {
 			return theme.fg("muted", `│ ${s.padEnd(12)}`) + theme.fg(color, bar) + theme.fg("muted", " │");
 		});
 
+		const personality = state.personality.replace(/\n/g, " ");
+		const backstory = state.backstory.replace(/\n/g, " ");
 		const lines = [
 			header,
 			theme.fg("muted", `│ Species:    `) + theme.bold(state.species),
@@ -4847,8 +4877,8 @@ export class InteractiveMode {
 			theme.fg("muted", "│ Stats:"),
 			...statLines,
 			"│",
-			theme.fg("muted", `│ Personality: ${state.personality}`),
-			theme.fg("muted", `│ Backstory:  ${state.backstory}`),
+			theme.fg("muted", `│ Personality: ${personality}`),
+			theme.fg("muted", `│ Backstory:  ${backstory}`),
 			footer,
 		].join("\n");
 

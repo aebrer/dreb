@@ -9,11 +9,13 @@
  * - Stat display and rarity badge
  */
 
-import type { Component, TUI } from "@dreb/tui";
+import type { Component, MarkdownTheme as MT, TUI } from "@dreb/tui";
+import { truncateToWidth, visibleWidth } from "@dreb/tui";
+import { marked } from "marked";
 import { applyEyes, getSpeciesFrames, getSpeciesWidth } from "../../../core/buddy/buddy-species.js";
 import type { BuddyState } from "../../../core/buddy/buddy-types.js";
 import { Rarity, Stat } from "../../../core/buddy/buddy-types.js";
-import { theme } from "../theme/theme.js";
+import { getMarkdownTheme, theme } from "../theme/theme.js";
 
 const IDLE_INTERVAL_MS = 500;
 const SPEECH_BUBBLE_DURATION_MS = 10000;
@@ -237,7 +239,8 @@ export class BuddyComponent implements Component {
 
 		if (this.speechText) {
 			const maxQuip = Math.max(10, width - face.length - this.state.name.length - 6);
-			const quip = this.speechText.length > maxQuip ? `${this.speechText.slice(0, maxQuip - 1)}…` : this.speechText;
+			const styledQuip = this.renderInlineMarkdown(this.speechText);
+			const quip = visibleWidth(styledQuip) > maxQuip ? `${truncateToWidth(styledQuip, maxQuip - 1)}…` : styledQuip;
 			lines.push(` ${face} ${name}: ${theme.fg("accent", quip)}`);
 		} else if (this.thinkingLabel !== null) {
 			const dots = ".".repeat((this.thinkingDots % BuddyComponent.THINKING_DOT_COUNT) + 1);
@@ -317,13 +320,18 @@ export class BuddyComponent implements Component {
 
 	private formatSpeechBubble(text: string, maxWidth: number): string[] {
 		if (!text.trim()) return [];
+
+		// Render inline markdown (bold, italic, code) to styled text with ANSI codes
+		const styledText = this.renderInlineMarkdown(text);
+
+		// Word-wrap using visible width (ANSI-aware)
 		const lines: string[] = [];
-		const words = text.split(" ");
+		const words = styledText.split(" ");
 		let currentLine = "";
 
 		for (const word of words) {
 			const test = currentLine ? `${currentLine} ${word}` : word;
-			if (test.length > maxWidth) {
+			if (visibleWidth(test) > maxWidth) {
 				if (currentLine) lines.push(currentLine);
 				currentLine = word;
 			} else {
@@ -332,19 +340,62 @@ export class BuddyComponent implements Component {
 		}
 		if (currentLine) lines.push(currentLine);
 
-		// Wrap in bubble border
-		const bubbleWidth = Math.min(Math.max(...lines.map((l) => l.length)) + 4, maxWidth + 4);
+		// Wrap in bubble border using visible width for measurement
+		const maxLineWidth = Math.max(...lines.map((l) => visibleWidth(l)));
+		const bubbleWidth = Math.max(6, Math.min(maxLineWidth + 4, maxWidth + 4));
 		const top = `╭${"─".repeat(bubbleWidth - 2)}╮`;
 		const bottom = `╰${"─".repeat(bubbleWidth - 2)}╯`;
 
 		const result: string[] = [];
 		result.push(` ${theme.fg("accent", top)}`);
 		for (const line of lines) {
-			const padded = line + " ".repeat(bubbleWidth - 4 - line.length);
+			const padding = Math.max(0, bubbleWidth - 4 - visibleWidth(line));
+			const padded = line + " ".repeat(padding);
 			result.push(` ${theme.fg("accent", "│")} ${padded} ${theme.fg("accent", "│")}`);
 		}
 		result.push(` ${theme.fg("accent", bottom)}`);
 
+		return result;
+	}
+
+	/** Render inline markdown tokens (bold, italic, code) to ANSI-styled text */
+	private renderInlineMarkdown(text: string): string {
+		const mdTheme = getMarkdownTheme();
+		const tokens = marked.lexer(text);
+
+		// Flatten: we expect a paragraph containing inline tokens
+		const inlineTokens = tokens.flatMap((t: any) =>
+			t.type === "paragraph" ? (t.tokens ?? []) : t.type === "text" ? t : [],
+		);
+
+		return this.renderInlineTokens(inlineTokens, mdTheme);
+	}
+
+	/** Recursively render marked inline tokens to ANSI-styled strings */
+	private renderInlineTokens(tokens: any[], mdTheme: MT): string {
+		let result = "";
+		for (const token of tokens) {
+			switch (token.type) {
+				case "text":
+					result += token.text ?? this.renderInlineTokens(token.tokens ?? [], mdTheme);
+					break;
+				case "strong":
+					result += mdTheme.bold(this.renderInlineTokens(token.tokens ?? [], mdTheme));
+					break;
+				case "em":
+					result += mdTheme.italic(this.renderInlineTokens(token.tokens ?? [], mdTheme));
+					break;
+				case "codespan":
+					result += mdTheme.code(token.text);
+					break;
+				case "escape":
+					result += token.text;
+					break;
+				default:
+					result += token.text ?? token.raw ?? "";
+					break;
+			}
+		}
 		return result;
 	}
 }

@@ -343,12 +343,23 @@ export class BuddyManager {
 			name: `${modelName} (Ollama)`,
 		};
 
-		const response = await completeSimple(model, context, {
-			apiKey: "ollama",
-			signal: AbortSignal.timeout(15000),
-		});
+		let response: import("@dreb/ai").AssistantMessage;
+		try {
+			response = await completeSimple(model, context, {
+				apiKey: "ollama",
+				signal: AbortSignal.timeout(15000),
+			});
+		} catch {
+			// Ollama crashed or became unreachable — invalidate cache so next attempt rechecks
+			this.ollamaStatus = null;
+			return null;
+		}
 
-		if (response.stopReason === "error") return null;
+		if (response.stopReason === "error") {
+			// Completion returned an error — invalidate cache
+			this.ollamaStatus = null;
+			return null;
+		}
 
 		return response.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")

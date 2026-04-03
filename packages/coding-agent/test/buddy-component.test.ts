@@ -13,6 +13,11 @@ vi.mock("../src/modes/interactive/theme/theme.js", () => ({
 		bold: (s: string) => `**${s}**`,
 		fg: (_color: string, s: string) => s,
 	},
+	getMarkdownTheme: () => ({
+		bold: (s: string) => `**${s}**`,
+		italic: (s: string) => `_${s}_`,
+		code: (s: string) => `\`${s}\``,
+	}),
 }));
 
 // Minimal TUI mock
@@ -100,6 +105,29 @@ describe("BuddyComponent", () => {
 			expect(joined).toContain("╯");
 			// requestRender should have been called
 			expect(mockRequestRender).toHaveBeenCalled();
+		});
+
+		it("renders bold markdown in speech bubble", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showSpeech("That was **really** cool!");
+			const lines = comp.render(120);
+			comp.dispose();
+
+			const joined = lines.join("\n");
+			// Bold should be rendered via theme.bold (mock wraps in **)
+			expect(joined).toContain("**really**");
+		});
+
+		it("renders italic markdown in speech bubble", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showSpeech("Well, *maybe* I can help");
+			const lines = comp.render(120);
+			comp.dispose();
+
+			const joined = lines.join("\n");
+			expect(joined).toContain("_maybe_");
 		});
 
 		it("word-wraps long speech text", () => {
