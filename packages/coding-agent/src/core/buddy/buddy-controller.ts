@@ -118,6 +118,8 @@ export class BuddyController {
 
 		if (!this.enabled) return;
 
+		if (!this.manager.getState()) return; // No buddy loaded, skip idle timer
+
 		// Activity gating: skip idle timer if user has been inactive too long
 		if (this.config.activityGateMs > 0 && this.lastActivityTime > 0) {
 			const elapsed = Date.now() - this.lastActivityTime;
@@ -196,7 +198,11 @@ export class BuddyController {
 	 */
 	async handleNameCall(userMessage: string): Promise<void> {
 		if (!this.enabled) return;
-		const state = this.manager.getState();
+		let state = this.manager.getState();
+		if (!state) {
+			// Try loading from disk (buddy may have been hatched in another frontend)
+			state = this.manager.load();
+		}
 		if (!state) return;
 
 		this.callbacks.onThinkingStart();
@@ -346,6 +352,7 @@ export class BuddyController {
 					const state = await this.callbacks.onReroll(this.manager);
 					this.callbacks.onThinkingEnd();
 					this.enabled = true;
+					this.manager.setHidden(false);
 					return { type: "reroll", state };
 				} catch (err) {
 					this.callbacks.onThinkingEnd();
@@ -361,6 +368,7 @@ export class BuddyController {
 			}
 			case "off": {
 				this.enabled = false;
+				this.manager.setHidden(true);
 				this.stop();
 				return { type: "off" };
 			}
@@ -369,6 +377,7 @@ export class BuddyController {
 				if (this.manager.getState()) {
 					// Already showing — just enable and return
 					this.enabled = true;
+					this.manager.setHidden(false);
 					return { type: "show", state: this.manager.getState()! };
 				}
 
@@ -376,6 +385,7 @@ export class BuddyController {
 				const existing = this.manager.load();
 				if (existing) {
 					this.enabled = true;
+					this.manager.setHidden(false);
 					return { type: "show", state: existing };
 				}
 
@@ -402,7 +412,8 @@ export class BuddyController {
 	start(): BuddyState | null {
 		const existing = this.manager.load();
 		if (existing) {
-			this.enabled = true;
+			// If buddy was hidden (via /buddy off), keep it loaded but disabled
+			this.enabled = !existing.hidden;
 			return existing;
 		}
 		return null;

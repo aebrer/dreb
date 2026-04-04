@@ -4,7 +4,7 @@
  * command dispatch, and lifecycle.
  */
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -248,6 +248,36 @@ describe("enabled flag", () => {
 		expect(result!.name).toBe("Testbud");
 		expect(controller.enabled).toBe(true);
 	});
+
+	it("should persist hidden=true on off and clear on re-enable", async () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		// Off should persist hidden
+		await controller.handleCommand("off");
+		const stored = JSON.parse(readFileSync(join(TEST_DIR, "buddy.json"), "utf-8"));
+		expect(stored.hidden).toBe(true);
+
+		// Re-enable should clear hidden
+		await controller.handleCommand("");
+		const stored2 = JSON.parse(readFileSync(join(TEST_DIR, "buddy.json"), "utf-8"));
+		expect(stored2.hidden).toBeFalsy();
+	});
+
+	it("should start with enabled=false when stored buddy has hidden=true", () => {
+		writeStoredBuddy();
+		const { controller } = createTestController();
+
+		// Manually set hidden
+		const stored = JSON.parse(readFileSync(join(TEST_DIR, "buddy.json"), "utf-8"));
+		stored.hidden = true;
+		writeFileSync(join(TEST_DIR, "buddy.json"), JSON.stringify(stored));
+
+		const state = controller.start();
+		expect(state).not.toBeNull(); // buddy loaded from disk
+		expect(controller.enabled).toBe(false); // but disabled
+	});
 });
 
 // ===========================================================================
@@ -304,6 +334,13 @@ describe("activity tracking", () => {
 		const { controller } = createTestController({ activityGateMs: 100 });
 		controller.markActivity();
 		(controller as any).lastActivityTime = Date.now() - 1000; // old activity
+		controller.resetIdleTimer();
+		expect((controller as any).idleTimer).toBeNull();
+	});
+
+	it("should not start idle timer when no buddy loaded", () => {
+		const { controller } = createTestController();
+		// No buddy loaded, no stored buddy
 		controller.resetIdleTimer();
 		expect((controller as any).idleTimer).toBeNull();
 	});
@@ -463,6 +500,18 @@ describe("handleNameCall", () => {
 		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
 		expect(callbacks.onSpeech).not.toHaveBeenCalled();
 	});
+
+	it("should load from disk when handling name-call with no in-memory state", async () => {
+		writeStoredBuddy({ name: "Zorp" });
+		const { controller, callbacks, manager } = createTestController();
+		// Don't call manager.load() — simulate disk-only buddy (hatched in another frontend)
+
+		vi.spyOn(manager, "respondToNameCall").mockResolvedValue("Hello from disk!");
+
+		await controller.handleNameCall("Hey Zorp!");
+		expect(callbacks.onThinkingStart).toHaveBeenCalled();
+		expect(callbacks.onSpeech).toHaveBeenCalledWith("Hello from disk!");
+	});
 });
 
 // ===========================================================================
@@ -615,6 +664,33 @@ describe("processUserMessage", () => {
 
 		expect(nameCallSpy).toHaveBeenCalledWith("Hey Zorp!");
 	});
+
+	it("should call handleNameCall when name detected via processUserMessage", async () => {
+		writeStoredBuddy({ name: "Zorp" });
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		vi.spyOn(manager, "respondToNameCall").mockResolvedValue("Hey!");
+
+		controller.processUserMessage("Hey Zorp, what's up?");
+
+		// Wait for the async handleNameCall
+		await vi.waitFor(() => {
+			expect(callbacks.onSpeech).toHaveBeenCalledWith("Hey!");
+		});
+	});
+
+	it("should still capture context and reset idle even for name-calls", async () => {
+		writeStoredBuddy({ name: "Zorp" });
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		const idleSpy = vi.spyOn(controller, "resetIdleTimer");
+		controller.processUserMessage("Hey Zorp, what's up?");
+
+		expect(controller.buildContext()).toContain("User: Hey Zorp, what's up?");
+		expect(idleSpy).toHaveBeenCalled();
+	});
 });
 
 // ===========================================================================
@@ -729,6 +805,19 @@ describe("handleCommand", () => {
 		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
 		expect(controller.enabled).toBe(true);
 	});
+
+	it("should return error for reroll when onReroll throws", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+		(callbacks.onReroll as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("Ollama unavailable"));
+
+		const result = await controller.handleCommand("reroll");
+		expect(result.type).toBe("error");
+		if (result.type === "error") expect(result.message).toContain("Reroll failed");
+		expect(callbacks.onThinkingStart).toHaveBeenCalled();
+		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
+	});
 });
 
 // ===========================================================================
@@ -803,7 +892,10 @@ describe("lifecycle", () => {
 	});
 
 	it("should clear timers on stop", () => {
-		const { controller } = createTestController();
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
 		controller.resetIdleTimer();
 		expect((controller as any).idleTimer).not.toBeNull();
 		controller.stop();

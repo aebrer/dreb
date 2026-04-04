@@ -2222,6 +2222,11 @@ export class InteractiveMode {
 				}
 			}
 
+			// Capture user message for buddy context and reset idle timer
+			this.buddyController.appendContext(`User: ${text}`);
+			this.buddyController.markActivity();
+			this.buddyController.resetIdleTimer();
+
 			// Name-call detection for buddy (must run before all early-return paths)
 			if (this.buddyController.detectNameCall(text) && this.buddyComponent) {
 				this.editor.setText("");
@@ -2240,11 +2245,6 @@ export class InteractiveMode {
 				}
 				return;
 			}
-
-			// Capture user message for buddy context and reset idle timer
-			this.buddyController.appendContext(`User: ${text}`);
-			this.buddyController.markActivity();
-			this.buddyController.resetIdleTimer();
 
 			// If streaming, use prompt() with steer behavior
 			// This handles extension commands (execute immediately), prompt template expansion, and queueing

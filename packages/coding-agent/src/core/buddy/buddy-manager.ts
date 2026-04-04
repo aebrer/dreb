@@ -131,6 +131,7 @@ function loadStored(): StoredCompanion | null {
 				personality: data.personality,
 				backstory: typeof data.backstory === "string" ? data.backstory : DEFAULT_BACKSTORY,
 				hatchedAt: data.hatchedAt ?? new Date().toISOString(),
+				...(data.hidden !== undefined ? { hidden: data.hidden } : {}),
 			};
 		}
 		return null;
@@ -410,5 +411,14 @@ export class BuddyManager {
 	/** Reset Ollama status cache (e.g. after detecting it became available) */
 	resetOllamaCache(): void {
 		this.ollamaStatus = null;
+	}
+
+	/** Update the hidden flag in persisted storage */
+	setHidden(hidden: boolean): void {
+		const stored = loadStored();
+		if (stored) {
+			stored.hidden = hidden;
+			saveStored(stored);
+		}
 	}
 }
