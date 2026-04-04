@@ -278,6 +278,21 @@ describe("enabled flag", () => {
 		expect(state).not.toBeNull(); // buddy loaded from disk
 		expect(controller.enabled).toBe(false); // but disabled
 	});
+
+	it("should keep buddy disabled after reset() when /buddy off was called", async () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+		controller.start();
+
+		// /buddy off — sets enabled=false and persists hidden=true
+		await controller.handleCommand("off");
+		expect(controller.enabled).toBe(false);
+
+		// Simulate bridge reconnect — reset() should respect hidden state
+		controller.reset();
+		expect(controller.enabled).toBe(false); // stays disabled
+	});
 });
 
 // ===========================================================================

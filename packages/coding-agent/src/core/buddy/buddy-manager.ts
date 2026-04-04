@@ -420,5 +420,9 @@ export class BuddyManager {
 			stored.hidden = hidden;
 			saveStored(stored);
 		}
+		// Keep in-memory state in sync so reset() reads current hidden flag
+		if (this.state) {
+			this.state.hidden = hidden;
+		}
 	}
 }
