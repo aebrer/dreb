@@ -131,7 +131,6 @@ function loadStored(): StoredCompanion | null {
 				personality: data.personality,
 				backstory: typeof data.backstory === "string" ? data.backstory : DEFAULT_BACKSTORY,
 				hatchedAt: data.hatchedAt ?? new Date().toISOString(),
-				visible: data.visible !== false,
 			};
 		}
 		return null;
@@ -277,7 +276,6 @@ export class BuddyManager {
 			personality,
 			backstory,
 			hatchedAt: new Date().toISOString(),
-			visible: true,
 		};
 
 		saveStored(newStored);
@@ -301,23 +299,11 @@ export class BuddyManager {
 			personality,
 			backstory,
 			hatchedAt: new Date().toISOString(),
-			visible: true,
 		};
 
 		saveStored(newStored);
 		this.state = { ...bones, ...newStored };
 		return this.state;
-	}
-
-	/** Set visibility (persists to disk) */
-	setVisible(visible: boolean): void {
-		const stored = loadStored();
-		if (!stored) return;
-		stored.visible = visible;
-		saveStored(stored);
-		if (this.state) {
-			this.state.visible = visible;
-		}
 	}
 
 	/** Get buddy's name (for name-call detection) */

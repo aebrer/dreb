@@ -41,7 +41,7 @@ import { APP_NAME, getAgentDir, getAuthPath, getDebugLogPath, getUpdateInstructi
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
 import { BuddyManager } from "../../core/buddy/buddy-manager.js";
 import { Rarity, Stat } from "../../core/buddy/buddy-types.js";
-import { BuddyController, checkOllama } from "../../core/buddy/index.js";
+import { BuddyController } from "../../core/buddy/index.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type {
 	ExtensionContext,
@@ -4690,7 +4690,7 @@ export class InteractiveMode {
 				case "reroll": {
 					await this.playHatchAnimation();
 					this.mountBuddy(result.state);
-					this.showBuddyHatchMessage(result.state);
+					this.showBuddyStatsPanel(result.state);
 					this.ui.requestRender();
 					break;
 				}
@@ -4710,11 +4710,12 @@ export class InteractiveMode {
 				case "hatch": {
 					await this.playHatchAnimation();
 					this.mountBuddy(result.state);
-					this.showBuddyHatchMessage(result.state);
+					this.showBuddyStatsPanel(result.state);
 					break;
 				}
 				case "show": {
 					this.mountBuddy(result.state);
+					this.showBuddyStatsPanel(result.state);
 					break;
 				}
 				case "warning": {
@@ -4747,35 +4748,6 @@ export class InteractiveMode {
 		}
 		this.extensionWidgetsBelow.delete("__buddy__");
 		this.renderWidgets();
-	}
-
-	private showBuddyHatchMessage(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
-		this.chatContainer.addChild(new Spacer(1));
-		const shinyMark = state.shiny ? " ✨ SHINY!" : "";
-		const md = [
-			`🥚 A **${state.rarity}** ${state.species} hatched!${shinyMark}`,
-			`Meet **${state.name}** — ${state.personality}`,
-			`*Backstory: ${state.backstory}*`,
-			"",
-			"Use `/buddy pet` to show love, `/buddy reroll` to try again.",
-		].join("\n");
-		this.chatContainer.addChild(new Markdown(md, 1, 0, this.getMarkdownThemeWithSettings()));
-
-		// Check Ollama availability and warn if missing
-		this.checkOllamaAndWarn();
-
-		this.ui.requestRender();
-	}
-
-	private async checkOllamaAndWarn(): Promise<void> {
-		const status = await checkOllama();
-		if (!status.available) {
-			const msg = status.error
-				? `⚠️ Buddy reactions unavailable: ${status.error}`
-				: "⚠️ Buddy reactions require Ollama. Install it at https://ollama.com and run: ollama pull llama3.2";
-			this.chatContainer.addChild(new Text(theme.fg("warning", msg), 1, 0));
-			this.ui.requestRender();
-		}
 	}
 
 	private showBuddyStatsPanel(state: import("../../core/buddy/buddy-types.js").BuddyState): void {

@@ -184,6 +184,12 @@ export async function handleAgentEvent(
 			break;
 		}
 
+		case "tool_execution_end": {
+			// Feed event to buddy controller for context capture + error reactions
+			state.buddyController?.handleEvent(event);
+			break;
+		}
+
 		case "message_end": {
 			const msg = event.message;
 

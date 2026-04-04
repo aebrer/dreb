@@ -10,6 +10,7 @@ import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type BuddyCallbacks, BuddyController } from "../src/core/buddy/buddy-controller.js";
 import { BuddyManager } from "../src/core/buddy/buddy-manager.js";
+import { type BuddyState, Rarity } from "../src/core/buddy/buddy-types.js";
 
 const TEST_DIR = join(tmpdir(), "dreb-buddy-controller-test");
 
@@ -38,9 +39,33 @@ function createTestController(config?: { activityGateMs?: number; reactionsPerHo
 	return { controller, callbacks, manager };
 }
 
+/** A valid BuddyState for mocking hatch/reroll results */
+function createMockBuddyState(overrides?: Partial<BuddyState>): BuddyState {
+	return {
+		species: "Duck",
+		rarity: Rarity.COMMON,
+		shiny: false,
+		eyeStyle: "●",
+		hat: "",
+		stats: {
+			DEBUGGING: 5,
+			PATIENCE: 7,
+			CHAOS: 3,
+			WISDOM: 6,
+			SNARK: 4,
+		},
+		personality: "A test buddy.",
+		backstory: "Born in a test file.",
+		name: "Testbud",
+		rerollCount: 0,
+		hatchedAt: new Date().toISOString(),
+		...overrides,
+	};
+}
+
 /** Write a stored buddy so manager.load() returns a state */
 function writeStoredBuddy(
-	overrides?: Partial<{ name: string; personality: string; backstory: string; rerollCount: number; visible: boolean }>,
+	overrides?: Partial<{ name: string; personality: string; backstory: string; rerollCount: number }>,
 ) {
 	const stored = {
 		rerollCount: 0,
@@ -48,7 +73,6 @@ function writeStoredBuddy(
 		personality: "A test buddy.",
 		backstory: "Born in a test file.",
 		hatchedAt: new Date().toISOString(),
-		visible: true,
 		...overrides,
 	};
 	// getAgentDir() returns DREB_CODING_AGENT_DIR directly; buddy.json goes inside it
@@ -215,13 +239,14 @@ describe("enabled flag", () => {
 		expect(callbacks.onSpeech).toHaveBeenCalledWith("I'm back!");
 	});
 
-	it("should be set to false by start() when buddy is hidden", () => {
-		writeStoredBuddy({ visible: false });
+	it("should load any existing buddy via start() regardless of stored data", () => {
+		writeStoredBuddy();
 		const { controller } = createTestController();
 
 		const result = controller.start();
-		expect(result).toBeNull();
-		expect(controller.enabled).toBe(false);
+		expect(result).not.toBeNull();
+		expect(result!.name).toBe("Testbud");
+		expect(controller.enabled).toBe(true);
 	});
 });
 
@@ -425,6 +450,19 @@ describe("handleNameCall", () => {
 		await controller.handleNameCall("Hey!");
 		expect(callbacks.onThinkingStart).not.toHaveBeenCalled();
 	});
+
+	it("should call onThinkingEnd and not call onSpeech when respondToNameCall throws", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		vi.spyOn(manager, "respondToNameCall").mockRejectedValue(new Error("Ollama crashed"));
+
+		await controller.handleNameCall("Hey Testbud!");
+		expect(callbacks.onThinkingStart).toHaveBeenCalled();
+		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
+		expect(callbacks.onSpeech).not.toHaveBeenCalled();
+	});
 });
 
 // ===========================================================================
@@ -498,6 +536,28 @@ describe("handleEvent", () => {
 		});
 
 		expect(reactSpy).toHaveBeenCalled();
+	});
+
+	it("should trigger reaction on tool error with result.error string", () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		const reactSpy = vi.spyOn(manager, "react").mockResolvedValue("ouch!");
+
+		controller.handleEvent({
+			type: "tool_execution_end",
+			toolName: "bash",
+			toolCallId: "1",
+			result: { error: "permission denied" },
+			isError: true,
+		});
+
+		// Context should capture the error text
+		expect(controller.buildContext()).toContain("Tool bash failed");
+		// Reaction should be triggered with the error string
+		expect(reactSpy).toHaveBeenCalled();
+		expect(reactSpy).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
 	});
 
 	it("should trigger reaction on agent_end with context", () => {
@@ -615,20 +675,102 @@ describe("handleCommand", () => {
 		if (result.type === "error") expect(result.message).toContain("No model available");
 	});
 
-	it("should return off result and mark buddy invisible", async () => {
+	it("should return off result, set enabled=false, and stop idle timer", async () => {
 		writeStoredBuddy();
 		const { controller, manager } = createTestController();
 		manager.load();
 
+		// Set up an idle timer so we can verify it gets cleared
+		controller.resetIdleTimer();
+		expect((controller as any).idleTimer).not.toBeNull();
+
 		const result = await controller.handleCommand("off");
 		expect(result.type).toBe("off");
-		expect(manager.getState()?.visible).toBe(false);
+		expect(controller.enabled).toBe(false);
+		expect((controller as any).idleTimer).toBeNull();
 	});
 
 	it("should return warning for reroll with no stored buddy", async () => {
 		const { controller } = createTestController();
 		const result = await controller.handleCommand("reroll");
 		expect(result.type).toBe("warning");
+	});
+
+	it("should hatch new buddy when no stored buddy exists", async () => {
+		const { controller, callbacks } = createTestController();
+		const mockState = createMockBuddyState();
+		(callbacks.onHatch as ReturnType<typeof vi.fn>).mockResolvedValue(mockState);
+
+		const result = await controller.handleCommand("");
+		expect(result.type).toBe("hatch");
+		if (result.type === "hatch") {
+			expect(result.state.name).toBe("Testbud");
+		}
+		expect(callbacks.onHatch).toHaveBeenCalledWith(controller.manager);
+		expect(callbacks.onThinkingStart).toHaveBeenCalled();
+		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
+		expect(controller.enabled).toBe(true);
+	});
+
+	it("should reroll when stored buddy exists", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+		const mockState = createMockBuddyState({ name: "Newbud" });
+		(callbacks.onReroll as ReturnType<typeof vi.fn>).mockResolvedValue(mockState);
+
+		const result = await controller.handleCommand("reroll");
+		expect(result.type).toBe("reroll");
+		if (result.type === "reroll") {
+			expect(result.state.name).toBe("Newbud");
+		}
+		expect(callbacks.onReroll).toHaveBeenCalledWith(controller.manager);
+		expect(callbacks.onThinkingStart).toHaveBeenCalled();
+		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
+		expect(controller.enabled).toBe(true);
+	});
+});
+
+// ===========================================================================
+// Idle timer firing
+// ===========================================================================
+describe("idle timer", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("should trigger reaction when idle timer fires", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController({
+			idleTimeoutMs: undefined,
+		} as any);
+		// Override config for short timeout
+		(controller as any).config.idleTimeoutMs = 5000;
+		manager.load();
+
+		vi.spyOn(manager, "react").mockResolvedValue("Still here!");
+
+		// Seed context so the timer callback has something to report
+		controller.appendContext("User: wrote some code");
+		controller.markActivity();
+		controller.resetIdleTimer();
+
+		// Timer should not have fired yet
+		expect(callbacks.onSpeech).not.toHaveBeenCalled();
+
+		// Advance past the idle timeout
+		vi.advanceTimersByTime(5000);
+
+		// Wait for the async reaction to complete
+		await vi.runAllTimersAsync();
+
+		expect(callbacks.onThinkingStart).toHaveBeenCalled();
+		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
+		expect(callbacks.onSpeech).toHaveBeenCalledWith("Still here!");
 	});
 });
 
@@ -650,10 +792,14 @@ describe("lifecycle", () => {
 		expect(controller.start()).toBeNull();
 	});
 
-	it("should return null for hidden buddy", () => {
-		writeStoredBuddy({ visible: false });
+	it("should load buddy from stored data regardless of stored fields", () => {
+		writeStoredBuddy();
 		const { controller } = createTestController();
-		expect(controller.start()).toBeNull();
+
+		const state = controller.start();
+		expect(state).not.toBeNull();
+		expect(state!.name).toBe("Testbud");
+		expect(controller.enabled).toBe(true);
 	});
 
 	it("should clear timers on stop", () => {

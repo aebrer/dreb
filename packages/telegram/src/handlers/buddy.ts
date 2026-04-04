@@ -45,26 +45,6 @@ function speciesEmoji(species: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Format a hatch announcement for Telegram.
- * Species emoji + name/personality/backstory + ASCII art in <pre> code block.
- */
-export function formatBuddyHatch(state: BuddyState): string {
-	const emoji = speciesEmoji(state.species);
-	const shiny = state.shiny ? " ✨Shiny!" : "";
-	const lines = [
-		`${emoji} *${state.name}* hatched! (${state.rarity}${shiny})`,
-		`_${state.personality}_`,
-		`_${state.backstory}_`,
-		"",
-		`<pre>`,
-		`  ${state.hat}`,
-		`  ${state.eyeStyle}   ${state.eyeStyle}`,
-		`</pre>`,
-	];
-	return lines.join("\n");
-}
-
-/**
  * Format a stats panel as a Telegram code block.
  * Shows stat bars using █ and ░ characters.
  */

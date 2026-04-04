@@ -44,7 +44,6 @@ function createTestState(overrides: Partial<BuddyState> = {}): BuddyState {
 		personality: "A test duck.",
 		backstory: "Once ruled a pond empire.",
 		hatchedAt: new Date().toISOString(),
-		visible: true,
 		...overrides,
 	};
 }

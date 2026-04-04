@@ -184,8 +184,9 @@ export class BuddyController {
 				this.reactionTimestamps.push(Date.now());
 				this.callbacks.onSpeech(quip);
 			}
-		} catch {
+		} catch (err) {
 			this.callbacks.onThinkingEnd();
+			console.error("[buddy] triggerReaction failed:", err instanceof Error ? err.message : err);
 		}
 	}
 
@@ -205,8 +206,9 @@ export class BuddyController {
 			if (response) {
 				this.callbacks.onSpeech(response);
 			}
-		} catch {
+		} catch (err) {
 			this.callbacks.onThinkingEnd();
+			console.error("[buddy] handleNameCall failed:", err instanceof Error ? err.message : err);
 		}
 	}
 
@@ -358,7 +360,6 @@ export class BuddyController {
 				return { type: "stats", state };
 			}
 			case "off": {
-				this.manager.setVisible(false);
 				this.enabled = false;
 				this.stop();
 				return { type: "off" };
@@ -367,7 +368,6 @@ export class BuddyController {
 				// No subcommand: hatch or show
 				if (this.manager.getState()) {
 					// Already showing — just enable and return
-					this.manager.setVisible(true);
 					this.enabled = true;
 					return { type: "show", state: this.manager.getState()! };
 				}
@@ -375,7 +375,6 @@ export class BuddyController {
 				// Try to load existing buddy
 				const existing = this.manager.load();
 				if (existing) {
-					this.manager.setVisible(true);
 					this.enabled = true;
 					return { type: "show", state: existing };
 				}
@@ -399,16 +398,12 @@ export class BuddyController {
 	// Lifecycle
 	// =========================================================================
 
-	/** Start the controller — auto-load buddy if one exists and is visible */
+	/** Start the controller — auto-load buddy if one exists */
 	start(): BuddyState | null {
 		const existing = this.manager.load();
-		if (existing && existing.visible !== false) {
+		if (existing) {
 			this.enabled = true;
 			return existing;
-		}
-		// Buddy exists but is hidden — load state but stay disabled
-		if (existing) {
-			this.enabled = false;
 		}
 		return null;
 	}

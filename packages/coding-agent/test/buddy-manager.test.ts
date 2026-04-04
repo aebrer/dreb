@@ -82,7 +82,6 @@ function writeStoredBuddy(overrides: Partial<StoredCompanion> = {}): void {
 		personality: "Test personality",
 		backstory: "A mysterious past shrouded in legend.",
 		hatchedAt: new Date().toISOString(),
-		visible: true,
 		...overrides,
 	};
 	writeFileSync(join(TEST_DIR, "buddy.json"), JSON.stringify(stored));
@@ -135,20 +134,6 @@ describe("BuddyManager", () => {
 		expect(state!.stats).toBeDefined();
 	});
 
-	it("setVisible persists to disk", () => {
-		const restore = withTestEnv();
-		writeStoredBuddy();
-
-		const mgr = new BuddyManager();
-		mgr.load();
-		mgr.setVisible(false);
-
-		const data = readStoredBuddy();
-		expect(data.visible).toBe(false);
-
-		restore();
-	});
-
 	it("getName returns null when no buddy", () => {
 		const mgr = new BuddyManager();
 		expect(mgr.getName()).toBeNull();
@@ -185,7 +170,6 @@ describe("BuddyManager.hatch()", () => {
 		expect(state.personality).toBe("A feisty little companion.");
 		expect(state.backstory).toBe("A mysterious past shrouded in legend.");
 		expect(state.hatchedAt).toBeDefined();
-		expect(state.visible).toBe(true);
 		expect(state.rerollCount).toBe(0);
 
 		// Verify LLM was called
@@ -204,7 +188,6 @@ describe("BuddyManager.hatch()", () => {
 		const diskData = readStoredBuddy();
 		expect(diskData.name).toBe("Rex");
 		expect(diskData.personality).toBe("Bold and brave.");
-		expect(diskData.visible).toBe(true);
 		expect(diskData.rerollCount).toBe(0);
 	});
 
@@ -277,7 +260,6 @@ describe("BuddyManager.reroll()", () => {
 		expect(state.rerollCount).toBe(1);
 		expect(state.name).toBe("Phoenix");
 		expect(state.personality).toBe("Reborn from ashes.");
-		expect(state.visible).toBe(true);
 	});
 
 	it("increments from existing rerollCount", async () => {

@@ -4,7 +4,7 @@
 
 import type { Context } from "grammy";
 import type { Config } from "../config.js";
-import { createTelegramBuddyController, formatBuddyHatch, formatBuddyStats } from "../handlers/buddy.js";
+import { createTelegramBuddyController, formatBuddyStats } from "../handlers/buddy.js";
 import { enqueueSend } from "../handlers/message.js";
 import type { UserState } from "../types.js";
 import { safeSend } from "../util/telegram.js";
@@ -34,52 +34,60 @@ export async function cmdBuddy(ctx: Context, config: Config, userState: UserStat
 	const args = (ctx.match as string)?.trim() ?? "";
 	const subcommand = args.split(/\s+/)[0]?.toLowerCase() ?? "";
 
-	// Ensure buddy controller exists
-	ensureBuddyController(ctx.api, userState, chatId, config);
+	try {
+		// Ensure buddy controller exists
+		ensureBuddyController(ctx.api, userState, chatId, config);
 
-	const controller = userState.buddyController;
-	const result = await controller.handleCommand(subcommand);
+		const controller = userState.buddyController;
+		const result = await controller.handleCommand(subcommand);
 
-	switch (result.type) {
-		case "hatch":
-		case "reroll": {
-			// Reload manager state after RPC hatch/reroll changed buddy.json
-			controller.manager.load();
-			await safeSend(ctx.api, chatId, formatBuddyHatch(result.state));
-			try {
-				await ctx.api.setMessageReaction(chatId, ctx.message!.message_id, [{ type: "emoji", emoji: "❤" }]);
-			} catch {
-				/* Reactions not available in all chats */
+		switch (result.type) {
+			case "hatch":
+			case "reroll": {
+				// Reload manager state after RPC hatch/reroll changed buddy.json
+				controller.manager.load();
+				await safeSend(ctx.api, chatId, formatBuddyStats(result.state));
+				try {
+					await ctx.api.setMessageReaction(chatId, ctx.message!.message_id, [{ type: "emoji", emoji: "❤" }]);
+				} catch {
+					/* Reactions not available in all chats */
+				}
+				break;
 			}
-			break;
-		}
-		case "show": {
-			await safeSend(ctx.api, chatId, formatBuddyHatch(result.state));
-			break;
-		}
-		case "pet": {
-			try {
-				await ctx.api.setMessageReaction(chatId, ctx.message!.message_id, [{ type: "emoji", emoji: "❤" }]);
-			} catch {
-				await safeSend(ctx.api, chatId, "❤️");
+			case "show": {
+				await safeSend(ctx.api, chatId, formatBuddyStats(result.state));
+				break;
 			}
-			break;
+			case "pet": {
+				try {
+					await ctx.api.setMessageReaction(chatId, ctx.message!.message_id, [{ type: "emoji", emoji: "❤" }]);
+				} catch {
+					await safeSend(ctx.api, chatId, "❤️");
+				}
+				break;
+			}
+			case "stats": {
+				await safeSend(ctx.api, chatId, formatBuddyStats(result.state));
+				break;
+			}
+			case "off": {
+				await safeSend(ctx.api, chatId, "🐣 Buddy hidden. Use /buddy to bring them back.");
+				break;
+			}
+			case "warning": {
+				await safeSend(ctx.api, chatId, `⚠️ ${result.message}`);
+				break;
+			}
+			case "error": {
+				await safeSend(ctx.api, chatId, `❌ ${result.message}`);
+				break;
+			}
 		}
-		case "stats": {
-			await safeSend(ctx.api, chatId, formatBuddyStats(result.state));
-			break;
-		}
-		case "off": {
-			await safeSend(ctx.api, chatId, "🐣 Buddy hidden. Use /buddy to bring them back.");
-			break;
-		}
-		case "warning": {
-			await safeSend(ctx.api, chatId, `⚠️ ${result.message}`);
-			break;
-		}
-		case "error": {
-			await safeSend(ctx.api, chatId, `❌ ${result.message}`);
-			break;
-		}
+	} catch (err) {
+		await safeSend(
+			ctx.api,
+			chatId,
+			`❌ Failed to initialize buddy: ${err instanceof Error ? err.message : String(err)}`,
+		);
 	}
 }
