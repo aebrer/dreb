@@ -92,7 +92,7 @@ export interface StoredCompanion {
 	personality: string;
 	backstory: string;
 	hatchedAt: string;
-	visible: boolean;
+	hidden?: boolean; // true when user ran /buddy off
 }
 
 /** Full buddy state = bones (ephemeral) + soul (persisted) */

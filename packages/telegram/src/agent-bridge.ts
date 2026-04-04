@@ -329,6 +329,34 @@ export class AgentBridge {
 	}
 
 	/**
+	 * Hatch a new buddy companion. Runs inside the agent process
+	 * so API keys never cross the process boundary.
+	 */
+	async buddyHatch(): Promise<any> {
+		if (!this.client) throw new Error("Agent not connected.");
+		try {
+			return await this.client.buddyHatch();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
+	}
+
+	/**
+	 * Reroll the buddy companion. Runs inside the agent process
+	 * so API keys never cross the process boundary.
+	 */
+	async buddyReroll(): Promise<any> {
+		if (!this.client) throw new Error("Agent not connected.");
+		try {
+			return await this.client.buddyReroll();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
+	}
+
+	/**
 	 * Get last assistant text.
 	 */
 	async getLastAssistantText(): Promise<string | null> {

@@ -32,6 +32,10 @@ export type RpcCommand =
 	| { id?: string; type: "cycle_model" }
 	| { id?: string; type: "get_available_models" }
 
+	// Buddy — hatch/reroll run inside the agent process so API keys never leave
+	| { id?: string; type: "buddy_hatch" }
+	| { id?: string; type: "buddy_reroll" }
+
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
 	| { id?: string; type: "cycle_thinking_level" }
@@ -145,6 +149,22 @@ export type RpcResponse =
 			command: "get_available_models";
 			success: true;
 			data: { models: Model<any>[] };
+	  }
+
+	// Buddy
+	| {
+			id?: string;
+			type: "response";
+			command: "buddy_hatch";
+			success: true;
+			data: { state: import("../../core/buddy/buddy-types.js").BuddyState };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "buddy_reroll";
+			success: true;
+			data: { state: import("../../core/buddy/buddy-types.js").BuddyState };
 	  }
 
 	// Thinking

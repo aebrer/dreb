@@ -14,9 +14,10 @@ import { log, safeDelete, safeSend } from "./util/telegram.js";
 /** Per-user state store */
 const userStates = new Map<number, UserState>();
 
-function createUserState(): UserState {
+function createUserState(config: Config): UserState {
 	return {
 		bridge: null,
+		config,
 		promptInFlight: false,
 		newSessionFlag: false,
 		newSessionCwd: null,
@@ -24,13 +25,15 @@ function createUserState(): UserState {
 		backgroundAgents: new Map(),
 		stopRequested: false,
 		outbox: [],
+		buddyController: null,
 	};
 }
 
-function getUserState(userId: number): UserState {
+function getUserState(userId: number, config?: Config): UserState {
 	let state = userStates.get(userId);
 	if (!state) {
-		state = createUserState();
+		if (!config) throw new Error("Config required for new user state creation");
+		state = createUserState(config);
 		userStates.set(userId, state);
 	}
 	return state;
@@ -52,8 +55,9 @@ export function createBot(config: Config): Bot {
 		});
 	}
 
-	// Register slash commands
-	registerCommands(bot, config, getUserState);
+	// Register slash commands — bind config so callers see (userId) => UserState
+	const boundGetUserState = (userId: number) => getUserState(userId, config);
+	registerCommands(bot, config, boundGetUserState);
 
 	// Text message handler
 	bot.on("message:text", async (ctx) => {
@@ -61,7 +65,7 @@ export function createBot(config: Config): Bot {
 		if (ctx.message.text.startsWith("/")) return;
 
 		const userId = ctx.from!.id;
-		const userState = getUserState(userId);
+		const userState = getUserState(userId, config);
 		const isBusy = userState.bridge?.isStreaming || userState.promptInFlight;
 
 		// Show status immediately
@@ -96,7 +100,7 @@ export function createBot(config: Config): Bot {
 	// File handler (documents, photos, voice, audio, video)
 	bot.on(["message:document", "message:photo", "message:voice", "message:audio", "message:video"], async (ctx) => {
 		const userId = ctx.from!.id;
-		const userState = getUserState(userId);
+		const userState = getUserState(userId, config);
 
 		// Ensure bridge is alive
 		try {
@@ -107,7 +111,7 @@ export function createBot(config: Config): Bot {
 			return;
 		}
 
-		await handleFile(ctx, ctx.api, getUserState);
+		await handleFile(ctx, ctx.api, boundGetUserState);
 	});
 
 	// Error handler

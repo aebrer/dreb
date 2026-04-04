@@ -131,7 +131,7 @@ function loadStored(): StoredCompanion | null {
 				personality: data.personality,
 				backstory: typeof data.backstory === "string" ? data.backstory : DEFAULT_BACKSTORY,
 				hatchedAt: data.hatchedAt ?? new Date().toISOString(),
-				visible: data.visible !== false,
+				...(data.hidden !== undefined ? { hidden: data.hidden } : {}),
 			};
 		}
 		return null;
@@ -277,7 +277,6 @@ export class BuddyManager {
 			personality,
 			backstory,
 			hatchedAt: new Date().toISOString(),
-			visible: true,
 		};
 
 		saveStored(newStored);
@@ -301,23 +300,11 @@ export class BuddyManager {
 			personality,
 			backstory,
 			hatchedAt: new Date().toISOString(),
-			visible: true,
 		};
 
 		saveStored(newStored);
 		this.state = { ...bones, ...newStored };
 		return this.state;
-	}
-
-	/** Set visibility (persists to disk) */
-	setVisible(visible: boolean): void {
-		const stored = loadStored();
-		if (!stored) return;
-		stored.visible = visible;
-		saveStored(stored);
-		if (this.state) {
-			this.state.visible = visible;
-		}
 	}
 
 	/** Get buddy's name (for name-call detection) */
@@ -424,5 +411,18 @@ export class BuddyManager {
 	/** Reset Ollama status cache (e.g. after detecting it became available) */
 	resetOllamaCache(): void {
 		this.ollamaStatus = null;
+	}
+
+	/** Update the hidden flag in persisted storage */
+	setHidden(hidden: boolean): void {
+		const stored = loadStored();
+		if (stored) {
+			stored.hidden = hidden;
+			saveStored(stored);
+		}
+		// Keep in-memory state in sync so reset() reads current hidden flag
+		if (this.state) {
+			this.state.hidden = hidden;
+		}
 	}
 }

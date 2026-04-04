@@ -75,7 +75,10 @@ The plan should be **high-level on implementation details** (avoid cascading spe
 
 **Project-layer coverage:** Cross-check the plan against discovered project layers. Every affected layer should be addressed.
 
-**Test coverage planning:** If the project has tests, each behavior change must specify what tests to add or modify.
+**Test coverage is mandatory, not optional.** Every new behavior, command handler, formatting function, or event wiring must include tests in the plan. If the target package lacks test infrastructure, the plan must include setting it up as a deliverable — this cannot be deferred. The testing approach should specify:
+- Which test files to create or modify
+- What behaviors to verify (happy paths, error paths, edge cases)
+- What test infrastructure/helpers are needed (mocks, factories, fixtures)
 
 Present the plan to the user. Discuss and revise if they have feedback.
 

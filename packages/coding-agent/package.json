@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/coding-agent",
-	"version": "1.14.0",
+	"version": "1.15.0",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"drebConfig": {
@@ -24,6 +24,10 @@
 		"./rpc": {
 			"types": "./dist/modes/rpc/index.d.ts",
 			"import": "./dist/modes/rpc/index.js"
+		},
+		"./buddy": {
+			"types": "./dist/core/buddy/index.d.ts",
+			"import": "./dist/core/buddy/index.js"
 		}
 	},
 	"files": [

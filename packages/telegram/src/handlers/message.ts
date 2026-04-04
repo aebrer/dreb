@@ -13,6 +13,7 @@
 
 import type { Api } from "grammy";
 import type { AgentBridge } from "../agent-bridge.js";
+import { ensureBuddyController } from "../commands/buddy.js";
 import { setUserSession } from "../state.js";
 import type { UserState } from "../types.js";
 import { cleanupUploads } from "../util/files.js";
@@ -73,7 +74,7 @@ async function drainOutbox(api: Api, userState: UserState): Promise<void> {
 }
 
 /** Push a message to the outbox and kick the delivery loop */
-function enqueueSend(api: Api, userState: UserState, chatId: number, text: string, long?: boolean): void {
+export function enqueueSend(api: Api, userState: UserState, chatId: number, text: string, long?: boolean): void {
 	userState.outbox.push({ chatId, text, long });
 	void drainOutbox(api, userState);
 }
@@ -103,6 +104,7 @@ function ensureSubscribed(api: Api, userState: UserState, bridge: AgentBridge): 
 	// New bridge — clear stale state from any previous bridge
 	userState.promptInFlight = false;
 	displays.delete(userState);
+	userState.buddyController?.reset();
 
 	let eventChain = Promise.resolve();
 	let parentAgentDone = false; // true after agent_end fires (even if BG agents still running)
@@ -233,6 +235,22 @@ export function sendPrompt(
 	// Ensure persistent subscription exists for this bridge
 	ensureSubscribed(api, userState, bridge);
 
+	// Buddy: auto-init controller (loads from shared buddy.json)
+	if (!userState.buddyController) {
+		ensureBuddyController(api, userState, opts.chatId, userState.config);
+	}
+
+	// Buddy: capture context, reset idle, and check for name-call interception.
+	// processUserMessage returns true if name-call detected (buddy handles it).
+	const isNameCall = userState.buddyController?.processUserMessage(opts.prompt);
+	if (isNameCall) {
+		// Clean up the status message (won't be needed — buddy responds instead)
+		if (opts.statusMessageId) {
+			void safeDelete(api, opts.chatId, opts.statusMessageId);
+		}
+		return;
+	}
+
 	// Steering path — agent is actively streaming (same check as TUI).
 	// promptInFlight covers the race window between prompt() and agent_start.
 	if (bridge.isStreaming || userState.promptInFlight) {
@@ -258,6 +276,7 @@ export function sendPrompt(
 	if (opts.userId) userIds.set(userState, opts.userId);
 
 	const display = createEventDisplay(api, opts.chatId, opts.replyToId, opts.statusMessageId);
+	display.buddyController = userState.buddyController;
 
 	// Sync BG agent state — the display needs to know about running agents
 	// so events.ts doesn't prematurely finalize on agent_end (flush editor,

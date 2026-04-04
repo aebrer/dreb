@@ -24,6 +24,7 @@ export const STATIC_COMMANDS: Array<{ command: string; description: string }> = 
 	{ command: "cwd", description: "Working directory" },
 	{ command: "stop", description: "Interrupt current task" },
 	{ command: "restart", description: "Restart the bot" },
+	{ command: "buddy", description: "Hatch or manage your companion" },
 ];
 
 /**

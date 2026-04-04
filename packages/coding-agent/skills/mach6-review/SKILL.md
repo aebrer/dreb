@@ -145,6 +145,8 @@ If a finding was already addressed in prior commits or PR discussion, classify a
 
 After classifying all findings, produce an **action plan** listing what to fix, in what order.
 
+**Important guidance on "deferred" classifications:** Test coverage gaps should NOT be automatically deferred. If a PR adds new testable code, tests should ship with it — even if that means adding test infrastructure to a package that lacks it. Only defer tests when the gap is truly unrelated to the PR's changes (e.g., pre-existing untested code that the PR happens to touch). When tests are deferred, the assessor must note whether a tracking issue exists or needs to be created.
+
 Update task: assess → completed, post-assess → in_progress.
 
 ## Step 7: Post assessment

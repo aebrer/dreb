@@ -12,19 +12,30 @@ import type { UserState } from "../src/types.js";
 // Mocks — hoisted so they're available in vi.mock factories
 // ---------------------------------------------------------------------------
 
-const { mockSetUserSession, mockCleanupUploads, mockSafeSend, mockSendLong, mockSafeDelete, mockLog } = vi.hoisted(
-	() => ({
-		mockSetUserSession: vi.fn(),
-		mockCleanupUploads: vi.fn(),
-		mockSafeSend: vi.fn().mockResolvedValue(1),
-		mockSendLong: vi.fn().mockResolvedValue(""),
-		mockSafeDelete: vi.fn().mockResolvedValue(true),
-		mockLog: vi.fn(),
-	}),
-);
+const {
+	mockSetUserSession,
+	mockCleanupUploads,
+	mockSafeSend,
+	mockSendLong,
+	mockSafeDelete,
+	mockLog,
+	mockEnsureBuddyController,
+} = vi.hoisted(() => ({
+	mockSetUserSession: vi.fn(),
+	mockCleanupUploads: vi.fn(),
+	mockSafeSend: vi.fn().mockResolvedValue(1),
+	mockSendLong: vi.fn().mockResolvedValue(""),
+	mockSafeDelete: vi.fn().mockResolvedValue(true),
+	mockLog: vi.fn(),
+	mockEnsureBuddyController: vi.fn(),
+}));
 
 vi.mock("../src/state.js", () => ({
 	setUserSession: mockSetUserSession,
+}));
+
+vi.mock("../src/commands/buddy.js", () => ({
+	ensureBuddyController: mockEnsureBuddyController,
 }));
 
 vi.mock("../src/util/files.js", () => ({
@@ -85,12 +96,14 @@ function createApi() {
 function createUserState(overrides?: Partial<UserState>): UserState {
 	return {
 		bridge: null,
+		config: { botToken: "test", allowedUserIds: [], workingDir: "/tmp", drebPath: "dreb", serviceName: "test" },
 		promptInFlight: false,
 		newSessionFlag: false,
 		newSessionCwd: null,
 		effectiveCwd: null,
 		backgroundAgents: new Map(),
 		stopRequested: false,
+		buddyController: null,
 		outbox: [],
 		...overrides,
 	};
@@ -149,6 +162,8 @@ describe("sendPrompt", () => {
 		// Reset safeSend to default success behavior
 		mockSafeSend.mockResolvedValue(1);
 		mockSendLong.mockResolvedValue("");
+		// Default: ensureBuddyController is a no-op (buddyController already set in tests that need it)
+		mockEnsureBuddyController.mockImplementation(() => {});
 	});
 
 	afterEach(() => {
@@ -315,7 +330,91 @@ describe("sendPrompt", () => {
 	});
 
 	// -----------------------------------------------------------------------
-	// 6. stopRequested suppresses steering error
+	// 6. Name-call interception
+	// -----------------------------------------------------------------------
+	describe("name-call interception", () => {
+		it("deletes status message and returns early when processUserMessage returns true", () => {
+			const api = createApi();
+			const { bridge } = createBridge();
+			const mockBuddyController = {
+				processUserMessage: vi.fn().mockReturnValue(true),
+				reset: vi.fn(),
+			};
+			const userState = createUserState({
+				bridge: bridge as any,
+				buddyController: mockBuddyController as any,
+			});
+			const opts = defaultOpts();
+
+			sendPrompt(api, userState, opts);
+
+			// Buddy handled the message — agent should NOT be prompted
+			expect(bridge.prompt).not.toHaveBeenCalled();
+			// Status message should be cleaned up
+			expect(mockSafeDelete).toHaveBeenCalledWith(api, 100, 999);
+			// processUserMessage should receive the prompt text
+			expect(mockBuddyController.processUserMessage).toHaveBeenCalledWith("hello");
+		});
+
+		it("does not delete status message when statusMessageId is null", () => {
+			const api = createApi();
+			const { bridge } = createBridge();
+			const mockBuddyController = {
+				processUserMessage: vi.fn().mockReturnValue(true),
+				reset: vi.fn(),
+			};
+			const userState = createUserState({
+				bridge: bridge as any,
+				buddyController: mockBuddyController as any,
+			});
+			const opts = defaultOpts({ statusMessageId: null });
+
+			sendPrompt(api, userState, opts);
+
+			expect(mockSafeDelete).not.toHaveBeenCalled();
+			expect(bridge.prompt).not.toHaveBeenCalled();
+		});
+
+		it("does not call ensureBuddyController when buddyController already set", () => {
+			const api = createApi();
+			const { bridge } = createBridge();
+			const mockBuddyController = {
+				processUserMessage: vi.fn().mockReturnValue(true),
+				reset: vi.fn(),
+			};
+			const userState = createUserState({
+				bridge: bridge as any,
+				buddyController: mockBuddyController as any,
+			});
+
+			sendPrompt(api, userState, defaultOpts());
+
+			expect(mockEnsureBuddyController).not.toHaveBeenCalled();
+		});
+
+		it("proceeds to agent when processUserMessage returns false", () => {
+			const api = createApi();
+			const { bridge } = createBridge();
+			const mockBuddyController = {
+				processUserMessage: vi.fn().mockReturnValue(false),
+				reset: vi.fn(),
+			};
+			const userState = createUserState({
+				bridge: bridge as any,
+				buddyController: mockBuddyController as any,
+			});
+
+			sendPrompt(api, userState, defaultOpts());
+
+			// Normal path — agent should be prompted
+			expect(bridge.prompt).toHaveBeenCalledWith("hello", undefined);
+			// Status message should NOT be deleted (it's used for the event display)
+			expect(mockSafeDelete).not.toHaveBeenCalledWith(api, 100, 999);
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// 7. stopRequested suppresses steering error
 	// -----------------------------------------------------------------------
 	describe("stopRequested suppresses steering error", () => {
 		it("does not send error when steer() fails and stopRequested is true", async () => {

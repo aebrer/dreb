@@ -77,6 +77,9 @@ Use the `feature-dev` subagent to implement each deliverable. `feature-dev` is a
 - The full plan context and any relevant PR discussion
 - The list of files to read for understanding existing patterns
 - Instructions to run tests and linting after making changes
+- **If the plan includes tests for this deliverable, tests MUST be written as part of the implementation — not deferred**
+
+**Test coverage is part of the deliverable, not an afterthought.** If the plan specifies tests for a deliverable, the feature-dev agent must implement them. If the target package lacks test infrastructure, add it.
 
 **Parallelism:** If deliverables are independent (don't modify the same files), run their `feature-dev` agents in parallel. If they have dependencies, use chain mode or run them sequentially — later features may depend on earlier ones.
 
