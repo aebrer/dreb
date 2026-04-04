@@ -260,3 +260,115 @@ describe("tool_execution_start", () => {
 		expect(state.toolsSinceText).toHaveLength(0);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Buddy event forwarding
+// ---------------------------------------------------------------------------
+
+describe("buddy event forwarding", () => {
+	it("forwards tool_execution_end to buddyController", async () => {
+		const send = vi.fn();
+		const handleEvent = vi.fn();
+		const state = makeState();
+		state.buddyController = { handleEvent };
+
+		const event = {
+			type: "tool_execution_end",
+			toolName: "bash",
+			args: { command: "ls" },
+			output: "file.txt",
+		};
+
+		await handleAgentEvent(send, mockApi(), state, event);
+
+		expect(handleEvent).toHaveBeenCalledOnce();
+		expect(handleEvent).toHaveBeenCalledWith(event);
+	});
+
+	it("forwards message_end with assistant message to buddyController", async () => {
+		const send = vi.fn();
+		const handleEvent = vi.fn();
+		const state = makeState();
+		state.buddyController = { handleEvent };
+
+		const event = {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "Hello" }],
+			},
+		};
+
+		await handleAgentEvent(send, mockApi(), state, event);
+
+		expect(handleEvent).toHaveBeenCalledOnce();
+		expect(handleEvent).toHaveBeenCalledWith(event);
+	});
+
+	it("does NOT forward message_end with toolResult role to buddyController", async () => {
+		const send = vi.fn();
+		const handleEvent = vi.fn();
+		const state = makeState();
+		state.buddyController = { handleEvent };
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "message_end",
+			message: {
+				role: "toolResult",
+				toolName: "subagent",
+				content: [{ type: "text", text: "Result" }],
+			},
+		});
+
+		expect(handleEvent).not.toHaveBeenCalled();
+	});
+
+	it("does NOT forward message_end with user role to buddyController", async () => {
+		const send = vi.fn();
+		const handleEvent = vi.fn();
+		const state = makeState();
+		state.buddyController = { handleEvent };
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "message_end",
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "Just a user message" }],
+			},
+		});
+
+		expect(handleEvent).not.toHaveBeenCalled();
+	});
+
+	it("forwards agent_end to buddyController", async () => {
+		const send = vi.fn();
+		const handleEvent = vi.fn();
+		const state = makeState();
+		state.buddyController = { handleEvent };
+
+		const event = {
+			type: "agent_end",
+			messages: [],
+		};
+
+		await handleAgentEvent(send, mockApi(), state, event);
+
+		expect(handleEvent).toHaveBeenCalledOnce();
+		expect(handleEvent).toHaveBeenCalledWith(event);
+	});
+
+	it("does NOT forward tool_execution_start to buddyController", async () => {
+		const send = vi.fn();
+		const handleEvent = vi.fn();
+		const state = makeState();
+		state.buddyController = { handleEvent };
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "tool_execution_start",
+			toolName: "bash",
+			args: { command: "ls" },
+		});
+
+		expect(handleEvent).not.toHaveBeenCalled();
+	});
+});

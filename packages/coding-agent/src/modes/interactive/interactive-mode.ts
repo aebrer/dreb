@@ -39,7 +39,7 @@ import {
 import { spawn, spawnSync } from "child_process";
 import { APP_NAME, getAgentDir, getAuthPath, getDebugLogPath, getUpdateInstruction, VERSION } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
-import { BuddyManager } from "../../core/buddy/buddy-manager.js";
+import { BuddyManager, checkOllama } from "../../core/buddy/buddy-manager.js";
 import { Rarity, Stat } from "../../core/buddy/buddy-types.js";
 import { BuddyController } from "../../core/buddy/index.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
@@ -4691,6 +4691,7 @@ export class InteractiveMode {
 					await this.playHatchAnimation();
 					this.mountBuddy(result.state);
 					this.showBuddyStatsPanel(result.state);
+					await this.checkAndWarnOllama();
 					this.ui.requestRender();
 					break;
 				}
@@ -4711,6 +4712,7 @@ export class InteractiveMode {
 					await this.playHatchAnimation();
 					this.mountBuddy(result.state);
 					this.showBuddyStatsPanel(result.state);
+					await this.checkAndWarnOllama();
 					break;
 				}
 				case "show": {
@@ -4803,6 +4805,23 @@ export class InteractiveMode {
 				return "warning";
 			case Rarity.LEGENDARY:
 				return "error";
+		}
+	}
+
+	/** Check Ollama availability and show a warning if unavailable */
+	private async checkAndWarnOllama(): Promise<void> {
+		const status = await checkOllama();
+		if (!status.available) {
+			this.chatContainer.addChild(
+				new Text(
+					theme.fg(
+						"warning",
+						"⚠️ Buddy reactions require Ollama. Install it at https://ollama.com and run: ollama pull llama3.2",
+					),
+					1,
+					0,
+				),
+			);
 		}
 	}
 

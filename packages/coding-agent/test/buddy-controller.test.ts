@@ -317,19 +317,6 @@ describe("activity tracking", () => {
 		expect((controller as any).lastActivityTime).toBeGreaterThan(before);
 	});
 
-	it("should be within activity window after markActivity", () => {
-		const { controller } = createTestController({ activityGateMs: 3600000 });
-		controller.markActivity();
-		expect(controller.isWithinActivityWindow()).toBe(true);
-	});
-
-	it("should be outside activity window with old activity", () => {
-		const { controller } = createTestController({ activityGateMs: 100 });
-		controller.markActivity();
-		(controller as any).lastActivityTime = Date.now() - 1000; // simulate old activity
-		expect(controller.isWithinActivityWindow()).toBe(false);
-	});
-
 	it("should not start idle timer when outside activity gate", () => {
 		const { controller } = createTestController({ activityGateMs: 100 });
 		controller.markActivity();
@@ -651,6 +638,28 @@ describe("processUserMessage", () => {
 
 		expect(controller.buildContext()).toContain("User: Hello world");
 		expect(idleSpy).toHaveBeenCalled();
+	});
+
+	it("should return false when no name-call detected", () => {
+		writeStoredBuddy({ name: "Zorp" });
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		const result = controller.processUserMessage("Hello world");
+
+		expect(result).toBe(false);
+	});
+
+	it("should return true when name-call detected", () => {
+		writeStoredBuddy({ name: "Zorp" });
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		vi.spyOn(controller, "handleNameCall").mockResolvedValue();
+
+		const result = controller.processUserMessage("Hey Zorp!");
+
+		expect(result).toBe(true);
 	});
 
 	it("should detect name-call", () => {

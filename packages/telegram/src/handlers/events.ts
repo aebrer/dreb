@@ -179,8 +179,6 @@ export async function handleAgentEvent(
 
 			// Update status with tool count and recent tools
 			updateStatus(state);
-			// Feed event to buddy controller for context capture + reactions
-			state.buddyController?.handleEvent(event);
 			break;
 		}
 

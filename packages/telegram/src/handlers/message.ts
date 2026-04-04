@@ -241,17 +241,13 @@ export function sendPrompt(
 	}
 
 	// Buddy: capture context, reset idle, and check for name-call interception.
-	// processUserMessage handles all three plus name-call detection.
-	// If it's a name-call, the buddy responds and we skip the agent entirely.
-	const isNameCall = userState.buddyController?.detectNameCall(opts.prompt);
+	// processUserMessage returns true if name-call detected (buddy handles it).
+	const isNameCall = userState.buddyController?.processUserMessage(opts.prompt);
 	if (isNameCall) {
-		// Clean up the status message (won't be needed)
+		// Clean up the status message (won't be needed — buddy responds instead)
 		if (opts.statusMessageId) {
 			void safeDelete(api, opts.chatId, opts.statusMessageId);
 		}
-	}
-	userState.buddyController?.processUserMessage(opts.prompt);
-	if (isNameCall) {
 		return;
 	}
 

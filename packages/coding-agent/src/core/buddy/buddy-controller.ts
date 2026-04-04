@@ -135,13 +135,6 @@ export class BuddyController {
 		}, this.config.idleTimeoutMs);
 	}
 
-	/** Check if user is within the activity window (for activity gating) */
-	isWithinActivityWindow(): boolean {
-		if (this.config.activityGateMs === 0) return true;
-		if (this.lastActivityTime === 0) return true;
-		return Date.now() - this.lastActivityTime < this.config.activityGateMs;
-	}
-
 	// =========================================================================
 	// Reactions
 	// =========================================================================
@@ -315,8 +308,9 @@ export class BuddyController {
 	/**
 	 * Process a user message — captures context, resets idle, checks name-call.
 	 * Context capture always happens. Active features gated by `enabled`.
+	 * Returns true if a name-call was detected and is being handled.
 	 */
-	processUserMessage(text: string): void {
+	processUserMessage(text: string): boolean {
 		this.appendContext(`User: ${text}`);
 		this.markActivity();
 		this.resetIdleTimer();
@@ -324,7 +318,9 @@ export class BuddyController {
 		// Name-call detection (gated by enabled via detectNameCall)
 		if (this.detectNameCall(text)) {
 			this.handleNameCall(text).catch(() => {});
+			return true;
 		}
+		return false;
 	}
 
 	// =========================================================================
@@ -427,12 +423,15 @@ export class BuddyController {
 		}
 	}
 
-	/** Full reset — clear context buffer, idle timer, reaction budget, and re-enable */
+	/** Full reset — clear context buffer, idle timer, reaction budget.
+	 *  Respects persisted hidden state so bridge reconnects don't undo /buddy off. */
 	reset(): void {
 		this.stop();
 		this.contextBuffer = [];
 		this.lastReactionTime = 0;
 		this.reactionTimestamps = [];
-		this.enabled = true;
+		// Re-enable unless buddy was explicitly hidden via /buddy off
+		const state = this.manager.getState() ?? this.manager.load();
+		this.enabled = state ? !state.hidden : true;
 	}
 }
