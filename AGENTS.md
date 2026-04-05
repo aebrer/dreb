@@ -8,7 +8,7 @@
 npm run build
 ```
 
-This builds all packages in dependency order: tui → ai → agent → coding-agent.
+This builds all packages in dependency order: tui → ai → agent → coding-agent → telegram.
 
 ## Monorepo Structure
 
@@ -16,6 +16,7 @@ This builds all packages in dependency order: tui → ai → agent → coding-ag
 - `packages/agent` — Core agent loop, event system, types
 - `packages/coding-agent` — CLI tool, tools, model resolution, TUI
 - `packages/tui` — Terminal UI components
+- `packages/telegram` — Telegram bot integration
 
 ## Release Protocol
 

@@ -181,9 +181,9 @@ models: [{
       high: "default",
       xhigh: "default"
     },
-      maxTokensField: "max_tokens",      // instead of "max_completion_tokens"
-      requiresToolResultName: true,      // tool results need name field
-      thinkingFormat: "qwen"            // top-level enable_thinking: true
+    maxTokensField: "max_tokens",      // instead of "max_completion_tokens"
+    requiresToolResultName: true,      // tool results need name field
+    thinkingFormat: "qwen"            // top-level enable_thinking: true
     }
   }]
 ```
@@ -496,6 +496,8 @@ Test your provider against the same test suites used by built-in providers. Copy
 | `unicode-surrogate.test.ts` | Unicode edge cases |
 | `tool-call-without-result.test.ts` | Tool call edge cases |
 | `image-tool-result.test.ts` | Images in tool results |
+| `image-limits.test.ts` | Image input handling |
+| `image-tool-result.test.ts` | Images in tool results |
 | `total-tokens.test.ts` | Total token calculation |
 | `cross-provider-handoff.test.ts` | Context handoff between providers |
 
@@ -588,7 +590,10 @@ interface ProviderModelConfig {
     requiresToolResultName?: boolean;
     requiresAssistantAfterToolResult?: boolean;
     requiresThinkingAsText?: boolean;
-    thinkingFormat?: "openai" | "zai" | "qwen" | "qwen-chat-template";
+    thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+    openRouterRouting?: OpenRouterRouting;
+    vercelGatewayRouting?: VercelGatewayRouting;
+    supportsStrictMode?: boolean;
   };
 }
 ```

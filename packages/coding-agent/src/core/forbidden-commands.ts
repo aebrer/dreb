@@ -24,6 +24,7 @@ const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
 	"^gh api.*bypass", // API calls with bypass flag
 	"^(?:export\\s+)?HUSKY=0", // bypass pre-commit hooks (anchored with optional export prefix)
 	"^git\\s+commit.*--no-verify", // bypass pre-commit hooks via --no-verify flag
+	"^(?:export\\s+)?SKIP_?VALIDATION=1", // bypass pre-commit hooks via SKIP_VALIDATION env var
 ];
 
 /**

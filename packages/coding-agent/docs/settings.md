@@ -118,6 +118,7 @@ When a provider requests a retry delay longer than `maxDelayMs` (e.g., Google's 
 | `shellPath` | string | - | Custom shell path (e.g., for Cygwin on Windows) |
 | `shellCommandPrefix` | string | - | Prefix for every bash command (e.g., `"shopt -s expand_aliases"`) |
 | `npmCommand` | string[] | - | Command argv used for npm package lookup/install operations (e.g., `["mise", "exec", "node@20", "--", "npm"]`) |
+| `forbiddenCommands` | string[] | `[]` | Additional regex patterns for commands the bash tool will refuse to run (appended to hardcoded defaults) |
 
 ```json
 {

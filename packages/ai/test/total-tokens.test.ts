@@ -26,13 +26,12 @@ import { resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
-	resolveApiKey("anthropic"),
 	resolveApiKey("github-copilot"),
 	resolveApiKey("google-gemini-cli"),
 	resolveApiKey("google-antigravity"),
 	resolveApiKey("openai-codex"),
 ]);
-const [anthropicOAuthToken, githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
+const [githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
 
 // Generate a long system prompt to trigger caching (>2k bytes for most providers)
 const LONG_SYSTEM_PROMPT = `You are a helpful assistant. Be concise in your responses.
@@ -114,29 +113,6 @@ describe("totalTokens field", () => {
 
 				console.log(`\nAnthropic / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: process.env.ANTHROPIC_API_KEY });
-
-				logUsage("First request", first);
-				logUsage("Second request", second);
-
-				assertTotalTokensEqualsComponents(first);
-				assertTotalTokensEqualsComponents(second);
-
-				// Anthropic should have cache activity
-				const hasCache = second.cacheRead > 0 || second.cacheWrite > 0 || first.cacheWrite > 0;
-				expect(hasCache).toBe(true);
-			},
-		);
-	});
-
-	describe("Anthropic (OAuth)", () => {
-		it.skipIf(!anthropicOAuthToken)(
-			"claude-sonnet-4 - should return totalTokens equal to sum of components",
-			{ retry: 3, timeout: 60000 },
-			async () => {
-				const llm = getModel("anthropic", "claude-sonnet-4-20250514");
-
-				console.log(`\nAnthropic OAuth / ${llm.id}:`);
-				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: anthropicOAuthToken });
 
 				logUsage("First request", first);
 				logUsage("Second request", second);

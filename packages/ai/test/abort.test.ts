@@ -157,7 +157,7 @@ describe("AI Providers Abort Tests", () => {
 		});
 	});
 
-	describe.skipIf(!process.env.ANTHROPIC_OAUTH_TOKEN)("Anthropic Provider Abort", () => {
+	describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN)("Anthropic Provider Abort", () => {
 		const llm = getModel("anthropic", "claude-opus-4-1-20250805");
 
 		it("should abort mid-stream", { retry: 3 }, async () => {

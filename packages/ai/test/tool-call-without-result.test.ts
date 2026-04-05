@@ -13,13 +13,12 @@ import { resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
-	resolveApiKey("anthropic"),
 	resolveApiKey("github-copilot"),
 	resolveApiKey("google-gemini-cli"),
 	resolveApiKey("google-antigravity"),
 	resolveApiKey("openai-codex"),
 ]);
-const [anthropicOAuthToken, githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
+const [githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
 
 // Simple calculate tool
 const calculateSchema = Type.Object({
@@ -228,18 +227,6 @@ describe("Tool Call Without Result Tests", () => {
 	// =========================================================================
 	// OAuth-based providers (credentials from ~/.dreb/agent/oauth.json)
 	// =========================================================================
-
-	describe("Anthropic OAuth Provider", () => {
-		const model = findModel("anthropic", "haiku")!;
-
-		it.skipIf(!anthropicOAuthToken)(
-			"should filter out tool calls without corresponding tool results",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				await testToolCallWithoutResult(model, { apiKey: anthropicOAuthToken });
-			},
-		);
-	});
 
 	describe("GitHub Copilot Provider", () => {
 		it.skipIf(!githubCopilotToken)(
