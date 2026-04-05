@@ -15,7 +15,6 @@ dreb supports subscription-based providers via OAuth and API key providers via e
 
 Use `/login` in interactive mode, then select a provider:
 
-- Claude Pro/Max
 - ChatGPT Plus/Pro (Codex)
 - GitHub Copilot
 - Google Gemini CLI

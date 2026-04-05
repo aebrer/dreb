@@ -497,7 +497,6 @@ Test your provider against the same test suites used by built-in providers. Copy
 | `tool-call-without-result.test.ts` | Tool call edge cases |
 | `image-tool-result.test.ts` | Images in tool results |
 | `image-limits.test.ts` | Image input handling |
-| `image-tool-result.test.ts` | Images in tool results |
 | `total-tokens.test.ts` | Total token calculation |
 | `cross-provider-handoff.test.ts` | Context handoff between providers |
 

@@ -395,10 +395,11 @@ describe("Large session fixture", () => {
 // ============================================================================
 
 describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN)("LLM summarization", () => {
+	const apiKey = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY!;
+
 	it("should generate a compaction result for the large session", async () => {
 		const entries = loadLargeSessionEntries();
 		const model = findModel("anthropic", "sonnet")!;
-		const apiKey = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY!;
 
 		const preparation = prepareCompaction(entries, DEFAULT_COMPACTION_SETTINGS);
 		expect(preparation).toBeDefined();
