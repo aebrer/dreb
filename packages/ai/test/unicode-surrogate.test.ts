@@ -16,13 +16,12 @@ const emptySchema = Type.Object({});
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
-	resolveApiKey("anthropic"),
 	resolveApiKey("github-copilot"),
 	resolveApiKey("google-gemini-cli"),
 	resolveApiKey("google-antigravity"),
 	resolveApiKey("openai-codex"),
 ]);
-const [anthropicOAuthToken, githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
+const [githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
 
 /**
  * Test for Unicode surrogate pair handling in tool results.
@@ -371,30 +370,6 @@ describe("AI Providers Unicode Surrogate Pair Tests", () => {
 	// =========================================================================
 	// OAuth-based providers (credentials from ~/.dreb/agent/oauth.json)
 	// =========================================================================
-
-	describe("Anthropic OAuth Provider Unicode Handling", () => {
-		const llm = findModel("anthropic", "haiku")!;
-
-		it.skipIf(!anthropicOAuthToken)("should handle emoji in tool results", { retry: 3, timeout: 30000 }, async () => {
-			await testEmojiInToolResults(llm, { apiKey: anthropicOAuthToken });
-		});
-
-		it.skipIf(!anthropicOAuthToken)(
-			"should handle real-world LinkedIn comment data with emoji",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				await testRealWorldLinkedInData(llm, { apiKey: anthropicOAuthToken });
-			},
-		);
-
-		it.skipIf(!anthropicOAuthToken)(
-			"should handle unpaired high surrogate (0xD83D) in tool results",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				await testUnpairedHighSurrogate(llm, { apiKey: anthropicOAuthToken });
-			},
-		);
-	});
 
 	describe("GitHub Copilot Provider Unicode Handling", () => {
 		it.skipIf(!githubCopilotToken)(

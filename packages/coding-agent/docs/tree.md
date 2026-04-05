@@ -125,7 +125,7 @@ async navigateTree(
     replaceInstructions?: boolean;
     label?: string;
   }
-): Promise<{ editorText?: string; cancelled: boolean }>
+): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean; summaryEntry?: BranchSummaryEntry }>
 ```
 
 Options:
@@ -148,7 +148,7 @@ Flow:
 
 ### SessionManager
 
-- `getLeafUuid(): string | null` - Current leaf (null if empty)
+- `getLeafId(): string | null` - Current leaf (null if empty)
 - `resetLeaf(): void` - Set leaf to null (for root user message navigation)
 - `getTree(): SessionTreeNode[]` - Full tree with children sorted by timestamp
 - `branch(id)` - Change leaf pointer
@@ -203,7 +203,7 @@ interface SessionTreeEvent {
   newLeafId: string | null;
   oldLeafId: string | null;
   summaryEntry?: BranchSummaryEntry;
-  fromHook?: boolean;
+  fromExtension?: boolean;
 }
 ```
 

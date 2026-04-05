@@ -14,13 +14,12 @@ import { resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
-	resolveApiKey("anthropic"),
 	resolveApiKey("github-copilot"),
 	resolveApiKey("google-gemini-cli"),
 	resolveApiKey("google-antigravity"),
 	resolveApiKey("openai-codex"),
 ]);
-const [anthropicOAuthToken, githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
+const [githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
 
 /**
  * Test that tool results containing only images work correctly across all providers.
@@ -327,26 +326,6 @@ describe("Tool Results with Images", () => {
 	// =========================================================================
 	// OAuth-based providers (credentials from ~/.dreb/agent/oauth.json)
 	// =========================================================================
-
-	describe("Anthropic OAuth Provider (claude-sonnet-4-5)", () => {
-		const model = findModel("anthropic", "sonnet")!;
-
-		it.skipIf(!anthropicOAuthToken)(
-			"should handle tool result with only image",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				await handleToolWithImageResult(model, { apiKey: anthropicOAuthToken });
-			},
-		);
-
-		it.skipIf(!anthropicOAuthToken)(
-			"should handle tool result with text and image",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				await handleToolWithTextAndImageResult(model, { apiKey: anthropicOAuthToken });
-			},
-		);
-	});
 
 	describe("GitHub Copilot Provider", () => {
 		it.skipIf(!githubCopilotToken)(

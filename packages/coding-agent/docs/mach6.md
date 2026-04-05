@@ -15,7 +15,7 @@ Inspired by [mach10](https://github.com/LeanAndMean/mach10) (MIT, by Kevin Ryan)
 /skill:mach6-implement 53 1,2   # Fix review findings
 /skill:mach6-push              # Push fixes
 /skill:mach6-review 53         # Re-review (repeat until clean)
-/skill:mach6-publish 53        # Merge, tag, release
+/skill:mach6-publish 53        # Docs update, merge, tag, release
 ```
 
 ## Skills
@@ -98,15 +98,16 @@ Implement a plan from a PR, or fix review findings / CI failures.
 
 ### mach6-publish
 
-Pre-merge checks, merge, tag, and release.
+Pre-merge checks, version bump, docs update, merge, tag, and release.
 
 ```
 /skill:mach6-publish 53
 ```
 
 - Verifies CI passing, no merge conflicts, all findings addressed
-- Runs pre-merge checklist (docs, version bump, changelog, tests)
-- Applies any needed pre-merge updates
+- Runs pre-merge checklist (version bump, changelog, tests)
+- Applies version bump on the feature branch
+- Proactively reviews and updates ALL documentation affected by the PR's changes
 - Merges with `--squash --delete-branch`
 - Optionally creates a git tag and GitHub release
 

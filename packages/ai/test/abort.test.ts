@@ -157,17 +157,20 @@ describe("AI Providers Abort Tests", () => {
 		});
 	});
 
-	describe.skipIf(!process.env.ANTHROPIC_OAUTH_TOKEN)("Anthropic Provider Abort", () => {
-		const llm = getModel("anthropic", "claude-opus-4-1-20250805");
+	describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN)(
+		"Anthropic Provider Abort",
+		() => {
+			const llm = getModel("anthropic", "claude-opus-4-1-20250805");
 
-		it("should abort mid-stream", { retry: 3 }, async () => {
-			await testAbortSignal(llm, { thinkingEnabled: true, thinkingBudgetTokens: 2048 });
-		});
+			it("should abort mid-stream", { retry: 3 }, async () => {
+				await testAbortSignal(llm, { thinkingEnabled: true, thinkingBudgetTokens: 2048 });
+			});
 
-		it("should handle immediate abort", { retry: 3 }, async () => {
-			await testImmediateAbort(llm, { thinkingEnabled: true, thinkingBudgetTokens: 2048 });
-		});
-	});
+			it("should handle immediate abort", { retry: 3 }, async () => {
+				await testImmediateAbort(llm, { thinkingEnabled: true, thinkingBudgetTokens: 2048 });
+			});
+		},
+	);
 
 	describe.skipIf(!process.env.MISTRAL_API_KEY)("Mistral Provider Abort", () => {
 		const llm = getModel("mistral", "devstral-medium-latest");

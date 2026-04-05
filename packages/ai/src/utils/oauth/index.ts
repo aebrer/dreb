@@ -3,14 +3,15 @@
  *
  * This module handles login, token refresh, and credential storage
  * for OAuth-based providers:
- * - Anthropic (Claude Pro/Max)
  * - GitHub Copilot
  * - Google Cloud Code Assist (Gemini CLI)
  * - Antigravity (Gemini 3, Claude, GPT-OSS via Google Cloud)
+ * - OpenAI Codex (ChatGPT OAuth)
+ *
+ * Note: Anthropic OAuth was removed in April 2026 after Anthropic blocked
+ * third-party harness access to Claude Pro/Max subscriptions.
  */
 
-// Anthropic
-export { anthropicOAuthProvider, loginAnthropic, refreshAnthropicToken } from "./anthropic.js";
 // GitHub Copilot
 export {
 	getGitHubCopilotBaseUrl,
@@ -32,7 +33,6 @@ export * from "./types.js";
 // Provider Registry
 // ============================================================================
 
-import { anthropicOAuthProvider } from "./anthropic.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
 import { antigravityOAuthProvider } from "./google-antigravity.js";
 import { geminiCliOAuthProvider } from "./google-gemini-cli.js";
@@ -40,7 +40,6 @@ import { openaiCodexOAuthProvider } from "./openai-codex.js";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
-	anthropicOAuthProvider,
 	githubCopilotOAuthProvider,
 	geminiCliOAuthProvider,
 	antigravityOAuthProvider,

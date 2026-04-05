@@ -21,6 +21,7 @@ argument-hint: "<pr-number>"
 tasks_update([
   { id: "checks", title: "Pre-merge checks", status: "in_progress" },
   { id: "version", title: "Version bump (on feature branch)", status: "pending" },
+  { id: "docs", title: "Update documentation", status: "pending" },
   { id: "merge", title: "Merge PR", status: "pending" },
   { id: "release", title: "Tag and release", status: "pending" }
 ])
@@ -90,9 +91,46 @@ Update task: checks → completed, version → in_progress.
 
 If the project doesn't use versioning, skip this step.
 
-Update task: version → completed, merge → in_progress.
+Update task: version → completed, docs → in_progress.
 
-## Step 4: Merge
+## Step 4: Update documentation
+
+Proactively review and update ALL documentation affected by the PR's changes. This is not limited to mach6 docs — check everything in the repo.
+
+1. Identify changed features by reading the PR diff:
+   ```bash
+   gh pr diff <pr-number>
+   ```
+
+2. Scan all documentation for references to changed features:
+   - README.md files across all packages
+   - docs/ directory (all .md files)
+   - AGENTS.md, CLAUDE.md, CONTRIBUTING.md, .dreb/CONTEXT.md
+   - Example files and their READMEs
+   - Help text and CLI flag documentation
+   - CHANGELOG.md or CHANGES.md
+
+3. For each doc, verify:
+   - CLI flags, settings, and commands match current code
+   - Code snippets and examples are accurate
+   - Cross-references point to real files and valid anchors
+   - No stale descriptions of removed or changed features
+   - Environment variables listed match current code
+
+4. Fix all inaccuracies found. Commit and push:
+   ```bash
+   git add <doc-files>
+   git commit -m "docs: update documentation for <version>"
+   git push
+   ```
+
+5. Wait for CI to pass on the docs commit.
+
+If no documentation changes are needed (rare), skip this step.
+
+Update task: docs → completed, merge → in_progress.
+
+## Step 5: Merge
 
 ```bash
 gh pr merge <pr-number> --squash --delete-branch
@@ -113,7 +151,7 @@ git branch -d <branch-name> 2>/dev/null
 
 Update task: merge → completed, release → in_progress.
 
-## Step 5: Tag and release
+## Step 6: Tag and release
 
 Ask the user if they want to create a GitHub release:
 - **Yes**: Proceed with tagging and release
@@ -145,6 +183,6 @@ git push --tags
 
 Update task: release → completed.
 
-## Step 6: Report
+## Step 7: Report
 
 Report: what was merged, tagged, released. Link to the PR and release.

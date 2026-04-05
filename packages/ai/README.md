@@ -930,7 +930,7 @@ In Node.js environments, you can set environment variables to avoid passing API 
 |----------|------------------------|
 | OpenAI | `OPENAI_API_KEY` |
 | Azure OpenAI | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_BASE_URL` or `AZURE_OPENAI_RESOURCE_NAME` (optional `AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` like `model=deployment,model2=deployment2`) |
-| Anthropic | `ANTHROPIC_API_KEY` or `ANTHROPIC_OAUTH_TOKEN` |
+| Anthropic | `ANTHROPIC_API_KEY` |
 | Google | `GEMINI_API_KEY` |
 | Vertex AI | `GOOGLE_CLOUD_API_KEY` or `GOOGLE_CLOUD_PROJECT` (or `GCLOUD_PROJECT`) + `GOOGLE_CLOUD_LOCATION` + ADC |
 | Mistral | `MISTRAL_API_KEY` |
@@ -992,7 +992,6 @@ const key = getEnvApiKey('openai');  // checks OPENAI_API_KEY
 
 Several providers require OAuth authentication instead of static API keys:
 
-- **Anthropic** (Claude Pro/Max subscription)
 - **OpenAI Codex** (ChatGPT Plus/Pro subscription, access to GPT-5.x Codex models)
 - **GitHub Copilot** (Copilot subscription)
 - **Google Gemini CLI** (Gemini 2.0/2.5 via Google Cloud Code Assist; free tier or paid subscription)
@@ -1047,7 +1046,7 @@ The quickest way to authenticate:
 
 ```bash
 npx @dreb/ai login              # interactive provider selection
-npx @dreb/ai login anthropic    # login to specific provider
+npx @dreb/ai login              # interactive provider selection
 npx @dreb/ai list               # list available providers
 ```
 
@@ -1060,7 +1059,6 @@ The library provides login and token refresh functions via the `@dreb/ai/oauth` 
 ```typescript
 import {
   // Login functions (return credentials, do not store)
-  loginAnthropic,
   loginOpenAICodex,
   loginGitHubCopilot,
   loginGeminiCli,
@@ -1071,7 +1069,7 @@ import {
   getOAuthApiKey,      // (provider, credentialsMap) => { newCredentials, apiKey } | null
 
   // Types
-  type OAuthProvider,  // 'anthropic' | 'openai-codex' | 'github-copilot' | 'google-gemini-cli' | 'google-antigravity'
+  type OAuthProvider,  // 'openai-codex' | 'github-copilot' | 'google-gemini-cli' | 'google-antigravity'
   type OAuthCredentials,
 } from '@dreb/ai/oauth';
 ```

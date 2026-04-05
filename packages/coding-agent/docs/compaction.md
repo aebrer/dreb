@@ -123,7 +123,7 @@ interface CompactionEntry<T = unknown> {
   type: "compaction";
   id: string;
   parentId: string;
-  timestamp: number;
+  timestamp: string;
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
@@ -190,7 +190,7 @@ interface BranchSummaryEntry<T = unknown> {
   type: "branch_summary";
   id: string;
   parentId: string;
-  timestamp: number;
+  timestamp: string;
   summary: string;
   fromId: string;      // Entry we navigated from
   fromHook?: boolean;  // true if provided by extension (legacy field name)

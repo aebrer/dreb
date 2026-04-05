@@ -30,7 +30,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 dreb
 ```
 
-Or use a coding subscription (Claude Max, Codex, GitHub Copilot): run `dreb` then `/login`.
+Or use a coding subscription (Codex, GitHub Copilot): run `dreb` then `/login`.
 
 Or use a custom provider — corporate proxy, Bedrock, local models, anything OpenAI/Anthropic-compatible. See [Custom Models](packages/coding-agent/docs/models.md).
 

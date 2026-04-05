@@ -12,13 +12,12 @@ import { resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
-	resolveApiKey("anthropic"),
 	resolveApiKey("github-copilot"),
 	resolveApiKey("google-gemini-cli"),
 	resolveApiKey("google-antigravity"),
 	resolveApiKey("openai-codex"),
 ]);
-const [anthropicOAuthToken, githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
+const [githubCopilotToken, geminiCliToken, antigravityToken, openaiCodexToken] = oauthTokens;
 
 async function testTokensOnAbort<TApi extends Api>(llm: Model<TApi>, options: StreamOptionsWithExtras = {}) {
 	const context: Context = {
@@ -211,18 +210,6 @@ describe("Token Statistics on Abort", () => {
 	// =========================================================================
 	// OAuth-based providers (credentials from ~/.dreb/agent/oauth.json)
 	// =========================================================================
-
-	describe("Anthropic OAuth Provider", () => {
-		const llm = findModel("anthropic", "sonnet")!;
-
-		it.skipIf(!anthropicOAuthToken)(
-			"should include token stats when aborted mid-stream",
-			{ retry: 3, timeout: 30000 },
-			async () => {
-				await testTokensOnAbort(llm, { apiKey: anthropicOAuthToken });
-			},
-		);
-	});
 
 	describe("GitHub Copilot Provider", () => {
 		it.skipIf(!githubCopilotToken)(

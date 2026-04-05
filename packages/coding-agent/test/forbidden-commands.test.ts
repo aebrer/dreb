@@ -82,6 +82,30 @@ describe("isForbiddenCommand", () => {
 		});
 	});
 
+	describe("SKIP_VALIDATION=1 (bypass pre-commit hooks)", () => {
+		const SKIP_PATTERN = "^(?:export\\s+)?SKIP_?VALIDATION=1";
+
+		it("blocks SKIP_VALIDATION=1 as env prefix", () => {
+			expect(isForbiddenCommand('SKIP_VALIDATION=1 git commit -m "msg"')).toBe(SKIP_PATTERN);
+		});
+
+		it("blocks SKIP_VALIDATION=1 in compound command", () => {
+			expect(isForbiddenCommand("cd repo && SKIP_VALIDATION=1 git commit -m fix")).toBe(SKIP_PATTERN);
+		});
+
+		it("blocks export SKIP_VALIDATION=1", () => {
+			expect(isForbiddenCommand("export SKIP_VALIDATION=1")).toBe(SKIP_PATTERN);
+		});
+
+		it("allows grep for SKIP_VALIDATION=1 in files (no false positive)", () => {
+			expect(isForbiddenCommand("grep SKIP_VALIDATION=1 .husky/pre-commit")).toBeUndefined();
+		});
+
+		it("allows git log searching for SKIP_VALIDATION=1", () => {
+			expect(isForbiddenCommand('git log --grep="SKIP_VALIDATION=1"')).toBeUndefined();
+		});
+	});
+
 	describe("git commit --no-verify (bypass pre-commit hooks)", () => {
 		const NO_VERIFY_PATTERN = "^git\\s+commit.*--no-verify";
 

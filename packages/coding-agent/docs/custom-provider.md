@@ -181,9 +181,9 @@ models: [{
       high: "default",
       xhigh: "default"
     },
-      maxTokensField: "max_tokens",      // instead of "max_completion_tokens"
-      requiresToolResultName: true,      // tool results need name field
-      thinkingFormat: "qwen"            // top-level enable_thinking: true
+    maxTokensField: "max_tokens",      // instead of "max_completion_tokens"
+    requiresToolResultName: true,      // tool results need name field
+    thinkingFormat: "qwen"            // top-level enable_thinking: true
     }
   }]
 ```
@@ -588,7 +588,10 @@ interface ProviderModelConfig {
     requiresToolResultName?: boolean;
     requiresAssistantAfterToolResult?: boolean;
     requiresThinkingAsText?: boolean;
-    thinkingFormat?: "openai" | "zai" | "qwen" | "qwen-chat-template";
+    thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+    openRouterRouting?: OpenRouterRouting;
+    vercelGatewayRouting?: VercelGatewayRouting;
+    supportsStrictMode?: boolean;
   };
 }
 ```

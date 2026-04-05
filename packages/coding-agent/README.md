@@ -77,7 +77,6 @@ Then just talk to dreb. All 10 built-in tools are enabled by default: `read`, `w
 For each built-in provider, dreb maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model` (or Ctrl+L).
 
 **Subscriptions:**
-- Anthropic Claude Pro/Max
 - OpenAI ChatGPT Plus/Pro (Codex)
 - GitHub Copilot
 - Google Gemini CLI
