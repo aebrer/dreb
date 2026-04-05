@@ -496,7 +496,6 @@ Test your provider against the same test suites used by built-in providers. Copy
 | `unicode-surrogate.test.ts` | Unicode edge cases |
 | `tool-call-without-result.test.ts` | Tool call edge cases |
 | `image-tool-result.test.ts` | Images in tool results |
-| `image-limits.test.ts` | Image input handling |
 | `total-tokens.test.ts` | Total token calculation |
 | `cross-provider-handoff.test.ts` | Context handoff between providers |
 
