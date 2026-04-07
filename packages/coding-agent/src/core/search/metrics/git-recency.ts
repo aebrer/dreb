@@ -1,15 +1,18 @@
 /**
  * Git recency metric — recently modified files score higher.
  *
- * Runs `git log` per unique file path to get last-modified timestamps,
- * then applies linear decay scoring.
+ * Runs a single `git log` command to get last-modified timestamps for all
+ * files, then applies linear decay scoring.
  */
 
 import { execSync } from "node:child_process";
 import type { StoredChunk } from "../types.js";
 
-/** Timeout for each git command in milliseconds. */
-const GIT_TIMEOUT_MS = 5000;
+/** Timeout for the git command in milliseconds. */
+const GIT_TIMEOUT_MS = 15000;
+
+/** Max buffer for git output (10 MB — sufficient for large repos). */
+const GIT_MAX_BUFFER = 10 * 1024 * 1024;
 
 /** Default score for files where git info is unavailable. */
 const NEUTRAL_SCORE = 0.5;
@@ -31,28 +34,10 @@ export function computeGitRecencyScores(projectRoot: string, chunks: StoredChunk
 			uniquePaths.add(chunk.filePath);
 		}
 
-		// Get last-modified timestamp for each file
-		const fileTimestamps = new Map<string, number>();
-
-		for (const filePath of uniquePaths) {
-			try {
-				const output = execSync(`git log -1 --format=%at -- ${escapeShellArg(filePath)}`, {
-					cwd: projectRoot,
-					timeout: GIT_TIMEOUT_MS,
-					encoding: "utf-8",
-					stdio: ["pipe", "pipe", "pipe"],
-				}).trim();
-
-				if (output) {
-					const timestamp = Number.parseInt(output, 10);
-					if (!Number.isNaN(timestamp) && timestamp > 0) {
-						fileTimestamps.set(filePath, timestamp);
-					}
-				}
-			} catch {
-				// File not tracked or git error — skip
-			}
-		}
+		// Get last-modified timestamps in a single git call.
+		// Output format: "COMMIT <timestamp>" lines followed by changed file names.
+		// We take the first (most recent) timestamp seen for each file.
+		const fileTimestamps = getFileTimestamps(projectRoot, uniquePaths);
 
 		// If no timestamps found, assign neutral scores
 		if (fileTimestamps.size === 0) {
@@ -97,8 +82,51 @@ export function computeGitRecencyScores(projectRoot: string, chunks: StoredChunk
 }
 
 /**
- * Escape a string for safe use in a shell command.
+ * Get last-modified timestamps for files using a single `git log` invocation.
+ * Returns a Map of filePath → unix timestamp (seconds).
  */
-function escapeShellArg(arg: string): string {
-	return `'${arg.replace(/'/g, "'\\''")}'`;
+function getFileTimestamps(projectRoot: string, targetPaths: Set<string>): Map<string, number> {
+	const fileTimestamps = new Map<string, number>();
+
+	try {
+		// Single git call: list all commits with their timestamps and changed files.
+		// --diff-filter=AMCR: only additions, modifications, copies, renames.
+		// --name-only: list file names after each commit.
+		// --format="COMMIT %at": prefix each commit with its unix timestamp.
+		const output = execSync('git log --format="COMMIT %at" --name-only --diff-filter=AMCR', {
+			cwd: projectRoot,
+			timeout: GIT_TIMEOUT_MS,
+			encoding: "utf-8",
+			stdio: ["pipe", "pipe", "pipe"],
+			maxBuffer: GIT_MAX_BUFFER,
+		});
+
+		let currentTimestamp = 0;
+		let foundAll = false;
+
+		for (const line of output.split("\n")) {
+			if (foundAll) break;
+
+			if (line.startsWith("COMMIT ")) {
+				currentTimestamp = Number.parseInt(line.slice(7), 10);
+				if (Number.isNaN(currentTimestamp) || currentTimestamp <= 0) {
+					currentTimestamp = 0;
+				}
+			} else if (line.trim() && currentTimestamp > 0) {
+				const filePath = line.trim();
+				// Only record the first (most recent) timestamp per file
+				if (targetPaths.has(filePath) && !fileTimestamps.has(filePath)) {
+					fileTimestamps.set(filePath, currentTimestamp);
+					// Early exit once we've found all target files
+					if (fileTimestamps.size === targetPaths.size) {
+						foundAll = true;
+					}
+				}
+			}
+		}
+	} catch {
+		// Git unavailable or failed — return empty map
+	}
+
+	return fileTimestamps;
 }

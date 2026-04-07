@@ -9,7 +9,6 @@ import type { AgentTool } from "@dreb/agent-core";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { IndexManager } from "../search/index-manager.js";
 import { SearchEngine } from "../search/search.js";
 import { shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -91,7 +90,7 @@ function formatSearchResult(
 
 /** Check if the search tool is available (requires node:sqlite). */
 export function isSearchAvailable(): boolean {
-	return IndexManager.isAvailable();
+	return SearchEngine.isAvailable();
 }
 
 // Cache search engines per cwd to reuse index across calls within a session
@@ -191,7 +190,6 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 				const topScores = Object.entries(scores)
 					.filter(([, v]) => v > 0.01)
 					.sort(([, a], [, b]) => b - a)
-					.slice(0, 3)
 					.map(([k, v]) => `${k}=${v.toFixed(2)}`)
 					.join(" ");
 				if (topScores) {
@@ -212,13 +210,8 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 				if (i < results.length - 1) lines.push("");
 			}
 
-			// Get index stats
-			const indexManager = new IndexManager({
-				projectRoot: cwd,
-				indexDir: `${cwd}/.dreb/index`,
-				modelName: "Xenova/all-MiniLM-L6-v2",
-			});
-			const stats = indexManager.getStats();
+			// Get index stats from the existing engine (no new connection)
+			const stats = engine.getStats();
 
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],

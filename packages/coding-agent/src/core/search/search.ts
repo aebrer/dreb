@@ -110,9 +110,17 @@ export class SearchEngine {
 		onProgress?.("searching", 4, 6);
 
 		// 5. Import graph (use BM25 + cosine as seed scores, aggregated per file)
+		// Only use files with strong scores as seeds — low-scoring files (e.g. from
+		// common OR terms matching everywhere) pollute the seed set and prevent
+		// meaningful propagation.
 		const fileSeedScores = aggregateFileScores(allChunks, bm25Scores, cosineScores);
+		const seedThreshold = computeSeedThreshold(fileSeedScores);
+		const filteredSeeds = new Map<number, number>();
+		for (const [fileId, score] of fileSeedScores) {
+			if (score >= seedThreshold) filteredSeeds.set(fileId, score);
+		}
 		const fileIdToChunkIds = buildFileChunkMap(allChunks);
-		const importScores = computeImportGraphScores(db, fileSeedScores, fileIdToChunkIds);
+		const importScores = computeImportGraphScores(db, filteredSeeds, fileIdToChunkIds);
 		onProgress?.("searching", 5, 6);
 
 		// 6. Git recency
@@ -169,6 +177,12 @@ export class SearchEngine {
 		return results;
 	}
 
+	/** Get index stats without opening a new connection. */
+	getStats(): { files: number; chunks: number } | null {
+		if (!this.indexManager) return null;
+		return this.indexManager.getStats();
+	}
+
 	/** Dispose resources. */
 	close(): void {
 		this.indexManager?.close();
@@ -210,7 +224,7 @@ export class SearchEngine {
 		// Initialize embedder if needed
 		if (!this.embedder) {
 			this.embedder = new Embedder({
-				modelCacheDir: path.join(this.projectRoot, ".dreb", "agent", "models"),
+				modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
 				modelName: config.modelName,
 			});
 			await this.embedder.initialize();
@@ -275,6 +289,18 @@ function aggregateFileScores(chunks: StoredChunk[], ...scoreMaps: Map<number, nu
 	return fileScores;
 }
 
+/**
+ * Compute a dynamic threshold for import graph seeds.
+ * Uses the median score — only the top half of files are strong enough seeds.
+ * Falls back to 0.1 minimum to avoid accepting near-zero scores.
+ */
+function computeSeedThreshold(fileScores: Map<number, number>): number {
+	if (fileScores.size === 0) return 0;
+	const sorted = [...fileScores.values()].sort((a, b) => b - a);
+	const median = sorted[Math.floor(sorted.length / 2)];
+	return Math.max(median, 0.1);
+}
+
 /** Build a map of fileId → chunk IDs for that file. */
 function buildFileChunkMap(chunks: StoredChunk[]): Map<number, number[]> {
 	const map = new Map<number, number[]>();
@@ -286,9 +312,76 @@ function buildFileChunkMap(chunks: StoredChunk[]): Map<number, number[]> {
 	return map;
 }
 
+/** Common English stopwords to exclude from FTS queries. */
+const STOPWORDS = new Set([
+	"a",
+	"an",
+	"and",
+	"are",
+	"as",
+	"at",
+	"be",
+	"but",
+	"by",
+	"for",
+	"from",
+	"had",
+	"has",
+	"have",
+	"he",
+	"her",
+	"his",
+	"how",
+	"i",
+	"if",
+	"in",
+	"into",
+	"is",
+	"it",
+	"its",
+	"me",
+	"my",
+	"no",
+	"not",
+	"of",
+	"on",
+	"or",
+	"our",
+	"she",
+	"so",
+	"than",
+	"that",
+	"the",
+	"their",
+	"them",
+	"then",
+	"there",
+	"these",
+	"they",
+	"this",
+	"to",
+	"up",
+	"us",
+	"was",
+	"we",
+	"what",
+	"when",
+	"where",
+	"which",
+	"who",
+	"will",
+	"with",
+	"would",
+	"you",
+	"your",
+]);
+
 /**
  * Sanitize a query string for FTS5 MATCH syntax.
  * FTS5 chokes on certain characters — strip operators and wrap terms.
+ *
+ * Removes stopwords and uses OR between terms so multi-word queries return
+ * partial matches (FTS5's default implicit AND is too restrictive).
  */
 function sanitizeFtsQuery(query: string): string {
 	// Remove FTS5 operators and special chars
@@ -297,8 +390,9 @@ function sanitizeFtsQuery(query: string): string {
 		.replace(/\bAND\b|\bOR\b|\bNOT\b|\bNEAR\b/gi, " ")
 		.trim();
 
-	// Split into tokens and join with implicit AND (FTS5 default)
-	const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0);
+	// Split into tokens, remove stopwords, join with OR
+	const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0 && !STOPWORDS.has(t.toLowerCase()));
 	if (tokens.length === 0) return '""';
-	return tokens.join(" ");
+	if (tokens.length === 1) return tokens[0];
+	return tokens.join(" OR ");
 }

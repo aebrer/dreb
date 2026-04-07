@@ -6,6 +6,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { chunkFile } from "./chunker.js";
 import type { SearchDatabase } from "./db.js";
@@ -135,51 +136,52 @@ export class IndexManager {
 			onProgress?.("indexing", i + 1, filesToProcess.length);
 
 			try {
-				// Read file content
+				// Read file content and chunk BEFORE the transaction so that
+				// failures in I/O or chunking don't leave a committed mtime
+				// with zero chunks (which would make the file permanently invisible).
 				const absPath = scanned.filePath.startsWith("~memory/")
 					? path.join(this.config.globalMemoryDir ?? "", scanned.filePath.replace("~memory/", ""))
 					: path.join(config.projectRoot, scanned.filePath);
 
 				const content = readFileSync(absPath, "utf-8");
-
-				// Upsert file record
-				const fileId = db.upsertFile(scanned.filePath, scanned.mtime, scanned.fileType);
-
-				// Delete old chunks (for updates)
-				const existingFile = existingByPath.get(scanned.filePath);
-				if (existingFile) {
-					db.deleteChunksForFile(existingFile.id);
-					db.deleteImportsForFile(existingFile.id);
-				}
-
-				// Chunk the file
 				const chunks = await chunkFile(content, scanned.filePath, scanned.fileType);
-
-				// Insert chunks and symbols
-				for (const chunk of chunks) {
-					const chunkId = db.insertChunk(
-						fileId,
-						chunk.filePath,
-						chunk.startLine,
-						chunk.endLine,
-						chunk.kind,
-						chunk.name,
-						chunk.content,
-						chunk.fileType,
-					);
-					allNewChunkIds.push(chunkId);
-
-					// Insert symbol if the chunk has a name
-					if (chunk.name) {
-						db.insertSymbol(chunkId, chunk.name, chunk.kind);
-					}
-				}
-
-				// Extract and store import edges
 				const imports = extractImports(content, scanned.filePath, scanned.fileType);
-				for (const imp of imports) {
-					db.insertImport(fileId, imp);
-				}
+
+				// All DB mutations in a single transaction — atomic per file
+				db.transaction(() => {
+					const fileId = db.upsertFile(scanned.filePath, scanned.mtime, scanned.fileType);
+
+					// Delete old chunks (for updates)
+					const existingFile = existingByPath.get(scanned.filePath);
+					if (existingFile) {
+						db.deleteChunksForFile(existingFile.id);
+						db.deleteImportsForFile(existingFile.id);
+					}
+
+					// Insert chunks and symbols
+					for (const chunk of chunks) {
+						const chunkId = db.insertChunk(
+							fileId,
+							chunk.filePath,
+							chunk.startLine,
+							chunk.endLine,
+							chunk.kind,
+							chunk.name,
+							chunk.content,
+							chunk.fileType,
+						);
+						allNewChunkIds.push(chunkId);
+
+						if (chunk.name) {
+							db.insertSymbol(chunkId, chunk.name, chunk.kind);
+						}
+					}
+
+					// Store import edges
+					for (const imp of imports) {
+						db.insertImport(fileId, imp);
+					}
+				});
 			} catch {
 				// Skip files that fail to process (permissions, encoding issues, etc.)
 			}
@@ -219,7 +221,7 @@ export class IndexManager {
 		if (!this.embedder) {
 			onProgress?.("loading model", 0, 1);
 			this.embedder = new Embedder({
-				modelCacheDir: this.config.indexDir.replace(/\.dreb\/index\/?$/, ".dreb/agent/models/"),
+				modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
 				modelName: this.config.modelName,
 			});
 			await this.embedder.initialize();

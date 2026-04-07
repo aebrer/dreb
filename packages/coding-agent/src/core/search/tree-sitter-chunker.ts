@@ -192,14 +192,21 @@ export async function initTreeSitter(): Promise<void> {
 	if (initPromise) return initPromise;
 
 	initPromise = (async () => {
-		const mod = await import("web-tree-sitter");
-		Parser = mod.Parser;
-		Language = mod.Language;
+		try {
+			const mod = await import("web-tree-sitter");
+			Parser = mod.Parser;
+			Language = mod.Language;
 
-		const wasmPath = require.resolve("web-tree-sitter/web-tree-sitter.wasm");
-		const wasmBuf = readFileSync(wasmPath);
-		await Parser.init({ locateFile: () => wasmPath, wasmBinary: wasmBuf });
-		initialized = true;
+			const wasmPath = require.resolve("web-tree-sitter/web-tree-sitter.wasm");
+			const wasmBuf = readFileSync(wasmPath);
+			await Parser.init({ locateFile: () => wasmPath, wasmBinary: wasmBuf });
+			initialized = true;
+		} catch (err) {
+			// Reset so subsequent calls can retry instead of returning
+			// the same rejected promise forever
+			initPromise = null;
+			throw err;
+		}
 	})();
 
 	return initPromise;
@@ -260,24 +267,15 @@ function extractRegions(rootNode: TSNode, extractors: NodeExtractor[], _sourceLi
 			if (node.parent?.type !== "variable_declarator") continue;
 		}
 
-		// For export_statement, use the whole node — the exported declaration is inside
-		let targetNode = node;
-
-		// For export_statement wrapping arrow functions in variable declarations,
-		// use the export_statement itself
-		if (node.type === "export_statement") {
-			targetNode = node;
-		}
-
-		const startLine = targetNode.startPosition.row + 1; // 0→1 indexed
-		const endLine = targetNode.endPosition.row + 1;
+		const startLine = node.startPosition.row + 1; // 0→1 indexed
+		const endLine = node.endPosition.row + 1;
 
 		raw.push({
 			name: ext.getName(node),
 			kind: ext.kind,
 			startLine,
 			endLine,
-			content: targetNode.text,
+			content: node.text,
 		});
 	}
 
@@ -388,7 +386,8 @@ export async function chunkWithTreeSitter(
 
 	const tree = parser.parse(content);
 	if (!tree) {
-		// Parse failed — return the whole file as a single chunk
+		// Parse failed — free the parser WASM memory before returning
+		parser.delete();
 		const lines = content.split("\n");
 		return [
 			{

@@ -6,6 +6,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, type Stats, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { extname, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
 import type { FileType } from "./types.js";
@@ -107,14 +108,19 @@ export function detectFileType(filePath: string): FileType | null {
 export async function scanProject(projectRoot: string, globalMemoryDir?: string): Promise<ScannedFile[]> {
 	const results: ScannedFile[] = [];
 
-	// Build ignore matcher from .gitignore files discovered during walk
-	const ig = ignore();
+	// Detect if projectRoot is the home directory — use shallow scan mode
+	// to avoid recursing into the entire home dir (which would be catastrophic).
+	const isHomeDir = isHomeDirPath(projectRoot);
 
-	// Seed with root .gitignore
-	loadGitignore(ig, projectRoot, projectRoot);
-
-	// Walk project tree
-	walkDirectory(projectRoot, projectRoot, ig, results);
+	if (isHomeDir) {
+		// Shallow mode: only scan top-level files and ~/.dreb/memory/
+		scanShallow(projectRoot, results);
+	} else {
+		// Normal mode: full recursive walk with .gitignore
+		const ig = ignore();
+		loadGitignore(ig, projectRoot, projectRoot);
+		walkDirectory(projectRoot, projectRoot, ig, results);
+	}
 
 	// Include global memory files if the directory exists
 	if (globalMemoryDir && existsSync(globalMemoryDir)) {
@@ -122,6 +128,61 @@ export async function scanProject(projectRoot: string, globalMemoryDir?: string)
 	}
 
 	return results;
+}
+
+/** Check if a path is the user's home directory. */
+function isHomeDirPath(dir: string): boolean {
+	try {
+		const home = homedir();
+		// Normalize trailing slashes for comparison
+		const normalizedDir = dir.replace(/[/\\]+$/, "");
+		const normalizedHome = home.replace(/[/\\]+$/, "");
+		return normalizedDir === normalizedHome;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Shallow scan mode for home directory: only index top-level files
+ * (no directory recursion) to avoid scanning the entire home directory.
+ * Memory files are handled separately via scanMemoryDir.
+ */
+function scanShallow(dir: string, results: ScannedFile[]): void {
+	let entries: string[];
+	try {
+		entries = readdirSync(dir);
+	} catch {
+		return;
+	}
+
+	for (const entry of entries) {
+		// Skip dotfiles/dotdirs in home dir (except specific ones we want)
+		if (entry.startsWith(".")) continue;
+
+		const fullPath = join(dir, entry);
+
+		let stats: Stats;
+		try {
+			stats = statSync(fullPath);
+		} catch {
+			continue;
+		}
+
+		// Only index files, not directories (shallow mode)
+		if (!stats.isFile()) continue;
+		if (stats.size > MAX_FILE_SIZE) continue;
+		if (stats.size === 0) continue;
+
+		const fileType = detectFileType(entry);
+		if (!fileType) continue;
+
+		results.push({
+			filePath: entry,
+			fileType,
+			mtime: stats.mtimeMs,
+		});
+	}
 }
 
 // ============================================================================
@@ -186,13 +247,14 @@ function prefixPattern(line: string, prefix: string): string | null {
  * Handles both top-level names ("node_modules") and nested paths (".dreb/index").
  */
 function shouldSkipDir(relPath: string): boolean {
+	const posix = toPosix(relPath);
+
 	// Check the directory name itself
-	const parts = toPosix(relPath).split("/");
+	const parts = posix.split("/");
 	const name = parts[parts.length - 1];
 	if (SKIP_DIRS.has(name)) return true;
 
 	// Check multi-segment skip patterns (e.g. ".dreb/index")
-	const posix = toPosix(relPath);
 	for (const skip of SKIP_DIRS) {
 		if (skip.includes("/") && (posix === skip || posix.endsWith(`/${skip}`))) {
 			return true;

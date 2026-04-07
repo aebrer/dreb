@@ -179,15 +179,8 @@ function chunkYaml(content: string, filePath: string): Chunk[] {
 
 	const chunks: Chunk[] = [];
 
-	// Content before the first key (comments, directives)
-	if (keys[0].line > 0) {
-		const preambleLines = lines.slice(0, keys[0].line);
-		const preambleContent = preambleLines.join("\n");
-		if (preambleContent.trim().length > 0) {
-			// Attach preamble to the first key's chunk by adjusting its start
-			// (handled below by starting from line 0 for the first key)
-		}
-	}
+	// Preamble (comments, directives before first key) is included in the
+	// first key's chunk via the `start = 0` logic below for `i === 0`.
 
 	for (let i = 0; i < keys.length; i++) {
 		// Include any preceding comments/blank lines that belong to this key
@@ -417,24 +410,11 @@ function chunkToml(content: string, filePath: string): Chunk[] {
 		let start = boundary.line;
 		const end = i < boundaries.length - 1 ? boundaries[i + 1].line - 1 : lines.length - 1;
 
-		// For sections, look back for attached comments
-		if (boundary.kind === "section" && i > 0) {
-			let scan = boundary.line - 1;
-			const prevEnd = boundaries[i - 1].line;
-			while (scan > prevEnd) {
-				const trimmed = lines[scan].trim();
-				if (trimmed.startsWith("#") || trimmed === "") {
-					scan--;
-				} else {
-					break;
-				}
-			}
-			start = scan + 1;
-		} else if (boundary.kind === "kv" && i === 0) {
-			// First KV — include any leading comments
+		if (i === 0) {
+			// First boundary — include any leading comments/preamble
 			start = 0;
-		} else if (boundary.kind === "kv" && i > 0) {
-			// Look back for comments attached to this KV
+		} else {
+			// Look back for comment/blank lines attached to this boundary
 			let scan = boundary.line - 1;
 			const prevEnd = boundaries[i - 1].line;
 			while (scan > prevEnd) {

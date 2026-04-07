@@ -7,6 +7,7 @@
 
 import { createRequire } from "node:module";
 import type { ChunkKind, FileType, IndexedFile, StoredChunk } from "./types.js";
+import { unpackVector } from "./vector-store.js";
 
 // ============================================================================
 // Availability Check
@@ -256,16 +257,27 @@ export class SearchDatabase {
 		return this.rowToChunk(row);
 	}
 
-	/** Get multiple chunks by IDs. */
+	/** Get multiple chunks by IDs. Batches queries to avoid exceeding SQLite's bind variable limit. */
 	getChunksById(chunkIds: number[]): StoredChunk[] {
 		if (chunkIds.length === 0) return [];
-		const placeholders = chunkIds.map(() => "?").join(",");
-		const rows = this.db
-			.prepare(
-				`SELECT id, file_id, file_path, start_line, end_line, kind, name, content, file_type FROM chunks WHERE id IN (${placeholders})`,
-			)
-			.all(...chunkIds);
-		return rows.map((r: any) => this.rowToChunk(r));
+
+		const BATCH_SIZE = 500;
+		const results: StoredChunk[] = [];
+
+		for (let i = 0; i < chunkIds.length; i += BATCH_SIZE) {
+			const batch = chunkIds.slice(i, i + BATCH_SIZE);
+			const placeholders = batch.map(() => "?").join(",");
+			const rows = this.db
+				.prepare(
+					`SELECT id, file_id, file_path, start_line, end_line, kind, name, content, file_type FROM chunks WHERE id IN (${placeholders})`,
+				)
+				.all(...batch);
+			for (const r of rows) {
+				results.push(this.rowToChunk(r));
+			}
+		}
+
+		return results;
 	}
 
 	private rowToChunk(r: any): StoredChunk {
@@ -297,17 +309,12 @@ export class SearchDatabase {
 	/** Batch insert embeddings. Uses a transaction for performance. */
 	batchUpsertEmbeddings(items: Array<{ chunkId: number; modelName: string; vector: Float32Array }>): void {
 		const stmt = this.db.prepare("INSERT OR REPLACE INTO embeddings (chunk_id, model_name, vector) VALUES (?, ?, ?)");
-		this.db.exec("BEGIN");
-		try {
+		this.transaction(() => {
 			for (const item of items) {
 				const blob = Buffer.from(item.vector.buffer, item.vector.byteOffset, item.vector.byteLength);
 				stmt.run(item.chunkId, item.modelName, blob);
 			}
-			this.db.exec("COMMIT");
-		} catch (err) {
-			this.db.exec("ROLLBACK");
-			throw err;
-		}
+		});
 	}
 
 	/** Get the embedding for a chunk. */
@@ -316,7 +323,7 @@ export class SearchDatabase {
 			.prepare("SELECT vector FROM embeddings WHERE chunk_id = ? AND model_name = ?")
 			.get(chunkId, modelName);
 		if (!row) return null;
-		return blobToFloat32(row.vector);
+		return unpackVector(row.vector);
 	}
 
 	/** Get all embeddings for a model. Returns map of chunkId → vector. */
@@ -324,7 +331,7 @@ export class SearchDatabase {
 		const rows = this.db.prepare("SELECT chunk_id, vector FROM embeddings WHERE model_name = ?").all(modelName);
 		const map = new Map<number, Float32Array>();
 		for (const row of rows) {
-			map.set(row.chunk_id, blobToFloat32(row.vector));
+			map.set(row.chunk_id, unpackVector(row.vector));
 		}
 		return map;
 	}
@@ -465,13 +472,4 @@ export class SearchDatabase {
 	close(): void {
 		this.db.close();
 	}
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/** Convert a BLOB (Uint8Array from node:sqlite) to Float32Array. */
-function blobToFloat32(blob: Uint8Array): Float32Array {
-	return new Float32Array(blob.buffer, blob.byteOffset, blob.byteLength / 4);
 }

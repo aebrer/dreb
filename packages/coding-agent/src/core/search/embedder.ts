@@ -1,8 +1,8 @@
 /**
- * Embedding pipeline using nomic-embed-text-v1.5 via @huggingface/transformers.
+ * Embedding pipeline using all-MiniLM-L6-v2 via @huggingface/transformers.
  *
- * Generates 768-dimensional normalized embeddings for semantic search.
- * First use downloads the model (~131MB) to the configured cache directory.
+ * Generates 384-dimensional normalized embeddings for semantic search.
+ * First use downloads the model (~23MB) to the configured cache directory.
  */
 
 import type { IndexProgressCallback } from "./types.js";
@@ -109,7 +109,7 @@ export class Embedder {
 				normalize: true,
 			});
 
-			// output.data is a flat Float32Array of shape [batchLen, 768]
+			// output.data is a flat Float32Array of shape [batchLen, EMBEDDING_DIMENSION]
 			const data: Float32Array = output.data;
 			for (let j = 0; j < batch.length; j++) {
 				const start = j * EMBEDDING_DIMENSION;
@@ -138,7 +138,7 @@ export class Embedder {
 			normalize: true,
 		});
 
-		// Single input — output.data is Float32Array of shape [1, 768]
+		// Single input — output.data is Float32Array of shape [1, EMBEDDING_DIMENSION]
 		return new Float32Array(output.data);
 	}
 
