@@ -216,7 +216,7 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 			const indexManager = new IndexManager({
 				projectRoot: cwd,
 				indexDir: `${cwd}/.dreb/index`,
-				modelName: "nomic-ai/nomic-embed-text-v1.5",
+				modelName: "Xenova/all-MiniLM-L6-v2",
 			});
 			const stats = indexManager.getStats();
 

@@ -14,7 +14,7 @@ import type { IndexProgressCallback } from "./types.js";
 export interface EmbedderOptions {
 	/** Absolute path to the model cache directory (e.g. ~/.dreb/agent/models/). */
 	modelCacheDir: string;
-	/** HuggingFace model name. Default: 'nomic-ai/nomic-embed-text-v1.5'. */
+	/** HuggingFace model name. Default: 'Xenova/all-MiniLM-L6-v2'. */
 	modelName?: string;
 	/** Number of texts to embed per batch. Default: 32. */
 	batchSize?: number;
@@ -24,13 +24,17 @@ export interface EmbedderOptions {
 // Constants
 // ============================================================================
 
-const DEFAULT_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5";
+const DEFAULT_MODEL_NAME = "Xenova/all-MiniLM-L6-v2";
 const DEFAULT_BATCH_SIZE = 32;
-const EMBEDDING_DIMENSION = 768;
+const EMBEDDING_DIMENSION = 384;
 
-/** Nomic requires prefixes to distinguish document vs query embeddings. */
-const DOCUMENT_PREFIX = "search_document: ";
-const QUERY_PREFIX = "search_query: ";
+/**
+ * Model-specific prefixes for document vs query embeddings.
+ * nomic-embed-text-v1.5 requires these; most other models don't.
+ */
+const MODEL_PREFIXES: Record<string, { document: string; query: string }> = {
+	"nomic-ai/nomic-embed-text-v1.5": { document: "search_document: ", query: "search_query: " },
+};
 
 // ============================================================================
 // Embedder
@@ -75,7 +79,7 @@ export class Embedder {
 
 		try {
 			this.extractor = await pipeline("feature-extraction", this.modelName, {
-				dtype: "fp32" as any,
+				dtype: "q8" as any,
 				device: "cpu" as any,
 			});
 		} finally {
@@ -86,18 +90,19 @@ export class Embedder {
 	/**
 	 * Embed documents for indexing.
 	 *
-	 * Prepends the `search_document: ` prefix required by nomic and processes
-	 * texts in batches of `batchSize` for memory efficiency.
+	 * Applies model-specific prefixes if required, then processes texts
+	 * in batches of `batchSize` for memory efficiency.
 	 */
 	async embedDocuments(texts: string[], onProgress?: IndexProgressCallback): Promise<Float32Array[]> {
 		this.ensureInitialized();
 
 		const results: Float32Array[] = [];
 		const total = texts.length;
+		const prefix = MODEL_PREFIXES[this.modelName]?.document ?? "";
 
 		for (let i = 0; i < total; i += this.batchSize) {
 			const batch = texts.slice(i, i + this.batchSize);
-			const prefixed = batch.map((t) => DOCUMENT_PREFIX + t);
+			const prefixed = prefix ? batch.map((t) => prefix + t) : batch;
 
 			const output = await this.extractor!(prefixed, {
 				pooling: "mean",
@@ -122,12 +127,13 @@ export class Embedder {
 	/**
 	 * Embed a query for search.
 	 *
-	 * Prepends the `search_query: ` prefix required by nomic.
+	 * Applies model-specific query prefix if required.
 	 */
 	async embedQuery(query: string): Promise<Float32Array> {
 		this.ensureInitialized();
 
-		const output = await this.extractor!(QUERY_PREFIX + query, {
+		const prefix = MODEL_PREFIXES[this.modelName]?.query ?? "";
+		const output = await this.extractor!(prefix + query, {
 			pooling: "mean",
 			normalize: true,
 		});
@@ -136,7 +142,7 @@ export class Embedder {
 		return new Float32Array(output.data);
 	}
 
-	/** Get the embedding dimension (768 for nomic-embed-text-v1.5). */
+	/** Get the embedding dimension (384 for all-MiniLM-L6-v2, 768 for nomic). */
 	get dimension(): number {
 		return EMBEDDING_DIMENSION;
 	}

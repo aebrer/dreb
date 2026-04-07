@@ -23,7 +23,7 @@ import type { IndexConfig, IndexProgressCallback, MetricScores, SearchResult, St
 // Constants
 // ============================================================================
 
-const DEFAULT_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5";
+const DEFAULT_MODEL_NAME = "Xenova/all-MiniLM-L6-v2";
 const DEFAULT_RESULT_LIMIT = 20;
 const METRIC_CANDIDATE_LIMIT = 1000;
 
