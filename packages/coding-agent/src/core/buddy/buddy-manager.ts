@@ -21,10 +21,8 @@ const BUDDY_SALT = "dreb-buddy-v1";
 const BUDDY_FILENAME = "buddy.json";
 const DEFAULT_BACKSTORY = "A mysterious past shrouded in legend.";
 
-/** Ollama model config for buddy reactions */
-const OLLAMA_MODEL: Model<"openai-completions"> = {
-	id: "llama3.2",
-	name: "Llama 3.2 (Ollama)",
+/** Base Ollama model config — id/name are set dynamically from available models */
+const OLLAMA_MODEL_BASE: Omit<Model<"openai-completions">, "id" | "name"> = {
 	api: "openai-completions",
 	provider: "ollama",
 	baseUrl: "http://localhost:11434/v1",
@@ -32,12 +30,15 @@ const OLLAMA_MODEL: Model<"openai-completions"> = {
 	input: ["text"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 128000,
-	maxTokens: 256,
+	maxTokens: 2048,
 	compat: {
 		supportsDeveloperRole: false,
 		supportsReasoningEffort: false,
 	},
 };
+
+/** Max words for buddy response before truncation */
+const MAX_RESPONSE_WORDS = 300;
 
 /** Prompt for soul generation (uses parent LLM, not Ollama) */
 const SOUL_GENERATION_PROMPT = `You are generating a companion character for a coding assistant terminal app. Based on the species, rarity, and stats below, generate a creative name, a one-sentence personality description, and a funny fictional backstory.
@@ -100,10 +101,24 @@ export async function checkOllama(): Promise<OllamaStatus> {
 	}
 }
 
-/** Pick the first available Ollama model, preferring llama3.2 */
-function pickOllamaModel(models: string[]): string {
-	const preferred = models.find((m) => m.startsWith("llama3.2") || m.startsWith("llama3.1"));
-	return preferred ?? models[0];
+/**
+ * Pick the Ollama model for the buddy.
+ * Returns the stored model name if it's available, otherwise null.
+ */
+function pickOllamaModel(storedModel: string | undefined, availableModels: string[]): string | null {
+	if (!storedModel) return null;
+	// Check if the stored model is installed (exact match or prefix match without tag)
+	const match = availableModels.find((m) => m === storedModel || m.startsWith(`${storedModel}:`));
+	return match ?? null;
+}
+
+/**
+ * Truncate response to a maximum word count, appending "...[truncated]" if exceeded.
+ */
+export function truncateResponse(text: string, maxWords: number): string {
+	const words = text.split(/\s+/);
+	if (words.length <= maxWords) return text;
+	return `${words.slice(0, maxWords).join(" ")} ...[truncated]`;
 }
 
 // =============================================================================
@@ -132,6 +147,7 @@ function loadStored(): StoredCompanion | null {
 				backstory: typeof data.backstory === "string" ? data.backstory : DEFAULT_BACKSTORY,
 				hatchedAt: data.hatchedAt ?? new Date().toISOString(),
 				...(data.hidden !== undefined ? { hidden: data.hidden } : {}),
+				...(typeof data.ollamaModel === "string" ? { ollamaModel: data.ollamaModel } : {}),
 			};
 		}
 		return null;
@@ -277,6 +293,7 @@ export class BuddyManager {
 			personality,
 			backstory,
 			hatchedAt: new Date().toISOString(),
+			...(stored?.ollamaModel ? { ollamaModel: stored.ollamaModel } : {}),
 		};
 
 		saveStored(newStored);
@@ -300,6 +317,7 @@ export class BuddyManager {
 			personality,
 			backstory,
 			hatchedAt: new Date().toISOString(),
+			...(stored?.ollamaModel ? { ollamaModel: stored.ollamaModel } : {}),
 		};
 
 		saveStored(newStored);
@@ -314,7 +332,7 @@ export class BuddyManager {
 
 	/**
 	 * Shared Ollama chat helper. Checks availability, picks model, runs completion.
-	 * Returns the response text, or null if Ollama is unavailable.
+	 * Returns the response text, or null if Ollama is unavailable or no model configured.
 	 */
 	private async ollamaChat(context: Context): Promise<string | null> {
 		// Check Ollama lazily, retry if previously unavailable
@@ -323,9 +341,10 @@ export class BuddyManager {
 		}
 		if (!this.ollamaStatus.available) return null;
 
-		const modelName = pickOllamaModel(this.ollamaStatus.models);
+		const modelName = pickOllamaModel(this.state?.ollamaModel, this.ollamaStatus.models);
+		if (!modelName) return null;
 		const model: Model<"openai-completions"> = {
-			...OLLAMA_MODEL,
+			...OLLAMA_MODEL_BASE,
 			id: modelName,
 			name: `${modelName} (Ollama)`,
 		};
@@ -334,25 +353,36 @@ export class BuddyManager {
 		try {
 			response = await completeSimple(model, context, {
 				apiKey: "ollama",
-				signal: AbortSignal.timeout(15000),
+				signal: AbortSignal.timeout(120000),
 			});
 		} catch {
-			// Ollama crashed or became unreachable — invalidate cache so next attempt rechecks
+			// Safety net for unexpected sync errors (e.g. provider not found).
+			// Normal runtime errors (timeout, connection) are handled via stopReason below.
 			this.ollamaStatus = null;
 			return null;
 		}
 
+		// Connection error — invalidate cache so next attempt re-checks Ollama
 		if (response.stopReason === "error") {
-			// Completion returned an error — invalidate cache
 			this.ollamaStatus = null;
 			return null;
 		}
 
-		return response.content
+		// Timeout or abort — preserve cache (model is just slow, Ollama is fine)
+		if (response.stopReason === "aborted") {
+			return null;
+		}
+
+		let text = response.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
 			.map((c) => c.text)
 			.join("")
 			.trim();
+
+		// Truncate overly long responses
+		text = truncateResponse(text, MAX_RESPONSE_WORDS);
+
+		return text || null;
 	}
 
 	/**
@@ -373,12 +403,7 @@ export class BuddyManager {
 			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 		};
 
-		try {
-			const text = await this.ollamaChat(context);
-			return text || null;
-		} catch {
-			return null;
-		}
+		return this.ollamaChat(context);
 	}
 
 	/**
@@ -400,12 +425,26 @@ export class BuddyManager {
 			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 		};
 
-		try {
-			const text = await this.ollamaChat(context);
-			return text || `${this.state.name} wiggles happily at you!`;
-		} catch {
-			return `${this.state.name} wiggles happily at you!`;
+		return this.ollamaChat(context);
+	}
+
+	/** Get the configured Ollama model name, or null if not set */
+	getOllamaModel(): string | null {
+		return this.state?.ollamaModel ?? loadStored()?.ollamaModel ?? null;
+	}
+
+	/** Set the Ollama model for buddy reactions. Persists to disk. */
+	setOllamaModel(modelName: string): void {
+		const stored = loadStored();
+		if (stored) {
+			stored.ollamaModel = modelName;
+			saveStored(stored);
 		}
+		if (this.state) {
+			this.state.ollamaModel = modelName;
+		}
+		// Invalidate Ollama status cache so next call picks up the new model
+		this.ollamaStatus = null;
 	}
 
 	/** Reset Ollama status cache (e.g. after detecting it became available) */

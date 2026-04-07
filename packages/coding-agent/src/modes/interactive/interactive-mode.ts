@@ -257,35 +257,31 @@ export class InteractiveMode {
 	) {
 		this.session = session;
 		this.version = VERSION;
-		this.buddyController = new BuddyController(
-			new BuddyManager(),
-			{
-				onSpeech: (text) => {
-					this.buddyComponent?.showSpeech(text);
-				},
-				onThinkingStart: () => {
-					this.buddyComponent?.showThinking();
-				},
-				onThinkingEnd: () => {
-					this.buddyComponent?.hideThinking();
-				},
-				onHatch: async (manager) => {
-					const model = this.session.model;
-					if (!model) throw new Error("No model available. Set a model first.");
-					const apiKey = await this.session.modelRegistry.getApiKey(model);
-					if (!apiKey) throw new Error("No API key available for the current model.");
-					return manager.hatch(model, apiKey);
-				},
-				onReroll: async (manager) => {
-					const model = this.session.model;
-					if (!model) throw new Error("No model available. Set a model first.");
-					const apiKey = await this.session.modelRegistry.getApiKey(model);
-					if (!apiKey) throw new Error("No API key available for the current model.");
-					return manager.reroll(model, apiKey);
-				},
+		this.buddyController = new BuddyController(new BuddyManager(), {
+			onSpeech: (text) => {
+				this.buddyComponent?.showSpeech(text);
 			},
-			{ idleTimeoutMs: 30000, reactionCooldownMs: 60000, contextMaxEntries: 20 },
-		);
+			onThinkingStart: () => {
+				this.buddyComponent?.showThinking();
+			},
+			onThinkingEnd: () => {
+				this.buddyComponent?.hideThinking();
+			},
+			onHatch: async (manager) => {
+				const model = this.session.model;
+				if (!model) throw new Error("No model available. Set a model first.");
+				const apiKey = await this.session.modelRegistry.getApiKey(model);
+				if (!apiKey) throw new Error("No API key available for the current model.");
+				return manager.hatch(model, apiKey);
+			},
+			onReroll: async (manager) => {
+				const model = this.session.model;
+				if (!model) throw new Error("No model available. Set a model first.");
+				const apiKey = await this.session.modelRegistry.getApiKey(model);
+				if (!apiKey) throw new Error("No API key available for the current model.");
+				return manager.reroll(model, apiKey);
+			},
+		});
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
@@ -412,6 +408,7 @@ export class InteractiveMode {
 		if (buddyCommand) {
 			buddyCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
 				const subcommands = [
+					{ value: "model", label: "model", description: "Show or set the Ollama model for reactions" },
 					{ value: "pet", label: "pet", description: "Show your buddy some love" },
 					{ value: "reroll", label: "reroll", description: "Re-roll for a new buddy" },
 					{ value: "off", label: "off", description: "Hide your buddy" },
@@ -4689,9 +4686,7 @@ export class InteractiveMode {
 				}
 				case "reroll": {
 					await this.playHatchAnimation();
-					this.mountBuddy(result.state);
-					this.showBuddyStatsPanel(result.state);
-					await this.checkAndWarnOllama();
+					await this.mountAndRevealBuddy(result.state);
 					this.ui.requestRender();
 					break;
 				}
@@ -4710,14 +4705,17 @@ export class InteractiveMode {
 				}
 				case "hatch": {
 					await this.playHatchAnimation();
-					this.mountBuddy(result.state);
-					this.showBuddyStatsPanel(result.state);
-					await this.checkAndWarnOllama();
+					await this.mountAndRevealBuddy(result.state);
 					break;
 				}
 				case "show": {
-					this.mountBuddy(result.state);
-					this.showBuddyStatsPanel(result.state);
+					await this.mountAndRevealBuddy(result.state);
+					break;
+				}
+				case "model": {
+					this.chatContainer.addChild(new Spacer(1));
+					this.chatContainer.addChild(new Text(result.message, 1, 0));
+					this.ui.requestRender();
 					break;
 				}
 				case "warning": {
@@ -4732,6 +4730,13 @@ export class InteractiveMode {
 		} catch (err) {
 			this.showError(`Buddy error: ${err instanceof Error ? err.message : String(err)}`);
 		}
+	}
+
+	/** Mount buddy, show stats panel, and check Ollama availability */
+	private async mountAndRevealBuddy(state: import("../../core/buddy/buddy-types.js").BuddyState): Promise<void> {
+		this.mountBuddy(state);
+		this.showBuddyStatsPanel(state);
+		await this.checkAndWarnOllama();
 	}
 
 	private mountBuddy(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
@@ -4816,12 +4821,17 @@ export class InteractiveMode {
 				new Text(
 					theme.fg(
 						"warning",
-						"⚠️ Buddy reactions require Ollama. Install it at https://ollama.com and run: ollama pull llama3.2",
+						"⚠️ Buddy reactions require Ollama. Install it at https://ollama.com then pull a model.",
 					),
 					1,
 					0,
 				),
 			);
+			return;
+		}
+		const nudge = this.buddyController.getModelNudge();
+		if (nudge) {
+			this.chatContainer.addChild(new Text(theme.fg("warning", `⚠️ ${nudge}`), 1, 0));
 		}
 	}
 

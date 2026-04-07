@@ -93,6 +93,7 @@ export interface StoredCompanion {
 	backstory: string;
 	hatchedAt: string;
 	hidden?: boolean; // true when user ran /buddy off
+	ollamaModel?: string; // user-chosen Ollama model for reactions
 }
 
 /** Full buddy state = bones (ephemeral) + soul (persisted) */
