@@ -115,7 +115,7 @@ Pre-merge checks, version bump, docs update, merge, tag, and release.
 
 ### feature-dev
 
-Strong general-purpose coding agent used by `mach6-implement` for plan implementation and fix application. Has full tool access (read, write, edit, grep, find, ls, bash) and uses a strong-tier model with provider fallback list. Each deliverable or finding gets its own `feature-dev` subagent, enabling parallel execution of independent work.
+Strong general-purpose coding agent used by `mach6-implement` for plan implementation and fix application. Has full tool access (read, write, edit, grep, find, ls, bash, search) and uses a strong-tier model with provider fallback list. Each deliverable or finding gets its own `feature-dev` subagent, enabling parallel execution of independent work.
 
 ### Review Agents
 

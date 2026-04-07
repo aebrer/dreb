@@ -70,7 +70,7 @@ Read all files mentioned in the plan. Understand the existing code before making
 
 ### Step 6i: Implement
 
-Use the `feature-dev` subagent to implement each deliverable. `feature-dev` is a **pre-existing agent definition** shipped with dreb — it has full tool access (read, write, edit, grep, find, ls, bash) and uses a strong-tier model with a provider fallback list. Do not override its model unless there's a specific reason.
+Use the `feature-dev` subagent to implement each deliverable. `feature-dev` is a **pre-existing agent definition** shipped with dreb — it has full tool access (read, write, edit, grep, find, ls, bash, search) and uses a strong-tier model with a provider fallback list. Do not override its model unless there's a specific reason.
 
 **For each deliverable in the plan**, launch a `feature-dev` subagent via the `subagent` tool. Provide each agent with:
 - The specific deliverable to implement (files to modify, what to change, expected behavior)
