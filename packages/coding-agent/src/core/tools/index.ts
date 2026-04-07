@@ -63,6 +63,13 @@ export {
 	readToolDefinition,
 } from "./read.js";
 export {
+	createSearchTool,
+	createSearchToolDefinition,
+	isSearchAvailable,
+	type SearchToolDetails,
+	type SearchToolInput,
+} from "./search.js";
+export {
 	createSkillTool,
 	createSkillToolDefinition,
 	type SkillToolDetails,
@@ -148,6 +155,7 @@ import {
 	readTool,
 	readToolDefinition,
 } from "./read.js";
+import { createSearchTool, createSearchToolDefinition, isSearchAvailable } from "./search.js";
 import { createSkillTool, createSkillToolDefinition, type SkillToolOptions } from "./skill.js";
 import {
 	createSubagentTool,
@@ -250,6 +258,9 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		subagent: createSubagentToolDefinition(cwd, options?.subagent),
 		tmp_read: createTmpReadToolDefinition(options?.read),
 	};
+	if (isSearchAvailable()) {
+		tools.search = createSearchToolDefinition(cwd);
+	}
 	if (options?.skill) {
 		tools.skill = createSkillToolDefinition(cwd, options.skill);
 	}
@@ -286,6 +297,9 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		subagent: createSubagentTool(cwd, options?.subagent),
 		tmp_read: wrapToolDefinition(createTmpReadToolDefinition(options?.read)),
 	};
+	if (isSearchAvailable()) {
+		tools.search = createSearchTool(cwd);
+	}
 	if (options?.skill) {
 		tools.skill = createSkillTool(cwd, options.skill);
 	}
