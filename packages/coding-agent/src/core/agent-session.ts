@@ -2607,6 +2607,7 @@ export class AgentSession {
 					"web_search",
 					"web_fetch",
 					"subagent",
+					"search",
 					"skill",
 					"tasks_update",
 				];

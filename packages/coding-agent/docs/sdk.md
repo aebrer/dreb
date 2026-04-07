@@ -383,7 +383,7 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 ```typescript
 import {
-  codingTools,   // read, bash, edit, write (subset — default is all 10)
+  codingTools,   // read, bash, edit, write (subset — default is all 11)
   readOnlyTools, // read, grep, find, ls
   readTool, bashTool, editTool, writeTool,
   grepTool, findTool, lsTool,

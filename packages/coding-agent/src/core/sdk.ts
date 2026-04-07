@@ -62,7 +62,7 @@ export interface CreateAgentSessionOptions {
 	/** Models available for cycling (Ctrl+P in interactive mode) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
-	/** Built-in tools to use. Default: all standard tools [read, bash, edit, write, grep, find, ls, web_search, web_fetch, subagent]. `skill` and `tasks_update` are always active regardless of this setting. */
+	/** Built-in tools to use. Default: all standard tools [read, bash, edit, write, grep, find, ls, web_search, web_fetch, subagent]. `skill`, `tasks_update`, and `search` are always active regardless of this setting. */
 	tools?: Tool[];
 	/** Custom tools to register (in addition to built-in tools). */
 	customTools?: ToolDefinition[];
@@ -253,7 +253,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Tools that are always active when available (created by factory, not in allTools singleton)
-	const alwaysActiveBuiltins = ["skill", "tasks_update"];
+	const alwaysActiveBuiltins = ["skill", "tasks_update", "search"];
 	const defaultActiveToolNames: ToolName[] = [
 		"read",
 		"bash",

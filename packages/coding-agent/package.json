@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/coding-agent",
-	"version": "1.15.2",
+	"version": "1.16.0",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"drebConfig": {
@@ -49,10 +49,11 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@mariozechner/jiti": "^2.6.2",
 		"@dreb/agent-core": "^1.0.0",
 		"@dreb/ai": "^1.0.0",
 		"@dreb/tui": "^1.0.0",
+		"@huggingface/transformers": "^4.0.1",
+		"@mariozechner/jiti": "^2.6.2",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"ajv": "^8.17.1",
 		"chalk": "^5.5.0",
@@ -67,7 +68,16 @@
 		"minimatch": "^10.2.3",
 		"proper-lockfile": "^4.1.2",
 		"strip-ansi": "^7.1.0",
+		"tree-sitter-c": "^0.24.1",
+		"tree-sitter-cpp": "^0.23.4",
+		"tree-sitter-go": "^0.25.0",
+		"tree-sitter-java": "^0.23.5",
+		"tree-sitter-javascript": "^0.25.0",
+		"tree-sitter-python": "^0.25.0",
+		"tree-sitter-rust": "^0.24.0",
+		"tree-sitter-typescript": "^0.23.2",
 		"undici": "^7.19.1",
+		"web-tree-sitter": "^0.26.8",
 		"yaml": "^2.8.2"
 	},
 	"overrides": {

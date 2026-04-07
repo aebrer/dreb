@@ -36,7 +36,7 @@ Or use a custom provider — corporate proxy, Bedrock, local models, anything Op
 
 ## What's In It
 
-**10 built-in tools:** `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent` — plus always-active `skill` and `tasks_update`.
+**10 built-in tools:** `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent` — plus always-active `search`, `skill`, and `tasks_update`.
 
 **[mach6](packages/coding-agent/docs/mach6.md)** — a built-in development workflow covering the full issue-to-merge lifecycle: assess → plan → implement → push → review → fix → publish. Multi-agent code review with 5 specialized agents running in parallel, independent assessment of findings, iterative review-fix cycles, GitHub as shared memory. Inspired by [mach10](https://github.com/LeanAndMean/mach10) by Kevin Ryan.
 
