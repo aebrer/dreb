@@ -21,7 +21,6 @@ const BUDDY_SALT = "dreb-buddy-v1";
 const BUDDY_FILENAME = "buddy.json";
 const DEFAULT_BACKSTORY = "A mysterious past shrouded in legend.";
 
-/** Ollama model config for buddy reactions */
 /** Base Ollama model config — id/name are set dynamically from available models */
 const OLLAMA_MODEL_BASE: Omit<Model<"openai-completions">, "id" | "name"> = {
 	api: "openai-completions",
@@ -342,8 +341,7 @@ export class BuddyManager {
 		}
 		if (!this.ollamaStatus.available) return null;
 
-		const stored = loadStored();
-		const modelName = pickOllamaModel(stored?.ollamaModel, this.ollamaStatus.models);
+		const modelName = pickOllamaModel(this.state?.ollamaModel, this.ollamaStatus.models);
 		if (!modelName) return null;
 		const model: Model<"openai-completions"> = {
 			...OLLAMA_MODEL_BASE,
@@ -357,18 +355,21 @@ export class BuddyManager {
 				apiKey: "ollama",
 				signal: AbortSignal.timeout(120000),
 			});
-		} catch (err) {
-			// Only invalidate Ollama cache for connection errors, not timeouts.
-			// A timeout means the model is just slow (e.g. reasoning), not that Ollama is down.
-			if (!(err instanceof DOMException && err.name === "AbortError")) {
-				this.ollamaStatus = null;
-			}
+		} catch {
+			// Safety net for unexpected sync errors (e.g. provider not found).
+			// Normal runtime errors (timeout, connection) are handled via stopReason below.
+			this.ollamaStatus = null;
 			return null;
 		}
 
+		// Connection error — invalidate cache so next attempt re-checks Ollama
 		if (response.stopReason === "error") {
-			// Completion returned an error — invalidate cache
 			this.ollamaStatus = null;
+			return null;
+		}
+
+		// Timeout or abort — preserve cache (model is just slow, Ollama is fine)
+		if (response.stopReason === "aborted") {
 			return null;
 		}
 
@@ -402,11 +403,7 @@ export class BuddyManager {
 			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 		};
 
-		try {
-			return await this.ollamaChat(context);
-		} catch {
-			return null;
-		}
+		return this.ollamaChat(context);
 	}
 
 	/**
@@ -428,11 +425,7 @@ export class BuddyManager {
 			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 		};
 
-		try {
-			return await this.ollamaChat(context);
-		} catch {
-			return null;
-		}
+		return this.ollamaChat(context);
 	}
 
 	/** Get the configured Ollama model name, or null if not set */

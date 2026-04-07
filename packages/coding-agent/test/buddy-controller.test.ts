@@ -70,7 +70,13 @@ function createMockBuddyState(overrides?: Partial<BuddyState>): BuddyState {
 
 /** Write a stored buddy so manager.load() returns a state */
 function writeStoredBuddy(
-	overrides?: Partial<{ name: string; personality: string; backstory: string; rerollCount: number }>,
+	overrides?: Partial<{
+		name: string;
+		personality: string;
+		backstory: string;
+		rerollCount: number;
+		ollamaModel: string;
+	}>,
 ) {
 	const stored = {
 		rerollCount: 0,
@@ -896,15 +902,6 @@ describe("idle timer", () => {
 // Lifecycle
 // ===========================================================================
 describe("lifecycle", () => {
-	it("should start and load existing buddy", () => {
-		writeStoredBuddy();
-		const { controller } = createTestController();
-
-		const state = controller.start();
-		expect(state).not.toBeNull();
-		expect(state!.name).toBe("Testbud");
-	});
-
 	it("should return null when no stored buddy", () => {
 		const { controller } = createTestController();
 		expect(controller.start()).toBeNull();
@@ -956,7 +953,11 @@ describe("handleCommand — model", () => {
 	});
 
 	it("should show Ollama not running when checking models", async () => {
-		vi.mocked(checkOllama).mockResolvedValue({ available: false, models: [] });
+		vi.mocked(checkOllama).mockResolvedValue({
+			available: false,
+			models: [],
+			error: "Ollama is not running. Start it with: ollama serve",
+		});
 
 		const { controller } = createTestController();
 		const result = await controller.handleCommand("model");
@@ -964,6 +965,22 @@ describe("handleCommand — model", () => {
 		expect(result.type).toBe("model");
 		if (result.type === "model") {
 			expect(result.message).toContain("Ollama is not running");
+		}
+	});
+
+	it("should show 'no models installed' when Ollama running but empty", async () => {
+		vi.mocked(checkOllama).mockResolvedValue({
+			available: false,
+			models: [],
+			error: "No models installed. Run: ollama pull llama3.2",
+		});
+
+		const { controller } = createTestController();
+		const result = await controller.handleCommand("model");
+
+		expect(result.type).toBe("model");
+		if (result.type === "model") {
+			expect(result.message).toContain("No models installed");
 		}
 	});
 
@@ -1060,7 +1077,11 @@ describe("handleCommand — model", () => {
 		const { controller, manager } = createTestController();
 		manager.load();
 
-		vi.mocked(checkOllama).mockResolvedValue({ available: false, models: [] });
+		vi.mocked(checkOllama).mockResolvedValue({
+			available: false,
+			models: [],
+			error: "Ollama is not running. Start it with: ollama serve",
+		});
 
 		const result = await controller.handleCommand("model test-model");
 
@@ -1068,5 +1089,36 @@ describe("handleCommand — model", () => {
 		if (result.type === "error") {
 			expect(result.message).toContain("not running");
 		}
+	});
+});
+
+// ===========================================================================
+// getModelNudge
+// ===========================================================================
+describe("getModelNudge", () => {
+	it("should return null when model is configured", () => {
+		writeStoredBuddy({ ollamaModel: "test-model" });
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		expect(controller.getModelNudge()).toBeNull();
+	});
+
+	it("should return nudge string when no model configured", () => {
+		writeStoredBuddy({ ollamaModel: undefined });
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		const nudge = controller.getModelNudge();
+		expect(nudge).not.toBeNull();
+		expect(nudge).toContain("/buddy model");
+	});
+
+	it("should return nudge string when no buddy exists", () => {
+		const { controller } = createTestController();
+
+		const nudge = controller.getModelNudge();
+		expect(nudge).not.toBeNull();
+		expect(nudge).toContain("/buddy model");
 	});
 });

@@ -180,6 +180,61 @@ describe("BuddyComponent", () => {
 		});
 	});
 
+	describe("showThinking() / hideThinking()", () => {
+		it("shows thinking indicator with default label when called without arguments", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showThinking();
+
+			const lines = comp.render(120);
+			comp.dispose();
+
+			const joined = lines.join("\n");
+			expect(joined).toContain("thinking");
+			expect(joined).toContain("💭");
+		});
+
+		it("shows thinking indicator with custom label", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showThinking("loading");
+
+			const lines = comp.render(120);
+			comp.dispose();
+
+			const joined = lines.join("\n");
+			expect(joined).toContain("loading");
+			expect(joined).toContain("💭");
+		});
+
+		it("hides thinking indicator after hideThinking()", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showThinking();
+			comp.hideThinking();
+
+			const lines = comp.render(120);
+			comp.dispose();
+
+			const joined = lines.join("\n");
+			expect(joined).not.toContain("💭");
+			expect(joined).not.toContain("thinking.");
+		});
+
+		it("shows thinking indicator in narrow mode", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showThinking();
+
+			const lines = comp.render(80);
+			comp.dispose();
+
+			const joined = lines.join("\n");
+			expect(joined).toContain("thinking");
+			expect(joined).toContain("💭");
+		});
+	});
+
 	describe("dispose()", () => {
 		it("cleans up without crashing", () => {
 			const state = createTestState();

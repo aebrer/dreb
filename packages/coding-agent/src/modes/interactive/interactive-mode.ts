@@ -4686,9 +4686,7 @@ export class InteractiveMode {
 				}
 				case "reroll": {
 					await this.playHatchAnimation();
-					this.mountBuddy(result.state);
-					this.showBuddyStatsPanel(result.state);
-					await this.checkAndWarnOllama();
+					await this.mountAndRevealBuddy(result.state);
 					this.ui.requestRender();
 					break;
 				}
@@ -4707,15 +4705,11 @@ export class InteractiveMode {
 				}
 				case "hatch": {
 					await this.playHatchAnimation();
-					this.mountBuddy(result.state);
-					this.showBuddyStatsPanel(result.state);
-					await this.checkAndWarnOllama();
+					await this.mountAndRevealBuddy(result.state);
 					break;
 				}
 				case "show": {
-					this.mountBuddy(result.state);
-					this.showBuddyStatsPanel(result.state);
-					await this.checkAndWarnOllama();
+					await this.mountAndRevealBuddy(result.state);
 					break;
 				}
 				case "model": {
@@ -4736,6 +4730,13 @@ export class InteractiveMode {
 		} catch (err) {
 			this.showError(`Buddy error: ${err instanceof Error ? err.message : String(err)}`);
 		}
+	}
+
+	/** Mount buddy, show stats panel, and check Ollama availability */
+	private async mountAndRevealBuddy(state: import("../../core/buddy/buddy-types.js").BuddyState): Promise<void> {
+		this.mountBuddy(state);
+		this.showBuddyStatsPanel(state);
+		await this.checkAndWarnOllama();
 	}
 
 	private mountBuddy(state: import("../../core/buddy/buddy-types.js").BuddyState): void {

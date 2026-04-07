@@ -420,7 +420,7 @@ export class BuddyController {
 			const current = this.manager.getOllamaModel();
 			const status = await checkOllama();
 			if (!status.available) {
-				return { type: "model", message: "Ollama is not running. Start it with: ollama serve" };
+				return { type: "model", message: status.error ?? "Ollama is not available." };
 			}
 			const available = status.models.map((m) => `  • ${m}`).join("\n");
 			if (current) {
@@ -442,7 +442,7 @@ export class BuddyController {
 
 		const status = await checkOllama();
 		if (!status.available) {
-			return { type: "error", message: "Ollama is not running. Start it with: ollama serve" };
+			return { type: "error", message: status.error ?? "Ollama is not available." };
 		}
 
 		// Check if the model is installed

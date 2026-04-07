@@ -221,6 +221,34 @@ describe("BuddyManager.hatch()", () => {
 		expect(state.rerollCount).toBe(3);
 	});
 
+	it("preserves ollamaModel across hatch", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy({ ollamaModel: "phi4-mini" });
+		mockSoulResponse("New", "Fresh.");
+
+		const mgr = new BuddyManager();
+		const state = await mgr.hatch(createTestModel(), "test-key");
+
+		restore();
+
+		expect(state.ollamaModel).toBe("phi4-mini");
+		const diskData = readStoredBuddy();
+		expect(diskData.ollamaModel).toBe("phi4-mini");
+	});
+
+	it("does not set ollamaModel when previous buddy had none", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy({ ollamaModel: undefined });
+		mockSoulResponse("New", "Fresh.");
+
+		const mgr = new BuddyManager();
+		const state = await mgr.hatch(createTestModel(), "test-key");
+
+		restore();
+
+		expect(state.ollamaModel).toBeUndefined();
+	});
+
 	it("truncates long names to 8 chars", async () => {
 		const restore = withTestEnv();
 		mockSoulResponse("SuperCalifragilistic", "Long name.");
@@ -289,6 +317,21 @@ describe("BuddyManager.reroll()", () => {
 		const diskData = readStoredBuddy();
 		expect(diskData.rerollCount).toBe(3);
 		expect(diskData.name).toBe("Disk");
+	});
+
+	it("preserves ollamaModel across reroll", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy({ rerollCount: 0, ollamaModel: "phi4-mini" });
+		mockSoulResponse("New", "Fresh.");
+
+		const mgr = new BuddyManager();
+		const state = await mgr.reroll(createTestModel(), "test-key");
+
+		restore();
+
+		expect(state.ollamaModel).toBe("phi4-mini");
+		const diskData = readStoredBuddy();
+		expect(diskData.ollamaModel).toBe("phi4-mini");
 	});
 
 	it("falls back gracefully when LLM fails", async () => {
@@ -435,20 +478,114 @@ describe("BuddyManager.react()", () => {
 		expect(result).toBeNull();
 	});
 
-	it("returns null when completeSimple throws", async () => {
+	it("returns null and invalidates cache on connection error (stopReason: error)", async () => {
 		const restore = withTestEnv();
 		writeStoredBuddy();
-		globalThis.fetch = vi.fn().mockResolvedValue({
+		const mockFetch = vi.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ models: [{ name: "test-model" }] }),
 		});
-		vi.mocked(completeSimple).mockRejectedValue(new Error("Connection refused"));
+		globalThis.fetch = mockFetch;
+		vi.mocked(completeSimple).mockResolvedValue({
+			role: "assistant",
+			content: [],
+			api: "openai-completions",
+			provider: "ollama",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "error",
+			timestamp: Date.now(),
+		});
 
 		const mgr = new BuddyManager();
 		mgr.load();
 		const result = await mgr.react("some event");
-		restore();
 		expect(result).toBeNull();
+
+		// Cache should be invalidated — next call should re-check Ollama
+		vi.mocked(completeSimple).mockResolvedValue({
+			role: "assistant",
+			content: [{ type: "text", text: "Back online!" }],
+			api: "openai-completions",
+			provider: "ollama",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await mgr.react("another event");
+		restore();
+		// fetch should be called twice — once initially, once after cache invalidation
+		expect(mockFetch).toHaveBeenCalledTimes(2);
+	});
+
+	it("returns null and preserves cache on timeout (stopReason: aborted)", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ models: [{ name: "test-model" }] }),
+		});
+		globalThis.fetch = mockFetch;
+		vi.mocked(completeSimple).mockResolvedValue({
+			role: "assistant",
+			content: [],
+			api: "openai-completions",
+			provider: "ollama",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "aborted",
+			timestamp: Date.now(),
+		});
+
+		const mgr = new BuddyManager();
+		mgr.load();
+		const result = await mgr.react("some event");
+		expect(result).toBeNull();
+
+		// Cache should be preserved — next call should NOT re-check Ollama
+		vi.mocked(completeSimple).mockResolvedValue({
+			role: "assistant",
+			content: [{ type: "text", text: "Still here!" }],
+			api: "openai-completions",
+			provider: "ollama",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		await mgr.react("another event");
+		restore();
+		// fetch should be called only once — cache preserved after timeout
+		expect(mockFetch).toHaveBeenCalledOnce();
 	});
 
 	it("caches Ollama status", async () => {
