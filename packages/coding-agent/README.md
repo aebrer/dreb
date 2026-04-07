@@ -153,7 +153,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/compact [prompt]` | Manually compact context, optional custom instructions |
 | `/copy` | Copy last assistant message to clipboard |
 | `/export [file]` | Export session to HTML file |
-| `/buddy` | Terminal companion — hatch, pet, reroll, or hide with `/buddy pet`, `/buddy reroll`, `/buddy off`, `/buddy stats` |
+| `/buddy` | Terminal companion — hatch, pet, reroll, set model, or hide. See [docs/buddy.md](docs/buddy.md) |
 | `/reload` | Reload keybindings, extensions, skills, prompts, and context files (themes hot-reload automatically) |
 | `/hotkeys` | Show all keyboard shortcuts |
 | `/changelog` | Display version history |
