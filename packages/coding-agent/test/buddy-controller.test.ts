@@ -9,8 +9,13 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type BuddyCallbacks, BuddyController } from "../src/core/buddy/buddy-controller.js";
-import { BuddyManager } from "../src/core/buddy/buddy-manager.js";
+import { BuddyManager, checkOllama } from "../src/core/buddy/buddy-manager.js";
 import { type BuddyState, Rarity } from "../src/core/buddy/buddy-types.js";
+
+vi.mock("../src/core/buddy/buddy-manager.js", async () => {
+	const actual = await vi.importActual("../src/core/buddy/buddy-manager.js");
+	return { ...actual, checkOllama: vi.fn() };
+});
 
 const TEST_DIR = join(tmpdir(), "dreb-buddy-controller-test");
 
@@ -939,5 +944,129 @@ describe("lifecycle", () => {
 		expect(controller.buildContext()).toBe("No recent activity.");
 		expect((controller as any).lastReactionTime).toBe(0);
 		expect((controller as any).reactionTimestamps).toHaveLength(0);
+	});
+});
+
+// ===========================================================================
+// Model command
+// ===========================================================================
+describe("handleCommand — model", () => {
+	afterEach(() => {
+		vi.mocked(checkOllama).mockReset();
+	});
+
+	it("should show Ollama not running when checking models", async () => {
+		vi.mocked(checkOllama).mockResolvedValue({ available: false, models: [] });
+
+		const { controller } = createTestController();
+		const result = await controller.handleCommand("model");
+
+		expect(result.type).toBe("model");
+		if (result.type === "model") {
+			expect(result.message).toContain("Ollama is not running");
+		}
+	});
+
+	it("should show current model and available models", async () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		vi.spyOn(manager, "getOllamaModel").mockReturnValue("test-model");
+		vi.mocked(checkOllama).mockResolvedValue({
+			available: true,
+			models: ["test-model", "other-model"],
+		});
+
+		const result = await controller.handleCommand("model");
+
+		expect(result.type).toBe("model");
+		if (result.type === "model") {
+			expect(result.message).toContain("Current model: test-model");
+			expect(result.message).toContain("other-model");
+		}
+	});
+
+	it("should show 'No model set' when no model configured", async () => {
+		vi.mocked(checkOllama).mockResolvedValue({
+			available: true,
+			models: ["llama3.2:latest"],
+		});
+
+		const { controller, manager } = createTestController();
+		vi.spyOn(manager, "getOllamaModel").mockReturnValue(null);
+
+		const result = await controller.handleCommand("model");
+
+		expect(result.type).toBe("model");
+		if (result.type === "model") {
+			expect(result.message).toContain("No model set");
+			expect(result.message).toContain("llama3.2:latest");
+		}
+	});
+
+	it("should set model when valid name provided", async () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		vi.mocked(checkOllama).mockResolvedValue({
+			available: true,
+			models: ["test-model:latest"],
+		});
+		const setModelSpy = vi.spyOn(manager, "setOllamaModel");
+
+		const result = await controller.handleCommand("model test-model");
+
+		expect(result.type).toBe("model");
+		if (result.type === "model") {
+			expect(result.message).toBe("Buddy model set to: test-model:latest");
+		}
+		expect(setModelSpy).toHaveBeenCalledWith("test-model:latest");
+	});
+
+	it("should return error when model not found", async () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		vi.mocked(checkOllama).mockResolvedValue({
+			available: true,
+			models: ["llama3.2:latest", "mistral:latest"],
+		});
+
+		const result = await controller.handleCommand("model nonexistent");
+
+		expect(result.type).toBe("error");
+		if (result.type === "error") {
+			expect(result.message).toContain("not found");
+		}
+	});
+
+	it("should return warning when setting model before hatching", async () => {
+		// No writeStoredBuddy() — no buddy exists
+		const { controller } = createTestController();
+
+		const result = await controller.handleCommand("model test-model");
+
+		expect(result.type).toBe("warning");
+		if (result.type === "warning") {
+			expect(result.message).toContain("No buddy yet");
+		}
+	});
+
+	it("should return error when setting model with Ollama not running", async () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		vi.mocked(checkOllama).mockResolvedValue({ available: false, models: [] });
+
+		const result = await controller.handleCommand("model test-model");
+
+		expect(result.type).toBe("error");
+		if (result.type === "error") {
+			expect(result.message).toContain("not running");
+		}
 	});
 });

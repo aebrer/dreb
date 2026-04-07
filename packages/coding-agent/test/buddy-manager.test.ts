@@ -221,7 +221,7 @@ describe("BuddyManager.hatch()", () => {
 		expect(state.rerollCount).toBe(3);
 	});
 
-	it("truncates long names to 12 chars", async () => {
+	it("truncates long names to 8 chars", async () => {
 		const restore = withTestEnv();
 		mockSoulResponse("SuperCalifragilistic", "Long name.");
 
@@ -799,7 +799,7 @@ describe("BuddyManager.react() response processing", () => {
 		expect(call[0].id).toBe("phi4-mini:latest");
 	});
 
-	it("returns error message when no ollamaModel is configured", async () => {
+	it("returns null when no ollamaModel is configured", async () => {
 		const restore = withTestEnv();
 		writeStoredBuddy({ ollamaModel: undefined });
 		globalThis.fetch = vi.fn().mockResolvedValue({
@@ -812,8 +812,8 @@ describe("BuddyManager.react() response processing", () => {
 		const result = await mgr.react("some event");
 		restore();
 
-		// No model configured — should not call completeSimple, should return instruction
+		// No model configured — should not call completeSimple, should return null
 		expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
-		expect(result).toContain("/buddy model");
+		expect(result).toBeNull();
 	});
 });

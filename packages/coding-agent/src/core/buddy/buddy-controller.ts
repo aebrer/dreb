@@ -376,11 +376,12 @@ export class BuddyController {
 				}
 
 				// No subcommand: hatch or show
-				if (this.manager.getState()) {
+				const current = this.manager.getState();
+				if (current) {
 					// Already showing — just enable and return
 					this.enabled = true;
 					this.manager.setHidden(false);
-					return { type: "show", state: this.manager.getState()! };
+					return { type: "show", state: current };
 				}
 
 				// Try to load existing buddy
@@ -435,6 +436,10 @@ export class BuddyController {
 		}
 
 		// "/buddy model <name>" — set the model
+		if (!this.manager.getState() && !this.manager.hasStoredBuddy()) {
+			return { type: "warning", message: "No buddy yet — hatch one first with /buddy, then set a model." };
+		}
+
 		const status = await checkOllama();
 		if (!status.available) {
 			return { type: "error", message: "Ollama is not running. Start it with: ollama serve" };

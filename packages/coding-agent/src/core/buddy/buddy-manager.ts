@@ -294,6 +294,7 @@ export class BuddyManager {
 			personality,
 			backstory,
 			hatchedAt: new Date().toISOString(),
+			...(stored?.ollamaModel ? { ollamaModel: stored.ollamaModel } : {}),
 		};
 
 		saveStored(newStored);
@@ -317,6 +318,7 @@ export class BuddyManager {
 			personality,
 			backstory,
 			hatchedAt: new Date().toISOString(),
+			...(stored?.ollamaModel ? { ollamaModel: stored.ollamaModel } : {}),
 		};
 
 		saveStored(newStored);
@@ -329,13 +331,9 @@ export class BuddyManager {
 		return this.state?.name ?? loadStored()?.name ?? null;
 	}
 
-	/** No Ollama model configured — returned as speech so users know what to do */
-	private static readonly NO_MODEL_MESSAGE = "No Ollama model set! Run /buddy model to choose one.";
-
 	/**
 	 * Shared Ollama chat helper. Checks availability, picks model, runs completion.
-	 * Returns the response text, or a user-facing error message if something is wrong.
-	 * Returns null only for transient failures (timeout, crash).
+	 * Returns the response text, or null if Ollama is unavailable or no model configured.
 	 */
 	private async ollamaChat(context: Context): Promise<string | null> {
 		// Check Ollama lazily, retry if previously unavailable
@@ -346,7 +344,7 @@ export class BuddyManager {
 
 		const stored = loadStored();
 		const modelName = pickOllamaModel(stored?.ollamaModel, this.ollamaStatus.models);
-		if (!modelName) return BuddyManager.NO_MODEL_MESSAGE;
+		if (!modelName) return null;
 		const model: Model<"openai-completions"> = {
 			...OLLAMA_MODEL_BASE,
 			id: modelName,
@@ -405,8 +403,7 @@ export class BuddyManager {
 		};
 
 		try {
-			const text = await this.ollamaChat(context);
-			return text || null;
+			return await this.ollamaChat(context);
 		} catch {
 			return null;
 		}

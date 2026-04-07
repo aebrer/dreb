@@ -257,35 +257,31 @@ export class InteractiveMode {
 	) {
 		this.session = session;
 		this.version = VERSION;
-		this.buddyController = new BuddyController(
-			new BuddyManager(),
-			{
-				onSpeech: (text) => {
-					this.buddyComponent?.showSpeech(text);
-				},
-				onThinkingStart: () => {
-					this.buddyComponent?.showThinking();
-				},
-				onThinkingEnd: () => {
-					this.buddyComponent?.hideThinking();
-				},
-				onHatch: async (manager) => {
-					const model = this.session.model;
-					if (!model) throw new Error("No model available. Set a model first.");
-					const apiKey = await this.session.modelRegistry.getApiKey(model);
-					if (!apiKey) throw new Error("No API key available for the current model.");
-					return manager.hatch(model, apiKey);
-				},
-				onReroll: async (manager) => {
-					const model = this.session.model;
-					if (!model) throw new Error("No model available. Set a model first.");
-					const apiKey = await this.session.modelRegistry.getApiKey(model);
-					if (!apiKey) throw new Error("No API key available for the current model.");
-					return manager.reroll(model, apiKey);
-				},
+		this.buddyController = new BuddyController(new BuddyManager(), {
+			onSpeech: (text) => {
+				this.buddyComponent?.showSpeech(text);
 			},
-			{ idleTimeoutMs: 30000, reactionCooldownMs: 60000, contextMaxEntries: 20 },
-		);
+			onThinkingStart: () => {
+				this.buddyComponent?.showThinking();
+			},
+			onThinkingEnd: () => {
+				this.buddyComponent?.hideThinking();
+			},
+			onHatch: async (manager) => {
+				const model = this.session.model;
+				if (!model) throw new Error("No model available. Set a model first.");
+				const apiKey = await this.session.modelRegistry.getApiKey(model);
+				if (!apiKey) throw new Error("No API key available for the current model.");
+				return manager.hatch(model, apiKey);
+			},
+			onReroll: async (manager) => {
+				const model = this.session.model;
+				if (!model) throw new Error("No model available. Set a model first.");
+				const apiKey = await this.session.modelRegistry.getApiKey(model);
+				if (!apiKey) throw new Error("No API key available for the current model.");
+				return manager.reroll(model, apiKey);
+			},
+		});
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
@@ -412,6 +408,7 @@ export class InteractiveMode {
 		if (buddyCommand) {
 			buddyCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
 				const subcommands = [
+					{ value: "model", label: "model", description: "Show or set the Ollama model for reactions" },
 					{ value: "pet", label: "pet", description: "Show your buddy some love" },
 					{ value: "reroll", label: "reroll", description: "Re-roll for a new buddy" },
 					{ value: "off", label: "off", description: "Hide your buddy" },
