@@ -399,4 +399,99 @@ describe("SearchDatabase", () => {
 			expect(db.getChunkCount()).toBe(3);
 		});
 	});
+
+	// ====================================================================
+	// getChunksById (batching)
+	// ====================================================================
+
+	describe("getChunksById", () => {
+		it("returns empty array for empty input", () => {
+			expect(db.getChunksById([])).toEqual([]);
+		});
+
+		it("returns matching chunks for valid IDs", () => {
+			const fileId = db.upsertFile("test.ts", 1, "typescript");
+			const c1 = db.insertChunk(fileId, "test.ts", 1, 5, "function", "fn1", "code1", "typescript");
+			const c2 = db.insertChunk(fileId, "test.ts", 6, 10, "function", "fn2", "code2", "typescript");
+
+			const results = db.getChunksById([c1, c2]);
+			expect(results).toHaveLength(2);
+			const ids = results.map((c) => c.id).sort();
+			expect(ids).toEqual([c1, c2].sort());
+		});
+
+		it("returns only existing chunks (ignores invalid IDs)", () => {
+			const fileId = db.upsertFile("test.ts", 1, "typescript");
+			const c1 = db.insertChunk(fileId, "test.ts", 1, 5, "function", "fn1", "code1", "typescript");
+
+			const results = db.getChunksById([c1, 99999, 88888]);
+			expect(results).toHaveLength(1);
+			expect(results[0].id).toBe(c1);
+		});
+
+		it("handles exactly 500 IDs (one full batch)", () => {
+			const fileId = db.upsertFile("test.ts", Date.now(), "typescript");
+			const ids: number[] = [];
+			for (let i = 0; i < 500; i++) {
+				ids.push(db.insertChunk(fileId, "test.ts", i, i + 1, "function", `fn${i}`, `content ${i}`, "typescript"));
+			}
+
+			const results = db.getChunksById(ids);
+			expect(results).toHaveLength(500);
+		});
+
+		it("handles 501 IDs (crosses batch boundary)", () => {
+			const fileId = db.upsertFile("test.ts", Date.now(), "typescript");
+			const ids: number[] = [];
+			for (let i = 0; i < 501; i++) {
+				ids.push(db.insertChunk(fileId, "test.ts", i, i + 1, "function", `fn${i}`, `content ${i}`, "typescript"));
+			}
+
+			const results = db.getChunksById(ids);
+			expect(results).toHaveLength(501);
+		});
+
+		it("handles 1000+ IDs (multiple batches)", () => {
+			const fileId = db.upsertFile("test.ts", Date.now(), "typescript");
+			const ids: number[] = [];
+			for (let i = 0; i < 1001; i++) {
+				ids.push(db.insertChunk(fileId, "test.ts", i, i + 1, "function", `fn${i}`, `content ${i}`, "typescript"));
+			}
+
+			const results = db.getChunksById(ids);
+			expect(results).toHaveLength(1001);
+			// Verify all IDs are present
+			const returnedIds = new Set(results.map((c) => c.id));
+			for (const id of ids) {
+				expect(returnedIds.has(id)).toBe(true);
+			}
+		});
+
+		it("returns results in correct shape (all StoredChunk fields present)", () => {
+			const fileId = db.upsertFile("shape.ts", 1, "typescript");
+			const chunkId = db.insertChunk(
+				fileId,
+				"shape.ts",
+				5,
+				15,
+				"class",
+				"MyClass",
+				"class MyClass {}",
+				"typescript",
+			);
+
+			const results = db.getChunksById([chunkId]);
+			expect(results).toHaveLength(1);
+			const c = results[0];
+			expect(c.id).toBe(chunkId);
+			expect(c.fileId).toBe(fileId);
+			expect(c.filePath).toBe("shape.ts");
+			expect(c.startLine).toBe(5);
+			expect(c.endLine).toBe(15);
+			expect(c.kind).toBe("class");
+			expect(c.name).toBe("MyClass");
+			expect(c.content).toBe("class MyClass {}");
+			expect(c.fileType).toBe("typescript");
+		});
+	});
 });

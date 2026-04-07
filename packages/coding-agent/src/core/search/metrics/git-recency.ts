@@ -93,7 +93,7 @@ function getFileTimestamps(projectRoot: string, targetPaths: Set<string>): Map<s
 		// --diff-filter=AMCR: only additions, modifications, copies, renames.
 		// --name-only: list file names after each commit.
 		// --format="COMMIT %at": prefix each commit with its unix timestamp.
-		const output = execSync('git log --format="COMMIT %at" --name-only --diff-filter=AMCR', {
+		const output = execSync('git log --max-count=10000 --format="COMMIT %at" --name-only --diff-filter=AMCR', {
 			cwd: projectRoot,
 			timeout: GIT_TIMEOUT_MS,
 			encoding: "utf-8",

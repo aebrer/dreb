@@ -569,7 +569,7 @@ In the default parallel tool execution mode, sibling tool calls from the same as
 import { isToolCallEventType } from "@dreb/coding-agent";
 
 dreb.on("tool_call", async (event, ctx) => {
-  // event.toolName - "bash", "read", "write", "edit", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "skill", "tasks_update", or custom tool names
+  // event.toolName - "bash", "read", "write", "edit", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "search", "skill", "tasks_update", or custom tool names
   // event.toolCallId
   // event.input - tool parameters
 
@@ -1474,7 +1474,7 @@ async execute(toolCallId, params) {
 
 ### Overriding Built-in Tools
 
-Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`) by registering a tool with the same name. Interactive mode displays a warning when this happens. The factory-only tools (`skill`, `tasks_update`) can also be overridden.
+Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `search`) by registering a tool with the same name. Interactive mode displays a warning when this happens. The factory-only tools (`skill`, `tasks_update`) can also be overridden.
 
 ```bash
 # Extension's read tool replaces built-in read

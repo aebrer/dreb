@@ -66,7 +66,7 @@ dreb
 
 Or use a custom provider (corporate proxy, Bedrock, etc.) — see [Custom providers & models](#providers--models).
 
-Then just talk to dreb. All 10 built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, and `subagent`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Two additional tools — `skill` and `tasks_update` — are always active. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
+Then just talk to dreb. All 11 built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, and `search`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Two additional tools — `skill` and `tasks_update` — are always active. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -534,9 +534,10 @@ cat README.md | dreb -p "Summarize this text"
 | `--tools <list>` | Comma-separated list of tools to enable (default: all) |
 | `--no-tools` | Disable all built-in tools (extension tools still work) |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`
+Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `search`
 
-Two additional tools are always active but don't appear in `--tools`:
+Three additional tools are always active but don't appear in `--tools`:
+- `search` — [semantic codebase search](#semantic-search) using natural language queries
 - `skill` — invokes [skills](#skills) programmatically
 - `tasks_update` — session [task tracking](#task-tracking) with TUI panel
 

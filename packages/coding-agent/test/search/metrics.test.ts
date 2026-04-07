@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SearchDatabase } from "../../src/core/search/db.js";
+import { computeBm25Scores } from "../../src/core/search/metrics/bm25.js";
 import { computeGitRecencyScores } from "../../src/core/search/metrics/git-recency.js";
+import { computeImportGraphScores } from "../../src/core/search/metrics/import-graph.js";
 import { computePathMatchScores } from "../../src/core/search/metrics/path-match.js";
 import { computeSymbolMatchScores } from "../../src/core/search/metrics/symbol-match.js";
 import { tokenize } from "../../src/core/search/metrics/tokenize.js";
@@ -242,5 +245,284 @@ describe("computeGitRecencyScores", () => {
 		const scores = computeGitRecencyScores(projectRoot, chunks);
 		// The untracked file should get the neutral score 0.5
 		expect(scores.get(2)).toBe(0.5);
+	});
+});
+
+// ============================================================================
+// computeImportGraphScores
+// ============================================================================
+
+describe("computeImportGraphScores", () => {
+	let db: SearchDatabase;
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dreb-import-test-"));
+		db = new SearchDatabase(path.join(tmpDir, "index.db"));
+	});
+
+	afterEach(() => {
+		db.close();
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("returns empty map when seedScores is empty", () => {
+		const scores = computeImportGraphScores(db, new Map(), new Map());
+		expect(scores.size).toBe(0);
+	});
+
+	it("returns empty map when no import edges exist", () => {
+		const fA = db.upsertFile("a.ts", 1, "typescript");
+		const cA = db.insertChunk(fA, "a.ts", 1, 10, "function", "fnA", "code a", "typescript");
+
+		const seedScores = new Map([[fA, 1.0]]);
+		const fileIdToChunkIds = new Map([[fA, [cA]]]);
+
+		const scores = computeImportGraphScores(db, seedScores, fileIdToChunkIds);
+		expect(scores.size).toBe(0);
+	});
+
+	it("propagates scores to imported files", () => {
+		// A imports B — A is a seed, B should get a propagated score
+		const fA = db.upsertFile("a.ts", 1, "typescript");
+		const fB = db.upsertFile("b.ts", 1, "typescript");
+		const cA = db.insertChunk(fA, "a.ts", 1, 10, "function", "fnA", "code a", "typescript");
+		const cB = db.insertChunk(fB, "b.ts", 1, 10, "function", "fnB", "code b", "typescript");
+		db.insertImport(fA, "b.ts");
+
+		const seedScores = new Map([[fA, 1.0]]);
+		const fileIdToChunkIds = new Map([
+			[fA, [cA]],
+			[fB, [cB]],
+		]);
+
+		const scores = computeImportGraphScores(db, seedScores, fileIdToChunkIds);
+		expect(scores.has(cB)).toBe(true);
+		expect(scores.get(cB)!).toBeGreaterThan(0);
+	});
+
+	it("propagates scores to importers", () => {
+		// C imports A — A is a seed, C should get a propagated score
+		const fA = db.upsertFile("a.ts", 1, "typescript");
+		const fC = db.upsertFile("c.ts", 1, "typescript");
+		const cA = db.insertChunk(fA, "a.ts", 1, 10, "function", "fnA", "code a", "typescript");
+		const cC = db.insertChunk(fC, "c.ts", 1, 10, "function", "fnC", "code c", "typescript");
+		db.insertImport(fC, "a.ts");
+
+		const seedScores = new Map([[fA, 1.0]]);
+		const fileIdToChunkIds = new Map([
+			[fA, [cA]],
+			[fC, [cC]],
+		]);
+
+		const scores = computeImportGraphScores(db, seedScores, fileIdToChunkIds);
+		expect(scores.has(cC)).toBe(true);
+		expect(scores.get(cC)!).toBeGreaterThan(0);
+	});
+
+	it("self-boosts seed files connected to other seeds", () => {
+		// A imports B, both are seeds → A gets a self-boost
+		const fA = db.upsertFile("a.ts", 1, "typescript");
+		const fB = db.upsertFile("b.ts", 1, "typescript");
+		const cA = db.insertChunk(fA, "a.ts", 1, 10, "function", "fnA", "code a", "typescript");
+		const cB = db.insertChunk(fB, "b.ts", 1, 10, "function", "fnB", "code b", "typescript");
+		db.insertImport(fA, "b.ts");
+
+		const seedScores = new Map([
+			[fA, 1.0],
+			[fB, 1.0],
+		]);
+		const fileIdToChunkIds = new Map([
+			[fA, [cA]],
+			[fB, [cB]],
+		]);
+
+		const scores = computeImportGraphScores(db, seedScores, fileIdToChunkIds);
+		// A should receive a self-boost score
+		expect(scores.has(cA)).toBe(true);
+		expect(scores.get(cA)!).toBeGreaterThan(0);
+	});
+
+	it("normalizes scores to [0, 1]", () => {
+		// A imports B and C; B and C are non-seeds
+		const fA = db.upsertFile("a.ts", 1, "typescript");
+		const fB = db.upsertFile("b.ts", 1, "typescript");
+		const fC = db.upsertFile("c.ts", 1, "typescript");
+		const cA = db.insertChunk(fA, "a.ts", 1, 10, "function", "fnA", "code a", "typescript");
+		const cB = db.insertChunk(fB, "b.ts", 1, 10, "function", "fnB", "code b", "typescript");
+		const cC = db.insertChunk(fC, "c.ts", 1, 10, "function", "fnC", "code c", "typescript");
+		db.insertImport(fA, "b.ts");
+		db.insertImport(fA, "c.ts");
+
+		const seedScores = new Map([[fA, 1.0]]);
+		const fileIdToChunkIds = new Map([
+			[fA, [cA]],
+			[fB, [cB]],
+			[fC, [cC]],
+		]);
+
+		const scores = computeImportGraphScores(db, seedScores, fileIdToChunkIds);
+		for (const score of scores.values()) {
+			expect(score).toBeGreaterThanOrEqual(0);
+			expect(score).toBeLessThanOrEqual(1);
+		}
+		// At least one score should be exactly 1.0 (the max after normalization)
+		const maxScore = Math.max(...scores.values());
+		expect(maxScore).toBeCloseTo(1.0, 5);
+	});
+
+	it("distributes scores equally among chunks of the same file", () => {
+		// A imports B; B has two chunks — both should get equal scores
+		const fA = db.upsertFile("a.ts", 1, "typescript");
+		const fB = db.upsertFile("b.ts", 1, "typescript");
+		const cA = db.insertChunk(fA, "a.ts", 1, 10, "function", "fnA", "code a", "typescript");
+		const cB1 = db.insertChunk(fB, "b.ts", 1, 10, "function", "fnB1", "code b1", "typescript");
+		const cB2 = db.insertChunk(fB, "b.ts", 11, 20, "function", "fnB2", "code b2", "typescript");
+		db.insertImport(fA, "b.ts");
+
+		const seedScores = new Map([[fA, 1.0]]);
+		const fileIdToChunkIds = new Map([
+			[fA, [cA]],
+			[fB, [cB1, cB2]],
+		]);
+
+		const scores = computeImportGraphScores(db, seedScores, fileIdToChunkIds);
+		expect(scores.has(cB1)).toBe(true);
+		expect(scores.has(cB2)).toBe(true);
+		expect(scores.get(cB1)).toBe(scores.get(cB2));
+	});
+
+	it("handles extension-stripped import paths", () => {
+		// A imports "b" (no extension), file is stored as "b.ts"
+		const fA = db.upsertFile("a.ts", 1, "typescript");
+		const fB = db.upsertFile("b.ts", 1, "typescript");
+		const cA = db.insertChunk(fA, "a.ts", 1, 10, "function", "fnA", "code a", "typescript");
+		const cB = db.insertChunk(fB, "b.ts", 1, 10, "function", "fnB", "code b", "typescript");
+		db.insertImport(fA, "b"); // no extension
+
+		const seedScores = new Map([[fA, 1.0]]);
+		const fileIdToChunkIds = new Map([
+			[fA, [cA]],
+			[fB, [cB]],
+		]);
+
+		const scores = computeImportGraphScores(db, seedScores, fileIdToChunkIds);
+		expect(scores.has(cB)).toBe(true);
+		expect(scores.get(cB)!).toBeGreaterThan(0);
+	});
+});
+
+// ============================================================================
+// computeBm25Scores
+// ============================================================================
+
+describe("computeBm25Scores", () => {
+	let db: SearchDatabase;
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dreb-bm25-test-"));
+		db = new SearchDatabase(path.join(tmpDir, "index.db"));
+	});
+
+	afterEach(() => {
+		db.close();
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("returns empty map for query matching no chunks", () => {
+		const fileId = db.upsertFile("a.ts", 1, "typescript");
+		db.insertChunk(fileId, "a.ts", 1, 10, "function", "hello", "hello world", "typescript");
+		db.rebuildFts();
+
+		const scores = computeBm25Scores(db, "zzzznotfound", 10);
+		expect(scores.size).toBe(0);
+	});
+
+	it("returns normalized scores — top match gets 1.0", () => {
+		const fileId = db.upsertFile("search.ts", 1, "typescript");
+		db.insertChunk(
+			fileId,
+			"search.ts",
+			1,
+			10,
+			"function",
+			"authenticate",
+			"authenticate the user credentials authenticate again authenticate",
+			"typescript",
+		);
+		db.insertChunk(
+			fileId,
+			"search.ts",
+			11,
+			20,
+			"function",
+			"process",
+			"process data after authenticate",
+			"typescript",
+		);
+		db.rebuildFts();
+
+		const scores = computeBm25Scores(db, "authenticate", 10);
+		expect(scores.size).toBeGreaterThanOrEqual(2);
+		const maxScore = Math.max(...scores.values());
+		expect(maxScore).toBeCloseTo(1.0, 5);
+	});
+
+	it("returns proportional scores for multiple matches", () => {
+		const fileId = db.upsertFile("multi.ts", 1, "typescript");
+		// Heavy occurrence
+		const c1 = db.insertChunk(
+			fileId,
+			"multi.ts",
+			1,
+			10,
+			"function",
+			"heavy",
+			"parse parse parse parse parse parse parse parse",
+			"typescript",
+		);
+		// Light occurrence
+		const c2 = db.insertChunk(fileId, "multi.ts", 11, 20, "function", "light", "call parse once here", "typescript");
+		db.rebuildFts();
+
+		const scores = computeBm25Scores(db, "parse", 10);
+		expect(scores.has(c1)).toBe(true);
+		expect(scores.has(c2)).toBe(true);
+		// Heavy match should score higher
+		expect(scores.get(c1)!).toBeGreaterThanOrEqual(scores.get(c2)!);
+		// Top score should be 1.0
+		expect(scores.get(c1)).toBeCloseTo(1.0, 5);
+		// Light match should be less than 1.0
+		expect(scores.get(c2)!).toBeLessThan(1.0);
+	});
+
+	it("returns empty map for empty query", () => {
+		const fileId = db.upsertFile("a.ts", 1, "typescript");
+		db.insertChunk(fileId, "a.ts", 1, 5, "function", "fn", "some content", "typescript");
+		db.rebuildFts();
+
+		const scores = computeBm25Scores(db, "", 10);
+		expect(scores.size).toBe(0);
+	});
+
+	it("handles single match — score is 1.0", () => {
+		const fileId = db.upsertFile("single.ts", 1, "typescript");
+		const c1 = db.insertChunk(
+			fileId,
+			"single.ts",
+			1,
+			10,
+			"function",
+			"unique",
+			"this is a uniquetoken for testing",
+			"typescript",
+		);
+		db.insertChunk(fileId, "single.ts", 11, 20, "function", "other", "unrelated content here", "typescript");
+		db.rebuildFts();
+
+		const scores = computeBm25Scores(db, "uniquetoken", 10);
+		expect(scores.size).toBe(1);
+		expect(scores.get(c1)).toBeCloseTo(1.0, 5);
 	});
 });

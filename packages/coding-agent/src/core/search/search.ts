@@ -18,6 +18,7 @@ import { computeSymbolMatchScores } from "./metrics/symbol-match.js";
 import { poemRank } from "./poem.js";
 import { classifyQuery } from "./query-classifier.js";
 import type { IndexConfig, IndexProgressCallback, MetricScores, SearchResult, StoredChunk } from "./types.js";
+import { topKSimilar } from "./vector-store.js";
 
 // ============================================================================
 // Constants
@@ -240,8 +241,6 @@ export class SearchEngine {
 			return new Map();
 		}
 
-		// Use vector-store topKSimilar
-		const { topKSimilar } = await import("./vector-store.js");
 		const topK = topKSimilar(queryVector, storedVectors, limit);
 
 		// Convert to Map, clamping negative similarities to 0
