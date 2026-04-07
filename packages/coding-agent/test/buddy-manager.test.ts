@@ -550,7 +550,7 @@ describe("BuddyManager.respondToNameCall()", () => {
 		expect(result).toBeNull();
 	});
 
-	it("returns fallback when Ollama unavailable", async () => {
+	it("returns null when Ollama unavailable", async () => {
 		const restore = withTestEnv();
 		writeStoredBuddy({ name: "Quackers" });
 		globalThis.fetch = vi.fn().mockResolvedValue({
@@ -562,8 +562,7 @@ describe("BuddyManager.respondToNameCall()", () => {
 		mgr.load();
 		const result = await mgr.respondToNameCall("hey buddy", "coding");
 		restore();
-		expect(result).toContain("Quackers");
-		expect(result).toContain("wiggles happily");
+		expect(result).toBeNull();
 	});
 
 	it("returns response from Ollama when available", async () => {
@@ -598,7 +597,7 @@ describe("BuddyManager.respondToNameCall()", () => {
 		expect(result).toBe("Hey there, code warrior!");
 	});
 
-	it("returns fallback on error", async () => {
+	it("returns null on error", async () => {
 		const restore = withTestEnv();
 		writeStoredBuddy({ name: "Rex" });
 		globalThis.fetch = vi.fn().mockResolvedValue({
@@ -611,8 +610,7 @@ describe("BuddyManager.respondToNameCall()", () => {
 		mgr.load();
 		const result = await mgr.respondToNameCall("hello", "context");
 		restore();
-		expect(result).toContain("Rex");
-		expect(result).toContain("wiggles happily");
+		expect(result).toBeNull();
 	});
 });
 
@@ -801,7 +799,7 @@ describe("BuddyManager.react() response processing", () => {
 		expect(call[0].id).toBe("phi4-mini:latest");
 	});
 
-	it("returns null when no ollamaModel is configured", async () => {
+	it("returns error message when no ollamaModel is configured", async () => {
 		const restore = withTestEnv();
 		writeStoredBuddy({ ollamaModel: undefined });
 		globalThis.fetch = vi.fn().mockResolvedValue({
@@ -814,8 +812,8 @@ describe("BuddyManager.react() response processing", () => {
 		const result = await mgr.react("some event");
 		restore();
 
-		// No model configured — should not call completeSimple
+		// No model configured — should not call completeSimple, should return instruction
 		expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
-		expect(result).toBeNull();
+		expect(result).toContain("/buddy model");
 	});
 });
