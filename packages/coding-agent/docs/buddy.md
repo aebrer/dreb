@@ -14,13 +14,22 @@ ollama pull llama3.2
 /buddy
 ```
 
-The buddy uses whichever model is first in `ollama list`. To change which model the buddy uses, manage your installed models with `ollama pull` / `ollama rm`.
+After hatching, set which Ollama model the buddy should use for reactions:
+
+```bash
+/buddy model              # show current model + available models
+/buddy model llama3.2     # set the buddy's model
+```
+
+The buddy won't react until a model is configured. The choice is persisted across sessions.
 
 ## Commands
 
 | Command | Description |
 |---|---|
 | `/buddy` | Hatch a new buddy (or show existing one) |
+| `/buddy model` | Show current Ollama model and available models |
+| `/buddy model <name>` | Set the Ollama model for buddy reactions |
 | `/buddy pet` | Pet your buddy |
 | `/buddy reroll` | Reroll for a new buddy (new species, name, personality) |
 | `/buddy stats` | Show buddy stats panel |

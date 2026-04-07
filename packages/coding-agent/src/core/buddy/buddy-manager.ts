@@ -102,9 +102,15 @@ export async function checkOllama(): Promise<OllamaStatus> {
 	}
 }
 
-/** Pick an available Ollama model. Returns the first installed model. */
-function pickOllamaModel(models: string[]): string {
-	return models[0];
+/**
+ * Pick the Ollama model for the buddy.
+ * Returns the stored model name if it's available, otherwise null.
+ */
+function pickOllamaModel(storedModel: string | undefined, availableModels: string[]): string | null {
+	if (!storedModel) return null;
+	// Check if the stored model is installed (exact match or prefix match without tag)
+	const match = availableModels.find((m) => m === storedModel || m.startsWith(`${storedModel}:`));
+	return match ?? null;
 }
 
 /**
@@ -142,6 +148,7 @@ function loadStored(): StoredCompanion | null {
 				backstory: typeof data.backstory === "string" ? data.backstory : DEFAULT_BACKSTORY,
 				hatchedAt: data.hatchedAt ?? new Date().toISOString(),
 				...(data.hidden !== undefined ? { hidden: data.hidden } : {}),
+				...(typeof data.ollamaModel === "string" ? { ollamaModel: data.ollamaModel } : {}),
 			};
 		}
 		return null;
@@ -333,7 +340,9 @@ export class BuddyManager {
 		}
 		if (!this.ollamaStatus.available) return null;
 
-		const modelName = pickOllamaModel(this.ollamaStatus.models);
+		const stored = loadStored();
+		const modelName = pickOllamaModel(stored?.ollamaModel, this.ollamaStatus.models);
+		if (!modelName) return null; // no model configured or not installed
 		const model: Model<"openai-completions"> = {
 			...OLLAMA_MODEL_BASE,
 			id: modelName,
@@ -424,6 +433,25 @@ export class BuddyManager {
 		} catch {
 			return `${this.state.name} wiggles happily at you!`;
 		}
+	}
+
+	/** Get the configured Ollama model name, or null if not set */
+	getOllamaModel(): string | null {
+		return this.state?.ollamaModel ?? loadStored()?.ollamaModel ?? null;
+	}
+
+	/** Set the Ollama model for buddy reactions. Persists to disk. */
+	setOllamaModel(modelName: string): void {
+		const stored = loadStored();
+		if (stored) {
+			stored.ollamaModel = modelName;
+			saveStored(stored);
+		}
+		if (this.state) {
+			this.state.ollamaModel = modelName;
+		}
+		// Invalidate Ollama status cache so next call picks up the new model
+		this.ollamaStatus = null;
 	}
 
 	/** Reset Ollama status cache (e.g. after detecting it became available) */

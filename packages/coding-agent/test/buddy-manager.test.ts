@@ -82,6 +82,7 @@ function writeStoredBuddy(overrides: Partial<StoredCompanion> = {}): void {
 		personality: "Test personality",
 		backstory: "A mysterious past shrouded in legend.",
 		hatchedAt: new Date().toISOString(),
+		ollamaModel: "test-model",
 		...overrides,
 	};
 	writeFileSync(join(TEST_DIR, "buddy.json"), JSON.stringify(stored));
@@ -375,14 +376,14 @@ describe("BuddyManager.react()", () => {
 		writeStoredBuddy();
 		globalThis.fetch = vi.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ models: [{ name: "llama3.2" }] }),
+			json: async () => ({ models: [{ name: "test-model" }] }),
 		});
 		vi.mocked(completeSimple).mockResolvedValue({
 			role: "assistant",
 			content: [{ type: "text", text: "Looks like someone forgot a semicolon again!" }],
 			api: "openai-completions",
 			provider: "ollama",
-			model: "llama3.2",
+			model: "test-model",
 			usage: {
 				input: 0,
 				output: 0,
@@ -407,14 +408,14 @@ describe("BuddyManager.react()", () => {
 		writeStoredBuddy();
 		globalThis.fetch = vi.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ models: [{ name: "llama3.2" }] }),
+			json: async () => ({ models: [{ name: "test-model" }] }),
 		});
 		vi.mocked(completeSimple).mockResolvedValue({
 			role: "assistant",
 			content: [{ type: "text", text: "error text" }],
 			api: "openai-completions",
 			provider: "ollama",
-			model: "llama3.2",
+			model: "test-model",
 			usage: {
 				input: 0,
 				output: 0,
@@ -439,7 +440,7 @@ describe("BuddyManager.react()", () => {
 		writeStoredBuddy();
 		globalThis.fetch = vi.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ models: [{ name: "llama3.2" }] }),
+			json: async () => ({ models: [{ name: "test-model" }] }),
 		});
 		vi.mocked(completeSimple).mockRejectedValue(new Error("Connection refused"));
 
@@ -455,7 +456,7 @@ describe("BuddyManager.react()", () => {
 		writeStoredBuddy();
 		const mockFetch = vi.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ models: [{ name: "llama3.2" }] }),
+			json: async () => ({ models: [{ name: "test-model" }] }),
 		});
 		globalThis.fetch = mockFetch;
 		vi.mocked(completeSimple).mockResolvedValue({
@@ -463,7 +464,7 @@ describe("BuddyManager.react()", () => {
 			content: [{ type: "text", text: "Quip 1" }],
 			api: "openai-completions",
 			provider: "ollama",
-			model: "llama3.2",
+			model: "test-model",
 			usage: {
 				input: 0,
 				output: 0,
@@ -497,7 +498,7 @@ describe("BuddyManager.react()", () => {
 		// Second call: available
 		mockFetch.mockResolvedValue({
 			ok: true,
-			json: async () => ({ models: [{ name: "llama3.2" }] }),
+			json: async () => ({ models: [{ name: "test-model" }] }),
 		});
 		globalThis.fetch = mockFetch;
 		vi.mocked(completeSimple).mockResolvedValue({
@@ -505,7 +506,7 @@ describe("BuddyManager.react()", () => {
 			content: [{ type: "text", text: "Now I'm here!" }],
 			api: "openai-completions",
 			provider: "ollama",
-			model: "llama3.2",
+			model: "test-model",
 			usage: {
 				input: 0,
 				output: 0,
@@ -570,14 +571,14 @@ describe("BuddyManager.respondToNameCall()", () => {
 		writeStoredBuddy({ name: "Sparky" });
 		globalThis.fetch = vi.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ models: [{ name: "llama3.2" }] }),
+			json: async () => ({ models: [{ name: "test-model" }] }),
 		});
 		vi.mocked(completeSimple).mockResolvedValue({
 			role: "assistant",
 			content: [{ type: "text", text: "Hey there, code warrior!" }],
 			api: "openai-completions",
 			provider: "ollama",
-			model: "llama3.2",
+			model: "test-model",
 			usage: {
 				input: 0,
 				output: 0,
@@ -602,7 +603,7 @@ describe("BuddyManager.respondToNameCall()", () => {
 		writeStoredBuddy({ name: "Rex" });
 		globalThis.fetch = vi.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ models: [{ name: "llama3.2" }] }),
+			json: async () => ({ models: [{ name: "test-model" }] }),
 		});
 		vi.mocked(completeSimple).mockRejectedValue(new Error("Ollama crashed"));
 
@@ -765,19 +766,19 @@ describe("BuddyManager.react() response processing", () => {
 		expect(result).toBeNull();
 	});
 
-	it("uses first available model without preference", async () => {
+	it("uses the configured ollamaModel", async () => {
 		const restore = withTestEnv();
-		writeStoredBuddy();
+		writeStoredBuddy({ ollamaModel: "phi4-mini" });
 		globalThis.fetch = vi.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ models: [{ name: "phi4-mini-reasoning" }, { name: "llama3.2" }] }),
+			json: async () => ({ models: [{ name: "llama3.2" }, { name: "phi4-mini:latest" }] }),
 		});
 		vi.mocked(completeSimple).mockResolvedValue({
 			role: "assistant",
 			content: [{ type: "text", text: "Hello!" }],
 			api: "openai-completions",
 			provider: "ollama",
-			model: "phi4-mini-reasoning",
+			model: "phi4-mini:latest",
 			usage: {
 				input: 0,
 				output: 0,
@@ -795,8 +796,26 @@ describe("BuddyManager.react() response processing", () => {
 		await mgr.react("some event");
 		restore();
 
-		// Should use the first model (phi4-mini-reasoning), not prefer llama3.2
+		// Should use the configured model, not the first available
 		const call = vi.mocked(completeSimple).mock.calls[0];
-		expect(call[0].id).toBe("phi4-mini-reasoning");
+		expect(call[0].id).toBe("phi4-mini:latest");
+	});
+
+	it("returns null when no ollamaModel is configured", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy({ ollamaModel: undefined });
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ models: [{ name: "llama3.2" }] }),
+		});
+
+		const mgr = new BuddyManager();
+		mgr.load();
+		const result = await mgr.react("some event");
+		restore();
+
+		// No model configured — should not call completeSimple
+		expect(vi.mocked(completeSimple)).not.toHaveBeenCalled();
+		expect(result).toBeNull();
 	});
 });

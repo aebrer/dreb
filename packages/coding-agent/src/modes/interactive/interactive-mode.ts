@@ -4718,6 +4718,13 @@ export class InteractiveMode {
 				case "show": {
 					this.mountBuddy(result.state);
 					this.showBuddyStatsPanel(result.state);
+					await this.checkAndWarnOllama();
+					break;
+				}
+				case "model": {
+					this.chatContainer.addChild(new Spacer(1));
+					this.chatContainer.addChild(new Text(result.message, 1, 0));
+					this.ui.requestRender();
 					break;
 				}
 				case "warning": {
@@ -4816,12 +4823,17 @@ export class InteractiveMode {
 				new Text(
 					theme.fg(
 						"warning",
-						"⚠️ Buddy reactions require Ollama. Install it at https://ollama.com and run: ollama pull llama3.2",
+						"⚠️ Buddy reactions require Ollama. Install it at https://ollama.com then pull a model.",
 					),
 					1,
 					0,
 				),
 			);
+			return;
+		}
+		const nudge = this.buddyController.getModelNudge();
+		if (nudge) {
+			this.chatContainer.addChild(new Text(theme.fg("warning", `⚠️ ${nudge}`), 1, 0));
 		}
 	}
 

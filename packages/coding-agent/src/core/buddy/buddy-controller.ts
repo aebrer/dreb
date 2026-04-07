@@ -13,7 +13,7 @@
  * and Telegram (activity gating + reaction budget) can use different strategies.
  */
 
-import type { BuddyManager } from "./buddy-manager.js";
+import { type BuddyManager, checkOllama } from "./buddy-manager.js";
 import type { BuddyState } from "./buddy-types.js";
 
 /** Frontend-provided callbacks for buddy rendering */
@@ -52,6 +52,7 @@ export type BuddyCommandResult =
 	| { type: "pet" }
 	| { type: "stats"; state: BuddyState }
 	| { type: "off" }
+	| { type: "model"; message: string }
 	| { type: "warning"; message: string }
 	| { type: "error"; message: string };
 
@@ -369,6 +370,11 @@ export class BuddyController {
 				return { type: "off" };
 			}
 			default: {
+				// Handle "/buddy model" and "/buddy model <name>"
+				if (subcommand === "model" || subcommand.startsWith("model ")) {
+					return this.handleModelCommand(subcommand);
+				}
+
 				// No subcommand: hatch or show
 				if (this.manager.getState()) {
 					// Already showing — just enable and return
@@ -398,6 +404,60 @@ export class BuddyController {
 				}
 			}
 		}
+	}
+
+	// =========================================================================
+	// Model selection
+	// =========================================================================
+
+	/** Handle /buddy model [name] — show current model or set a new one */
+	private async handleModelCommand(subcommand: string): Promise<BuddyCommandResult> {
+		const modelArg = subcommand.slice("model".length).trim();
+
+		if (!modelArg) {
+			// "/buddy model" with no argument — show current + available
+			const current = this.manager.getOllamaModel();
+			const status = await checkOllama();
+			if (!status.available) {
+				return { type: "model", message: "Ollama is not running. Start it with: ollama serve" };
+			}
+			const available = status.models.map((m) => `  • ${m}`).join("\n");
+			if (current) {
+				return {
+					type: "model",
+					message: `Current model: ${current}\n\nAvailable models:\n${available}\n\nChange with: /buddy model <name>`,
+				};
+			}
+			return {
+				type: "model",
+				message: `No model set. Choose one with: /buddy model <name>\n\nAvailable models:\n${available}`,
+			};
+		}
+
+		// "/buddy model <name>" — set the model
+		const status = await checkOllama();
+		if (!status.available) {
+			return { type: "error", message: "Ollama is not running. Start it with: ollama serve" };
+		}
+
+		// Check if the model is installed
+		const match = status.models.find((m) => m === modelArg || m.startsWith(`${modelArg}:`));
+		if (!match) {
+			const available = status.models.map((m) => `  • ${m}`).join("\n");
+			return {
+				type: "error",
+				message: `Model "${modelArg}" not found. Available models:\n${available}\n\nPull it first with: ollama pull ${modelArg}`,
+			};
+		}
+
+		this.manager.setOllamaModel(match);
+		return { type: "model", message: `Buddy model set to: ${match}` };
+	}
+
+	/** Check if an Ollama model is configured, return a nudge message if not */
+	getModelNudge(): string | null {
+		if (this.manager.getOllamaModel()) return null;
+		return "No Ollama model set — reactions are disabled. Run /buddy model to choose one.";
 	}
 
 	// =========================================================================
