@@ -2607,10 +2607,9 @@ export class AgentSession {
 					"web_search",
 					"web_fetch",
 					"subagent",
+					"search",
 					"skill",
 					"tasks_update",
-					// Conditionally included — only registered when node:sqlite is available
-					...(Object.keys(baseToolDefinitions).includes("search") ? ["search"] : []),
 				];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
