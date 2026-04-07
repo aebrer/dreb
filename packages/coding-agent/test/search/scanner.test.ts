@@ -1,7 +1,20 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Mutable ref for overriding os.homedir() in shallow-scan tests.
+// When empty string, the real homedir() is used.
+const mockHomeDir = vi.hoisted(() => ({ value: "" }));
+
+vi.mock("node:os", async (importOriginal) => {
+	const actual = (await importOriginal()) as typeof import("node:os");
+	return {
+		...actual,
+		homedir: () => mockHomeDir.value || actual.homedir(),
+	};
+});
+
 import { detectFileType, scanProject } from "../../src/core/search/scanner.js";
 
 // ============================================================================
@@ -311,9 +324,8 @@ describe("scanProject", () => {
 			const files = await scanProject(tmpDir, memoryDir);
 			const paths = files.map((f) => f.filePath);
 
-			// scanMemoryDir recurses with the subdirectory as the new root,
-			// so nested files appear with just their filename under ~memory/
-			expect(paths).toContain("~memory/deep.md");
+			// scanMemoryDir preserves subdirectory path components under ~memory/
+			expect(paths).toContain("~memory/sub/deep.md");
 		});
 
 		it("skips unrecognized extensions in memory dir", async () => {
@@ -355,6 +367,105 @@ describe("scanProject", () => {
 
 			const files = await scanProject(tmpDir, bogusDir);
 			expect(files.map((f) => f.filePath)).toEqual(["app.ts"]);
+		});
+	});
+
+	// ========================================================================
+	// Shallow scan (home directory mode)
+	// ========================================================================
+
+	describe("scanShallow (home directory mode)", () => {
+		beforeEach(() => {
+			// Point the homedir mock at our temp dir so isHomeDirPath triggers
+			mockHomeDir.value = tmpDir;
+		});
+
+		afterEach(() => {
+			mockHomeDir.value = "";
+		});
+
+		it("triggers shallow mode and returns only top-level files", async () => {
+			createFile("readme.md", "# Home\n");
+			createFile("config.json", '{"a":1}\n');
+			createFile("projects/app/index.ts", "export {};\n");
+
+			const files = await scanProject(tmpDir);
+			const paths = files.map((f) => f.filePath).sort();
+
+			expect(paths).toContain("config.json");
+			expect(paths).toContain("readme.md");
+			// Subdirectory files should NOT appear
+			expect(paths).not.toContain("projects/app/index.ts");
+		});
+
+		it("skips dotfiles in shallow mode", async () => {
+			createFile(".hidden.ts", "export {};\n");
+			createFile(".bashrc", "alias x=y\n");
+			createFile("visible.ts", "export {};\n");
+
+			const files = await scanProject(tmpDir);
+			const paths = files.map((f) => f.filePath);
+
+			expect(paths).toContain("visible.ts");
+			expect(paths).not.toContain(".hidden.ts");
+			expect(paths).not.toContain(".bashrc");
+		});
+
+		it("does not recurse into subdirectories", async () => {
+			createFile("top.ts", "export {};\n");
+			createFile("subdir/nested.ts", "export {};\n");
+			createFile("a/b/c/deep.ts", "export {};\n");
+
+			const files = await scanProject(tmpDir);
+			const paths = files.map((f) => f.filePath);
+
+			expect(paths).toEqual(["top.ts"]);
+		});
+
+		it("skips files with unrecognized extensions", async () => {
+			createFile("photo.png", "fake-png");
+			createFile("notes.md", "# Notes\n");
+
+			const files = await scanProject(tmpDir);
+			const paths = files.map((f) => f.filePath);
+
+			expect(paths).toEqual(["notes.md"]);
+		});
+
+		it("skips empty files", async () => {
+			createFile("empty.ts", "");
+			createFile("valid.ts", "export const x = 1;\n");
+
+			const files = await scanProject(tmpDir);
+			expect(files).toHaveLength(1);
+			expect(files[0].filePath).toBe("valid.ts");
+		});
+
+		it("skips files larger than 1MB", async () => {
+			createFile("small.ts", "export {};\n");
+			createFile("huge.ts", "x".repeat(1024 * 1024 + 1));
+
+			const files = await scanProject(tmpDir);
+			expect(files).toHaveLength(1);
+			expect(files[0].filePath).toBe("small.ts");
+		});
+
+		it("returns correct fileType for top-level files", async () => {
+			createFile("app.ts", "export {};\n");
+			createFile("data.json", '{"a":1}\n');
+			createFile("notes.md", "# Notes\n");
+
+			const files = await scanProject(tmpDir);
+			const byPath = Object.fromEntries(files.map((f) => [f.filePath, f.fileType]));
+
+			expect(byPath["app.ts"]).toBe("typescript");
+			expect(byPath["data.json"]).toBe("json");
+			expect(byPath["notes.md"]).toBe("markdown");
+		});
+
+		it("returns empty array for empty home directory", async () => {
+			const files = await scanProject(tmpDir);
+			expect(files).toEqual([]);
 		});
 	});
 

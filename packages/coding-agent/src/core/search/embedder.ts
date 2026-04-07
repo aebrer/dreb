@@ -1,7 +1,8 @@
 /**
- * Embedding pipeline using all-MiniLM-L6-v2 via @huggingface/transformers.
+ * Embedding pipeline using @huggingface/transformers.
  *
- * Generates 384-dimensional normalized embeddings for semantic search.
+ * Generates normalized embeddings for semantic search. The embedding
+ * dimension is derived at runtime from the model's actual output.
  * First use downloads the model (~23MB) to the configured cache directory.
  */
 
@@ -26,7 +27,7 @@ export interface EmbedderOptions {
 
 const DEFAULT_MODEL_NAME = "Xenova/all-MiniLM-L6-v2";
 const DEFAULT_BATCH_SIZE = 32;
-const EMBEDDING_DIMENSION = 384;
+const DEFAULT_DIMENSION = 384;
 
 /**
  * Model-specific prefixes for document vs query embeddings.
@@ -45,6 +46,7 @@ export class Embedder {
 	private readonly modelName: string;
 	private readonly batchSize: number;
 	private extractor: any | null = null;
+	private resolvedDimension: number | null = null;
 
 	constructor(options: EmbedderOptions) {
 		this.modelCacheDir = options.modelCacheDir;
@@ -109,11 +111,15 @@ export class Embedder {
 				normalize: true,
 			});
 
-			// output.data is a flat Float32Array of shape [batchLen, EMBEDDING_DIMENSION]
+			// output.data is a flat Float32Array of shape [batchLen, dim]
 			const data: Float32Array = output.data;
+			const dim = data.length / batch.length;
+			if (this.resolvedDimension === null) {
+				this.resolvedDimension = dim;
+			}
 			for (let j = 0; j < batch.length; j++) {
-				const start = j * EMBEDDING_DIMENSION;
-				results.push(data.slice(start, start + EMBEDDING_DIMENSION));
+				const start = j * dim;
+				results.push(data.slice(start, start + dim));
 			}
 
 			if (onProgress) {
@@ -138,13 +144,18 @@ export class Embedder {
 			normalize: true,
 		});
 
-		// Single input — output.data is Float32Array of shape [1, EMBEDDING_DIMENSION]
-		return new Float32Array(output.data);
+		// Single input — derive dimension and slice to exactly one vector
+		const data: Float32Array = output.data;
+		const dim = data.length;
+		if (this.resolvedDimension === null) {
+			this.resolvedDimension = dim;
+		}
+		return data.slice(0, dim);
 	}
 
-	/** Get the embedding dimension (384 for all-MiniLM-L6-v2, 768 for nomic). */
+	/** Get the embedding dimension. Returns the model's actual dimension once known, or 384 as default. */
 	get dimension(): number {
-		return EMBEDDING_DIMENSION;
+		return this.resolvedDimension ?? DEFAULT_DIMENSION;
 	}
 
 	/** Dispose the pipeline to free memory. */

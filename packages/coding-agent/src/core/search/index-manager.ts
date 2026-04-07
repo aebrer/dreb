@@ -6,12 +6,11 @@
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import { chunkFile } from "./chunker.js";
 import type { SearchDatabase } from "./db.js";
 import { isSqliteAvailable, SearchDatabase as SearchDatabaseClass } from "./db.js";
-import { Embedder } from "./embedder.js";
+import type { Embedder } from "./embedder.js";
 import { type ScannedFile, scanProject } from "./scanner.js";
 import type { IndexConfig, IndexedFile, IndexProgressCallback } from "./types.js";
 
@@ -49,16 +48,23 @@ export class IndexManager {
 		return this.db;
 	}
 
+	/**
+	 * Set an external embedder instance to share with the caller.
+	 * When set, embedChunks() uses this instead of creating its own.
+	 */
+	setEmbedder(embedder: Embedder): void {
+		this.embedder = embedder;
+	}
+
 	/** Close the database and dispose resources. */
 	close(): void {
 		if (this.db) {
 			this.db.close();
 			this.db = null;
 		}
-		if (this.embedder) {
-			this.embedder.dispose();
-			this.embedder = null;
-		}
+		// Only dispose the embedder if we own it (not shared externally).
+		// The caller who set it via setEmbedder() is responsible for its lifecycle.
+		this.embedder = null;
 	}
 
 	/** Get the database, opening if needed. */
@@ -75,7 +81,9 @@ export class IndexManager {
 	 * 3. Re-chunk and re-embed only changed/new files
 	 * 4. Remove deleted files
 	 */
-	async buildIndex(onProgress?: IndexProgressCallback): Promise<{ added: number; updated: number; removed: number }> {
+	async buildIndex(
+		onProgress?: IndexProgressCallback,
+	): Promise<{ added: number; updated: number; removed: number; failed: number }> {
 		const db = this.getDb();
 		const config = this.config;
 
@@ -119,7 +127,7 @@ export class IndexManager {
 
 		const totalWork = toAdd.length + toUpdate.length + toRemove.length;
 		if (totalWork === 0) {
-			return { added: 0, updated: 0, removed: 0 };
+			return { added: 0, updated: 0, removed: 0, failed: 0 };
 		}
 
 		// Phase 3: Remove deleted files
@@ -130,6 +138,7 @@ export class IndexManager {
 		// Phase 4: Process new and changed files
 		const filesToProcess = [...toAdd, ...toUpdate];
 		const allNewChunkIds: number[] = [];
+		let failed = 0;
 
 		for (let i = 0; i < filesToProcess.length; i++) {
 			const scanned = filesToProcess[i];
@@ -182,8 +191,15 @@ export class IndexManager {
 						db.insertImport(fileId, imp);
 					}
 				});
-			} catch {
+			} catch (err: unknown) {
+				// Re-throw DB-level errors (SQLITE_FULL, disk full, etc.) — these
+				// indicate infrastructure problems, not per-file issues.
+				const message = err instanceof Error ? err.message : String(err);
+				if (message.includes("SQLITE")) {
+					throw err;
+				}
 				// Skip files that fail to process (permissions, encoding issues, etc.)
+				failed++;
 			}
 		}
 
@@ -192,7 +208,7 @@ export class IndexManager {
 			await this.embedChunks(db, allNewChunkIds, onProgress);
 		}
 
-		return { added: toAdd.length, updated: toUpdate.length, removed: toRemove.length };
+		return { added: toAdd.length, updated: toUpdate.length, removed: toRemove.length, failed };
 	}
 
 	/**
@@ -209,6 +225,7 @@ export class IndexManager {
 
 	/**
 	 * Generate embeddings for specific chunks.
+	 * Requires an embedder to be set via setEmbedder() before calling.
 	 */
 	private async embedChunks(
 		db: SearchDatabase,
@@ -217,15 +234,8 @@ export class IndexManager {
 	): Promise<void> {
 		if (chunkIds.length === 0) return;
 
-		// Initialize embedder if needed
 		if (!this.embedder) {
-			onProgress?.("loading model", 0, 1);
-			this.embedder = new Embedder({
-				modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
-				modelName: this.config.modelName,
-			});
-			await this.embedder.initialize();
-			onProgress?.("loading model", 1, 1);
+			throw new Error("IndexManager: embedder not set. Call setEmbedder() before embedding.");
 		}
 
 		// Get chunk contents

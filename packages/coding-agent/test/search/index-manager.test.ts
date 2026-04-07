@@ -1,21 +1,21 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { IndexManager } from "../../src/core/search/index-manager.js";
 import type { IndexConfig, IndexProgressCallback } from "../../src/core/search/types.js";
 
-// Mock the embedder to avoid downloading real models during tests.
-// The mock returns zero-vectors of the correct dimensionality.
-vi.mock("../../src/core/search/embedder.js", () => ({
-	Embedder: class MockEmbedder {
-		async initialize() {}
-		async embedDocuments(texts: string[]) {
-			return texts.map(() => new Float32Array(384).fill(0));
-		}
-		dispose() {}
+// Mock embedder that returns zero-vectors of the correct dimensionality.
+const mockEmbedder = {
+	async initialize() {},
+	async embedQuery(_text: string) {
+		return new Float32Array(384).fill(0);
 	},
-}));
+	async embedDocuments(texts: string[]) {
+		return texts.map(() => new Float32Array(384).fill(0));
+	},
+	dispose() {},
+};
 
 // ============================================================================
 // Helpers
@@ -57,6 +57,8 @@ describe("IndexManager", () => {
 			modelName: "Xenova/all-MiniLM-L6-v2",
 		};
 		manager = new IndexManager(config);
+		// Share a mock embedder — IndexManager no longer creates its own
+		manager.setEmbedder(mockEmbedder as any);
 	});
 
 	afterEach(() => {
@@ -175,7 +177,7 @@ describe("IndexManager", () => {
 	describe("buildIndex", () => {
 		it("returns all zeros for an empty project", async () => {
 			const result = await manager.buildIndex();
-			expect(result).toEqual({ added: 0, updated: 0, removed: 0 });
+			expect(result).toEqual({ added: 0, updated: 0, removed: 0, failed: 0 });
 		});
 
 		it("adds new files on first build", async () => {
@@ -204,7 +206,7 @@ describe("IndexManager", () => {
 			await manager.buildIndex();
 			const result = await manager.buildIndex();
 
-			expect(result).toEqual({ added: 0, updated: 0, removed: 0 });
+			expect(result).toEqual({ added: 0, updated: 0, removed: 0, failed: 0 });
 		});
 
 		it("detects mtime changes and reports updated count", async () => {
@@ -360,6 +362,111 @@ describe("IndexManager", () => {
 
 			const badFile = manager.getDb().getFile("bad.md");
 			expect(badFile).not.toBeNull();
+		});
+	});
+
+	// ====================================================================
+	// Stale chunk elimination (Finding 10)
+	// ====================================================================
+
+	describe("stale chunk elimination on file update", () => {
+		it("replaces old chunks with new ones (no stale leftovers)", async () => {
+			// Create a file with enough content to produce multiple chunks
+			const longContent = [
+				"# Document",
+				"",
+				"## Section One",
+				"",
+				"This is the first section with enough text to be meaningful.",
+				"It contains several sentences so the chunker has something to split.",
+				"We want to ensure there are at least a couple of chunks here.",
+				"",
+				"## Section Two",
+				"",
+				"This is the second section of the document.",
+				"It also has multiple sentences to give the chunker material.",
+				"More content here to pad out the section nicely.",
+				"",
+				"## Section Three",
+				"",
+				"Third section with its own content.",
+				"Yet more text to ensure we get distinct chunks.",
+				"The chunker should produce several chunks from this file.",
+			].join("\n");
+
+			createFixtureProject(projectDir, { "doc.md": longContent });
+
+			// First build
+			await manager.buildIndex();
+			const db = manager.getDb();
+			const chunksAfterFirstBuild = db.getAllChunks().length;
+			expect(chunksAfterFirstBuild).toBeGreaterThan(0);
+
+			// Replace with much shorter content (fewer chunks)
+			const shortContent = "# Short\n\nJust one line.";
+			writeFileSync(path.join(projectDir, "doc.md"), shortContent, "utf-8");
+			setMtime(path.join(projectDir, "doc.md"), new Date(Date.now() + 10_000));
+
+			// Rebuild
+			const result = await manager.buildIndex();
+			expect(result.updated).toBe(1);
+
+			// Key assertion: total chunks must match the new (shorter) content,
+			// not old + new. Old chunks must have been deleted.
+			const chunksAfterSecondBuild = db.getAllChunks().length;
+			expect(chunksAfterSecondBuild).toBeLessThan(chunksAfterFirstBuild);
+
+			// All remaining chunks should belong to this file and contain new content
+			const file = db.getFile("doc.md");
+			expect(file).not.toBeNull();
+			const fileChunks = db.getChunksByFileId(file!.id);
+			expect(fileChunks.length).toBe(chunksAfterSecondBuild);
+			// None of the old section headers should be in any chunk
+			for (const chunk of fileChunks) {
+				expect(chunk.content).not.toContain("Section One");
+				expect(chunk.content).not.toContain("Section Two");
+				expect(chunk.content).not.toContain("Section Three");
+			}
+		});
+	});
+
+	// ====================================================================
+	// Import extraction e2e (Finding 11)
+	// ====================================================================
+
+	describe("extractImports end-to-end", () => {
+		it("stores TypeScript import edges during buildIndex", async () => {
+			createFixtureProject(projectDir, {
+				"src/a.ts": ['import { foo } from "./b";', "", "console.log(foo);"].join("\n"),
+				"src/b.ts": ["export const foo = 1;"].join("\n"),
+			});
+
+			await manager.buildIndex();
+			const db = manager.getDb();
+
+			const fileA = db.getFile("src/a.ts");
+			expect(fileA).not.toBeNull();
+
+			const imports = db.getImportsFrom(fileA!.id);
+			// resolveImportPath joins dir + target: "src" + "./b" → "src/b"
+			expect(imports).toContain("src/b");
+		});
+
+		it("stores Python relative import edges during buildIndex", async () => {
+			createFixtureProject(projectDir, {
+				"pkg/main.py": ["from .utils import helper", "", "helper()"].join("\n"),
+				"pkg/utils.py": ["def helper():", "    pass"].join("\n"),
+			});
+
+			await manager.buildIndex();
+			const db = manager.getDb();
+
+			const mainFile = db.getFile("pkg/main.py");
+			expect(mainFile).not.toBeNull();
+
+			const imports = db.getImportsFrom(mainFile!.id);
+			// resolvePythonImport: dir="pkg", ".utils" → "pkg/utils"
+			expect(imports).toContain("pkg/utils");
 		});
 	});
 

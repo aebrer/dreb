@@ -73,6 +73,10 @@ export class SearchEngine {
 		const indexManager = this.getIndexManager();
 		const db = indexManager.getDb();
 
+		// Share our embedder with IndexManager so it doesn't create a second one
+		const embedder = await this.getOrCreateEmbedder();
+		indexManager.setEmbedder(embedder);
+
 		await indexManager.buildIndex(onProgress);
 		await indexManager.ensureEmbeddings(onProgress);
 
@@ -125,7 +129,7 @@ export class SearchEngine {
 		onProgress?.("searching", 5, 6);
 
 		// 6. Git recency
-		const recencyScores = computeGitRecencyScores(this.projectRoot, allChunks);
+		const recencyScores = await computeGitRecencyScores(this.projectRoot, allChunks);
 		onProgress?.("searching", 6, 6);
 
 		// Build MetricScores for each candidate chunk
@@ -214,6 +218,18 @@ export class SearchEngine {
 		};
 	}
 
+	private async getOrCreateEmbedder(): Promise<Embedder> {
+		if (!this.embedder) {
+			const config = this.getIndexConfig();
+			this.embedder = new Embedder({
+				modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
+				modelName: config.modelName,
+			});
+			await this.embedder.initialize();
+		}
+		return this.embedder;
+	}
+
 	private async computeVectorScores(
 		db: SearchDatabase,
 		query: string,
@@ -221,18 +237,10 @@ export class SearchEngine {
 		_onProgress?: IndexProgressCallback,
 	): Promise<Map<number, number>> {
 		const config = this.getIndexConfig();
-
-		// Initialize embedder if needed
-		if (!this.embedder) {
-			this.embedder = new Embedder({
-				modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
-				modelName: config.modelName,
-			});
-			await this.embedder.initialize();
-		}
+		const embedder = await this.getOrCreateEmbedder();
 
 		// Embed the query
-		const queryVector = await this.embedder.embedQuery(query);
+		const queryVector = await embedder.embedQuery(query);
 
 		// Get all stored embeddings
 		const storedVectors = db.getAllEmbeddings(config.modelName);

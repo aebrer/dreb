@@ -174,6 +174,264 @@ describe("chunkWithTreeSitter — Go", () => {
 });
 
 // ============================================================================
+// TSX
+// ============================================================================
+
+const tsxCode = `export function MyComponent() {
+  return <div>hello</div>;
+}
+`;
+
+describe("chunkWithTreeSitter — TSX", () => {
+	let chunks: Chunk[];
+
+	beforeAll(async () => {
+		chunks = await chunkWithTreeSitter(tsxCode, "component.tsx", "tsx");
+	});
+
+	it("extracts MyComponent function", () => {
+		const fn = chunks.find((c) => c.name === "MyComponent");
+		expect(fn).toBeDefined();
+		expect(["function", "export"]).toContain(fn!.kind);
+		expect(fn!.content).toContain("MyComponent");
+	});
+
+	it("has correct line range", () => {
+		const fn = chunks.find((c) => c.name === "MyComponent");
+		expect(fn!.startLine).toBeGreaterThan(0);
+		expect(fn!.endLine).toBeGreaterThanOrEqual(fn!.startLine);
+	});
+});
+
+// ============================================================================
+// JavaScript
+// ============================================================================
+
+const jsCode = `function greet(name) {
+  return 'hello ' + name;
+}
+
+const handler = (req, res) => {
+  res.send('ok');
+};
+`;
+
+describe("chunkWithTreeSitter — JavaScript", () => {
+	let chunks: Chunk[];
+
+	beforeAll(async () => {
+		chunks = await chunkWithTreeSitter(jsCode, "app.js", "javascript");
+	});
+
+	it("extracts greet function_declaration", () => {
+		const fn = chunks.find((c) => c.name === "greet");
+		expect(fn).toBeDefined();
+		expect(fn!.kind).toBe("function");
+		expect(fn!.content).toContain("greet");
+	});
+
+	it("extracts handler arrow_function", () => {
+		const fn = chunks.find((c) => c.name === "handler");
+		expect(fn).toBeDefined();
+		expect(fn!.kind).toBe("function");
+		expect(fn!.content).toContain("res.send");
+	});
+
+	it("each chunk has valid line range and non-empty content", () => {
+		for (const chunk of chunks) {
+			expect(chunk.startLine).toBeGreaterThan(0);
+			expect(chunk.endLine).toBeGreaterThanOrEqual(chunk.startLine);
+			expect(chunk.content.length).toBeGreaterThan(0);
+		}
+	});
+});
+
+// ============================================================================
+// Rust
+// ============================================================================
+
+const rustCode = `fn main() {
+    println!("hello");
+}
+
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Point {
+    fn new(x: f64, y: f64) -> Self {
+        Point { x, y }
+    }
+}
+`;
+
+describe("chunkWithTreeSitter — Rust", () => {
+	let chunks: Chunk[];
+
+	beforeAll(async () => {
+		chunks = await chunkWithTreeSitter(rustCode, "main.rs", "rust");
+	});
+
+	it("extracts main function", () => {
+		const fn = chunks.find((c) => c.name === "main");
+		expect(fn).toBeDefined();
+		expect(fn!.kind).toBe("function");
+		expect(fn!.content).toContain("println!");
+	});
+
+	it("extracts Point struct", () => {
+		const s = chunks.find((c) => c.name === "Point" && c.kind === "struct");
+		expect(s).toBeDefined();
+		expect(s!.content).toContain("x: f64");
+	});
+
+	it("extracts Point impl", () => {
+		const impl = chunks.find((c) => c.name === "Point" && c.kind === "impl");
+		expect(impl).toBeDefined();
+		expect(impl!.content).toContain("fn new");
+	});
+
+	it("each chunk has valid line range", () => {
+		for (const chunk of chunks) {
+			expect(chunk.startLine).toBeGreaterThan(0);
+			expect(chunk.endLine).toBeGreaterThanOrEqual(chunk.startLine);
+		}
+	});
+});
+
+// ============================================================================
+// Java
+// ============================================================================
+
+const javaCode = `public class Greeting {
+    public String greet(String name) {
+        return "Hello " + name;
+    }
+}
+`;
+
+describe("chunkWithTreeSitter — Java", () => {
+	let chunks: Chunk[];
+
+	beforeAll(async () => {
+		chunks = await chunkWithTreeSitter(javaCode, "Greeting.java", "java");
+	});
+
+	it("extracts Greeting class", () => {
+		const cls = chunks.find((c) => c.name === "Greeting");
+		expect(cls).toBeDefined();
+		expect(cls!.kind).toBe("class");
+		expect(cls!.content).toContain("Greeting");
+	});
+
+	it("class chunk encompasses the method", () => {
+		// Java class_declaration is the outermost node; method is nested inside
+		const cls = chunks.find((c) => c.name === "Greeting");
+		expect(cls).toBeDefined();
+		expect(cls!.content).toContain("greet");
+		expect(cls!.content).toContain("Hello");
+	});
+
+	it("each chunk has valid line range and non-empty content", () => {
+		for (const chunk of chunks) {
+			expect(chunk.startLine).toBeGreaterThan(0);
+			expect(chunk.endLine).toBeGreaterThanOrEqual(chunk.startLine);
+			expect(chunk.content.length).toBeGreaterThan(0);
+		}
+	});
+});
+
+// ============================================================================
+// C
+// ============================================================================
+
+const cCode = `int add(int a, int b) {
+    return a + b;
+}
+
+struct Point {
+    int x;
+    int y;
+};
+`;
+
+describe("chunkWithTreeSitter — C", () => {
+	let chunks: Chunk[];
+
+	beforeAll(async () => {
+		chunks = await chunkWithTreeSitter(cCode, "math.c", "c");
+	});
+
+	it("extracts add function", () => {
+		const fn = chunks.find((c) => c.name === "add");
+		expect(fn).toBeDefined();
+		expect(fn!.kind).toBe("function");
+		expect(fn!.content).toContain("return a + b");
+	});
+
+	it("extracts Point struct", () => {
+		const s = chunks.find((c) => c.name === "Point");
+		expect(s).toBeDefined();
+		expect(s!.kind).toBe("struct");
+		expect(s!.content).toContain("int x");
+	});
+
+	it("each chunk has valid line range", () => {
+		for (const chunk of chunks) {
+			expect(chunk.startLine).toBeGreaterThan(0);
+			expect(chunk.endLine).toBeGreaterThanOrEqual(chunk.startLine);
+		}
+	});
+});
+
+// ============================================================================
+// C++
+// ============================================================================
+
+const cppCode = `class Calculator {
+public:
+    int add(int a, int b) {
+        return a + b;
+    }
+};
+
+int main() {
+    return 0;
+}
+`;
+
+describe("chunkWithTreeSitter — C++", () => {
+	let chunks: Chunk[];
+
+	beforeAll(async () => {
+		chunks = await chunkWithTreeSitter(cppCode, "calc.cpp", "cpp");
+	});
+
+	it("extracts Calculator class", () => {
+		const cls = chunks.find((c) => c.name === "Calculator");
+		expect(cls).toBeDefined();
+		expect(cls!.kind).toBe("class");
+		expect(cls!.content).toContain("Calculator");
+	});
+
+	it("extracts main function", () => {
+		const fn = chunks.find((c) => c.name === "main");
+		expect(fn).toBeDefined();
+		expect(fn!.kind).toBe("function");
+		expect(fn!.content).toContain("return 0");
+	});
+
+	it("each chunk has valid line range and non-empty content", () => {
+		for (const chunk of chunks) {
+			expect(chunk.startLine).toBeGreaterThan(0);
+			expect(chunk.endLine).toBeGreaterThanOrEqual(chunk.startLine);
+			expect(chunk.content.length).toBeGreaterThan(0);
+		}
+	});
+});
+
+// ============================================================================
 // Fallback — invalid/unparseable code
 // ============================================================================
 

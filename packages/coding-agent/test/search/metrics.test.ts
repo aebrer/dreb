@@ -211,38 +211,38 @@ describe("computeSymbolMatchScores", () => {
 // ============================================================================
 
 describe("computeGitRecencyScores", () => {
-	it("returns empty map for empty chunks", () => {
-		const scores = computeGitRecencyScores("/tmp", []);
+	it("returns empty map for empty chunks", async () => {
+		const scores = await computeGitRecencyScores("/tmp", []);
 		expect(scores.size).toBe(0);
 	});
 
-	it("assigns neutral score (0.5) when git is unavailable", () => {
+	it("assigns neutral score (0.5) when git is unavailable", async () => {
 		// Create a temp dir that is NOT a git repo
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "metrics-test-"));
 		try {
 			const chunks = [chunk(1, "nonexistent/file.ts")];
-			const scores = computeGitRecencyScores(tmpDir, chunks);
+			const scores = await computeGitRecencyScores(tmpDir, chunks);
 			expect(scores.get(1)).toBe(0.5);
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
 	});
 
-	it("returns valid scores in [0, 1] for a real git repo", () => {
+	it("returns valid scores in [0, 1] for a real git repo", async () => {
 		// Use the dreb repo itself as the real git repo
 		const projectRoot = path.resolve(__dirname, "../../../..");
 		const chunks = [chunk(1, "package.json"), chunk(2, "README.md")];
-		const scores = computeGitRecencyScores(projectRoot, chunks);
+		const scores = await computeGitRecencyScores(projectRoot, chunks);
 		for (const score of scores.values()) {
 			expect(score).toBeGreaterThanOrEqual(0);
 			expect(score).toBeLessThanOrEqual(1);
 		}
 	});
 
-	it("assigns neutral score to files not tracked by git", () => {
+	it("assigns neutral score to files not tracked by git", async () => {
 		const projectRoot = path.resolve(__dirname, "../../../..");
 		const chunks = [chunk(1, "package.json"), chunk(2, "this-file-definitely-does-not-exist-xyz.ts")];
-		const scores = computeGitRecencyScores(projectRoot, chunks);
+		const scores = await computeGitRecencyScores(projectRoot, chunks);
 		// The untracked file should get the neutral score 0.5
 		expect(scores.get(2)).toBe(0.5);
 	});

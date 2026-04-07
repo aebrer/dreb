@@ -330,7 +330,7 @@ function walkDirectory(dir: string, root: string, ig: IgnoreMatcher, results: Sc
  * Paths for global memory files are stored with a `~memory/` prefix
  * to distinguish them from project files.
  */
-function scanMemoryDir(memoryDir: string, projectRoot: string, results: ScannedFile[]): void {
+function scanMemoryDir(memoryDir: string, projectRoot: string, results: ScannedFile[], baseMemoryDir?: string): void {
 	let entries: string[];
 	try {
 		entries = readdirSync(memoryDir);
@@ -350,7 +350,7 @@ function scanMemoryDir(memoryDir: string, projectRoot: string, results: ScannedF
 
 		if (stats.isDirectory()) {
 			// Recurse into subdirectories
-			scanMemoryDir(fullPath, projectRoot, results);
+			scanMemoryDir(fullPath, projectRoot, results, baseMemoryDir ?? memoryDir);
 			continue;
 		}
 
@@ -365,7 +365,8 @@ function scanMemoryDir(memoryDir: string, projectRoot: string, results: ScannedF
 		// Otherwise, use a ~memory/ prefix so paths remain unique and identifiable.
 		const rel = relative(projectRoot, fullPath);
 		const isOutsideProject = rel.startsWith("..") || isAbsolute(rel);
-		const filePath = isOutsideProject ? `~memory/${relative(memoryDir, fullPath)}` : rel;
+		const rootMemoryDir = baseMemoryDir ?? memoryDir;
+		const filePath = isOutsideProject ? `~memory/${relative(rootMemoryDir, fullPath)}` : rel;
 
 		results.push({
 			filePath: toPosix(filePath),

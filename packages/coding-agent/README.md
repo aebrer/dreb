@@ -27,6 +27,7 @@ What you get in exchange: a skill system, an extension API, custom agent definit
 - [Context Files](#context-files)
 - [Memory](#memory)
 - [Task Tracking](#task-tracking)
+- [Semantic Search](#semantic-search)
 - [Customization](#customization)
   - [Prompt Templates](#prompt-templates)
   - [Skills](#skills)
@@ -66,7 +67,7 @@ dreb
 
 Or use a custom provider (corporate proxy, Bedrock, etc.) — see [Custom providers & models](#providers--models).
 
-Then just talk to dreb. All 11 built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, and `search`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Two additional tools — `skill` and `tasks_update` — are always active. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
+Then just talk to dreb. All 10 built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, and `subagent`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Three additional tools — `search`, `skill`, and `tasks_update` — are always active. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -320,6 +321,25 @@ Task tracking is prompt-driven: the system prompt includes guidelines for when t
 
 ---
 
+## Semantic Search
+
+The `search` tool provides natural language queries over the codebase using embeddings and full-text search. It supports identifier queries (e.g., `AuthMiddleware`), natural language (e.g., `where is rate limiting handled`), and path queries (e.g., `src/auth/`).
+
+**How it works:** The first query builds a project index (may take a few minutes for large repos). Subsequent queries use the cached index, with incremental re-indexing for changed files (mtime-based).
+
+**Indexing pipeline:**
+- AST-aware code chunking via tree-sitter (TypeScript, JavaScript, Python, Go, Rust, Java, C, C++) — extracts functions, classes, methods, and exports as individual chunks
+- Format-aware text chunking for non-code files (Markdown by heading, YAML/JSON/TOML by top-level key)
+- Local embeddings via all-MiniLM-L6-v2 (~23MB model, auto-downloaded on first use, cached at `~/.dreb/agent/models/`)
+
+**Ranking:** Uses POEM (Pareto-Optimal Embedding-based Multiranking) with 6 metrics: FTS5 BM25, vector cosine similarity, path match, symbol match, import graph proximity, and git recency. Short identifier queries bias toward exact text matches; long natural language queries bias toward vector similarity.
+
+**Storage:** Project index at `.dreb/index/`, memory files indexed alongside code. Works offline after the initial model download.
+
+**Requirements:** Node.js 22+ (uses built-in `node:sqlite`). On older Node versions the tool is silently unavailable — no crash, it simply doesn't register. Zero native addons — uses `web-tree-sitter` (WASM) and `@huggingface/transformers` (WASM).
+
+---
+
 ## Customization
 
 ### Prompt Templates
@@ -534,7 +554,7 @@ cat README.md | dreb -p "Summarize this text"
 | `--tools <list>` | Comma-separated list of tools to enable (default: all) |
 | `--no-tools` | Disable all built-in tools (extension tools still work) |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `search`
+Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`
 
 Three additional tools are always active but don't appear in `--tools`:
 - `search` — [semantic codebase search](#semantic-search) using natural language queries
