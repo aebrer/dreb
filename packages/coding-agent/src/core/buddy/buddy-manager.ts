@@ -22,9 +22,8 @@ const BUDDY_FILENAME = "buddy.json";
 const DEFAULT_BACKSTORY = "A mysterious past shrouded in legend.";
 
 /** Ollama model config for buddy reactions */
-const OLLAMA_MODEL: Model<"openai-completions"> = {
-	id: "llama3.2",
-	name: "Llama 3.2 (Ollama)",
+/** Base Ollama model config — id/name are set dynamically from available models */
+const OLLAMA_MODEL_BASE: Omit<Model<"openai-completions">, "id" | "name"> = {
 	api: "openai-completions",
 	provider: "ollama",
 	baseUrl: "http://localhost:11434/v1",
@@ -32,12 +31,15 @@ const OLLAMA_MODEL: Model<"openai-completions"> = {
 	input: ["text"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 128000,
-	maxTokens: 256,
+	maxTokens: 2048,
 	compat: {
 		supportsDeveloperRole: false,
 		supportsReasoningEffort: false,
 	},
 };
+
+/** Max words for buddy response before truncation */
+const MAX_RESPONSE_WORDS = 300;
 
 /** Prompt for soul generation (uses parent LLM, not Ollama) */
 const SOUL_GENERATION_PROMPT = `You are generating a companion character for a coding assistant terminal app. Based on the species, rarity, and stats below, generate a creative name, a one-sentence personality description, and a funny fictional backstory.
@@ -100,10 +102,18 @@ export async function checkOllama(): Promise<OllamaStatus> {
 	}
 }
 
-/** Pick the first available Ollama model, preferring llama3.2 */
+/** Pick an available Ollama model. Returns the first installed model. */
 function pickOllamaModel(models: string[]): string {
-	const preferred = models.find((m) => m.startsWith("llama3.2") || m.startsWith("llama3.1"));
-	return preferred ?? models[0];
+	return models[0];
+}
+
+/**
+ * Truncate response to a maximum word count, appending "...[truncated]" if exceeded.
+ */
+export function truncateResponse(text: string, maxWords: number): string {
+	const words = text.split(/\s+/);
+	if (words.length <= maxWords) return text;
+	return `${words.slice(0, maxWords).join(" ")} ...[truncated]`;
 }
 
 // =============================================================================
@@ -325,7 +335,7 @@ export class BuddyManager {
 
 		const modelName = pickOllamaModel(this.ollamaStatus.models);
 		const model: Model<"openai-completions"> = {
-			...OLLAMA_MODEL,
+			...OLLAMA_MODEL_BASE,
 			id: modelName,
 			name: `${modelName} (Ollama)`,
 		};
@@ -334,7 +344,7 @@ export class BuddyManager {
 		try {
 			response = await completeSimple(model, context, {
 				apiKey: "ollama",
-				signal: AbortSignal.timeout(15000),
+				signal: AbortSignal.timeout(30000),
 			});
 		} catch {
 			// Ollama crashed or became unreachable — invalidate cache so next attempt rechecks
@@ -348,11 +358,16 @@ export class BuddyManager {
 			return null;
 		}
 
-		return response.content
+		let text = response.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
 			.map((c) => c.text)
 			.join("")
 			.trim();
+
+		// Truncate overly long responses
+		text = truncateResponse(text, MAX_RESPONSE_WORDS);
+
+		return text || null;
 	}
 
 	/**

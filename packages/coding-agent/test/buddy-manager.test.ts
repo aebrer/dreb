@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BuddyManager, checkOllama } from "../src/core/buddy/buddy-manager.js";
+import { BuddyManager, checkOllama, truncateResponse } from "../src/core/buddy/buddy-manager.js";
 import type { StoredCompanion } from "../src/core/buddy/buddy-types.js";
 
 const TEST_DIR = join(tmpdir(), "dreb-buddy-test");
@@ -612,5 +612,191 @@ describe("BuddyManager.respondToNameCall()", () => {
 		restore();
 		expect(result).toContain("Rex");
 		expect(result).toContain("wiggles happily");
+	});
+});
+
+describe("truncateResponse", () => {
+	it("passes through short responses unchanged", () => {
+		expect(truncateResponse("Hello world!", 300)).toBe("Hello world!");
+	});
+
+	it("passes through responses at exactly the limit", () => {
+		const words = Array.from({ length: 300 }, (_, i) => `word${i}`);
+		const text = words.join(" ");
+		expect(truncateResponse(text, 300)).toBe(text);
+	});
+
+	it("truncates responses over the word limit", () => {
+		const words = Array.from({ length: 400 }, (_, i) => `word${i}`);
+		const text = words.join(" ");
+		const result = truncateResponse(text, 300);
+		expect(result).toContain("...[truncated]");
+		expect(result.split(/\s+/).length).toBeLessThanOrEqual(302); // 300 words + "...[truncated]"
+	});
+
+	it("preserves content before truncation point", () => {
+		const words = Array.from({ length: 400 }, (_, i) => `word${i}`);
+		const text = words.join(" ");
+		const result = truncateResponse(text, 300);
+		expect(result.startsWith("word0 word1 word2")).toBe(true);
+		expect(result).toContain("word299");
+		expect(result).not.toContain("word300");
+	});
+
+	it("handles empty string", () => {
+		expect(truncateResponse("", 300)).toBe("");
+	});
+
+	it("handles single word", () => {
+		expect(truncateResponse("hello", 300)).toBe("hello");
+	});
+});
+
+describe("BuddyManager.react() response processing", () => {
+	let originalFetch: typeof globalThis.fetch;
+
+	beforeEach(() => {
+		originalFetch = globalThis.fetch;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	it("truncates overly long responses", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ models: [{ name: "test-model" }] }),
+		});
+		const longText = Array.from({ length: 400 }, (_, i) => `word${i}`).join(" ");
+		vi.mocked(completeSimple).mockResolvedValue({
+			role: "assistant",
+			content: [{ type: "text", text: longText }],
+			api: "openai-completions",
+			provider: "ollama",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		const mgr = new BuddyManager();
+		mgr.load();
+		const result = await mgr.react("some event");
+		restore();
+		expect(result).toContain("...[truncated]");
+	});
+
+	it("filters out thinking blocks (only uses text content)", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ models: [{ name: "test-model" }] }),
+		});
+		// Simulate a properly-configured reasoning model: thinking in a structured block,
+		// final answer in a text block
+		vi.mocked(completeSimple).mockResolvedValue({
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "Let me think about this...", thinkingSignature: "reasoning" },
+				{ type: "text", text: "Nice debugging!" },
+			],
+			api: "openai-completions",
+			provider: "ollama",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		const mgr = new BuddyManager();
+		mgr.load();
+		const result = await mgr.react("User fixed a bug");
+		restore();
+		expect(result).toBe("Nice debugging!");
+	});
+
+	it("returns null when response is only whitespace", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ models: [{ name: "test-model" }] }),
+		});
+		vi.mocked(completeSimple).mockResolvedValue({
+			role: "assistant",
+			content: [{ type: "text", text: "   \n  " }],
+			api: "openai-completions",
+			provider: "ollama",
+			model: "test-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		const mgr = new BuddyManager();
+		mgr.load();
+		const result = await mgr.react("some event");
+		restore();
+		expect(result).toBeNull();
+	});
+
+	it("uses first available model without preference", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ models: [{ name: "phi4-mini-reasoning" }, { name: "llama3.2" }] }),
+		});
+		vi.mocked(completeSimple).mockResolvedValue({
+			role: "assistant",
+			content: [{ type: "text", text: "Hello!" }],
+			api: "openai-completions",
+			provider: "ollama",
+			model: "phi4-mini-reasoning",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		const mgr = new BuddyManager();
+		mgr.load();
+		await mgr.react("some event");
+		restore();
+
+		// Should use the first model (phi4-mini-reasoning), not prefer llama3.2
+		const call = vi.mocked(completeSimple).mock.calls[0];
+		expect(call[0].id).toBe("phi4-mini-reasoning");
 	});
 });

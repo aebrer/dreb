@@ -109,7 +109,7 @@ export class BuddyComponent implements Component {
 
 	/** Show a pulsing thinking indicator with optional label */
 	showThinking(label?: string): void {
-		this.thinkingLabel = label ?? null;
+		this.thinkingLabel = label ?? "thinking";
 		this.thinkingDots = 0;
 		this.bumpVersion();
 		this.ui.requestRender();
