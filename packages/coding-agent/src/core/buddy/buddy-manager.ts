@@ -344,11 +344,14 @@ export class BuddyManager {
 		try {
 			response = await completeSimple(model, context, {
 				apiKey: "ollama",
-				signal: AbortSignal.timeout(30000),
+				signal: AbortSignal.timeout(120000),
 			});
-		} catch {
-			// Ollama crashed or became unreachable — invalidate cache so next attempt rechecks
-			this.ollamaStatus = null;
+		} catch (err) {
+			// Only invalidate Ollama cache for connection errors, not timeouts.
+			// A timeout means the model is just slow (e.g. reasoning), not that Ollama is down.
+			if (!(err instanceof DOMException && err.name === "AbortError")) {
+				this.ollamaStatus = null;
+			}
 			return null;
 		}
 
