@@ -336,7 +336,7 @@ The `search` tool provides natural language queries over the codebase using embe
 
 **Ranking:** Uses POEM (Pareto-Optimal Embedding-based Multiranking) with 6 metrics: FTS5 BM25, vector cosine similarity, path match, symbol match, import graph proximity, and git recency. Short identifier queries bias toward exact text matches; long natural language queries bias toward vector similarity.
 
-**Storage:** Project index at `.dreb/index/`, memory files indexed alongside code. Add `**/.dreb/index/` to your project's `.gitignore`. Works offline after the initial model download.
+**Storage:** Project index at `.dreb/index/`, memory files indexed alongside code. Add `**/.dreb/` to your project's `.gitignore`. Works offline after the initial model download.
 
 **Requirements:** Node.js 22+ (uses built-in `node:sqlite`). On older Node versions the tool is silently unavailable — no crash, it simply doesn't register. Zero native addons — uses `web-tree-sitter` (WASM) and `@huggingface/transformers` (WASM).
 

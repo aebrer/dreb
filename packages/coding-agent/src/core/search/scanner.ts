@@ -9,6 +9,7 @@ import { existsSync, readdirSync, readFileSync, type Stats, statSync } from "nod
 import { homedir } from "node:os";
 import { extname, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
+import { getDrebToolVisibleDirs } from "../tools/dreb-paths.js";
 import type { FileType } from "./types.js";
 
 // ============================================================================
@@ -120,6 +121,15 @@ export async function scanProject(projectRoot: string, globalMemoryDir?: string)
 		const ig = ignore();
 		loadGitignore(ig, projectRoot, projectRoot);
 		walkDirectory(projectRoot, projectRoot, ig, results);
+	}
+
+	// Include tool-visible .dreb/ subdirs (bypasses gitignore).
+	// In home dir mode, global memory is already handled separately below,
+	// and we don't want to double-scan ~/.dreb/memory/.
+	if (!isHomeDir) {
+		for (const dir of getDrebToolVisibleDirs(projectRoot)) {
+			scanMemoryDir(dir, projectRoot, results);
+		}
 	}
 
 	// Include global memory files if the directory exists

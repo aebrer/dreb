@@ -8,6 +8,7 @@ import path from "path";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { getDrebToolVisibleDirs } from "./dreb-paths.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -216,6 +217,14 @@ export function createGrepToolDefinition(
 						if (literal) args.push("--fixed-strings");
 						if (glob) args.push("--glob", glob);
 						args.push(pattern, searchPath);
+
+						// Include tool-visible .dreb/ subdirs when searching from project root.
+						// rg bypasses .gitignore for explicit path arguments.
+						if (!searchDir) {
+							for (const dir of getDrebToolVisibleDirs(cwd)) {
+								args.push(dir);
+							}
+						}
 
 						const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
 						const rl = createInterface({ input: child.stdout });

@@ -6,9 +6,8 @@ dist/
 *.tsbuildinfo
 packages/ai/src/models.generated.ts
 
-# dreb runtime data — index, cached models, session logs
-**/.dreb/index/
-**/.dreb/agent/
+# dreb runtime data
+**/.dreb/
 
 # Secrets — never commit tokens or credentials
 *.env
