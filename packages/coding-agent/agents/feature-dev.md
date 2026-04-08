@@ -1,7 +1,7 @@
 ---
 name: feature-dev
 description: Strong general-purpose coder for targeted implementation, fixes, and refactoring
-tools: read, write, edit, grep, find, ls, bash
+tools: read, write, edit, grep, find, ls, bash, search
 model: glm-5.1, opus
 ---
 

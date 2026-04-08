@@ -1,7 +1,7 @@
 ---
 name: error-auditor
 description: Audits code changes for silent runtime failures, missing error handling, and unsafe fallbacks
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls, bash, search
 model: glm-5-turbo, sonnet
 ---
 

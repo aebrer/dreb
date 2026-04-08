@@ -1,7 +1,7 @@
 ---
 name: test-reviewer
 description: Reviews test coverage and quality for changed code, identifying untested or poorly tested behaviors
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls, bash, search
 model: glm-5-turbo, sonnet
 ---
 

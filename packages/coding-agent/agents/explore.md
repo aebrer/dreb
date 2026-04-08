@@ -1,7 +1,7 @@
 ---
 name: Explore
 description: Codebase exploration — find files, search code, answer questions. Read-only.
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls, bash, search
 model: glm-5-turbo, sonnet
 ---
 
