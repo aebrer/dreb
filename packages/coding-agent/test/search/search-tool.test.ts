@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSearchToolDefinition, isSearchAvailable } from "../../src/core/tools/search.js";
+import { createSearchToolDefinition, formatSearchCall, isSearchAvailable } from "../../src/core/tools/search.js";
 
 // Mock the embedder to avoid downloading the ONNX model (~23MB).
 // Returns zero-vectors so cosine scores are 0, but BM25/path/symbol metrics still work.
@@ -132,6 +132,62 @@ describe("createSearchToolDefinition", () => {
 			expect(schema.properties.rebuild).toBeDefined();
 			expect(schema.properties.rebuild.type).toBe("boolean");
 			expect(schema.required ?? []).not.toContain("rebuild");
+		});
+	});
+
+	// ============================================================================
+	// formatSearchCall rendering
+	// ============================================================================
+
+	describe("formatSearchCall", () => {
+		// Stub theme that passes through text without ANSI codes
+		const stubTheme = {
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as any;
+
+		it("renders basic query", () => {
+			const result = formatSearchCall({ query: "AuthMiddleware" }, stubTheme);
+			expect(result).toContain("search");
+			expect(result).toContain('"AuthMiddleware"');
+		});
+
+		it("renders projectDir when provided", () => {
+			const result = formatSearchCall({ query: "test", projectDir: "/home/user/project" }, stubTheme);
+			expect(result).toContain("project");
+			expect(result).toContain("project"); // shortenPath output
+		});
+
+		it("renders searchPath when provided", () => {
+			const result = formatSearchCall({ query: "test", path: "src/auth" }, stubTheme);
+			expect(result).toContain("in");
+			expect(result).toContain("src/auth");
+		});
+
+		it("renders rebuild indicator when true", () => {
+			const result = formatSearchCall({ query: "test", rebuild: true }, stubTheme);
+			expect(result).toContain("[rebuild]");
+		});
+
+		it("does not render rebuild indicator when false", () => {
+			const result = formatSearchCall({ query: "test", rebuild: false }, stubTheme);
+			expect(result).not.toContain("[rebuild]");
+		});
+
+		it("renders limit when provided", () => {
+			const result = formatSearchCall({ query: "test", limit: 5 }, stubTheme);
+			expect(result).toContain("limit 5");
+		});
+
+		it("renders all options together", () => {
+			const result = formatSearchCall(
+				{ query: "auth", projectDir: "/proj", path: "src", rebuild: true, limit: 10 },
+				stubTheme,
+			);
+			expect(result).toContain('"auth"');
+			expect(result).toContain("[rebuild]");
+			expect(result).toContain("limit 10");
+			expect(result).toContain("in");
 		});
 	});
 
@@ -286,6 +342,41 @@ describe("createSearchToolDefinition", () => {
 				expect(result.details!.resultCount).toBeGreaterThan(0);
 			});
 
+			it("returns error when projectDir does not exist", async () => {
+				const result = await differentCwdTool.execute(
+					"t-projdir-noexist",
+					{ query: "AuthMiddleware", projectDir: "/tmp/this-path-definitely-does-not-exist-abc123" },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+				const text = (result.content[0] as { type: "text"; text: string }).text;
+
+				expect(text).toContain("does not exist or is not a directory");
+				expect(result.details!.resultCount).toBe(0);
+				expect(result.details!.indexBuilt).toBe(false);
+			});
+
+			it("returns error when projectDir is a file, not a directory", async () => {
+				const tmpFile = path.join(mkdtempSync(path.join(tmpdir(), "search-file-")), "not-a-dir.txt");
+				writeFileSync(tmpFile, "hello", "utf-8");
+				try {
+					const result = await differentCwdTool.execute(
+						"t-projdir-file",
+						{ query: "AuthMiddleware", projectDir: tmpFile },
+						undefined,
+						undefined,
+						undefined as any,
+					);
+					const text = (result.content[0] as { type: "text"; text: string }).text;
+
+					expect(text).toContain("does not exist or is not a directory");
+					expect(result.details!.resultCount).toBe(0);
+				} finally {
+					rmSync(path.dirname(tmpFile), { recursive: true, force: true });
+				}
+			});
+
 			it("does not find project-specific content when projectDir points elsewhere", async () => {
 				const emptyProject = mkdtempSync(path.join(tmpdir(), "search-empty-proj-"));
 				try {
@@ -322,6 +413,30 @@ describe("createSearchToolDefinition", () => {
 
 			afterAll(() => {
 				rmSync(rebuildFixture, { recursive: true, force: true });
+			});
+
+			it("rebuild: true works as the very first call (no prior index)", async () => {
+				// Create a completely fresh fixture and tool — no prior search
+				const coldFixture = mkdtempSync(path.join(tmpdir(), "search-cold-rebuild-"));
+				createFixtureProject(coldFixture);
+				const coldTool = createSearchToolDefinition(coldFixture);
+
+				try {
+					const result = await coldTool.execute(
+						"t-cold-rebuild",
+						{ query: "AuthMiddleware", rebuild: true },
+						undefined,
+						undefined,
+						undefined as any,
+					);
+					const text = (result.content[0] as { type: "text"; text: string }).text;
+
+					expect(text).toContain("AuthMiddleware");
+					expect(result.details!.resultCount).toBeGreaterThan(0);
+					expect(result.details!.indexBuilt).toBe(true);
+				} finally {
+					rmSync(coldFixture, { recursive: true, force: true });
+				}
 			});
 
 			it("rebuild: true produces valid results after fresh index", async () => {

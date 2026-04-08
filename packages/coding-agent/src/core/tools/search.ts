@@ -5,6 +5,7 @@
  * Feature-gated on `node:sqlite` availability (Node 22+).
  */
 
+import { existsSync, statSync } from "node:fs";
 import type { AgentTool } from "@dreb/agent-core";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
@@ -44,7 +45,8 @@ export interface SearchToolDetails {
 // Rendering
 // ============================================================================
 
-function formatSearchCall(
+/** @internal Exported for testing. */
+export function formatSearchCall(
 	args: { query?: string; path?: string; limit?: number; projectDir?: string; rebuild?: boolean } | undefined,
 	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
 ): string {
@@ -155,6 +157,19 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 			}
 
 			const resolvedProjectDir = projectDir ? resolveToCwd(projectDir, cwd) : cwd;
+
+			if (projectDir && (!existsSync(resolvedProjectDir) || !statSync(resolvedProjectDir).isDirectory())) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `projectDir does not exist or is not a directory: ${resolvedProjectDir}`,
+						},
+					],
+					details: { resultCount: 0, indexBuilt: false },
+				};
+			}
+
 			const engine = getSearchEngine(resolvedProjectDir);
 
 			if (rebuild) {
