@@ -7,9 +7,24 @@ import type { MetricScores } from "../../src/core/search/types.js";
 
 // Mock the embedder to avoid downloading the ONNX model (~23MB).
 // Returns zero-vectors so cosine scores are 0, but all other 5 metrics still work.
+// Tracks initialize() calls so concurrency tests can verify single-initialization.
+let mockInitializeCallCount = 0;
+let mockInitializeFailNext = false;
+
+function resetMockEmbedder(): void {
+	mockInitializeCallCount = 0;
+	mockInitializeFailNext = false;
+}
+
 vi.mock("../../src/core/search/embedder.js", () => ({
 	Embedder: class MockEmbedder {
-		async initialize() {}
+		async initialize() {
+			mockInitializeCallCount++;
+			if (mockInitializeFailNext) {
+				mockInitializeFailNext = false;
+				throw new Error("Mock initialization failure");
+			}
+		}
 		async embedQuery(_query: string) {
 			return new Float32Array(384);
 		}
@@ -300,6 +315,7 @@ describe("SearchEngine.search()", () => {
 		beforeAll(() => {
 			concurrentDir = mkdtempSync(path.join(tmpdir(), "dreb-search-concurrent-"));
 			createFixtureProject(concurrentDir);
+			resetMockEmbedder();
 			concurrentEngine = new SearchEngine(concurrentDir);
 		});
 
@@ -320,6 +336,13 @@ describe("SearchEngine.search()", () => {
 			}
 		});
 
+		it("embedder is initialized exactly once across concurrent searches", () => {
+			// After the 5 concurrent searches above, the embedder should have been
+			// initialized exactly once — the promise coalescing ensures all callers
+			// share the same initialization.
+			expect(mockInitializeCallCount).toBe(1);
+		});
+
 		it("concurrent searches produce valid result shapes", async () => {
 			const promises = ["AuthMiddleware", "Logger"].map((q) => concurrentEngine.search(q));
 			const results = await Promise.all(promises);
@@ -332,6 +355,41 @@ describe("SearchEngine.search()", () => {
 					expect(result.scores).toBeDefined();
 				}
 			}
+		});
+	});
+
+	// ================================================================
+	// 13. Failure retry — embedder initialization
+	// ================================================================
+
+	describe("embedder initialization failure retry", () => {
+		let retryDir: string;
+		let retryEngine: SearchEngine;
+
+		beforeAll(() => {
+			retryDir = mkdtempSync(path.join(tmpdir(), "dreb-search-retry-"));
+			createFixtureProject(retryDir);
+		});
+
+		afterAll(() => {
+			retryEngine?.close();
+			rmSync(retryDir, { recursive: true, force: true });
+		});
+
+		it("retries successfully after initialization failure", async () => {
+			resetMockEmbedder();
+			retryEngine = new SearchEngine(retryDir);
+
+			// First search — embedder init will fail
+			mockInitializeFailNext = true;
+			await expect(retryEngine.search("AuthMiddleware")).rejects.toThrow("Mock initialization failure");
+
+			// Second search — should retry and succeed (promise was reset)
+			const results = await retryEngine.search("AuthMiddleware");
+			expect(results.length).toBeGreaterThan(0);
+
+			// initialize() was called twice: once failed, once succeeded
+			expect(mockInitializeCallCount).toBe(2);
 		});
 	});
 });
