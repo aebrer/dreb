@@ -92,4 +92,28 @@ describe("buildSystemPrompt", () => {
 			expect(prompt.match(/- Use dynamic_tool for summaries\./g)).toHaveLength(1);
 		});
 	});
+
+	describe("exploration guidelines", () => {
+		test("includes search-first guidance when search tool is available", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: ["bash", "grep", "find", "ls", "search"],
+				contextFiles: [],
+				skills: [],
+			});
+
+			expect(prompt).toContain("Start with `search`");
+			expect(prompt).not.toContain("Prefer grep/find/ls tools over bash");
+		});
+
+		test("falls back to grep/find guidance when search is not available", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: ["bash", "grep", "find", "ls"],
+				contextFiles: [],
+				skills: [],
+			});
+
+			expect(prompt).toContain("Prefer grep/find/ls tools over bash");
+			expect(prompt).not.toContain("Start with `search`");
+		});
+	});
 });

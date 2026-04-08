@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBash } from "../src/core/bash-executor.js";
 import { bashTool, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.js";
 import { editTool } from "../src/core/tools/edit.js";
-import { findTool } from "../src/core/tools/find.js";
-import { grepTool } from "../src/core/tools/grep.js";
+import { createFindTool, findTool } from "../src/core/tools/find.js";
+import { createGrepTool, grepTool } from "../src/core/tools/grep.js";
 import { lsTool } from "../src/core/tools/ls.js";
 import { readTool } from "../src/core/tools/read.js";
 import { writeTool } from "../src/core/tools/write.js";
@@ -361,6 +361,71 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("example.txt:2: match line");
 		});
 
+		it("should find matches in .dreb/memory/ when searching project root", async () => {
+			const { execFileSync } = await import("node:child_process");
+			execFileSync("git", ["init"], { cwd: testDir, stdio: "ignore" });
+
+			writeFileSync(join(testDir, ".gitignore"), "**/.dreb/\n");
+			mkdirSync(join(testDir, "src"), { recursive: true });
+			writeFileSync(join(testDir, "src", "main.ts"), "export const UNIQUE_MARKER = true;\n");
+			mkdirSync(join(testDir, ".dreb", "memory"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "memory", "knowledge.md"), "# Knowledge\nUNIQUE_MARKER in memory\n");
+			mkdirSync(join(testDir, ".dreb", "index"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "index", "data.txt"), "UNIQUE_MARKER in index\n");
+			mkdirSync(join(testDir, ".dreb", "secrets"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "secrets", "keys.txt"), "UNIQUE_MARKER in secrets\n");
+
+			const scopedGrep = createGrepTool(testDir);
+			const result = await scopedGrep.execute("test-dreb-grep-1", { pattern: "UNIQUE_MARKER" });
+			const output = getTextOutput(result);
+
+			expect(output).toContain(".dreb/memory/knowledge.md");
+			expect(output).toContain("UNIQUE_MARKER in memory");
+		});
+
+		it("should NOT find matches in .dreb/index/ or .dreb/secrets/", async () => {
+			const { execFileSync } = await import("node:child_process");
+			execFileSync("git", ["init"], { cwd: testDir, stdio: "ignore" });
+
+			writeFileSync(join(testDir, ".gitignore"), "**/.dreb/\n");
+			mkdirSync(join(testDir, "src"), { recursive: true });
+			writeFileSync(join(testDir, "src", "main.ts"), "export const UNIQUE_MARKER = true;\n");
+			mkdirSync(join(testDir, ".dreb", "memory"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "memory", "knowledge.md"), "# Knowledge\nUNIQUE_MARKER in memory\n");
+			mkdirSync(join(testDir, ".dreb", "index"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "index", "data.txt"), "UNIQUE_MARKER in index\n");
+			mkdirSync(join(testDir, ".dreb", "secrets"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "secrets", "keys.txt"), "UNIQUE_MARKER in secrets\n");
+
+			const scopedGrep = createGrepTool(testDir);
+			const result = await scopedGrep.execute("test-dreb-grep-2", { pattern: "UNIQUE_MARKER" });
+			const output = getTextOutput(result);
+
+			expect(output).not.toContain(".dreb/index/");
+			expect(output).not.toContain(".dreb/secrets/");
+		});
+
+		it("should NOT inject .dreb/ dirs when path is restricted to subdirectory", async () => {
+			const { execFileSync } = await import("node:child_process");
+			execFileSync("git", ["init"], { cwd: testDir, stdio: "ignore" });
+
+			writeFileSync(join(testDir, ".gitignore"), "**/.dreb/\n");
+			mkdirSync(join(testDir, "src"), { recursive: true });
+			writeFileSync(join(testDir, "src", "main.ts"), "export const UNIQUE_MARKER = true;\n");
+			mkdirSync(join(testDir, ".dreb", "memory"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "memory", "knowledge.md"), "# Knowledge\nUNIQUE_MARKER in memory\n");
+
+			const scopedGrep = createGrepTool(testDir);
+			const result = await scopedGrep.execute("test-dreb-grep-3", {
+				pattern: "UNIQUE_MARKER",
+				path: join(testDir, "src"),
+			});
+			const output = getTextOutput(result);
+
+			expect(output).toContain("main.ts");
+			expect(output).not.toContain(".dreb/");
+		});
+
 		it("should respect global limit and include context lines", async () => {
 			const testFile = join(testDir, "context.txt");
 			const content = ["before", "match one", "after", "middle", "match two", "after two"].join("\n");
@@ -402,6 +467,69 @@ describe("Coding Agent Tools", () => {
 
 			expect(outputLines).toContain("visible.txt");
 			expect(outputLines).toContain(".secret/hidden.txt");
+		});
+
+		it("should find files in .dreb/memory/ when searching project root", async () => {
+			const { execFileSync } = await import("node:child_process");
+			execFileSync("git", ["init"], { cwd: testDir, stdio: "ignore" });
+
+			writeFileSync(join(testDir, ".gitignore"), "**/.dreb/\n");
+			mkdirSync(join(testDir, "src"), { recursive: true });
+			writeFileSync(join(testDir, "src", "main.ts"), "export const UNIQUE_MARKER = true;\n");
+			mkdirSync(join(testDir, ".dreb", "memory"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "memory", "knowledge.md"), "# Knowledge\nUNIQUE_MARKER in memory\n");
+			mkdirSync(join(testDir, ".dreb", "index"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "index", "data.txt"), "UNIQUE_MARKER in index\n");
+			mkdirSync(join(testDir, ".dreb", "secrets"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "secrets", "keys.txt"), "UNIQUE_MARKER in secrets\n");
+
+			const scopedFind = createFindTool(testDir);
+			const result = await scopedFind.execute("test-dreb-find-1", { pattern: "*.md" });
+			const output = getTextOutput(result);
+
+			expect(output).toContain(".dreb/memory/knowledge.md");
+		});
+
+		it("should NOT find files in .dreb/index/ or .dreb/secrets/", async () => {
+			const { execFileSync } = await import("node:child_process");
+			execFileSync("git", ["init"], { cwd: testDir, stdio: "ignore" });
+
+			writeFileSync(join(testDir, ".gitignore"), "**/.dreb/\n");
+			mkdirSync(join(testDir, "src"), { recursive: true });
+			writeFileSync(join(testDir, "src", "main.ts"), "export const UNIQUE_MARKER = true;\n");
+			mkdirSync(join(testDir, ".dreb", "memory"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "memory", "knowledge.md"), "# Knowledge\nUNIQUE_MARKER in memory\n");
+			mkdirSync(join(testDir, ".dreb", "index"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "index", "data.txt"), "UNIQUE_MARKER in index\n");
+			mkdirSync(join(testDir, ".dreb", "secrets"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "secrets", "keys.txt"), "UNIQUE_MARKER in secrets\n");
+
+			const scopedFind = createFindTool(testDir);
+			const result = await scopedFind.execute("test-dreb-find-2", { pattern: "*" });
+			const output = getTextOutput(result);
+
+			expect(output).not.toContain(".dreb/index/");
+			expect(output).not.toContain(".dreb/secrets/");
+		});
+
+		it("should NOT inject .dreb/ dirs when path is restricted", async () => {
+			const { execFileSync } = await import("node:child_process");
+			execFileSync("git", ["init"], { cwd: testDir, stdio: "ignore" });
+
+			writeFileSync(join(testDir, ".gitignore"), "**/.dreb/\n");
+			mkdirSync(join(testDir, "src"), { recursive: true });
+			writeFileSync(join(testDir, "src", "main.ts"), "export const UNIQUE_MARKER = true;\n");
+			mkdirSync(join(testDir, ".dreb", "memory"), { recursive: true });
+			writeFileSync(join(testDir, ".dreb", "memory", "knowledge.md"), "# Knowledge\nUNIQUE_MARKER in memory\n");
+
+			const scopedFind = createFindTool(testDir);
+			const result = await scopedFind.execute("test-dreb-find-3", {
+				pattern: "*",
+				path: join(testDir, "src"),
+			});
+			const output = getTextOutput(result);
+
+			expect(output).not.toContain(".dreb/");
 		});
 
 		it("should respect .gitignore", async () => {

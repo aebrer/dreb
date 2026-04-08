@@ -5,6 +5,7 @@
  * → duplicate columns → POEM rank → assemble results.
  */
 
+import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { SearchDatabase } from "./db.js";
@@ -186,6 +187,25 @@ export class SearchEngine {
 	getStats(): { files: number; chunks: number } | null {
 		if (!this.indexManager) return null;
 		return this.indexManager.getStats();
+	}
+
+	/**
+	 * Reset the search index — delete the DB and close the IndexManager.
+	 *
+	 * Preserves the embedder (expensive ONNX model, unrelated to index state).
+	 * The next `search()` call will lazily re-create the IndexManager and build
+	 * a fresh index from scratch.
+	 */
+	resetIndex(): void {
+		// Close DB connection first (WAL mode may hold locks)
+		this.indexManager?.close();
+		this.indexManager = null;
+
+		// Delete the DB file
+		const dbPath = path.join(this.projectRoot, ".dreb", "index", "search.db");
+		if (existsSync(dbPath)) {
+			unlinkSync(dbPath);
+		}
 	}
 
 	/** Dispose resources. */
