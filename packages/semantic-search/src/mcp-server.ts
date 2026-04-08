@@ -28,15 +28,15 @@ const SEARCH_TOOL = {
 		type: "object" as const,
 		properties: {
 			query: { type: "string", description: "Search query (natural language, identifier, or path)" },
+			projectDir: {
+				type: "string",
+				description: "Absolute path to the project directory to search. Use your current working directory.",
+			},
 			path: { type: "string", description: "Restrict search to files under this path" },
 			limit: { type: "number", description: "Maximum results to return (default: 20)" },
 			rebuild: { type: "boolean", description: "Force index rebuild (default: false)" },
-			projectDir: {
-				type: "string",
-				description: "Directory to search (default: server working directory)",
-			},
 		},
-		required: ["query"],
+		required: ["query", "projectDir"],
 	},
 };
 
@@ -134,14 +134,13 @@ export function createMcpServer(defaultProjectDir: string): Server {
 
 		const args = (request.params.arguments ?? {}) as {
 			query?: string;
+			projectDir?: string;
 			path?: string;
 			limit?: number;
 			rebuild?: boolean;
-			projectDir?: string;
 		};
 		const { query, path: searchPath, limit = 20, rebuild = false } = args;
 
-		// Resolve project directory: per-call override > server default
 		const projectDir = args.projectDir ? resolve(args.projectDir) : defaultProjectDir;
 
 		if (!SearchEngine.isAvailable()) {

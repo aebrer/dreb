@@ -297,6 +297,7 @@ describe("MCP protocol integration", () => {
 		expect(tool.inputSchema.properties).toHaveProperty("rebuild");
 		expect(tool.inputSchema.properties).toHaveProperty("projectDir");
 		expect(tool.inputSchema.required).toContain("query");
+		expect(tool.inputSchema.required).toContain("projectDir");
 	});
 
 	it("calls search and returns formatted results", async () => {
@@ -308,7 +309,10 @@ describe("MCP protocol integration", () => {
 		];
 		mockSearch.mockResolvedValue(mockResults);
 
-		const result = await client.callTool({ name: "search", arguments: { query: "server setup" } });
+		const result = await client.callTool({
+			name: "search",
+			arguments: { query: "server setup", projectDir: "/tmp/test-project" },
+		});
 
 		expect(result.content).toHaveLength(1);
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
@@ -320,7 +324,10 @@ describe("MCP protocol integration", () => {
 	it("returns empty result message when no matches", async () => {
 		mockSearch.mockResolvedValue([]);
 
-		const result = await client.callTool({ name: "search", arguments: { query: "nonexistent" } });
+		const result = await client.callTool({
+			name: "search",
+			arguments: { query: "nonexistent", projectDir: "/tmp/test-project" },
+		});
 
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
 		expect(text).toContain("No results found.");
@@ -331,7 +338,7 @@ describe("MCP protocol integration", () => {
 
 		await client.callTool({
 			name: "search",
-			arguments: { query: "handler", path: "src/api" },
+			arguments: { query: "handler", projectDir: "/tmp/test-project", path: "src/api" },
 		});
 
 		expect(mockSearch).toHaveBeenCalledWith("handler", expect.objectContaining({ pathFilter: "src/api" }));
@@ -342,7 +349,7 @@ describe("MCP protocol integration", () => {
 
 		await client.callTool({
 			name: "search",
-			arguments: { query: "handler", limit: 5 },
+			arguments: { query: "handler", projectDir: "/tmp/test-project", limit: 5 },
 		});
 
 		expect(mockSearch).toHaveBeenCalledWith("handler", expect.objectContaining({ limit: 5 }));
@@ -353,7 +360,7 @@ describe("MCP protocol integration", () => {
 
 		await client.callTool({
 			name: "search",
-			arguments: { query: "test", rebuild: true },
+			arguments: { query: "test", projectDir: "/tmp/test-project", rebuild: true },
 		});
 
 		expect(mockResetIndex).toHaveBeenCalled();
@@ -364,7 +371,7 @@ describe("MCP protocol integration", () => {
 
 		await client.callTool({
 			name: "search",
-			arguments: { query: "test", rebuild: false },
+			arguments: { query: "test", projectDir: "/tmp/test-project", rebuild: false },
 		});
 
 		expect(mockResetIndex).not.toHaveBeenCalled();
