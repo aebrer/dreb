@@ -2,7 +2,12 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createSearchToolDefinition, formatSearchCall, isSearchAvailable } from "../../src/core/tools/search.js";
+import {
+	createSearchToolDefinition,
+	formatSearchCall,
+	formatSearchResult,
+	isSearchAvailable,
+} from "../../src/core/tools/search.js";
 
 // Mock the embedder to avoid downloading the ONNX model (~23MB).
 // Returns zero-vectors so cosine scores are 0, but BM25/path/symbol metrics still work.
@@ -155,7 +160,7 @@ describe("createSearchToolDefinition", () => {
 		it("renders projectDir when provided", () => {
 			const result = formatSearchCall({ query: "test", projectDir: "/home/user/project" }, stubTheme);
 			expect(result).toContain("project");
-			expect(result).toContain("project"); // shortenPath output
+			expect(result).toContain("/home/user/project"); // shortenPath output
 		});
 
 		it("renders searchPath when provided", () => {
@@ -188,6 +193,97 @@ describe("createSearchToolDefinition", () => {
 			expect(result).toContain("[rebuild]");
 			expect(result).toContain("limit 10");
 			expect(result).toContain("in");
+		});
+	});
+
+	// ============================================================================
+	// formatSearchResult rendering
+	// ============================================================================
+
+	describe("formatSearchResult", () => {
+		const stubTheme = {
+			fg: (_color: string, text: string) => text,
+			bold: (text: string) => text,
+		} as any;
+
+		it("returns empty string for empty content", () => {
+			const result = formatSearchResult(
+				{ content: [{ type: "text", text: "" }] },
+				{ expanded: false, isPartial: false },
+				stubTheme,
+			);
+			expect(result).toBe("");
+		});
+
+		it("returns empty string for missing text", () => {
+			const result = formatSearchResult(
+				{ content: [{ type: "text" }] },
+				{ expanded: false, isPartial: false },
+				stubTheme,
+			);
+			expect(result).toBe("");
+		});
+
+		it("renders all lines when under 20 lines in collapsed mode", () => {
+			const lines = Array.from({ length: 5 }, (_, i) => `line ${i + 1}`);
+			const result = formatSearchResult(
+				{ content: [{ type: "text", text: lines.join("\n") }] },
+				{ expanded: false, isPartial: false },
+				stubTheme,
+			);
+			for (const line of lines) {
+				expect(result).toContain(line);
+			}
+			expect(result).not.toContain("more lines");
+		});
+
+		it("truncates at 20 lines in collapsed mode with remaining count", () => {
+			const lines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+			const result = formatSearchResult(
+				{ content: [{ type: "text", text: lines.join("\n") }] },
+				{ expanded: false, isPartial: false },
+				stubTheme,
+			);
+			expect(result).toContain("line 1");
+			expect(result).toContain("line 20");
+			expect(result).not.toContain("line 21");
+			expect(result).toContain("... (10 more lines)");
+		});
+
+		it("shows all lines in expanded mode", () => {
+			const lines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+			const result = formatSearchResult(
+				{ content: [{ type: "text", text: lines.join("\n") }] },
+				{ expanded: true, isPartial: false },
+				stubTheme,
+			);
+			expect(result).toContain("line 1");
+			expect(result).toContain("line 30");
+			expect(result).not.toContain("more lines");
+		});
+
+		it("renders indexStats footer when present", () => {
+			const result = formatSearchResult(
+				{
+					content: [{ type: "text", text: "some result" }],
+					details: { resultCount: 1, indexBuilt: false, indexStats: { files: 42, chunks: 256 } },
+				},
+				{ expanded: false, isPartial: false },
+				stubTheme,
+			);
+			expect(result).toContain("[Index: 42 files, 256 chunks]");
+		});
+
+		it("does not render indexStats footer when not present", () => {
+			const result = formatSearchResult(
+				{
+					content: [{ type: "text", text: "some result" }],
+					details: { resultCount: 1, indexBuilt: false },
+				},
+				{ expanded: false, isPartial: false },
+				stubTheme,
+			);
+			expect(result).not.toContain("[Index:");
 		});
 	});
 

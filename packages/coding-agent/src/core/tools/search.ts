@@ -69,7 +69,8 @@ export function formatSearchCall(
 	return text;
 }
 
-function formatSearchResult(
+/** @internal Exported for testing. */
+export function formatSearchResult(
 	result: {
 		content: Array<{ type: string; text?: string }>;
 		details?: SearchToolDetails;
