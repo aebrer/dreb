@@ -295,6 +295,7 @@ describe("MCP protocol integration", () => {
 		expect(tool.inputSchema.properties).toHaveProperty("path");
 		expect(tool.inputSchema.properties).toHaveProperty("limit");
 		expect(tool.inputSchema.properties).toHaveProperty("rebuild");
+		expect(tool.inputSchema.properties).toHaveProperty("projectDir");
 		expect(tool.inputSchema.required).toContain("query");
 	});
 
@@ -367,5 +368,19 @@ describe("MCP protocol integration", () => {
 		});
 
 		expect(mockResetIndex).not.toHaveBeenCalled();
+	});
+
+	it("accepts projectDir as a per-call override", async () => {
+		mockSearch.mockResolvedValue([]);
+
+		// Should not throw — projectDir is accepted as a valid parameter
+		const result = await client.callTool({
+			name: "search",
+			arguments: { query: "test", projectDir: "/tmp/other-project" },
+		});
+
+		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+		// Should complete without error
+		expect(text).toContain("No results found.");
 	});
 });

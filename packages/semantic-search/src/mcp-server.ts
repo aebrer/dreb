@@ -3,8 +3,13 @@
  *
  * Exposes the SearchEngine as a single "search" tool over the Model Context Protocol,
  * enabling any MCP-compatible client to run semantic codebase queries.
+ *
+ * The server defaults to using its CWD as the project directory. Claude Code
+ * launches MCP servers with CWD set to the project root, so no configuration
+ * is needed for typical per-project usage.
  */
 
+import { resolve } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
@@ -26,10 +31,30 @@ const SEARCH_TOOL = {
 			path: { type: "string", description: "Restrict search to files under this path" },
 			limit: { type: "number", description: "Maximum results to return (default: 20)" },
 			rebuild: { type: "boolean", description: "Force index rebuild (default: false)" },
+			projectDir: {
+				type: "string",
+				description: "Directory to search (default: server working directory)",
+			},
 		},
 		required: ["query"],
 	},
 };
+
+// ============================================================================
+// Engine Cache
+// ============================================================================
+
+/** Cache search engines per project root to reuse index across calls. */
+const engineCache = new Map<string, SearchEngine>();
+
+function getSearchEngine(projectRoot: string): SearchEngine {
+	let engine = engineCache.get(projectRoot);
+	if (!engine) {
+		engine = new SearchEngine(projectRoot);
+		engineCache.set(projectRoot, engine);
+	}
+	return engine;
+}
 
 // ============================================================================
 // Result Formatting
@@ -84,15 +109,16 @@ export function formatResults(results: SearchResult[]): string {
 
 /**
  * Create an MCP server instance configured with the semantic search tool.
- * Does not connect to any transport — call `server.connect(transport)` separately.
+ *
+ * @param defaultProjectDir - Default project directory for searches. Used when
+ *   the client doesn't specify `projectDir` in the tool call. Typically the
+ *   server's CWD, which Claude Code sets to the project root.
  */
-export function createMcpServer(projectDir: string): Server {
+export function createMcpServer(defaultProjectDir: string): Server {
 	const server = new Server(
 		{ name: "semantic-search", version: "1.0.0" },
 		{ capabilities: { tools: {}, logging: {} } },
 	);
-
-	const engine = new SearchEngine(projectDir);
 
 	server.setRequestHandler(ListToolsRequestSchema, async () => ({
 		tools: [SEARCH_TOOL],
@@ -111,8 +137,12 @@ export function createMcpServer(projectDir: string): Server {
 			path?: string;
 			limit?: number;
 			rebuild?: boolean;
+			projectDir?: string;
 		};
 		const { query, path: searchPath, limit = 20, rebuild = false } = args;
+
+		// Resolve project directory: per-call override > server default
+		const projectDir = args.projectDir ? resolve(args.projectDir) : defaultProjectDir;
 
 		if (!SearchEngine.isAvailable()) {
 			return {
@@ -132,6 +162,8 @@ export function createMcpServer(projectDir: string): Server {
 				isError: true,
 			};
 		}
+
+		const engine = getSearchEngine(projectDir);
 
 		if (rebuild) {
 			engine.resetIndex();
