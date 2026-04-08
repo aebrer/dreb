@@ -6,11 +6,14 @@
  */
 
 import { existsSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
+import { SearchEngine } from "@dreb/semantic-search";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { SearchEngine } from "../search/search.js";
+import { getDrebToolVisibleDirs } from "./dreb-paths.js";
 import { resolveToCwd } from "./path-utils.js";
 import { shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -114,7 +117,12 @@ const engineCache = new Map<string, SearchEngine>();
 function getSearchEngine(projectRoot: string): SearchEngine {
 	let engine = engineCache.get(projectRoot);
 	if (!engine) {
-		engine = new SearchEngine(projectRoot);
+		engine = new SearchEngine(projectRoot, {
+			indexDir: path.join(projectRoot, ".dreb", "index"),
+			globalMemoryDir: path.join(homedir(), ".dreb", "memory"),
+			modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
+			visibleDirs: getDrebToolVisibleDirs,
+		});
 		engineCache.set(projectRoot, engine);
 	}
 	return engine;

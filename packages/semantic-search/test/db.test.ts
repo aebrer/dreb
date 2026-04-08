@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isSqliteAvailable, SearchDatabase } from "../../src/core/search/db.js";
+import { isSqliteAvailable, SearchDatabase } from "../src/db.js";
 
 describe("isSqliteAvailable", () => {
 	it("returns true on Node 22+", () => {

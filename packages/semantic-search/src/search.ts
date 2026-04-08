@@ -43,17 +43,34 @@ export interface SearchOptions {
 }
 
 // ============================================================================
+// Search Engine Options
+// ============================================================================
+
+export interface SearchEngineOptions {
+	/** Absolute path to the index database directory. Default: `<projectRoot>/.search-index` */
+	indexDir?: string;
+	/** Absolute path to a global memory directory to include in the index. */
+	globalMemoryDir?: string;
+	/** Absolute path to the model cache directory. Default: `~/.cache/semantic-search/models` */
+	modelCacheDir?: string;
+	/** Provider of additional directories to include in scans (bypasses gitignore). */
+	visibleDirs?: (projectRoot: string) => string[];
+}
+
+// ============================================================================
 // Search Engine
 // ============================================================================
 
 export class SearchEngine {
 	private readonly projectRoot: string;
+	private readonly options: SearchEngineOptions;
 	private indexManager: IndexManager | null = null;
 	private embedderPromise: Promise<Embedder> | null = null;
 	private searchQueue: Promise<void> = Promise.resolve();
 
-	constructor(projectRoot: string) {
+	constructor(projectRoot: string, options?: SearchEngineOptions) {
 		this.projectRoot = projectRoot;
+		this.options = options ?? {};
 	}
 
 	/** Check if semantic search is available (requires node:sqlite). */
@@ -212,12 +229,10 @@ export class SearchEngine {
 	 * a fresh index from scratch.
 	 */
 	resetIndex(): void {
-		// Close DB connection first (WAL mode may hold locks)
 		this.indexManager?.close();
 		this.indexManager = null;
-
-		// Delete the DB file
-		const dbPath = path.join(this.projectRoot, ".dreb", "index", "search.db");
+		const config = this.getIndexConfig();
+		const dbPath = path.join(config.indexDir, "search.db");
 		if (existsSync(dbPath)) {
 			unlinkSync(dbPath);
 		}
@@ -248,10 +263,12 @@ export class SearchEngine {
 	}
 
 	private getIndexConfig(): IndexConfig {
+		const visibleDirsFn = this.options.visibleDirs;
 		return {
 			projectRoot: this.projectRoot,
-			indexDir: path.join(this.projectRoot, ".dreb", "index"),
-			globalMemoryDir: path.join(homedir(), ".dreb", "memory"),
+			indexDir: this.options.indexDir ?? path.join(this.projectRoot, ".search-index"),
+			globalMemoryDir: this.options.globalMemoryDir,
+			visibleDirs: visibleDirsFn ? visibleDirsFn(this.projectRoot) : undefined,
 			modelName: DEFAULT_MODEL_NAME,
 		};
 	}
@@ -262,13 +279,14 @@ export class SearchEngine {
 				try {
 					const config = this.getIndexConfig();
 					const embedder = new Embedder({
-						modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
+						modelCacheDir:
+							this.options.modelCacheDir ?? path.join(homedir(), ".cache", "semantic-search", "models"),
 						modelName: config.modelName,
 					});
 					await embedder.initialize();
 					return embedder;
 				} catch (err) {
-					this.embedderPromise = null; // reset on failure for retry
+					this.embedderPromise = null;
 					throw err;
 				}
 			})();

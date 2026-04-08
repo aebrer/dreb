@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { chunkTextFile } from "../src/core/search/text-chunker.js";
+import { chunkTextFile } from "../src/text-chunker.js";
 
 // ============================================================================
 // Helper

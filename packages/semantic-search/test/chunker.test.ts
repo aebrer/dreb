@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { chunkFile } from "../../src/core/search/chunker.js";
-import { initTreeSitter } from "../../src/core/search/tree-sitter-chunker.js";
-import type { Chunk, FileType } from "../../src/core/search/types.js";
+import { chunkFile } from "../src/chunker.js";
+import { initTreeSitter } from "../src/tree-sitter-chunker.js";
+import type { Chunk, FileType } from "../src/types.js";
 
 // ============================================================================
 // Setup — tree-sitter needs one-time WASM init

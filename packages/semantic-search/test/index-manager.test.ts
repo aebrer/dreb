@@ -2,8 +2,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, utim
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { IndexManager } from "../../src/core/search/index-manager.js";
-import type { IndexConfig, IndexProgressCallback } from "../../src/core/search/types.js";
+import { IndexManager } from "../src/index-manager.js";
+import type { IndexConfig, IndexProgressCallback } from "../src/types.js";
 
 // Mock embedder that returns zero-vectors of the correct dimensionality.
 const mockEmbedder = {

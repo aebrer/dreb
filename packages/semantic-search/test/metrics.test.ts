@@ -2,14 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SearchDatabase } from "../../src/core/search/db.js";
-import { computeBm25Scores } from "../../src/core/search/metrics/bm25.js";
-import { computeGitRecencyScores } from "../../src/core/search/metrics/git-recency.js";
-import { computeImportGraphScores } from "../../src/core/search/metrics/import-graph.js";
-import { computePathMatchScores } from "../../src/core/search/metrics/path-match.js";
-import { computeSymbolMatchScores } from "../../src/core/search/metrics/symbol-match.js";
-import { tokenize } from "../../src/core/search/metrics/tokenize.js";
-import type { StoredChunk } from "../../src/core/search/types.js";
+import { SearchDatabase } from "../src/db.js";
+import { computeBm25Scores } from "../src/metrics/bm25.js";
+import { computeGitRecencyScores } from "../src/metrics/git-recency.js";
+import { computeImportGraphScores } from "../src/metrics/import-graph.js";
+import { computePathMatchScores } from "../src/metrics/path-match.js";
+import { computeSymbolMatchScores } from "../src/metrics/symbol-match.js";
+import { tokenize } from "../src/metrics/tokenize.js";
+import type { StoredChunk } from "../src/types.js";
 
 /** Helper to build a minimal StoredChunk for testing. */
 const chunk = (id: number, filePath: string, fileId = 1): StoredChunk => ({
@@ -230,7 +230,7 @@ describe("computeGitRecencyScores", () => {
 
 	it("returns valid scores in [0, 1] for a real git repo", async () => {
 		// Use the dreb repo itself as the real git repo
-		const projectRoot = path.resolve(__dirname, "../../../..");
+		const projectRoot = path.resolve(__dirname, "../../..");
 		const chunks = [chunk(1, "package.json"), chunk(2, "README.md")];
 		const scores = await computeGitRecencyScores(projectRoot, chunks);
 		for (const score of scores.values()) {
@@ -240,7 +240,7 @@ describe("computeGitRecencyScores", () => {
 	});
 
 	it("assigns neutral score to files not tracked by git", async () => {
-		const projectRoot = path.resolve(__dirname, "../../../..");
+		const projectRoot = path.resolve(__dirname, "../../..");
 		const chunks = [chunk(1, "package.json"), chunk(2, "this-file-definitely-does-not-exist-xyz.ts")];
 		const scores = await computeGitRecencyScores(projectRoot, chunks);
 		// The untracked file should get the neutral score 0.5

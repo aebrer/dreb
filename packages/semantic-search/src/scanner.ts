@@ -9,7 +9,6 @@ import { existsSync, readdirSync, readFileSync, type Stats, statSync } from "nod
 import { homedir } from "node:os";
 import { extname, isAbsolute, join, relative, sep } from "node:path";
 import ignore from "ignore";
-import { getDrebToolVisibleDirs } from "../tools/dreb-paths.js";
 import type { FileType } from "./types.js";
 
 // ============================================================================
@@ -106,7 +105,11 @@ export function detectFileType(filePath: string): FileType | null {
  * skips binary / oversized files, and optionally includes memory files from
  * a global memory directory.
  */
-export async function scanProject(projectRoot: string, globalMemoryDir?: string): Promise<ScannedFile[]> {
+export async function scanProject(
+	projectRoot: string,
+	globalMemoryDir?: string,
+	visibleDirs?: string[],
+): Promise<ScannedFile[]> {
 	const results: ScannedFile[] = [];
 
 	// Detect if projectRoot is the home directory — use shallow scan mode
@@ -127,7 +130,7 @@ export async function scanProject(projectRoot: string, globalMemoryDir?: string)
 	// In home dir mode, global memory is already handled separately below,
 	// and we don't want to double-scan ~/.dreb/memory/.
 	if (!isHomeDir) {
-		for (const dir of getDrebToolVisibleDirs(projectRoot)) {
+		for (const dir of visibleDirs ?? []) {
 			scanMemoryDir(dir, projectRoot, results);
 		}
 	}

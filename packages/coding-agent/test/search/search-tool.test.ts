@@ -11,7 +11,7 @@ import {
 
 // Mock the embedder to avoid downloading the ONNX model (~23MB).
 // Returns zero-vectors so cosine scores are 0, but BM25/path/symbol metrics still work.
-vi.mock("../../src/core/search/embedder.js", () => ({
+vi.mock("../../../semantic-search/src/embedder.js", () => ({
 	Embedder: class MockEmbedder {
 		async initialize() {}
 		async embedQuery(_query: string) {

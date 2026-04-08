@@ -18,7 +18,9 @@
 			"@dreb/coding-agent/*": ["./packages/coding-agent/src/*"],
 			"@sinclair/typebox": ["./node_modules/@sinclair/typebox"],
 			"@dreb/tui": ["./packages/tui/src/index.ts"],
-			"@dreb/tui/*": ["./packages/tui/src/*"]
+			"@dreb/tui/*": ["./packages/tui/src/*"],
+			"@dreb/semantic-search": ["./packages/semantic-search/src/index.ts"],
+			"@dreb/semantic-search/*": ["./packages/semantic-search/src/*"]
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],

@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { SearchEngine } from "../../src/core/search/search.js";
-import type { MetricScores } from "../../src/core/search/types.js";
+import { SearchEngine } from "../src/search.js";
+import type { MetricScores } from "../src/types.js";
 
 // Mock the embedder to avoid downloading the ONNX model (~23MB).
 // Returns zero-vectors so cosine scores are 0, but all other 5 metrics still work.
@@ -16,7 +16,7 @@ function resetMockEmbedder(): void {
 	mockInitializeFailNext = false;
 }
 
-vi.mock("../../src/core/search/embedder.js", () => ({
+vi.mock("../src/embedder.js", () => ({
 	Embedder: class MockEmbedder {
 		async initialize() {
 			mockInitializeCallCount++;

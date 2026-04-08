@@ -15,7 +15,7 @@ vi.mock("node:os", async (importOriginal) => {
 	};
 });
 
-import { detectFileType, scanProject } from "../../src/core/search/scanner.js";
+import { detectFileType, scanProject } from "../src/scanner.js";
 
 // ============================================================================
 // detectFileType
