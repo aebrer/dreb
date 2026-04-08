@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -121,6 +121,18 @@ describe("createSearchToolDefinition", () => {
 			expect(schema.properties.limit).toBeDefined();
 			expect(schema.required ?? []).not.toContain("limit");
 		});
+
+		it("has projectDir as an optional property", () => {
+			expect(schema.properties.projectDir).toBeDefined();
+			expect(schema.properties.projectDir.type).toBe("string");
+			expect(schema.required ?? []).not.toContain("projectDir");
+		});
+
+		it("has rebuild as an optional property", () => {
+			expect(schema.properties.rebuild).toBeDefined();
+			expect(schema.properties.rebuild.type).toBe("boolean");
+			expect(schema.required ?? []).not.toContain("rebuild");
+		});
 	});
 
 	// ============================================================================
@@ -235,6 +247,203 @@ describe("createSearchToolDefinition", () => {
 
 				expect(text).toBe("No results found.");
 				expect(result.details!.resultCount).toBe(0);
+			});
+		});
+
+		// ============================================================================
+		// Execute — projectDir parameter
+		// ============================================================================
+
+		describe("projectDir parameter", () => {
+			let projectDirFixture: string;
+			let differentCwdTool: ReturnType<typeof createSearchToolDefinition>;
+
+			beforeAll(() => {
+				// Create a fixture project in a separate directory
+				projectDirFixture = mkdtempSync(path.join(tmpdir(), "search-projectdir-"));
+				createFixtureProject(projectDirFixture);
+				// Create the tool with a DIFFERENT cwd (empty temp dir)
+				const emptyCwd = mkdtempSync(path.join(tmpdir(), "search-empty-cwd-"));
+				differentCwdTool = createSearchToolDefinition(emptyCwd);
+			});
+
+			afterAll(() => {
+				rmSync(projectDirFixture, { recursive: true, force: true });
+			});
+
+			it("searches the projectDir instead of cwd when provided", async () => {
+				const result = await differentCwdTool.execute(
+					"t-projdir",
+					{ query: "AuthMiddleware", projectDir: projectDirFixture },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+				const text = (result.content[0] as { type: "text"; text: string }).text;
+
+				// Should find results from the projectDir fixture
+				expect(text).toContain("AuthMiddleware");
+				expect(result.details!.resultCount).toBeGreaterThan(0);
+			});
+
+			it("does not find project-specific content when projectDir points elsewhere", async () => {
+				const emptyProject = mkdtempSync(path.join(tmpdir(), "search-empty-proj-"));
+				try {
+					const result = await differentCwdTool.execute(
+						"t-projdir-empty",
+						{ query: "AuthMiddleware", projectDir: emptyProject },
+						undefined,
+						undefined,
+						undefined as any,
+					);
+					const text = (result.content[0] as { type: "text"; text: string }).text;
+					// AuthMiddleware is only in the fixture project, not in an empty dir
+					// (global memory may still return results, but not for AuthMiddleware)
+					expect(text).not.toContain("src/auth/middleware.ts");
+				} finally {
+					rmSync(emptyProject, { recursive: true, force: true });
+				}
+			});
+		});
+
+		// ============================================================================
+		// Execute — rebuild parameter
+		// ============================================================================
+
+		describe("rebuild parameter", () => {
+			let rebuildFixture: string;
+			let rebuildTool: ReturnType<typeof createSearchToolDefinition>;
+
+			beforeAll(() => {
+				rebuildFixture = mkdtempSync(path.join(tmpdir(), "search-rebuild-"));
+				createFixtureProject(rebuildFixture);
+				rebuildTool = createSearchToolDefinition(rebuildFixture);
+			});
+
+			afterAll(() => {
+				rmSync(rebuildFixture, { recursive: true, force: true });
+			});
+
+			it("rebuild: true produces valid results after fresh index", async () => {
+				// First search to build the index
+				await rebuildTool.execute(
+					"t-rebuild-setup",
+					{ query: "AuthMiddleware" },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+
+				// Verify the index DB exists
+				const dbPath = path.join(rebuildFixture, ".dreb", "index", "search.db");
+				expect(existsSync(dbPath)).toBe(true);
+
+				// Now search with rebuild: true
+				const result = await rebuildTool.execute(
+					"t-rebuild",
+					{ query: "AuthMiddleware", rebuild: true },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+				const text = (result.content[0] as { type: "text"; text: string }).text;
+
+				expect(text).toContain("AuthMiddleware");
+				expect(result.details!.resultCount).toBeGreaterThan(0);
+				// Index should have been rebuilt
+				expect(result.details!.indexBuilt).toBe(true);
+			});
+
+			it("normal search after rebuild still works", async () => {
+				// rebuild was done in previous test, now a normal search should work fine
+				const result = await rebuildTool.execute(
+					"t-after-rebuild",
+					{ query: "formatDate" },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+				const text = (result.content[0] as { type: "text"; text: string }).text;
+
+				expect(text).toContain("formatDate");
+				expect(result.details!.resultCount).toBeGreaterThan(0);
+			});
+		});
+
+		// ============================================================================
+		// Execute — projectDir + rebuild isolation
+		// ============================================================================
+
+		describe("projectDir + rebuild isolation", () => {
+			let projectA: string;
+			let projectB: string;
+			let isolationTool: ReturnType<typeof createSearchToolDefinition>;
+
+			beforeAll(() => {
+				const toolCwd = mkdtempSync(path.join(tmpdir(), "search-isolation-cwd-"));
+				isolationTool = createSearchToolDefinition(toolCwd);
+
+				// Project A has the standard fixtures
+				projectA = mkdtempSync(path.join(tmpdir(), "search-iso-a-"));
+				createFixtureProject(projectA);
+
+				// Project B has different content
+				projectB = mkdtempSync(path.join(tmpdir(), "search-iso-b-"));
+				const bFile = path.join(projectB, "src", "payments.ts");
+				mkdirSync(path.dirname(bFile), { recursive: true });
+				writeFileSync(bFile, "export class PaymentProcessor { charge() {} }", "utf-8");
+			});
+
+			afterAll(() => {
+				rmSync(projectA, { recursive: true, force: true });
+				rmSync(projectB, { recursive: true, force: true });
+			});
+
+			it("each projectDir gets its own index", async () => {
+				const resultA = await isolationTool.execute(
+					"t-iso-a",
+					{ query: "AuthMiddleware", projectDir: projectA },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+				expect(resultA.details!.resultCount).toBeGreaterThan(0);
+
+				const resultB = await isolationTool.execute(
+					"t-iso-b",
+					{ query: "PaymentProcessor", projectDir: projectB },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+				expect(resultB.details!.resultCount).toBeGreaterThan(0);
+
+				// Verify separate index DBs exist
+				expect(existsSync(path.join(projectA, ".dreb", "index", "search.db"))).toBe(true);
+				expect(existsSync(path.join(projectB, ".dreb", "index", "search.db"))).toBe(true);
+			});
+
+			it("rebuild on one project does not affect the other", async () => {
+				// Rebuild project A
+				await isolationTool.execute(
+					"t-iso-rebuild-a",
+					{ query: "AuthMiddleware", projectDir: projectA, rebuild: true },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+
+				// Project B index should still exist and work
+				expect(existsSync(path.join(projectB, ".dreb", "index", "search.db"))).toBe(true);
+
+				const resultB = await isolationTool.execute(
+					"t-iso-b-after",
+					{ query: "PaymentProcessor", projectDir: projectB },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+				expect(resultB.details!.resultCount).toBeGreaterThan(0);
 			});
 		});
 	});
