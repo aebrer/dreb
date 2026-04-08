@@ -1,7 +1,7 @@
 ---
 name: simplifier
 description: Identifies opportunities to simplify code without changing behavior
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls, bash, search
 model: glm-5-turbo, sonnet
 ---
 

@@ -288,4 +288,50 @@ describe("SearchEngine.search()", () => {
 		const separateEngine = new SearchEngine(tmpDir);
 		expect(() => separateEngine.close()).not.toThrow();
 	});
+
+	// ================================================================
+	// 12. Concurrent search calls
+	// ================================================================
+
+	describe("concurrent search calls", () => {
+		let concurrentDir: string;
+		let concurrentEngine: SearchEngine;
+
+		beforeAll(() => {
+			concurrentDir = mkdtempSync(path.join(tmpdir(), "dreb-search-concurrent-"));
+			createFixtureProject(concurrentDir);
+			concurrentEngine = new SearchEngine(concurrentDir);
+		});
+
+		afterAll(() => {
+			concurrentEngine.close();
+			rmSync(concurrentDir, { recursive: true, force: true });
+		});
+
+		it("multiple concurrent search calls all succeed", async () => {
+			// Fire 5 concurrent searches on the same engine
+			const queries = ["AuthMiddleware", "Logger", "formatDate", "handler", "src/auth/"];
+			const promises = queries.map((q) => concurrentEngine.search(q));
+			const results = await Promise.all(promises);
+
+			// Every search should return results
+			for (let i = 0; i < queries.length; i++) {
+				expect(results[i].length).toBeGreaterThan(0);
+			}
+		});
+
+		it("concurrent searches produce valid result shapes", async () => {
+			const promises = ["AuthMiddleware", "Logger"].map((q) => concurrentEngine.search(q));
+			const results = await Promise.all(promises);
+
+			for (const resultSet of results) {
+				for (const result of resultSet) {
+					expect(result.chunk).toBeDefined();
+					expect(typeof result.chunk.filePath).toBe("string");
+					expect(typeof result.rank).toBe("number");
+					expect(result.scores).toBeDefined();
+				}
+			}
+		});
+	});
 });

@@ -46,6 +46,7 @@ export class Embedder {
 	private readonly modelName: string;
 	private readonly batchSize: number;
 	private extractor: any | null = null;
+	private initPromise: Promise<void> | null = null;
 	private resolvedDimension: number | null = null;
 
 	constructor(options: EmbedderOptions) {
@@ -62,31 +63,43 @@ export class Embedder {
 	 */
 	async initialize(): Promise<void> {
 		if (this.extractor) return;
+		if (this.initPromise) return this.initPromise;
 
-		// Dynamic import — @huggingface/transformers is a heavy dependency
-		const { pipeline, env } = await import("@huggingface/transformers");
+		this.initPromise = (async () => {
+			try {
+				// Dynamic import — @huggingface/transformers is a heavy dependency
+				const { pipeline, env } = await import("@huggingface/transformers");
 
-		// Direct the model cache to our managed directory
-		env.cacheDir = this.modelCacheDir;
+				// Direct the model cache to our managed directory
+				env.cacheDir = this.modelCacheDir;
 
-		// Suppress the onnxruntime native addon warning — WASM fallback is fine
-		// The library tries to load native onnxruntime first and logs a warning
-		// when it falls back to WASM. We suppress this to avoid confusing users.
-		const originalWarn = console.warn;
-		console.warn = (...args: any[]) => {
-			const msg = typeof args[0] === "string" ? args[0] : "";
-			if (msg.includes("onnxruntime") || msg.includes("ONNX")) return;
-			originalWarn.apply(console, args);
-		};
+				// Suppress the onnxruntime native addon warning — WASM fallback is fine
+				// The library tries to load native onnxruntime first and logs a warning
+				// when it falls back to WASM. We suppress this to avoid confusing users.
+				const originalWarn = console.warn;
+				console.warn = (...args: any[]) => {
+					const msg = typeof args[0] === "string" ? args[0] : "";
+					if (msg.includes("onnxruntime") || msg.includes("ONNX")) return;
+					originalWarn.apply(console, args);
+				};
 
-		try {
-			this.extractor = await pipeline("feature-extraction", this.modelName, {
-				dtype: "q8" as any,
-				device: "cpu" as any,
-			});
-		} finally {
-			console.warn = originalWarn;
-		}
+				try {
+					this.extractor = await pipeline("feature-extraction", this.modelName, {
+						dtype: "q8" as any,
+						device: "cpu" as any,
+					});
+				} finally {
+					console.warn = originalWarn;
+				}
+			} catch (err) {
+				// Reset so subsequent calls can retry instead of returning
+				// the same rejected promise forever
+				this.initPromise = null;
+				throw err;
+			}
+		})();
+
+		return this.initPromise;
 	}
 
 	/**
@@ -167,6 +180,7 @@ export class Embedder {
 			}
 			this.extractor = null;
 		}
+		this.initPromise = null;
 	}
 
 	/** Throw if initialize() hasn't been called yet. */
