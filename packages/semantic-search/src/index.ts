@@ -9,6 +9,8 @@ export type { EmbedderOptions } from "./embedder.js";
 
 // Embedder
 export { Embedder } from "./embedder.js";
+// Result formatting
+export { formatResults } from "./format.js";
 // Index management
 export { IndexManager } from "./index-manager.js";
 export type { RankedCandidate } from "./poem.js";
@@ -19,7 +21,8 @@ export { classifyQuery } from "./query-classifier.js";
 export type { ScannedFile } from "./scanner.js";
 // Scanner
 export { detectFileType, scanProject } from "./scanner.js";
-export { SearchEngine, SearchEngineOptions, SearchOptions } from "./search.js";
+export type { SearchEngineOptions, SearchOptions } from "./search.js";
+export { SearchEngine } from "./search.js";
 // Types
 export type {
 	Chunk,

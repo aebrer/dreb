@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { z } from "zod";
 
 // Mock the embedder to avoid downloading the ONNX model
 vi.mock("../src/embedder.js", () => ({
@@ -141,7 +140,7 @@ describe("formatResults", () => {
 		const output = formatResults([result]);
 
 		// Should be truncated to 117 chars + "..."
-		expect(output).toContain("x".repeat(117) + "...");
+		expect(output).toContain(`${"x".repeat(117)}...`);
 		expect(output).not.toContain("x".repeat(200));
 	});
 
@@ -184,49 +183,6 @@ describe("formatResults", () => {
 		for (let i = 1; i < scoreValues.length; i++) {
 			expect(scoreValues[i]).toBeLessThanOrEqual(scoreValues[i - 1]);
 		}
-	});
-});
-
-// ============================================================================
-// Zod input schema validation
-// ============================================================================
-
-describe("search input schema", () => {
-	const schema = z.object({
-		query: z.string(),
-		path: z.string().optional(),
-		limit: z.number().optional().default(20),
-		rebuild: z.boolean().optional().default(false),
-	});
-
-	it("accepts a minimal valid input", () => {
-		const result = schema.parse({ query: "auth middleware" });
-		expect(result.query).toBe("auth middleware");
-		expect(result.limit).toBe(20);
-		expect(result.rebuild).toBe(false);
-	});
-
-	it("accepts all optional fields", () => {
-		const result = schema.parse({
-			query: "rate limiting",
-			path: "src/api",
-			limit: 5,
-			rebuild: true,
-		});
-		expect(result.query).toBe("rate limiting");
-		expect(result.path).toBe("src/api");
-		expect(result.limit).toBe(5);
-		expect(result.rebuild).toBe(true);
-	});
-
-	it("rejects missing query", () => {
-		expect(() => schema.parse({})).toThrow();
-	});
-
-	it("rejects wrong types", () => {
-		expect(() => schema.parse({ query: 123 })).toThrow();
-		expect(() => schema.parse({ query: "ok", limit: "five" })).toThrow();
-		expect(() => schema.parse({ query: "ok", rebuild: "yes" })).toThrow();
 	});
 });
 
@@ -389,5 +345,50 @@ describe("MCP protocol integration", () => {
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
 		// Should complete without error
 		expect(text).toContain("No results found.");
+	});
+
+	it("returns isError for empty query", async () => {
+		const result = await client.callTool({
+			name: "search",
+			arguments: { query: "", projectDir: "/tmp/test-project" },
+		});
+		expect(result.isError).toBe(true);
+		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+		expect(text).toContain("empty");
+	});
+
+	it("returns isError for whitespace-only query", async () => {
+		const result = await client.callTool({
+			name: "search",
+			arguments: { query: "   ", projectDir: "/tmp/test-project" },
+		});
+		expect(result.isError).toBe(true);
+	});
+
+	it("returns isError when SQLite is not available", async () => {
+		const { SearchEngine: MockedEngine } = await import("../src/search.js");
+		const spy = vi.spyOn(MockedEngine, "isAvailable").mockReturnValue(false);
+
+		const result = await client.callTool({
+			name: "search",
+			arguments: { query: "test", projectDir: "/tmp/test-project" },
+		});
+		expect(result.isError).toBe(true);
+		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+		expect(text).toContain("Node.js 22");
+
+		spy.mockRestore();
+	});
+
+	it("returns isError when search throws", async () => {
+		mockSearch.mockRejectedValueOnce(new Error("SQLite database is corrupted"));
+
+		const result = await client.callTool({
+			name: "search",
+			arguments: { query: "test", projectDir: "/tmp/test-project" },
+		});
+		expect(result.isError).toBe(true);
+		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+		expect(text).toContain("SQLite database is corrupted");
 	});
 });

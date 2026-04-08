@@ -228,13 +228,24 @@ export class SearchEngine {
 	 * The next `search()` call will lazily re-create the IndexManager and build
 	 * a fresh index from scratch.
 	 */
-	resetIndex(): void {
-		this.indexManager?.close();
-		this.indexManager = null;
-		const config = this.getIndexConfig();
-		const dbPath = path.join(config.indexDir, "search.db");
-		if (existsSync(dbPath)) {
-			unlinkSync(dbPath);
+	async resetIndex(): Promise<void> {
+		let resolve!: () => void;
+		const gate = new Promise<void>((r) => {
+			resolve = r;
+		});
+		const waitFor = this.searchQueue;
+		this.searchQueue = gate;
+		try {
+			await waitFor;
+			this.indexManager?.close();
+			this.indexManager = null;
+			const config = this.getIndexConfig();
+			const dbPath = path.join(config.indexDir, "search.db");
+			if (existsSync(dbPath)) {
+				unlinkSync(dbPath);
+			}
+		} finally {
+			resolve();
 		}
 	}
 

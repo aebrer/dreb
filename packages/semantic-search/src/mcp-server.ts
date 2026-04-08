@@ -9,12 +9,16 @@
  * is needed for typical per-project usage.
  */
 
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, type CallToolResult, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { formatResults } from "./format.js";
 import { SearchEngine } from "./search.js";
-import type { SearchResult } from "./types.js";
+
+const require = createRequire(import.meta.url);
+const { version: packageVersion } = require("../package.json") as { version: string };
 
 // ============================================================================
 // Tool Schema (JSON Schema for MCP)
@@ -56,52 +60,7 @@ function getSearchEngine(projectRoot: string): SearchEngine {
 	return engine;
 }
 
-// ============================================================================
-// Result Formatting
-// ============================================================================
-
-/** Format search results into a human-readable numbered list. */
-export function formatResults(results: SearchResult[]): string {
-	if (results.length === 0) return "No results found.";
-
-	const lines: string[] = [];
-	for (let i = 0; i < results.length; i++) {
-		const r = results[i];
-		const { chunk, scores } = r;
-
-		// Header line with file path and line range
-		const lineRange =
-			chunk.startLine === chunk.endLine ? `L${chunk.startLine}` : `L${chunk.startLine}-${chunk.endLine}`;
-		const kindLabel = chunk.name ? `${chunk.kind} ${chunk.name}` : chunk.kind;
-
-		lines.push(`${i + 1}. ${chunk.filePath}:${lineRange} (${kindLabel})`);
-
-		// Score summary — show top contributing metrics
-		const topScores = Object.entries(scores)
-			.filter(([, v]) => v > 0.01)
-			.sort(([, a], [, b]) => b - a)
-			.map(([k, v]) => `${k}=${v.toFixed(2)}`)
-			.join(" ");
-		if (topScores) {
-			lines.push(`   scores: ${topScores}`);
-		}
-
-		// Content preview (first 3 lines)
-		const contentLines = chunk.content.split("\n");
-		const previewLines = contentLines.slice(0, 3);
-		for (const line of previewLines) {
-			const trimmed = line.length > 120 ? `${line.slice(0, 117)}...` : line;
-			lines.push(`   ${trimmed}`);
-		}
-		if (contentLines.length > 3) {
-			lines.push(`   ... (${contentLines.length - 3} more lines)`);
-		}
-
-		if (i < results.length - 1) lines.push("");
-	}
-
-	return lines.join("\n");
-}
+export { formatResults };
 
 // ============================================================================
 // Server Factory
@@ -116,7 +75,7 @@ export function formatResults(results: SearchResult[]): string {
  */
 export function createMcpServer(defaultProjectDir: string): Server {
 	const server = new Server(
-		{ name: "semantic-search", version: "1.0.0" },
+		{ name: "semantic-search", version: packageVersion },
 		{ capabilities: { tools: {}, logging: {} } },
 	);
 
@@ -162,40 +121,47 @@ export function createMcpServer(defaultProjectDir: string): Server {
 			};
 		}
 
-		const engine = getSearchEngine(projectDir);
+		try {
+			const engine = getSearchEngine(projectDir);
 
-		if (rebuild) {
-			engine.resetIndex();
+			if (rebuild) {
+				await engine.resetIndex();
+			}
+
+			// Send progress via logging messages
+			const results = await engine.search(query, {
+				limit,
+				pathFilter: searchPath,
+				onProgress: (phase, current, total) => {
+					server
+						.sendLoggingMessage({
+							level: "info",
+							logger: "semantic-search",
+							data: `${phase}: ${current}/${total}`,
+						})
+						.catch(() => {
+							// Ignore errors sending progress — client may not support logging
+						});
+				},
+			});
+
+			const text = formatResults(results);
+			const stats = engine.getStats();
+
+			let statsLine = "";
+			if (stats) {
+				statsLine = `\n\n[Index: ${stats.files} files, ${stats.chunks} chunks]`;
+			}
+
+			return {
+				content: [{ type: "text", text: text + statsLine }],
+			};
+		} catch (err) {
+			return {
+				content: [{ type: "text", text: `Search failed: ${err instanceof Error ? err.message : String(err)}` }],
+				isError: true,
+			};
 		}
-
-		// Send progress via logging messages
-		const results = await engine.search(query, {
-			limit,
-			pathFilter: searchPath,
-			onProgress: (phase, current, total) => {
-				server
-					.sendLoggingMessage({
-						level: "info",
-						logger: "semantic-search",
-						data: `${phase}: ${current}/${total}`,
-					})
-					.catch(() => {
-						// Ignore errors sending progress — client may not support logging
-					});
-			},
-		});
-
-		const text = formatResults(results);
-		const stats = engine.getStats();
-
-		let statsLine = "";
-		if (stats) {
-			statsLine = `\n\n[Index: ${stats.files} files, ${stats.chunks} chunks]`;
-		}
-
-		return {
-			content: [{ type: "text", text: text + statsLine }],
-		};
 	});
 
 	return server;

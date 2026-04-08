@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -390,6 +390,90 @@ describe("SearchEngine.search()", () => {
 
 			// initialize() was called twice: once failed, once succeeded
 			expect(mockInitializeCallCount).toBe(2);
+		});
+	});
+});
+
+// ============================================================================
+// SearchEngineOptions
+// ============================================================================
+
+describe("SearchEngineOptions", () => {
+	// ================================================================
+	// indexDir — custom index location
+	// ================================================================
+
+	describe("indexDir", () => {
+		let projectDir: string;
+		let customIndexDir: string;
+		let engine: SearchEngine;
+
+		beforeAll(() => {
+			projectDir = mkdtempSync(path.join(tmpdir(), "dreb-search-indexdir-"));
+			customIndexDir = mkdtempSync(path.join(tmpdir(), "dreb-search-custom-index-"));
+			createFixtureProject(projectDir);
+			engine = new SearchEngine(projectDir, { indexDir: customIndexDir });
+		});
+
+		afterAll(() => {
+			engine.close();
+			rmSync(projectDir, { recursive: true, force: true });
+			rmSync(customIndexDir, { recursive: true, force: true });
+		});
+
+		it("creates the DB file at the custom indexDir location", async () => {
+			await engine.search("AuthMiddleware");
+
+			// DB should exist at custom location
+			expect(existsSync(path.join(customIndexDir, "search.db"))).toBe(true);
+
+			// DB should NOT exist at default location
+			expect(existsSync(path.join(projectDir, ".search-index", "search.db"))).toBe(false);
+		});
+	});
+
+	// ================================================================
+	// visibleDirs — include gitignored directories
+	// ================================================================
+
+	describe("visibleDirs", () => {
+		let projectDir: string;
+		let engine: SearchEngine;
+
+		beforeAll(() => {
+			projectDir = mkdtempSync(path.join(tmpdir(), "dreb-search-visibledirs-"));
+
+			// Create a regular file so the engine has something to index
+			createFixtureProject(projectDir);
+
+			// Create a .hidden/ directory with a markdown file
+			const hiddenDir = path.join(projectDir, ".hidden");
+			mkdirSync(hiddenDir, { recursive: true });
+			writeFileSync(
+				path.join(hiddenDir, "secret-notes.md"),
+				"# Secret Notes\n\nThis file contains unique-hidden-keyword-xyzzy for testing.\n",
+				"utf-8",
+			);
+
+			// Add .hidden to .gitignore so it would normally be excluded
+			writeFileSync(path.join(projectDir, ".gitignore"), ".hidden\n", "utf-8");
+
+			engine = new SearchEngine(projectDir, {
+				visibleDirs: (root) => [path.join(root, ".hidden")],
+			});
+		});
+
+		afterAll(() => {
+			engine.close();
+			rmSync(projectDir, { recursive: true, force: true });
+		});
+
+		it("includes files from visibleDirs even when gitignored", async () => {
+			const results = await engine.search("unique-hidden-keyword-xyzzy");
+
+			const filePaths = results.map((r) => r.chunk.filePath);
+			const hasHiddenFile = filePaths.some((fp) => fp.includes(".hidden/"));
+			expect(hasHiddenFile).toBe(true);
 		});
 	});
 });

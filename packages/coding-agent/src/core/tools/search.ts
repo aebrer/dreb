@@ -9,7 +9,7 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
-import { SearchEngine } from "@dreb/semantic-search";
+import { formatResults, SearchEngine } from "@dreb/semantic-search";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
@@ -182,7 +182,7 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 			const engine = getSearchEngine(resolvedProjectDir);
 
 			if (rebuild) {
-				engine.resetIndex();
+				await engine.resetIndex();
 			}
 
 			let indexBuilt = false;
@@ -214,48 +214,13 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 				};
 			}
 
-			// Format results
-			const lines: string[] = [];
-			for (let i = 0; i < results.length; i++) {
-				const r = results[i];
-				const { chunk, scores } = r;
-
-				// Header line with file path and line range
-				const lineRange =
-					chunk.startLine === chunk.endLine ? `L${chunk.startLine}` : `L${chunk.startLine}-${chunk.endLine}`;
-				const kindLabel = chunk.name ? `${chunk.kind} ${chunk.name}` : chunk.kind;
-
-				lines.push(`${i + 1}. ${chunk.filePath}:${lineRange} (${kindLabel})`);
-
-				// Score summary — show top contributing metrics
-				const topScores = Object.entries(scores)
-					.filter(([, v]) => v > 0.01)
-					.sort(([, a], [, b]) => b - a)
-					.map(([k, v]) => `${k}=${v.toFixed(2)}`)
-					.join(" ");
-				if (topScores) {
-					lines.push(`   scores: ${topScores}`);
-				}
-
-				// Content preview (first 3 lines)
-				const contentLines = chunk.content.split("\n");
-				const previewLines = contentLines.slice(0, 3);
-				for (const line of previewLines) {
-					const trimmed = line.length > 120 ? `${line.slice(0, 117)}...` : line;
-					lines.push(`   ${trimmed}`);
-				}
-				if (contentLines.length > 3) {
-					lines.push(`   ... (${contentLines.length - 3} more lines)`);
-				}
-
-				if (i < results.length - 1) lines.push("");
-			}
+			const text = formatResults(results);
 
 			// Get index stats from the existing engine (no new connection)
 			const stats = engine.getStats();
 
 			return {
-				content: [{ type: "text", text: lines.join("\n") }],
+				content: [{ type: "text", text }],
 				details: {
 					resultCount: results.length,
 					indexBuilt,
