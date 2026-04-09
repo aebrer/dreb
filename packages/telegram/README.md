@@ -39,15 +39,30 @@ chmod 600 ~/.dreb/secrets/telegram.env
 
 This file is gitignored. Explicit environment variables take priority over the file.
 
-### 5. Build and run
+### 5. Install and run
+
+```bash
+npm install -g @dreb/telegram
+```
+
+Set up your secrets (see step 4), then run:
+
+```bash
+dreb-telegram
+```
+
+The bot auto-loads secrets from `~/.dreb/secrets/telegram.env`.
+
+<details>
+<summary>Building from source</summary>
 
 ```bash
 # From the monorepo root
 npm run build
-
-# Run directly (auto-loads secrets from ~/.dreb/secrets/telegram.env)
 node packages/telegram/dist/index.js
 ```
+
+</details>
 
 ### 6. Systemd service (recommended)
 

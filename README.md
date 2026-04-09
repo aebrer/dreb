@@ -16,11 +16,7 @@ What you get in exchange: a skill system, an extension API, custom agent definit
 ## Quick Start
 
 ```bash
-git clone https://github.com/aebrer/dreb.git
-cd dreb
-npm install
-npm run build
-npm link -w packages/coding-agent
+npm install -g @dreb/coding-agent
 ```
 
 Then authenticate and run:
@@ -33,6 +29,16 @@ dreb
 Or use a coding subscription (Codex, GitHub Copilot): run `dreb` then `/login`.
 
 Or use a custom provider — corporate proxy, Bedrock, local models, anything OpenAI/Anthropic-compatible. See [Custom Models](packages/coding-agent/docs/models.md).
+
+### Building from source
+
+```bash
+git clone https://github.com/aebrer/dreb.git
+cd dreb
+npm install
+npm run build
+npm link -w packages/coding-agent
+```
 
 ## What's In It
 
@@ -63,6 +69,7 @@ See [FORK.md](FORK.md) for details.
 | Package | Description |
 |---|---|
 | [packages/coding-agent](packages/coding-agent/) | CLI tool, built-in tools, skills, sessions, extensions — [full docs](packages/coding-agent/README.md) |
+| [packages/telegram](packages/telegram/) | Telegram bot frontend — run dreb as a Telegram bot |
 | [packages/ai](packages/ai/) | LLM provider abstraction — 20+ adapters, OAuth, model discovery |
 | [packages/agent](packages/agent/) | Agent runtime — tool loop, state, streaming, hooks |
 | [packages/tui](packages/tui/) | Terminal UI — differential rendering, markdown, syntax highlighting |
