@@ -58,11 +58,12 @@ function createSession(options: {
 	return session as unknown as AgentSession;
 }
 
-function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
+function createFooterData(providerCount: number, dailyCost = 0): ReadonlyFooterDataProvider {
 	const provider = {
 		getGitBranch: () => "main",
 		getExtensionStatuses: () => new Map<string, string>(),
 		getAvailableProviderCount: () => providerCount,
+		getDailyCost: () => dailyCost,
 		onBranchChange: (callback: () => void) => {
 			void callback;
 			return () => {};
@@ -86,6 +87,50 @@ describe("FooterComponent width handling", () => {
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
+	});
+
+	it("keeps stats line within width when daily cost is shown", () => {
+		const width = 80;
+		const session = createSession({
+			sessionName: "",
+			usage: {
+				input: 12_345,
+				output: 6_789,
+				cacheRead: 45_000,
+				cacheWrite: 8_000,
+				cost: { total: 0.042 },
+			},
+		});
+		// Daily cost > session cost triggers "· today $X.XX" display
+		const footer = new FooterComponent(session, createFooterData(1, 15.37));
+
+		const lines = footer.render(width);
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+		// The stats line should contain the daily cost
+		const rawStats = lines[1];
+		expect(rawStats).toContain("today");
+	});
+
+	it("hides daily cost when it equals session cost", () => {
+		const width = 80;
+		const session = createSession({
+			sessionName: "",
+			usage: {
+				input: 1000,
+				output: 500,
+				cacheRead: 0,
+				cacheWrite: 0,
+				cost: { total: 0.5 },
+			},
+		});
+		// Daily cost == session cost — should not show "today"
+		const footer = new FooterComponent(session, createFooterData(1, 0.5));
+
+		const lines = footer.render(width);
+		const rawStats = lines[1];
+		expect(rawStats).not.toContain("today");
 	});
 
 	it("keeps stats line within width for wide model and provider names", () => {

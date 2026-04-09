@@ -4,6 +4,7 @@
  * footerData exposes data not otherwise accessible:
  * - getGitBranch(): current git branch
  * - getExtensionStatuses(): texts from ctx.ui.setStatus()
+ * - getDailyCost(): aggregate cost across all sessions today
  *
  * Token stats come from ctx.sessionManager/ctx.model (already accessible).
  */

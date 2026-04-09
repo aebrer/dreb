@@ -775,6 +775,7 @@ ctx.ui.setFooter((tui, theme, footerData) => ({
   render(width: number): string[] {
     // footerData.getGitBranch(): string | null
     // footerData.getExtensionStatuses(): ReadonlyMap<string, string>
+    // footerData.getDailyCost(): number — aggregate cost across all sessions today
     return [`${ctx.model?.id} (${footerData.getGitBranch() || "no git"})`];
   },
   dispose: footerData.onBranchChange(() => tui.requestRender()), // reactive

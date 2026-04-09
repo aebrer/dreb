@@ -104,18 +104,23 @@ export class FooterComponent implements Component {
 			pwd = `${pwd} • ${sessionName}`;
 		}
 
-		// Build stats line
-		const statsParts = [];
-		if (totalInput) statsParts.push(`↑${formatTokens(totalInput)}`);
-		if (totalOutput) statsParts.push(`↓${formatTokens(totalOutput)}`);
-		if (totalCacheRead) statsParts.push(`R${formatTokens(totalCacheRead)}`);
-		if (totalCacheWrite) statsParts.push(`W${formatTokens(totalCacheWrite)}`);
+		// Build stats line as sections separated by ·
+		const tokenParts = [];
+		if (totalInput) tokenParts.push(`↑${formatTokens(totalInput)}`);
+		if (totalOutput) tokenParts.push(`↓${formatTokens(totalOutput)}`);
+		if (totalCacheRead) tokenParts.push(`R${formatTokens(totalCacheRead)}`);
+		if (totalCacheWrite) tokenParts.push(`W${formatTokens(totalCacheWrite)}`);
 
 		// Show cost with "(sub)" indicator if using OAuth subscription
+		let costStr = "";
 		const usingSubscription = state.model ? this.session.modelRegistry.isUsingOAuth(state.model) : false;
 		if (totalCost || usingSubscription) {
-			const costStr = `$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
-			statsParts.push(costStr);
+			costStr = `$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
+			// Append daily total when there's cross-session spend
+			const dailyCost = this.footerData.getDailyCost();
+			if (dailyCost > totalCost) {
+				costStr += `, today: $${dailyCost.toFixed(2)}`;
+			}
 		}
 
 		// Colorize context percentage based on usage
@@ -132,9 +137,14 @@ export class FooterComponent implements Component {
 		} else {
 			contextPercentStr = contextPercentDisplay;
 		}
-		statsParts.push(contextPercentStr);
 
-		let statsLeft = statsParts.join(" ");
+		// Join sections with · separator
+		const sections: string[] = [];
+		if (tokenParts.length > 0) sections.push(tokenParts.join(" "));
+		if (costStr) sections.push(costStr);
+		sections.push(contextPercentStr);
+
+		let statsLeft = sections.join(" · ");
 
 		// Add model name on the right side, plus thinking level if model supports it
 		const modelName = state.model?.id || "no-model";
