@@ -1,7 +1,7 @@
 {
   "name": "semantic-search",
   "description": "Semantic codebase search — natural language queries over code and docs using embeddings, tree-sitter parsing, and POEM multi-signal ranking",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "author": {
     "name": "Drew Brereton"
   },
