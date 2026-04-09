@@ -49,6 +49,18 @@ function makeSessionJsonl(costs: number[]): string {
 	return `${lines.join("\n")}\n`;
 }
 
+/**
+ * Create a tracker and wait for the initial async scan to complete.
+ * After this, getDailyCost() reflects the scanned value.
+ */
+async function createTracker(sessionsDir: string): Promise<DailyCostTracker> {
+	const tracker = new DailyCostTracker(sessionsDir);
+	// The constructor kicks off an async scan. refresh() queues another full scan
+	// and awaits it, guaranteeing the cache is populated when it resolves.
+	await tracker.refresh();
+	return tracker;
+}
+
 // ---------------------------------------------------------------------------
 // filenameTimestampToDate
 // ---------------------------------------------------------------------------
@@ -163,7 +175,7 @@ describe("DailyCostTracker", () => {
 
 	// Happy path ---------------------------------------------------------------
 
-	it("aggregates costs from today's sessions across multiple projects", () => {
+	it("aggregates costs from today's sessions across multiple projects", async () => {
 		const projectA = createProjectDir("--home-user-projectA--");
 		const projectB = createProjectDir("--home-user-projectB--");
 
@@ -178,29 +190,41 @@ describe("DailyCostTracker", () => {
 		// Yesterday's session — should NOT be included
 		writeFileSync(join(projectA, makeSessionFilename(yesterday)), makeSessionJsonl([10.0]));
 
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(1.75, 5);
+	});
+
+	// Constructor returns 0 before initial scan completes ----------------------
+
+	it("getDailyCost() returns 0 immediately after construction (before scan)", () => {
+		const projectDir = createProjectDir("--project--");
+		const now = new Date();
+		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
+
+		// Construct without awaiting — cache should be 0
+		tracker = new DailyCostTracker(tmpDir);
+		expect(tracker.getDailyCost()).toBe(0);
 	});
 
 	// Empty sessions dir -------------------------------------------------------
 
-	it("returns 0 for an empty sessions directory", () => {
+	it("returns 0 for an empty sessions directory", async () => {
 		// tmpDir exists but has no subdirectories
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBe(0);
 	});
 
 	// Non-existent sessions dir ------------------------------------------------
 
-	it("returns 0 for a non-existent sessions directory", () => {
+	it("returns 0 for a non-existent sessions directory", async () => {
 		const nonExistent = join(tmpDir, "does-not-exist");
-		tracker = new DailyCostTracker(nonExistent);
+		tracker = await createTracker(nonExistent);
 		expect(tracker.getDailyCost()).toBe(0);
 	});
 
 	// Corrupt JSONL lines ------------------------------------------------------
 
-	it("skips corrupt JSONL lines gracefully", () => {
+	it("skips corrupt JSONL lines gracefully", async () => {
 		const projectDir = createProjectDir("--project--");
 		const now = new Date();
 
@@ -223,60 +247,60 @@ describe("DailyCostTracker", () => {
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), content);
 
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(0.42, 5);
 	});
 
 	// Refresh updates cached value --------------------------------------------
 
-	it("refresh() picks up newly added session files", () => {
+	it("refresh() picks up newly added session files", async () => {
 		const projectDir = createProjectDir("--project--");
 		const now = new Date();
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
 
 		// Add another file
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([0.5]));
-		tracker.refresh();
+		await tracker.refresh();
 		expect(tracker.getDailyCost()).toBeCloseTo(1.5, 5);
 	});
 
 	// Dispose ------------------------------------------------------------------
 
-	it("dispose prevents refresh from updating", () => {
+	it("dispose prevents refresh from updating", async () => {
 		const projectDir = createProjectDir("--project--");
 		const now = new Date();
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([1.0]));
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
 
 		tracker.dispose();
 
 		// Add another file and try to refresh — should be a no-op
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([2.0]));
-		tracker.refresh();
+		await tracker.refresh();
 		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
 	});
 
 	// Sessions with zero cost --------------------------------------------------
 
-	it("handles sessions with zero cost correctly", () => {
+	it("handles sessions with zero cost correctly", async () => {
 		const projectDir = createProjectDir("--project--");
 		const now = new Date();
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([0, 0, 0]));
 		writeFileSync(join(projectDir, makeSessionFilename(now)), makeSessionJsonl([0.75]));
 
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(0.75, 5);
 	});
 
 	// Messages without cost field --------------------------------------------
 
-	it("handles messages without usage.cost.total", () => {
+	it("handles messages without usage.cost.total", async () => {
 		const projectDir = createProjectDir("--project--");
 		const now = new Date();
 
@@ -309,13 +333,13 @@ describe("DailyCostTracker", () => {
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), content);
 
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBe(0);
 	});
 
 	// User messages are not counted -------------------------------------------
 
-	it("ignores user messages (only counts assistant)", () => {
+	it("ignores user messages (only counts assistant)", async () => {
 		const projectDir = createProjectDir("--project--");
 		const now = new Date();
 
@@ -347,13 +371,13 @@ describe("DailyCostTracker", () => {
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), content);
 
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(0.1, 5);
 	});
 
 	// Non-message entries are skipped -----------------------------------------
 
-	it("skips non-message session entries (compaction, model_change, etc.)", () => {
+	it("skips non-message session entries (compaction, model_change, etc.)", async () => {
 		const projectDir = createProjectDir("--project--");
 		const now = new Date();
 
@@ -389,13 +413,13 @@ describe("DailyCostTracker", () => {
 
 		writeFileSync(join(projectDir, makeSessionFilename(now)), content);
 
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(0.33, 5);
 	});
 
 	// Filenames without expected format are skipped ---------------------------
 
-	it("ignores files with non-standard names", () => {
+	it("ignores files with non-standard names", async () => {
 		const projectDir = createProjectDir("--project--");
 		const now = new Date();
 
@@ -405,7 +429,7 @@ describe("DailyCostTracker", () => {
 		writeFileSync(join(projectDir, "notes.jsonl"), makeSessionJsonl([50.0]));
 		writeFileSync(join(projectDir, "random-name.jsonl"), makeSessionJsonl([50.0]));
 
-		tracker = new DailyCostTracker(tmpDir);
+		tracker = await createTracker(tmpDir);
 		expect(tracker.getDailyCost()).toBeCloseTo(1.0, 5);
 	});
 });

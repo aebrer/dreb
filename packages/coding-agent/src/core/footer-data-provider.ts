@@ -145,8 +145,8 @@ export class FooterDataProvider {
 	}
 
 	/** Force refresh of the daily cost cache. */
-	refreshDailyCost(): void {
-		this.dailyCostTracker.refresh();
+	async refreshDailyCost(): Promise<void> {
+		await this.dailyCostTracker.refresh();
 	}
 
 	/** Number of unique providers with available models (for footer display) */

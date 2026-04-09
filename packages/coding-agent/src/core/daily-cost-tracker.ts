@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "fs";
+import { existsSync } from "fs";
+import { readdir, readFile } from "fs/promises";
 import { join } from "path";
 import { getSessionsDir } from "../config.js";
 
@@ -37,18 +38,57 @@ export class DailyCostTracker {
 	private static readonly REFRESH_INTERVAL_MS = 60_000;
 
 	private cachedCost = 0;
-	private refreshTimer: ReturnType<typeof setInterval> | null = null;
+	private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 	private disposed = false;
 	private sessionsDir: string;
 
 	constructor(sessionsDir?: string) {
 		this.sessionsDir = sessionsDir ?? getSessionsDir();
-		// Initial scan synchronously
-		this.cachedCost = this.scanDailyCost();
-		// Set up periodic refresh
-		this.refreshTimer = setInterval(() => {
+		// Kick off initial async scan — getDailyCost() returns 0 until it completes
+		void this.initialScan();
+	}
+
+	/** Get cached daily cost total. O(1). */
+	getDailyCost(): number {
+		return this.cachedCost;
+	}
+
+	/** Force an async refresh of the daily cost. */
+	async refresh(): Promise<void> {
+		if (!this.disposed) {
+			const cost = await this.scanDailyCost();
 			if (!this.disposed) {
-				this.cachedCost = this.scanDailyCost();
+				this.cachedCost = cost;
+			}
+		}
+	}
+
+	/** Clean up timer and prevent in-flight scans from updating cache. */
+	dispose(): void {
+		this.disposed = true;
+		if (this.refreshTimer) {
+			clearTimeout(this.refreshTimer);
+			this.refreshTimer = null;
+		}
+	}
+
+	private async initialScan(): Promise<void> {
+		const cost = await this.scanDailyCost();
+		if (!this.disposed) {
+			this.cachedCost = cost;
+			this.scheduleNextRefresh();
+		}
+	}
+
+	private scheduleNextRefresh(): void {
+		if (this.disposed) return;
+		this.refreshTimer = setTimeout(async () => {
+			this.refreshTimer = null;
+			if (this.disposed) return;
+			const cost = await this.scanDailyCost();
+			if (!this.disposed) {
+				this.cachedCost = cost;
+				this.scheduleNextRefresh();
 			}
 		}, DailyCostTracker.REFRESH_INTERVAL_MS);
 		// Allow the timer to not keep the process alive
@@ -57,36 +97,13 @@ export class DailyCostTracker {
 		}
 	}
 
-	/** Get cached daily cost total. O(1). */
-	getDailyCost(): number {
-		return this.cachedCost;
-	}
-
-	/** Force a synchronous refresh of the daily cost. */
-	refresh(): void {
-		if (!this.disposed) {
-			this.cachedCost = this.scanDailyCost();
-		}
-	}
-
-	/** Clean up timer. */
-	dispose(): void {
-		this.disposed = true;
-		if (this.refreshTimer) {
-			clearInterval(this.refreshTimer);
-			this.refreshTimer = null;
-		}
-	}
-
-	private scanDailyCost(): number {
+	private async scanDailyCost(): Promise<number> {
 		try {
 			if (!existsSync(this.sessionsDir)) return 0;
 
 			const now = new Date();
-			const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-
 			let total = 0;
-			const projectDirs = readdirSync(this.sessionsDir, { withFileTypes: true });
+			const projectDirs = await readdir(this.sessionsDir, { withFileTypes: true });
 
 			for (const dirEntry of projectDirs) {
 				if (!dirEntry.isDirectory()) continue;
@@ -94,7 +111,7 @@ export class DailyCostTracker {
 				const projectDir = join(this.sessionsDir, dirEntry.name);
 				let files: string[];
 				try {
-					files = readdirSync(projectDir).filter((f) => f.endsWith(".jsonl"));
+					files = (await readdir(projectDir)).filter((f) => f.endsWith(".jsonl"));
 				} catch {
 					continue;
 				}
@@ -109,16 +126,11 @@ export class DailyCostTracker {
 					const fileDate = filenameTimestampToDate(timestampPart);
 					if (!fileDate) continue;
 
-					// Check if the session's UTC timestamp falls on today's local date
-					if (!isSameLocalDay(fileDate, now)) {
-						// Quick check: if the filename date prefix doesn't even match
-						// today or yesterday (UTC), skip entirely for performance
-						const fileDateLocal = `${fileDate.getFullYear()}-${String(fileDate.getMonth() + 1).padStart(2, "0")}-${String(fileDate.getDate()).padStart(2, "0")}`;
-						if (fileDateLocal !== todayLocal) continue;
-					}
+					// Skip sessions not from today (compares local calendar day)
+					if (!isSameLocalDay(fileDate, now)) continue;
 
 					// Read and parse the JSONL file
-					total += this.sumCostFromFile(join(projectDir, filename));
+					total += await this.sumCostFromFile(join(projectDir, filename));
 				}
 			}
 
@@ -129,9 +141,9 @@ export class DailyCostTracker {
 		}
 	}
 
-	private sumCostFromFile(filePath: string): number {
+	private async sumCostFromFile(filePath: string): Promise<number> {
 		try {
-			const content = readFileSync(filePath, "utf8");
+			const content = await readFile(filePath, "utf8");
 			let total = 0;
 
 			for (const line of content.split("\n")) {

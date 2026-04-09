@@ -2468,7 +2468,7 @@ export class InteractiveMode {
 				// Buddy reaction: session wrap-up quip
 				this.buddyController.handleEvent(event);
 
-				this.footerDataProvider.refreshDailyCost();
+				await this.footerDataProvider.refreshDailyCost();
 				this.ui.requestRender();
 				break;
 
@@ -3903,7 +3903,7 @@ export class InteractiveMode {
 
 		// Switch session via AgentSession (emits extension session events)
 		await this.session.switchSession(sessionPath);
-		this.footerDataProvider.refreshDailyCost();
+		await this.footerDataProvider.refreshDailyCost();
 
 		// Clear and re-render the chat
 		this.chatContainer.clear();
@@ -4438,7 +4438,7 @@ export class InteractiveMode {
 
 		// New session via session (emits extension session events)
 		await this.session.newSession();
-		this.footerDataProvider.refreshDailyCost();
+		await this.footerDataProvider.refreshDailyCost();
 
 		// Clear UI state
 		this.headerContainer.clear();
