@@ -2,6 +2,12 @@
 
 Minimal terminal UI framework with differential rendering and synchronized output for flicker-free interactive CLI applications.
 
+## Installation
+
+```bash
+npm install @dreb/tui
+```
+
 ## Features
 
 - **Differential Rendering**: Three-strategy rendering system that only updates what changed
