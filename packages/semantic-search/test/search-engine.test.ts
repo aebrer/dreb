@@ -1,22 +1,24 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { SearchEngine } from "../../src/core/search/search.js";
-import type { MetricScores } from "../../src/core/search/types.js";
+import { SearchEngine } from "../src/search.js";
+import type { MetricScores } from "../src/types.js";
 
 // Mock the embedder to avoid downloading the ONNX model (~23MB).
 // Returns zero-vectors so cosine scores are 0, but all other 5 metrics still work.
 // Tracks initialize() calls so concurrency tests can verify single-initialization.
 let mockInitializeCallCount = 0;
 let mockInitializeFailNext = false;
+let mockDisposeCallCount = 0;
 
 function resetMockEmbedder(): void {
 	mockInitializeCallCount = 0;
 	mockInitializeFailNext = false;
+	mockDisposeCallCount = 0;
 }
 
-vi.mock("../../src/core/search/embedder.js", () => ({
+vi.mock("../src/embedder.js", () => ({
 	Embedder: class MockEmbedder {
 		async initialize() {
 			mockInitializeCallCount++;
@@ -31,7 +33,9 @@ vi.mock("../../src/core/search/embedder.js", () => ({
 		async embedDocuments(texts: string[]) {
 			return texts.map(() => new Float32Array(384));
 		}
-		dispose() {}
+		dispose() {
+			mockDisposeCallCount++;
+		}
 	},
 }));
 
@@ -116,8 +120,8 @@ describe("SearchEngine.search()", () => {
 		engine = new SearchEngine(tmpDir);
 	});
 
-	afterAll(() => {
-		engine.close();
+	afterAll(async () => {
+		await engine.close();
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
@@ -204,6 +208,18 @@ describe("SearchEngine.search()", () => {
 				expect(bm25 + pathMatch + symbolMatch).toBeLessThanOrEqual(0.1);
 			}
 		}
+	});
+
+	// ================================================================
+	// 6b. All-stopwords query does not crash
+	// ================================================================
+
+	it("handles a query of entirely stopwords without crashing", async () => {
+		// "where is the" → all stopwords → sanitizeFtsQuery returns '""'
+		// BM25 returns nothing, but other metrics (cosine, path, etc.) still work
+		const results = await engine.search("where is the");
+		// Should not throw — results may be empty or from non-BM25 metrics
+		expect(Array.isArray(results)).toBe(true);
 	});
 
 	// ================================================================
@@ -298,10 +314,26 @@ describe("SearchEngine.search()", () => {
 	// 11. close() is safe to call and engine is unusable after
 	// ================================================================
 
-	it("close() disposes resources without throwing", () => {
+	it("close() disposes resources without throwing", async () => {
 		// Create a separate engine to avoid breaking subsequent tests
 		const separateEngine = new SearchEngine(tmpDir);
-		expect(() => separateEngine.close()).not.toThrow();
+		await expect(separateEngine.close()).resolves.not.toThrow();
+	});
+
+	it("close() after search() calls embedder.dispose()", async () => {
+		const disposeDir = mkdtempSync(path.join(tmpdir(), "dreb-search-dispose-"));
+		createFixtureProject(disposeDir);
+		const disposeBefore = mockDisposeCallCount;
+		const disposeEngine = new SearchEngine(disposeDir);
+
+		// Search initializes the embedder
+		await disposeEngine.search("AuthMiddleware");
+
+		// Close should dispose the embedder
+		await disposeEngine.close();
+		expect(mockDisposeCallCount).toBe(disposeBefore + 1);
+
+		rmSync(disposeDir, { recursive: true, force: true });
 	});
 
 	// ================================================================
@@ -319,8 +351,8 @@ describe("SearchEngine.search()", () => {
 			concurrentEngine = new SearchEngine(concurrentDir);
 		});
 
-		afterAll(() => {
-			concurrentEngine.close();
+		afterAll(async () => {
+			await concurrentEngine.close();
 			rmSync(concurrentDir, { recursive: true, force: true });
 		});
 
@@ -359,7 +391,58 @@ describe("SearchEngine.search()", () => {
 	});
 
 	// ================================================================
-	// 13. Failure retry — embedder initialization
+	// 13. resetIndex()
+	// ================================================================
+
+	describe("resetIndex()", () => {
+		let resetDir: string;
+		let resetEngine: SearchEngine;
+
+		beforeAll(() => {
+			resetDir = mkdtempSync(path.join(tmpdir(), "dreb-search-reset-"));
+			createFixtureProject(resetDir);
+			resetMockEmbedder();
+			resetEngine = new SearchEngine(resetDir);
+		});
+
+		afterAll(async () => {
+			await resetEngine.close();
+			rmSync(resetDir, { recursive: true, force: true });
+		});
+
+		it("after resetIndex(), search.db no longer exists", async () => {
+			const dbPath = path.join(resetDir, ".search-index", "search.db");
+
+			// Build the index
+			await resetEngine.search("AuthMiddleware");
+			expect(existsSync(dbPath)).toBe(true);
+
+			// Reset it
+			await resetEngine.resetIndex();
+			expect(existsSync(dbPath)).toBe(false);
+		});
+
+		it("a search() after resetIndex() succeeds and rebuilds the index", async () => {
+			// Index was reset in the previous test — search should rebuild it
+			const results = await resetEngine.search("Logger");
+			expect(results.length).toBeGreaterThan(0);
+		});
+
+		it("resetIndex() during concurrent searches doesn't corrupt state", async () => {
+			const promises = [
+				resetEngine.search("AuthMiddleware"),
+				resetEngine.search("Logger"),
+				resetEngine.resetIndex(),
+				resetEngine.search("formatDate"),
+			];
+
+			// Everything should complete without throwing
+			await expect(Promise.all(promises)).resolves.toBeDefined();
+		});
+	});
+
+	// ================================================================
+	// 14. Failure retry — embedder initialization
 	// ================================================================
 
 	describe("embedder initialization failure retry", () => {
@@ -371,8 +454,8 @@ describe("SearchEngine.search()", () => {
 			createFixtureProject(retryDir);
 		});
 
-		afterAll(() => {
-			retryEngine?.close();
+		afterAll(async () => {
+			await retryEngine?.close();
 			rmSync(retryDir, { recursive: true, force: true });
 		});
 
@@ -390,6 +473,90 @@ describe("SearchEngine.search()", () => {
 
 			// initialize() was called twice: once failed, once succeeded
 			expect(mockInitializeCallCount).toBe(2);
+		});
+	});
+});
+
+// ============================================================================
+// SearchEngineOptions
+// ============================================================================
+
+describe("SearchEngineOptions", () => {
+	// ================================================================
+	// indexDir — custom index location
+	// ================================================================
+
+	describe("indexDir", () => {
+		let projectDir: string;
+		let customIndexDir: string;
+		let engine: SearchEngine;
+
+		beforeAll(() => {
+			projectDir = mkdtempSync(path.join(tmpdir(), "dreb-search-indexdir-"));
+			customIndexDir = mkdtempSync(path.join(tmpdir(), "dreb-search-custom-index-"));
+			createFixtureProject(projectDir);
+			engine = new SearchEngine(projectDir, { indexDir: customIndexDir });
+		});
+
+		afterAll(async () => {
+			await engine.close();
+			rmSync(projectDir, { recursive: true, force: true });
+			rmSync(customIndexDir, { recursive: true, force: true });
+		});
+
+		it("creates the DB file at the custom indexDir location", async () => {
+			await engine.search("AuthMiddleware");
+
+			// DB should exist at custom location
+			expect(existsSync(path.join(customIndexDir, "search.db"))).toBe(true);
+
+			// DB should NOT exist at default location
+			expect(existsSync(path.join(projectDir, ".search-index", "search.db"))).toBe(false);
+		});
+	});
+
+	// ================================================================
+	// visibleDirs — include gitignored directories
+	// ================================================================
+
+	describe("visibleDirs", () => {
+		let projectDir: string;
+		let engine: SearchEngine;
+
+		beforeAll(() => {
+			projectDir = mkdtempSync(path.join(tmpdir(), "dreb-search-visibledirs-"));
+
+			// Create a regular file so the engine has something to index
+			createFixtureProject(projectDir);
+
+			// Create a .hidden/ directory with a markdown file
+			const hiddenDir = path.join(projectDir, ".hidden");
+			mkdirSync(hiddenDir, { recursive: true });
+			writeFileSync(
+				path.join(hiddenDir, "secret-notes.md"),
+				"# Secret Notes\n\nThis file contains unique-hidden-keyword-xyzzy for testing.\n",
+				"utf-8",
+			);
+
+			// Add .hidden to .gitignore so it would normally be excluded
+			writeFileSync(path.join(projectDir, ".gitignore"), ".hidden\n", "utf-8");
+
+			engine = new SearchEngine(projectDir, {
+				visibleDirs: (root) => [path.join(root, ".hidden")],
+			});
+		});
+
+		afterAll(async () => {
+			await engine.close();
+			rmSync(projectDir, { recursive: true, force: true });
+		});
+
+		it("includes files from visibleDirs even when gitignored", async () => {
+			const results = await engine.search("unique-hidden-keyword-xyzzy");
+
+			const filePaths = results.map((r) => r.chunk.filePath);
+			const hasHiddenFile = filePaths.some((fp) => fp.includes(".hidden/"));
+			expect(hasHiddenFile).toBe(true);
 		});
 	});
 });

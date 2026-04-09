@@ -52,6 +52,16 @@ jobs:
             npm publish
           fi
 
+      - name: Publish @dreb/semantic-search
+        working-directory: packages/semantic-search
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view @dreb/semantic-search@$VERSION version >/dev/null 2>&1; then
+            echo "::warning::@dreb/semantic-search@$VERSION already published, skipping"
+          else
+            npm publish
+          fi
+
       - name: Publish @dreb/coding-agent
         working-directory: packages/coding-agent
         run: |

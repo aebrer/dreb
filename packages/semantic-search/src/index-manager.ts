@@ -89,7 +89,7 @@ export class IndexManager {
 
 		// Phase 1: Scan
 		onProgress?.("scanning", 0, 1);
-		const scannedFiles = await scanProject(config.projectRoot, config.globalMemoryDir);
+		const scannedFiles = await scanProject(config.projectRoot, config.globalMemoryDir, config.visibleDirs);
 		onProgress?.("scanning", 1, 1);
 
 		// Phase 2: Diff against existing index

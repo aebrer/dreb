@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { poemRank } from "../../src/core/search/poem.js";
-import { classifyQuery } from "../../src/core/search/query-classifier.js";
-import type { MetricScores } from "../../src/core/search/types.js";
+import { poemRank } from "../src/poem.js";
+import { classifyQuery } from "../src/query-classifier.js";
+import type { MetricScores } from "../src/types.js";
 
 // ============================================================================
 // Helpers

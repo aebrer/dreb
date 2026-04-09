@@ -1,49 +1,49 @@
 {
-  "name": "dreb",
-  "private": true,
-  "type": "module",
-  "workspaces": [
-    "packages/*",
-    "packages/coding-agent/examples/extensions/with-deps",
-    "packages/coding-agent/examples/extensions/custom-provider-anthropic",
-    "packages/coding-agent/examples/extensions/custom-provider-gitlab-duo",
-    "packages/coding-agent/examples/extensions/custom-provider-qwen-cli"
-  ],
-  "scripts": {
-    "clean": "npm run clean --workspaces",
-    "sync-version": "bash scripts/sync-version.sh",
-    "build": "bash scripts/sync-version.sh && cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build && cd ../telegram && npm run build",
-    "dev": "concurrently --names \"ai,agent,coding-agent,tui\" --prefix-colors \"cyan,yellow,red,magenta\" \"cd packages/ai && npm run dev\" \"cd packages/agent && npm run dev\" \"cd packages/coding-agent && npm run dev\" \"cd packages/tui && npm run dev\"",
-    "check": "biome check --write --error-on-warnings . && tsgo --noEmit",
-    "test": "npm run test --workspaces --if-present",
-    "prepare": "husky"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "2.3.5",
-    "@types/node": "^22.10.5",
-    "@typescript/native-preview": "7.0.0-dev.20260120.1",
-    "concurrently": "^9.2.1",
-    "husky": "^9.1.7",
-    "tsx": "^4.20.3",
-    "typescript": "^5.9.2",
-    "shx": "^0.4.0"
-  },
-  "author": "Drew Brereton",
-  "homepage": "https://entropist.ca",
-  "engines": {
-    "node": ">=20.0.0"
-  },
-  "version": "1.18.0",
-  "dependencies": {
-    "@mariozechner/jiti": "^2.6.5",
-    "@dreb/coding-agent": "^1.0.0",
-    "get-east-asian-width": "^1.4.0"
-  },
-  "overrides": {
-    "rimraf": "6.1.2",
-    "fast-xml-parser": "5.5.9",
-    "gaxios": {
-      "rimraf": "6.1.2"
-    }
-  }
+	"name": "dreb",
+	"private": true,
+	"type": "module",
+	"workspaces": [
+		"packages/*",
+		"packages/coding-agent/examples/extensions/with-deps",
+		"packages/coding-agent/examples/extensions/custom-provider-anthropic",
+		"packages/coding-agent/examples/extensions/custom-provider-gitlab-duo",
+		"packages/coding-agent/examples/extensions/custom-provider-qwen-cli"
+	],
+	"scripts": {
+		"clean": "npm run clean --workspaces",
+		"sync-version": "bash scripts/sync-version.sh",
+		"build": "bash scripts/sync-version.sh && cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../semantic-search && npm run build && cd ../coding-agent && npm run build && cd ../telegram && npm run build",
+		"dev": "concurrently --names \"ai,agent,coding-agent,tui\" --prefix-colors \"cyan,yellow,red,magenta\" \"cd packages/ai && npm run dev\" \"cd packages/agent && npm run dev\" \"cd packages/coding-agent && npm run dev\" \"cd packages/tui && npm run dev\"",
+		"check": "biome check --write --error-on-warnings . && tsgo --noEmit",
+		"test": "npm run test --workspaces --if-present",
+		"prepare": "husky"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.5",
+		"@types/node": "^22.10.5",
+		"@typescript/native-preview": "7.0.0-dev.20260120.1",
+		"concurrently": "^9.2.1",
+		"husky": "^9.1.7",
+		"tsx": "^4.20.3",
+		"typescript": "^5.9.2",
+		"shx": "^0.4.0"
+	},
+	"author": "Drew Brereton",
+	"homepage": "https://entropist.ca",
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"version": "2.0.0",
+	"dependencies": {
+		"@mariozechner/jiti": "^2.6.5",
+		"@dreb/coding-agent": "^1.0.0",
+		"get-east-asian-width": "^1.4.0"
+	},
+	"overrides": {
+		"rimraf": "6.1.2",
+		"fast-xml-parser": "5.5.9",
+		"gaxios": {
+			"rimraf": "6.1.2"
+		}
+	}
 }

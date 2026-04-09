@@ -1,0 +1,71 @@
+{
+	"name": "@dreb/semantic-search",
+	"version": "2.0.0",
+	"description": "Semantic codebase search engine with embedding-based ranking and MCP server",
+	"publishConfig": {
+		"access": "public"
+	},
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"bin": {
+		"semantic-search-mcp": "./bin/server.js"
+	},
+	"files": [
+		"dist",
+		"bin",
+		".claude-plugin",
+		".mcp.json",
+		"skills",
+		"README.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json",
+		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@huggingface/transformers": "^4.0.1",
+		"@modelcontextprotocol/sdk": "^1.29.0",
+		"ignore": "^7.0.5",
+		"tree-sitter-c": "^0.24.1",
+		"tree-sitter-cpp": "^0.23.4",
+		"tree-sitter-go": "^0.25.0",
+		"tree-sitter-java": "^0.23.5",
+		"tree-sitter-javascript": "^0.25.0",
+		"tree-sitter-python": "^0.25.0",
+		"tree-sitter-rust": "^0.24.0",
+		"tree-sitter-typescript": "^0.23.2",
+		"web-tree-sitter": "^0.26.8"
+	},
+	"devDependencies": {
+		"@types/node": "^24.3.0",
+		"shx": "^0.4.0",
+		"typescript": "^5.9.2",
+		"vitest": "^3.2.4"
+	},
+	"keywords": [
+		"semantic-search",
+		"codebase",
+		"embeddings",
+		"mcp"
+	],
+	"author": "Drew Brereton",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/aebrer/dreb.git",
+		"directory": "packages/semantic-search"
+	},
+	"engines": {
+		"node": ">=22.0.0"
+	}
+}

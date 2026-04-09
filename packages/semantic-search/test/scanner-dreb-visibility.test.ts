@@ -2,10 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { scanProject } from "../../src/core/search/scanner.js";
+import { scanProject } from "../src/scanner.js";
 
 describe("scanner .dreb/ visibility", () => {
 	let fixtureDir: string;
+
+	/** Directories to pass as visibleDirs — mirrors what getDrebToolVisibleDirs returns. */
+	let visibleDirs: string[];
 
 	beforeAll(() => {
 		fixtureDir = mkdtempSync(path.join(tmpdir(), "scanner-dreb-"));
@@ -48,6 +51,13 @@ describe("scanner .dreb/ visibility", () => {
 
 		mkdirSync(path.join(fixtureDir, ".dreb", "secrets"), { recursive: true });
 		writeFileSync(path.join(fixtureDir, ".dreb", "secrets", "keys.json"), '{"key":"secret"}', "utf-8");
+
+		// Only the visible subdirectories — same as what getDrebToolVisibleDirs would return
+		visibleDirs = [
+			path.join(fixtureDir, ".dreb", "memory"),
+			path.join(fixtureDir, ".dreb", "agents"),
+			path.join(fixtureDir, ".dreb", "extensions"),
+		];
 	});
 
 	afterAll(() => {
@@ -55,49 +65,49 @@ describe("scanner .dreb/ visibility", () => {
 	});
 
 	it("includes regular project files", async () => {
-		const files = await scanProject(fixtureDir);
+		const files = await scanProject(fixtureDir, undefined, visibleDirs);
 		const paths = files.map((f) => f.filePath);
 
 		expect(paths).toContain("src/main.ts");
 	});
 
 	it("includes .dreb/memory/ files despite gitignore", async () => {
-		const files = await scanProject(fixtureDir);
+		const files = await scanProject(fixtureDir, undefined, visibleDirs);
 		const paths = files.map((f) => f.filePath);
 
 		expect(paths.some((p) => p.includes(".dreb/memory/knowledge.md"))).toBe(true);
 	});
 
 	it("includes .dreb/agents/ files despite gitignore", async () => {
-		const files = await scanProject(fixtureDir);
+		const files = await scanProject(fixtureDir, undefined, visibleDirs);
 		const paths = files.map((f) => f.filePath);
 
 		expect(paths.some((p) => p.includes(".dreb/agents/custom-agent.md"))).toBe(true);
 	});
 
 	it("includes .dreb/extensions/ files despite gitignore", async () => {
-		const files = await scanProject(fixtureDir);
+		const files = await scanProject(fixtureDir, undefined, visibleDirs);
 		const paths = files.map((f) => f.filePath);
 
 		expect(paths.some((p) => p.includes(".dreb/extensions/my-ext.ts"))).toBe(true);
 	});
 
 	it("does NOT include .dreb/index/ content", async () => {
-		const files = await scanProject(fixtureDir);
+		const files = await scanProject(fixtureDir, undefined, visibleDirs);
 		const paths = files.map((f) => f.filePath);
 
 		expect(paths.some((p) => p.includes(".dreb/index/"))).toBe(false);
 	});
 
 	it("does NOT include .dreb/agent/ content", async () => {
-		const files = await scanProject(fixtureDir);
+		const files = await scanProject(fixtureDir, undefined, visibleDirs);
 		const paths = files.map((f) => f.filePath);
 
 		expect(paths.some((p) => p.includes(".dreb/agent/"))).toBe(false);
 	});
 
 	it("does NOT include .dreb/secrets/ content", async () => {
-		const files = await scanProject(fixtureDir);
+		const files = await scanProject(fixtureDir, undefined, visibleDirs);
 		const paths = files.map((f) => f.filePath);
 
 		expect(paths.some((p) => p.includes(".dreb/secrets/"))).toBe(false);

@@ -43,17 +43,34 @@ export interface SearchOptions {
 }
 
 // ============================================================================
+// Search Engine Options
+// ============================================================================
+
+export interface SearchEngineOptions {
+	/** Absolute path to the index database directory. Default: `<projectRoot>/.search-index` */
+	indexDir?: string;
+	/** Absolute path to a global memory directory to include in the index. */
+	globalMemoryDir?: string;
+	/** Absolute path to the model cache directory. Default: `~/.cache/semantic-search/models` */
+	modelCacheDir?: string;
+	/** Provider of additional directories to include in scans (bypasses gitignore). */
+	visibleDirs?: (projectRoot: string) => string[];
+}
+
+// ============================================================================
 // Search Engine
 // ============================================================================
 
 export class SearchEngine {
 	private readonly projectRoot: string;
+	private readonly options: SearchEngineOptions;
 	private indexManager: IndexManager | null = null;
 	private embedderPromise: Promise<Embedder> | null = null;
 	private searchQueue: Promise<void> = Promise.resolve();
 
-	constructor(projectRoot: string) {
+	constructor(projectRoot: string, options?: SearchEngineOptions) {
 		this.projectRoot = projectRoot;
+		this.options = options ?? {};
 	}
 
 	/** Check if semantic search is available (requires node:sqlite). */
@@ -68,17 +85,7 @@ export class SearchEngine {
 	 * incrementally update changed files before searching.
 	 */
 	async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
-		// Chain through searchQueue so concurrent calls serialize
-		let resolve!: () => void;
-		const gate = new Promise<void>((r) => {
-			resolve = r;
-		});
-		const waitFor = this.searchQueue;
-		this.searchQueue = gate;
-
-		try {
-			await waitFor;
-
+		return this.enqueue(async () => {
 			const limit = options?.limit ?? DEFAULT_RESULT_LIMIT;
 			const onProgress = options?.onProgress;
 
@@ -193,9 +200,7 @@ export class SearchEngine {
 			}
 
 			return results;
-		} finally {
-			resolve();
-		}
+		});
 	}
 
 	/** Get index stats without opening a new connection. */
@@ -211,32 +216,56 @@ export class SearchEngine {
 	 * The next `search()` call will lazily re-create the IndexManager and build
 	 * a fresh index from scratch.
 	 */
-	resetIndex(): void {
-		// Close DB connection first (WAL mode may hold locks)
-		this.indexManager?.close();
-		this.indexManager = null;
-
-		// Delete the DB file
-		const dbPath = path.join(this.projectRoot, ".dreb", "index", "search.db");
-		if (existsSync(dbPath)) {
-			unlinkSync(dbPath);
-		}
+	async resetIndex(): Promise<void> {
+		return this.enqueue(async () => {
+			this.indexManager?.close();
+			this.indexManager = null;
+			const config = this.getIndexConfig();
+			const dbPath = path.join(config.indexDir, "search.db");
+			if (existsSync(dbPath)) {
+				unlinkSync(dbPath);
+			}
+		});
 	}
 
 	/** Dispose resources. */
-	close(): void {
-		this.indexManager?.close();
-		this.indexManager = null;
-		// Dispose embedder if it was created
-		if (this.embedderPromise) {
-			this.embedderPromise.then((e) => e.dispose()).catch(() => {});
-			this.embedderPromise = null;
-		}
+	async close(): Promise<void> {
+		return this.enqueue(async () => {
+			this.indexManager?.close();
+			this.indexManager = null;
+			// Dispose embedder if it was created
+			if (this.embedderPromise) {
+				try {
+					const embedder = await this.embedderPromise;
+					embedder.dispose();
+				} finally {
+					this.embedderPromise = null;
+				}
+			}
+		});
 	}
 
 	// ========================================================================
 	// Private
 	// ========================================================================
+
+	private enqueue<T>(work: () => Promise<T>): Promise<T> {
+		let resolve!: () => void;
+		const gate = new Promise<void>((r) => {
+			resolve = r;
+		});
+		const waitFor = this.searchQueue;
+		this.searchQueue = gate;
+
+		return (async () => {
+			try {
+				await waitFor;
+				return await work();
+			} finally {
+				resolve();
+			}
+		})();
+	}
 
 	private getIndexManager(): IndexManager {
 		if (!this.indexManager) {
@@ -248,10 +277,12 @@ export class SearchEngine {
 	}
 
 	private getIndexConfig(): IndexConfig {
+		const visibleDirsFn = this.options.visibleDirs;
 		return {
 			projectRoot: this.projectRoot,
-			indexDir: path.join(this.projectRoot, ".dreb", "index"),
-			globalMemoryDir: path.join(homedir(), ".dreb", "memory"),
+			indexDir: this.options.indexDir ?? path.join(this.projectRoot, ".search-index"),
+			globalMemoryDir: this.options.globalMemoryDir,
+			visibleDirs: visibleDirsFn ? visibleDirsFn(this.projectRoot) : undefined,
 			modelName: DEFAULT_MODEL_NAME,
 		};
 	}
@@ -262,13 +293,14 @@ export class SearchEngine {
 				try {
 					const config = this.getIndexConfig();
 					const embedder = new Embedder({
-						modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
+						modelCacheDir:
+							this.options.modelCacheDir ?? path.join(homedir(), ".cache", "semantic-search", "models"),
 						modelName: config.modelName,
 					});
 					await embedder.initialize();
 					return embedder;
 				} catch (err) {
-					this.embedderPromise = null; // reset on failure for retry
+					this.embedderPromise = null;
 					throw err;
 				}
 			})();
@@ -443,9 +475,11 @@ function sanitizeFtsQuery(query: string): string {
 		.replace(/\bAND\b|\bOR\b|\bNOT\b|\bNEAR\b/gi, " ")
 		.trim();
 
-	// Split into tokens, remove stopwords, join with OR
-	const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0 && !STOPWORDS.has(t.toLowerCase()));
+	// Split into tokens, strip leading hyphens (FTS5 NOT operator), remove stopwords, join with OR
+	const tokens = cleaned
+		.split(/\s+/)
+		.map((t) => t.replace(/^-+/, ""))
+		.filter((t) => t.length > 0 && !STOPWORDS.has(t.toLowerCase()));
 	if (tokens.length === 0) return '""';
-	if (tokens.length === 1) return tokens[0];
 	return tokens.join(" OR ");
 }

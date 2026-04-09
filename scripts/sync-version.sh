@@ -29,4 +29,16 @@ for pkg in packages/*/package.json; do
 	echo "  $pkg -> $VERSION"
 done
 
+# Sync .claude-plugin/plugin.json if present
+for plugin_json in packages/*/.claude-plugin/plugin.json; do
+	[ -f "$plugin_json" ] || continue
+	node -e "
+		const fs = require('fs');
+		const p = JSON.parse(fs.readFileSync('$plugin_json', 'utf-8'));
+		p.version = '$VERSION';
+		fs.writeFileSync('$plugin_json', JSON.stringify(p, null, '  ') + '\n');
+	"
+	echo "  $plugin_json -> $VERSION"
+done
+
 echo "Done."

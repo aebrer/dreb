@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cosineSimilarity, packVector, topKSimilar, unpackVector } from "../../src/core/search/vector-store.js";
+import { cosineSimilarity, packVector, topKSimilar, unpackVector } from "../src/vector-store.js";
 
 describe("cosineSimilarity", () => {
 	it("returns 1.0 for identical normalized vectors", () => {

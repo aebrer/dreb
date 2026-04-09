@@ -66,6 +66,8 @@ export interface IndexConfig {
 	indexDir: string;
 	/** Absolute path to the global memory directory (e.g. ~/.dreb/memory/). */
 	globalMemoryDir?: string;
+	/** Additional directories to include in scans (bypasses gitignore). */
+	visibleDirs?: string[];
 	/** Embedding model name (used to key the embeddings table). */
 	modelName: string;
 }

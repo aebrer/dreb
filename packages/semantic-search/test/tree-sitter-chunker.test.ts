@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { chunkWithTreeSitter, initTreeSitter } from "../../src/core/search/tree-sitter-chunker.js";
-import type { Chunk } from "../../src/core/search/types.js";
+import { chunkWithTreeSitter, initTreeSitter } from "../src/tree-sitter-chunker.js";
+import type { Chunk } from "../src/types.js";
 
 // ============================================================================
 // Setup
