@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "semantic-search": {
-      "command": "npx",
-      "args": ["@dreb/semantic-search", "semantic-search-mcp"]
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/server.js"]
     }
   }
 }
