@@ -1,6 +1,7 @@
 import { type ExecFileException, execFile, spawnSync } from "child_process";
 import { existsSync, type FSWatcher, readFileSync, statSync, watch } from "fs";
 import { dirname, join, resolve } from "path";
+import { DailyCostTracker } from "./daily-cost-tracker.js";
 
 type GitPaths = {
 	repoDir: string;
@@ -92,6 +93,7 @@ export class FooterDataProvider {
 	private headWatcher: FSWatcher | null = null;
 	private reftableWatcher: FSWatcher | null = null;
 	private branchChangeCallbacks = new Set<() => void>();
+	private dailyCostTracker: DailyCostTracker;
 	private availableProviderCount = 0;
 	private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 	private refreshInFlight = false;
@@ -101,6 +103,7 @@ export class FooterDataProvider {
 	constructor() {
 		this.gitPaths = findGitPaths();
 		this.setupGitWatcher();
+		this.dailyCostTracker = new DailyCostTracker();
 	}
 
 	/** Current git branch, null if not in repo, "detached" if detached HEAD */
@@ -136,6 +139,16 @@ export class FooterDataProvider {
 		this.extensionStatuses.clear();
 	}
 
+	/** Cached daily cost total across all sessions. O(1). */
+	getDailyCost(): number {
+		return this.dailyCostTracker.getDailyCost();
+	}
+
+	/** Force refresh of the daily cost cache. */
+	refreshDailyCost(): void {
+		this.dailyCostTracker.refresh();
+	}
+
 	/** Number of unique providers with available models (for footer display) */
 	getAvailableProviderCount(): number {
 		return this.availableProviderCount;
@@ -153,6 +166,7 @@ export class FooterDataProvider {
 			clearTimeout(this.refreshTimer);
 			this.refreshTimer = null;
 		}
+		this.dailyCostTracker.dispose();
 		if (this.headWatcher) {
 			this.headWatcher.close();
 			this.headWatcher = null;
@@ -269,5 +283,5 @@ export class FooterDataProvider {
 /** Read-only view for extensions - excludes setExtensionStatus, setAvailableProviderCount and dispose */
 export type ReadonlyFooterDataProvider = Pick<
 	FooterDataProvider,
-	"getGitBranch" | "getExtensionStatuses" | "getAvailableProviderCount" | "onBranchChange"
+	"getGitBranch" | "getExtensionStatuses" | "getAvailableProviderCount" | "onBranchChange" | "getDailyCost"
 >;

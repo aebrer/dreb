@@ -114,7 +114,12 @@ export class FooterComponent implements Component {
 		// Show cost with "(sub)" indicator if using OAuth subscription
 		const usingSubscription = state.model ? this.session.modelRegistry.isUsingOAuth(state.model) : false;
 		if (totalCost || usingSubscription) {
-			const costStr = `$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
+			let costStr = `$${totalCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
+			// Append daily total when there's cross-session spend
+			const dailyCost = this.footerData.getDailyCost();
+			if (dailyCost > totalCost) {
+				costStr += ` · today $${dailyCost.toFixed(2)}`;
+			}
 			statsParts.push(costStr);
 		}
 
