@@ -16,7 +16,8 @@ export async function cmdStart(ctx: Context): Promise<void> {
 		"🤖 *dreb Telegram*\n\n" +
 			"Send me a message and I'll forward it to dreb.\n\n" +
 			"*Session:*\n" +
-			"/new \\[path\\] — Start a fresh session (optionally in a different directory)\n" +
+			"/new — Start a fresh session (keeps current directory)\n" +
+			"/new <path> — Start a fresh session in a different directory\n" +
 			"/sessions — List recent sessions\n" +
 			"/resume <id> — Resume a session\n" +
 			"/recent \\[N\\] — Resend last N messages\n\n" +
