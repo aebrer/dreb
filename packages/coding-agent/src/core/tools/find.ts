@@ -7,6 +7,7 @@ import path from "path";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { getDrebToolVisibleDirs } from "./dreb-paths.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -209,6 +210,14 @@ export function createFindToolDefinition(
 						// those patterns globally, causing venv/.gitignore files containing
 						// bare "*" to suppress all results. See issue #17.
 						args.push(pattern, searchPath);
+
+						// Include tool-visible .dreb/ subdirs when searching from project root.
+						// fd bypasses .gitignore for explicit path arguments.
+						if (!searchDir) {
+							for (const dir of getDrebToolVisibleDirs(cwd)) {
+								args.push(dir);
+							}
+						}
 
 						const result = spawnSync(fdPath, args, { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
 						signal?.removeEventListener("abort", onAbort);

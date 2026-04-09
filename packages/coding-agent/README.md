@@ -333,7 +333,9 @@ Task tracking is prompt-driven: the system prompt includes guidelines for when t
 
 The `search` tool provides natural language queries over the codebase using embeddings and full-text search. It supports identifier queries (e.g., `AuthMiddleware`), natural language (e.g., `where is rate limiting handled`), and path queries (e.g., `src/auth/`).
 
-**How it works:** The first query builds a project index (may take a few minutes for large repos). Subsequent queries use the cached index, with incremental re-indexing for changed files (mtime-based).
+**Parameters:** `query` (required), `path` (restrict to subdirectory), `limit` (max results, default 20), `projectDir` (index/search a different directory instead of cwd — useful for Telegram sessions where cwd is `~/`), `rebuild` (force a clean re-index when results look stale or corrupt).
+
+**How it works:** The first query builds a project index (typically 10–60s, longer for very large repos). Subsequent queries use the cached index, with incremental re-indexing for changed files (mtime-based). Each unique `projectDir` gets its own independent index.
 
 **Indexing pipeline:**
 - AST-aware code chunking via tree-sitter (TypeScript, JavaScript, Python, Go, Rust, Java, C, C++) — extracts functions, classes, methods, and exports as individual chunks
@@ -342,7 +344,7 @@ The `search` tool provides natural language queries over the codebase using embe
 
 **Ranking:** Uses POEM (Pareto-Optimal Embedding-based Multiranking) with 6 metrics: FTS5 BM25, vector cosine similarity, path match, symbol match, import graph proximity, and git recency. Short identifier queries bias toward exact text matches; long natural language queries bias toward vector similarity.
 
-**Storage:** Project index at `.dreb/index/`, memory files indexed alongside code. Works offline after the initial model download.
+**Storage:** Project index at `.dreb/index/`, memory files indexed alongside code. Add `**/.dreb/` to your project's `.gitignore`. Works offline after the initial model download.
 
 **Requirements:** Node.js 22+ (uses built-in `node:sqlite`). On older Node versions the tool is silently unavailable — no crash, it simply doesn't register. Zero native addons — uses `web-tree-sitter` (WASM) and `@huggingface/transformers` (WASM).
 

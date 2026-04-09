@@ -5,6 +5,7 @@
  * → duplicate columns → POEM rank → assemble results.
  */
 
+import { existsSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { SearchDatabase } from "./db.js";
@@ -48,7 +49,8 @@ export interface SearchOptions {
 export class SearchEngine {
 	private readonly projectRoot: string;
 	private indexManager: IndexManager | null = null;
-	private embedder: Embedder | null = null;
+	private embedderPromise: Promise<Embedder> | null = null;
+	private searchQueue: Promise<void> = Promise.resolve();
 
 	constructor(projectRoot: string) {
 		this.projectRoot = projectRoot;
@@ -66,120 +68,134 @@ export class SearchEngine {
 	 * incrementally update changed files before searching.
 	 */
 	async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
-		const limit = options?.limit ?? DEFAULT_RESULT_LIMIT;
-		const onProgress = options?.onProgress;
+		// Chain through searchQueue so concurrent calls serialize
+		let resolve!: () => void;
+		const gate = new Promise<void>((r) => {
+			resolve = r;
+		});
+		const waitFor = this.searchQueue;
+		this.searchQueue = gate;
 
-		// Ensure index is built and up to date
-		const indexManager = this.getIndexManager();
-		const db = indexManager.getDb();
+		try {
+			await waitFor;
 
-		// Share our embedder with IndexManager so it doesn't create a second one
-		const embedder = await this.getOrCreateEmbedder();
-		indexManager.setEmbedder(embedder);
+			const limit = options?.limit ?? DEFAULT_RESULT_LIMIT;
+			const onProgress = options?.onProgress;
 
-		await indexManager.buildIndex(onProgress);
-		await indexManager.ensureEmbeddings(onProgress);
+			// Ensure index is built and up to date
+			const indexManager = this.getIndexManager();
+			const db = indexManager.getDb();
 
-		// Get all chunks (potentially filtered by path)
-		let allChunks = db.getAllChunks();
-		if (options?.pathFilter) {
-			const filter = options.pathFilter;
-			allChunks = allChunks.filter((c) => c.filePath.startsWith(filter));
-		}
+			// Share our embedder with IndexManager so it doesn't create a second one
+			const embedder = await this.getOrCreateEmbedder();
+			indexManager.setEmbedder(embedder);
 
-		if (allChunks.length === 0) {
-			return [];
-		}
+			await indexManager.buildIndex(onProgress);
+			await indexManager.ensureEmbeddings(onProgress);
 
-		// Classify query type for POEM column weighting
-		const queryType = classifyQuery(query);
+			// Get all chunks (potentially filtered by path)
+			let allChunks = db.getAllChunks();
+			if (options?.pathFilter) {
+				const filter = options.pathFilter;
+				allChunks = allChunks.filter((c) => c.filePath.startsWith(filter));
+			}
 
-		// Compute all 6 metrics
-		onProgress?.("searching", 0, 6);
+			if (allChunks.length === 0) {
+				return [];
+			}
 
-		// 1. BM25 (FTS5)
-		const bm25Scores = computeBm25Scores(db, sanitizeFtsQuery(query), METRIC_CANDIDATE_LIMIT);
-		onProgress?.("searching", 1, 6);
+			// Classify query type for POEM column weighting
+			const queryType = classifyQuery(query);
 
-		// 2. Cosine similarity (vector search)
-		const cosineScores = await this.computeVectorScores(db, query, METRIC_CANDIDATE_LIMIT, onProgress);
-		onProgress?.("searching", 2, 6);
+			// Compute all 6 metrics
+			onProgress?.("searching", 0, 6);
 
-		// 3. Path match
-		const pathScores = computePathMatchScores(query, allChunks);
-		onProgress?.("searching", 3, 6);
+			// 1. BM25 (FTS5)
+			const bm25Scores = computeBm25Scores(db, sanitizeFtsQuery(query), METRIC_CANDIDATE_LIMIT);
+			onProgress?.("searching", 1, 6);
 
-		// 4. Symbol match
-		const symbols = db.getAllSymbols();
-		const symbolScores = computeSymbolMatchScores(query, symbols);
-		onProgress?.("searching", 4, 6);
+			// 2. Cosine similarity (vector search)
+			const cosineScores = await this.computeVectorScores(db, query, METRIC_CANDIDATE_LIMIT, onProgress);
+			onProgress?.("searching", 2, 6);
 
-		// 5. Import graph (use BM25 + cosine as seed scores, aggregated per file)
-		// Only use files with strong scores as seeds — low-scoring files (e.g. from
-		// common OR terms matching everywhere) pollute the seed set and prevent
-		// meaningful propagation.
-		const fileSeedScores = aggregateFileScores(allChunks, bm25Scores, cosineScores);
-		const seedThreshold = computeSeedThreshold(fileSeedScores);
-		const filteredSeeds = new Map<number, number>();
-		for (const [fileId, score] of fileSeedScores) {
-			if (score >= seedThreshold) filteredSeeds.set(fileId, score);
-		}
-		const fileIdToChunkIds = buildFileChunkMap(allChunks);
-		const importScores = computeImportGraphScores(db, filteredSeeds, fileIdToChunkIds);
-		onProgress?.("searching", 5, 6);
+			// 3. Path match
+			const pathScores = computePathMatchScores(query, allChunks);
+			onProgress?.("searching", 3, 6);
 
-		// 6. Git recency
-		const recencyScores = await computeGitRecencyScores(this.projectRoot, allChunks);
-		onProgress?.("searching", 6, 6);
+			// 4. Symbol match
+			const symbols = db.getAllSymbols();
+			const symbolScores = computeSymbolMatchScores(query, symbols);
+			onProgress?.("searching", 4, 6);
 
-		// Build MetricScores for each candidate chunk
-		const candidateIds = collectCandidateIds(
-			bm25Scores,
-			cosineScores,
-			pathScores,
-			symbolScores,
-			importScores,
-			recencyScores,
-		);
-		const candidates = new Map<number, MetricScores>();
+			// 5. Import graph (use BM25 + cosine as seed scores, aggregated per file)
+			// Only use files with strong scores as seeds — low-scoring files (e.g. from
+			// common OR terms matching everywhere) pollute the seed set and prevent
+			// meaningful propagation.
+			const fileSeedScores = aggregateFileScores(allChunks, bm25Scores, cosineScores);
+			const seedThreshold = computeSeedThreshold(fileSeedScores);
+			const filteredSeeds = new Map<number, number>();
+			for (const [fileId, score] of fileSeedScores) {
+				if (score >= seedThreshold) filteredSeeds.set(fileId, score);
+			}
+			const fileIdToChunkIds = buildFileChunkMap(allChunks);
+			const importScores = computeImportGraphScores(db, filteredSeeds, fileIdToChunkIds);
+			onProgress?.("searching", 5, 6);
 
-		for (const id of candidateIds) {
-			candidates.set(id, {
-				bm25: bm25Scores.get(id) ?? 0,
-				cosine: cosineScores.get(id) ?? 0,
-				pathMatch: pathScores.get(id) ?? 0,
-				symbolMatch: symbolScores.get(id) ?? 0,
-				importGraph: importScores.get(id) ?? 0,
-				gitRecency: recencyScores.get(id) ?? 0,
-			});
-		}
+			// 6. Git recency
+			const recencyScores = await computeGitRecencyScores(this.projectRoot, allChunks);
+			onProgress?.("searching", 6, 6);
 
-		if (candidates.size === 0) {
-			return [];
-		}
+			// Build MetricScores for each candidate chunk
+			const candidateIds = collectCandidateIds(
+				bm25Scores,
+				cosineScores,
+				pathScores,
+				symbolScores,
+				importScores,
+				recencyScores,
+			);
+			const candidates = new Map<number, MetricScores>();
 
-		// POEM rank
-		const ranked = poemRank(candidates, queryType);
-
-		// Assemble results
-		const chunkMap = new Map<number, StoredChunk>();
-		for (const chunk of allChunks) {
-			chunkMap.set(chunk.id, chunk);
-		}
-
-		const results: SearchResult[] = [];
-		for (const candidate of ranked.slice(0, limit)) {
-			const chunk = chunkMap.get(candidate.id);
-			if (chunk) {
-				results.push({
-					chunk,
-					scores: candidate.scores,
-					rank: candidate.rank,
+			for (const id of candidateIds) {
+				candidates.set(id, {
+					bm25: bm25Scores.get(id) ?? 0,
+					cosine: cosineScores.get(id) ?? 0,
+					pathMatch: pathScores.get(id) ?? 0,
+					symbolMatch: symbolScores.get(id) ?? 0,
+					importGraph: importScores.get(id) ?? 0,
+					gitRecency: recencyScores.get(id) ?? 0,
 				});
 			}
-		}
 
-		return results;
+			if (candidates.size === 0) {
+				return [];
+			}
+
+			// POEM rank
+			const ranked = poemRank(candidates, queryType);
+
+			// Assemble results
+			const chunkMap = new Map<number, StoredChunk>();
+			for (const chunk of allChunks) {
+				chunkMap.set(chunk.id, chunk);
+			}
+
+			const results: SearchResult[] = [];
+			for (const candidate of ranked.slice(0, limit)) {
+				const chunk = chunkMap.get(candidate.id);
+				if (chunk) {
+					results.push({
+						chunk,
+						scores: candidate.scores,
+						rank: candidate.rank,
+					});
+				}
+			}
+
+			return results;
+		} finally {
+			resolve();
+		}
 	}
 
 	/** Get index stats without opening a new connection. */
@@ -188,12 +204,34 @@ export class SearchEngine {
 		return this.indexManager.getStats();
 	}
 
+	/**
+	 * Reset the search index — delete the DB and close the IndexManager.
+	 *
+	 * Preserves the embedder (expensive ONNX model, unrelated to index state).
+	 * The next `search()` call will lazily re-create the IndexManager and build
+	 * a fresh index from scratch.
+	 */
+	resetIndex(): void {
+		// Close DB connection first (WAL mode may hold locks)
+		this.indexManager?.close();
+		this.indexManager = null;
+
+		// Delete the DB file
+		const dbPath = path.join(this.projectRoot, ".dreb", "index", "search.db");
+		if (existsSync(dbPath)) {
+			unlinkSync(dbPath);
+		}
+	}
+
 	/** Dispose resources. */
 	close(): void {
 		this.indexManager?.close();
 		this.indexManager = null;
-		this.embedder?.dispose();
-		this.embedder = null;
+		// Dispose embedder if it was created
+		if (this.embedderPromise) {
+			this.embedderPromise.then((e) => e.dispose()).catch(() => {});
+			this.embedderPromise = null;
+		}
 	}
 
 	// ========================================================================
@@ -218,16 +256,24 @@ export class SearchEngine {
 		};
 	}
 
-	private async getOrCreateEmbedder(): Promise<Embedder> {
-		if (!this.embedder) {
-			const config = this.getIndexConfig();
-			this.embedder = new Embedder({
-				modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
-				modelName: config.modelName,
-			});
-			await this.embedder.initialize();
+	private getOrCreateEmbedder(): Promise<Embedder> {
+		if (!this.embedderPromise) {
+			this.embedderPromise = (async () => {
+				try {
+					const config = this.getIndexConfig();
+					const embedder = new Embedder({
+						modelCacheDir: path.join(homedir(), ".dreb", "agent", "models"),
+						modelName: config.modelName,
+					});
+					await embedder.initialize();
+					return embedder;
+				} catch (err) {
+					this.embedderPromise = null; // reset on failure for retry
+					throw err;
+				}
+			})();
 		}
-		return this.embedder;
+		return this.embedderPromise;
 	}
 
 	private async computeVectorScores(

@@ -1,7 +1,7 @@
 ---
 name: completeness-checker
 description: Verifies a PR fully implements what the linked issue requires
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls, bash, search
 model: glm-5-turbo, sonnet
 ---
 
