@@ -41,4 +41,12 @@ for plugin_json in packages/*/.claude-plugin/plugin.json; do
 	echo "  $plugin_json -> $VERSION"
 done
 
-echo "Done."
+# Refresh package-lock.json so workspace versions match
+npm install --package-lock-only --ignore-scripts 2>/dev/null
+echo "  package-lock.json refreshed"
+
+echo "Done. Files to stage for version bump commit:"
+echo "  package.json"
+echo "  package-lock.json"
+for pkg in packages/*/package.json; do echo "  $pkg"; done
+for pj in packages/*/.claude-plugin/plugin.json; do [ -f "$pj" ] && echo "  $pj"; done

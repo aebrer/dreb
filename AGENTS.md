@@ -28,7 +28,7 @@ This builds all packages in dependency order: tui → ai → agent → coding-ag
 2. **Sync**: Run `npm run sync-version` (or let `npm run build` do it — the build script runs `sync-version.sh` automatically)
 3. **Build**: Run `npm run build` to compile with the new version
 4. **Verify**: Launch the binary and confirm the TUI welcome message shows the correct version
-5. **Commit & push**: Commit the version bump (all `package.json` files touched by sync) and push to the feature branch
+5. **Commit & push**: Commit **all** version-bumped files and push to the feature branch. The sync script prints the full list, but at minimum: `package.json`, `package-lock.json`, all `packages/*/package.json`, and any `packages/*/.claude-plugin/plugin.json`
 6. **Merge**: Merge the PR (squash) after CI passes
 7. **Tag**: On the default branch after merge: `git tag v<version> && git push --tags`
 
