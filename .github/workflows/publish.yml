@@ -24,20 +24,50 @@ jobs:
 
       - name: Publish @dreb/tui
         working-directory: packages/tui
-        run: npm publish
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view @dreb/tui@$VERSION version >/dev/null 2>&1; then
+            echo "::warning::@dreb/tui@$VERSION already published, skipping"
+          else
+            npm publish
+          fi
 
       - name: Publish @dreb/ai
         working-directory: packages/ai
-        run: npm publish
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view @dreb/ai@$VERSION version >/dev/null 2>&1; then
+            echo "::warning::@dreb/ai@$VERSION already published, skipping"
+          else
+            npm publish
+          fi
 
       - name: Publish @dreb/agent-core
         working-directory: packages/agent
-        run: npm publish
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view @dreb/agent-core@$VERSION version >/dev/null 2>&1; then
+            echo "::warning::@dreb/agent-core@$VERSION already published, skipping"
+          else
+            npm publish
+          fi
 
       - name: Publish @dreb/coding-agent
         working-directory: packages/coding-agent
-        run: npm publish
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view @dreb/coding-agent@$VERSION version >/dev/null 2>&1; then
+            echo "::warning::@dreb/coding-agent@$VERSION already published, skipping"
+          else
+            npm publish
+          fi
 
       - name: Publish @dreb/telegram
         working-directory: packages/telegram
-        run: npm publish
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view @dreb/telegram@$VERSION version >/dev/null 2>&1; then
+            echo "::warning::@dreb/telegram@$VERSION already published, skipping"
+          else
+            npm publish
+          fi
