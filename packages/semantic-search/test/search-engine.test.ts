@@ -10,10 +10,12 @@ import type { MetricScores } from "../src/types.js";
 // Tracks initialize() calls so concurrency tests can verify single-initialization.
 let mockInitializeCallCount = 0;
 let mockInitializeFailNext = false;
+let mockDisposeCallCount = 0;
 
 function resetMockEmbedder(): void {
 	mockInitializeCallCount = 0;
 	mockInitializeFailNext = false;
+	mockDisposeCallCount = 0;
 }
 
 vi.mock("../src/embedder.js", () => ({
@@ -31,7 +33,9 @@ vi.mock("../src/embedder.js", () => ({
 		async embedDocuments(texts: string[]) {
 			return texts.map(() => new Float32Array(384));
 		}
-		dispose() {}
+		dispose() {
+			mockDisposeCallCount++;
+		}
 	},
 }));
 
@@ -207,6 +211,18 @@ describe("SearchEngine.search()", () => {
 	});
 
 	// ================================================================
+	// 6b. All-stopwords query does not crash
+	// ================================================================
+
+	it("handles a query of entirely stopwords without crashing", async () => {
+		// "where is the" → all stopwords → sanitizeFtsQuery returns '""'
+		// BM25 returns nothing, but other metrics (cosine, path, etc.) still work
+		const results = await engine.search("where is the");
+		// Should not throw — results may be empty or from non-BM25 metrics
+		expect(Array.isArray(results)).toBe(true);
+	});
+
+	// ================================================================
 	// 7. Results have the correct shape
 	// ================================================================
 
@@ -302,6 +318,22 @@ describe("SearchEngine.search()", () => {
 		// Create a separate engine to avoid breaking subsequent tests
 		const separateEngine = new SearchEngine(tmpDir);
 		await expect(separateEngine.close()).resolves.not.toThrow();
+	});
+
+	it("close() after search() calls embedder.dispose()", async () => {
+		const disposeDir = mkdtempSync(path.join(tmpdir(), "dreb-search-dispose-"));
+		createFixtureProject(disposeDir);
+		const disposeBefore = mockDisposeCallCount;
+		const disposeEngine = new SearchEngine(disposeDir);
+
+		// Search initializes the embedder
+		await disposeEngine.search("AuthMiddleware");
+
+		// Close should dispose the embedder
+		await disposeEngine.close();
+		expect(mockDisposeCallCount).toBe(disposeBefore + 1);
+
+		rmSync(disposeDir, { recursive: true, force: true });
 	});
 
 	// ================================================================

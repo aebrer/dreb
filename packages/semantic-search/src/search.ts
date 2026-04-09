@@ -235,9 +235,12 @@ export class SearchEngine {
 			this.indexManager = null;
 			// Dispose embedder if it was created
 			if (this.embedderPromise) {
-				const embedder = await this.embedderPromise;
-				embedder.dispose();
-				this.embedderPromise = null;
+				try {
+					const embedder = await this.embedderPromise;
+					embedder.dispose();
+				} finally {
+					this.embedderPromise = null;
+				}
 			}
 		});
 	}
@@ -472,9 +475,11 @@ function sanitizeFtsQuery(query: string): string {
 		.replace(/\bAND\b|\bOR\b|\bNOT\b|\bNEAR\b/gi, " ")
 		.trim();
 
-	// Split into tokens, remove stopwords, join with OR
-	const tokens = cleaned.split(/\s+/).filter((t) => t.length > 0 && !STOPWORDS.has(t.toLowerCase()));
+	// Split into tokens, strip leading hyphens (FTS5 NOT operator), remove stopwords, join with OR
+	const tokens = cleaned
+		.split(/\s+/)
+		.map((t) => t.replace(/^-+/, ""))
+		.filter((t) => t.length > 0 && !STOPWORDS.has(t.toLowerCase()));
 	if (tokens.length === 0) return '""';
-	if (tokens.length === 1) return tokens[0];
 	return tokens.join(" OR ");
 }

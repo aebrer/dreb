@@ -187,7 +187,7 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 
 			let indexBuilt = false;
 			const results = await engine.search(query, {
-				limit: limit ?? 20,
+				limit: typeof limit === "number" && limit > 0 ? Math.floor(limit) : 20,
 				pathFilter: searchPath,
 				onProgress: (phase, current, total) => {
 					if (phase === "indexing" || phase === "scanning" || phase === "loading model" || phase === "embedding") {
