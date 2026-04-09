@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/semantic-search",
-	"version": "1.18.0",
+	"version": "2.0.0",
 	"description": "Semantic codebase search engine with embedding-based ranking and MCP server",
 	"publishConfig": {
 		"access": "public"
