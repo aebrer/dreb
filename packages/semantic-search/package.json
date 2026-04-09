@@ -17,7 +17,9 @@
 	"files": [
 		"dist",
 		"bin",
-		"claude-code-plugin",
+		".claude-plugin",
+		".mcp.json",
+		"skills",
 		"README.md"
 	],
 	"scripts": {
