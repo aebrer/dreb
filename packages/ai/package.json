@@ -58,6 +58,9 @@
 	"bin": {
 		"dreb-ai": "./dist/cli.js"
 	},
+	"publishConfig": {
+		"access": "public"
+	},
 	"files": [
 		"dist",
 		"README.md"

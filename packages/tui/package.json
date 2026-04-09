@@ -11,6 +11,9 @@
 		"test": "node --test --import tsx test/*.test.ts",
 		"prepublishOnly": "npm run clean && npm run build"
 	},
+	"publishConfig": {
+		"access": "public"
+	},
 	"files": [
 		"dist/**/*",
 		"README.md"
