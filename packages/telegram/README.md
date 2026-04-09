@@ -76,7 +76,8 @@ systemctl --user enable --now dreb-telegram
 
 ### Session
 - `/start` — Help & command list
-- `/new` — Start fresh session
+- `/new` — Start fresh session (preserves current working directory)
+- `/new <path>` — Start fresh session in the specified directory
 - `/sessions` — List recent sessions
 - `/resume <id>` — Resume by session ID prefix
 - `/recent [N]` — Resend last N assistant messages
