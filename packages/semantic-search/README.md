@@ -14,16 +14,30 @@ npm install @dreb/semantic-search
 
 ## Claude Code Plugin
 
-The package ships as a Claude Code plugin. Install via a marketplace that includes it as an npm source, or register the MCP server directly:
+The package ships as a Claude Code plugin. Add the dreb marketplace and install:
+
+```
+/plugin marketplace add aebrer/dreb
+/plugin install semantic-search@dreb
+```
+
+Or from the CLI outside a session:
+
+```bash
+claude plugin marketplace add aebrer/dreb
+claude plugin install semantic-search@dreb
+```
+
+Alternatively, register the MCP server directly without the plugin system:
 
 ```bash
 claude mcp add --transport stdio semantic-search -- npx @dreb/semantic-search semantic-search-mcp
 ```
 
-For local development:
+For local development from a cloned repo:
 
 ```bash
-claude --plugin-dir /path/to/packages/semantic-search
+claude --plugin-dir ./packages/semantic-search
 ```
 
 ## MCP Server

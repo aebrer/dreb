@@ -1,0 +1,24 @@
+{
+	"name": "dreb",
+	"owner": {
+		"name": "Drew Brereton",
+		"email": "drew@aebrer.com"
+	},
+	"metadata": {
+		"description": "Plugins from the dreb coding agent project"
+	},
+	"plugins": [
+		{
+			"name": "semantic-search",
+			"source": {
+				"source": "npm",
+				"package": "@dreb/semantic-search"
+			},
+			"description": "Semantic codebase search — natural language queries over code and docs using embeddings, tree-sitter parsing, and POEM multi-signal ranking",
+			"homepage": "https://github.com/aebrer/dreb/tree/master/packages/semantic-search",
+			"repository": "https://github.com/aebrer/dreb",
+			"license": "MIT",
+			"keywords": ["semantic-search", "codebase", "embeddings", "mcp", "poem"]
+		}
+	]
+}
