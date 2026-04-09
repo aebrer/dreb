@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "semantic-search": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/../bin/server.js"]
+    }
+  }
+}

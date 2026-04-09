@@ -17,6 +17,7 @@
 	"files": [
 		"dist",
 		"bin",
+		"claude-code-plugin",
 		"README.md"
 	],
 	"scripts": {
@@ -38,8 +39,7 @@
 		"tree-sitter-python": "^0.25.0",
 		"tree-sitter-rust": "^0.24.0",
 		"tree-sitter-typescript": "^0.23.2",
-		"web-tree-sitter": "^0.26.8",
-		"zod": "^3.25.0"
+		"web-tree-sitter": "^0.26.8"
 	},
 	"devDependencies": {
 		"@types/node": "^24.3.0",

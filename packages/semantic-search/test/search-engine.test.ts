@@ -116,8 +116,8 @@ describe("SearchEngine.search()", () => {
 		engine = new SearchEngine(tmpDir);
 	});
 
-	afterAll(() => {
-		engine.close();
+	afterAll(async () => {
+		await engine.close();
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
@@ -298,10 +298,10 @@ describe("SearchEngine.search()", () => {
 	// 11. close() is safe to call and engine is unusable after
 	// ================================================================
 
-	it("close() disposes resources without throwing", () => {
+	it("close() disposes resources without throwing", async () => {
 		// Create a separate engine to avoid breaking subsequent tests
 		const separateEngine = new SearchEngine(tmpDir);
-		expect(() => separateEngine.close()).not.toThrow();
+		await expect(separateEngine.close()).resolves.not.toThrow();
 	});
 
 	// ================================================================
@@ -319,8 +319,8 @@ describe("SearchEngine.search()", () => {
 			concurrentEngine = new SearchEngine(concurrentDir);
 		});
 
-		afterAll(() => {
-			concurrentEngine.close();
+		afterAll(async () => {
+			await concurrentEngine.close();
 			rmSync(concurrentDir, { recursive: true, force: true });
 		});
 
@@ -359,7 +359,58 @@ describe("SearchEngine.search()", () => {
 	});
 
 	// ================================================================
-	// 13. Failure retry — embedder initialization
+	// 13. resetIndex()
+	// ================================================================
+
+	describe("resetIndex()", () => {
+		let resetDir: string;
+		let resetEngine: SearchEngine;
+
+		beforeAll(() => {
+			resetDir = mkdtempSync(path.join(tmpdir(), "dreb-search-reset-"));
+			createFixtureProject(resetDir);
+			resetMockEmbedder();
+			resetEngine = new SearchEngine(resetDir);
+		});
+
+		afterAll(async () => {
+			await resetEngine.close();
+			rmSync(resetDir, { recursive: true, force: true });
+		});
+
+		it("after resetIndex(), search.db no longer exists", async () => {
+			const dbPath = path.join(resetDir, ".search-index", "search.db");
+
+			// Build the index
+			await resetEngine.search("AuthMiddleware");
+			expect(existsSync(dbPath)).toBe(true);
+
+			// Reset it
+			await resetEngine.resetIndex();
+			expect(existsSync(dbPath)).toBe(false);
+		});
+
+		it("a search() after resetIndex() succeeds and rebuilds the index", async () => {
+			// Index was reset in the previous test — search should rebuild it
+			const results = await resetEngine.search("Logger");
+			expect(results.length).toBeGreaterThan(0);
+		});
+
+		it("resetIndex() during concurrent searches doesn't corrupt state", async () => {
+			const promises = [
+				resetEngine.search("AuthMiddleware"),
+				resetEngine.search("Logger"),
+				resetEngine.resetIndex(),
+				resetEngine.search("formatDate"),
+			];
+
+			// Everything should complete without throwing
+			await expect(Promise.all(promises)).resolves.toBeDefined();
+		});
+	});
+
+	// ================================================================
+	// 14. Failure retry — embedder initialization
 	// ================================================================
 
 	describe("embedder initialization failure retry", () => {
@@ -371,8 +422,8 @@ describe("SearchEngine.search()", () => {
 			createFixtureProject(retryDir);
 		});
 
-		afterAll(() => {
-			retryEngine?.close();
+		afterAll(async () => {
+			await retryEngine?.close();
 			rmSync(retryDir, { recursive: true, force: true });
 		});
 
@@ -415,8 +466,8 @@ describe("SearchEngineOptions", () => {
 			engine = new SearchEngine(projectDir, { indexDir: customIndexDir });
 		});
 
-		afterAll(() => {
-			engine.close();
+		afterAll(async () => {
+			await engine.close();
 			rmSync(projectDir, { recursive: true, force: true });
 			rmSync(customIndexDir, { recursive: true, force: true });
 		});
@@ -463,8 +514,8 @@ describe("SearchEngineOptions", () => {
 			});
 		});
 
-		afterAll(() => {
-			engine.close();
+		afterAll(async () => {
+			await engine.close();
 			rmSync(projectDir, { recursive: true, force: true });
 		});
 

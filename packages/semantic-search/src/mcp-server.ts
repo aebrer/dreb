@@ -60,8 +60,6 @@ function getSearchEngine(projectRoot: string): SearchEngine {
 	return engine;
 }
 
-export { formatResults };
-
 // ============================================================================
 // Server Factory
 // ============================================================================
@@ -98,7 +96,8 @@ export function createMcpServer(defaultProjectDir: string): Server {
 			limit?: number;
 			rebuild?: boolean;
 		};
-		const { query, path: searchPath, limit = 20, rebuild = false } = args;
+		const { query, path: searchPath, rebuild = false } = args;
+		const limit = typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : 20;
 
 		const projectDir = args.projectDir ? resolve(args.projectDir) : defaultProjectDir;
 

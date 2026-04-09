@@ -32,7 +32,8 @@ vi.mock("../src/search.js", () => ({
 	},
 }));
 
-import { createMcpServer, formatResults, startServer } from "../src/mcp-server.js";
+import { formatResults } from "../src/format.js";
+import { createMcpServer, startServer } from "../src/mcp-server.js";
 import type { MetricScores, SearchResult, StoredChunk } from "../src/types.js";
 
 // ============================================================================
@@ -378,6 +379,20 @@ describe("MCP protocol integration", () => {
 		expect(text).toContain("Node.js 22");
 
 		spy.mockRestore();
+	});
+
+	it("omits stats footer when getStats() returns null", async () => {
+		mockGetStats.mockReturnValue(null);
+		mockSearch.mockResolvedValue([]);
+
+		const result = await client.callTool({
+			name: "search",
+			arguments: { query: "test", projectDir: "/tmp/test-project" },
+		});
+
+		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+		expect(text).not.toContain("[Index:");
+		expect(text).toContain("No results found.");
 	});
 
 	it("returns isError when search throws", async () => {

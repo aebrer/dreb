@@ -85,17 +85,7 @@ export class SearchEngine {
 	 * incrementally update changed files before searching.
 	 */
 	async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
-		// Chain through searchQueue so concurrent calls serialize
-		let resolve!: () => void;
-		const gate = new Promise<void>((r) => {
-			resolve = r;
-		});
-		const waitFor = this.searchQueue;
-		this.searchQueue = gate;
-
-		try {
-			await waitFor;
-
+		return this.enqueue(async () => {
 			const limit = options?.limit ?? DEFAULT_RESULT_LIMIT;
 			const onProgress = options?.onProgress;
 
@@ -210,9 +200,7 @@ export class SearchEngine {
 			}
 
 			return results;
-		} finally {
-			resolve();
-		}
+		});
 	}
 
 	/** Get index stats without opening a new connection. */
@@ -229,14 +217,7 @@ export class SearchEngine {
 	 * a fresh index from scratch.
 	 */
 	async resetIndex(): Promise<void> {
-		let resolve!: () => void;
-		const gate = new Promise<void>((r) => {
-			resolve = r;
-		});
-		const waitFor = this.searchQueue;
-		this.searchQueue = gate;
-		try {
-			await waitFor;
+		return this.enqueue(async () => {
 			this.indexManager?.close();
 			this.indexManager = null;
 			const config = this.getIndexConfig();
@@ -244,25 +225,44 @@ export class SearchEngine {
 			if (existsSync(dbPath)) {
 				unlinkSync(dbPath);
 			}
-		} finally {
-			resolve();
-		}
+		});
 	}
 
 	/** Dispose resources. */
-	close(): void {
-		this.indexManager?.close();
-		this.indexManager = null;
-		// Dispose embedder if it was created
-		if (this.embedderPromise) {
-			this.embedderPromise.then((e) => e.dispose()).catch(() => {});
-			this.embedderPromise = null;
-		}
+	async close(): Promise<void> {
+		return this.enqueue(async () => {
+			this.indexManager?.close();
+			this.indexManager = null;
+			// Dispose embedder if it was created
+			if (this.embedderPromise) {
+				const embedder = await this.embedderPromise;
+				embedder.dispose();
+				this.embedderPromise = null;
+			}
+		});
 	}
 
 	// ========================================================================
 	// Private
 	// ========================================================================
+
+	private enqueue<T>(work: () => Promise<T>): Promise<T> {
+		let resolve!: () => void;
+		const gate = new Promise<void>((r) => {
+			resolve = r;
+		});
+		const waitFor = this.searchQueue;
+		this.searchQueue = gate;
+
+		return (async () => {
+			try {
+				await waitFor;
+				return await work();
+			} finally {
+				resolve();
+			}
+		})();
+	}
 
 	private getIndexManager(): IndexManager {
 		if (!this.indexManager) {
