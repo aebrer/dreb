@@ -345,6 +345,26 @@ describe("Coding Agent Tools", () => {
 			expect(result.exitCode).toBe(0);
 			expect(result.output).toBe("red\n");
 		});
+
+		it("should collapse \\r-based progress output to final state", async () => {
+			// Simulate a progress bar: \r overwrites on the same line, then a final newline
+			const result = await bashTool.execute("test-terminal-render", {
+				command: "printf 'Progress: 0%%\\rProgress: 50%%\\rProgress: 100%%\\n'",
+			});
+			const output = getTextOutput(result).trim();
+			expect(output).toBe("Progress: 100%");
+			// Intermediate states should be overwritten by \r
+			expect(output).not.toContain("Progress: 0%");
+			expect(output).not.toContain("Progress: 50%");
+		});
+
+		it("should render ANSI color codes out of tool result", async () => {
+			const result = await bashTool.execute("test-terminal-render-ansi", {
+				command: "printf '\\033[31merror\\033[0m: failed\\n'",
+			});
+			const output = getTextOutput(result).trim();
+			expect(output).toBe("error: failed");
+		});
 	});
 
 	describe("grep tool", () => {
