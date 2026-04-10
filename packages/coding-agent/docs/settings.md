@@ -144,7 +144,7 @@ When multiple sources specify a session directory, `--session-dir` CLI flag take
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `enabledModels` | string[] | - | Model patterns for Ctrl+P cycling (same format as `--models` CLI flag) |
+| `enabledModels` | string[] | - | Model patterns for cycling (same format as `--models` CLI flag) |
 
 ```json
 {

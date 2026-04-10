@@ -275,7 +275,7 @@ user sends another prompt ◄─────────────────
   ├─► session_before_tree (can cancel or customize)
   └─► session_tree
 
-/model or Ctrl+P (model selection/cycling)
+/model (model selection/cycling)
   └─► model_select
 
 exit (Ctrl+C, Ctrl+D)
@@ -536,7 +536,7 @@ This is mainly useful for debugging provider serialization and cache behavior.
 
 #### model_select
 
-Fired when the model changes via `/model` command, model cycling (`Ctrl+P`), or session restore.
+Fired when the model changes via `/model` command, model cycling, or session restore.
 
 ```typescript
 dreb.on("model_select", async (event, ctx) => {
