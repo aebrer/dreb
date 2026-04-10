@@ -144,10 +144,9 @@ describe("TUI resize handling", () => {
 });
 
 describe("TUI content shrinkage", () => {
-	it("clears empty rows when content shrinks significantly", async () => {
-		const terminal = new VirtualTerminal(40, 10);
+	it("clears empty rows when content shrinks via differential renderer", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
-		tui.setClearOnShrink(true); // Explicitly enable (may be disabled via env var)
 		const component = new TestComponent();
 		tui.addChild(component);
 
@@ -157,19 +156,22 @@ describe("TUI content shrinkage", () => {
 		await terminal.flush();
 
 		const initialRedraws = tui.fullRedraws;
+		terminal.clearWrites();
 
 		// Shrink to fewer lines
 		component.lines = ["Line 0", "Line 1"];
 		tui.requestRender();
 		await terminal.flush();
 
-		// Should have triggered a full redraw to clear empty rows
-		assert.ok(tui.fullRedraws > initialRedraws, "Content shrinkage should trigger full redraw");
+		// Should NOT trigger a full redraw — differential renderer handles it
+		assert.strictEqual(tui.fullRedraws, initialRedraws, "Shrink should use differential rendering, not full redraw");
+		// Should NOT clear scrollback
+		assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Shrink should not clear scrollback");
 
 		const viewport = terminal.getViewport();
 		assert.ok(viewport[0]?.includes("Line 0"), "First line preserved");
 		assert.ok(viewport[1]?.includes("Line 1"), "Second line preserved");
-		// Lines below should be empty (cleared)
+		// Lines below should be empty (cleared by targeted erasure)
 		assert.strictEqual(viewport[2]?.trim(), "", "Line 2 should be cleared");
 		assert.strictEqual(viewport[3]?.trim(), "", "Line 3 should be cleared");
 
@@ -179,7 +181,6 @@ describe("TUI content shrinkage", () => {
 	it("handles shrink to single line", async () => {
 		const terminal = new VirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
-		tui.setClearOnShrink(true); // Explicitly enable (may be disabled via env var)
 		const component = new TestComponent();
 		tui.addChild(component);
 
@@ -202,7 +203,6 @@ describe("TUI content shrinkage", () => {
 	it("handles shrink to empty", async () => {
 		const terminal = new VirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
-		tui.setClearOnShrink(true); // Explicitly enable (may be disabled via env var)
 		const component = new TestComponent();
 		tui.addChild(component);
 
@@ -503,6 +503,232 @@ describe("TUI differential rendering", () => {
 			"Editor 1",
 			"Editor 2",
 		]);
+
+		tui.stop();
+	});
+});
+
+describe("TUI scrollback preservation", () => {
+	it("does not clear scrollback when content shrinks", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = ["Line 0", "Line 1", "Line 2", "Line 3", "Line 4", "Line 5"];
+		tui.start();
+		await terminal.flush();
+		terminal.clearWrites();
+
+		// Shrink content
+		component.lines = ["Line 0", "Line 1"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Shrink should not clear scrollback");
+		tui.stop();
+	});
+
+	it("clears scrollback on width change", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = ["Line 0", "Line 1", "Line 2"];
+		tui.start();
+		await terminal.flush();
+		terminal.clearWrites();
+
+		// Width change should clear scrollback (wrapping invalidates it)
+		terminal.resize(60, 10);
+		await terminal.flush();
+
+		assert.ok(terminal.getWrites().includes("\x1b[3J"), "Width change should clear scrollback");
+		tui.stop();
+	});
+
+	it("does not clear scrollback on height change", async () => {
+		await withEnv({ TERMUX_VERSION: undefined }, async () => {
+			const terminal = new LoggingVirtualTerminal(40, 10);
+			const tui = new TUI(terminal);
+			const component = new TestComponent();
+			tui.addChild(component);
+
+			component.lines = ["Line 0", "Line 1", "Line 2"];
+			tui.start();
+			await terminal.flush();
+			terminal.clearWrites();
+
+			// Height change should clear screen but NOT scrollback
+			terminal.resize(40, 15);
+			await terminal.flush();
+
+			assert.ok(terminal.getWrites().includes("\x1b[2J"), "Height change should clear screen");
+			assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Height change should not clear scrollback");
+			tui.stop();
+		});
+	});
+
+	it("off-screen changes do not trigger scrollback clear", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		// Content longer than terminal height
+		component.lines = Array.from({ length: 15 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await terminal.flush();
+
+		const initialRedraws = tui.fullRedraws;
+		terminal.clearWrites();
+
+		// Change a line above the viewport (viewport shows lines 10-14)
+		component.lines = Array.from({ length: 15 }, (_, i) => (i === 2 ? "CHANGED" : `Line ${i}`));
+		tui.requestRender();
+		await terminal.flush();
+
+		// Should not trigger a full redraw or clear scrollback
+		assert.strictEqual(tui.fullRedraws, initialRedraws, "Off-screen change should not trigger full redraw");
+		assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Off-screen change should not clear scrollback");
+		assert.ok(!terminal.getWrites().includes("\x1b[2J"), "Off-screen change should not clear screen");
+
+		// Visible content should remain correct
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[4]?.includes("Line 14"), "Bottom of viewport preserved");
+
+		tui.stop();
+	});
+});
+
+describe("TUI maxLinesRendered tracking", () => {
+	it("shrinks maxLinesRendered when no overlays are active", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		// Render long content
+		component.lines = Array.from({ length: 8 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await terminal.flush();
+
+		// Shrink content
+		component.lines = ["Line 0", "Line 1", "Line 2"];
+		tui.requestRender();
+		await terminal.flush();
+
+		// Now grow slightly — should NOT trigger full redraw (maxLinesRendered tracked actual)
+		const redraws = tui.fullRedraws;
+		component.lines = ["Line 0", "Line 1", "Line 2", "Line 3"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.strictEqual(tui.fullRedraws, redraws, "Growth after shrink should use differential rendering");
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[3]?.includes("Line 3"), "New line rendered correctly");
+
+		tui.stop();
+	});
+
+	it("keeps maxLinesRendered stable with overlays active", async () => {
+		const terminal = new VirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		// Render content
+		component.lines = Array.from({ length: 8 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await terminal.flush();
+
+		// Show overlay
+		const overlayComponent = new TestComponent();
+		overlayComponent.lines = ["Overlay content"];
+		const handle = tui.showOverlay(overlayComponent, { width: 20, anchor: "center" });
+		await terminal.flush();
+
+		// Shrink content while overlay is active
+		component.lines = ["Line 0", "Line 1", "Line 2"];
+		tui.requestRender();
+		await terminal.flush();
+
+		// Overlay positioning should remain stable (maxLinesRendered should not shrink)
+		const viewport = terminal.getViewport();
+		// The overlay should still be visible and positioned correctly
+		const overlayVisible = viewport.some((line) => line.includes("Overlay content"));
+		assert.ok(overlayVisible, "Overlay should remain visible after content shrink");
+
+		handle.hide();
+		tui.stop();
+	});
+});
+
+describe("TUI spinner lifecycle", () => {
+	it("spinner add and remove leaves no ghost lines", async () => {
+		const terminal = new VirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const chat = new TestComponent();
+		const spinner = new TestComponent();
+		tui.addChild(chat);
+		tui.addChild(spinner);
+
+		// Chat content with spinner
+		chat.lines = ["Message 1", "Message 2"];
+		spinner.lines = ["⠋ Loading..."];
+		tui.start();
+		await terminal.flush();
+
+		let viewport = terminal.getViewport();
+		assert.ok(viewport[0]?.includes("Message 1"), "Chat line 1");
+		assert.ok(viewport[1]?.includes("Message 2"), "Chat line 2");
+		assert.ok(viewport[2]?.includes("Loading"), "Spinner visible");
+
+		// Remove spinner (simulates spinner stop)
+		spinner.lines = [];
+		tui.requestRender();
+		await terminal.flush();
+
+		viewport = terminal.getViewport();
+		assert.ok(viewport[0]?.includes("Message 1"), "Chat line 1 preserved");
+		assert.ok(viewport[1]?.includes("Message 2"), "Chat line 2 preserved");
+		assert.strictEqual(viewport[2]?.trim(), "", "Spinner line should be cleared");
+
+		tui.stop();
+	});
+
+	it("all-deleted case uses targeted erasure not full redraw", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		// Render 5 lines (all fit in viewport)
+		component.lines = ["Line 0", "Line 1", "Line 2", "Line 3", "Line 4"];
+		tui.start();
+		await terminal.flush();
+
+		const initialRedraws = tui.fullRedraws;
+		terminal.clearWrites();
+
+		// Shrink to 3 lines — lines 3,4 are "all deleted"
+		component.lines = ["Line 0", "Line 1", "Line 2"];
+		tui.requestRender();
+		await terminal.flush();
+
+		// Should use targeted erasure, not full redraw
+		assert.strictEqual(tui.fullRedraws, initialRedraws, "Should not trigger full redraw");
+		// Should use line-by-line erasure (\x1b[2K)
+		assert.ok(terminal.getWrites().includes("\x1b[2K"), "Should use targeted line erasure");
+		assert.ok(!terminal.getWrites().includes("\x1b[2J"), "Should not clear entire screen");
+
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[0]?.includes("Line 0"), "Line 0 preserved");
+		assert.ok(viewport[1]?.includes("Line 1"), "Line 1 preserved");
+		assert.ok(viewport[2]?.includes("Line 2"), "Line 2 preserved");
+		assert.strictEqual(viewport[3]?.trim(), "", "Line 3 cleared");
+		assert.strictEqual(viewport[4]?.trim(), "", "Line 4 cleared");
 
 		tui.stop();
 	});
