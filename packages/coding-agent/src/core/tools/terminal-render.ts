@@ -20,7 +20,7 @@ const MAX_CURSOR_POSITION = 5000;
 export function sanitizeCursorPositioning(input: string): string {
 	// Match CSI sequences: ESC[ followed by params and a final byte
 	// Covers H, f (CUP), A/B/C/D (movement), d (VPA), G/` (HPA)
-	return input.replace(/\x1b\[([0-9;]*)([HABCDGHfd`])/g, (_match, params: string, cmd: string) => {
+	return input.replace(/\x1b\[([0-9;]*)([ABCDEGHfdr`])/g, (_match, params: string, cmd: string) => {
 		const capped = params
 			.split(";")
 			.map((p: string) => {

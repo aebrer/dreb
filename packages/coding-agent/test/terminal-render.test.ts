@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderTerminalOutput, sanitizeCursorPositioning } from "../src/core/tools/terminal-render.js";
 
 describe("renderTerminalOutput", () => {
@@ -123,11 +123,26 @@ describe("renderTerminalOutput", () => {
 		expect(result).toContain("world");
 	});
 
-	it("should return raw input when TerminalTextRender throws", () => {
-		// We can't easily make TerminalTextRender throw, but we can verify the
-		// function doesn't throw for edge cases that might break the renderer
-		const weirdInput = "\x1b[999999999999;999999999999H";
-		expect(() => renderTerminalOutput(weirdInput)).not.toThrow();
+	it("should return raw input when TerminalTextRender throws", async () => {
+		// Use vi.doMock (not hoisted) + dynamic import to avoid breaking other tests
+		vi.doMock("terminal-render", () => ({
+			TerminalTextRender: vi.fn().mockImplementation(() => ({
+				write: vi.fn(),
+				render: vi.fn(() => {
+					throw new Error("Mock render failure");
+				}),
+			})),
+		}));
+
+		vi.resetModules();
+		const { renderTerminalOutput: mockedRender } = await import("../src/core/tools/terminal-render.js");
+
+		const input = "test input with \x1b[31mcolor\x1b[0m";
+		const result = mockedRender(input);
+		expect(result).toBe(input); // Should return raw input on error
+
+		vi.doUnmock("terminal-render");
+		vi.resetModules();
 	});
 });
 
@@ -198,5 +213,17 @@ describe("sanitizeCursorPositioning", () => {
 		const input = "text\x1b[9999999;1Hmore\x1b[9999999A";
 		const result = sanitizeCursorPositioning(input);
 		expect(result).toBe("text\x1b[5000;1Hmore\x1b[5000A");
+	});
+
+	it("should cap large row values in CNL sequences", () => {
+		const input = "\x1b[9999999E";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe("\x1b[5000E");
+	});
+
+	it("should cap scroll region bottom values", () => {
+		const input = "\x1b[1;9999999r";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe("\x1b[1;5000r");
 	});
 });

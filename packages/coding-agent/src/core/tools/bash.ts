@@ -315,14 +315,7 @@ export function createBashToolDefinition(
 					// Stream partial output using the rolling tail buffer.
 					if (onUpdate) {
 						const fullBuffer = Buffer.concat(chunks);
-						let fullText: string;
-						try {
-							fullText = renderTerminalOutput(fullBuffer.toString("utf-8"));
-						} catch (err) {
-							const detail = err instanceof Error ? err.message : String(err);
-							console.error(`[dreb] terminal-render fallback in streaming handler: ${detail}, using raw output`);
-							fullText = fullBuffer.toString("utf-8");
-						}
+						const fullText = renderTerminalOutput(fullBuffer.toString("utf-8"));
 						const truncation = truncateTail(fullText);
 						onUpdate({
 							content: [{ type: "text", text: truncation.content || "" }],
@@ -378,14 +371,7 @@ export function createBashToolDefinition(
 						// Close temp file stream and include buffered output in the error message.
 						if (tempFileStream) tempFileStream.end();
 						const fullBuffer = Buffer.concat(chunks);
-						let output: string;
-						try {
-							output = renderTerminalOutput(fullBuffer.toString("utf-8"));
-						} catch (renderErr) {
-							const detail = renderErr instanceof Error ? renderErr.message : String(renderErr);
-							console.error(`[dreb] terminal-render fallback in error handler: ${detail}, using raw output`);
-							output = fullBuffer.toString("utf-8");
-						}
+						let output = renderTerminalOutput(fullBuffer.toString("utf-8"));
 						if (err.message === "aborted") {
 							if (output) output += "\n\n";
 							output += "Command aborted";
