@@ -13,6 +13,7 @@ import { waitForChildProcess } from "../../utils/child-process.js";
 import { getShellConfig, getShellEnv, killProcessTree } from "../../utils/shell.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
+import { renderTerminalOutput } from "./terminal-render.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
@@ -314,7 +315,7 @@ export function createBashToolDefinition(
 					// Stream partial output using the rolling tail buffer.
 					if (onUpdate) {
 						const fullBuffer = Buffer.concat(chunks);
-						const fullText = fullBuffer.toString("utf-8");
+						const fullText = renderTerminalOutput(fullBuffer.toString("utf-8"));
 						const truncation = truncateTail(fullText);
 						onUpdate({
 							content: [{ type: "text", text: truncation.content || "" }],
@@ -337,7 +338,9 @@ export function createBashToolDefinition(
 						if (tempFileStream) tempFileStream.end();
 						// Combine the rolling buffer chunks.
 						const fullBuffer = Buffer.concat(chunks);
-						const fullOutput = fullBuffer.toString("utf-8");
+						// Render terminal output to collapse progress bars, handle \r overwrites,
+						// and process ANSI cursor movement — producing what a terminal would display.
+						const fullOutput = renderTerminalOutput(fullBuffer.toString("utf-8"));
 						// Apply tail truncation for the final display payload.
 						const truncation = truncateTail(fullOutput);
 						let outputText = truncation.content || "(no output)";
@@ -368,7 +371,7 @@ export function createBashToolDefinition(
 						// Close temp file stream and include buffered output in the error message.
 						if (tempFileStream) tempFileStream.end();
 						const fullBuffer = Buffer.concat(chunks);
-						let output = fullBuffer.toString("utf-8");
+						let output = renderTerminalOutput(fullBuffer.toString("utf-8"));
 						if (err.message === "aborted") {
 							if (output) output += "\n\n";
 							output += "Command aborted";

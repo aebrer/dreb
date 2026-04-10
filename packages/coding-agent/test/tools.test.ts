@@ -345,6 +345,47 @@ describe("Coding Agent Tools", () => {
 			expect(result.exitCode).toBe(0);
 			expect(result.output).toBe("red\n");
 		});
+
+		it("should collapse \\r-based progress output to final state", async () => {
+			// Simulate a progress bar: \r overwrites on the same line, then a final newline
+			const result = await bashTool.execute("test-terminal-render", {
+				command: "printf 'Progress: 0%%\\rProgress: 50%%\\rProgress: 100%%\\n'",
+			});
+			const output = getTextOutput(result).trim();
+			expect(output).toBe("Progress: 100%");
+			// Intermediate states should be overwritten by \r
+			expect(output).not.toContain("Progress: 0%");
+			expect(output).not.toContain("Progress: 50%");
+		});
+
+		it("should render terminal output in streaming updates", async () => {
+			const updates: any[] = [];
+			const onUpdate = (update: any) => updates.push(update);
+
+			await bashTool.execute(
+				"test-streaming-render",
+				{
+					command: "printf 'Progress: 0%%\\rProgress: 100%%\\n'",
+				},
+				undefined,
+				onUpdate,
+			);
+
+			// Should have received at least one update with rendered content
+			expect(updates.length).toBeGreaterThan(0);
+			const finalUpdate = updates[updates.length - 1];
+			const text = getTextOutput(finalUpdate).trim();
+			expect(text).toBe("Progress: 100%");
+			expect(text).not.toContain("Progress: 0%");
+		});
+
+		it("should render ANSI color codes out of tool result", async () => {
+			const result = await bashTool.execute("test-terminal-render-ansi", {
+				command: "printf '\\033[31merror\\033[0m: failed\\n'",
+			});
+			const output = getTextOutput(result).trim();
+			expect(output).toBe("error: failed");
+		});
 	});
 
 	describe("grep tool", () => {

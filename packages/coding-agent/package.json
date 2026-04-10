@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/coding-agent",
-	"version": "2.3.0",
+	"version": "2.4.0",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"drebConfig": {
@@ -72,6 +72,7 @@
 		"minimatch": "^10.2.3",
 		"proper-lockfile": "^4.1.2",
 		"strip-ansi": "^7.1.0",
+		"terminal-render": "^1.5.1",
 		"tree-sitter-c": "^0.24.1",
 		"tree-sitter-cpp": "^0.23.4",
 		"tree-sitter-go": "^0.25.0",
