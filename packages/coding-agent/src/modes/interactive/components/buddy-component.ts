@@ -10,7 +10,7 @@
  */
 
 import type { Component, MarkdownTheme as MT, TUI } from "@dreb/tui";
-import { joinColumns, truncateToWidth, visibleWidth } from "@dreb/tui";
+import { joinColumns, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@dreb/tui";
 import { marked } from "marked";
 import { applyEyes, getSpeciesFrames, getSpeciesWidth } from "../../../core/buddy/buddy-species.js";
 import type { BuddyState } from "../../../core/buddy/buddy-types.js";
@@ -198,7 +198,7 @@ export class BuddyComponent implements Component {
 		// Build RIGHT block: speech bubble or thinking indicator
 		let rightLines: string[] = [];
 		if (this.speechText) {
-			const availableWidth = width - spriteWidth - SIDE_PANEL_GAP - 4; // 4 for bubble borders+padding
+			const availableWidth = width - spriteWidth - SIDE_PANEL_GAP - 5; // 5 for leading space + bubble borders + padding
 			const bubbleMaxWidth = Math.max(20, availableWidth);
 			rightLines = this.formatSpeechBubble(this.speechText, bubbleMaxWidth);
 		} else if (this.thinkingLabel !== null) {
@@ -335,21 +335,8 @@ export class BuddyComponent implements Component {
 		// Render inline markdown (bold, italic, code) to styled text with ANSI codes
 		const styledText = this.renderInlineMarkdown(text);
 
-		// Word-wrap using visible width (ANSI-aware)
-		const lines: string[] = [];
-		const words = styledText.split(" ");
-		let currentLine = "";
-
-		for (const word of words) {
-			const test = currentLine ? `${currentLine} ${word}` : word;
-			if (visibleWidth(test) > maxWidth) {
-				if (currentLine) lines.push(currentLine);
-				currentLine = word;
-			} else {
-				currentLine = test;
-			}
-		}
-		if (currentLine) lines.push(currentLine);
+		// Word-wrap using visible width (ANSI-aware, handles long words)
+		const lines = wrapTextWithAnsi(styledText, maxWidth);
 
 		// Enforce hard line cap
 		if (lines.length > SPEECH_MAX_CONTENT_LINES) {
