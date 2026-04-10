@@ -753,38 +753,38 @@ describe("BuddyManager.respondToNameCall()", () => {
 
 describe("truncateResponse", () => {
 	it("passes through short responses unchanged", () => {
-		expect(truncateResponse("Hello world!", 300)).toBe("Hello world!");
+		expect(truncateResponse("Hello world!", 60)).toBe("Hello world!");
 	});
 
 	it("passes through responses at exactly the limit", () => {
-		const words = Array.from({ length: 300 }, (_, i) => `word${i}`);
+		const words = Array.from({ length: 60 }, (_, i) => `word${i}`);
 		const text = words.join(" ");
-		expect(truncateResponse(text, 300)).toBe(text);
+		expect(truncateResponse(text, 60)).toBe(text);
 	});
 
 	it("truncates responses over the word limit", () => {
-		const words = Array.from({ length: 400 }, (_, i) => `word${i}`);
+		const words = Array.from({ length: 100 }, (_, i) => `word${i}`);
 		const text = words.join(" ");
-		const result = truncateResponse(text, 300);
+		const result = truncateResponse(text, 60);
 		expect(result).toContain("...[truncated]");
-		expect(result.split(/\s+/).length).toBeLessThanOrEqual(302); // 300 words + "...[truncated]"
+		expect(result.split(/\s+/).length).toBeLessThanOrEqual(62); // 60 words + "...[truncated]"
 	});
 
 	it("preserves content before truncation point", () => {
-		const words = Array.from({ length: 400 }, (_, i) => `word${i}`);
+		const words = Array.from({ length: 100 }, (_, i) => `word${i}`);
 		const text = words.join(" ");
-		const result = truncateResponse(text, 300);
+		const result = truncateResponse(text, 60);
 		expect(result.startsWith("word0 word1 word2")).toBe(true);
-		expect(result).toContain("word299");
-		expect(result).not.toContain("word300");
+		expect(result).toContain("word59");
+		expect(result).not.toContain("word60");
 	});
 
 	it("handles empty string", () => {
-		expect(truncateResponse("", 300)).toBe("");
+		expect(truncateResponse("", 60)).toBe("");
 	});
 
 	it("handles single word", () => {
-		expect(truncateResponse("hello", 300)).toBe("hello");
+		expect(truncateResponse("hello", 60)).toBe("hello");
 	});
 });
 

@@ -38,7 +38,7 @@ const OLLAMA_MODEL_BASE: Omit<Model<"openai-completions">, "id" | "name"> = {
 };
 
 /** Max words for buddy response before truncation */
-const MAX_RESPONSE_WORDS = 300;
+const MAX_RESPONSE_WORDS = 60;
 
 /** Prompt for soul generation (uses parent LLM, not Ollama) */
 const SOUL_GENERATION_PROMPT = `You are generating a companion character for a coding assistant terminal app. Based on the species, rarity, and stats below, generate a creative name, a one-sentence personality description, and a funny fictional backstory.
