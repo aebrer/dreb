@@ -482,8 +482,15 @@ export class InteractiveMode {
 				hint("app.suspend", "to suspend"),
 				keyHint("tui.editor.deleteToLineEnd", "to delete to end"),
 				hint("app.thinking.cycle", "to cycle thinking level"),
-				rawKeyHint(`${keyText("app.model.cycleForward")}/${keyText("app.model.cycleBackward")}`, "to cycle models"),
-				hint("app.model.select", "to select model"),
+				...(keyText("app.model.cycleForward") || keyText("app.model.cycleBackward")
+					? [
+							rawKeyHint(
+								`${keyText("app.model.cycleForward")}/${keyText("app.model.cycleBackward")}`,
+								"to cycle models",
+							),
+						]
+					: []),
+				...(keyText("app.model.select") ? [hint("app.model.select", "to select model")] : []),
 				hint("app.tools.expand", "to expand tools"),
 				hint("app.thinking.toggle", "to expand thinking"),
 				hint("app.editor.external", "for external editor"),
@@ -4381,9 +4388,7 @@ export class InteractiveMode {
 | \`${exit}\` | Exit (when editor is empty) |
 | \`${suspend}\` | Suspend to background |
 | \`${cycleThinkingLevel}\` | Cycle thinking level |
-| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
-| \`${selectModel}\` | Open model selector |
-| \`${expandTools}\` | Toggle tool output expansion |
+${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |\n` : ""}${selectModel ? `| \`${selectModel}\` | Open model selector |\n` : ""}| \`${expandTools}\` | Toggle tool output expansion |
 | \`${toggleThinking}\` | Toggle thinking block visibility |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${followUp}\` | Queue follow-up message |
