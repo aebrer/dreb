@@ -226,4 +226,80 @@ describe("sanitizeCursorPositioning", () => {
 		const result = sanitizeCursorPositioning(input);
 		expect(result).toBe("\x1b[1;5000r");
 	});
+
+	it("should clamp accumulated cursor-down sequences to MAX_CURSOR_POSITION", () => {
+		// Three sequences of 2000 each = 6000 total, but should be clamped to 5000
+		const input = "\x1b[2000B\x1b[2000B\x1b[2000B";
+		const result = sanitizeCursorPositioning(input);
+		// First: 2000 allowed (cursor at 2000)
+		// Second: 2000 allowed (cursor at 4000)
+		// Third: only 1000 allowed (cursor would exceed 5000)
+		expect(result).toBe("\x1b[2000B\x1b[2000B\x1b[1000B");
+	});
+
+	it("should clamp accumulated cursor-forward sequences to MAX_CURSOR_POSITION", () => {
+		const input = "\x1b[3000C\x1b[3000C";
+		const result = sanitizeCursorPositioning(input);
+		// First: 3000 allowed (cursor at 3000)
+		// Second: only 2000 allowed (5000 - 3000)
+		expect(result).toBe("\x1b[3000C\x1b[2000C");
+	});
+
+	it("should allow cursor re-use after moving up", () => {
+		// Move down 3000, then up 2000, then down — should have 4000 available
+		const input = "\x1b[3000B\x1b[2000A\x1b[4000B";
+		const result = sanitizeCursorPositioning(input);
+		// After first: cursorRow=3000
+		// After second: cursorRow=1000
+		// Third: allowed=5000-1000=4000, clamped=min(4000,4000)=4000
+		expect(result).toBe("\x1b[3000B\x1b[2000A\x1b[4000B");
+	});
+
+	it("should track absolute positioning for accumulation limits", () => {
+		// Absolute position to row 4000, then cursor down
+		const input = "\x1b[4000;1H\x1b[2000B";
+		const result = sanitizeCursorPositioning(input);
+		// After H: cursorRow=4000
+		// Cursor down 2000: allowed=5000-4000=1000, clamped=1000
+		expect(result).toBe("\x1b[4000;1H\x1b[1000B");
+	});
+
+	it("should prevent cursor accumulation from many repeated sequences", () => {
+		// Attack vector: 11000 sequences of ESC[5000B each pass per-sequence cap
+		// but would accumulate to row ~55M without cumulative tracking
+		const malicious = "\x1b[5000B".repeat(11000);
+		const result = sanitizeCursorPositioning(malicious);
+		// First sequence moves to 5000, all remaining are clamped to 0
+		expect(result.startsWith("\x1b[5000B")).toBe(true);
+		expect(result).toContain("\x1b[0B");
+		// Total should be 11000 sequences (none stripped, just clamped)
+		expect(result.split("\x1b[").length - 1).toBe(11000);
+	});
+});
+
+describe("renderTerminalOutput — cursor accumulation security", () => {
+	it("should survive repeated cursor-down attack without OOM or timeout", () => {
+		// ~11000 sequences of ESC[5000B in ~100KB of input
+		// Without the fix, this triggers ensureLine(55M) → ~1.3GB allocation → OOM
+		const malicious = "\x1b[5000B".repeat(11000);
+		const input = `start${malicious}end`;
+		const start = performance.now();
+		const result = renderTerminalOutput(input);
+		const elapsed = performance.now() - start;
+		// Must complete quickly — OOM or multi-second hang means the fix failed
+		expect(elapsed).toBeLessThan(2000);
+		expect(result).toContain("start");
+		expect(result).toContain("end");
+	});
+
+	it("should survive repeated cursor-forward attack without OOM or timeout", () => {
+		const malicious = "\x1b[5000C".repeat(11000);
+		const input = `start${malicious}end`;
+		const start = performance.now();
+		const result = renderTerminalOutput(input);
+		const elapsed = performance.now() - start;
+		expect(elapsed).toBeLessThan(2000);
+		expect(result).toContain("start");
+		expect(result).toContain("end");
+	});
 });

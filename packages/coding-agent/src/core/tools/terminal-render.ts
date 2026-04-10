@@ -14,22 +14,109 @@ const MAX_CURSOR_POSITION = 5000;
  * millions of empty lines. This function caps row/column values in:
  * - CUP (cursor position): ESC[<row>;<col>H  or ESC[<row>;<col>f
  * - CUU/CUD/CUF/CUB (cursor movement): ESC[<n>A/B/C/D
+ * - CNL (cursor next line): ESC[<n>E
  * - VPA (vertical position absolute): ESC[<row>d
  * - HPA (horizontal position absolute): ESC[<col>G or ESC[<col>`
+ *
+ * In addition to per-sequence caps, this tracks cumulative cursor position
+ * to prevent accumulation attacks where many sequences each at the per-sequence
+ * cap combine to push the cursor to millions of rows/columns, triggering OOM
+ * via array allocation in the terminal renderer.
  */
 export function sanitizeCursorPositioning(input: string): string {
-	// Match CSI sequences: ESC[ followed by params and a final byte
-	// Covers H, f (CUP), A/B/C/D (movement), d (VPA), G/` (HPA)
-	return input.replace(/\x1b\[([0-9;]*)([ABCDEGHfdr`])/g, (_match, params: string, cmd: string) => {
-		const capped = params
-			.split(";")
+	// Track cumulative cursor position across sequences. An attacker can send
+	// thousands of ESC[5000B sequences, each passing the per-sequence cap but
+	// accumulating to ~55M rows. By tracking position, we clamp movement that
+	// would exceed the limit.
+	let cursorRow = 0;
+	let cursorCol = 0;
+
+	const parsePart = (p: string | undefined): number | null => {
+		if (p === undefined) return null;
+		const n = Number.parseInt(p, 10);
+		return Number.isNaN(n) ? null : n;
+	};
+
+	// Cap all numeric params individually and rebuild the param string
+	const capParams = (rawParts: string[]) =>
+		rawParts
 			.map((p: string) => {
 				const n = Number.parseInt(p, 10);
 				if (Number.isNaN(n)) return p;
 				return String(Math.min(n, MAX_CURSOR_POSITION));
 			})
 			.join(";");
-		return `\x1b[${capped}${cmd}`;
+
+	// Match CSI sequences: ESC[ followed by params and a final byte
+	// Covers H, f (CUP), A/B/C/D (movement), E (CNL), d (VPA), G/` (HPA), r (scroll region)
+	return input.replace(/\x1b\[([0-9;]*)([ABCDEGHfdr`])/g, (_match, params: string, cmd: string) => {
+		const rawParts = params.split(";");
+
+		switch (cmd) {
+			case "B": // Cursor down by n (default 1)
+			case "E": {
+				// Cursor next line by n (default 1)
+				const n = parsePart(rawParts[0]) ?? 1;
+				const capped = Math.min(n, MAX_CURSOR_POSITION);
+				const allowed = Math.max(0, MAX_CURSOR_POSITION - cursorRow);
+				const clamped = Math.min(capped, allowed);
+				cursorRow += clamped;
+				if (cmd === "E") cursorCol = 0;
+				return `\x1b[${clamped}${cmd}`;
+			}
+			case "A": {
+				// Cursor up by n (default 1)
+				const n = parsePart(rawParts[0]) ?? 1;
+				const capped = Math.min(n, MAX_CURSOR_POSITION);
+				cursorRow = Math.max(0, cursorRow - capped);
+				return `\x1b[${capped}A`;
+			}
+			case "C": {
+				// Cursor forward by n (default 1)
+				const n = parsePart(rawParts[0]) ?? 1;
+				const capped = Math.min(n, MAX_CURSOR_POSITION);
+				const allowed = Math.max(0, MAX_CURSOR_POSITION - cursorCol);
+				const clamped = Math.min(capped, allowed);
+				cursorCol += clamped;
+				return `\x1b[${clamped}C`;
+			}
+			case "D": {
+				// Cursor back by n (default 1)
+				const n = parsePart(rawParts[0]) ?? 1;
+				const capped = Math.min(n, MAX_CURSOR_POSITION);
+				cursorCol = Math.max(0, cursorCol - capped);
+				return `\x1b[${capped}D`;
+			}
+			case "H":
+			case "f": {
+				// Absolute cursor position: ESC[row;colH
+				const row = parsePart(rawParts[0]);
+				const col = parsePart(rawParts[1]);
+				cursorRow = row != null ? Math.min(row, MAX_CURSOR_POSITION) : 1;
+				cursorCol = col != null ? Math.min(col, MAX_CURSOR_POSITION) : 1;
+				return `\x1b[${capParams(rawParts)}${cmd}`;
+			}
+			case "d": {
+				// VPA - vertical position absolute
+				const row = parsePart(rawParts[0]);
+				cursorRow = row != null ? Math.min(row, MAX_CURSOR_POSITION) : 1;
+				return `\x1b[${capParams(rawParts)}d`;
+			}
+			case "G":
+			case "`": {
+				// HPA - horizontal position absolute
+				const col = parsePart(rawParts[0]);
+				cursorCol = col != null ? Math.min(col, MAX_CURSOR_POSITION) : 1;
+				return `\x1b[${capParams(rawParts)}${cmd}`;
+			}
+			case "r": {
+				// Set scroll region - cap params, no position tracking
+				return `\x1b[${capParams(rawParts)}r`;
+			}
+			default: {
+				return `\x1b[${capParams(rawParts)}${cmd}`;
+			}
+		}
 	});
 }
 
