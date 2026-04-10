@@ -30,7 +30,7 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@dreb/coding-agent": "^1.0.0",
+		"@dreb/coding-agent": "^2.0.0",
 		"grammy": "^1.35.0"
 	},
 	"devDependencies": {
