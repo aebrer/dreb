@@ -22,7 +22,7 @@ export class Loader extends Text {
 	}
 
 	render(width: number): string[] {
-		return ["", ...super.render(width)];
+		return super.render(width);
 	}
 
 	start() {

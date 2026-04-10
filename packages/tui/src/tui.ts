@@ -226,7 +226,6 @@ export class TUI extends Container {
 	private inputBuffer = ""; // Buffer for parsing terminal responses
 	private cellSizeQueryPending = false;
 	private showHardwareCursor = process.env.DREB_HARDWARE_CURSOR === "1";
-	private clearOnShrink = process.env.DREB_CLEAR_ON_SHRINK === "1"; // Clear empty rows when content shrinks (default: off)
 	private maxLinesRendered = 0; // Track terminal's working area (max lines ever rendered)
 	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
 	private fullRedrawCount = 0;
@@ -265,19 +264,6 @@ export class TUI extends Container {
 			this.terminal.hideCursor();
 		}
 		this.requestRender();
-	}
-
-	getClearOnShrink(): boolean {
-		return this.clearOnShrink;
-	}
-
-	/**
-	 * Set whether to trigger full re-render when content shrinks.
-	 * When true (default), empty rows are cleared when content shrinks.
-	 * When false, empty rows remain (reduces redraws on slower terminals).
-	 */
-	setClearOnShrink(enabled: boolean): void {
-		this.clearOnShrink = enabled;
 	}
 
 	setFocus(component: Component | null): void {
@@ -900,10 +886,13 @@ export class TUI extends Container {
 		newLines = this.applyLineResets(newLines);
 
 		// Helper to clear scrollback and viewport and render all new lines
-		const fullRender = (clear: boolean): void => {
+		const fullRender = (clear: boolean, clearScrollback = false): void => {
 			this.fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
-			if (clear) buffer += "\x1b[2J\x1b[H\x1b[3J"; // Clear screen, home, then clear scrollback
+			if (clear) {
+				buffer += "\x1b[2J\x1b[H"; // Clear screen, home
+				if (clearScrollback) buffer += "\x1b[3J"; // Clear scrollback (only for width changes)
+			}
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
 				buffer += newLines[i];
@@ -944,7 +933,7 @@ export class TUI extends Container {
 		// Width changes always need a full re-render because wrapping changes.
 		if (widthChanged) {
 			logRedraw(`terminal width changed (${this.previousWidth} -> ${width})`);
-			fullRender(true);
+			fullRender(true, true);
 			return;
 		}
 
@@ -953,16 +942,7 @@ export class TUI extends Container {
 		// In that environment, a full redraw causes the entire history to replay on every toggle.
 		if (heightChanged && !isTermuxSession()) {
 			logRedraw(`terminal height changed (${this.previousHeight} -> ${height})`);
-			fullRender(true);
-			return;
-		}
-
-		// Content shrunk below the working area and no overlays - re-render to clear empty rows
-		// (overlays need the padding, so only do this when no overlays are active)
-		// Configurable via setClearOnShrink() or DREB_CLEAR_ON_SHRINK=0 env var
-		if (this.clearOnShrink && newLines.length < this.maxLinesRendered && this.overlayStack.length === 0) {
-			logRedraw(`clearOnShrink (maxLinesRendered=${this.maxLinesRendered})`);
-			fullRender(true);
+			fullRender(true, false);
 			return;
 		}
 
@@ -1006,18 +986,22 @@ export class TUI extends Container {
 				const targetRow = Math.max(0, newLines.length - 1);
 				if (targetRow < prevViewportTop) {
 					logRedraw(`deleted lines moved viewport up (${targetRow} < ${prevViewportTop})`);
-					fullRender(true);
+					fullRender(true, false);
 					return;
 				}
 				const lineDiff = computeLineDiff(targetRow);
 				if (lineDiff > 0) buffer += `\x1b[${lineDiff}B`;
 				else if (lineDiff < 0) buffer += `\x1b[${-lineDiff}A`;
 				buffer += "\r";
+				// When content is completely empty, clear the row at targetRow too
+				if (newLines.length === 0) {
+					buffer += "\x1b[2K";
+				}
 				// Clear extra lines without scrolling
 				const extraLines = this.previousLines.length - newLines.length;
 				if (extraLines > height) {
 					logRedraw(`extraLines > height (${extraLines} > ${height})`);
-					fullRender(true);
+					fullRender(true, false);
 					return;
 				}
 				if (extraLines > 0) {
@@ -1035,6 +1019,12 @@ export class TUI extends Container {
 				this.cursorRow = targetRow;
 				this.hardwareCursorRow = targetRow;
 			}
+			// Track actual content height — shrink when no overlays to prevent ghost whitespace
+			if (this.overlayStack.length === 0) {
+				this.maxLinesRendered = newLines.length;
+			} else {
+				this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+			}
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousLines = newLines;
 			this.previousWidth = width;
@@ -1043,12 +1033,31 @@ export class TUI extends Container {
 			return;
 		}
 
-		// Differential rendering can only touch what was actually visible.
-		// If the first changed line is above the previous viewport, we need a full redraw.
+		// If changes are above the viewport, decide whether to clamp or full redraw
 		if (firstChanged < prevViewportTop) {
-			logRedraw(`firstChanged < viewportTop (${firstChanged} < ${prevViewportTop})`);
-			fullRender(true);
-			return;
+			if (newLines.length >= prevViewportTop + height) {
+				// Content still fills viewport — clamp off-screen changes
+				if (lastChanged < prevViewportTop) {
+					// All changes are above viewport — update state without rendering
+					if (this.overlayStack.length === 0) {
+						this.maxLinesRendered = newLines.length;
+					} else {
+						this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+					}
+					this.previousViewportTop = prevViewportTop;
+					this.positionHardwareCursor(cursorPos, newLines.length);
+					this.previousLines = newLines;
+					this.previousWidth = width;
+					this.previousHeight = height;
+					return;
+				}
+				firstChanged = prevViewportTop;
+			} else {
+				// Viewport needs to shift — full redraw without scrollback clear
+				logRedraw(`firstChanged < viewportTop with viewport shift (${firstChanged} < ${prevViewportTop})`);
+				fullRender(true, false);
+				return;
+			}
 		}
 
 		// Render from first changed line to end
@@ -1176,8 +1185,12 @@ export class TUI extends Container {
 		// hardwareCursorRow tracks actual terminal cursor position (for movement)
 		this.cursorRow = Math.max(0, newLines.length - 1);
 		this.hardwareCursorRow = finalCursorRow;
-		// Track terminal's working area (grows but doesn't shrink unless cleared)
-		this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+		// Track terminal's working area — shrink when no overlays to prevent ghost whitespace
+		if (this.overlayStack.length === 0) {
+			this.maxLinesRendered = newLines.length;
+		} else {
+			this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+		}
 		this.previousViewportTop = Math.max(prevViewportTop, finalCursorRow - height + 1);
 
 		// Position hardware cursor for IME
