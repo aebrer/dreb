@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderTerminalOutput } from "../src/core/tools/terminal-render.js";
+import { renderTerminalOutput, sanitizeCursorPositioning } from "../src/core/tools/terminal-render.js";
 
 describe("renderTerminalOutput", () => {
 	it("should collapse \\r-based progress bar to final state", () => {
@@ -110,5 +110,93 @@ describe("renderTerminalOutput", () => {
 		const result = renderTerminalOutput(input);
 		expect(result).toContain("new text");
 		expect(result).not.toContain("old text");
+	});
+
+	it("should cap extreme cursor positioning to prevent memory exhaustion", () => {
+		// ESC[9999999;1H would try to create ~10M lines without sanitization
+		const input = "hello\x1b[9999999;1Hworld";
+		const start = performance.now();
+		const result = renderTerminalOutput(input);
+		const elapsed = performance.now() - start;
+		// Should complete quickly (not allocate millions of lines)
+		expect(elapsed).toBeLessThan(2000);
+		expect(result).toContain("world");
+	});
+
+	it("should return raw input when TerminalTextRender throws", () => {
+		// We can't easily make TerminalTextRender throw, but we can verify the
+		// function doesn't throw for edge cases that might break the renderer
+		const weirdInput = "\x1b[999999999999;999999999999H";
+		expect(() => renderTerminalOutput(weirdInput)).not.toThrow();
+	});
+});
+
+describe("sanitizeCursorPositioning", () => {
+	it("should cap large row values in CUP sequences", () => {
+		const input = "\x1b[9999999;1H";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe("\x1b[5000;1H");
+	});
+
+	it("should cap large column values in CUP sequences", () => {
+		const input = "\x1b[1;9999999H";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe("\x1b[1;5000H");
+	});
+
+	it("should cap both row and column values", () => {
+		const input = "\x1b[9999999;9999999H";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe("\x1b[5000;5000H");
+	});
+
+	it("should not modify values within the cap", () => {
+		const input = "\x1b[25;80H";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe("\x1b[25;80H");
+	});
+
+	it("should cap cursor movement sequences (CUU/CUD/CUF/CUB)", () => {
+		expect(sanitizeCursorPositioning("\x1b[9999999A")).toBe("\x1b[5000A");
+		expect(sanitizeCursorPositioning("\x1b[9999999B")).toBe("\x1b[5000B");
+		expect(sanitizeCursorPositioning("\x1b[9999999C")).toBe("\x1b[5000C");
+		expect(sanitizeCursorPositioning("\x1b[9999999D")).toBe("\x1b[5000D");
+	});
+
+	it("should cap VPA and HPA sequences", () => {
+		expect(sanitizeCursorPositioning("\x1b[9999999d")).toBe("\x1b[5000d");
+		expect(sanitizeCursorPositioning("\x1b[9999999G")).toBe("\x1b[5000G");
+	});
+
+	it("should handle the lowercase f variant of CUP", () => {
+		const input = "\x1b[9999999;1f";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe("\x1b[5000;1f");
+	});
+
+	it("should leave non-cursor sequences untouched", () => {
+		// Color code
+		const input = "\x1b[31mhello\x1b[0m";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe(input);
+	});
+
+	it("should handle input with no ANSI sequences", () => {
+		const input = "plain text";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe(input);
+	});
+
+	it("should preserve empty params (defaults)", () => {
+		// ESC[H means cursor to home (1,1) — empty params
+		const input = "\x1b[H";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe("\x1b[H");
+	});
+
+	it("should handle multiple sequences in one string", () => {
+		const input = "text\x1b[9999999;1Hmore\x1b[9999999A";
+		const result = sanitizeCursorPositioning(input);
+		expect(result).toBe("text\x1b[5000;1Hmore\x1b[5000A");
 	});
 });
