@@ -763,6 +763,48 @@ function breakLongWord(word: string, width: number, tracker: AnsiCodeTracker): s
 }
 
 /**
+ * Merge two blocks of lines side-by-side into a single block.
+ * ANSI-safe: uses visibleWidth() for measurement and pads/truncates accordingly.
+ *
+ * @param left - Left block lines (may contain ANSI codes)
+ * @param right - Right block lines (may contain ANSI codes)
+ * @param gap - Number of spaces between left and right columns
+ * @param totalWidth - Maximum total width per line
+ * @returns Merged lines array
+ */
+export function joinColumns(left: string[], right: string[], gap: number, totalWidth: number): string[] {
+	const maxRows = Math.max(left.length, right.length);
+	if (maxRows === 0) return [];
+
+	// Find the max visible width across all left lines
+	let leftColWidth = 0;
+	for (const line of left) {
+		const w = visibleWidth(line);
+		if (w > leftColWidth) leftColWidth = w;
+	}
+
+	const rightColWidth = Math.max(0, totalWidth - leftColWidth - gap);
+	const gapStr = " ".repeat(gap);
+	const result: string[] = [];
+
+	for (let row = 0; row < maxRows; row++) {
+		const leftLine = row < left.length ? left[row]! : "";
+		const rightLine = row < right.length ? right[row]! : "";
+
+		// Pad left line to leftColWidth (ANSI-safe)
+		const leftVisible = visibleWidth(leftLine);
+		const leftPadded = leftLine + " ".repeat(Math.max(0, leftColWidth - leftVisible));
+
+		// Truncate right line if it exceeds rightColWidth
+		const rightTruncated = rightColWidth > 0 ? truncateToWidth(rightLine, rightColWidth) : "";
+
+		result.push(leftPadded + gapStr + rightTruncated);
+	}
+
+	return result;
+}
+
+/**
  * Apply background color to a line, padding to full width.
  *
  * @param line - Line of text (may contain ANSI codes)

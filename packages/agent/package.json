@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/agent-core",
-	"version": "2.1.0",
+	"version": "2.2.0",
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -20,7 +20,7 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@dreb/ai": "^1.0.0"
+		"@dreb/ai": "^2.0.0"
 	},
 	"keywords": [
 		"ai",

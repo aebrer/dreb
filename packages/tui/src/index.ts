@@ -101,4 +101,4 @@ export {
 	TUI,
 } from "./tui.js";
 // Utilities
-export { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";
+export { joinColumns, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";

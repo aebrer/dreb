@@ -2,6 +2,7 @@
  * Unit tests for BuddyComponent — rendering, speech bubbles, petting, state updates.
  */
 
+import { visibleWidth } from "@dreb/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuddyState } from "../src/core/buddy/buddy-types.js";
 import { Rarity, Stat } from "../src/core/buddy/buddy-types.js";
@@ -138,10 +139,59 @@ describe("BuddyComponent", () => {
 			const lines = comp.render(120);
 			comp.dispose();
 
-			// Full render has sprite + name + stats + bubble lines; bubble should have multiple content lines
 			// Find the bubble lines (those with │ borders)
 			const bubbleContentLines = lines.filter((l) => l.includes("│") && !l.includes("╭") && !l.includes("╰"));
 			expect(bubbleContentLines.length).toBeGreaterThan(1);
+		});
+
+		it("renders speech bubble beside sprite on same rows", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			comp.showSpeech("Hello beside!");
+			const lines = comp.render(120);
+			comp.dispose();
+
+			// At least one line should have both sprite content (●● from Duck eyeStyle) and bubble border (│)
+			const sideBySideLines = lines.filter(
+				(l) => l.includes("│") && (l.includes("●●") || l.includes("╭") || l.includes("╰")),
+			);
+			expect(sideBySideLines.length).toBeGreaterThan(0);
+		});
+
+		it("caps speech bubble to max 3 content lines", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			// Generate text that would produce many wrapped lines
+			const words = Array.from({ length: 30 }, (_, i) => `word${i}`);
+			const longText = words.join(" ");
+			comp.showSpeech(longText);
+			const lines = comp.render(120);
+			comp.dispose();
+
+			// Count bubble content lines (│ but not ╭ or ╰)
+			const contentLines = lines.filter((l) => l.includes("│") && !l.includes("╭") && !l.includes("╰"));
+			// Should have at most 3 content lines (the cap)
+			expect(contentLines.length).toBeLessThanOrEqual(3);
+			// Total bubble lines: top border + content + bottom border = at most 5
+			const bubbleLines = lines.filter((l) => l.includes("╭") || l.includes("╰") || l.includes("│"));
+			expect(bubbleLines.length).toBeLessThanOrEqual(5);
+		});
+
+		it("scales bubble width to fill available terminal space", () => {
+			const state = createTestState();
+			const comp = new BuddyComponent(mockUI, state);
+			const longText =
+				"This is a reasonably long speech text that should cause the bubble to expand wider than the old sixty character maximum.";
+			comp.showSpeech(longText);
+			const lines = comp.render(120);
+			comp.dispose();
+
+			// Find lines with bubble borders and check they are wider than 60 chars
+			const borderLines = lines.filter((l) => l.includes("╭") || l.includes("╰"));
+			for (const line of borderLines) {
+				// Visible width should be > 60 (the old hard-coded max)
+				expect(visibleWidth(line)).toBeGreaterThan(60);
+			}
 		});
 	});
 

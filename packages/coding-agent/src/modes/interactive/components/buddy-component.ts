@@ -10,7 +10,7 @@
  */
 
 import type { Component, MarkdownTheme as MT, TUI } from "@dreb/tui";
-import { truncateToWidth, visibleWidth } from "@dreb/tui";
+import { joinColumns, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@dreb/tui";
 import { marked } from "marked";
 import { applyEyes, getSpeciesFrames, getSpeciesWidth } from "../../../core/buddy/buddy-species.js";
 import type { BuddyState } from "../../../core/buddy/buddy-types.js";
@@ -22,6 +22,8 @@ const SPEECH_BUBBLE_DURATION_MS = 10000;
 const PET_DURATION_MS = 2500;
 const HEART_CHARS = ["❤️", "💕", "💖", "💗", "✨"];
 const NARROW_THRESHOLD = 100;
+const SPEECH_MAX_CONTENT_LINES = 3;
+const SIDE_PANEL_GAP = 2;
 
 export class BuddyComponent implements Component {
 	private ui: TUI;
@@ -165,18 +167,18 @@ export class BuddyComponent implements Component {
 		const frames = getSpeciesFrames(this.state.species);
 		const frame = frames[this.currentFrame % this.totalFrames];
 		const rendered = applyEyes(frame, this.state.eyeStyle);
+		const spriteWidth = getSpeciesWidth(this.state.species);
 
-		// Hat line (if present)
+		// Build LEFT block: hat + heart animation + sprite lines
+		const leftLines: string[] = [];
+
+		// Hat line
 		if (this.state.hat) {
-			const hatPad = Math.max(0, Math.floor((getSpeciesWidth(this.state.species) - 1) / 2) - 1);
-			lines.push(" ".repeat(hatPad) + this.state.hat);
+			const hatPad = Math.max(0, Math.floor((spriteWidth - 1) / 2) - 1);
+			leftLines.push(" ".repeat(hatPad) + this.state.hat);
 		}
 
-		// Sprite lines
-		const spriteWidth = getSpeciesWidth(this.state.species);
-		lines.push(...rendered);
-
-		// Heart animation line above sprite
+		// Heart animation line (above sprite, inserted at top)
 		if (this.isPetting && this.hearts.length > 0) {
 			const heartLine = " ".repeat(spriteWidth);
 			const chars = heartLine.split("");
@@ -187,36 +189,45 @@ export class BuddyComponent implements Component {
 					chars.splice(x, hChar.length, ...hChar.split(""));
 				}
 			}
-			// Insert heart line before sprite
-			lines.splice(this.state.hat ? 1 : 0, 0, chars.join(""));
+			leftLines.push(chars.join(""));
 		}
 
-		// Name + rarity line
+		// Sprite lines
+		leftLines.push(...rendered);
+
+		// Build RIGHT block: speech bubble or thinking indicator
+		let rightLines: string[] = [];
+		if (this.speechText) {
+			const availableWidth = width - spriteWidth - SIDE_PANEL_GAP - 5; // 5 for leading space + bubble borders + padding
+			const bubbleMaxWidth = Math.max(20, availableWidth);
+			rightLines = this.formatSpeechBubble(this.speechText, bubbleMaxWidth);
+		} else if (this.thinkingLabel !== null) {
+			const dots = ".".repeat((this.thinkingDots % BuddyComponent.THINKING_DOT_COUNT) + 1);
+			const label = this.thinkingLabel || "thinking";
+			rightLines = [` ${theme.fg("muted", `💭 ${label}${dots}`)}`];
+		}
+
+		// Merge left and right side-by-side
+		if (rightLines.length > 0) {
+			const merged = joinColumns(leftLines, rightLines, SIDE_PANEL_GAP, width);
+			lines.push(...merged);
+		} else {
+			lines.push(...leftLines);
+		}
+
+		// Name + rarity line (full width, below the sprite+panel area)
 		const shinyMark = this.state.shiny ? " ✨" : "";
 		const rarityColor = this.rarityColor(this.state.rarity);
 		const nameLine = ` ${theme.bold(this.state.name)}${shinyMark} ${theme.fg(rarityColor, `[${this.state.rarity}]`)} ${theme.fg("muted", this.state.species)}`;
 		lines.push(nameLine);
 
-		// Stats line
+		// Stats line (full width)
 		const statParts = (Object.values(Stat) as Stat[]).map((s) => {
 			const val = this.state.stats[s];
 			const bar = this.statBar(val);
 			return `${theme.fg("muted", s[0])}:${bar}`;
 		});
 		lines.push(` ${statParts.join(" ")}`);
-
-		// Thinking indicator
-		if (this.thinkingLabel !== null) {
-			const dots = ".".repeat((this.thinkingDots % BuddyComponent.THINKING_DOT_COUNT) + 1);
-			const label = this.thinkingLabel || "thinking";
-			lines.push(` ${theme.fg("muted", `💭 ${label}${dots}`)}`);
-		}
-
-		// Speech bubble (beside or below sprite)
-		if (this.speechText) {
-			const bubbleLines = this.formatSpeechBubble(this.speechText, Math.min(width - 4, 60));
-			lines.push(...bubbleLines);
-		}
 
 		return lines;
 	}
@@ -324,21 +335,19 @@ export class BuddyComponent implements Component {
 		// Render inline markdown (bold, italic, code) to styled text with ANSI codes
 		const styledText = this.renderInlineMarkdown(text);
 
-		// Word-wrap using visible width (ANSI-aware)
-		const lines: string[] = [];
-		const words = styledText.split(" ");
-		let currentLine = "";
+		// Word-wrap using visible width (ANSI-aware, handles long words)
+		const lines = wrapTextWithAnsi(styledText, maxWidth);
 
-		for (const word of words) {
-			const test = currentLine ? `${currentLine} ${word}` : word;
-			if (visibleWidth(test) > maxWidth) {
-				if (currentLine) lines.push(currentLine);
-				currentLine = word;
-			} else {
-				currentLine = test;
-			}
+		// Enforce hard line cap
+		if (lines.length > SPEECH_MAX_CONTENT_LINES) {
+			const kept = lines.slice(0, SPEECH_MAX_CONTENT_LINES - 1);
+			const lastLine = lines[SPEECH_MAX_CONTENT_LINES - 1];
+			// Truncate the last kept line with ellipsis
+			const truncated = truncateToWidth(lastLine, maxWidth - 1, "…");
+			kept.push(truncated);
+			lines.length = 0;
+			lines.push(...kept);
 		}
-		if (currentLine) lines.push(currentLine);
 
 		// Wrap in bubble border using visible width for measurement
 		const maxLineWidth = Math.max(...lines.map((l) => visibleWidth(l)));
