@@ -19,6 +19,7 @@ import type {
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.js";
+import { parseModelPattern } from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import { SessionManager } from "../../core/session-manager.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
@@ -46,7 +47,7 @@ export type {
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
-export async function runRpcMode(session: AgentSession): Promise<never> {
+export async function runRpcMode(session: AgentSession, modelFallbackMessage?: string): Promise<never> {
 	takeOverStdout();
 
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
@@ -387,6 +388,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					messageCount: session.messages.length,
 					pendingMessageCount: session.pendingMessageCount,
+					modelFallbackMessage,
 				};
 				return success(id, "get_state", state);
 			}
@@ -403,6 +405,19 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 				}
 				await session.setModel(model);
 				return success(id, "set_model", model);
+			}
+
+			case "resolve_model": {
+				session.modelRegistry.refresh();
+				const models = await session.modelRegistry.getAvailable();
+				const result = parseModelPattern(command.pattern, models);
+				if (!result.model) {
+					return success(id, "resolve_model", null);
+				}
+				return success(id, "resolve_model", {
+					model: result.model,
+					warning: result.warning,
+				});
 			}
 
 			case "cycle_model": {

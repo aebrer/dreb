@@ -519,6 +519,20 @@ function isOAuthToken(apiKey: string): boolean {
 	return apiKey.includes("sk-ant-oat");
 }
 
+/**
+ * Check if a base URL points to a first-party Anthropic API endpoint.
+ * Third-party Anthropic-compatible endpoints (e.g. kimi-coding) should not
+ * receive Anthropic-specific beta headers or SDK flags.
+ */
+function isFirstPartyAnthropic(baseUrl: string): boolean {
+	try {
+		const url = new URL(baseUrl);
+		return url.hostname === "api.anthropic.com" || url.hostname.endsWith(".api.anthropic.com");
+	} catch {
+		return false;
+	}
+}
+
 function createClient(
 	model: Model<"anthropic-messages">,
 	apiKey: string,
@@ -529,6 +543,7 @@ function createClient(
 	// Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
 	// The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model.id);
+	const firstParty = isFirstPartyAnthropic(model.baseUrl);
 
 	// Copilot: Bearer auth, selective betas (no fine-grained-tool-streaming)
 	if (model.provider === "github-copilot") {
@@ -545,11 +560,28 @@ function createClient(
 			defaultHeaders: mergeHeaders(
 				{
 					accept: "application/json",
-					"anthropic-dangerous-direct-browser-access": "true",
+					...(firstParty ? { "anthropic-dangerous-direct-browser-access": "true" } : {}),
 					...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
 				},
 				model.headers,
 				dynamicHeaders,
+				optionsHeaders,
+			),
+		});
+
+		return { client, isOAuthToken: false };
+	}
+
+	// Third-party Anthropic-compatible endpoints: minimal headers, no Anthropic-specific features
+	if (!firstParty) {
+		const client = new Anthropic({
+			apiKey,
+			baseURL: model.baseUrl,
+			defaultHeaders: mergeHeaders(
+				{
+					accept: "application/json",
+				},
+				model.headers,
 				optionsHeaders,
 			),
 		});
@@ -585,7 +617,7 @@ function createClient(
 		return { client, isOAuthToken: true };
 	}
 
-	// API key auth
+	// API key auth (first-party Anthropic)
 	const client = new Anthropic({
 		apiKey,
 		baseURL: model.baseUrl,

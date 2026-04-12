@@ -115,24 +115,13 @@ export async function cmdModel(ctx: Context, userState: UserState, args: string)
 			return;
 		}
 
-		// Try to match and switch
-		const pattern = args.trim().toLowerCase();
-		const models = await bridge.getAvailableModels();
+		// Resolve pattern using the same logic as CLI/TUI
+		const pattern = args.trim();
+		const result = await bridge.resolveModel(pattern);
 
-		// Score matches: exact id > exact provider/id > substring
-		const scored = models
-			.map((m: any) => {
-				const id = m.id.toLowerCase();
-				const full = `${m.provider}/${m.id}`.toLowerCase();
-				if (id === pattern || full === pattern) return { model: m, score: 0 };
-				if (id.includes(pattern) || full.includes(pattern)) return { model: m, score: 1 };
-				return { model: m, score: -1 };
-			})
-			.filter((s) => s.score >= 0)
-			.sort((a, b) => a.score - b.score);
-
-		if (scored.length === 0) {
-			// Group models by provider for readable display
+		if (!result) {
+			// No match — list available models grouped by provider
+			const models = await bridge.getAvailableModels();
 			const byProvider = new Map<string, string[]>();
 			for (const m of models as any[]) {
 				const list = byProvider.get(m.provider) || [];
@@ -150,10 +139,10 @@ export async function cmdModel(ctx: Context, userState: UserState, args: string)
 			return;
 		}
 
-		// If multiple matches, prefer exact over substring
-		const match = scored[0].model;
-		await bridge.setModel((match as any).provider, (match as any).id);
-		await safeSend(ctx.api, chatId, `🧠 Switched to \`${(match as any).provider}/${(match as any).id}\``);
+		const model = result.model as any;
+		await bridge.setModel(model.provider, model.id);
+		const warning = result.warning ? ` ⚠️ ${result.warning}` : "";
+		await safeSend(ctx.api, chatId, `🧠 Switched to \`${model.provider}/${model.id}\`${warning}`);
 	} catch (e) {
 		log(`[CMD] /model error: ${e}`);
 		await safeSend(ctx.api, chatId, `❌ ${e}`);

@@ -42,6 +42,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		expect(state.model?.id).toBe("claude-sonnet-4-5");
 		expect(state.isStreaming).toBe(false);
 		expect(state.messageCount).toBe(0);
+		expect(state.modelFallbackMessage).toBeUndefined();
 	}, 30000);
 
 	test("should save messages to session file", async () => {
@@ -318,4 +319,18 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		expect(sessionInfoEntries.length).toBe(1);
 		expect(sessionInfoEntries[0].name).toBe("my-test-session");
 	}, 60000);
+
+	test("should resolve model patterns via resolve_model command", async () => {
+		await client.start();
+
+		// Exact model match
+		const result = await client.resolveModel("claude-sonnet-4-5");
+		expect(result).not.toBeNull();
+		expect(result!.model.provider).toBe("anthropic");
+		expect(result!.model.id).toBe("claude-sonnet-4-5");
+
+		// Non-existent model returns null
+		const noMatch = await client.resolveModel("nonexistent-model-xyz-12345");
+		expect(noMatch).toBeNull();
+	}, 30000);
 });

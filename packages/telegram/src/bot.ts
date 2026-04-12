@@ -11,6 +11,14 @@ import { sendPrompt } from "./handlers/message.js";
 import type { UserState } from "./types.js";
 import { log, safeDelete, safeSend } from "./util/telegram.js";
 
+/** Flush any pending model fallback warning to the user (shown once after bridge restart) */
+async function flushPendingWarning(api: Bot["api"], chatId: number, userState: UserState): Promise<void> {
+	if (userState.pendingModelFallbackWarning) {
+		await safeSend(api, chatId, `⚠️ _${userState.pendingModelFallbackWarning}_`);
+		userState.pendingModelFallbackWarning = undefined;
+	}
+}
+
 /** Per-user state store */
 const userStates = new Map<number, UserState>();
 
@@ -88,6 +96,8 @@ export function createBot(config: Config): Bot {
 			return;
 		}
 
+		await flushPendingWarning(ctx.api, ctx.chat!.id, userState);
+
 		sendPrompt(ctx.api, userState, {
 			chatId: ctx.chat!.id,
 			replyToId: ctx.message.message_id,
@@ -110,6 +120,8 @@ export function createBot(config: Config): Bot {
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Failed to start agent: ${e}`);
 			return;
 		}
+
+		await flushPendingWarning(ctx.api, ctx.chat!.id, userState);
 
 		await handleFile(ctx, ctx.api, boundGetUserState);
 	});

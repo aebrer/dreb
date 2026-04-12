@@ -29,6 +29,7 @@ export type RpcCommand =
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
+	| { id?: string; type: "resolve_model"; pattern: string }
 	| { id?: string; type: "cycle_model" }
 	| { id?: string; type: "get_available_models" }
 
@@ -110,6 +111,9 @@ export interface RpcSessionState {
 	autoCompactionEnabled: boolean;
 	messageCount: number;
 	pendingMessageCount: number;
+	/** Non-empty when the model was changed from the user's saved preference
+	 *  (e.g. saved model unavailable after restart). */
+	modelFallbackMessage?: string;
 }
 
 // ============================================================================
@@ -135,6 +139,13 @@ export type RpcResponse =
 			command: "set_model";
 			success: true;
 			data: Model<any>;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "resolve_model";
+			success: true;
+			data: { model: Model<any>; warning?: string } | null;
 	  }
 	| {
 			id?: string;

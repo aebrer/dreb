@@ -75,7 +75,14 @@ export async function resolveApiKey(provider: string): Promise<string | undefine
 			}
 		}
 
-		const result = await getOAuthApiKey(provider as OAuthProvider, oauthCredentials);
+		let result: Awaited<ReturnType<typeof getOAuthApiKey>> | undefined;
+		try {
+			result = await getOAuthApiKey(provider as OAuthProvider, oauthCredentials);
+		} catch {
+			// Provider not registered as OAuth (e.g. "anthropic" with an OAuth entry
+			// in auth.json but no OAuth handler registered in the test environment)
+			return undefined;
+		}
 		if (!result) return undefined;
 
 		// Save refreshed credentials back to auth.json

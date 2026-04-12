@@ -67,7 +67,9 @@ export async function ensureBridgeWithSession(config: Config, userState: UserSta
 		return bridge;
 	}
 
+	const hadBridge = !!userState.bridge?.isAlive;
 	const bridge = await ensureBridge(config, userState);
+	const freshBridge = !hadBridge;
 
 	// Track effective cwd (default from config on first bridge creation)
 	if (!userState.effectiveCwd) {
@@ -77,6 +79,18 @@ export async function ensureBridgeWithSession(config: Config, userState: UserSta
 	// No session yet — try to resume latest
 	if (!bridge.sessionId) {
 		await bridge.resumeLatest();
+	}
+
+	// Check for model fallback warning on fresh bridge (e.g. after crash)
+	if (freshBridge) {
+		try {
+			const state = await bridge.getState();
+			if (state?.modelFallbackMessage) {
+				userState.pendingModelFallbackWarning = state.modelFallbackMessage;
+			}
+		} catch {
+			// Non-critical — the warning is best-effort
+		}
 	}
 
 	return bridge;

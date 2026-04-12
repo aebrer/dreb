@@ -303,6 +303,19 @@ export class AgentBridge {
 	}
 
 	/**
+	 * Resolve a model pattern using the same logic as CLI/TUI.
+	 */
+	async resolveModel(pattern: string): Promise<{ model: any; warning?: string } | null> {
+		if (!this.client) return null;
+		try {
+			return await this.client.resolveModel(pattern);
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
+	}
+
+	/**
 	 * Set thinking level.
 	 */
 	async setThinkingLevel(level: string): Promise<void> {
