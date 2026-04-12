@@ -110,7 +110,7 @@ function tryMatchModel(modelPattern: string, availableModels: Model<Api>[]): Mod
 
 /**
  * Resolve a model pattern against available models.
- * Shared by TUI, CLI, and RPC/Telgram resolution paths.
+ * Shared by TUI, CLI, and RPC/Telegram resolution paths.
  *
  * Handles: exact matches, provider/model references, fuzzy matching,
  * and thinking level parsing (e.g. "sonnet:high").

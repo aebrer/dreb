@@ -88,6 +88,12 @@ export function createBot(config: Config): Bot {
 			return;
 		}
 
+		// Surface model fallback warning (e.g. saved model unavailable after restart)
+		if (userState.pendingModelFallbackWarning) {
+			await safeSend(ctx.api, ctx.chat!.id, `⚠️ _${userState.pendingModelFallbackWarning}_`);
+			userState.pendingModelFallbackWarning = undefined;
+		}
+
 		sendPrompt(ctx.api, userState, {
 			chatId: ctx.chat!.id,
 			replyToId: ctx.message.message_id,
@@ -109,6 +115,12 @@ export function createBot(config: Config): Bot {
 			log(`[FILE] Bridge setup failed: ${e}`);
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Failed to start agent: ${e}`);
 			return;
+		}
+
+		// Surface model fallback warning (e.g. saved model unavailable after restart)
+		if (userState.pendingModelFallbackWarning) {
+			await safeSend(ctx.api, ctx.chat!.id, `⚠️ _${userState.pendingModelFallbackWarning}_`);
+			userState.pendingModelFallbackWarning = undefined;
 		}
 
 		await handleFile(ctx, ctx.api, boundGetUserState);

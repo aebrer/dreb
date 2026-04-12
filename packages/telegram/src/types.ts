@@ -35,6 +35,8 @@ export interface UserState {
 	outbox: Array<{ chatId: number; text: string; long?: boolean; retries?: number }>;
 	/** Buddy controller — any to avoid import of @dreb/coding-agent/buddy */
 	buddyController: any;
+	/** Pending model fallback warning to show the user (set once after bridge start) */
+	pendingModelFallbackWarning?: string;
 }
 
 /** Session info for persistence across bot restarts */
