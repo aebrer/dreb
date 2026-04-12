@@ -253,6 +253,16 @@ export class RpcClient {
 	}
 
 	/**
+	 * Resolve a model pattern using the same logic as CLI/TUI.
+	 * Runs server-side so API keys never leave the process.
+	 * Returns null if no match found.
+	 */
+	async resolveModel(pattern: string): Promise<{ model: ModelInfo; warning?: string } | null> {
+		const response = await this.send({ type: "resolve_model", pattern });
+		return this.getData<{ model: ModelInfo; warning?: string } | null>(response);
+	}
+
+	/**
 	 * Hatch a new buddy companion. Runs inside the agent process
 	 * so API keys never leave the process boundary.
 	 */

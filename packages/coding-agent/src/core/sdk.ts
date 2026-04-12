@@ -207,11 +207,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// If session has data, try to restore model from it
 	if (!model && hasExistingSession && existingSession.model) {
 		const restoredModel = modelRegistry.find(existingSession.model.provider, existingSession.model.modelId);
-		if (restoredModel && (await modelRegistry.getApiKey(restoredModel))) {
+		const hasApiKey = restoredModel ? !!(await modelRegistry.getApiKey(restoredModel)) : false;
+		if (restoredModel && hasApiKey) {
 			model = restoredModel;
 		}
 		if (!model) {
-			modelFallbackMessage = `Could not restore model ${existingSession.model.provider}/${existingSession.model.modelId}`;
+			const reason = !restoredModel ? "not found in registry" : "no API key available";
+			modelFallbackMessage = `Could not restore model ${existingSession.model.provider}/${existingSession.model.modelId} (${reason})`;
+			console.warn(`[model-restore] ${modelFallbackMessage}`);
 		}
 	}
 

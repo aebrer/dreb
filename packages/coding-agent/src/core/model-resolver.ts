@@ -108,6 +108,24 @@ function tryMatchModel(modelPattern: string, availableModels: Model<Api>[]): Mod
 	return findModelInList(modelPattern, availableModels);
 }
 
+/**
+ * Resolve a model pattern against available models.
+ * Shared by TUI, CLI, and RPC/Telgram resolution paths.
+ *
+ * Handles: exact matches, provider/model references, fuzzy matching,
+ * and thinking level parsing (e.g. "sonnet:high").
+ *
+ * Returns the resolved model and optional thinking level/warning.
+ * Returns undefined model if no match found.
+ */
+export function resolveModelPattern(
+	pattern: string,
+	availableModels: Model<Api>[],
+	options?: { allowInvalidThinkingLevelFallback?: boolean },
+): ParsedModelResult {
+	return parseModelPattern(pattern, availableModels, options);
+}
+
 export interface ParsedModelResult {
 	model: Model<Api> | undefined;
 	/** Thinking level if explicitly specified in pattern, undefined otherwise */
