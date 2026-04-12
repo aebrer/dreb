@@ -19,7 +19,7 @@ import type {
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.js";
-import { resolveModelPattern } from "../../core/model-resolver.js";
+import { parseModelPattern } from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import { SessionManager } from "../../core/session-manager.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
@@ -410,7 +410,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			case "resolve_model": {
 				session.modelRegistry.refresh();
 				const models = await session.modelRegistry.getAvailable();
-				const result = resolveModelPattern(command.pattern, models);
+				const result = parseModelPattern(command.pattern, models);
 				if (!result.model) {
 					return success(id, "resolve_model", null);
 				}
