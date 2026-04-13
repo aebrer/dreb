@@ -228,10 +228,11 @@ describe("ensureBridgeWithSession", () => {
 		it("kills bridge, creates new one with effectiveCwd, calls newSession()", async () => {
 			const existingBridge = createMockBridge({ isAlive: true });
 			const newBridge = createMockBridge();
+			// cmdNew now eagerly resolves: newSessionCwd = effectiveCwd ?? config.workingDir
 			const userState = createUserState({
 				bridge: existingBridge as any,
 				newSessionFlag: true,
-				newSessionCwd: null,
+				newSessionCwd: "/prev/dir",
 				effectiveCwd: "/prev/dir",
 			});
 
@@ -255,9 +256,10 @@ describe("ensureBridgeWithSession", () => {
 	describe("bare /new with no prior session", () => {
 		it("kills bridge, creates new one with config.workingDir, calls newSession()", async () => {
 			const newBridge = createMockBridge();
+			// cmdNew now eagerly resolves: newSessionCwd = effectiveCwd ?? config.workingDir
 			const userState = createUserState({
 				newSessionFlag: true,
-				newSessionCwd: null,
+				newSessionCwd: "/default/dir",
 				effectiveCwd: null,
 			});
 

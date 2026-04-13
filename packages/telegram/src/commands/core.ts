@@ -93,9 +93,13 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 		userState.newSessionCwd = resolved;
 		await ctx.reply(`🆕 Next message will start a fresh session in \`${resolved}\``);
 	} else {
+		// Eagerly resolve CWD — never store null as a sentinel.
+		// After /restart, effectiveCwd is null (in-memory state is lost),
+		// so this falls back to config.workingDir deterministically.
+		const cwd = userState.effectiveCwd ?? userState.config.workingDir;
 		userState.newSessionFlag = true;
-		userState.newSessionCwd = null;
-		await ctx.reply("🆕 Next message will start a fresh session.");
+		userState.newSessionCwd = cwd;
+		await ctx.reply(`🆕 Next message will start a fresh session in \`${cwd}\``);
 	}
 }
 
