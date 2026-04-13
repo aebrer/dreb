@@ -51,8 +51,8 @@ describe("executeBash truncation temp file", () => {
 	});
 
 	it("creates a temp file when output exceeds byte limit", async () => {
-		// Generate >50KB of output
-		const result = await executeBash("head -c 60000 /dev/urandom | base64");
+		// Generate >50KB of deterministic output (60000 bytes > 50KB = 51200 bytes)
+		const result = await executeBash("head -c 60000 /dev/zero | tr '\\0' 'A'");
 		trackTempFile(result.fullOutputPath);
 
 		expect(result.truncated).toBe(true);
