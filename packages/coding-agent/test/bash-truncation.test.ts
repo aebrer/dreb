@@ -67,6 +67,30 @@ describe("executeBash truncation temp file", () => {
 		expect(result.truncated).toBe(false);
 		expect(result.fullOutputPath).toBeUndefined();
 	});
+
+	it("creates a temp file when an aborted command has truncatable output", async () => {
+		const controller = new AbortController();
+
+		// Produce 3000+ lines (over the 2000-line truncation threshold) then sleep to keep alive
+		const resultPromise = executeBash("seq 3000; sleep 30", { signal: controller.signal });
+
+		// Give seq time to finish output, then abort during sleep
+		await new Promise<void>((resolve) => setTimeout(resolve, 300));
+		controller.abort();
+
+		const result = await resultPromise;
+		trackTempFile(result.fullOutputPath);
+
+		expect(result.cancelled).toBe(true);
+		expect(result.truncated).toBe(true);
+		expect(result.fullOutputPath).toBeDefined();
+		expect(result.fullOutputPath).not.toBe("undefined");
+		expect(existsSync(result.fullOutputPath!)).toBe(true);
+
+		const fullContent = readFileSync(result.fullOutputPath!, "utf-8");
+		const lineCount = fullContent.trimEnd().split("\n").length;
+		expect(lineCount).toBe(3000);
+	});
 });
 
 // ---------------------------------------------------------------------------

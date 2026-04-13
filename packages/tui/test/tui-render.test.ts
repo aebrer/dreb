@@ -24,6 +24,10 @@ class LoggingVirtualTerminal extends VirtualTerminal {
 		return this.writes.join("");
 	}
 
+	getWriteCount(): number {
+		return this.writes.length;
+	}
+
 	clearWrites(): void {
 		this.writes = [];
 	}
@@ -744,6 +748,13 @@ describe("TUI render throttle", () => {
 		component.lines = ["Initial"];
 		tui.start();
 		await terminal.flush();
+
+		// Record how many writes a single render produces
+		terminal.clearWrites();
+		component.lines = ["Baseline"];
+		tui.requestRender();
+		await terminal.flush();
+		const writesPerRender = terminal.getWriteCount();
 		terminal.clearWrites();
 
 		// Fire many rapid requestRender calls
@@ -758,6 +769,14 @@ describe("TUI render throttle", () => {
 		// The final state should reflect the last update
 		const viewport = terminal.getViewport();
 		assert.ok(viewport[0]?.includes("Update 49"), `Final state should be last update, got: ${viewport[0]}`);
+
+		// Throttle should have coalesced 50 requests into far fewer actual renders
+		const totalWrites = terminal.getWriteCount();
+		const maxExpectedRenders = 5; // 50 requests within one tick → at most a few renders
+		assert.ok(
+			totalWrites <= writesPerRender * maxExpectedRenders,
+			`Expected at most ${maxExpectedRenders} renders (${writesPerRender * maxExpectedRenders} writes), got ${totalWrites} writes`,
+		);
 
 		tui.stop();
 	});
