@@ -1,8 +1,9 @@
 /**
- * Tests for warnInSession() behavior, AgentSession.reload() diagnostic surfacing,
+ * Tests for warnInSession() behavior, warnResourceDiagnostics(), AgentSession.reload()
+ * diagnostic surfacing, onWarning → informational mapping, configValueWarnings drain,
  * and event queue error recovery.
  *
- * Covers: PR 155 findings 3, 10, 11
+ * Covers: PR 155 findings 1, 3, 5, 6, 10, 11
  */
 
 import { Agent } from "@dreb/agent-core";
@@ -12,6 +13,7 @@ import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import type { ResourceDiagnostic } from "../src/core/diagnostics.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
+import { clearConfigValueCache, configValueWarnings } from "../src/core/resolve-config-value.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { createHarness, type Harness } from "./test-harness.js";
@@ -239,6 +241,217 @@ describe("AgentSession.reload() diagnostic surfacing", () => {
 			expect(warnSpy).toHaveBeenCalledTimes(1);
 			const message = warnSpy.mock.calls[0][0];
 			expect(message).toContain("[error] Could not read AGENTS.md (/project/AGENTS.md)");
+
+			warnSpy.mockRestore();
+		} finally {
+			session.dispose();
+		}
+	});
+});
+
+// ============================================================================
+// Finding 1: warnResourceDiagnostics() — shared helper for startup + reload
+// ============================================================================
+
+describe("warnResourceDiagnostics", () => {
+	it("formats skill, prompt, theme, context diagnostics and extension errors into a single warning", () => {
+		const resourceLoader = createTestResourceLoader();
+		resourceLoader.getSkills = () => ({
+			skills: [],
+			diagnostics: [{ type: "warning", message: "Bad frontmatter", path: "/skills/bad.md" }],
+		});
+		resourceLoader.getPrompts = () => ({
+			prompts: [],
+			diagnostics: [{ type: "error", message: "Prompt parse failed", path: "/prompts/x.md" }],
+		});
+		resourceLoader.getContextDiagnostics = () => [
+			{ type: "error", message: "Could not read AGENTS.md", path: "/project/AGENTS.md" },
+		];
+
+		const { session } = createMinimalSession(resourceLoader);
+		try {
+			const warnSpy = vi.spyOn(session, "warnInSession");
+
+			session.warnResourceDiagnostics(resourceLoader);
+
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			const message = warnSpy.mock.calls[0][0];
+			expect(message).toContain("Resource loading issues:");
+			expect(message).toContain("[warning] Bad frontmatter (/skills/bad.md)");
+			expect(message).toContain("[error] Prompt parse failed (/prompts/x.md)");
+			expect(message).toContain("[error] Could not read AGENTS.md (/project/AGENTS.md)");
+
+			warnSpy.mockRestore();
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("includes extension errors", () => {
+		const resourceLoader = createTestResourceLoader();
+		const originalGetExtensions = resourceLoader.getExtensions;
+		resourceLoader.getExtensions = () => ({
+			...originalGetExtensions(),
+			errors: [{ path: "/ext/broken.ts", error: "SyntaxError" }],
+		});
+
+		const { session } = createMinimalSession(resourceLoader);
+		try {
+			const warnSpy = vi.spyOn(session, "warnInSession");
+
+			session.warnResourceDiagnostics(resourceLoader);
+
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("[error] Extension: /ext/broken.ts: SyntaxError");
+
+			warnSpy.mockRestore();
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("does not call warnInSession when there are no diagnostics or errors", () => {
+		const resourceLoader = createTestResourceLoader();
+
+		const { session } = createMinimalSession(resourceLoader);
+		try {
+			const warnSpy = vi.spyOn(session, "warnInSession");
+
+			session.warnResourceDiagnostics(resourceLoader);
+
+			expect(warnSpy).not.toHaveBeenCalled();
+
+			warnSpy.mockRestore();
+		} finally {
+			session.dispose();
+		}
+	});
+});
+
+// ============================================================================
+// Finding 5: onWarning code → informational mapping
+// ============================================================================
+
+describe("onWarning informational mapping", () => {
+	it("routes sse_parse_error as informational", () => {
+		const { session } = createMinimalSession();
+		try {
+			const warnSpy = vi.spyOn(session, "warnInSession");
+
+			// Simulate the mapping from sdk.ts onWarning callback
+			const code: string = "sse_parse_error";
+			const informational =
+				code === "sse_parse_error" || code === "ws_parse_error" || code === "json_parse_total_failure";
+			session.warnInSession("3 malformed SSE events dropped", { informational });
+
+			expect(warnSpy).toHaveBeenCalledWith("3 malformed SSE events dropped", { informational: true });
+
+			const pending = (session as any)._pendingNextTurnMessages;
+			expect(pending[0].content).toContain("Note this for context");
+			expect(pending[0].content).not.toContain("Inform the user");
+
+			warnSpy.mockRestore();
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("routes ws_parse_error as informational", () => {
+		const { session } = createMinimalSession();
+		try {
+			const code: string = "ws_parse_error";
+			const informational =
+				code === "sse_parse_error" || code === "ws_parse_error" || code === "json_parse_total_failure";
+			session.warnInSession("Malformed WS message", { informational });
+
+			const pending = (session as any)._pendingNextTurnMessages;
+			expect(pending[0].content).toContain("Note this for context");
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("routes json_parse_total_failure as informational", () => {
+		const { session } = createMinimalSession();
+		try {
+			const code: string = "json_parse_total_failure";
+			const informational =
+				code === "sse_parse_error" || code === "ws_parse_error" || code === "json_parse_total_failure";
+			session.warnInSession("Both parsers failed", { informational });
+
+			const pending = (session as any)._pendingNextTurnMessages;
+			expect(pending[0].content).toContain("Note this for context");
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("routes unknown warning codes as actionable (not informational)", () => {
+		const { session } = createMinimalSession();
+		try {
+			const code: string = "some_other_error";
+			const informational =
+				code === "sse_parse_error" || code === "ws_parse_error" || code === "json_parse_total_failure";
+			session.warnInSession("Something broke", { informational });
+
+			const pending = (session as any)._pendingNextTurnMessages;
+			expect(pending[0].content).toContain("Inform the user about this issue");
+			expect(pending[0].content).not.toContain("Note this for context");
+		} finally {
+			session.dispose();
+		}
+	});
+});
+
+// ============================================================================
+// Finding 6: configValueWarnings → warnInSession forwarding
+// ============================================================================
+
+describe("configValueWarnings forwarding", () => {
+	afterEach(() => {
+		clearConfigValueCache();
+	});
+
+	it("drains configValueWarnings and forwards each to warnInSession", () => {
+		const { session } = createMinimalSession();
+		try {
+			const warnSpy = vi.spyOn(session, "warnInSession");
+
+			// Simulate warnings accumulated during resolveConfigValue
+			configValueWarnings.push('Config command "!get-key" exited with status 1');
+			configValueWarnings.push('Config command "!other-cmd" failed: ENOENT');
+
+			// Simulate the drain logic from sdk.ts getApiKey callback
+			const warnings = configValueWarnings.splice(0);
+			for (const w of warnings) {
+				session.warnInSession(w);
+			}
+
+			expect(warnSpy).toHaveBeenCalledTimes(2);
+			expect(warnSpy).toHaveBeenCalledWith('Config command "!get-key" exited with status 1');
+			expect(warnSpy).toHaveBeenCalledWith('Config command "!other-cmd" failed: ENOENT');
+
+			// Array should be drained
+			expect(configValueWarnings).toHaveLength(0);
+
+			warnSpy.mockRestore();
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("splice(0) on empty array produces no warnings", () => {
+		const { session } = createMinimalSession();
+		try {
+			const warnSpy = vi.spyOn(session, "warnInSession");
+
+			// Drain empty array — same pattern as sdk.ts
+			const warnings = configValueWarnings.splice(0);
+			for (const w of warnings) {
+				session.warnInSession(w);
+			}
+
+			expect(warnSpy).not.toHaveBeenCalled();
 
 			warnSpy.mockRestore();
 		} finally {

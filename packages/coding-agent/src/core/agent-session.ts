@@ -619,6 +619,26 @@ export class AgentSession {
 	};
 
 	/**
+	 * Collect all resource diagnostics from a loader and surface them as a session warning.
+	 * Used after both initial load (sdk.ts) and user-initiated reload.
+	 */
+	warnResourceDiagnostics(resourceLoader: ResourceLoader): void {
+		const diagnostics: ResourceDiagnostic[] = [
+			...resourceLoader.getSkills().diagnostics,
+			...resourceLoader.getPrompts().diagnostics,
+			...resourceLoader.getThemes().diagnostics,
+			...resourceLoader.getContextDiagnostics(),
+		];
+		const extErrors = resourceLoader.getExtensions().errors;
+		if (diagnostics.length === 0 && extErrors.length === 0) return;
+		const lines = [
+			...diagnostics.map((d) => `- [${d.type}] ${d.message}${d.path ? ` (${d.path})` : ""}`),
+			...extErrors.map((e) => `- [error] Extension: ${typeof e === "string" ? e : `${e.path}: ${e.error}`}`),
+		];
+		this.warnInSession(`Resource loading issues:\n${lines.join("\n")}`);
+	}
+
+	/**
 	 * Surface a warning in the session so both the human and the AI agent can see it.
 	 * During streaming: steers the warning as a user message into the conversation.
 	 * Between turns: queues for delivery with the next user prompt.
@@ -2683,23 +2703,7 @@ export class AgentSession {
 		}
 
 		// After reload completes, surface any resource diagnostics to the session
-		const allDiagnostics: ResourceDiagnostic[] = [
-			...this._resourceLoader.getSkills().diagnostics,
-			...this._resourceLoader.getPrompts().diagnostics,
-			...this._resourceLoader.getThemes().diagnostics,
-			...this._resourceLoader.getContextDiagnostics(),
-		];
-		const extErrors = this._resourceLoader.getExtensions().errors;
-		if (allDiagnostics.length > 0 || extErrors.length > 0) {
-			const lines: string[] = [];
-			for (const d of allDiagnostics) {
-				lines.push(`- [${d.type}] ${d.message}${d.path ? ` (${d.path})` : ""}`);
-			}
-			for (const e of extErrors) {
-				lines.push(`- [error] Extension: ${typeof e === "string" ? e : `${e.path}: ${e.error}`}`);
-			}
-			this.warnInSession(`Resource loading issues:\n${lines.join("\n")}`);
-		}
+		this.warnResourceDiagnostics(this._resourceLoader);
 	}
 
 	// =========================================================================

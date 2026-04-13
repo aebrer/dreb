@@ -5,7 +5,6 @@ import { getAgentDir, getDocsPath } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
-import type { ResourceDiagnostic } from "./diagnostics.js";
 import type { ExtensionRunner, LoadExtensionsResult, ToolDefinition } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
@@ -414,22 +413,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const extensionsResult = resourceLoader.getExtensions();
 
 	// Surface any resource diagnostics from initial load
-	const startupDiagnostics: ResourceDiagnostic[] = [
-		...resourceLoader.getSkills().diagnostics,
-		...resourceLoader.getPrompts().diagnostics,
-		...resourceLoader.getThemes().diagnostics,
-		...resourceLoader.getContextDiagnostics(),
-	];
-	if (startupDiagnostics.length > 0 || extensionsResult.errors.length > 0) {
-		const lines: string[] = [];
-		for (const d of startupDiagnostics) {
-			lines.push(`- [${d.type}] ${d.message}${d.path ? ` (${d.path})` : ""}`);
-		}
-		for (const e of extensionsResult.errors) {
-			lines.push(`- [error] Extension: ${typeof e === "string" ? e : `${e.path}: ${e.error}`}`);
-		}
-		session.warnInSession(`Resource loading issues:\n${lines.join("\n")}`);
-	}
+	session.warnResourceDiagnostics(resourceLoader);
 
 	return {
 		session,
