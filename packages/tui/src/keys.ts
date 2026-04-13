@@ -1310,6 +1310,7 @@ export function decodeKittyPrintable(data: string): string | undefined {
 	try {
 		return String.fromCodePoint(effectiveCodepoint);
 	} catch {
+		/* Invalid codepoint (e.g. lone surrogate 0xD800–0xDFFF) — drop keystroke */
 		return undefined;
 	}
 }

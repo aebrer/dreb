@@ -216,6 +216,7 @@ export function getPngDimensions(base64Data: string): ImageDimensions | null {
 
 		return { widthPx: width, heightPx: height };
 	} catch {
+		/* Malformed/truncated PNG — dimensions unknown */
 		return null;
 	}
 }
@@ -259,6 +260,7 @@ export function getJpegDimensions(base64Data: string): ImageDimensions | null {
 
 		return null;
 	} catch {
+		/* Malformed/truncated JPEG — dimensions unknown */
 		return null;
 	}
 }
@@ -281,6 +283,7 @@ export function getGifDimensions(base64Data: string): ImageDimensions | null {
 
 		return { widthPx: width, heightPx: height };
 	} catch {
+		/* Malformed/truncated GIF — dimensions unknown */
 		return null;
 	}
 }
@@ -320,6 +323,7 @@ export function getWebpDimensions(base64Data: string): ImageDimensions | null {
 
 		return null;
 	} catch {
+		/* Malformed/truncated WebP — dimensions unknown */
 		return null;
 	}
 }

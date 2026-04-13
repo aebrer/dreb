@@ -9,6 +9,76 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
+describe("google-gemini-cli SSE parse error counting", () => {
+	it("calls onWarning when SSE chunks contain malformed JSON", async () => {
+		const validChunk = JSON.stringify({
+			response: {
+				candidates: [
+					{
+						content: { role: "model", parts: [{ text: "Hello" }] },
+						finishReason: "STOP",
+					},
+				],
+				usageMetadata: {
+					promptTokenCount: 1,
+					candidatesTokenCount: 1,
+					totalTokenCount: 2,
+				},
+			},
+		});
+
+		const encoder = new TextEncoder();
+		const sse = [`data: ${validChunk}`, "", "data: {not valid json at all", "", "data: {also broken}}}", ""].join(
+			"\n",
+		);
+
+		const dataStream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode(sse));
+				controller.close();
+			},
+		});
+
+		global.fetch = vi.fn(async () => {
+			return new Response(dataStream, {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		}) as typeof fetch;
+
+		const model: Model<"google-gemini-cli"> = {
+			id: "gemini-2.5-flash",
+			name: "Gemini 2.5 Flash",
+			api: "google-gemini-cli",
+			provider: "google-gemini-cli",
+			baseUrl: "https://cloudcode-pa.googleapis.com",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+
+		const context: Context = {
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const onWarning = vi.fn();
+		const stream = streamGoogleGeminiCli(model, context, {
+			apiKey: JSON.stringify({ token: "token", projectId: "project" }),
+			onWarning,
+		});
+
+		let text = "";
+		for await (const event of stream) {
+			if (event.type === "text_delta") text += event.delta;
+		}
+
+		expect(text).toBe("Hello");
+		expect(onWarning).toHaveBeenCalledWith("sse_parse_error", expect.stringContaining("2 malformed"));
+	});
+});
+
 describe("google-gemini-cli empty stream retry", () => {
 	it("retries empty SSE responses without duplicate start", async () => {
 		const emptyStream = new ReadableStream<Uint8Array>({

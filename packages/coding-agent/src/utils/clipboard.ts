@@ -13,6 +13,7 @@ function copyToX11Clipboard(options: NativeClipboardExecOptions): void {
 	try {
 		execSync("xclip -selection clipboard", options);
 	} catch {
+		// xclip unavailable — fall back to xsel
 		execSync("xsel --clipboard --input", options);
 	}
 }
@@ -28,7 +29,7 @@ export async function copyToClipboard(text: string): Promise<void> {
 			return;
 		}
 	} catch {
-		// Fall through to platform-specific clipboard tools.
+		/* Native clipboard module threw — fall through to platform-specific tools */
 	}
 
 	// Also try native tools (best effort for local sessions)
@@ -47,7 +48,7 @@ export async function copyToClipboard(text: string): Promise<void> {
 					execSync("termux-clipboard-set", options);
 					return;
 				} catch {
-					// Fall back to Wayland or X11 tools.
+					/* termux-clipboard-set unavailable — fall back to Wayland or X11 tools */
 				}
 			}
 
@@ -67,6 +68,7 @@ export async function copyToClipboard(text: string): Promise<void> {
 					proc.stdin.end();
 					proc.unref();
 				} catch {
+					/* wl-copy unavailable or failed — fall back to X11 if available */
 					if (hasX11Display) {
 						copyToX11Clipboard(options);
 					}
@@ -76,6 +78,6 @@ export async function copyToClipboard(text: string): Promise<void> {
 			}
 		}
 	} catch {
-		// Ignore - OSC 52 already emitted as fallback
+		/* Platform clipboard tools failed — OSC 52 already emitted above as fallback */
 	}
 }

@@ -500,6 +500,116 @@ describe("openai-codex streaming", () => {
 		await streamResult.result();
 	});
 
+	it("calls onWarning when SSE events contain malformed JSON", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+		const encoder = new TextEncoder();
+
+		// Build an SSE payload with 2 malformed data lines among valid events
+		const validDelta = JSON.stringify({ type: "response.output_text.delta", delta: "Hello" });
+		const validItemAdded = JSON.stringify({
+			type: "response.output_item.added",
+			item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+		});
+		const validPartAdded = JSON.stringify({
+			type: "response.content_part.added",
+			part: { type: "output_text", text: "" },
+		});
+		const validItemDone = JSON.stringify({
+			type: "response.output_item.done",
+			item: {
+				type: "message",
+				id: "msg_1",
+				role: "assistant",
+				status: "completed",
+				content: [{ type: "output_text", text: "Hello" }],
+			},
+		});
+		const validCompleted = JSON.stringify({
+			type: "response.completed",
+			response: {
+				status: "completed",
+				usage: {
+					input_tokens: 5,
+					output_tokens: 3,
+					total_tokens: 8,
+					input_tokens_details: { cached_tokens: 0 },
+				},
+			},
+		});
+
+		const sse = [
+			`data: ${validItemAdded}`,
+			"",
+			`data: ${validPartAdded}`,
+			"",
+			"data: {this is not valid json}",
+			"",
+			`data: ${validDelta}`,
+			"",
+			"data: {also broken",
+			"",
+			`data: ${validItemDone}`,
+			"",
+			`data: ${validCompleted}`,
+			"",
+		].join("\n");
+
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode(sse));
+				controller.close();
+			},
+		});
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				return new Response(stream, {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const onWarning = vi.fn();
+		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, onWarning });
+
+		let sawTextDelta = false;
+		for await (const event of streamResult) {
+			if (event.type === "text_delta") sawTextDelta = true;
+		}
+
+		expect(sawTextDelta).toBe(true);
+		expect(onWarning).toHaveBeenCalledWith("sse_parse_error", expect.stringContaining("2 malformed"));
+	});
+
 	it("does not set conversation_id/session_id headers when sessionId is not provided", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;

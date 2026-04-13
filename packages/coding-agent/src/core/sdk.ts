@@ -5,10 +5,12 @@ import { getAgentDir, getDocsPath } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
+import type { ResourceDiagnostic } from "./diagnostics.js";
 import type { ExtensionRunner, LoadExtensionsResult, ToolDefinition } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
+import { configValueWarnings } from "./resolve-config-value.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
@@ -341,9 +343,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
 		maxRetryDelayMs: settingsManager.getRetrySettings().maxDelayMs,
-		onWarning: (_code: string, message: string) => {
+		onWarning: (code: string, message: string) => {
 			// Wire provider-level warnings to the session for user/agent visibility
-			sessionRef.current?.warnInSession(message);
+			const informational =
+				code === "sse_parse_error" || code === "ws_parse_error" || code === "json_parse_total_failure";
+			sessionRef.current?.warnInSession(message, { informational });
 		},
 		getApiKey: async (provider) => {
 			// Use the provider argument from the in-flight request;
@@ -353,6 +357,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				throw new Error("No model selected");
 			}
 			const key = await modelRegistry.getApiKeyForProvider(resolvedProvider);
+			// Surface any config value resolution warnings (e.g. failed !command API keys)
+			if (configValueWarnings.length > 0) {
+				const warnings = configValueWarnings.splice(0);
+				for (const w of warnings) {
+					sessionRef.current?.warnInSession(w);
+				}
+			}
 			if (!key) {
 				const model = agent.state.model;
 				const isOAuth = model && modelRegistry.isUsingOAuth(model);
@@ -401,6 +412,24 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	});
 	sessionRef.current = session;
 	const extensionsResult = resourceLoader.getExtensions();
+
+	// Surface any resource diagnostics from initial load
+	const startupDiagnostics: ResourceDiagnostic[] = [
+		...resourceLoader.getSkills().diagnostics,
+		...resourceLoader.getPrompts().diagnostics,
+		...resourceLoader.getThemes().diagnostics,
+		...resourceLoader.getContextDiagnostics(),
+	];
+	if (startupDiagnostics.length > 0 || extensionsResult.errors.length > 0) {
+		const lines: string[] = [];
+		for (const d of startupDiagnostics) {
+			lines.push(`- [${d.type}] ${d.message}${d.path ? ` (${d.path})` : ""}`);
+		}
+		for (const e of extensionsResult.errors) {
+			lines.push(`- [error] Extension: ${typeof e === "string" ? e : `${e.path}: ${e.error}`}`);
+		}
+		session.warnInSession(`Resource loading issues:\n${lines.join("\n")}`);
+	}
 
 	return {
 		session,

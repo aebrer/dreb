@@ -603,14 +603,16 @@ export class AgentSession {
 
 		this._agentEventQueue = this._agentEventQueue.then(
 			() => this._processAgentEvent(event),
-			(err) => {
-				// Prior event failed — log and continue processing
-				this.warnInSession(`Event processing error: ${err instanceof Error ? err.message : String(err)}`);
+			() => {
+				// Prior event failed — already warned by the .catch() below.
+				// Swallow the old rejection and continue with the current event.
 				return this._processAgentEvent(event);
 			},
 		);
 
-		// Keep queue alive if current event handler also fails
+		// Prevent unhandled rejection and warn once per error.
+		// This fires for the CURRENT event's failure; the next event's rejection
+		// handler above silently continues without re-warning.
 		this._agentEventQueue.catch((err) => {
 			this.warnInSession(`Event queue error: ${err instanceof Error ? err.message : String(err)}`);
 		});
@@ -621,8 +623,11 @@ export class AgentSession {
 	 * During streaming: steers the warning as a user message into the conversation.
 	 * Between turns: queues for delivery with the next user prompt.
 	 */
-	warnInSession(message: string): void {
-		const warningContent = `[System Warning] ${message} Inform the user about this issue and ask how they would like to proceed.`;
+	warnInSession(message: string, options?: { informational?: boolean }): void {
+		const suffix = options?.informational
+			? " Note this for context but do not interrupt the current task to discuss it."
+			: " Inform the user about this issue and ask how they would like to proceed.";
+		const warningContent = `[System Warning] ${message}${suffix}`;
 		const warningMessage: CustomMessage = {
 			role: "custom",
 			customType: "system_warning",

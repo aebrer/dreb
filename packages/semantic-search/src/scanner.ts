@@ -152,6 +152,7 @@ function isHomeDirPath(dir: string): boolean {
 		const normalizedHome = home.replace(/[/\\]+$/, "");
 		return normalizedDir === normalizedHome;
 	} catch {
+		/* os.homedir() can throw in sandboxed/unusual environments */
 		return false;
 	}
 }
@@ -166,6 +167,7 @@ function scanShallow(dir: string, results: ScannedFile[]): void {
 	try {
 		entries = readdirSync(dir);
 	} catch {
+		/* Directory unreadable (EACCES, ENOENT) — abandon shallow scan */
 		return;
 	}
 
@@ -179,6 +181,7 @@ function scanShallow(dir: string, results: ScannedFile[]): void {
 		try {
 			stats = statSync(fullPath);
 		} catch {
+			/* Broken symlink or race deletion — skip entry */
 			continue;
 		}
 
@@ -283,7 +286,8 @@ function walkDirectory(dir: string, root: string, ig: IgnoreMatcher, results: Sc
 	try {
 		entries = readdirSync(dir);
 	} catch {
-		return; // Permission denied, etc.
+		/* Directory unreadable (permission denied, etc.) — stop recursion into this branch */
+		return;
 	}
 
 	for (const entry of entries) {
@@ -295,7 +299,8 @@ function walkDirectory(dir: string, root: string, ig: IgnoreMatcher, results: Sc
 		try {
 			stats = statSync(fullPath);
 		} catch {
-			continue; // Broken symlink, etc.
+			/* Broken symlink or race deletion — skip entry */
+			continue;
 		}
 
 		if (stats.isDirectory()) {
@@ -348,6 +353,7 @@ function scanMemoryDir(memoryDir: string, projectRoot: string, results: ScannedF
 	try {
 		entries = readdirSync(memoryDir);
 	} catch {
+		/* Memory directory doesn't exist or is unreadable — skip */
 		return;
 	}
 
@@ -358,6 +364,7 @@ function scanMemoryDir(memoryDir: string, projectRoot: string, results: ScannedF
 		try {
 			stats = statSync(fullPath);
 		} catch {
+			/* Broken symlink or race deletion — skip entry */
 			continue;
 		}
 

@@ -62,6 +62,7 @@ export async function cmdBuddy(ctx: Context, config: Config, userState: UserStat
 				try {
 					await ctx.api.setMessageReaction(chatId, ctx.message!.message_id, [{ type: "emoji", emoji: "❤" }]);
 				} catch {
+					/* setMessageReaction unavailable or forbidden — send heart as plain text */
 					await safeSend(ctx.api, chatId, "❤️");
 				}
 				break;
