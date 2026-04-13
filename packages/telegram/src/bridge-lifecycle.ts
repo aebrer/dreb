@@ -45,10 +45,9 @@ export async function ensureBridge(config: Config, userState: UserState): Promis
  */
 export async function ensureBridgeWithSession(config: Config, userState: UserState): Promise<AgentBridge> {
 	// Handle new session — always kill and recreate the bridge for clean state.
-	// For /new <path>: uses the user-specified directory.
-	// For /new (bare): preserves the current effectiveCwd.
+	// cmdNew always sets newSessionCwd to a concrete string (never null).
 	if (userState.newSessionFlag) {
-		const cwd = userState.newSessionCwd ?? userState.effectiveCwd ?? config.workingDir;
+		const cwd = userState.newSessionCwd!;
 		userState.newSessionFlag = false;
 		userState.newSessionCwd = null;
 
