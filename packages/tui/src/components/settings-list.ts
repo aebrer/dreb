@@ -91,7 +91,7 @@ export class SettingsList implements Component {
 		const lines: string[] = [];
 
 		if (this.searchEnabled && this.searchInput) {
-			lines.push(...this.searchInput.render(width));
+			for (const line of this.searchInput.render(width)) lines.push(line);
 			lines.push("");
 		}
 

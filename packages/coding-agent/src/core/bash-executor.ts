@@ -7,7 +7,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream, type WriteStream, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import stripAnsi from "strip-ansi";
@@ -126,6 +126,16 @@ export async function executeBashWithOperations(
 
 		const fullOutput = outputChunks.join("");
 		const truncationResult = truncateTail(fullOutput);
+
+		// If truncation occurred (e.g. by line count) but no temp file was
+		// created (output was under the byte-streaming threshold), write the
+		// full output to a temp file so the truncation message can reference it.
+		if (truncationResult.truncated && !tempFilePath) {
+			const id = randomBytes(8).toString("hex");
+			tempFilePath = join(tmpdir(), `dreb-bash-${id}.log`);
+			writeFileSync(tempFilePath, fullOutput);
+		}
+
 		const cancelled = options?.signal?.aborted ?? false;
 
 		return {
@@ -144,6 +154,11 @@ export async function executeBashWithOperations(
 		if (options?.signal?.aborted) {
 			const fullOutput = outputChunks.join("");
 			const truncationResult = truncateTail(fullOutput);
+			if (truncationResult.truncated && !tempFilePath) {
+				const id = randomBytes(8).toString("hex");
+				tempFilePath = join(tmpdir(), `dreb-bash-${id}.log`);
+				writeFileSync(tempFilePath, fullOutput);
+			}
 			return {
 				output: truncationResult.truncated ? truncationResult.content : fullOutput,
 				exitCode: undefined,

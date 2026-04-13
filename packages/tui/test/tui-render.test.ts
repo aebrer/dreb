@@ -733,3 +733,53 @@ describe("TUI spinner lifecycle", () => {
 		tui.stop();
 	});
 });
+
+describe("TUI render throttle", () => {
+	it("coalesces rapid render requests", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = ["Initial"];
+		tui.start();
+		await terminal.flush();
+		terminal.clearWrites();
+
+		// Fire many rapid requestRender calls
+		for (let i = 0; i < 50; i++) {
+			component.lines = [`Update ${i}`];
+			tui.requestRender();
+		}
+
+		// Wait for all timers to settle
+		await terminal.flush();
+
+		// The final state should reflect the last update
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[0]?.includes("Update 49"), `Final state should be last update, got: ${viewport[0]}`);
+
+		tui.stop();
+	});
+
+	it("force render resets state even during throttle window", async () => {
+		const terminal = new VirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = ["Line 0", "Line 1", "Line 2"];
+		tui.start();
+		await terminal.flush();
+
+		// Immediately force render — should still work correctly
+		component.lines = ["Force updated"];
+		tui.requestRender(true);
+		await terminal.flush();
+
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[0]?.includes("Force updated"), `Force render applied: ${viewport[0]}`);
+
+		tui.stop();
+	});
+});

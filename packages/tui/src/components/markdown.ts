@@ -121,7 +121,7 @@ export class Markdown implements Component {
 			const token = tokens[i];
 			const nextToken = tokens[i + 1];
 			const tokenLines = this.renderToken(token, contentWidth, nextToken?.type);
-			renderedLines.push(...tokenLines);
+			for (const line of tokenLines) renderedLines.push(line);
 		}
 
 		// Wrap lines (NO padding, NO background yet)
@@ -130,7 +130,7 @@ export class Markdown implements Component {
 			if (isImageLine(line)) {
 				wrappedLines.push(line);
 			} else {
-				wrappedLines.push(...wrapTextWithAnsi(line, contentWidth));
+				for (const wl of wrapTextWithAnsi(line, contentWidth)) wrappedLines.push(wl);
 			}
 		}
 
@@ -331,7 +331,7 @@ export class Markdown implements Component {
 
 			case "list": {
 				const listLines = this.renderList(token as any, 0, styleContext);
-				lines.push(...listLines);
+				for (const line of listLines) lines.push(line);
 				// Don't add spacing after lists if a space token follows
 				// (the space token will handle it)
 				break;
@@ -339,7 +339,7 @@ export class Markdown implements Component {
 
 			case "table": {
 				const tableLines = this.renderTable(token as any, width, nextTokenType, styleContext);
-				lines.push(...tableLines);
+				for (const line of tableLines) lines.push(line);
 				break;
 			}
 
@@ -575,7 +575,7 @@ export class Markdown implements Component {
 				// Nested list - render with one additional indent level
 				// These lines will have their own indent, so we just add them as-is
 				const nestedLines = this.renderList(token as any, parentDepth + 1, styleContext);
-				lines.push(...nestedLines);
+				for (const line of nestedLines) lines.push(line);
 			} else if (token.type === "text") {
 				// Text content (may have inline tokens)
 				const text =
