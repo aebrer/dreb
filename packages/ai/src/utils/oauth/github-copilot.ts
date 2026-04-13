@@ -50,6 +50,7 @@ export function normalizeDomain(input: string): string | null {
 		const url = trimmed.includes("://") ? new URL(trimmed) : new URL(`https://${trimmed}`);
 		return url.hostname;
 	} catch {
+		// Invalid URL or domain input — return null to signal unparseable input
 		return null;
 	}
 }
@@ -294,6 +295,7 @@ async function enableGitHubCopilotModel(token: string, modelId: string, enterpri
 		});
 		return response.ok;
 	} catch {
+		// Network error enabling model policy — non-critical, return false and continue
 		return false;
 	}
 }

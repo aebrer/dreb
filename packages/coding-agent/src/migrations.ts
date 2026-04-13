@@ -89,6 +89,7 @@ export function migrateSessionsFromAgentRoot(): void {
 			.filter((f) => f.endsWith(".jsonl"))
 			.map((f) => join(agentDir, f));
 	} catch {
+		// Directory unreadable — nothing to migrate
 		return;
 	}
 

@@ -28,6 +28,7 @@ function fileExists(filePath: string): boolean {
 		accessSync(filePath, constants.F_OK);
 		return true;
 	} catch {
+		// accessSync threw — file does not exist
 		return false;
 	}
 }

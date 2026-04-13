@@ -527,6 +527,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				return null;
 			}
 		} catch {
+			/* Path doesn't exist — no file suggestions available */
 			return null;
 		}
 
@@ -752,6 +753,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 			return suggestions;
 		} catch {
+			/* fd spawn failure, AbortError, or other search error — return empty suggestions */
 			return [];
 		}
 	}

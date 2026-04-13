@@ -240,7 +240,7 @@ function extractErrorMessage(errorText: string): string {
 			return parsed.error.message;
 		}
 	} catch {
-		// Not JSON, return as-is
+		// Best-effort JSON parse of error body — fall back to raw text
 	}
 	return errorText;
 }
@@ -358,6 +358,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 				accessToken = parsed.token;
 				projectId = parsed.projectId;
 			} catch {
+				// Re-throw with user-friendly message for malformed JSON
 				throw new Error("Invalid Google Cloud Code Assist credentials. Use /login to re-authenticate.");
 			}
 
@@ -503,6 +504,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 				}
 
 				let hasContent = false;
+				let chunkParseErrors = 0;
 				let currentBlock: TextContent | ThinkingContent | null = null;
 				const blocks = output.content;
 				const blockIndex = () => blocks.length - 1;
@@ -514,6 +516,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 
 				// Set up abort handler to cancel reader when signal fires
 				const abortHandler = () => {
+					// Cleanup on abort — reader may already be closed
 					void reader.cancel().catch(() => {});
 				};
 				options?.signal?.addEventListener("abort", abortHandler);
@@ -542,6 +545,8 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 							try {
 								chunk = JSON.parse(jsonStr);
 							} catch {
+								// Malformed SSE chunk — track for end-of-stream warning
+								chunkParseErrors++;
 								continue;
 							}
 
@@ -712,6 +717,13 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 					}
 				} finally {
 					options?.signal?.removeEventListener("abort", abortHandler);
+
+					if (chunkParseErrors > 0) {
+						options?.onWarning?.(
+							"sse_parse_error",
+							`${chunkParseErrors} malformed SSE chunk(s) were dropped during streaming. Response content may be incomplete.`,
+						);
+					}
 				}
 
 				if (currentBlock) {

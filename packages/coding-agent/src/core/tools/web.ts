@@ -517,6 +517,7 @@ export function createWebFetchToolDefinition(
 			try {
 				parsed = new URL(url);
 			} catch {
+				// URL constructor threw — input is not a valid URL
 				return {
 					content: [{ type: "text", text: `Invalid URL: ${url}` }],
 					details: undefined,

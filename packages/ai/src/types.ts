@@ -102,6 +102,12 @@ export interface StreamOptions {
 	 * For example, Anthropic uses `user_id` for abuse tracking and rate limiting.
 	 */
 	metadata?: Record<string, unknown>;
+	/**
+	 * Optional callback for non-fatal warnings during streaming (e.g. malformed JSON chunks).
+	 * Called by providers when errors are caught but don't terminate the stream.
+	 * The session layer wires this to surface warnings in the conversation.
+	 */
+	onWarning?: (code: string, message: string) => void;
 }
 
 export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;

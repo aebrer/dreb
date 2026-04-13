@@ -466,6 +466,7 @@ function isValidSessionFile(filePath: string): boolean {
 		const header = JSON.parse(firstLine);
 		return header.type === "session" && typeof header.id === "string";
 	} catch {
+		/* Not a valid session file (corrupt, not JSON) */
 		return false;
 	}
 }
@@ -482,6 +483,7 @@ export function findMostRecentSession(sessionDir: string): string | null {
 
 		return files[0]?.path || null;
 	} catch {
+		/* Session directory may not exist or be unreadable */
 		return null;
 	}
 }
@@ -605,6 +607,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			allMessagesText: allMessages.join(" "),
 		};
 	} catch {
+		/* Corrupt session file — exclude from listing */
 		return null;
 	}
 }
@@ -642,7 +645,7 @@ async function listSessionsFromDir(
 			}
 		}
 	} catch {
-		// Return empty list on error
+		/* Session directory read failed — return partial results */
 	}
 
 	return sessions;
@@ -1377,6 +1380,7 @@ export class SessionManager {
 					dirFiles.push(files.map((f) => join(dir, f)));
 					totalFiles += files.length;
 				} catch {
+					/* Directory unreadable — skip */
 					dirFiles.push([]);
 				}
 			}
@@ -1404,6 +1408,7 @@ export class SessionManager {
 			sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
 			return sessions;
 		} catch {
+			/* Session listing failed — return empty list */
 			return [];
 		}
 	}

@@ -9,6 +9,9 @@ import { getShellConfig } from "../utils/shell.js";
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
 
+/** Warnings from config value resolution — queried by session to surface errors */
+export const configValueWarnings: string[] = [];
+
 /**
  * Resolve a config value (API key, header value, etc.) to an actual value.
  * - If starts with "!", executes the rest as a shell command and uses stdout (cached)
@@ -36,18 +39,24 @@ function executeWithConfiguredShell(command: string): { executed: boolean; value
 		if (result.error) {
 			const error = result.error as NodeJS.ErrnoException;
 			if (error.code === "ENOENT") {
+				// Configured shell not found — fall back to default shell
 				return { executed: false, value: undefined };
 			}
+			configValueWarnings.push(`Config command "!${command}" error: ${error.message}`);
 			return { executed: true, value: undefined };
 		}
 
 		if (result.status !== 0) {
+			configValueWarnings.push(`Config command "!${command}" exited with status ${result.status}`);
 			return { executed: true, value: undefined };
 		}
 
 		const value = (result.stdout ?? "").trim();
 		return { executed: true, value: value || undefined };
-	} catch {
+	} catch (err) {
+		configValueWarnings.push(
+			`Config command "!${command}" failed: ${err instanceof Error ? err.message : String(err)}`,
+		);
 		return { executed: false, value: undefined };
 	}
 }
@@ -60,7 +69,8 @@ function executeWithDefaultShell(command: string): string | undefined {
 			stdio: ["ignore", "pipe", "ignore"],
 		});
 		return output.trim() || undefined;
-	} catch {
+	} catch (err) {
+		configValueWarnings.push(`Config command failed: ${err instanceof Error ? err.message : String(err)}`);
 		return undefined;
 	}
 }
@@ -98,7 +108,8 @@ export function resolveHeaders(headers: Record<string, string> | undefined): Rec
 	return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
-/** Clear the config value command cache. Exported for testing. */
+/** Clear the config value command cache and warnings. Exported for testing. */
 export function clearConfigValueCache(): void {
 	commandResultCache.clear();
+	configValueWarnings.length = 0;
 }

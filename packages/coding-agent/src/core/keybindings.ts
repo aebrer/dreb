@@ -258,6 +258,7 @@ function loadRawConfig(path: string): Record<string, unknown> | undefined {
 		const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
 		return isRecord(parsed) ? parsed : undefined;
 	} catch {
+		// Malformed JSON config — treat as absent
 		return undefined;
 	}
 }

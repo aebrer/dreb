@@ -177,9 +177,9 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				} else if (item.contentBlockStart) {
 					handleContentBlockStart(item.contentBlockStart, blocks, output, stream);
 				} else if (item.contentBlockDelta) {
-					handleContentBlockDelta(item.contentBlockDelta, blocks, output, stream);
+					handleContentBlockDelta(item.contentBlockDelta, blocks, output, stream, options?.onWarning);
 				} else if (item.contentBlockStop) {
-					handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
+					handleContentBlockStop(item.contentBlockStop, blocks, output, stream, options?.onWarning);
 				} else if (item.messageStop) {
 					output.stopReason = mapStopReason(item.messageStop.stopReason);
 				} else if (item.metadata) {
@@ -294,6 +294,7 @@ function handleContentBlockDelta(
 	blocks: Block[],
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
+	onWarning?: (code: string, message: string) => void,
 ): void {
 	const contentBlockIndex = event.contentBlockIndex!;
 	const delta = event.delta;
@@ -315,7 +316,7 @@ function handleContentBlockDelta(
 		}
 	} else if (delta?.toolUse && block?.type === "toolCall") {
 		block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
-		block.arguments = parseStreamingJson(block.partialJson);
+		block.arguments = parseStreamingJson(block.partialJson, onWarning);
 		stream.push({ type: "toolcall_delta", contentIndex: index, delta: delta.toolUse.input || "", partial: output });
 	} else if (delta?.reasoningContent) {
 		let thinkingBlock = block;
@@ -367,6 +368,7 @@ function handleContentBlockStop(
 	blocks: Block[],
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
+	onWarning?: (code: string, message: string) => void,
 ): void {
 	const index = blocks.findIndex((b) => b.index === event.contentBlockIndex);
 	const block = blocks[index];
@@ -381,7 +383,7 @@ function handleContentBlockStop(
 			stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: output });
 			break;
 		case "toolCall":
-			block.arguments = parseStreamingJson(block.partialJson);
+			block.arguments = parseStreamingJson(block.partialJson, onWarning);
 			delete (block as Block).partialJson;
 			stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
 			break;

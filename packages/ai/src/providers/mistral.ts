@@ -76,7 +76,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
 			}
 			const mistralStream = await mistral.chat.stream(payload, buildRequestOptions(model, options));
 			stream.push({ type: "start", partial: output });
-			await consumeChatStream(model, output, stream, mistralStream);
+			await consumeChatStream(model, output, stream, mistralStream, options?.onWarning);
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
@@ -197,6 +197,7 @@ function safeJsonStringify(value: unknown): string {
 		const serialized = JSON.stringify(value);
 		return serialized === undefined ? String(value) : serialized;
 	} catch {
+		// Fallback serialization — String(value) if JSON.stringify fails
 		return String(value);
 	}
 }
@@ -256,6 +257,7 @@ async function consumeChatStream(
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 	mistralStream: AsyncIterable<CompletionEvent>,
+	onWarning?: (code: string, message: string) => void,
 ): Promise<void> {
 	let currentBlock: TextContent | ThinkingContent | null = null;
 	const blocks = output.content;
@@ -408,7 +410,7 @@ async function consumeChatStream(
 					? toolCall.function.arguments
 					: JSON.stringify(toolCall.function.arguments || {});
 			block.partialArgs = (block.partialArgs || "") + argsDelta;
-			block.arguments = parseStreamingJson<Record<string, unknown>>(block.partialArgs);
+			block.arguments = parseStreamingJson<Record<string, unknown>>(block.partialArgs, onWarning);
 			stream.push({
 				type: "toolcall_delta",
 				contentIndex: toolBlocksByKey.get(key)!,
@@ -423,7 +425,7 @@ async function consumeChatStream(
 		const block = output.content[index];
 		if (block.type !== "toolCall") continue;
 		const toolBlock = block as ToolCall & { partialArgs?: string };
-		toolBlock.arguments = parseStreamingJson<Record<string, unknown>>(toolBlock.partialArgs);
+		toolBlock.arguments = parseStreamingJson<Record<string, unknown>>(toolBlock.partialArgs, onWarning);
 		delete toolBlock.partialArgs;
 		stream.push({
 			type: "toolcall_end",

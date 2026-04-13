@@ -8,6 +8,7 @@ function getMutationQueueKey(filePath: string): string {
 	try {
 		return realpathSync.native(resolvedPath);
 	} catch {
+		// realpath failed (file may not exist yet) — use resolved path
 		return resolvedPath;
 	}
 }

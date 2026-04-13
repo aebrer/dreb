@@ -38,6 +38,7 @@ function findGitPaths(): GitPaths | null {
 					return { repoDir: dir, commonGitDir: gitPath, headPath };
 				}
 			} catch {
+				/* Not inside a git repository, or git dir unreadable */
 				return null;
 			}
 		}
@@ -229,6 +230,7 @@ export class FooterDataProvider {
 			}
 			return "detached";
 		} catch {
+			/* Git HEAD unreadable — branch display unavailable */
 			return null;
 		}
 	}
@@ -245,6 +247,7 @@ export class FooterDataProvider {
 			}
 			return "detached";
 		} catch {
+			/* Git HEAD unreadable — branch display unavailable */
 			return null;
 		}
 	}

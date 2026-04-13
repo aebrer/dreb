@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import chalk from "chalk";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
@@ -44,6 +43,7 @@ export interface ResourceLoader {
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
+	getContextDiagnostics(): ResourceDiagnostic[];
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
 	getMemoryIndexes(): MemoryIndexes;
 	getSystemPrompt(): string | undefined;
@@ -52,7 +52,11 @@ export interface ResourceLoader {
 	reload(): Promise<void>;
 }
 
-function resolvePromptInput(input: string | undefined, description: string): string | undefined {
+function resolvePromptInput(
+	input: string | undefined,
+	description: string,
+	diagnostics?: ResourceDiagnostic[],
+): string | undefined {
 	if (!input) {
 		return undefined;
 	}
@@ -61,7 +65,11 @@ function resolvePromptInput(input: string | undefined, description: string): str
 		try {
 			return readFileSync(input, "utf-8");
 		} catch (error) {
-			console.error(chalk.yellow(`Warning: Could not read ${description} file ${input}: ${error}`));
+			diagnostics?.push({
+				type: "warning",
+				message: `Could not read ${description} file ${input}: ${error}`,
+				path: input,
+			});
 			return input;
 		}
 	}
@@ -73,7 +81,10 @@ function stripHtmlComments(content: string): string {
 	return content.replace(/<!--[\s\S]*?-->/g, "");
 }
 
-function loadContextFilesFromDir(dir: string): Array<{ path: string; content: string }> {
+function loadContextFilesFromDir(
+	dir: string,
+	diagnostics?: ResourceDiagnostic[],
+): Array<{ path: string; content: string }> {
 	const candidates = ["AGENTS.md", "CLAUDE.md", join(".claude", "CLAUDE.md"), join(".dreb", "CONTEXT.md")];
 	const results: Array<{ path: string; content: string }> = [];
 	for (const filename of candidates) {
@@ -85,7 +96,7 @@ function loadContextFilesFromDir(dir: string): Array<{ path: string; content: st
 					content: stripHtmlComments(readFileSync(filePath, "utf-8")),
 				});
 			} catch (error) {
-				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
+				diagnostics?.push({ type: "warning", message: `Could not read ${filePath}: ${error}`, path: filePath });
 			}
 		}
 	}
@@ -97,19 +108,20 @@ function loadRulesFromDir(
 	contextFiles: Array<{ path: string; content: string }>,
 	seenPaths: Set<string>,
 	depth: number = 0,
+	diagnostics?: ResourceDiagnostic[],
 ): void {
 	if (depth > 10) return;
 	let entries: import("node:fs").Dirent[];
 	try {
 		entries = readdirSync(dir, { withFileTypes: true });
 	} catch (error) {
-		console.error(chalk.yellow(`Warning: Could not read rules directory ${dir}: ${error}`));
+		diagnostics?.push({ type: "warning", message: `Could not read rules directory ${dir}: ${error}`, path: dir });
 		return;
 	}
 	for (const entry of entries) {
 		const fullPath = join(dir, entry.name);
 		if (entry.isDirectory() && !entry.isSymbolicLink()) {
-			loadRulesFromDir(fullPath, contextFiles, seenPaths, depth + 1);
+			loadRulesFromDir(fullPath, contextFiles, seenPaths, depth + 1, diagnostics);
 		} else if (entry.isFile() && entry.name.endsWith(".md") && !seenPaths.has(fullPath)) {
 			try {
 				const content = readFileSync(fullPath, "utf-8");
@@ -126,7 +138,11 @@ function loadRulesFromDir(
 				seenPaths.add(fullPath);
 				contextFiles.push({ path: fullPath, content: stripHtmlComments(content) });
 			} catch (error) {
-				console.error(chalk.yellow(`Warning: Could not read rule ${fullPath}: ${error}`));
+				diagnostics?.push({
+					type: "warning",
+					message: `Could not read rule ${fullPath}: ${error}`,
+					path: fullPath,
+				});
 			}
 		}
 	}
@@ -134,6 +150,7 @@ function loadRulesFromDir(
 
 function loadProjectContextFiles(
 	options: { cwd?: string; agentDir?: string } = {},
+	diagnostics?: ResourceDiagnostic[],
 ): Array<{ path: string; content: string }> {
 	const resolvedCwd = options.cwd ?? process.cwd();
 	const resolvedAgentDir = options.agentDir ?? getAgentDir();
@@ -157,7 +174,7 @@ function loadProjectContextFiles(
 					contextFiles.push({ path: filePath, content });
 				}
 			} catch (error) {
-				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
+				diagnostics?.push({ type: "warning", message: `Could not read ${filePath}: ${error}`, path: filePath });
 			}
 		}
 	}
@@ -168,7 +185,7 @@ function loadProjectContextFiles(
 	const root = resolve("/");
 
 	while (true) {
-		const dirFiles = loadContextFilesFromDir(currentDir);
+		const dirFiles = loadContextFilesFromDir(currentDir, diagnostics);
 		const newFiles = dirFiles.filter((f) => !seenPaths.has(f.path));
 		for (const file of newFiles) {
 			seenPaths.add(file.path);
@@ -192,9 +209,13 @@ function loadProjectContextFiles(
 	for (const rulesDir of rulesSearchDirs) {
 		if (existsSync(rulesDir)) {
 			try {
-				loadRulesFromDir(rulesDir, contextFiles, seenPaths);
+				loadRulesFromDir(rulesDir, contextFiles, seenPaths, 0, diagnostics);
 			} catch (error) {
-				console.error(chalk.yellow(`Warning: Could not read rules from ${rulesDir}: ${error}`));
+				diagnostics?.push({
+					type: "warning",
+					message: `Could not read rules from ${rulesDir}: ${error}`,
+					path: rulesDir,
+				});
 			}
 		}
 	}
@@ -213,28 +234,31 @@ export function encodeClaudeProjectPath(absolutePath: string): string {
 	return absolutePath.replace(/[/_]/g, "-");
 }
 
-function readMemoryIndex(dir: string): string | undefined {
+function readMemoryIndex(dir: string, diagnostics?: ResourceDiagnostic[]): string | undefined {
 	const indexPath = join(dir, "MEMORY.md");
 	try {
 		if (!existsSync(indexPath)) return undefined;
 		const content = readFileSync(indexPath, "utf-8");
 		const lines = content.split("\n");
 		if (lines.length > MEMORY_INDEX_MAX_LINES) {
-			console.error(
-				chalk.yellow(
-					`Warning: ${indexPath} has ${lines.length} lines, truncated to ${MEMORY_INDEX_MAX_LINES}. Consider cleaning up older entries.`,
-				),
-			);
+			diagnostics?.push({
+				type: "warning",
+				message: `${indexPath} has ${lines.length} lines, truncated to ${MEMORY_INDEX_MAX_LINES}. Consider cleaning up older entries.`,
+				path: indexPath,
+			});
 			return lines.slice(0, MEMORY_INDEX_MAX_LINES).join("\n");
 		}
 		return content;
 	} catch (error) {
-		console.error(chalk.yellow(`Warning: Could not read ${indexPath}: ${error}`));
+		diagnostics?.push({ type: "warning", message: `Could not read ${indexPath}: ${error}`, path: indexPath });
 		return undefined;
 	}
 }
 
-function loadMemoryIndexes(options: { cwd?: string; agentDir?: string }): MemoryIndexes {
+function loadMemoryIndexes(
+	options: { cwd?: string; agentDir?: string },
+	diagnostics?: ResourceDiagnostic[],
+): MemoryIndexes {
 	const resolvedCwd = options.cwd ?? process.cwd();
 	const projectRoot = findGitRoot(resolvedCwd) ?? resolvedCwd;
 	const drebRoot = options.agentDir ? resolve(options.agentDir, "..") : join(homedir(), ".dreb");
@@ -257,25 +281,26 @@ function loadMemoryIndexes(options: { cwd?: string; agentDir?: string }): Memory
 	const projectSources: MemorySource[] = [];
 
 	// Load dreb memory (primary)
-	const drebGlobal = readMemoryIndex(globalMemoryDir);
+	const drebGlobal = readMemoryIndex(globalMemoryDir, diagnostics);
 	if (drebGlobal) {
 		globalSources.push({ content: drebGlobal, dir: globalMemoryDir, source: "dreb" });
 	}
 
-	const drebProject = globalMemoryDir !== projectMemoryDir ? readMemoryIndex(projectMemoryDir) : undefined;
+	const drebProject =
+		globalMemoryDir !== projectMemoryDir ? readMemoryIndex(projectMemoryDir, diagnostics) : undefined;
 	if (drebProject) {
 		projectSources.push({ content: drebProject, dir: projectMemoryDir, source: "dreb" });
 	}
 
 	// Load Claude Code memory (read-only, compat)
-	const claudeGlobal = readMemoryIndex(claudeGlobalMemoryDir);
+	const claudeGlobal = readMemoryIndex(claudeGlobalMemoryDir, diagnostics);
 	if (claudeGlobal) {
 		globalSources.push({ content: claudeGlobal, dir: claudeGlobalMemoryDir, source: "claude" });
 	}
 
 	// Only load Claude project memory if it's a different path than Claude global
 	if (claudeProjectMemoryDir !== claudeGlobalMemoryDir) {
-		const claudeProject = readMemoryIndex(claudeProjectMemoryDir);
+		const claudeProject = readMemoryIndex(claudeProjectMemoryDir, diagnostics);
 		if (claudeProject) {
 			projectSources.push({ content: claudeProject, dir: claudeProjectMemoryDir, source: "claude" });
 		}
@@ -372,6 +397,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private memoryIndexes: MemoryIndexes;
 	private systemPrompt?: string;
 	private appendSystemPrompt: string[];
+	private contextDiagnostics: ResourceDiagnostic[];
 	private lastSkillPaths: string[];
 	private extensionSkillSourceInfos: Map<string, SourceInfo>;
 	private extensionPromptSourceInfos: Map<string, SourceInfo>;
@@ -423,6 +449,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			projectMemoryDir: join(this.cwd, ".dreb", "memory"),
 		};
 		this.appendSystemPrompt = [];
+		this.contextDiagnostics = [];
 		this.lastSkillPaths = [];
 		this.extensionSkillSourceInfos = new Map();
 		this.extensionPromptSourceInfos = new Map();
@@ -445,6 +472,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] } {
 		return { themes: this.themes, diagnostics: this.themeDiagnostics };
+	}
+
+	getContextDiagnostics(): ResourceDiagnostic[] {
+		return this.contextDiagnostics;
 	}
 
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> } {
@@ -504,6 +535,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	async reload(): Promise<void> {
+		this.contextDiagnostics = [];
 		const resolvedPaths = await this.packageManager.resolve();
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
@@ -544,6 +576,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 					return resource.path;
 				}
 			} catch {
+				// stat failed — path may not exist yet; use as-is
 				return resource.path;
 			}
 			const skillFile = join(resource.path, "SKILL.md");
@@ -615,39 +648,41 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.lastThemePaths = themePaths;
 		this.updateThemesFromPaths(themePaths, metadataByPath);
 
-		const agentsFiles = { agentsFiles: loadProjectContextFiles({ cwd: this.cwd, agentDir: this.agentDir }) };
+		const agentsFiles = {
+			agentsFiles: loadProjectContextFiles({ cwd: this.cwd, agentDir: this.agentDir }, this.contextDiagnostics),
+		};
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
 		this.agentsFiles = resolvedAgentsFiles.agentsFiles;
 
 		// Load memory indexes and ensure global memory directory exists.
 		// Wrapped in try/catch so memory loading failures degrade gracefully rather than crashing the session.
 		try {
-			this.memoryIndexes = loadMemoryIndexes({ cwd: this.cwd, agentDir: this.agentDir });
+			this.memoryIndexes = loadMemoryIndexes({ cwd: this.cwd, agentDir: this.agentDir }, this.contextDiagnostics);
 			try {
 				mkdirSync(this.memoryIndexes.globalMemoryDir, { recursive: true });
 			} catch (error) {
-				console.error(
-					chalk.yellow(
-						`Warning: Could not create memory directory ${this.memoryIndexes.globalMemoryDir}: ${error}. Memory saves to this directory will fail.`,
-					),
-				);
+				this.contextDiagnostics.push({
+					type: "warning",
+					message: `Could not create memory directory ${this.memoryIndexes.globalMemoryDir}: ${error}. Memory saves to this directory will fail.`,
+					path: this.memoryIndexes.globalMemoryDir,
+				});
 			}
 		} catch (error) {
-			console.error(
-				chalk.yellow(
-					`Warning: Could not load memory indexes: ${error}. Session will start without memory context.`,
-				),
-			);
+			this.contextDiagnostics.push({
+				type: "warning",
+				message: `Could not load memory indexes: ${error}. Session will start without memory context.`,
+			});
 		}
 
 		const baseSystemPrompt = resolvePromptInput(
 			this.systemPromptSource ?? this.discoverSystemPromptFile(),
 			"system prompt",
+			this.contextDiagnostics,
 		);
 		this.systemPrompt = this.systemPromptOverride ? this.systemPromptOverride(baseSystemPrompt) : baseSystemPrompt;
 
 		const appendSource = this.appendSystemPromptSource ?? this.discoverAppendSystemPromptFile();
-		const resolvedAppend = resolvePromptInput(appendSource, "append system prompt");
+		const resolvedAppend = resolvePromptInput(appendSource, "append system prompt", this.contextDiagnostics);
 		const baseAppend = resolvedAppend ? [resolvedAppend] : [];
 		this.appendSystemPrompt = this.appendSystemPromptOverride
 			? this.appendSystemPromptOverride(baseAppend)
@@ -828,12 +863,19 @@ export class DefaultResourceLoader implements ResourceLoader {
 			}
 		}
 
+		let baseDir: string;
+		try {
+			baseDir = statSync(normalizedPath).isDirectory() ? normalizedPath : resolve(normalizedPath, "..");
+		} catch {
+			// Path doesn't exist (deleted file, broken symlink, race condition) — fall back to parent dir
+			baseDir = resolve(normalizedPath, "..");
+		}
 		return {
 			path: filePath,
 			source: "local",
 			scope: "temporary",
 			origin: "top-level",
-			baseDir: statSync(normalizedPath).isDirectory() ? normalizedPath : resolve(normalizedPath, ".."),
+			baseDir,
 		};
 	}
 
@@ -919,6 +961,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 					try {
 						isFile = statSync(join(dir, entry.name)).isFile();
 					} catch {
+						// Broken symlink — skip entry
 						continue;
 					}
 				}

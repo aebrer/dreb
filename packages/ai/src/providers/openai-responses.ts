@@ -103,6 +103,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			await processResponsesStream(openaiStream, output, stream, model, {
 				serviceTier: options?.serviceTier,
 				applyServiceTierPricing,
+				onWarning: options?.onWarning,
 			});
 
 			if (options?.signal?.aborted) {

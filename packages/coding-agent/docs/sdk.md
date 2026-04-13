@@ -119,6 +119,10 @@ interface AgentSession {
   // Abort current operation
   abort(): Promise<void>;
   
+  // Warnings
+  warnInSession(message: string, options?: { informational?: boolean }): void;
+  warnResourceDiagnostics(resourceLoader: ResourceLoader): void;
+  
   // Cleanup
   dispose(): void;
 }
@@ -735,6 +739,7 @@ const skills = loader.getSkills();
 const prompts = loader.getPrompts();
 const themes = loader.getThemes();
 const contextFiles = loader.getAgentsFiles().agentsFiles;
+const contextDiagnostics = loader.getContextDiagnostics();
 ```
 
 ## Return Value

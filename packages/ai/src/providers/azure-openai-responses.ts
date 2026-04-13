@@ -96,7 +96,9 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			);
 			stream.push({ type: "start", partial: output });
 
-			await processResponsesStream(openaiStream, output, stream, model);
+			await processResponsesStream(openaiStream, output, stream, model, {
+				onWarning: options?.onWarning,
+			});
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");

@@ -33,6 +33,7 @@ export function getDrebToolVisibleDirs(projectRoot: string): string[] {
 	try {
 		entries = readdirSync(drebDir, { withFileTypes: true });
 	} catch {
+		// Directory unreadable — return empty list
 		return [];
 	}
 

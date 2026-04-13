@@ -164,11 +164,11 @@ describe("AgentSession._expandSkillCommand", () => {
 	it("returns original text when skill file cannot be read (error path)", () => {
 		const session = createSession([brokenSkill]);
 		try {
-			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+			const warnSpy = vi.spyOn(session, "warnInSession").mockImplementation(() => {});
 			const result = expandSkillCommand(session, "/skill:broken-skill");
 			expect(result).toBe("/skill:broken-skill");
-			expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Skill expansion error"));
-			consoleSpy.mockRestore();
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Skill expansion failed for "broken-skill"'));
+			warnSpy.mockRestore();
 		} finally {
 			session.dispose();
 		}

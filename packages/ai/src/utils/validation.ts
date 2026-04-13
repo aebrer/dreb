@@ -20,6 +20,7 @@ function canUseRuntimeCodegen(): boolean {
 		new Function("return true;");
 		return true;
 	} catch {
+		// Expected in CSP-restricted environments — code generation is blocked
 		return false;
 	}
 }
@@ -35,6 +36,7 @@ if (canUseRuntimeCodegen()) {
 		});
 		addFormats(ajv);
 	} catch (_e) {
+		// AJV requires code generation (new Function) which CSP may block. Tool argument validation is best-effort.
 		console.warn("AJV validation disabled due to CSP restrictions");
 	}
 }

@@ -23,6 +23,7 @@ export function isSqliteAvailable(): boolean {
 		require("node:sqlite");
 		_sqliteAvailable = true;
 	} catch {
+		/* node:sqlite not available (requires Node 22.5+) — gracefully degrade */
 		_sqliteAvailable = false;
 	}
 	return _sqliteAvailable;

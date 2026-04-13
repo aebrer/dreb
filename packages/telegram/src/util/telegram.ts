@@ -114,10 +114,12 @@ export async function safeEdit(api: Api, chatId: number, messageId: number, text
 		await withTimeout(api.editMessageText(chatId, messageId, text, { parse_mode: "Markdown" }), API_TIMEOUT);
 		return true;
 	} catch {
+		/* Markdown parse rejected by Telegram — retry as plaintext */
 		try {
 			await withTimeout(api.editMessageText(chatId, messageId, text), API_TIMEOUT);
 			return true;
 		} catch {
+			/* Plaintext edit also failed (message deleted, permissions revoked) */
 			return false;
 		}
 	}

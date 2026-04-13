@@ -154,6 +154,7 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 
 		return null;
 	} catch {
+		// Photon WASM or encoding error — return null to signal resize failure
 		return null;
 	} finally {
 		if (image) {

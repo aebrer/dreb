@@ -4,6 +4,16 @@
 
 ### Added
 
+- Added `warnInSession()` on `AgentSession` — surfaces warnings in the conversation so both the human and AI agent can see and act on them. Supports `{ informational: true }` for non-interrupting context notes vs. actionable warnings that prompt the agent to inform the user. ([#115](https://github.com/aebrer/dreb/issues/115))
+- Added `warnResourceDiagnostics()` on `AgentSession` — collects all resource loading diagnostics (skills, prompts, themes, context files, extensions) and surfaces them via `warnInSession()`. Called automatically on startup and `/reload`.
+- Added `getContextDiagnostics()` to `ResourceLoader` interface — returns `ResourceDiagnostic[]` for context file loading failures (AGENTS.md, memory indexes, etc.)
+- Added `configValueWarnings` for shell command config value failures (`!command` syntax) — drained and surfaced via `warnInSession()` after API key resolution
+- Converted all `console.error(chalk.yellow(...))` in resource-loader.ts to `ResourceDiagnostic` entries visible in the session
+- Added justification comments on all bare `catch {}` and `.catch(() => {})` blocks across the entire codebase
+- Added SSE/WebSocket parse error counting in OpenAI Codex and Google Gemini providers, reported via `onWarning` callback
+- Fixed WebSocket `wake()` placement — moved to `finally` block to prevent stream hangs on malformed messages
+- Added unreadable file reporting in grep tool results
+
 - Added `/buddy` terminal companion — an ASCII art companion that lives alongside you during coding sessions. 18 species with rarity tiers, deterministic generation via seeded PRNG, LLM-generated personality and backstory, Ollama-powered speech bubble reactions to tool errors and session events, idle timer reactions, name-call detection, pet hearts animation, and stat display. Companion state persists across sessions. ([#98](https://github.com/aebrer/dreb/issues/98))
 
 - Added skill system enhancements: `argument-hint` frontmatter field shown in `/` menu autocomplete, `user-invocable` field to hide skills from the `/` menu while keeping them available to the model, `disable-model-invocation` field to restrict skills to user-only invocation, and a dedicated `skill` tool for model-invocable skill execution with full content substitution (`$ARGUMENTS`, `$0`..`$N`, `$@`, `${@:N}`, `${DREB_SKILL_DIR}`, `${DREB_SESSION_ID}`) ([#7](https://github.com/aebrer/dreb/issues/7))

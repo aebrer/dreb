@@ -76,6 +76,7 @@ function commandExists(cmd: string): boolean {
 		// Check for ENOENT error (command not found)
 		return result.error === undefined || result.error === null;
 	} catch {
+		/* spawnSync threw (e.g. ENOENT on exotic platforms) — command not available */
 		return false;
 	}
 }

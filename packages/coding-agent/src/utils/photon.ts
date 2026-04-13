@@ -89,6 +89,7 @@ function patchPhotonWasmRead(): () => void {
 	try {
 		mutableFs.readFileSync = patchedReadFileSync;
 	} catch {
+		// Property may be non-writable; fall back to defineProperty
 		Object.defineProperty(fs, "readFileSync", {
 			value: patchedReadFileSync,
 			writable: true,
@@ -100,6 +101,7 @@ function patchPhotonWasmRead(): () => void {
 		try {
 			mutableFs.readFileSync = originalReadFileSync;
 		} catch {
+			// Property may be non-writable; fall back to defineProperty
 			Object.defineProperty(fs, "readFileSync", {
 				value: originalReadFileSync,
 				writable: true,
@@ -128,6 +130,7 @@ export async function loadPhoton(): Promise<typeof import("@silvia-odwyer/photon
 			photonModule = await import("@silvia-odwyer/photon-node");
 			return photonModule;
 		} catch {
+			// Optional dependency — unavailable is fine
 			photonModule = null;
 			return photonModule;
 		} finally {

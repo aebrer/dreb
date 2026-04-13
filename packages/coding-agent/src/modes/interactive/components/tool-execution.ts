@@ -236,6 +236,7 @@ export class ToolExecutionComponent extends Container {
 					this.contentBox.addChild(component);
 					hasContent = true;
 				} catch {
+					// Renderer threw — show generic fallback instead
 					this.callRendererComponent = undefined;
 					this.contentBox.addChild(this.createCallFallback());
 					hasContent = true;
@@ -262,6 +263,7 @@ export class ToolExecutionComponent extends Container {
 						this.contentBox.addChild(component);
 						hasContent = true;
 					} catch {
+						// Renderer threw — show generic fallback instead
 						this.resultRendererComponent = undefined;
 						const component = this.createResultFallback();
 						if (component) {

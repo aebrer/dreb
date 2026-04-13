@@ -114,7 +114,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 							partial: output,
 						});
 					} else if (block.type === "toolCall") {
-						block.arguments = parseStreamingJson(block.partialArgs);
+						block.arguments = parseStreamingJson(block.partialArgs, options?.onWarning);
 						delete block.partialArgs;
 						stream.push({
 							type: "toolcall_end",
@@ -246,7 +246,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 								if (toolCall.function?.arguments) {
 									delta = toolCall.function.arguments;
 									currentBlock.partialArgs += toolCall.function.arguments;
-									currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
+									currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs, options?.onWarning);
 								}
 								stream.push({
 									type: "toolcall_delta",
@@ -616,6 +616,7 @@ export function convertMessages(
 						try {
 							return JSON.parse(tc.thoughtSignature!);
 						} catch {
+							// Optional reasoning metadata — null is filtered out downstream
 							return null;
 						}
 					})

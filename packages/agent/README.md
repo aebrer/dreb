@@ -185,6 +185,9 @@ const agent = new Agent({
     }
   },
 
+  // Forward non-fatal provider warnings (e.g. malformed SSE/JSON) to the caller
+  onWarning: (code, message) => console.warn(`[${code}] ${message}`),
+
   // Custom thinking budgets for token-based providers
   thinkingBudgets: {
     minimal: 128,

@@ -347,7 +347,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 						const block = blocks[index];
 						if (block && block.type === "toolCall") {
 							block.partialJson += event.delta.partial_json;
-							block.arguments = parseStreamingJson(block.partialJson);
+							block.arguments = parseStreamingJson(block.partialJson, options?.onWarning);
 							stream.push({
 								type: "toolcall_delta",
 								contentIndex: index,
@@ -383,7 +383,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 								partial: output,
 							});
 						} else if (block.type === "toolCall") {
-							block.arguments = parseStreamingJson(block.partialJson);
+							block.arguments = parseStreamingJson(block.partialJson, options?.onWarning);
 							delete (block as any).partialJson;
 							stream.push({
 								type: "toolcall_end",
@@ -529,6 +529,7 @@ function isFirstPartyAnthropic(baseUrl: string): boolean {
 		const url = new URL(baseUrl);
 		return url.hostname === "api.anthropic.com" || url.hostname.endsWith(".api.anthropic.com");
 	} catch {
+		// Best-effort URL parse — return false if URL is malformed
 		return false;
 	}
 }

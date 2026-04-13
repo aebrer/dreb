@@ -61,7 +61,9 @@ function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
 			if (patterns.length > 0) {
 				ig.add(patterns);
 			}
-		} catch {}
+		} catch {
+			/* .gitignore may not exist or be unreadable — ignore patterns are optional */
+		}
 	}
 }
 
@@ -221,6 +223,7 @@ function loadSkillsFromDirInternal(
 				try {
 					isFile = statSync(fullPath).isFile();
 				} catch {
+					// Broken symlink — skip entry
 					continue;
 				}
 			}
@@ -433,6 +436,7 @@ export function loadSkills(options: LoadSkillsOptions = {}): LoadSkillsResult {
 			try {
 				realPath = realpathSync(skill.filePath);
 			} catch {
+				// Symlink resolution failed — use original path
 				realPath = skill.filePath;
 			}
 

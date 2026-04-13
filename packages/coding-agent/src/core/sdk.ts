@@ -9,6 +9,7 @@ import type { ExtensionRunner, LoadExtensionsResult, ToolDefinition } from "./ex
 import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
+import { configValueWarnings } from "./resolve-config-value.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
@@ -313,6 +314,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
+	const sessionRef: { current?: AgentSession } = {};
 
 	agent = new Agent({
 		initialState: {
@@ -340,6 +342,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
 		maxRetryDelayMs: settingsManager.getRetrySettings().maxDelayMs,
+		onWarning: (code: string, message: string) => {
+			// Wire provider-level warnings to the session for user/agent visibility
+			const informational =
+				code === "sse_parse_error" || code === "ws_parse_error" || code === "json_parse_total_failure";
+			sessionRef.current?.warnInSession(message, { informational });
+		},
 		getApiKey: async (provider) => {
 			// Use the provider argument from the in-flight request;
 			// agent.state.model may already be switched mid-turn.
@@ -348,6 +356,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				throw new Error("No model selected");
 			}
 			const key = await modelRegistry.getApiKeyForProvider(resolvedProvider);
+			// Surface any config value resolution warnings (e.g. failed !command API keys)
+			if (configValueWarnings.length > 0) {
+				const warnings = configValueWarnings.splice(0);
+				for (const w of warnings) {
+					sessionRef.current?.warnInSession(w);
+				}
+			}
 			if (!key) {
 				const model = agent.state.model;
 				const isOAuth = model && modelRegistry.isUsingOAuth(model);
@@ -394,7 +409,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionRunnerRef,
 		uiType: options.uiType,
 	});
+	sessionRef.current = session;
 	const extensionsResult = resourceLoader.getExtensions();
+
+	// Surface any resource diagnostics from initial load
+	session.warnResourceDiagnostics(resourceLoader);
 
 	return {
 		session,
