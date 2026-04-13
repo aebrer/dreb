@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `onWarning` option to `AgentOptions` — forwarded to providers via `StreamOptions.onWarning` for non-fatal streaming warnings ([#115](https://github.com/aebrer/dreb/issues/115))
+
 ## [0.62.0] - 2026-03-23
 
 ## [0.61.1] - 2026-03-20

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `onWarning` callback to `StreamOptions` for non-fatal warnings during streaming (e.g., malformed JSON chunks, SSE parse errors). All providers now forward `onWarning` to `parseStreamingJson` so callers can handle parse failures instead of silently swallowing them. ([#115](https://github.com/aebrer/dreb/issues/115))
+- Added `onWarning` callback parameter to `parseStreamingJson()` — called when both `JSON.parse` and `partial-json` fail on input
+
 ### Changed
 
 - Changed direct `minimax` and `minimax-cn` model catalogs to keep only `MiniMax-M2.7` and `MiniMax-M2.7-highspeed`, and updated MiniMax and abort coverage to current provider model IDs and usage behavior ([#2596](https://github.com/badlogic/pi-mono/pull/2596) by [@liyuan97](https://github.com/liyuan97))

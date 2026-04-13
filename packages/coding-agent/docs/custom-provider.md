@@ -381,6 +381,26 @@ function streamMyProvider(
 }
 ```
 
+### Non-Fatal Warnings
+
+`SimpleStreamOptions` includes an `onWarning` callback for non-fatal errors during streaming (e.g., malformed JSON chunks in tool call arguments). Call it instead of silently swallowing parse failures:
+
+```typescript
+// When parsing tool call arguments incrementally:
+try {
+  block.arguments = JSON.parse(partialJson);
+} catch {
+  try {
+    block.arguments = partialParse(partialJson);
+  } catch {
+    // Both parsers failed — report via onWarning instead of silently dropping
+    options?.onWarning?.("json_parse_total_failure", `Both parsers failed on: ${partialJson.slice(0, 100)}`);
+  }
+}
+```
+
+The session layer wires `onWarning` to surface warnings in the conversation, so the user learns about degraded responses.
+
 ### Event Types
 
 Push events via `stream.push()` in this order:
