@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { createWriteStream, existsSync } from "node:fs";
+import { createWriteStream, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
@@ -343,6 +343,13 @@ export function createBashToolDefinition(
 						const fullOutput = renderTerminalOutput(fullBuffer.toString("utf-8"));
 						// Apply tail truncation for the final display payload.
 						const truncation = truncateTail(fullOutput);
+						// If truncation occurred (e.g. by line count) but no temp file was
+						// created (output was under the byte-streaming threshold), write the
+						// full output to a temp file so the truncation message can reference it.
+						if (truncation.truncated && !tempFilePath) {
+							tempFilePath = getTempFilePath();
+							writeFileSync(tempFilePath, fullOutput);
+						}
 						let outputText = truncation.content || "(no output)";
 						let details: BashToolDetails | undefined;
 						if (truncation.truncated) {

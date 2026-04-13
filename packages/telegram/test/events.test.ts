@@ -148,6 +148,21 @@ describe("agent_end", () => {
 		expect(state.toolCount).toBe(0);
 	});
 
+	it("does NOT set done for 'ended without' errors (stream termination)", async () => {
+		const send = vi.fn();
+		const state = makeState({ toolCount: 2, textBlocks: ["partial"] });
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "agent_end",
+			messages: [{ stopReason: "error", errorMessage: "request ended without sending any chunks" }],
+		});
+
+		expect(state.done).toBe(false);
+		expect(state.pendingRetry).toBe(true);
+		expect(state.textBlocks).toEqual([]);
+		expect(state.toolCount).toBe(0);
+	});
+
 	it("does NOT set done when background agents are still running", async () => {
 		const send = vi.fn();
 		const state = makeState();

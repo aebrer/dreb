@@ -24,6 +24,10 @@ class LoggingVirtualTerminal extends VirtualTerminal {
 		return this.writes.join("");
 	}
 
+	getWriteCount(): number {
+		return this.writes.length;
+	}
+
 	clearWrites(): void {
 		this.writes = [];
 	}
@@ -729,6 +733,71 @@ describe("TUI spinner lifecycle", () => {
 		assert.ok(viewport[2]?.includes("Line 2"), "Line 2 preserved");
 		assert.strictEqual(viewport[3]?.trim(), "", "Line 3 cleared");
 		assert.strictEqual(viewport[4]?.trim(), "", "Line 4 cleared");
+
+		tui.stop();
+	});
+});
+
+describe("TUI render throttle", () => {
+	it("coalesces rapid render requests", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = ["Initial"];
+		tui.start();
+		await terminal.flush();
+
+		// Record how many writes a single render produces
+		terminal.clearWrites();
+		component.lines = ["Baseline"];
+		tui.requestRender();
+		await terminal.flush();
+		const writesPerRender = terminal.getWriteCount();
+		terminal.clearWrites();
+
+		// Fire many rapid requestRender calls
+		for (let i = 0; i < 50; i++) {
+			component.lines = [`Update ${i}`];
+			tui.requestRender();
+		}
+
+		// Wait for all timers to settle
+		await terminal.flush();
+
+		// The final state should reflect the last update
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[0]?.includes("Update 49"), `Final state should be last update, got: ${viewport[0]}`);
+
+		// Throttle should have coalesced 50 requests into far fewer actual renders
+		const totalWrites = terminal.getWriteCount();
+		const maxExpectedRenders = 5; // 50 requests within one tick → at most a few renders
+		assert.ok(
+			totalWrites <= writesPerRender * maxExpectedRenders,
+			`Expected at most ${maxExpectedRenders} renders (${writesPerRender * maxExpectedRenders} writes), got ${totalWrites} writes`,
+		);
+
+		tui.stop();
+	});
+
+	it("force render resets state even during throttle window", async () => {
+		const terminal = new VirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		component.lines = ["Line 0", "Line 1", "Line 2"];
+		tui.start();
+		await terminal.flush();
+
+		// Immediately force render — should still work correctly
+		component.lines = ["Force updated"];
+		tui.requestRender(true);
+		await terminal.flush();
+
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[0]?.includes("Force updated"), `Force render applied: ${viewport[0]}`);
 
 		tui.stop();
 	});

@@ -201,11 +201,13 @@ export class Container implements Component {
 	render(width: number): string[] {
 		const lines: string[] = [];
 		for (const child of this.children) {
-			lines.push(...child.render(width));
+			for (const line of child.render(width)) lines.push(line);
 		}
 		return lines;
 	}
 }
+
+const RENDER_THROTTLE_MS = 16; // ~60fps
 
 /**
  * TUI - Main class for managing terminal UI with differential rendering
@@ -220,7 +222,8 @@ export class TUI extends Container {
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
-	private renderRequested = false;
+	private renderTimer: ReturnType<typeof setTimeout> | null = null;
+	private lastRenderAt = 0;
 	private cursorRow = 0; // Logical cursor row (end of rendered content)
 	private hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
 	private inputBuffer = ""; // Buffer for parsing terminal responses
@@ -430,6 +433,10 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		if (this.renderTimer !== null) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = null;
+		}
 		this.stopped = true;
 		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
 		if (this.previousLines.length > 0) {
@@ -457,12 +464,27 @@ export class TUI extends Container {
 			this.maxLinesRendered = 0;
 			this.previousViewportTop = 0;
 		}
-		if (this.renderRequested) return;
-		this.renderRequested = true;
-		process.nextTick(() => {
-			this.renderRequested = false;
-			this.doRender();
-		});
+		this.scheduleRender();
+	}
+
+	private scheduleRender(): void {
+		if (this.renderTimer !== null) return;
+		const elapsed = performance.now() - this.lastRenderAt;
+		if (elapsed >= RENDER_THROTTLE_MS) {
+			// Enough time has passed — render on next tick (preserves existing coalescing)
+			this.renderTimer = setTimeout(() => {
+				this.renderTimer = null;
+				this.lastRenderAt = performance.now();
+				this.doRender();
+			}, 0);
+		} else {
+			// Too soon — schedule for the remaining time
+			this.renderTimer = setTimeout(() => {
+				this.renderTimer = null;
+				this.lastRenderAt = performance.now();
+				this.doRender();
+			}, RENDER_THROTTLE_MS - elapsed);
+		}
 	}
 
 	private handleInput(data: string): void {
