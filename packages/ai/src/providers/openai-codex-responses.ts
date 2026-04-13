@@ -251,7 +251,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 			}
 
 			stream.push({ type: "start", partial: output });
-			await processStream(response, output, stream, model);
+			await processStream(response, output, stream, model, options);
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
@@ -366,8 +366,9 @@ async function processStream(
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
 	model: Model<"openai-codex-responses">,
+	options?: OpenAICodexResponsesOptions,
 ): Promise<void> {
-	await processResponsesStream(mapCodexEvents(parseSSE(response)), output, stream, model);
+	await processResponsesStream(mapCodexEvents(parseSSE(response, options)), output, stream, model, options);
 }
 
 async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): AsyncGenerator<ResponseStreamEvent> {
@@ -408,11 +409,15 @@ function normalizeCodexStatus(status: unknown): CodexResponseStatus | undefined 
 // SSE Parsing
 // ============================================================================
 
-async function* parseSSE(response: Response): AsyncGenerator<Record<string, unknown>> {
+async function* parseSSE(
+	response: Response,
+	options?: OpenAICodexResponsesOptions,
+): AsyncGenerator<Record<string, unknown>> {
 	if (!response.body) return;
 
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
+	let sseParseErrors = 0;
 	let buffer = "";
 
 	try {
@@ -435,19 +440,32 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
 					if (data && data !== "[DONE]") {
 						try {
 							yield JSON.parse(data);
-						} catch {}
+						} catch {
+							// Malformed SSE event — track for end-of-stream summary
+							sseParseErrors++;
+						}
 					}
 				}
 				idx = buffer.indexOf("\n\n");
 			}
 		}
 	} finally {
+		if (sseParseErrors > 0) {
+			options?.onWarning?.(
+				"sse_parse_error",
+				`${sseParseErrors} malformed SSE event(s) were dropped during streaming. Response content may be incomplete.`,
+			);
+		}
 		try {
 			await reader.cancel();
-		} catch {}
+		} catch {
+			// Reader may already be closed — cleanup errors are safe to ignore
+		}
 		try {
 			reader.releaseLock();
-		} catch {}
+		} catch {
+			// Reader may already be closed — cleanup errors are safe to ignore
+		}
 	}
 }
 
@@ -509,7 +527,9 @@ function isWebSocketReusable(socket: WebSocketLike): boolean {
 function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "done"): void {
 	try {
 		socket.close(code, reason);
-	} catch {}
+	} catch {
+		// Intentionally silent — socket may already be closed
+	}
 }
 
 function scheduleSessionWebSocketExpiry(sessionId: string, entry: CachedWebSocketConnection): void {
@@ -699,7 +719,11 @@ async function decodeWebSocketData(data: unknown): Promise<string | null> {
 	return null;
 }
 
-async function* parseWebSocket(socket: WebSocketLike, signal?: AbortSignal): AsyncGenerator<Record<string, unknown>> {
+async function* parseWebSocket(
+	socket: WebSocketLike,
+	signal?: AbortSignal,
+	options?: OpenAICodexResponsesOptions,
+): AsyncGenerator<Record<string, unknown>> {
 	const queue: Record<string, unknown>[] = [];
 	let pending: (() => void) | null = null;
 	let done = false;
@@ -726,8 +750,13 @@ async function* parseWebSocket(socket: WebSocketLike, signal?: AbortSignal): Asy
 					done = true;
 				}
 				queue.push(parsed);
+			} catch {
+				// Malformed WebSocket message — warn but don't drop wake()
+				options?.onWarning?.("ws_parse_error", `Malformed WebSocket message dropped: ${text.slice(0, 200)}`);
+			} finally {
+				// Always wake the consumer — even on parse failure — to prevent stream hangs
 				wake();
-			} catch {}
+			}
 		})();
 	};
 
@@ -806,7 +835,13 @@ async function processWebSocketStream(
 		socket.send(JSON.stringify({ type: "response.create", ...body }));
 		onStart();
 		stream.push({ type: "start", partial: output });
-		await processResponsesStream(mapCodexEvents(parseWebSocket(socket, options?.signal)), output, stream, model);
+		await processResponsesStream(
+			mapCodexEvents(parseWebSocket(socket, options?.signal, options)),
+			output,
+			stream,
+			model,
+			options,
+		);
 		if (options?.signal?.aborted) {
 			keepConnection = false;
 		}
@@ -844,7 +879,9 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 			}
 			message = err.message || friendlyMessage || message;
 		}
-	} catch {}
+	} catch {
+		// Best-effort extraction of friendly error message — raw text is the fallback
+	}
 
 	return { message, friendlyMessage };
 }
@@ -862,6 +899,7 @@ function extractAccountId(token: string): string {
 		if (!accountId) throw new Error("No account ID in token");
 		return accountId;
 	} catch {
+		// Re-throw with unified message for any JWT decode failure
 		throw new Error("Failed to extract accountId from token");
 	}
 }

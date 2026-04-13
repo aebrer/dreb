@@ -113,6 +113,7 @@ export class DailyCostTracker {
 				try {
 					files = (await readdir(projectDir)).filter((f) => f.endsWith(".jsonl"));
 				} catch {
+					/* Directory unreadable — skip this session dir */
 					continue;
 				}
 
@@ -160,6 +161,7 @@ export class DailyCostTracker {
 
 			return total;
 		} catch {
+			/* File unreadable — treat as zero cost */
 			return 0;
 		}
 	}

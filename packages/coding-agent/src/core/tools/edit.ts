@@ -169,6 +169,7 @@ export function createEditToolDefinition(
 								try {
 									await ops.access(absolutePath);
 								} catch {
+									// access() threw — file missing or unreadable
 									if (signal) {
 										signal.removeEventListener("abort", onAbort);
 									}

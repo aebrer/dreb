@@ -109,7 +109,9 @@ export function streamProxy(model: Model<any>, context: Context, options: ProxyS
 
 		const abortHandler = () => {
 			if (reader) {
-				reader.cancel("Request aborted by user").catch(() => {});
+				reader.cancel("Request aborted by user").catch(() => {
+					/* Reader may already be closed — cleanup error is safe to ignore */
+				});
 			}
 		};
 

@@ -255,6 +255,7 @@ async function discoverProject(accessToken: string, onProgress?: (message: strin
 		try {
 			errorPayload = await loadResponse.clone().json();
 		} catch {
+			// JSON parse of error body failed — leave errorPayload undefined and fall through
 			errorPayload = undefined;
 		}
 

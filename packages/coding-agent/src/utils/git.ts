@@ -48,6 +48,7 @@ function splitRef(url: string): { repo: string; ref?: string } {
 				ref,
 			};
 		} catch {
+			// URL parsing failed — treat raw string as repo identifier
 			return { repo: url };
 		}
 	}
@@ -94,6 +95,7 @@ function parseGenericGitUrl(url: string): GitSource | null {
 			host = parsed.hostname;
 			path = parsed.pathname.replace(/^\/+/, "");
 		} catch {
+			// Malformed URL — not a valid git source
 			return null;
 		}
 	} else {

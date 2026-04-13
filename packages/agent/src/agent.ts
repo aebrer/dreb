@@ -117,6 +117,12 @@ export interface AgentOptions {
 	 * If it returns false, the loop exits cleanly.
 	 */
 	shouldContinue?: () => boolean;
+
+	/**
+	 * Optional callback for non-fatal warnings during streaming.
+	 * Forwarded to providers via StreamOptions.onWarning.
+	 */
+	onWarning?: (code: string, message: string) => void;
 }
 
 export class Agent {
@@ -159,6 +165,7 @@ export class Agent {
 		signal?: AbortSignal,
 	) => Promise<AfterToolCallResult | undefined>;
 	private _shouldContinue?: () => boolean;
+	private _onWarning?: (code: string, message: string) => void;
 
 	constructor(opts: AgentOptions = {}) {
 		this._state = { ...this._state, ...opts.initialState };
@@ -177,6 +184,7 @@ export class Agent {
 		this._beforeToolCall = opts.beforeToolCall;
 		this._shouldContinue = opts.shouldContinue;
 		this._afterToolCall = opts.afterToolCall;
+		this._onWarning = opts.onWarning;
 	}
 
 	/**
@@ -548,6 +556,7 @@ export class Agent {
 			transport: this._transport,
 			thinkingBudgets: this._thinkingBudgets,
 			maxRetryDelayMs: this._maxRetryDelayMs,
+			onWarning: this._onWarning,
 			toolExecution: this._toolExecution,
 			beforeToolCall: this._beforeToolCall,
 			afterToolCall: this._afterToolCall,

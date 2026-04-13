@@ -709,6 +709,7 @@ export class InteractiveMode {
 			const updates = await packageManager.checkForAvailableUpdates();
 			return updates.map((update) => update.displayName);
 		} catch {
+			/* Update check failed (network, npm unavailable) — suppress badge */
 			return [];
 		}
 	}
@@ -2233,7 +2234,9 @@ export class InteractiveMode {
 			// Name-call detection for buddy (must run before all early-return paths)
 			if (this.buddyController.detectNameCall(text) && this.buddyComponent) {
 				this.editor.setText("");
-				this.buddyController.handleNameCall(text).catch(() => {});
+				this.buddyController.handleNameCall(text).catch(() => {
+					/* handleNameCall() logs errors internally */
+				});
 				return;
 			}
 
@@ -3529,6 +3532,7 @@ export class InteractiveMode {
 		try {
 			return await this.session.modelRegistry.getAvailable();
 		} catch {
+			// Model registry unavailable — return empty list
 			return [];
 		}
 	}

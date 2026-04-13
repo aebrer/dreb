@@ -253,6 +253,7 @@ export async function computeEditDiff(
 		try {
 			await access(absolutePath, constants.R_OK);
 		} catch {
+			// access() threw — file missing or unreadable
 			return { error: `File not found: ${path}` };
 		}
 

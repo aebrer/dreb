@@ -84,6 +84,7 @@ function decodeJwt(token: string): JwtPayload | null {
 		const decoded = atob(payload);
 		return JSON.parse(decoded) as JwtPayload;
 	} catch {
+		// Malformed token — return null instead of throwing
 		return null;
 	}
 }
@@ -240,6 +241,7 @@ function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
 			res.end(oauthSuccessHtml("OpenAI authentication completed. You can close this window."));
 			settleWait?.({ code });
 		} catch {
+			// Unexpected error in OAuth callback handler — respond with 500 instead of crashing the server
 			res.statusCode = 500;
 			res.setHeader("Content-Type", "text/html; charset=utf-8");
 			res.end(oauthErrorHtml("Internal error while processing OAuth callback."));

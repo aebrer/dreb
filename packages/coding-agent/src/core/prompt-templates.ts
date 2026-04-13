@@ -128,6 +128,7 @@ function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptT
 			filePath,
 		};
 	} catch {
+		// File unreadable or malformed — skip template
 		return null;
 	}
 }
@@ -168,6 +169,7 @@ function loadTemplatesFromDir(dir: string, getSourceInfo: (filePath: string) => 
 			}
 		}
 	} catch {
+		// Directory unreadable — return whatever was loaded so far
 		return templates;
 	}
 

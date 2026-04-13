@@ -82,6 +82,7 @@ async function convertToPng(bytes: Uint8Array): Promise<Uint8Array | null> {
 			image.free();
 		}
 	} catch {
+		// Photon resize failed — return null to skip image
 		return null;
 	}
 }
@@ -149,6 +150,7 @@ function isWSL(env: NodeJS.ProcessEnv = process.env): boolean {
 		const release = readFileSync("/proc/version", "utf-8");
 		return /microsoft|wsl/i.test(release);
 	} catch {
+		// /proc/version unreadable — not WSL
 		return false;
 	}
 }
@@ -200,6 +202,7 @@ function readClipboardImageViaPowerShell(): ClipboardImage | null {
 
 		return { bytes: new Uint8Array(bytes), mimeType: "image/png" };
 	} catch {
+		// PowerShell clipboard read failed — no image available
 		return null;
 	} finally {
 		try {

@@ -132,7 +132,9 @@ export class BuddyController {
 
 		this.idleTimer = setTimeout(() => {
 			const ctx = this.buildContext();
-			this.triggerReaction(`It's been quiet for a moment. Recent activity:\n${ctx}`).catch(() => {});
+			this.triggerReaction(`It's been quiet for a moment. Recent activity:\n${ctx}`).catch(() => {
+				/* triggerReaction() logs errors internally — prevents unhandled rejection */
+			});
 		}, this.config.idleTimeoutMs);
 	}
 
@@ -223,6 +225,7 @@ export class BuddyController {
 			const regex = new RegExp(`\\b${escaped}\\b`, "i");
 			return regex.test(text);
 		} catch {
+			/* Invalid regex from buddy name — safe to return false */
 			return false;
 		}
 	}
@@ -291,7 +294,9 @@ export class BuddyController {
 						errorText = result.error.slice(0, 200);
 					}
 					if (!errorText) errorText = "unknown error";
-					this.triggerReaction(`Tool "${event.toolName}" failed: ${errorText}`).catch(() => {});
+					this.triggerReaction(`Tool "${event.toolName}" failed: ${errorText}`).catch(() => {
+						/* triggerReaction() logs errors internally */
+					});
 				}
 				break;
 			}
@@ -299,7 +304,9 @@ export class BuddyController {
 			case "agent_end": {
 				if (this.enabled) {
 					const ctx = this.buildContext();
-					this.triggerReaction(`The agent finished responding. Recent activity:\n${ctx}`).catch(() => {});
+					this.triggerReaction(`The agent finished responding. Recent activity:\n${ctx}`).catch(() => {
+						/* triggerReaction() logs errors internally */
+					});
 				}
 				break;
 			}
@@ -318,7 +325,9 @@ export class BuddyController {
 
 		// Name-call detection (gated by enabled via detectNameCall)
 		if (this.detectNameCall(text)) {
-			this.handleNameCall(text).catch(() => {});
+			this.handleNameCall(text).catch(() => {
+				/* handleNameCall() logs errors internally — prevents unhandled rejection */
+			});
 			return true;
 		}
 		return false;

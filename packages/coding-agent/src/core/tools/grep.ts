@@ -181,6 +181,7 @@ export function createGrepToolDefinition(
 						try {
 							isDirectory = await ops.isDirectory(searchPath);
 						} catch {
+							// isDirectory() threw — path doesn't exist
 							settle(() => reject(new Error(`Path not found: ${searchPath}`)));
 							return;
 						}
@@ -198,6 +199,7 @@ export function createGrepToolDefinition(
 						};
 
 						const fileCache = new Map<string, string[]>();
+						const failedFiles: string[] = [];
 						const getFileLines = async (filePath: string): Promise<string[]> => {
 							let lines = fileCache.get(filePath);
 							if (!lines) {
@@ -205,6 +207,8 @@ export function createGrepToolDefinition(
 									const content = await ops.readFile(filePath);
 									lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
 								} catch {
+									// File unreadable (permission denied, deleted, etc.) — record for tool result
+									failedFiles.push(filePath);
 									lines = [];
 								}
 								fileCache.set(filePath, lines);
@@ -283,6 +287,7 @@ export function createGrepToolDefinition(
 							try {
 								event = JSON.parse(line);
 							} catch {
+								// Malformed JSON from ripgrep — skip line
 								return;
 							}
 							if (event.type === "match") {
@@ -349,6 +354,9 @@ export function createGrepToolDefinition(
 								details.linesTruncated = true;
 							}
 							if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
+							if (failedFiles.length > 0) {
+								output += `\n\nWarning: Failed to read ${failedFiles.length} file(s): ${failedFiles.join(", ")}`;
+							}
 							settle(() =>
 								resolve({
 									content: [{ type: "text", text: output }],

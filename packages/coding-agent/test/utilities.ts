@@ -221,6 +221,7 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 		getSkills: () => ({ skills: options.skills ?? [], diagnostics: [] }),
 		getPrompts: () => ({ prompts: [], diagnostics: [] }),
 		getThemes: () => ({ themes: [], diagnostics: [] }),
+		getContextDiagnostics: () => [],
 		getAgentsFiles: () => ({ agentsFiles: [] }),
 		getMemoryIndexes: () => ({
 			global: [],

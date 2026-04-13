@@ -7,7 +7,10 @@ import { parse as partialParse } from "partial-json";
  * @param partialJson The partial JSON string from streaming
  * @returns Parsed object or empty object if parsing fails
  */
-export function parseStreamingJson<T = any>(partialJson: string | undefined): T {
+export function parseStreamingJson<T = any>(
+	partialJson: string | undefined,
+	onWarning?: (code: string, message: string) => void,
+): T {
 	if (!partialJson || partialJson.trim() === "") {
 		return {} as T;
 	}
@@ -21,7 +24,11 @@ export function parseStreamingJson<T = any>(partialJson: string | undefined): T 
 			const result = partialParse(partialJson);
 			return (result ?? {}) as T;
 		} catch {
-			// If all parsing fails, return empty object
+			// Both JSON.parse and partial-json failed — input is unparseable garbage
+			onWarning?.(
+				"json_parse_total_failure",
+				`Both JSON.parse and partial-json failed on: ${partialJson.slice(0, 200)}`,
+			);
 			return {} as T;
 		}
 	}

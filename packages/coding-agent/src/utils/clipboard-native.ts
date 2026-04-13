@@ -15,6 +15,7 @@ if (!process.env.TERMUX_VERSION && hasDisplay) {
 	try {
 		clipboard = require("@mariozechner/clipboard") as ClipboardModule;
 	} catch {
+		// Optional native dependency — unavailable is fine
 		clipboard = null;
 	}
 }

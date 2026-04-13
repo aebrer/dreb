@@ -17,6 +17,7 @@ function loadAuth(): Record<string, { type: "oauth" } & OAuthCredentials> {
 	try {
 		return JSON.parse(readFileSync(AUTH_FILE, "utf-8"));
 	} catch {
+		// Corrupt auth file — start fresh with empty credentials
 		return {};
 	}
 }

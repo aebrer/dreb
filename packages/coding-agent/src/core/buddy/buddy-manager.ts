@@ -97,6 +97,7 @@ export async function checkOllama(): Promise<OllamaStatus> {
 		}
 		return { available: true, models };
 	} catch {
+		/* Ollama not running or unreachable — report as unavailable */
 		return { available: false, models: [], error: "Ollama is not running. Start it with: ollama serve" };
 	}
 }
@@ -152,6 +153,7 @@ function loadStored(): StoredCompanion | null {
 		}
 		return null;
 	} catch {
+		/* Corrupt or missing companion file — return null to trigger fresh creation */
 		return null;
 	}
 }

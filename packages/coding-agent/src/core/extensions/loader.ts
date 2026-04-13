@@ -412,6 +412,7 @@ function readDrebManifest(packageJsonPath: string): DrebManifest | null {
 		}
 		return null;
 	} catch {
+		/* Malformed or missing package.json — skip manifest discovery */
 		return null;
 	}
 }
@@ -499,6 +500,7 @@ function discoverExtensionsInDir(dir: string): string[] {
 			}
 		}
 	} catch {
+		/* Extension directory scan failed — return empty list */
 		return [];
 	}
 

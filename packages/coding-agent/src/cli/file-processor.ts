@@ -34,6 +34,7 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 		try {
 			await access(absolutePath);
 		} catch {
+			// File does not exist — print a user-friendly error and exit
 			console.error(chalk.red(`Error: File not found: ${absolutePath}`));
 			process.exit(1);
 		}

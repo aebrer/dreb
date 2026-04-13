@@ -622,6 +622,7 @@ export function getThemeByName(name: string): Theme | undefined {
 	try {
 		return loadTheme(name);
 	} catch {
+		// Theme loading failed — treat as not found
 		return undefined;
 	}
 }
@@ -933,6 +934,7 @@ export function getThemeExportColors(themeName?: string): {
 			infoBg: resolve(exportSection.infoBg),
 		};
 	} catch {
+		// Export section resolution failed — use defaults
 		return {};
 	}
 }
@@ -995,6 +997,7 @@ export function highlightCode(code: string, lang?: string): string[] {
 	try {
 		return highlight(code, opts).split("\n");
 	} catch {
+		// Highlighter failed — return unhighlighted lines
 		return code.split("\n");
 	}
 }
@@ -1103,6 +1106,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 			try {
 				return highlight(code, opts).split("\n");
 			} catch {
+				// Highlighter failed — return themed but unhighlighted lines
 				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
 			}
 		},

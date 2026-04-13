@@ -49,6 +49,7 @@ const resourceLoader: ResourceLoader = {
 	getSkills: () => ({ skills: [], diagnostics: [] }),
 	getPrompts: () => ({ prompts: [], diagnostics: [] }),
 	getThemes: () => ({ themes: [], diagnostics: [] }),
+	getContextDiagnostics: () => [],
 	getAgentsFiles: () => ({ agentsFiles: [] }),
 	getMemoryIndexes: () => ({
 		global: [],

@@ -451,6 +451,37 @@ Content`,
 		});
 	});
 
+	describe("getDefaultSourceInfoForPath", () => {
+		it("does not crash on non-existent path", () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			const nonExistentPath = join(tempDir, "does", "not", "exist", "file.md");
+			const result = (loader as any).getDefaultSourceInfoForPath(nonExistentPath);
+
+			expect(result).toBeDefined();
+			expect(result.path).toBe(nonExistentPath);
+			expect(result.source).toBe("local");
+			// Falls back to parent directory when path doesn't exist
+			expect(result.baseDir).toBe(join(tempDir, "does", "not", "exist"));
+		});
+	});
+
+	describe("context diagnostics", () => {
+		it("produces context diagnostics for unreadable files", async () => {
+			// Create a directory where an AGENTS.md "file" is actually a directory,
+			// which causes EISDIR when readFileSync tries to read it.
+			const agentsMdPath = join(cwd, "AGENTS.md");
+			mkdirSync(agentsMdPath, { recursive: true });
+
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+
+			const diagnostics = loader.getContextDiagnostics();
+			expect(diagnostics.some((d) => d.path?.includes("AGENTS.md") && d.message.includes("Could not read"))).toBe(
+				true,
+			);
+		});
+	});
+
 	describe("extension conflict detection", () => {
 		it("should detect tool conflicts between extensions", async () => {
 			// Create two extensions that register the same tool

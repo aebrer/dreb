@@ -177,7 +177,9 @@ function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
 			if (patterns.length > 0) {
 				ig.add(patterns);
 			}
-		} catch {}
+		} catch {
+			/* .gitignore may not exist or be unreadable — ignore patterns are optional */
+		}
 	}
 }
 
@@ -228,6 +230,7 @@ function collectFiles(
 					isDir = stats.isDirectory();
 					isFile = stats.isFile();
 				} catch {
+					// Broken symlink or deleted file — skip entry
 					continue;
 				}
 			}
@@ -243,7 +246,7 @@ function collectFiles(
 			}
 		}
 	} catch {
-		// Ignore errors
+		// Directory may not exist or be unreadable — return empty list
 	}
 
 	return files;
@@ -278,6 +281,7 @@ function collectSkillEntries(
 					isDir = stats.isDirectory();
 					isFile = stats.isFile();
 				} catch {
+					// Broken symlink or deleted file — skip entry
 					continue;
 				}
 			}
@@ -297,7 +301,7 @@ function collectSkillEntries(
 			}
 		}
 	} catch {
-		// Ignore errors
+		// Directory may not exist or be unreadable — return empty list
 	}
 
 	return entries;
@@ -361,6 +365,7 @@ function collectAutoPromptEntries(dir: string): string[] {
 				try {
 					isFile = statSync(fullPath).isFile();
 				} catch {
+					// Broken symlink — skip entry
 					continue;
 				}
 			}
@@ -373,7 +378,7 @@ function collectAutoPromptEntries(dir: string): string[] {
 			}
 		}
 	} catch {
-		// Ignore errors
+		// Directory may not exist or be unreadable — return empty list
 	}
 
 	return entries;
@@ -398,6 +403,7 @@ function collectAutoThemeEntries(dir: string): string[] {
 				try {
 					isFile = statSync(fullPath).isFile();
 				} catch {
+					// Broken symlink — skip entry
 					continue;
 				}
 			}
@@ -410,7 +416,7 @@ function collectAutoThemeEntries(dir: string): string[] {
 			}
 		}
 	} catch {
-		// Ignore errors
+		// Directory may not exist or be unreadable — return empty list
 	}
 
 	return entries;
@@ -422,6 +428,7 @@ function readDrebManifestFile(packageJsonPath: string): DrebManifest | null {
 		const pkg = JSON.parse(content) as { dreb?: DrebManifest };
 		return pkg.dreb ?? null;
 	} catch {
+		// Malformed package.json — fall back to convention-based discovery
 		return null;
 	}
 }
@@ -486,6 +493,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
 					isDir = stats.isDirectory();
 					isFile = stats.isFile();
 				} catch {
+					// Broken symlink or deleted file — skip entry
 					continue;
 				}
 			}
@@ -504,7 +512,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
 			}
 		}
 	} catch {
-		// Ignore errors
+		// Directory may not exist or be unreadable — return empty list
 	}
 
 	return entries;
@@ -1066,6 +1074,7 @@ export class DefaultPackageManager implements PackageManager {
 				}
 			}
 		} catch {
+			// Package resource collection failed — skip this package
 			return;
 		}
 	}
@@ -1219,6 +1228,7 @@ export class DefaultPackageManager implements PackageManager {
 			const latestVersion = await this.getLatestNpmVersion(source.name);
 			return latestVersion !== installedVersion;
 		} catch {
+			// Update check failure — conservatively report no updates
 			return false;
 		}
 	}
@@ -1231,6 +1241,7 @@ export class DefaultPackageManager implements PackageManager {
 			const pkg = JSON.parse(content) as { version?: string };
 			return pkg.version;
 		} catch {
+			// Version read failed — treat as unknown
 			return undefined;
 		}
 	}
@@ -1257,6 +1268,7 @@ export class DefaultPackageManager implements PackageManager {
 			const remoteHead = await this.getRemoteGitHead(installedPath);
 			return localHead.trim() !== remoteHead.trim();
 		} catch {
+			// Update check failure — conservatively report no updates
 			return false;
 		}
 	}
@@ -1311,6 +1323,7 @@ export class DefaultPackageManager implements PackageManager {
 				],
 			};
 		} catch {
+			// Upstream ref detection failed — fall back to origin/HEAD
 			await this.runCommand("git", ["remote", "set-head", "origin", "-a"], { cwd: installedPath }).catch(() => {});
 			const head = await this.runCommandCapture("git", ["rev-parse", "origin/HEAD"], {
 				cwd: installedPath,
@@ -1319,7 +1332,7 @@ export class DefaultPackageManager implements PackageManager {
 			const originHeadRef = await this.runCommandCapture("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
 				cwd: installedPath,
 				timeoutMs: NETWORK_TIMEOUT_MS,
-			}).catch(() => "");
+			}).catch(() => "" /* Symbolic ref resolution failed — use empty string fallback */);
 			const branch = originHeadRef.trim().replace(/^refs\/remotes\/origin\//, "");
 			if (branch) {
 				return {
@@ -1355,6 +1368,7 @@ export class DefaultPackageManager implements PackageManager {
 			const branch = trimmed.slice("origin/".length);
 			return branch ? `refs/heads/${branch}` : undefined;
 		} catch {
+			// Upstream ref detection failed — return undefined
 			return undefined;
 		}
 	}
@@ -1588,6 +1602,7 @@ export class DefaultPackageManager implements PackageManager {
 			try {
 				rmSync(current, { recursive: true, force: true });
 			} catch {
+				// rmSync failed — stop pruning
 				break;
 			}
 			current = dirname(current);
@@ -1837,6 +1852,7 @@ export class DefaultPackageManager implements PackageManager {
 			const pkg = JSON.parse(content) as { dreb?: DrebManifest };
 			return pkg.dreb ?? null;
 		} catch {
+			// Malformed package.json — fall back to convention-based discovery
 			return null;
 		}
 	}
@@ -2029,7 +2045,7 @@ export class DefaultPackageManager implements PackageManager {
 					files.push(...collectResourceFiles(p, resourceType));
 				}
 			} catch {
-				// Ignore errors
+				// File/dir inaccessible — skip
 			}
 		}
 		return files;

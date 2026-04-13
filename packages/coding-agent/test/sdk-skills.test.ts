@@ -56,6 +56,7 @@ This is a test skill.
 			getSkills: () => ({ skills: [], diagnostics: [] }),
 			getPrompts: () => ({ prompts: [], diagnostics: [] }),
 			getThemes: () => ({ themes: [], diagnostics: [] }),
+			getContextDiagnostics: () => [],
 			getAgentsFiles: () => ({ agentsFiles: [] }),
 			getMemoryIndexes: () => ({
 				global: [],
@@ -96,6 +97,7 @@ This is a test skill.
 			getSkills: () => ({ skills: [customSkill], diagnostics: [] }),
 			getPrompts: () => ({ prompts: [], diagnostics: [] }),
 			getThemes: () => ({ themes: [], diagnostics: [] }),
+			getContextDiagnostics: () => [],
 			getAgentsFiles: () => ({ agentsFiles: [] }),
 			getMemoryIndexes: () => ({
 				global: [],

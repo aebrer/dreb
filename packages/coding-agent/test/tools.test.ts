@@ -6,7 +6,7 @@ import { executeBash } from "../src/core/bash-executor.js";
 import { bashTool, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.js";
 import { editTool } from "../src/core/tools/edit.js";
 import { createFindTool, findTool } from "../src/core/tools/find.js";
-import { createGrepTool, grepTool } from "../src/core/tools/grep.js";
+import { createGrepTool, type GrepOperations, grepTool } from "../src/core/tools/grep.js";
 import { lsTool } from "../src/core/tools/ls.js";
 import { readTool } from "../src/core/tools/read.js";
 import { writeTool } from "../src/core/tools/write.js";
@@ -465,6 +465,34 @@ describe("Coding Agent Tools", () => {
 
 			expect(output).toContain("main.ts");
 			expect(output).not.toContain(".dreb/");
+		});
+
+		it("reports unreadable files in grep result", async () => {
+			// Create a real file so ripgrep can find matches in it
+			const testFile = join(testDir, "readable.txt");
+			writeFileSync(testFile, "match line here\nanother match line\n");
+
+			// Custom operations where readFile fails for any file
+			const failingOps: GrepOperations = {
+				isDirectory: (p) => {
+					const { statSync: stat } = require("fs");
+					return stat(p).isDirectory();
+				},
+				readFile: (_p) => {
+					throw new Error("Permission denied");
+				},
+			};
+
+			const grepWithFailingRead = createGrepTool(testDir, { operations: failingOps });
+			const result = await grepWithFailingRead.execute("test-unreadable-grep", {
+				pattern: "match",
+				path: testFile,
+			});
+
+			const output = getTextOutput(result);
+			// The grep tool catches readFile errors, records failed files, and appends a warning
+			expect(output).toContain("Warning: Failed to read");
+			expect(output).toContain("readable.txt");
 		});
 
 		it("should respect global limit and include context lines", async () => {

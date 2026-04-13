@@ -69,6 +69,8 @@ export interface OpenAIResponsesStreamOptions {
 		usage: Usage,
 		serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
 	) => void;
+	/** Optional callback for non-fatal warnings during streaming (e.g. malformed JSON chunks). */
+	onWarning?: (code: string, message: string) => void;
 }
 
 export interface ConvertResponsesMessagesOptions {
@@ -398,7 +400,7 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.function_call_arguments.delta") {
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 				currentBlock.partialJson += event.delta;
-				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson, options?.onWarning);
 				stream.push({
 					type: "toolcall_delta",
 					contentIndex: blockIndex(),
@@ -409,7 +411,7 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.function_call_arguments.done") {
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 				currentBlock.partialJson = event.arguments;
-				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson, options?.onWarning);
 			}
 		} else if (event.type === "response.output_item.done") {
 			const item = event.item;
@@ -437,8 +439,8 @@ export async function processResponsesStream<TApi extends Api>(
 			} else if (item.type === "function_call") {
 				const args =
 					currentBlock?.type === "toolCall" && currentBlock.partialJson
-						? parseStreamingJson(currentBlock.partialJson)
-						: parseStreamingJson(item.arguments || "{}");
+						? parseStreamingJson(currentBlock.partialJson, options?.onWarning)
+						: parseStreamingJson(item.arguments || "{}", options?.onWarning);
 				const toolCall: ToolCall = {
 					type: "toolCall",
 					id: `${item.call_id}|${item.id}`,

@@ -64,8 +64,8 @@ export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 		}
 
 		return entries;
-	} catch (error) {
-		console.error(`Warning: Could not parse changelog: ${error}`);
+	} catch {
+		/* Changelog parse failure — non-critical, shown in about dialog */
 		return [];
 	}
 }

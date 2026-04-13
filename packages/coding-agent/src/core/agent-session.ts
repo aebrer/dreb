@@ -33,6 +33,7 @@ import {
 	shouldCompact,
 } from "./compaction/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
+import type { ResourceDiagnostic } from "./diagnostics.js";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.js";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
 import {
@@ -602,12 +603,39 @@ export class AgentSession {
 
 		this._agentEventQueue = this._agentEventQueue.then(
 			() => this._processAgentEvent(event),
-			() => this._processAgentEvent(event),
+			(err) => {
+				// Prior event failed — log and continue processing
+				this.warnInSession(`Event processing error: ${err instanceof Error ? err.message : String(err)}`);
+				return this._processAgentEvent(event);
+			},
 		);
 
-		// Keep queue alive if an event handler fails
-		this._agentEventQueue.catch(() => {});
+		// Keep queue alive if current event handler also fails
+		this._agentEventQueue.catch((err) => {
+			this.warnInSession(`Event queue error: ${err instanceof Error ? err.message : String(err)}`);
+		});
 	};
+
+	/**
+	 * Surface a warning in the session so both the human and the AI agent can see it.
+	 * During streaming: steers the warning as a user message into the conversation.
+	 * Between turns: queues for delivery with the next user prompt.
+	 */
+	warnInSession(message: string): void {
+		const warningContent = `[System Warning] ${message} Inform the user about this issue and ask how they would like to proceed.`;
+		const warningMessage: CustomMessage = {
+			role: "custom",
+			customType: "system_warning",
+			content: warningContent,
+			display: true,
+			timestamp: Date.now(),
+		};
+		if (this.isStreaming) {
+			this.agent.steer(warningMessage);
+		} else {
+			this._pendingNextTurnMessages.push(warningMessage);
+		}
+	}
 
 	private _createRetryPromiseForAgentEnd(event: AgentEvent): void {
 		if (event.type !== "agent_end" || this._retryPromise) {
@@ -1305,14 +1333,13 @@ export class AgentSession {
 			return expandSkillContent(skill, args, this.sessionId);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
+			this.warnInSession(`Skill expansion failed for "${skillName}": ${message}`);
 			if (this._extensionRunner) {
 				this._extensionRunner.emitError({
 					extensionPath: skill.filePath,
 					event: "skill_expansion",
 					error: message,
 				});
-			} else {
-				console.error(`Skill expansion error for "${skillName}": ${message}`);
 			}
 			return text; // Return original on error
 		}
@@ -2189,13 +2216,23 @@ export class AgentSession {
 				}
 
 				setTimeout(() => {
-					this.agent.continue().catch(() => {});
+					this.agent.continue().catch((err) => {
+						// Agent failed to continue after auto-compaction — surface to session
+						this.warnInSession(
+							`Agent failed to continue after compaction: ${err instanceof Error ? err.message : String(err)}`,
+						);
+					});
 				}, 100);
 			} else if (this.agent.hasQueuedMessages()) {
 				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
 				// Kick the loop so queued messages are actually delivered.
 				setTimeout(() => {
-					this.agent.continue().catch(() => {});
+					this.agent.continue().catch((err) => {
+						// Agent failed to continue after auto-compaction — surface to session
+						this.warnInSession(
+							`Agent failed to continue after compaction: ${err instanceof Error ? err.message : String(err)}`,
+						);
+					});
 				}, 100);
 			}
 		} catch (error) {
@@ -2639,6 +2676,25 @@ export class AgentSession {
 			await this._extensionRunner.emit({ type: "session_start" });
 			await this.extendResourcesFromExtensions("reload");
 		}
+
+		// After reload completes, surface any resource diagnostics to the session
+		const allDiagnostics: ResourceDiagnostic[] = [
+			...this._resourceLoader.getSkills().diagnostics,
+			...this._resourceLoader.getPrompts().diagnostics,
+			...this._resourceLoader.getThemes().diagnostics,
+			...this._resourceLoader.getContextDiagnostics(),
+		];
+		const extErrors = this._resourceLoader.getExtensions().errors;
+		if (allDiagnostics.length > 0 || extErrors.length > 0) {
+			const lines: string[] = [];
+			for (const d of allDiagnostics) {
+				lines.push(`- [${d.type}] ${d.message}${d.path ? ` (${d.path})` : ""}`);
+			}
+			for (const e of extErrors) {
+				lines.push(`- [error] Extension: ${typeof e === "string" ? e : `${e.path}: ${e.error}`}`);
+			}
+			this.warnInSession(`Resource loading issues:\n${lines.join("\n")}`);
+		}
 	}
 
 	// =========================================================================
@@ -2735,8 +2791,9 @@ export class AgentSession {
 
 		// Retry via continue() - use setTimeout to break out of event handler chain
 		setTimeout(() => {
-			this.agent.continue().catch(() => {
-				// Retry failed - will be caught by next agent_end
+			this.agent.continue().catch((err) => {
+				// Retry failed — surface to session so user knows
+				this.warnInSession(`Agent retry failed: ${err instanceof Error ? err.message : String(err)}`);
 			});
 		}, 0);
 
