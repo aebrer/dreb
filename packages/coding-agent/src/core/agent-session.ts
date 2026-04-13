@@ -633,7 +633,7 @@ export class AgentSession {
 		if (diagnostics.length === 0 && extErrors.length === 0) return;
 		const lines = [
 			...diagnostics.map((d) => `- [${d.type}] ${d.message}${d.path ? ` (${d.path})` : ""}`),
-			...extErrors.map((e) => `- [error] Extension: ${typeof e === "string" ? e : `${e.path}: ${e.error}`}`),
+			...extErrors.map((e) => `- [error] Extension: ${e.path}: ${e.error}`),
 		];
 		this.warnInSession(`Resource loading issues:\n${lines.join("\n")}`);
 	}

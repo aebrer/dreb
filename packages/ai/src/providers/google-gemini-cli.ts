@@ -717,6 +717,13 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 					}
 				} finally {
 					options?.signal?.removeEventListener("abort", abortHandler);
+
+					if (chunkParseErrors > 0) {
+						options?.onWarning?.(
+							"sse_parse_error",
+							`${chunkParseErrors} malformed SSE chunk(s) were dropped during streaming. Response content may be incomplete.`,
+						);
+					}
 				}
 
 				if (currentBlock) {
@@ -735,13 +742,6 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 							partial: output,
 						});
 					}
-				}
-
-				if (chunkParseErrors > 0) {
-					options?.onWarning?.(
-						"sse_parse_error",
-						`${chunkParseErrors} malformed SSE chunk(s) were dropped during streaming. Response content may be incomplete.`,
-					);
 				}
 
 				return hasContent;
