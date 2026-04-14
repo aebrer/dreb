@@ -238,6 +238,19 @@ export class AgentBridge {
 	}
 
 	/**
+	 * Generate session analysis report.
+	 */
+	async getSessionAnalysis(splitDate?: string): Promise<{ path: string } | null> {
+		if (!this.client) return null;
+		try {
+			return await this.client.sessionAnalysis(splitDate);
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
+	}
+
+	/**
 	 * Get current state.
 	 */
 	async getState(): Promise<any> {

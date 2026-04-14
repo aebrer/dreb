@@ -149,6 +149,30 @@ export async function cmdModel(ctx: Context, userState: UserState, args: string)
 	}
 }
 
+export async function cmdAnalysis(ctx: Context, userState: UserState, args: string): Promise<void> {
+	const chatId = ctx.chat!.id;
+	const bridge = userState.bridge;
+
+	if (!bridge?.isAlive) {
+		await safeSend(ctx.api, chatId, "No active session.");
+		return;
+	}
+
+	await safeSend(ctx.api, chatId, "📊 _Generating session analysis report..._");
+	try {
+		const splitDate = args.trim() || undefined;
+		const result = await bridge.getSessionAnalysis(splitDate);
+		if (result?.path) {
+			await safeSend(ctx.api, chatId, `✅ Session analysis saved to:\n\`${result.path}\``);
+		} else {
+			await safeSend(ctx.api, chatId, "❌ Failed to generate analysis.");
+		}
+	} catch (e) {
+		log(`[CMD] /analysis error: ${e}`);
+		await safeSend(ctx.api, chatId, `❌ Analysis failed: ${e}`);
+	}
+}
+
 export async function cmdThinking(ctx: Context, userState: UserState, args: string): Promise<void> {
 	const chatId = ctx.chat!.id;
 	const bridge = userState.bridge;

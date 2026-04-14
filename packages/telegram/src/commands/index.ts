@@ -7,7 +7,7 @@ import { ensureBridgeWithSession } from "../bridge-lifecycle.js";
 import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
 import { log, safeSend } from "../util/telegram.js";
-import { cmdAgents, cmdCompact, cmdModel, cmdStats, cmdThinking } from "./agent.js";
+import { cmdAgents, cmdAnalysis, cmdCompact, cmdModel, cmdStats, cmdThinking } from "./agent.js";
 import { cmdBuddy } from "./buddy.js";
 import { cmdCwd, cmdNew, cmdRestart, cmdStart, cmdStatus, cmdStop } from "./core.js";
 import { STATIC_COMMANDS } from "./refresh.js";
@@ -78,6 +78,12 @@ export function registerCommands(bot: Bot, config: Config, getUserState: (userId
 	bot.command("stats", (ctx) => {
 		const us = getUserState(ctx.from!.id);
 		return cmdStats(ctx, us);
+	});
+
+	bot.command("analysis", (ctx) => {
+		const us = getUserState(ctx.from!.id);
+		const args = ctx.match as string;
+		return cmdAnalysis(ctx, us, args);
 	});
 
 	bot.command("model", (ctx) => {

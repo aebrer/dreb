@@ -370,6 +370,14 @@ export class RpcClient {
 	}
 
 	/**
+	 * Generate session analysis report.
+	 */
+	async sessionAnalysis(splitDate?: string): Promise<{ path: string }> {
+		const response = await this.send({ type: "session_analysis", splitDate });
+		return this.getData(response);
+	}
+
+	/**
 	 * Switch to a different session file.
 	 * @returns Object with `cancelled: true` if an extension cancelled the switch
 	 */

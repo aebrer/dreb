@@ -583,6 +583,33 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "set_session_name");
 			}
 
+			case "session_analysis": {
+				try {
+					const { analyzeAllSessions } = await import("../../core/session-analyzer.js");
+					const { generateAnalysisHtml } = await import("../../core/session-analyzer-html.js");
+
+					const splitDate = command.splitDate ? new Date(command.splitDate) : undefined;
+					if (splitDate && Number.isNaN(splitDate.getTime())) {
+						return error(id, "session_analysis", `Invalid date: ${command.splitDate}`);
+					}
+
+					const result = await analyzeAllSessions(splitDate);
+					const html = generateAnalysisHtml(result);
+
+					const { tmpdir } = await import("node:os");
+					const { join } = await import("node:path");
+					const { writeFileSync } = await import("node:fs");
+
+					const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+					const outputPath = join(tmpdir(), `dreb-session-analysis-${timestamp}.html`);
+					writeFileSync(outputPath, html, "utf8");
+
+					return success(id, "session_analysis", { path: outputPath });
+				} catch (e) {
+					return error(id, "session_analysis", `Analysis failed: ${e instanceof Error ? e.message : String(e)}`);
+				}
+			}
+
 			// =================================================================
 			// Messages
 			// =================================================================

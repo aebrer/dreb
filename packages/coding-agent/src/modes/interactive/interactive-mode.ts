@@ -36,7 +36,7 @@ import {
 	TUI,
 	visibleWidth,
 } from "@dreb/tui";
-import { spawn, spawnSync } from "child_process";
+import { exec, spawn, spawnSync } from "child_process";
 import { APP_NAME, getAgentDir, getAuthPath, getDebugLogPath, getUpdateInstruction, VERSION } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
 import { BuddyManager, checkOllama } from "../../core/buddy/buddy-manager.js";
@@ -2197,6 +2197,12 @@ export class InteractiveMode {
 				await this.handleBuddyCommand(subcommand);
 				return;
 			}
+			if (text === "/session-analysis" || text.startsWith("/session-analysis ")) {
+				const dateArg = text.startsWith("/session-analysis ") ? text.slice(18).trim() : undefined;
+				this.editor.setText("");
+				await this.handleSessionAnalysisCommand(dateArg);
+				return;
+			}
 			if (text === "/resume") {
 				this.showSessionSelector();
 				this.editor.setText("");
@@ -4145,6 +4151,39 @@ export class InteractiveMode {
 			}
 		} catch (error: unknown) {
 			this.showError(`Failed to export session: ${error instanceof Error ? error.message : "Unknown error"}`);
+		}
+	}
+
+	private async handleSessionAnalysisCommand(dateArg?: string): Promise<void> {
+		let splitDate: Date | undefined;
+		if (dateArg) {
+			splitDate = new Date(dateArg);
+			if (Number.isNaN(splitDate.getTime())) {
+				this.showError(`Invalid date: ${dateArg}. Use YYYY-MM-DD format.`);
+				return;
+			}
+		}
+
+		this.showStatus("Generating session analysis report...");
+
+		try {
+			const { analyzeAllSessions } = await import("../../core/session-analyzer.js");
+			const { generateAnalysisHtml } = await import("../../core/session-analyzer-html.js");
+
+			const result = await analyzeAllSessions(splitDate);
+			const html = generateAnalysisHtml(result);
+
+			const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+			const outputPath = path.join(os.tmpdir(), `dreb-session-analysis-${timestamp}.html`);
+			fs.writeFileSync(outputPath, html, "utf8");
+
+			this.showStatus(`Session analysis saved to: ${outputPath}`);
+
+			// Auto-open in browser
+			const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+			exec(`${openCmd} "${outputPath}"`);
+		} catch (error: unknown) {
+			this.showError(`Failed to generate analysis: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
 	}
 

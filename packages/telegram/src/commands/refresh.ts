@@ -22,6 +22,7 @@ export const STATIC_COMMANDS: Array<{ command: string; description: string }> = 
 	{ command: "thinking", description: "View/set thinking level" },
 	{ command: "agents", description: "Background subagents" },
 	{ command: "cwd", description: "Working directory" },
+	{ command: "analysis", description: "Session analysis report [optional: split date]" },
 	{ command: "stop", description: "Interrupt current task" },
 	{ command: "restart", description: "Restart the bot" },
 	{ command: "buddy", description: "Hatch or manage your companion" },

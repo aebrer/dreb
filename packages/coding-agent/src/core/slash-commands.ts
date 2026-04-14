@@ -35,4 +35,8 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "reload", description: "Reload keybindings, extensions, skills, prompts, and themes" },
 	{ name: "buddy", description: "Hatch or manage your terminal companion (pet, reroll, off)" },
 	{ name: "quit", description: "Quit dreb" },
+	{
+		name: "session-analysis",
+		description: "Generate behavioral quality metrics report (optional: split date YYYY-MM-DD)",
+	},
 ];
