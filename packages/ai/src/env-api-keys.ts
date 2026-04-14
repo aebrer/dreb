@@ -109,6 +109,11 @@ export function getEnvApiKey(provider: any): string | undefined {
 		}
 	}
 
+	// z.ai (zai) provider uses ZHIPU_API_KEY in models.json, but also accept ZAI_API_KEY
+	if (provider === "zai") {
+		return process.env.ZAI_API_KEY || process.env.ZHIPU_API_KEY;
+	}
+
 	const envMap: Record<string, string> = {
 		openai: "OPENAI_API_KEY",
 		"azure-openai-responses": "AZURE_OPENAI_API_KEY",
