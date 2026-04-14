@@ -68,7 +68,7 @@ const GRAMMAR_PATHS: Record<TreeSitterLanguage, string> = {
 	java: "tree-sitter-java/tree-sitter-java.wasm",
 	c: "tree-sitter-c/tree-sitter-c.wasm",
 	cpp: "tree-sitter-cpp/tree-sitter-cpp.wasm",
-	gdscript: "../grammars/tree-sitter-gdscript.wasm",
+	gdscript: "tree-sitter-gdscript/tree-sitter-gdscript.wasm",
 };
 
 // ============================================================================
