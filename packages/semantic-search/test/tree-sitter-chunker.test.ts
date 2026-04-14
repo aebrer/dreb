@@ -515,6 +515,21 @@ describe("chunkWithTreeSitter — GDScript", () => {
 			expect(chunk.content.length).toBeGreaterThan(0);
 		}
 	});
+
+	it("absorbs class methods into the class chunk (not extracted separately)", async () => {
+		const code = `class Enemy:
+	var hp: int = 50
+
+	func take_damage(amount: int) -> void:
+		hp -= amount
+`;
+		const result = await chunkWithTreeSitter(code, "enemy.gd", "gdscript");
+		const cls = result.find((c) => c.name === "Enemy");
+		expect(cls).toBeDefined();
+		expect(cls!.content).toContain("take_damage");
+		// Nested methods should not be standalone chunks
+		expect(result.find((c) => c.name === "take_damage")).toBeUndefined();
+	});
 });
 
 // ============================================================================
