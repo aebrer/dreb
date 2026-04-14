@@ -13,12 +13,12 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
 import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@dreb/ai";
-import { getDocsPath } from "../config.js";
+import { getDocsPath, getSubagentSessionsDir } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { sleep } from "../utils/sleep.js";
 import { type BashResult, executeBash as executeBashCommand, executeBashWithOperations } from "./bash-executor.js";
@@ -66,8 +66,24 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
+import {
+	analyzeSession,
+	computeDateComparison,
+	computeGroups,
+	computeProjectTrend,
+	computeTimeline,
+	type FullSessionAnalysis,
+	type SessionAnalysis,
+} from "./session-analyzer.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
-import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
+import {
+	CURRENT_SESSION_VERSION,
+	getDefaultSessionDir,
+	getLatestCompactionEntry,
+	loadEntriesFromFile,
+	type SessionHeader,
+	type SessionMessageEntry,
+} from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
@@ -187,6 +203,8 @@ export interface ModelCycleResult {
 	/** Whether cycling through scoped models (--models flag) or all available */
 	isScoped: boolean;
 }
+
+export type { FullSessionAnalysis } from "./session-analyzer.js";
 
 /** Session statistics for /session command */
 export interface SessionStats {
@@ -3426,6 +3444,100 @@ export class AgentSession {
 			contextWindow,
 			percent,
 		};
+	}
+
+	/**
+	 * Get session analysis with behavioral quality metrics and project trends.
+	 */
+	async getSessionAnalysis(options?: { splitDate?: Date }): Promise<FullSessionAnalysis> {
+		// 1. Analyze current session from in-memory messages
+		const currentMessages = this.state.messages as Message[];
+		const current = analyzeSession(currentMessages, {
+			sessionId: this.sessionId,
+			sessionFile: this.sessionFile,
+			isSubagent: false,
+		});
+
+		// 2. Collect historical sessions for trend
+		const allSessions: SessionAnalysis[] = [current];
+		const cwd = this._cwd;
+
+		if (cwd) {
+			// Scan regular sessions
+			const sessionDir = getDefaultSessionDir(cwd);
+			this._scanSessionDir(sessionDir, false, allSessions);
+
+			// Scan subagent sessions (all dirs — filter by cwd from header)
+			const subagentBaseDir = getSubagentSessionsDir();
+			if (existsSync(subagentBaseDir)) {
+				for (const dirName of readdirSync(subagentBaseDir)) {
+					const subDir = join(subagentBaseDir, dirName);
+					try {
+						this._scanSessionDir(subDir, true, allSessions, cwd);
+					} catch {
+						// Skip inaccessible dirs
+					}
+				}
+			}
+		}
+
+		// 3. Compute trend and additional analysis
+		const trend = computeProjectTrend(allSessions);
+		const timeline = computeTimeline(allSessions);
+		const groups = computeGroups(allSessions, timeline);
+		const comparison = options?.splitDate ? computeDateComparison(allSessions, options.splitDate) : null;
+
+		return { current, timeline, groups, comparison, trend };
+	}
+
+	/**
+	 * Scan a directory for session JSONL files and analyze each one.
+	 * If filterCwd is provided, only include sessions whose header.cwd matches.
+	 */
+	private _scanSessionDir(dir: string, isSubagent: boolean, results: SessionAnalysis[], filterCwd?: string): void {
+		if (!existsSync(dir)) return;
+
+		let files: string[];
+		try {
+			files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+		} catch {
+			return;
+		}
+
+		for (const file of files) {
+			const filePath = join(dir, file);
+
+			// Skip the current session file (already analyzed from memory)
+			if (filePath === this.sessionFile) continue;
+
+			try {
+				const entries = loadEntriesFromFile(filePath);
+				if (entries.length === 0) continue;
+
+				const header = entries[0];
+				if (header.type !== "session") continue;
+
+				// Filter by cwd if specified (for subagent sessions)
+				if (filterCwd && (header as SessionHeader).cwd !== filterCwd) continue;
+
+				// Extract messages from entries
+				const messages = entries
+					.filter((e): e is SessionMessageEntry => e.type === "message" && "message" in e)
+					.map((e) => e.message as Message);
+
+				if (messages.length === 0) continue;
+
+				const analysis = analyzeSession(messages, {
+					sessionId: (header as SessionHeader).id || file,
+					sessionFile: filePath,
+					isSubagent,
+					agentType: (header as SessionHeader).agentType,
+				});
+				results.push(analysis);
+			} catch {
+				// Skip corrupt/unreadable files
+			}
+		}
 	}
 
 	/**

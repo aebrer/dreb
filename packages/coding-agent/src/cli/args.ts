@@ -42,6 +42,7 @@ export interface Args {
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
+	agentType?: string;
 	messages: string[];
 	fileArgs: string[];
 	/** Unknown flags (potentially extension flags) - map of flag name to value */
@@ -97,6 +98,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.fork = args[++i];
 		} else if (arg === "--session-dir" && i + 1 < args.length) {
 			result.sessionDir = args[++i];
+		} else if (arg === "--agent-type" && i + 1 < args.length) {
+			result.agentType = args[++i];
 		} else if (arg === "--models" && i + 1 < args.length) {
 			result.models = args[++i].split(",").map((s) => s.trim());
 		} else if (arg === "--no-tools") {
@@ -211,6 +214,7 @@ ${chalk.bold("Options:")}
   --session <path>               Use specific session file
   --fork <path>                  Fork specific session file or partial UUID into a new session
   --session-dir <dir>            Directory for session storage and lookup
+  --agent-type <name>            Agent type identifier for session metadata
   --no-session                   Don't save session (ephemeral)
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching

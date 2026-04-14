@@ -190,6 +190,9 @@ async function spawnSubagent(
 	} else {
 		args.push("--no-session");
 	}
+	if (agentConfig.name) {
+		args.push("--agent-type", agentConfig.name);
+	}
 	// By spawn time, model should be a resolved single string (fallback resolution
 	// happens in executeSingle). Handle string[] defensively by taking the first entry.
 	const modelStr = Array.isArray(agentConfig.model) ? agentConfig.model[0] : agentConfig.model;

@@ -7,7 +7,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { AgentEvent, AgentMessage, ThinkingLevel } from "@dreb/agent-core";
 import type { ImageContent } from "@dreb/ai";
-import type { SessionStats } from "../../core/agent-session.js";
+import type { FullSessionAnalysis, SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -358,6 +358,14 @@ export class RpcClient {
 	 */
 	async getSessionStats(): Promise<SessionStats> {
 		const response = await this.send({ type: "get_session_stats" });
+		return this.getData(response);
+	}
+
+	/**
+	 * Get session analysis with behavioral metrics and trends.
+	 */
+	async getSessionAnalysis(splitDate?: string): Promise<FullSessionAnalysis> {
+		const response = await this.send({ type: "get_session_analysis", splitDate });
 		return this.getData(response);
 	}
 

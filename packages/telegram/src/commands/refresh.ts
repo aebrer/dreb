@@ -17,6 +17,7 @@ export const STATIC_COMMANDS: Array<{ command: string; description: string }> = 
 	{ command: "recent", description: "Resend last N messages" },
 	{ command: "skills", description: "List available skills" },
 	{ command: "stats", description: "Token usage & cost" },
+	{ command: "session_analysis", description: "Behavioral quality metrics" },
 	{ command: "compact", description: "Compact context" },
 	{ command: "model", description: "View/switch model" },
 	{ command: "thinking", description: "View/set thinking level" },

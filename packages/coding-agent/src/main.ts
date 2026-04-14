@@ -495,7 +495,8 @@ async function createSessionManager(
 	// --resume is handled separately (needs picker UI)
 	// If effective session dir is set, create new session there
 	if (effectiveSessionDir) {
-		return SessionManager.create(cwd, effectiveSessionDir);
+		const newSessionOptions = parsed.agentType ? { agentType: parsed.agentType } : undefined;
+		return SessionManager.create(cwd, effectiveSessionDir, newSessionOptions);
 	}
 	// Default case (new session) returns undefined, SDK will create one
 	return undefined;

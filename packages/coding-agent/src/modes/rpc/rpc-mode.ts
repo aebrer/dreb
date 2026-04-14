@@ -549,6 +549,12 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "get_session_stats", stats);
 			}
 
+			case "get_session_analysis": {
+				const splitDate = command.splitDate ? new Date(command.splitDate) : undefined;
+				const analysis = await session.getSessionAnalysis(splitDate ? { splitDate } : undefined);
+				return success(id, "get_session_analysis", analysis);
+			}
+
 			case "export_html": {
 				const path = await session.exportToHtml(command.outputPath);
 				return success(id, "export_html", { path });

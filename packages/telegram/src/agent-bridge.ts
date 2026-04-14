@@ -238,6 +238,19 @@ export class AgentBridge {
 	}
 
 	/**
+	 * Get session analysis with behavioral metrics and trends.
+	 */
+	async getSessionAnalysis(): Promise<any> {
+		if (!this.client) return null;
+		try {
+			return await this.client.getSessionAnalysis();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
+	}
+
+	/**
 	 * Get current state.
 	 */
 	async getState(): Promise<any> {
