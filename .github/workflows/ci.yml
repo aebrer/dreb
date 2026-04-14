@@ -30,6 +30,13 @@ jobs:
         with:
           node-version: 25
           cache: npm
+      - name: Install ripgrep and fd
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep fd-find
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$(which fdfind)" "$HOME/.local/bin/fd"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: npm ci
       - run: npm run build
       - run: bash test.sh
