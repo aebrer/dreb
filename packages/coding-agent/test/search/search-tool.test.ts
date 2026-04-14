@@ -307,11 +307,15 @@ describe("createSearchToolDefinition", () => {
 			let fixtureDir: string;
 			let fixtureTool: ReturnType<typeof createSearchToolDefinition>;
 
-			beforeAll(() => {
+			beforeAll(async () => {
 				fixtureDir = mkdtempSync(path.join(tmpdir(), "search-tool-exec-"));
 				createFixtureProject(fixtureDir);
 				fixtureTool = createSearchToolDefinition(fixtureDir);
-			});
+				// Warm the search index so per-test timeouts aren't eaten by index building.
+				// The first search triggers a full index build (scan, chunk, embed) which
+				// can exceed the 30s test timeout on slower CI runners.
+				await fixtureTool.execute("t-warmup", { query: "warmup" }, undefined, undefined, undefined as any);
+			}, 120_000);
 
 			afterAll(() => {
 				rmSync(fixtureDir, { recursive: true, force: true });
