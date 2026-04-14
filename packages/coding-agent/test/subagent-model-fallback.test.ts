@@ -148,6 +148,7 @@ describe("model fallback lists", () => {
 			},
 		];
 
+		// Registry without authStorage — existing tests remain unchanged
 		const registry = {
 			getAll: () => mockModels,
 		} as unknown as Parameters<typeof resolveModelWithFallbacks>[2];
@@ -201,6 +202,134 @@ describe("model fallback lists", () => {
 				// Should NOT contain "None of the fallback models" for single model
 				expect(result.error).not.toContain("None of the fallback");
 			}
+		});
+	});
+
+	describe("resolveModelWithFallbacks — auth-aware fallback", () => {
+		// Models from multiple providers, including a gateway model whose ID
+		// contains a slash (simulates vercel-ai-gateway proxying zai models)
+		const authModels: Model<"anthropic-messages">[] = [
+			{
+				id: "claude-sonnet-4-5",
+				name: "Claude Sonnet 4.5",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				baseUrl: "https://api.anthropic.com",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+				contextWindow: 200000,
+				maxTokens: 8192,
+			},
+			{
+				id: "glm-5-turbo",
+				name: "GLM-5 Turbo",
+				api: "anthropic-messages",
+				provider: "zai",
+				baseUrl: "https://api.z.ai",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 1, output: 3, cacheRead: 0.1, cacheWrite: 1 },
+				contextWindow: 128000,
+				maxTokens: 8192,
+			},
+			{
+				// Gateway model whose ID literally contains "zai/" — this is the
+				// model that resolveCliModel can match when "zai" isn't a known provider
+				id: "zai/glm-5-turbo",
+				name: "GLM-5 Turbo (via gateway)",
+				api: "anthropic-messages",
+				provider: "vercel-ai-gateway",
+				baseUrl: "https://gateway.vercel.ai",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 1, output: 3, cacheRead: 0.1, cacheWrite: 1 },
+				contextWindow: 128000,
+				maxTokens: 8192,
+			},
+		];
+
+		// Only anthropic has auth configured
+		const authedProviders = new Set(["anthropic"]);
+		const authRegistry = {
+			getAll: () => authModels,
+			authStorage: {
+				hasAuth: (provider: string) => authedProviders.has(provider),
+			},
+		} as unknown as Parameters<typeof resolveModelWithFallbacks>[2];
+
+		test("provider-prefixed model resolves when provider has auth", () => {
+			const result = resolveModelStringSingle("anthropic/claude-sonnet-4-5", undefined, authRegistry);
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.modelId).toBe("claude-sonnet-4-5");
+				expect(result.provider).toBe("anthropic");
+			}
+		});
+
+		test("provider-prefixed model fails when provider has no auth", () => {
+			const result = resolveModelStringSingle("zai/glm-5-turbo", undefined, authRegistry);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toContain("No authentication configured");
+			}
+		});
+
+		test("fallback list skips unauthenticated provider and resolves to authenticated one", () => {
+			const result = resolveModelWithFallbacks(
+				["zai/glm-5-turbo", "anthropic/claude-sonnet-4-5"],
+				undefined,
+				authRegistry,
+			);
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.modelId).toBe("claude-sonnet-4-5");
+				expect(result.provider).toBe("anthropic");
+			}
+		});
+
+		test("gateway model ID clash resolved via auth check", () => {
+			// "zai/glm-5-turbo" could match the vercel-ai-gateway model with that literal ID.
+			// Either way (zai or gateway), neither has auth — fallback should continue.
+			const result = resolveModelWithFallbacks(
+				["zai/glm-5-turbo", "anthropic/claude-sonnet-4-5"],
+				undefined,
+				authRegistry,
+			);
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				// Must resolve to anthropic, not zai or vercel-ai-gateway
+				expect(result.provider).toBe("anthropic");
+			}
+		});
+
+		test("all unauthenticated providers returns error", () => {
+			const result = resolveModelWithFallbacks(["zai/glm-5-turbo"], undefined, authRegistry);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toContain("No authentication configured");
+			}
+		});
+
+		test("bare model name with parentProvider still works (no authStorage regression)", () => {
+			// Existing pattern: bare model name scoped to parent provider
+			const result = resolveModelStringSingle("claude-sonnet-4-5", "anthropic", authRegistry);
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.modelId).toBe("claude-sonnet-4-5");
+				expect(result.provider).toBe("anthropic");
+			}
+		});
+
+		test("registry without authStorage skips auth check (backward compat)", () => {
+			// Old-style mock without authStorage — should still work
+			const noAuthRegistry = {
+				getAll: () => authModels,
+			} as unknown as Parameters<typeof resolveModelWithFallbacks>[2];
+
+			const result = resolveModelStringSingle("zai/glm-5-turbo", undefined, noAuthRegistry);
+			// Without authStorage, the auth check is skipped — resolves successfully
+			expect(result.ok).toBe(true);
 		});
 	});
 });
