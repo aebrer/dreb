@@ -106,6 +106,16 @@ describe("detectFileType", () => {
 		expect(detectFileType("nginx.conf")).toBe("plaintext");
 	});
 
+	it("maps .gd to gdscript", () => {
+		expect(detectFileType("player.gd")).toBe("gdscript");
+	});
+
+	it("maps .tscn, .tres, .godot to plaintext", () => {
+		expect(detectFileType("scene.tscn")).toBe("plaintext");
+		expect(detectFileType("material.tres")).toBe("plaintext");
+		expect(detectFileType("project.godot")).toBe("plaintext");
+	});
+
 	it("returns null for unknown extensions", () => {
 		expect(detectFileType("image.png")).toBeNull();
 		expect(detectFileType("archive.tar.gz")).toBeNull();

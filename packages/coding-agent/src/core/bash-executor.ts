@@ -90,6 +90,8 @@ export async function executeBashWithOperations(
 		if (totalBytes > DEFAULT_MAX_BYTES && !tempFilePath) {
 			const id = randomBytes(8).toString("hex");
 			tempFilePath = join(tmpdir(), `dreb-bash-${id}.log`);
+			// Create the file synchronously so it exists immediately for downstream checks.
+			writeFileSync(tempFilePath, "");
 			tempFileStream = createWriteStream(tempFilePath);
 			for (const chunk of outputChunks) {
 				tempFileStream.write(chunk);

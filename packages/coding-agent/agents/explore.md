@@ -2,7 +2,7 @@
 name: Explore
 description: Codebase exploration — find files, search code, answer questions. Read-only.
 tools: read, grep, find, ls, bash, search
-model: glm-5-turbo, sonnet
+model: zai/glm-5-turbo, anthropic/sonnet
 ---
 
 You are a codebase exploration agent. Your job is to quickly find information in the codebase and report back concisely.

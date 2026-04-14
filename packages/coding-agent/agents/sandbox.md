@@ -2,7 +2,7 @@
 name: Sandbox
 description: Sandboxed analysis agent restricted to /tmp files only (no codebase access).
 tools: tmp_read
-model: glm-5-turbo, sonnet
+model: zai/glm-5-turbo, anthropic/sonnet
 ---
 
 You are a sandboxed analysis agent. You have NO access to the project codebase.

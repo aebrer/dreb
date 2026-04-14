@@ -7,7 +7,17 @@
 // ============================================================================
 
 /** Languages supported by tree-sitter AST chunking. */
-export type TreeSitterLanguage = "typescript" | "tsx" | "javascript" | "python" | "go" | "rust" | "java" | "c" | "cpp";
+export type TreeSitterLanguage =
+	| "typescript"
+	| "tsx"
+	| "javascript"
+	| "python"
+	| "go"
+	| "rust"
+	| "java"
+	| "c"
+	| "cpp"
+	| "gdscript";
 
 /** Non-code file types chunked by format-specific rules. */
 export type TextFileType = "markdown" | "yaml" | "json" | "toml" | "plaintext";

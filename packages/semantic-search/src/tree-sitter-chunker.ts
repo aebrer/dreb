@@ -68,6 +68,7 @@ const GRAMMAR_PATHS: Record<TreeSitterLanguage, string> = {
 	java: "tree-sitter-java/tree-sitter-java.wasm",
 	c: "tree-sitter-c/tree-sitter-c.wasm",
 	cpp: "tree-sitter-cpp/tree-sitter-cpp.wasm",
+	gdscript: "../grammars/tree-sitter-gdscript.wasm",
 };
 
 // ============================================================================
@@ -167,6 +168,12 @@ const CPP_EXTRACTORS: NodeExtractor[] = [
 	{ type: "class_specifier", kind: "class", getName: nameField },
 ];
 
+const GDSCRIPT_EXTRACTORS: NodeExtractor[] = [
+	{ type: "function_definition", kind: "function", getName: nameField },
+	{ type: "class_definition", kind: "class", getName: nameField },
+	{ type: "enum_definition", kind: "enum", getName: nameField },
+];
+
 const LANGUAGE_EXTRACTORS: Record<TreeSitterLanguage, NodeExtractor[]> = {
 	typescript: TS_EXTRACTORS,
 	tsx: TS_EXTRACTORS,
@@ -177,6 +184,7 @@ const LANGUAGE_EXTRACTORS: Record<TreeSitterLanguage, NodeExtractor[]> = {
 	java: JAVA_EXTRACTORS,
 	c: C_EXTRACTORS,
 	cpp: CPP_EXTRACTORS,
+	gdscript: GDSCRIPT_EXTRACTORS,
 };
 
 // ============================================================================

@@ -351,6 +351,110 @@ describe("chunkFile — Plaintext (text chunker)", () => {
 });
 
 // ============================================================================
+// Tree-sitter dispatch: GDScript
+// ============================================================================
+
+const gdSource = `extends Node2D
+
+func _ready():
+    print("hello")
+
+func take_damage(amount: int) -> void:
+    hp -= amount
+
+class Player:
+    var name: String
+    var hp: int = 100
+
+enum Direction { NORTH, SOUTH, EAST, WEST }
+`.trim();
+
+describe("chunkFile — GDScript (tree-sitter)", () => {
+	let chunks: Chunk[];
+
+	beforeAll(async () => {
+		chunks = await chunkFile(gdSource, "player.gd", "gdscript");
+	});
+
+	it("returns multiple chunks for GDScript with functions, classes, enums", () => {
+		expect(chunks.length).toBeGreaterThanOrEqual(3);
+	});
+
+	it("extracts a function chunk for _ready", () => {
+		const fn = chunks.find((c) => c.kind === "function" && c.name === "_ready");
+		expect(fn).toBeDefined();
+		expect(fn!.content).toContain("_ready");
+	});
+
+	it("extracts a class chunk for Player", () => {
+		const cls = chunks.find((c) => c.kind === "class" && c.name === "Player");
+		expect(cls).toBeDefined();
+		expect(cls!.content).toContain("Player");
+	});
+
+	it("extracts an enum chunk for Direction", () => {
+		const en = chunks.find((c) => c.kind === "enum" && c.name === "Direction");
+		expect(en).toBeDefined();
+		expect(en!.content).toContain("NORTH");
+	});
+
+	it("sets fileType to gdscript on all chunks", () => {
+		assertChunkShape(chunks, "player.gd", "gdscript");
+	});
+});
+
+// ============================================================================
+// Text dispatch: Godot scene/resource files
+// ============================================================================
+
+const tscnSource = `[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://player.gd" id="1"]
+
+[sub_resource type="RectangleShape2D" id="1"]
+size = Vector2(50, 50)
+
+[node name="Player" type="CharacterBody2D"]
+script = ExtResource("1")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("1")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("2")
+`.trim();
+
+describe("chunkFile — Godot scene (.tscn)", () => {
+	let chunks: Chunk[];
+
+	beforeAll(async () => {
+		chunks = await chunkFile(tscnSource, "player.tscn", "plaintext");
+	});
+
+	it("returns at least one chunk", () => {
+		expect(chunks.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("sets fileType to plaintext on all chunks", () => {
+		assertChunkShape(chunks, "player.tscn", "plaintext");
+	});
+});
+
+describe("chunkFile — Godot resource (.tres)", () => {
+	it("returns at least one chunk", async () => {
+		const tresSource = `[gd_resource type="Environment" format=3]
+
+[resource]
+background_mode = 2
+background_color = Color(0, 0, 0, 1)
+`;
+		const chunks = await chunkFile(tresSource, "env.tres", "plaintext");
+		expect(chunks.length).toBeGreaterThanOrEqual(1);
+		assertChunkShape(chunks, "env.tres", "plaintext");
+	});
+});
+
+// ============================================================================
 // Tree-sitter fallback
 // ============================================================================
 
@@ -421,6 +525,7 @@ describe("chunkFile — edge cases", () => {
 		const types: Array<[string, FileType]> = [
 			["function foo() {}", "typescript"],
 			["def foo(): pass", "python"],
+			["func _ready(): pass", "gdscript"],
 			["# Heading\nContent", "markdown"],
 			["key: value", "yaml"],
 			['{"a": 1}', "json"],

@@ -298,6 +298,8 @@ export function createBashToolDefinition(
 					// Start writing to a temp file once output exceeds the in-memory threshold.
 					if (totalBytes > DEFAULT_MAX_BYTES && !tempFilePath) {
 						tempFilePath = getTempFilePath();
+						// Create the file synchronously so it exists immediately for downstream checks.
+						writeFileSync(tempFilePath, "");
 						tempFileStream = createWriteStream(tempFilePath);
 						// Write all buffered chunks to the file.
 						for (const chunk of chunks) tempFileStream.write(chunk);
