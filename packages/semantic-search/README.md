@@ -100,8 +100,8 @@ SearchEngine.isAvailable();         // check for node:sqlite
 
 ## What Gets Indexed
 
-- **Code** — tree-sitter AST chunks (functions, classes, methods, interfaces, etc.). TypeScript, JavaScript, Python, Go, Rust, Java, C, C++.
-- **Text** — Markdown (by heading), YAML/TOML (by key), JSON, plaintext (by paragraph).
+- **Code** — tree-sitter AST chunks (functions, classes, methods, interfaces, etc.). TypeScript, JavaScript, Python, Go, Rust, Java, C, C++, GDScript.
+- **Text** — Markdown (by heading), YAML/TOML (by key), JSON, plaintext (by paragraph). Also indexes Godot scene (`.tscn`), resource (`.tres`), and project (`.godot`) files as plaintext.
 - **Extra directories** — via `globalMemoryDir` or `visibleDirs`, scanned even if gitignored.
 
 The index is stored in `.search-index/search.db` at the project root (add `.search-index/` to `.gitignore`).

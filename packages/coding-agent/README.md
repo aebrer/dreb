@@ -337,7 +337,7 @@ The `search` tool provides natural language queries over the codebase using embe
 **How it works:** The first query builds a project index (typically 10–60s, longer for very large repos). Subsequent queries use the cached index, with incremental re-indexing for changed files (mtime-based). Each unique `projectDir` gets its own independent index.
 
 **Indexing pipeline:**
-- AST-aware code chunking via tree-sitter (TypeScript, JavaScript, Python, Go, Rust, Java, C, C++) — extracts functions, classes, methods, and exports as individual chunks
+- AST-aware code chunking via tree-sitter (TypeScript, JavaScript, Python, Go, Rust, Java, C, C++, GDScript) — extracts functions, classes, methods, and exports as individual chunks
 - Format-aware text chunking for non-code files (Markdown by heading, YAML/JSON/TOML by top-level key)
 - Local embeddings via all-MiniLM-L6-v2 (~23MB model, auto-downloaded on first use, cached at `~/.dreb/agent/models/`)
 
