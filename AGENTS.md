@@ -18,6 +18,22 @@ This builds all packages in dependency order: tui → ai → agent → coding-ag
 - `packages/tui` — Terminal UI components
 - `packages/telegram` — Telegram bot integration
 
+## Workspace Link Safety
+
+**Always run `npm install` from the monorepo root.** Running it inside `packages/telegram/` or any subdirectory causes npm to pull `@dreb/*` packages from the registry as stale tarballs instead of symlinking to the local workspace source. This produces silent, hard-to-debug failures (outdated agent definitions, old model resolution logic, etc.).
+
+Verify workspace links are healthy before declaring a build good:
+
+```bash
+npm run verify-workspace-links
+```
+
+If it reports stale packages, fix with:
+
+```bash
+rm -rf packages/*/node_modules/@dreb && npm install
+```
+
 ## Release Protocol
 
 **Every release MUST follow these steps in order. No exceptions.**
