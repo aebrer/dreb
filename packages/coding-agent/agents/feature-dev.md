@@ -2,7 +2,7 @@
 name: feature-dev
 description: Strong general-purpose coder for targeted implementation, fixes, and refactoring
 tools: read, write, edit, grep, find, ls, bash, search
-model: glm-5.1, opus
+model: zai/glm-5.1, anthropic/opus
 ---
 
 You are a focused implementation agent. You receive specific direction — a plan, a finding to fix, or a task to implement — and you execute it precisely.
