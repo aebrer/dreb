@@ -2,18 +2,23 @@ import type { AssistantMessage, Message, ToolResultMessage, Usage, UserMessage }
 import { describe, expect, it } from "vitest";
 import {
 	type AnalysisInput,
+	type AnalysisTimeline,
 	analyzeSession,
+	computeDateComparison,
 	computeErrorRate,
+	computeGroups,
 	computeProjectTrend,
 	computeReadEditRatio,
 	computeSelfCorrectionFrequency,
+	computeTimeline,
 	computeToolDistribution,
 	computeWriteVsEditPercent,
 	extractAnalysisInput,
 	type FullSessionAnalysis,
-	formatAnalysisForTelegram,
 	formatAnalysisForTui,
 	type SessionAnalysis,
+	sparkline,
+	type TimePeriod,
 } from "../src/core/session-analyzer.js";
 
 // ── Test helpers ────────────────────────────────────────────────────────
@@ -714,47 +719,78 @@ describe("formatAnalysisForTui", () => {
 		expect(output).not.toContain("── Timeline");
 		expect(output).toContain("n/a");
 	});
-});
 
-// ── formatAnalysisForTelegram ───────────────────────────────────────────
+	it("renders Trends section when timeline is provided", () => {
+		const now = new Date();
+		const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
 
-describe("formatAnalysisForTelegram", () => {
-	it("produces Telegram-compatible Markdown", () => {
+		const makePeriod = (weeksAgo: number, sessionCount: number): TimePeriod => {
+			const start = new Date(now.getTime() - weeksAgo * oneWeekMs);
+			const end = new Date(start.getTime() + oneWeekMs);
+			return {
+				label: `W${weeksAgo}`,
+				start,
+				end,
+				metrics: {
+					label: `W${weeksAgo}`,
+					sessionCount,
+					avgReadEditRatio: sessionCount > 0 ? 2 + weeksAgo * 0.5 : null,
+					avgWriteVsEditPercent: null,
+					avgErrorRate: sessionCount > 0 ? 10 - weeksAgo : null,
+					avgSelfCorrectionPer1K: null,
+					toolDistribution: sessionCount > 0 ? { read: 5 * sessionCount, edit: 2 * sessionCount } : {},
+					totalToolCalls: sessionCount > 0 ? 7 * sessionCount : 0,
+					totalCost: sessionCount > 0 ? 0.05 * sessionCount : 0,
+					totalTokens: sessionCount > 0 ? 5000 * sessionCount : 0,
+					avgCostPerToolCall: sessionCount > 0 ? 0.05 / 7 : null,
+					avgTokensPerToolCall: sessionCount > 0 ? 5000 / 7 : null,
+				},
+			};
+		};
+
+		const timeline: AnalysisTimeline = {
+			periods: [makePeriod(3, 2), makePeriod(2, 3), makePeriod(1, 1), makePeriod(0, 4)],
+			totalSessions: 10,
+		};
+
 		const analysis: FullSessionAnalysis = {
 			current: {
-				sessionId: "tg-test",
-				timestamp: new Date(),
-				model: "claude-sonnet-4-20250514",
-				provider: "anthropic",
+				sessionId: "trend-test",
+				timestamp: now,
 				isSubagent: false,
-				readEditRatio: 2.0,
-				writeVsEditPercent: 50,
-				errorRate: 10,
-				selfCorrectionPer1K: 200,
-				toolDistribution: { read: 5, edit: 3 },
-				totalToolCalls: 8,
+				readEditRatio: 3.0,
+				writeVsEditPercent: null,
+				errorRate: 5,
+				selfCorrectionPer1K: null,
+				toolDistribution: { read: 5, edit: 2 },
+				totalToolCalls: 7,
 				totalCost: 0.05,
-				totalTokens: 8000,
+				totalTokens: 5000,
 				timeline: [],
 			},
-			timeline: null,
+			timeline,
 			groups: null,
 			comparison: null,
 			trend: null,
 		};
 
-		const output = formatAnalysisForTelegram(analysis);
-		expect(output).toContain("📊");
-		expect(output).toContain("🔧");
-		expect(output).toContain("```");
-		expect(output).toContain("`claude-sonnet-4-20250514`");
-		expect(output).toContain("noisy proxies");
+		const output = formatAnalysisForTui(analysis);
+		expect(output).toContain("── Trends");
+		expect(output).toContain("10 sessions");
+		expect(output).toContain("4 weeks");
+		expect(output).toContain("W3");
+		expect(output).toContain("W0");
+		// Sparkline chars should be present
+		expect(output).toMatch(/[▁▂▃▄▅▆▇█]/);
+		// Should have Read:Edit and Error Rate sparkline rows
+		expect(output).toContain("Read:Edit");
+		expect(output).toContain("Error Rate");
 	});
 
-	it("includes trend section when available", () => {
+	it("renders By Model section when groups are provided", () => {
 		const analysis: FullSessionAnalysis = {
 			current: {
-				sessionId: "tg-trend",
+				sessionId: "groups-test",
 				timestamp: new Date(),
 				isSubagent: false,
 				readEditRatio: null,
@@ -768,45 +804,409 @@ describe("formatAnalysisForTelegram", () => {
 				timeline: [],
 			},
 			timeline: null,
-			groups: null,
-			comparison: null,
-			trend: {
-				currentPeriod: {
-					label: "This week",
-					sessionCount: 2,
-					avgReadEditRatio: 3.0,
-					avgWriteVsEditPercent: null,
-					avgErrorRate: 5,
-					avgSelfCorrectionPer1K: null,
-					toolDistribution: {},
-					totalToolCalls: 10,
-					totalCost: 0.1,
-					totalTokens: 10000,
-					avgCostPerToolCall: null,
-					avgTokensPerToolCall: null,
-				},
-				previousPeriod: {
-					label: "Previous week",
-					sessionCount: 1,
-					avgReadEditRatio: 2.0,
-					avgWriteVsEditPercent: null,
-					avgErrorRate: 10,
-					avgSelfCorrectionPer1K: null,
-					toolDistribution: {},
-					totalToolCalls: 5,
-					totalCost: 0.05,
-					totalTokens: 5000,
-					avgCostPerToolCall: null,
-					avgTokensPerToolCall: null,
-				},
-				totalSessions: 3,
+			groups: {
+				byModel: [
+					{
+						groupKey: "claude-sonnet-4-20250514",
+						sessionCount: 5,
+						totalToolCalls: 50,
+						avgReadEditRatio: 3.0,
+						avgErrorRate: 8,
+						sparklineReadEdit: [],
+						sparklineErrorRate: [],
+					},
+					{
+						groupKey: "gpt-4o",
+						sessionCount: 2,
+						totalToolCalls: 15,
+						avgReadEditRatio: 2.5,
+						avgErrorRate: 12,
+						sparklineReadEdit: [],
+						sparklineErrorRate: [],
+					},
+				],
+				byType: [
+					{
+						groupKey: "parent",
+						sessionCount: 4,
+						totalToolCalls: 40,
+						avgReadEditRatio: 3.0,
+						avgErrorRate: 7,
+						sparklineReadEdit: [],
+						sparklineErrorRate: [],
+					},
+				],
 			},
+			comparison: null,
+			trend: null,
 		};
 
-		const output = formatAnalysisForTelegram(analysis);
-		// The formatter uses timeline (not trend) for display now,
-		// but should still produce valid output without crashing
-		expect(output).toContain("📊");
-		expect(output).toContain("noisy proxies");
+		const output = formatAnalysisForTui(analysis);
+		expect(output).toContain("── By Model ──");
+		expect(output).toContain("claude-sonnet-4-20250514");
+		expect(output).toContain("gpt-4o");
+		expect(output).toContain("── By Type ──");
+		expect(output).toContain("parent");
+	});
+});
+
+// ── sparkline ───────────────────────────────────────────────────────────
+
+describe("sparkline", () => {
+	it("returns empty string for all null input", () => {
+		expect(sparkline([null, null, null])).toBe("");
+	});
+
+	it("returns empty string for empty array", () => {
+		expect(sparkline([])).toBe("");
+	});
+
+	it("returns mid char for single non-null value (max === min)", () => {
+		expect(sparkline([42])).toBe("▅");
+	});
+
+	it("maps ascending sequence correctly", () => {
+		const result = sparkline([1, 2, 3, 4, 5, 6, 7, 8]);
+		expect(result[0]).toBe("▁");
+		expect(result[result.length - 1]).toBe("█");
+		expect(result.length).toBe(8);
+	});
+
+	it("null values produce a space in the sequence", () => {
+		const result = sparkline([1, null, 8]);
+		expect(result).toBe("▁ █");
+		expect(result.length).toBe(3);
+	});
+});
+
+// ── computeTimeline ─────────────────────────────────────────────────────
+
+describe("computeTimeline", () => {
+	function makeSessionAnalysis(overrides: Partial<SessionAnalysis> & { timestamp: Date }): SessionAnalysis {
+		const { timestamp, ...rest } = overrides;
+		return {
+			sessionId: `s-${Math.random().toString(36).slice(2, 8)}`,
+			timestamp,
+			isSubagent: false,
+			readEditRatio: null,
+			writeVsEditPercent: null,
+			errorRate: null,
+			selfCorrectionPer1K: null,
+			toolDistribution: {},
+			totalToolCalls: 0,
+			totalCost: 0,
+			totalTokens: 0,
+			timeline: [],
+			...rest,
+		};
+	}
+
+	it("returns null for 0 sessions", () => {
+		expect(computeTimeline([])).toBeNull();
+	});
+
+	it("returns null for 1 session", () => {
+		expect(computeTimeline([makeSessionAnalysis({ timestamp: new Date() })])).toBeNull();
+	});
+
+	it("returns exactly numWeeks periods", () => {
+		const now = new Date();
+		const sessions = [
+			makeSessionAnalysis({ timestamp: new Date(now.getTime() - 1000) }),
+			makeSessionAnalysis({ timestamp: new Date(now.getTime() - 2000) }),
+		];
+		const result = computeTimeline(sessions, 8);
+		expect(result).not.toBeNull();
+		expect(result!.periods).toHaveLength(8);
+	});
+
+	it("totalSessions equals the input session count", () => {
+		const now = new Date();
+		const sessions = [
+			makeSessionAnalysis({ timestamp: new Date(now.getTime() - 1000) }),
+			makeSessionAnalysis({ timestamp: new Date(now.getTime() - 2000) }),
+			makeSessionAnalysis({ timestamp: new Date(now.getTime() - 3000) }),
+		];
+		const result = computeTimeline(sessions, 8);
+		expect(result!.totalSessions).toBe(3);
+	});
+
+	it("sessions from the same week land in the same period", () => {
+		const now = new Date();
+		// Two sessions very close together (same week for sure)
+		const sessions = [
+			makeSessionAnalysis({ timestamp: new Date(now.getTime() - 1000), totalToolCalls: 10 }),
+			makeSessionAnalysis({ timestamp: new Date(now.getTime() - 2000), totalToolCalls: 20 }),
+		];
+		const result = computeTimeline(sessions, 8);
+		expect(result).not.toBeNull();
+		// The last period (current week) should have both sessions
+		const lastPeriod = result!.periods[result!.periods.length - 1];
+		expect(lastPeriod.metrics.sessionCount).toBe(2);
+		expect(lastPeriod.metrics.totalToolCalls).toBe(30);
+	});
+
+	it("sessions older than the window have 0 in their period buckets", () => {
+		const now = new Date();
+		const tenWeeksAgo = new Date(now.getTime() - 10 * 7 * 24 * 60 * 60 * 1000);
+		const sessions = [
+			makeSessionAnalysis({ timestamp: tenWeeksAgo, totalToolCalls: 5 }),
+			makeSessionAnalysis({ timestamp: new Date(now.getTime() - 1000), totalToolCalls: 10 }),
+		];
+		const result = computeTimeline(sessions, 8);
+		expect(result).not.toBeNull();
+		// totalSessions includes all sessions even if outside window
+		expect(result!.totalSessions).toBe(2);
+		// Only 1 session should appear in the bucketed periods
+		const totalBucketed = result!.periods.reduce((sum, p) => sum + p.metrics.sessionCount, 0);
+		expect(totalBucketed).toBe(1);
+	});
+});
+
+// ── computeGroups ───────────────────────────────────────────────────────
+
+describe("computeGroups", () => {
+	function makeSessionAnalysis(overrides: Partial<SessionAnalysis> & { timestamp: Date }): SessionAnalysis {
+		const { timestamp, ...rest } = overrides;
+		return {
+			sessionId: `s-${Math.random().toString(36).slice(2, 8)}`,
+			timestamp,
+			isSubagent: false,
+			readEditRatio: null,
+			writeVsEditPercent: null,
+			errorRate: null,
+			selfCorrectionPer1K: null,
+			toolDistribution: {},
+			totalToolCalls: 0,
+			totalCost: 0,
+			totalTokens: 0,
+			timeline: [],
+			...rest,
+		};
+	}
+
+	it("returns null for fewer than 2 sessions", () => {
+		expect(computeGroups([], null)).toBeNull();
+		expect(computeGroups([makeSessionAnalysis({ timestamp: new Date() })], null)).toBeNull();
+	});
+
+	it("groups sessions by model correctly", () => {
+		const now = new Date();
+		const sessions = [
+			makeSessionAnalysis({ timestamp: now, model: "model-a", totalToolCalls: 10 }),
+			makeSessionAnalysis({ timestamp: now, model: "model-a", totalToolCalls: 20 }),
+			makeSessionAnalysis({ timestamp: now, model: "model-b", totalToolCalls: 5 }),
+		];
+		const result = computeGroups(sessions, null);
+		expect(result).not.toBeNull();
+		expect(result!.byModel).toHaveLength(2);
+		// model-a has more sessions, sorted first
+		expect(result!.byModel[0].groupKey).toBe("model-a");
+		expect(result!.byModel[0].sessionCount).toBe(2);
+		expect(result!.byModel[0].totalToolCalls).toBe(30);
+		expect(result!.byModel[1].groupKey).toBe("model-b");
+		expect(result!.byModel[1].sessionCount).toBe(1);
+	});
+
+	it("subagent sessions with no agentType group as 'subagent (legacy)'", () => {
+		const now = new Date();
+		const sessions = [
+			makeSessionAnalysis({ timestamp: now, isSubagent: true }),
+			makeSessionAnalysis({ timestamp: now, isSubagent: true }),
+		];
+		const result = computeGroups(sessions, null);
+		expect(result).not.toBeNull();
+		const legacyGroup = result!.byType.find((g) => g.groupKey === "subagent (legacy)");
+		expect(legacyGroup).toBeDefined();
+		expect(legacyGroup!.sessionCount).toBe(2);
+	});
+
+	it("parent sessions group as 'parent'", () => {
+		const now = new Date();
+		const sessions = [
+			makeSessionAnalysis({ timestamp: now, isSubagent: false }),
+			makeSessionAnalysis({ timestamp: now, isSubagent: false }),
+		];
+		const result = computeGroups(sessions, null);
+		expect(result).not.toBeNull();
+		const parentGroup = result!.byType.find((g) => g.groupKey === "parent");
+		expect(parentGroup).toBeDefined();
+		expect(parentGroup!.sessionCount).toBe(2);
+	});
+
+	it("byModel is capped at 5 entries even with 6+ different models", () => {
+		const now = new Date();
+		const sessions = [
+			makeSessionAnalysis({ timestamp: now, model: "m1" }),
+			makeSessionAnalysis({ timestamp: now, model: "m2" }),
+			makeSessionAnalysis({ timestamp: now, model: "m3" }),
+			makeSessionAnalysis({ timestamp: now, model: "m4" }),
+			makeSessionAnalysis({ timestamp: now, model: "m5" }),
+			makeSessionAnalysis({ timestamp: now, model: "m6" }),
+			makeSessionAnalysis({ timestamp: now, model: "m7" }),
+		];
+		const result = computeGroups(sessions, null);
+		expect(result).not.toBeNull();
+		expect(result!.byModel.length).toBeLessThanOrEqual(5);
+	});
+});
+
+// ── computeDateComparison ───────────────────────────────────────────────
+
+describe("computeDateComparison", () => {
+	function makeSessionAnalysis(overrides: Partial<SessionAnalysis> & { timestamp: Date }): SessionAnalysis {
+		const { timestamp, ...rest } = overrides;
+		return {
+			sessionId: `s-${Math.random().toString(36).slice(2, 8)}`,
+			timestamp,
+			isSubagent: false,
+			readEditRatio: null,
+			writeVsEditPercent: null,
+			errorRate: null,
+			selfCorrectionPer1K: null,
+			toolDistribution: {},
+			totalToolCalls: 0,
+			totalCost: 0,
+			totalTokens: 0,
+			timeline: [],
+			...rest,
+		};
+	}
+
+	it("sessions before splitDate appear in before, sessions after appear in after", () => {
+		const splitDate = new Date("2025-06-01");
+		const sessions = [
+			makeSessionAnalysis({ timestamp: new Date("2025-05-01"), totalToolCalls: 10 }),
+			makeSessionAnalysis({ timestamp: new Date("2025-05-15"), totalToolCalls: 20 }),
+			makeSessionAnalysis({ timestamp: new Date("2025-06-15"), totalToolCalls: 30 }),
+		];
+		const result = computeDateComparison(sessions, splitDate);
+		expect(result.before.sessionCount).toBe(2);
+		expect(result.after.sessionCount).toBe(1);
+	});
+
+	it("empty before slice produces 0 sessionCount and null metrics", () => {
+		const splitDate = new Date("2025-01-01");
+		const sessions = [makeSessionAnalysis({ timestamp: new Date("2025-06-01"), totalToolCalls: 10 })];
+		const result = computeDateComparison(sessions, splitDate);
+		expect(result.before.sessionCount).toBe(0);
+		expect(result.before.avgReadEditRatio).toBeNull();
+		expect(result.before.avgErrorRate).toBeNull();
+		expect(result.before.totalToolCalls).toBe(0);
+	});
+
+	it("empty after slice produces 0 sessionCount and null metrics", () => {
+		const splitDate = new Date("2026-12-31");
+		const sessions = [makeSessionAnalysis({ timestamp: new Date("2025-06-01"), totalToolCalls: 10 })];
+		const result = computeDateComparison(sessions, splitDate);
+		expect(result.after.sessionCount).toBe(0);
+		expect(result.after.avgReadEditRatio).toBeNull();
+		expect(result.after.avgErrorRate).toBeNull();
+		expect(result.after.totalToolCalls).toBe(0);
+	});
+
+	it("before.totalToolCalls equals sum of tool calls from before-sessions", () => {
+		const splitDate = new Date("2025-06-01");
+		const sessions = [
+			makeSessionAnalysis({ timestamp: new Date("2025-05-01"), totalToolCalls: 7 }),
+			makeSessionAnalysis({ timestamp: new Date("2025-05-15"), totalToolCalls: 13 }),
+			makeSessionAnalysis({ timestamp: new Date("2025-07-01"), totalToolCalls: 99 }),
+		];
+		const result = computeDateComparison(sessions, splitDate);
+		expect(result.before.totalToolCalls).toBe(20);
+	});
+});
+
+// ── analyzeSession idempotency (finding 9) ──────────────────────────────
+
+describe("analyzeSession idempotency", () => {
+	it("produces identical results when called twice on the same messages", () => {
+		const readId = nextId();
+		const editId = nextId();
+		const ts = Date.now();
+		const messages: Message[] = [
+			makeUserMessage("Fix the bug"),
+			makeAssistantMessage([{ name: "read", id: readId }], "Reading the file"),
+			{ ...makeToolResult(readId, "read"), timestamp: ts + 100 },
+			makeAssistantMessage([{ name: "edit", id: editId }], "Editing"),
+			{ ...makeToolResult(editId, "edit"), timestamp: ts + 200 },
+		];
+
+		const meta = { sessionId: "idem-test", isSubagent: false };
+		const result1 = analyzeSession(messages, meta);
+		const result2 = analyzeSession(messages, meta);
+
+		expect(result1.totalToolCalls).toBe(result2.totalToolCalls);
+		expect(result1.readEditRatio).toBe(result2.readEditRatio);
+		expect(result1.errorRate).toBe(result2.errorRate);
+		expect(result1.writeVsEditPercent).toBe(result2.writeVsEditPercent);
+		expect(result1.selfCorrectionPer1K).toBe(result2.selfCorrectionPer1K);
+		expect(result1.toolDistribution).toEqual(result2.toolDistribution);
+	});
+
+	it("doubling messages doubles the tool call count (no dedup)", () => {
+		const readId1 = nextId();
+		const readId2 = nextId();
+		const ts = Date.now();
+		const messages: Message[] = [
+			makeUserMessage("Fix the bug"),
+			makeAssistantMessage([{ name: "read", id: readId1 }], "Reading"),
+			{ ...makeToolResult(readId1, "read"), timestamp: ts + 100 },
+			makeAssistantMessage([{ name: "read", id: readId2 }], "Reading again"),
+			{ ...makeToolResult(readId2, "read"), timestamp: ts + 200 },
+		];
+
+		const singleResult = analyzeSession(messages, { sessionId: "single", isSubagent: false });
+		// Duplicate messages to simulate double-counting
+		const doubled = [...messages, ...messages];
+		const doubledResult = analyzeSession(doubled, { sessionId: "doubled", isSubagent: false });
+
+		expect(doubledResult.totalToolCalls).toBe(singleResult.totalToolCalls * 2);
+	});
+});
+
+// ── computeGroups CWD-like filtering via agentType (finding 9) ──────────
+
+describe("computeGroups grouping correctness", () => {
+	function makeSessionAnalysis(overrides: Partial<SessionAnalysis> & { timestamp: Date }): SessionAnalysis {
+		const { timestamp, ...rest } = overrides;
+		return {
+			sessionId: `s-${Math.random().toString(36).slice(2, 8)}`,
+			timestamp,
+			isSubagent: false,
+			readEditRatio: null,
+			writeVsEditPercent: null,
+			errorRate: null,
+			selfCorrectionPer1K: null,
+			toolDistribution: {},
+			totalToolCalls: 0,
+			totalCost: 0,
+			totalTokens: 0,
+			timeline: [],
+			...rest,
+		};
+	}
+
+	it("sessions with different agentType values are grouped separately in byType", () => {
+		const now = new Date();
+		const sessions = [
+			makeSessionAnalysis({ timestamp: now, isSubagent: true, agentType: "code-reviewer" }),
+			makeSessionAnalysis({ timestamp: now, isSubagent: true, agentType: "code-reviewer" }),
+			makeSessionAnalysis({ timestamp: now, isSubagent: true, agentType: "error-auditor" }),
+			makeSessionAnalysis({ timestamp: now, isSubagent: false }),
+		];
+		const result = computeGroups(sessions, null);
+		expect(result).not.toBeNull();
+		// Should have 3 type groups: code-reviewer, error-auditor, parent
+		expect(result!.byType).toHaveLength(3);
+		const codeReviewer = result!.byType.find((g) => g.groupKey === "code-reviewer");
+		expect(codeReviewer).toBeDefined();
+		expect(codeReviewer!.sessionCount).toBe(2);
+		const errorAuditor = result!.byType.find((g) => g.groupKey === "error-auditor");
+		expect(errorAuditor).toBeDefined();
+		expect(errorAuditor!.sessionCount).toBe(1);
+		const parent = result!.byType.find((g) => g.groupKey === "parent");
+		expect(parent).toBeDefined();
+		expect(parent!.sessionCount).toBe(1);
 	});
 });

@@ -550,7 +550,13 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "get_session_analysis": {
-				const splitDate = command.splitDate ? new Date(command.splitDate) : undefined;
+				let splitDate: Date | undefined;
+				if (command.splitDate) {
+					splitDate = new Date(command.splitDate);
+					if (Number.isNaN(splitDate.getTime())) {
+						return error(id, "get_session_analysis", `Invalid splitDate: ${command.splitDate}`);
+					}
+				}
 				const analysis = await session.getSessionAnalysis(splitDate ? { splitDate } : undefined);
 				return success(id, "get_session_analysis", analysis);
 			}

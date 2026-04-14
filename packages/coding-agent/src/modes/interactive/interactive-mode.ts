@@ -56,6 +56,7 @@ import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import type { ResourceDiagnostic } from "../../core/resource-loader.js";
+import { generateAnalysisHtml } from "../../core/session-analysis-html.js";
 import { sparkline } from "../../core/session-analyzer.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
@@ -4288,153 +4289,70 @@ export class InteractiveMode {
 			}
 
 			const analysis = await this.session.getSessionAnalysis(splitDate ? { splitDate } : undefined);
-			const { current, timeline, groups, comparison } = analysis;
+			const { current, timeline } = analysis;
 
 			this.chatContainer.removeChild(loader);
 
+			// ── Inline TUI summary ──
+			const fmtVal = (v: number | null, suffix = ""): string => (v !== null ? `${v.toFixed(1)}${suffix}` : "n/a");
+
 			let info = `${theme.bold("Session Analysis")}\n\n`;
 
-			// ── Current Session ──
-			info += `${theme.bold("Current Session")}\n`;
+			// Current session metrics
+			info += `${theme.bold("Current Session")}`;
 			if (current.model) {
-				info += `${theme.fg("dim", "Model:")} ${current.provider ? `${current.provider}/` : ""}${current.model}\n`;
+				info += `  ${theme.fg("dim", current.provider ? `${current.provider}/${current.model}` : current.model)}`;
 			}
-			info += `${theme.fg("dim", "Tool Calls:")} ${current.totalToolCalls}\n`;
-			info += `${theme.fg("dim", "Tokens:")} ${current.totalTokens.toLocaleString()}\n`;
+			info += "\n";
+			info += `${theme.fg("dim", "Tool Calls:")} ${current.totalToolCalls}`;
+			info += `  ${theme.fg("dim", "Tokens:")} ${current.totalTokens.toLocaleString()}`;
 			if (current.totalCost > 0) {
-				info += `${theme.fg("dim", "Cost:")} $${current.totalCost.toFixed(4)}\n`;
+				info += `  ${theme.fg("dim", "Cost:")} $${current.totalCost.toFixed(4)}`;
 			}
+			info += "\n";
 
 			if (current.totalToolCalls > 0) {
-				info += `\n${theme.fg("dim", "Read:Edit Ratio:")} ${current.readEditRatio != null ? current.readEditRatio.toFixed(1) : "N/A (no edits)"}\n`;
-				info += `${theme.fg("dim", "Write vs Edit:")} ${current.writeVsEditPercent != null ? `${current.writeVsEditPercent.toFixed(0)}%` : "N/A"}\n`;
-				info += `${theme.fg("dim", "Error Rate:")} ${current.errorRate != null ? `${current.errorRate.toFixed(1)}%` : "N/A"}\n`;
-				info += `${theme.fg("dim", "Self-Correction:")} ${current.selfCorrectionPer1K != null ? `${current.selfCorrectionPer1K.toFixed(1)} per 1K calls` : "N/A"}\n`;
+				info += `${theme.fg("dim", "Read:Edit:")} ${fmtVal(current.readEditRatio)}`;
+				info += `  ${theme.fg("dim", "Write%:")} ${fmtVal(current.writeVsEditPercent, "%")}`;
+				info += `  ${theme.fg("dim", "Errors:")} ${fmtVal(current.errorRate, "%")}`;
+				info += `  ${theme.fg("dim", "Self-Corr:")} ${fmtVal(current.selfCorrectionPer1K, "/1K")}`;
+				info += "\n";
 			}
 
-			// ── Tool Distribution ──
-			const dist = current.toolDistribution;
-			const toolEntries = Object.entries(dist).sort((a, b) => b[1] - a[1]);
+			// Top-5 tool counts (compact)
+			const toolEntries = Object.entries(current.toolDistribution).sort((a, b) => b[1] - a[1]);
 			if (toolEntries.length > 0) {
-				info += `\n${theme.bold("Tool Distribution")}\n`;
-				const maxCount = toolEntries[0][1];
-				const maxBarWidth = 25;
-				const maxNameLen = Math.max(...toolEntries.map(([n]) => n.length));
-				for (const [name, count] of toolEntries) {
-					const barLen = maxCount > 0 ? Math.max(1, Math.round((count / maxCount) * maxBarWidth)) : 0;
-					const barStr = "\u2588".repeat(barLen);
-					const paddedName = name.padEnd(maxNameLen);
-					info += `  ${theme.fg("dim", paddedName)}  ${String(count).padStart(4)}  ${theme.fg("accent", barStr)}\n`;
-				}
+				const top5 = toolEntries.slice(0, 5);
+				const toolLine = top5.map(([name, count]) => `${name}:${count}`).join("  ");
+				info += `${theme.fg("dim", "Top tools:")} ${toolLine}`;
+				if (toolEntries.length > 5) info += `  ${theme.fg("dim", `+${toolEntries.length - 5} more`)}`;
+				info += "\n";
 			}
 
-			// ── Sparkline Trends ──
+			// Sparkline trends (compact)
 			if (timeline && timeline.periods.length > 1) {
-				info += `\n${theme.bold("Trends")} ${theme.fg("dim", `(${timeline.totalSessions} sessions, ${timeline.periods.length} weeks)`)}\n`;
+				const firstLabel = timeline.periods[0].label;
+				const lastLabel = timeline.periods[timeline.periods.length - 1].label;
+				info += `\n${theme.bold("Trends")} ${theme.fg("dim", `(${timeline.totalSessions} sessions, ${timeline.periods.length} weeks: ${firstLabel} – ${lastLabel})`)}\n`;
 
-				// Period labels
-				const labels = timeline.periods.map((p) => p.label);
-				const labelRow = `  ${"  ".padEnd(18)}${labels.map((l) => l.padEnd(7)).join(" ")}`;
-				info += `${theme.fg("dim", labelRow)}\n`;
-
-				// Metric sparklines
 				const readEditValues = timeline.periods.map((p) => p.metrics.avgReadEditRatio);
 				const errorValues = timeline.periods.map((p) => p.metrics.avgErrorRate);
 				const selfCorrValues = timeline.periods.map((p) => p.metrics.avgSelfCorrectionPer1K);
 
-				const fmtAvg = (vals: (number | null)[], suffix = ""): string => {
-					const valid = vals.filter((v): v is number => v !== null);
-					if (valid.length === 0) return "";
-					const avg = valid.reduce((a, b) => a + b, 0) / valid.length;
-					return `  avg ${avg.toFixed(1)}${suffix}`;
-				};
-
-				info += `  ${theme.fg("dim", "Read:Edit".padEnd(16))}  ${theme.fg("accent", sparkline(readEditValues))}${fmtAvg(readEditValues)}\n`;
-				info += `  ${theme.fg("dim", "Error Rate".padEnd(16))}  ${theme.fg("accent", sparkline(errorValues))}${fmtAvg(errorValues, "%")}\n`;
-				info += `  ${theme.fg("dim", "Self-Correct".padEnd(16))}  ${theme.fg("accent", sparkline(selfCorrValues))}${fmtAvg(selfCorrValues, "/1K")}\n`;
-
-				// Per-tool sparklines (top 5 tools by total usage)
-				const toolTotals: Record<string, number> = {};
-				for (const p of timeline.periods) {
-					for (const [tool, count] of Object.entries(p.metrics.toolDistribution)) {
-						toolTotals[tool] = (toolTotals[tool] ?? 0) + count;
-					}
-				}
-				const topTools = Object.entries(toolTotals)
-					.sort((a, b) => b[1] - a[1])
-					.slice(0, 5);
-
-				if (topTools.length > 0) {
-					info += "\n";
-					for (const [toolName] of topTools) {
-						const toolValues = timeline.periods.map((p) => p.metrics.toolDistribution[toolName] ?? 0);
-						// Convert to nullable for sparkline (0 is valid, not null)
-						const sparkValues = toolValues.map((v) => v as number | null);
-						info += `  ${theme.fg("dim", `Tool: ${toolName}`.padEnd(16))}  ${theme.fg("accent", sparkline(sparkValues))}\n`;
-					}
-				}
+				info += `  ${theme.fg("dim", "Read:Edit")}    ${theme.fg("accent", sparkline(readEditValues))}`;
+				info += `  ${theme.fg("dim", "Error")} ${theme.fg("accent", sparkline(errorValues))}`;
+				info += `  ${theme.fg("dim", "Self-Corr")} ${theme.fg("accent", sparkline(selfCorrValues))}`;
+				info += "\n";
 			}
 
-			// ── By Model ──
-			if (groups && groups.byModel.length > 0) {
-				info += `\n${theme.bold("By Model")}\n`;
-				for (const g of groups.byModel.slice(0, 5)) {
-					const re = g.avgReadEditRatio != null ? `R:E ${g.avgReadEditRatio.toFixed(1)}` : "";
-					const err = g.avgErrorRate != null ? `Err ${g.avgErrorRate.toFixed(1)}%` : "";
-					const spark = sparkline(g.sparklineReadEdit);
-					info += `  ${theme.fg("dim", g.groupKey.padEnd(22))} ${String(g.sessionCount).padStart(3)} sessions  ${re.padEnd(9)} ${err.padEnd(10)} ${theme.fg("accent", spark)}\n`;
-				}
-			}
+			// Generate HTML report
+			const html = generateAnalysisHtml(analysis);
+			const timestamp = Date.now();
+			const htmlPath = `/tmp/dreb-analysis-${timestamp}.html`;
+			fs.writeFileSync(htmlPath, html, "utf-8");
+			const fileUrl = `file://${htmlPath}`;
 
-			// ── By Type ──
-			if (groups && groups.byType.length > 0) {
-				info += `\n${theme.bold("By Type")}\n`;
-				for (const g of groups.byType) {
-					const re = g.avgReadEditRatio != null ? `R:E ${g.avgReadEditRatio.toFixed(1)}` : "";
-					const err = g.avgErrorRate != null ? `Err ${g.avgErrorRate.toFixed(1)}%` : "";
-					const spark = sparkline(g.sparklineReadEdit);
-					info += `  ${theme.fg("dim", g.groupKey.padEnd(22))} ${String(g.sessionCount).padStart(3)} sessions  ${re.padEnd(9)} ${err.padEnd(10)} ${theme.fg("accent", spark)}\n`;
-				}
-			}
-
-			// ── Date Comparison ──
-			if (comparison) {
-				const dateStr = comparison.splitDate.toISOString().slice(0, 10);
-				info += `\n${theme.bold(`Comparison: split at ${dateStr}`)}\n`;
-
-				const b = comparison.before;
-				const a = comparison.after;
-
-				const hdr = `  ${"  ".padEnd(18)} ${theme.fg("dim", `Before (${b.sessionCount})`.padEnd(14))} ${theme.fg("dim", `After (${a.sessionCount})`.padEnd(14))} Change`;
-				info += `${hdr}\n`;
-
-				const compRow = (
-					label: string,
-					bv: number | null,
-					av: number | null,
-					suffix = "",
-					decimals = 1,
-				): string => {
-					const bs = bv != null ? bv.toFixed(decimals) + suffix : "\u2014";
-					const as_ = av != null ? av.toFixed(decimals) + suffix : "\u2014";
-					let change = "";
-					if (bv != null && av != null && bv !== 0) {
-						const pct = ((av - bv) / Math.abs(bv)) * 100;
-						const arrow = pct > 5 ? "\u2191" : pct < -5 ? "\u2193" : "\u2192";
-						change = `${arrow} ${pct > 0 ? "+" : ""}${pct.toFixed(0)}%`;
-					}
-					return `  ${label.padEnd(18)} ${bs.padEnd(14)} ${as_.padEnd(14)} ${change}`;
-				};
-
-				info += `${compRow("Read:Edit", b.avgReadEditRatio, a.avgReadEditRatio)}\n`;
-				info += `${compRow("Write vs Edit", b.avgWriteVsEditPercent, a.avgWriteVsEditPercent, "%", 0)}\n`;
-				info += `${compRow("Error Rate", b.avgErrorRate, a.avgErrorRate, "%")}\n`;
-				info += `${compRow("Self-Correction", b.avgSelfCorrectionPer1K, a.avgSelfCorrectionPer1K, "/1K")}\n`;
-			}
-
-			// ── Caveat ──
-			info += `\n${theme.fg("dim", "Note: These metrics are noisy proxies for task characteristics, not quality scores.")}\n`;
-			info += `${theme.fg("dim", "Interpret relative to your project's own baseline, not as absolute values.")}`;
+			info += `\n${theme.fg("accent", "Full report:")} ${fileUrl}`;
 
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(new Text(info, 1, 0));

@@ -102,7 +102,7 @@ export interface FullSessionAnalysis {
 		byType: GroupSummary[];
 	} | null;
 	comparison: DateComparison | null;
-	trend: { currentPeriod: PeriodMetrics; previousPeriod: PeriodMetrics; totalSessions: number } | null;
+	trend: ProjectTrend | null;
 }
 
 // ── Read / Edit tool sets ───────────────────────────────────────────────
@@ -481,7 +481,7 @@ export function computeGroups(
 	// By type
 	const typeMap = new Map<string, SessionAnalysis[]>();
 	for (const s of sessions) {
-		const key = s.isSubagent ? (s.agentType ?? "unknown subagent") : "parent";
+		const key = s.isSubagent ? (s.agentType ?? "subagent (legacy)") : "parent";
 		const arr = typeMap.get(key);
 		if (arr) arr.push(s);
 		else typeMap.set(key, [s]);
@@ -598,13 +598,10 @@ export function formatAnalysisForTui(analysis: FullSessionAnalysis): string {
 	// ── Trends (sparkline section) ──
 	if (timeline) {
 		const weekCount = timeline.periods.length;
-		lines.push(`── Trends (${timeline.totalSessions} sessions, ${weekCount} weeks) ──`);
+		const firstLabel = timeline.periods[0].label;
+		const lastLabel = timeline.periods[timeline.periods.length - 1].label;
+		lines.push(`── Trends (${timeline.totalSessions} sessions, ${weekCount} weeks: ${firstLabel} – ${lastLabel}) ──`);
 		lines.push("");
-
-		// Period header labels
-		const periodLabels = timeline.periods.map((p) => p.label);
-		const labelHeader = `${"".padEnd(16)}${periodLabels.map((l) => l.padEnd(7)).join("")}`;
-		lines.push(labelHeader);
 
 		// Overall metric sparklines
 		const readEditValues = timeline.periods.map((p) => p.metrics.avgReadEditRatio);
@@ -706,132 +703,6 @@ export function formatAnalysisForTui(analysis: FullSessionAnalysis): string {
 	// ── Footer ──
 	lines.push("Note: These metrics are noisy proxies for session behavior, not quality scores.");
 	lines.push("Use them for self-reflection, not performance evaluation.");
-
-	return lines.join("\n");
-}
-
-// ── formatAnalysisForTelegram ───────────────────────────────────────────
-
-export function formatAnalysisForTelegram(analysis: FullSessionAnalysis): string {
-	const { current, timeline, groups, comparison } = analysis;
-	const lines: string[] = [];
-
-	// ── Current Session ──
-	lines.push("📊 *Session Analysis*");
-	lines.push("");
-	if (current.model) lines.push(`Model: \`${current.model}\``);
-	if (current.provider) lines.push(`Provider: \`${current.provider}\``);
-	lines.push(`Subagent: ${current.isSubagent ? "yes" : "no"}`);
-	if (current.agentType) lines.push(`Type: \`${current.agentType}\``);
-	lines.push(`Total tool calls: ${current.totalToolCalls}`);
-	lines.push(`Tokens: ${current.totalTokens.toLocaleString()} | Cost: $${current.totalCost.toFixed(4)}`);
-	lines.push("");
-	lines.push("```");
-	lines.push(`Read/Edit ratio:   ${fmtNum(current.readEditRatio)}`);
-	lines.push(`Write vs Edit:     ${fmtNum(current.writeVsEditPercent, "%")}`);
-	lines.push(`Error rate:        ${fmtNum(current.errorRate, "%")}`);
-	lines.push(`Self-corrections:  ${fmtNum(current.selfCorrectionPer1K, "/1K")}`);
-	lines.push("```");
-
-	// ── Tool Distribution ──
-	const dist = current.toolDistribution;
-	const distEntries = Object.entries(dist).sort((a, b) => b[1] - a[1]);
-	if (distEntries.length > 0) {
-		lines.push("");
-		lines.push("🔧 *Tool Distribution*");
-		lines.push("");
-		lines.push("```");
-		const maxNameLen = Math.max(...distEntries.map(([n]) => n.length));
-		const maxCountLen = Math.max(...distEntries.map(([, c]) => String(c).length));
-		for (const [name, count] of distEntries) {
-			lines.push(`${name.padEnd(maxNameLen)}  ${String(count).padStart(maxCountLen)}`);
-		}
-		lines.push("```");
-	}
-
-	// ── Trends ──
-	if (timeline) {
-		lines.push("");
-		lines.push(`📈 *Trends* (${timeline.totalSessions} sessions, ${timeline.periods.length} weeks)`);
-		lines.push("");
-
-		const readEditValues = timeline.periods.map((p) => p.metrics.avgReadEditRatio);
-		const errorValues = timeline.periods.map((p) => p.metrics.avgErrorRate);
-		const selfCorrValues = timeline.periods.map((p) => p.metrics.avgSelfCorrectionPer1K);
-
-		const costValues = timeline.periods.map((p) => (p.metrics.totalCost > 0 ? p.metrics.totalCost : null));
-		const avgCostTg = averageNonNull(costValues);
-
-		lines.push("```");
-		lines.push(`Read:Edit    ${sparkline(readEditValues)}  avg ${fmtNum(averageNonNull(readEditValues))}`);
-		lines.push(`Error Rate   ${sparkline(errorValues)}  avg ${fmtNum(averageNonNull(errorValues), "%")}`);
-		lines.push(`Self-Corr    ${sparkline(selfCorrValues)}  avg ${fmtNum(averageNonNull(selfCorrValues), "/1K")}`);
-		lines.push(`Cost/week    ${sparkline(costValues)}  avg $${avgCostTg != null ? avgCostTg.toFixed(4) : "n/a"}`);
-		lines.push("```");
-	}
-
-	// ── By Model (top 3) ──
-	if (groups && groups.byModel.length > 0) {
-		lines.push("");
-		lines.push("🤖 *By Model*");
-		lines.push("");
-		lines.push("```");
-		const top = groups.byModel.slice(0, 3);
-		const maxKeyLen = Math.max(...top.map((g) => g.groupKey.length));
-		for (const g of top) {
-			const key = g.groupKey.padEnd(maxKeyLen);
-			const spark = sparkline(g.sparklineReadEdit);
-			lines.push(`${key}  ${String(g.sessionCount).padStart(3)}s  R:E ${fmtNum(g.avgReadEditRatio)}  ${spark}`);
-		}
-		lines.push("```");
-	}
-
-	// ── By Type (top 3) ──
-	if (groups && groups.byType.length > 0) {
-		lines.push("");
-		lines.push("🏷️ *By Type*");
-		lines.push("");
-		lines.push("```");
-		const top = groups.byType.slice(0, 3);
-		const maxKeyLen = Math.max(...top.map((g) => g.groupKey.length));
-		for (const g of top) {
-			const key = g.groupKey.padEnd(maxKeyLen);
-			const spark = sparkline(g.sparklineReadEdit);
-			lines.push(`${key}  ${String(g.sessionCount).padStart(3)}s  R:E ${fmtNum(g.avgReadEditRatio)}  ${spark}`);
-		}
-		lines.push("```");
-	}
-
-	// ── Date Comparison ──
-	if (comparison) {
-		const splitStr = comparison.splitDate.toISOString().slice(0, 10);
-		const { before: b, after: a } = comparison;
-		lines.push("");
-		lines.push(`📅 *Comparison: split at ${splitStr}*`);
-		lines.push("");
-		lines.push("```");
-		lines.push(`              Before(${b.sessionCount})  After(${a.sessionCount})  Change`);
-		lines.push(
-			`Read:Edit     ${fmtNum(b.avgReadEditRatio).padEnd(11)} ${fmtNum(a.avgReadEditRatio).padEnd(10)} ${changeStr(a.avgReadEditRatio, b.avgReadEditRatio)}`,
-		);
-		lines.push(
-			`Write/Edit    ${fmtNum(b.avgWriteVsEditPercent, "%").padEnd(11)} ${fmtNum(a.avgWriteVsEditPercent, "%").padEnd(10)} ${changeStr(a.avgWriteVsEditPercent, b.avgWriteVsEditPercent)}`,
-		);
-		lines.push(
-			`Error Rate    ${fmtNum(b.avgErrorRate, "%").padEnd(11)} ${fmtNum(a.avgErrorRate, "%").padEnd(10)} ${changeStr(a.avgErrorRate, b.avgErrorRate)}`,
-		);
-		lines.push(
-			`Self-Corr     ${fmtNum(b.avgSelfCorrectionPer1K, "/1K").padEnd(11)} ${fmtNum(a.avgSelfCorrectionPer1K, "/1K").padEnd(10)} ${changeStr(a.avgSelfCorrectionPer1K, b.avgSelfCorrectionPer1K)}`,
-		);
-		lines.push(
-			`Cost          $${b.totalCost.toFixed(4).padEnd(10)} $${a.totalCost.toFixed(4).padEnd(9)} ${changeStr(a.totalCost, b.totalCost)}`,
-		);
-		lines.push("```");
-	}
-
-	// ── Footer ──
-	lines.push("");
-	lines.push("_These metrics are noisy proxies, not quality scores._");
 
 	return lines.join("\n");
 }

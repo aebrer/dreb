@@ -13,7 +13,8 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
@@ -70,7 +71,6 @@ import {
 	analyzeSession,
 	computeDateComparison,
 	computeGroups,
-	computeProjectTrend,
 	computeTimeline,
 	type FullSessionAnalysis,
 	type SessionAnalysis,
@@ -78,9 +78,9 @@ import {
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import {
 	CURRENT_SESSION_VERSION,
+	type FileEntry,
 	getDefaultSessionDir,
 	getLatestCompactionEntry,
-	loadEntriesFromFile,
 	type SessionHeader,
 	type SessionMessageEntry,
 } from "./session-manager.js";
@@ -3446,6 +3446,12 @@ export class AgentSession {
 		};
 	}
 
+	/** Maximum size of a single JSONL file to process (20 MB). */
+	private static readonly SESSION_FILE_SIZE_CAP = 20 * 1024 * 1024;
+
+	/** Maximum number of JSONL files to process across all directories. */
+	private static readonly SESSION_FILE_COUNT_CAP = 500;
+
 	/**
 	 * Get session analysis with behavioral quality metrics and project trends.
 	 */
@@ -3463,55 +3469,85 @@ export class AgentSession {
 		const cwd = this._cwd;
 
 		if (cwd) {
+			const fileCounter = { count: 0 };
+
 			// Scan regular sessions
 			const sessionDir = getDefaultSessionDir(cwd);
-			this._scanSessionDir(sessionDir, false, allSessions);
+			await this._scanSessionDir(sessionDir, false, allSessions, fileCounter);
 
 			// Scan subagent sessions (all dirs — filter by cwd from header)
 			const subagentBaseDir = getSubagentSessionsDir();
-			if (existsSync(subagentBaseDir)) {
-				for (const dirName of readdirSync(subagentBaseDir)) {
-					const subDir = join(subagentBaseDir, dirName);
-					try {
-						this._scanSessionDir(subDir, true, allSessions, cwd);
-					} catch {
-						// Skip inaccessible dirs
-					}
-				}
+			try {
+				const dirNames = await readdir(subagentBaseDir);
+				await Promise.all(
+					dirNames.map((dirName) => {
+						const subDir = join(subagentBaseDir, dirName);
+						return this._scanSessionDir(subDir, true, allSessions, fileCounter, cwd);
+					}),
+				);
+			} catch {
+				// subagentBaseDir doesn't exist or is inaccessible — skip
 			}
 		}
 
-		// 3. Compute trend and additional analysis
-		const trend = computeProjectTrend(allSessions);
+		// 3. Compute additional analysis (trend removed — not consumed by renderers)
 		const timeline = computeTimeline(allSessions);
 		const groups = computeGroups(allSessions, timeline);
 		const comparison = options?.splitDate ? computeDateComparison(allSessions, options.splitDate) : null;
 
-		return { current, timeline, groups, comparison, trend };
+		return { current, timeline, groups, comparison, trend: null };
 	}
 
 	/**
 	 * Scan a directory for session JSONL files and analyze each one.
 	 * If filterCwd is provided, only include sessions whose header.cwd matches.
 	 */
-	private _scanSessionDir(dir: string, isSubagent: boolean, results: SessionAnalysis[], filterCwd?: string): void {
-		if (!existsSync(dir)) return;
-
-		let files: string[];
+	private async _scanSessionDir(
+		dir: string,
+		isSubagent: boolean,
+		results: SessionAnalysis[],
+		fileCounter: { count: number },
+		filterCwd?: string,
+	): Promise<void> {
+		let dirEntries: string[];
 		try {
-			files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+			dirEntries = await readdir(dir);
 		} catch {
-			return;
+			return; // Directory doesn't exist or is inaccessible
 		}
 
+		const files = dirEntries.filter((f) => f.endsWith(".jsonl"));
+
 		for (const file of files) {
+			if (fileCounter.count >= AgentSession.SESSION_FILE_COUNT_CAP) return;
+
 			const filePath = join(dir, file);
 
 			// Skip the current session file (already analyzed from memory)
 			if (filePath === this.sessionFile) continue;
 
 			try {
-				const entries = loadEntriesFromFile(filePath);
+				// Check file size before reading
+				const fileStat = await stat(filePath);
+				if (fileStat.size > AgentSession.SESSION_FILE_SIZE_CAP) {
+					console.log(`[session-analysis] skipping large file (${fileStat.size} bytes): ${filePath}`);
+					continue;
+				}
+
+				fileCounter.count++;
+
+				// Read and parse JSONL content
+				const content = await readFile(filePath, "utf8");
+				const entries: FileEntry[] = [];
+				for (const line of content.trim().split("\n")) {
+					if (!line.trim()) continue;
+					try {
+						entries.push(JSON.parse(line) as FileEntry);
+					} catch {
+						// Skip malformed lines
+					}
+				}
+
 				if (entries.length === 0) continue;
 
 				const header = entries[0];

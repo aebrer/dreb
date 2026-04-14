@@ -6,6 +6,22 @@ import type { Context } from "grammy";
 import type { UserState } from "../types.js";
 import { log, safeSend } from "../util/telegram.js";
 
+const SPARK_CHARS = "▁▂▃▄▅▆▇█";
+function _sparkline(values: (number | null)[]): string {
+	const nonNull = values.filter((v): v is number => v !== null);
+	if (nonNull.length === 0) return "";
+	const min = Math.min(...nonNull);
+	const max = Math.max(...nonNull);
+	return values
+		.map((v) => {
+			if (v === null) return " ";
+			if (max === min) return SPARK_CHARS[4]; // mid for constant data
+			const idx = Math.round(((v - min) / (max - min)) * 7);
+			return SPARK_CHARS[idx];
+		})
+		.join("");
+}
+
 export async function cmdCompact(ctx: Context, userState: UserState): Promise<void> {
 	const chatId = ctx.chat!.id;
 	const bridge = userState.bridge;
@@ -155,18 +171,8 @@ export async function cmdSessionAnalysis(ctx: Context, userState: UserState): Pr
 			lines.push(`\n\ud83d\udcc8 *Trends* (${timeline.totalSessions} sessions, ${timeline.periods.length} weeks):`);
 			const readEditVals = timeline.periods.map((p: any) => p.metrics?.avgReadEditRatio ?? null);
 			const errorVals = timeline.periods.map((p: any) => p.metrics?.avgErrorRate ?? null);
-			// Simple sparkline using block chars
-			const spark = (vals: (number | null)[]): string => {
-				const chars = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588";
-				const valid = vals.filter((v): v is number => v !== null);
-				if (valid.length === 0) return "";
-				const min = Math.min(...valid);
-				const max = Math.max(...valid);
-				const range = max - min || 1;
-				return vals.map((v) => (v === null ? " " : chars[Math.round(((v - min) / range) * 7) + 1])).join("");
-			};
-			lines.push(`  Read:Edit:  ${spark(readEditVals)}`);
-			lines.push(`  Error Rate: ${spark(errorVals)}`);
+			lines.push(`  Read:Edit:  ${_sparkline(readEditVals)}`);
+			lines.push(`  Error Rate: ${_sparkline(errorVals)}`);
 		}
 
 		// Groups (compact: top 3 each)
