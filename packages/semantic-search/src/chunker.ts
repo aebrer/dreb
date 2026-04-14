@@ -23,6 +23,7 @@ const TREE_SITTER_LANGUAGES: Set<string> = new Set([
 	"java",
 	"c",
 	"cpp",
+	"gdscript",
 ]);
 
 // ============================================================================

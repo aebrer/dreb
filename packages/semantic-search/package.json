@@ -20,6 +20,7 @@
 	"files": [
 		"dist",
 		"bin",
+		"grammars",
 		".claude-plugin",
 		".mcp.json",
 		"skills",
@@ -38,6 +39,7 @@
 		"ignore": "^7.0.5",
 		"tree-sitter-c": "^0.24.1",
 		"tree-sitter-cpp": "^0.23.4",
+		"tree-sitter-gdscript": "^6.1.0",
 		"tree-sitter-go": "^0.25.0",
 		"tree-sitter-java": "^0.23.5",
 		"tree-sitter-javascript": "^0.25.0",

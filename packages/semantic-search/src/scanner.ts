@@ -70,6 +70,11 @@ const EXTENSION_MAP: ReadonlyMap<string, FileType> = new Map<string, FileType>([
 	[".cxx", "cpp"],
 	[".hh", "cpp"],
 	[".hxx", "cpp"],
+	[".gd", "gdscript"],
+	// Godot text-based files
+	[".tscn", "plaintext"],
+	[".tres", "plaintext"],
+	[".godot", "plaintext"],
 	// Text file types
 	[".md", "markdown"],
 	[".mdx", "markdown"],

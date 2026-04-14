@@ -432,6 +432,92 @@ describe("chunkWithTreeSitter — C++", () => {
 });
 
 // ============================================================================
+// GDScript
+// ============================================================================
+
+const gdCode = `extends Node2D
+
+var speed: float = 5.0
+const MAX_HP = 100
+
+func _ready():
+    print("hello")
+
+func take_damage(amount: int) -> void:
+    hp -= amount
+
+class Player:
+    var name: String
+    var hp: int = 100
+
+signal health_changed(new_hp: int)
+
+enum Direction { NORTH, SOUTH, EAST, WEST }
+`;
+
+describe("chunkWithTreeSitter — GDScript", () => {
+	let chunks: Chunk[];
+
+	beforeAll(async () => {
+		chunks = await chunkWithTreeSitter(gdCode, "player.gd", "gdscript");
+	});
+
+	it("extracts _ready function", () => {
+		const fn = chunks.find((c) => c.name === "_ready");
+		expect(fn).toBeDefined();
+		expect(fn!.kind).toBe("function");
+		expect(fn!.content).toContain("_ready");
+	});
+
+	it("extracts take_damage function", () => {
+		const fn = chunks.find((c) => c.name === "take_damage");
+		expect(fn).toBeDefined();
+		expect(fn!.kind).toBe("function");
+		expect(fn!.content).toContain("hp -= amount");
+	});
+
+	it("extracts Player class", () => {
+		const cls = chunks.find((c) => c.name === "Player");
+		expect(cls).toBeDefined();
+		expect(cls!.kind).toBe("class");
+		expect(cls!.content).toContain("Player");
+	});
+
+	it("extracts Direction enum", () => {
+		const en = chunks.find((c) => c.name === "Direction");
+		expect(en).toBeDefined();
+		expect(en!.kind).toBe("enum");
+		expect(en!.content).toContain("NORTH");
+	});
+
+	it("does not extract signals as named chunks (they fall into gaps)", () => {
+		const signalChunk = chunks.find((c) => c.name === "health_changed");
+		expect(signalChunk).toBeUndefined();
+	});
+
+	it("unextracted code (variables, signals) appears between extracted regions or in file-level chunks", () => {
+		// Signals, variables, and consts are not extracted as named chunks.
+		// They may appear in gap chunks if the gap exceeds MIN_GAP_LINES (3 non-blank lines),
+		// otherwise they're absorbed into surrounding context.
+		// The key assertion is that they're NOT extracted as named symbols.
+		const signalChunk = chunks.find((c) => c.name === "health_changed");
+		expect(signalChunk).toBeUndefined();
+		const varChunk = chunks.find((c) => c.name === "speed");
+		expect(varChunk).toBeUndefined();
+		const constChunk = chunks.find((c) => c.name === "MAX_HP");
+		expect(constChunk).toBeUndefined();
+	});
+
+	it("each chunk has valid line range and non-empty content", () => {
+		for (const chunk of chunks) {
+			expect(chunk.startLine).toBeGreaterThan(0);
+			expect(chunk.endLine).toBeGreaterThanOrEqual(chunk.startLine);
+			expect(chunk.content.length).toBeGreaterThan(0);
+		}
+	});
+});
+
+// ============================================================================
 // Fallback — invalid/unparseable code
 // ============================================================================
 
