@@ -482,6 +482,17 @@ export function resolveModelStringSingle(
 		};
 	}
 
+	// Verify the resolved provider has authentication configured.
+	// resolveCliModel uses getAll() (all models, not just authenticated ones)
+	// so a model can resolve successfully to a provider with no API key.
+	// Reject early so the fallback list can continue to the next model.
+	if (!registry.authStorage.hasAuth(resolved.model.provider)) {
+		return {
+			ok: false,
+			error: `No authentication configured for provider "${resolved.model.provider}". Model "${modelStr}" cannot be used.`,
+		};
+	}
+
 	return { ok: true, modelId: resolved.model.id, provider: resolved.model.provider };
 }
 

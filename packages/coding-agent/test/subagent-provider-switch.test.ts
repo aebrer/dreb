@@ -38,6 +38,7 @@ const zaiModel: Model<"anthropic-messages"> = {
 
 const registry = {
 	getAll: () => [anthropicModel, zaiModel],
+	authStorage: { hasAuth: () => true },
 } as unknown as Parameters<typeof resolveModelWithFallbacks>[2];
 
 describe("mid-session provider switch (issue 76)", () => {

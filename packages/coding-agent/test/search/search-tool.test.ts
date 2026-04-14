@@ -11,7 +11,21 @@ import {
 
 // Mock the embedder to avoid downloading the ONNX model (~23MB).
 // Returns zero-vectors so cosine scores are 0, but BM25/path/symbol metrics still work.
+// Mock both source and dist paths — vitest resolves through source in workspace mode
+// but may resolve through dist (via the @dreb/semantic-search symlink) in some environments.
 vi.mock("../../../semantic-search/src/embedder.js", () => ({
+	Embedder: class MockEmbedder {
+		async initialize() {}
+		async embedQuery(_query: string) {
+			return new Float32Array(384);
+		}
+		async embedDocuments(texts: string[]) {
+			return texts.map(() => new Float32Array(384));
+		}
+		dispose() {}
+	},
+}));
+vi.mock("../../../semantic-search/dist/embedder.js", () => ({
 	Embedder: class MockEmbedder {
 		async initialize() {}
 		async embedQuery(_query: string) {
@@ -307,11 +321,15 @@ describe("createSearchToolDefinition", () => {
 			let fixtureDir: string;
 			let fixtureTool: ReturnType<typeof createSearchToolDefinition>;
 
-			beforeAll(() => {
+			beforeAll(async () => {
 				fixtureDir = mkdtempSync(path.join(tmpdir(), "search-tool-exec-"));
 				createFixtureProject(fixtureDir);
 				fixtureTool = createSearchToolDefinition(fixtureDir);
-			});
+				// Warm the search index so per-test timeouts aren't eaten by index building.
+				// The first search triggers a full index build (scan, chunk, embed) which
+				// can exceed the 30s test timeout on slower CI runners.
+				await fixtureTool.execute("t-warmup", { query: "warmup" }, undefined, undefined, undefined as any);
+			}, 120_000);
 
 			afterAll(() => {
 				rmSync(fixtureDir, { recursive: true, force: true });
