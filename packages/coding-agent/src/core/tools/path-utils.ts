@@ -37,8 +37,16 @@ function normalizeAtPrefix(filePath: string): string {
 	return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
+/** Strip matching surrounding quotes (single or double) — users instinctively quote paths with spaces */
+function stripSurroundingQuotes(str: string): string {
+	if (str.length >= 2 && ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'")))) {
+		return str.slice(1, -1);
+	}
+	return str;
+}
+
 export function expandPath(filePath: string): string {
-	const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+	const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(stripSurroundingQuotes(filePath)));
 	if (normalized === "~") {
 		return os.homedir();
 	}

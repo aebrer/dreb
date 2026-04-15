@@ -38,6 +38,20 @@ describe("dream", () => {
 			expect(parseDreamCommand("/dream  ")).toEqual({ type: "run" });
 			expect(parseDreamCommand("/dream  backup  ")).toEqual({ type: "showBackup" });
 		});
+
+		it("preserves paths with spaces (quote stripping is expandPath's job)", () => {
+			expect(parseDreamCommand("/dream backup /mnt/c/path with spaces/backups")).toEqual({
+				type: "setBackup",
+				path: "/mnt/c/path with spaces/backups",
+			});
+		});
+
+		it("preserves quoted paths as-is (expandPath strips quotes downstream)", () => {
+			expect(parseDreamCommand('/dream backup "/mnt/c/path with spaces"')).toEqual({
+				type: "setBackup",
+				path: '"/mnt/c/path with spaces"',
+			});
+		});
 	});
 
 	describe("validateArchivePath", () => {
