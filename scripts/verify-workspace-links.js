@@ -51,7 +51,7 @@ for (const pkgDir of packageDirs) {
 }
 
 if (foundStale) {
-	console.error("\nFix: rm -rf packages/*/node_modules/@dreb && npm install");
+	console.error("\nFix: rm -rf packages/*/node_modules/@dreb && re-establish workspace symlinks locally (do not run npm install)");
 	process.exit(1);
 }
 
