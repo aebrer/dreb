@@ -249,12 +249,12 @@ describe("MCP protocol integration", () => {
 
 		expect(tool.inputSchema.type).toBe("object");
 		expect(tool.inputSchema.properties).toHaveProperty("query");
-		expect(tool.inputSchema.properties).toHaveProperty("path");
+		expect(tool.inputSchema.properties).toHaveProperty("restrictToDir");
 		expect(tool.inputSchema.properties).toHaveProperty("limit");
 		expect(tool.inputSchema.properties).toHaveProperty("rebuild");
-		expect(tool.inputSchema.properties).toHaveProperty("projectDir");
+		expect(tool.inputSchema.properties).toHaveProperty("searchDir");
 		expect(tool.inputSchema.required).toContain("query");
-		expect(tool.inputSchema.required).toContain("projectDir");
+		expect(tool.inputSchema.required).toContain("searchDir");
 	});
 
 	it("calls search and returns formatted results", async () => {
@@ -268,7 +268,7 @@ describe("MCP protocol integration", () => {
 
 		const result = await client.callTool({
 			name: "search",
-			arguments: { query: "server setup", projectDir: "/tmp/test-project" },
+			arguments: { query: "server setup", searchDir: "/tmp/test-project" },
 		});
 
 		expect(result.content).toHaveLength(1);
@@ -283,7 +283,7 @@ describe("MCP protocol integration", () => {
 
 		const result = await client.callTool({
 			name: "search",
-			arguments: { query: "nonexistent", projectDir: "/tmp/test-project" },
+			arguments: { query: "nonexistent", searchDir: "/tmp/test-project" },
 		});
 
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
@@ -295,7 +295,7 @@ describe("MCP protocol integration", () => {
 
 		await client.callTool({
 			name: "search",
-			arguments: { query: "handler", projectDir: "/tmp/test-project", path: "src/api" },
+			arguments: { query: "handler", searchDir: "/tmp/test-project", restrictToDir: "src/api" },
 		});
 
 		expect(mockSearch).toHaveBeenCalledWith("handler", expect.objectContaining({ pathFilter: "src/api" }));
@@ -306,7 +306,7 @@ describe("MCP protocol integration", () => {
 
 		await client.callTool({
 			name: "search",
-			arguments: { query: "handler", projectDir: "/tmp/test-project", limit: 5 },
+			arguments: { query: "handler", searchDir: "/tmp/test-project", limit: 5 },
 		});
 
 		expect(mockSearch).toHaveBeenCalledWith("handler", expect.objectContaining({ limit: 5 }));
@@ -317,7 +317,7 @@ describe("MCP protocol integration", () => {
 
 		await client.callTool({
 			name: "search",
-			arguments: { query: "test", projectDir: "/tmp/test-project", rebuild: true },
+			arguments: { query: "test", searchDir: "/tmp/test-project", rebuild: true },
 		});
 
 		expect(mockResetIndex).toHaveBeenCalled();
@@ -328,19 +328,19 @@ describe("MCP protocol integration", () => {
 
 		await client.callTool({
 			name: "search",
-			arguments: { query: "test", projectDir: "/tmp/test-project", rebuild: false },
+			arguments: { query: "test", searchDir: "/tmp/test-project", rebuild: false },
 		});
 
 		expect(mockResetIndex).not.toHaveBeenCalled();
 	});
 
-	it("accepts projectDir as a per-call override", async () => {
+	it("accepts searchDir as a per-call override", async () => {
 		mockSearch.mockResolvedValue([]);
 
-		// Should not throw — projectDir is accepted as a valid parameter
+		// Should not throw — searchDir is accepted as a valid parameter
 		const result = await client.callTool({
 			name: "search",
-			arguments: { query: "test", projectDir: "/tmp/other-project" },
+			arguments: { query: "test", searchDir: "/tmp/other-project" },
 		});
 
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
@@ -351,7 +351,7 @@ describe("MCP protocol integration", () => {
 	it("returns isError for empty query", async () => {
 		const result = await client.callTool({
 			name: "search",
-			arguments: { query: "", projectDir: "/tmp/test-project" },
+			arguments: { query: "", searchDir: "/tmp/test-project" },
 		});
 		expect(result.isError).toBe(true);
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
@@ -361,7 +361,7 @@ describe("MCP protocol integration", () => {
 	it("returns isError for whitespace-only query", async () => {
 		const result = await client.callTool({
 			name: "search",
-			arguments: { query: "   ", projectDir: "/tmp/test-project" },
+			arguments: { query: "   ", searchDir: "/tmp/test-project" },
 		});
 		expect(result.isError).toBe(true);
 	});
@@ -372,7 +372,7 @@ describe("MCP protocol integration", () => {
 
 		const result = await client.callTool({
 			name: "search",
-			arguments: { query: "test", projectDir: "/tmp/test-project" },
+			arguments: { query: "test", searchDir: "/tmp/test-project" },
 		});
 		expect(result.isError).toBe(true);
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
@@ -387,7 +387,7 @@ describe("MCP protocol integration", () => {
 
 		const result = await client.callTool({
 			name: "search",
-			arguments: { query: "test", projectDir: "/tmp/test-project" },
+			arguments: { query: "test", searchDir: "/tmp/test-project" },
 		});
 
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
@@ -400,7 +400,7 @@ describe("MCP protocol integration", () => {
 
 		const result = await client.callTool({
 			name: "search",
-			arguments: { query: "test", projectDir: "/tmp/test-project" },
+			arguments: { query: "test", searchDir: "/tmp/test-project" },
 		});
 		expect(result.isError).toBe(true);
 		const text = (result.content as Array<{ type: string; text: string }>)[0].text;
