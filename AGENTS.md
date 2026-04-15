@@ -20,7 +20,12 @@ This builds all packages in dependency order: tui → ai → agent → coding-ag
 
 ## Workspace Link Safety
 
-**Always run `npm install` from the monorepo root.** Running it inside `packages/telegram/` or any subdirectory causes npm to pull `@dreb/*` packages from the registry as stale tarballs instead of symlinking to the local workspace source. This produces silent, hard-to-debug failures (outdated agent definitions, old model resolution logic, etc.).
+npm v9 changed `install-links` to default `true`. This causes local workspace packages to be packed and installed as stale tarball copies instead of symlinked. When this happens you get silent, hard-to-debug failures because nested `node_modules/@dreb/*` directories contain outdated published code instead of your local workspace source.
+
+**How we made it safe:**
+- `.npmrc` at repo root sets `install-links=false`
+
+With this protection in place, `npm install` and `npm ci` will correctly symlink local workspace packages. (The `workspace:*` protocol would be even better, but it is currently broken in npm 11 — see npm/cli#8845.)
 
 Verify workspace links are healthy before declaring a build good:
 
@@ -28,11 +33,7 @@ Verify workspace links are healthy before declaring a build good:
 npm run verify-workspace-links
 ```
 
-If it reports stale packages, fix with:
-
-```bash
-rm -rf packages/*/node_modules/@dreb && npm install
-```
+If it reports stale packages, remove the stale directories and re-establish workspace symlinks locally.
 
 ## Release Protocol
 

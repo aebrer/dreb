@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/coding-agent",
-	"version": "2.6.0",
+	"version": "2.6.1",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"drebConfig": {
@@ -52,10 +52,10 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
-		"@dreb/agent-core": "^2.0.0",
-		"@dreb/ai": "^2.0.0",
-		"@dreb/semantic-search": "^2.0.0",
-		"@dreb/tui": "^2.0.0",
+		"@dreb/agent-core": "*",
+		"@dreb/ai": "*",
+		"@dreb/semantic-search": "*",
+		"@dreb/tui": "*",
 		"@huggingface/transformers": "^4.0.1",
 		"@mariozechner/jiti": "^2.6.2",
 		"@silvia-odwyer/photon-node": "^0.3.4",
