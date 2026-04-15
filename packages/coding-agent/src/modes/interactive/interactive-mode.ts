@@ -4749,16 +4749,9 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 			// Prune old backups
 			await pruneOldBackups(dreamContext.archivePath);
-
-			// Clean up dream temp dirs
-			cleanupDreamTmpDirs(allMemoryDirs);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			if (error instanceof Error && error.name === "AbortError") {
-				this.showError("Dream cancelled");
-			} else {
-				this.showError(`Dream failed: ${message}`);
-			}
+			this.showError(`Dream failed: ${message}`);
 		} finally {
 			// Always clean up
 			dreamLoader.stop();

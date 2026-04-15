@@ -592,16 +592,22 @@ describe("dream", () => {
 	});
 
 	describe("safeDirName", () => {
-		it("strips leading slash and replaces separators", () => {
-			expect(safeDirName("/home/user/.dreb/memory")).toBe("home-user-.dreb-memory");
+		it("encodes path separators collision-free", () => {
+			expect(safeDirName("/home/user/.dreb/memory")).toBe("_home_user_.dreb_memory");
 		});
 
-		it("replaces colons and backslashes", () => {
-			expect(safeDirName("C:\\Users\\test")).toBe("C--Users-test");
+		it("produces different names for paths differing only in dash vs slash", () => {
+			const a = safeDirName("/home/user/my-project/.dreb/memory");
+			const b = safeDirName("/home/user/my/project/.dreb/memory");
+			expect(a).not.toBe(b);
+		});
+
+		it("encodes colons and backslashes", () => {
+			expect(safeDirName("C:\\Users\\test")).toBe("C%3A%5CUsers%5Ctest");
 		});
 
 		it("handles paths without leading slash", () => {
-			expect(safeDirName("relative/path")).toBe("relative-path");
+			expect(safeDirName("relative/path")).toBe("relative_path");
 		});
 	});
 
@@ -625,37 +631,48 @@ describe("dream", () => {
 			expect(ctx.globalMemoryDir).toBe(join(homedir(), ".dreb", "memory"));
 		});
 
-		it("lastRunTimestamp is null when no marker file exists", async () => {
-			// resolveDreamContext reads ~/.dreb/memory/.dream-last-run — we can't
-			// easily redirect that without env var overrides. But we can verify the
-			// type contract and that it returns null OR a valid ISO timestamp string.
-			const mockSettingsManager = {
-				getDreamArchivePath: () => "/tmp/test-archive-no-marker",
-			} as unknown as SettingsManager;
+		it("lastRunTimestamp is null when marker file is absent (via override)", async () => {
+			const tempMemDir = mkdtempSync(join(tmpdir(), "dreb-dream-no-marker-ctx-"));
+			try {
+				const mockSettingsManager = {
+					getDreamArchivePath: () => "/tmp/test-archive-no-marker",
+				} as unknown as SettingsManager;
 
-			const ctx = await resolveDreamContext(mockSettingsManager);
-			if (ctx.lastRunTimestamp !== null) {
-				// If a marker file exists on this machine, it should be a valid timestamp
-				expect(new Date(ctx.lastRunTimestamp).toISOString()).toBe(ctx.lastRunTimestamp);
-			} else {
+				const ctx = await resolveDreamContext(mockSettingsManager, tempMemDir);
 				expect(ctx.lastRunTimestamp).toBeNull();
+			} finally {
+				rmSync(tempMemDir, { recursive: true, force: true });
 			}
 		});
 
-		it("reads lastRunTimestamp from marker file in temp dir", async () => {
-			// Create a temp dir with a known marker file to verify reading logic.
-			// resolveDreamContext hardcodes ~/.dreb/memory — so we test the underlying
-			// logic by writing a marker and reading it directly.
+		it("reads lastRunTimestamp from marker file via overrideGlobalMemDir", async () => {
 			const tempMemDir = mkdtempSync(join(tmpdir(), "dreb-dream-marker-test-"));
 			try {
 				const markerPath = join(tempMemDir, ".dream-last-run");
 				const knownTimestamp = "2026-04-10T12:00:00.000Z";
 				writeFileSync(markerPath, knownTimestamp, "utf-8");
 
-				// Verify readFileSync on the marker produces the expected content
-				const { readFileSync } = await import("node:fs");
-				const content = readFileSync(markerPath, "utf-8").trim();
-				expect(content).toBe(knownTimestamp);
+				const mockSettingsManager = {
+					getDreamArchivePath: () => "/tmp/test-archive",
+				} as unknown as SettingsManager;
+
+				const ctx = await resolveDreamContext(mockSettingsManager, tempMemDir);
+				expect(ctx.lastRunTimestamp).toBe(knownTimestamp);
+				expect(ctx.globalMemoryDir).toBe(tempMemDir);
+			} finally {
+				rmSync(tempMemDir, { recursive: true, force: true });
+			}
+		});
+
+		it("returns null lastRunTimestamp when no marker file exists", async () => {
+			const tempMemDir = mkdtempSync(join(tmpdir(), "dreb-dream-no-marker-test-"));
+			try {
+				const mockSettingsManager = {
+					getDreamArchivePath: () => "/tmp/test-archive",
+				} as unknown as SettingsManager;
+
+				const ctx = await resolveDreamContext(mockSettingsManager, tempMemDir);
+				expect(ctx.lastRunTimestamp).toBeNull();
 			} finally {
 				rmSync(tempMemDir, { recursive: true, force: true });
 			}

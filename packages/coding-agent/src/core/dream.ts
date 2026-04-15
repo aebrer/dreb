@@ -147,7 +147,11 @@ export function discoverAllProjectMemoryDirs(overrideSessionsDir?: string): stri
 		}
 		if (jsonlFiles.length === 0) continue;
 
-		const cwd = readSessionCwd(join(sessionSubDir, jsonlFiles[0]));
+		let cwd: string | undefined;
+		for (const f of jsonlFiles) {
+			cwd = readSessionCwd(join(sessionSubDir, f));
+			if (cwd) break;
+		}
 		if (!cwd) continue;
 
 		const memDir = join(cwd, ".dreb", "memory");
@@ -189,12 +193,15 @@ function discoverClaudeMemoryDirs(): string[] {
 // Context Resolution
 // =============================================================================
 
-export async function resolveDreamContext(settingsManager: SettingsManager): Promise<DreamContext> {
+export async function resolveDreamContext(
+	settingsManager: SettingsManager,
+	overrideGlobalMemDir?: string,
+): Promise<DreamContext> {
 	// Archive path from settings, or default
 	const archivePath = settingsManager.getDreamArchivePath();
 
 	// Global memory dir
-	const globalMemoryDir = join(homedir(), ".dreb", "memory");
+	const globalMemoryDir = overrideGlobalMemDir ?? join(homedir(), ".dreb", "memory");
 
 	// Last run timestamp
 	let lastRunTimestamp: string | null = null;
@@ -297,9 +304,9 @@ export function validateMemoryLinks(memoryDirs: string[]): LinkValidationResult 
 // Backup
 // =============================================================================
 
-/** Convert a filesystem path to a safe directory name (same encoding as session dirs). */
+/** Convert a filesystem path to a collision-resistant directory name for backup staging. */
 export function safeDirName(path: string): string {
-	return path.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
+	return encodeURIComponent(path).replace(/%2F/gi, "_");
 }
 
 /** Recursively count files and total size in a directory. */
