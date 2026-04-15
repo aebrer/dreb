@@ -43,6 +43,17 @@ import { BuddyManager, checkOllama } from "../../core/buddy/buddy-manager.js";
 import { Rarity, Stat } from "../../core/buddy/buddy-types.js";
 import { BuddyController } from "../../core/buddy/index.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
+import {
+	acquireDreamLock,
+	buildDreamPrompt,
+	cleanupDreamTmpDirs,
+	parseDreamCommand,
+	performDreamBackup,
+	pruneOldBackups,
+	resolveDreamContext,
+	validateArchivePath,
+	validateMemoryLinks,
+} from "../../core/dream.js";
 import type {
 	ExtensionContext,
 	ExtensionRunner,
@@ -59,6 +70,7 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
+import { resolveToCwd } from "../../core/tools/path-utils.js";
 import { abortBackgroundAgents, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.js";
@@ -400,6 +412,17 @@ export class InteractiveMode {
 					label: item.id,
 					description: item.provider,
 				}));
+			};
+		}
+
+		const dreamCommand = slashCommands.find((command) => command.name === "dream");
+		if (dreamCommand) {
+			dreamCommand.getArgumentCompletions = (prefix: string): AutocompleteItem[] | null => {
+				const subcommands = [
+					{ value: "backup", label: "backup", description: "Show or set the backup archive path" },
+				];
+				const filtered = prefix ? subcommands.filter((s) => s.value.startsWith(prefix.toLowerCase())) : subcommands;
+				return filtered.length > 0 ? filtered : null;
 			};
 		}
 
@@ -2174,6 +2197,11 @@ export class InteractiveMode {
 				const customInstructions = text.startsWith("/compact ") ? text.slice(9).trim() : undefined;
 				this.editor.setText("");
 				await this.handleCompactCommand(customInstructions);
+				return;
+			}
+			if (text === "/dream" || text.startsWith("/dream ")) {
+				this.editor.setText("");
+				await this.handleDreamCommand(text);
 				return;
 			}
 			if (text === "/reload") {
@@ -4594,6 +4622,153 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 		this.bashComponent = undefined;
 		this.ui.requestRender();
+	}
+
+	// =========================================================================
+	// Dream (memory consolidation) handler
+	// =========================================================================
+
+	private async handleDreamCommand(text: string): Promise<void> {
+		const command = parseDreamCommand(text);
+
+		switch (command.type) {
+			case "showBackup": {
+				const archivePath = this.settingsManager.getDreamArchivePath();
+				this.showStatus(`Dream backup path: ${archivePath}`);
+				return;
+			}
+			case "setBackup": {
+				try {
+					const absolutePath = resolveToCwd(command.path, process.cwd());
+					const context = await resolveDreamContext(this.settingsManager);
+					const allMemoryDirs = [
+						context.globalMemoryDir,
+						...context.projectMemoryDirs,
+						...context.claudeMemoryDirs,
+					];
+					validateArchivePath(absolutePath, allMemoryDirs);
+					this.settingsManager.setDreamArchivePath(absolutePath);
+					this.showStatus(`Dream backup path set to: ${absolutePath}`);
+				} catch (error) {
+					this.showError(`Invalid backup path: ${error instanceof Error ? error.message : String(error)}`);
+				}
+				return;
+			}
+			case "run": {
+				await this.executeDream();
+				return;
+			}
+		}
+	}
+
+	private async executeDream(): Promise<void> {
+		// Stop any existing loading animation
+		if (this.loadingAnimation) {
+			this.loadingAnimation.stop();
+			this.loadingAnimation = undefined;
+		}
+		this.statusContainer.clear();
+
+		let releaseLock: (() => void) | undefined;
+		let dreamContext: Awaited<ReturnType<typeof resolveDreamContext>> | undefined;
+
+		// Override escape to cancel
+		const originalOnEscape = this.defaultEditor.onEscape;
+		this.defaultEditor.onEscape = () => {
+			// User pressed escape — abort the dream
+			this.session.abort();
+		};
+
+		// Show loading spinner
+		this.chatContainer.addChild(new Spacer(1));
+		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
+		const dreamLoader = new Loader(
+			this.ui,
+			(spinner) => theme.fg("accent", spinner),
+			(text) => theme.fg("muted", text),
+			`Dreaming... ${cancelHint}`,
+		);
+		this.statusContainer.addChild(dreamLoader);
+		this.ui.requestRender();
+
+		try {
+			// Acquire lock
+			try {
+				releaseLock = await acquireDreamLock();
+			} catch (error) {
+				this.showError(`Cannot start dream: ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+
+			// Resolve context
+			dreamContext = await resolveDreamContext(this.settingsManager);
+
+			// Validate archive path
+			try {
+				const allMemoryDirs = [
+					dreamContext.globalMemoryDir,
+					...dreamContext.projectMemoryDirs,
+					...dreamContext.claudeMemoryDirs,
+				];
+				validateArchivePath(dreamContext.archivePath, allMemoryDirs);
+			} catch (error) {
+				this.showError(`Invalid archive path: ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+
+			// Perform backup
+			let backupResult: Awaited<ReturnType<typeof performDreamBackup>>;
+			try {
+				backupResult = await performDreamBackup(dreamContext);
+				if (!backupResult.verified) {
+					this.showError(
+						`Backup verification failed — aborting to protect your data. Check backup at: ${backupResult.backupPath}`,
+					);
+					return;
+				}
+			} catch (error) {
+				this.showError(`Backup failed: ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+
+			// Update loader text
+			dreamLoader.setText(`Consolidating memories... ${cancelHint}`);
+			this.ui.requestRender();
+
+			// Build prompt and inject into session
+			const prompt = buildDreamPrompt(dreamContext, backupResult);
+			await this.session.prompt(prompt);
+
+			// Post-consolidation: validate links
+			const allMemoryDirs = [dreamContext.globalMemoryDir, ...dreamContext.projectMemoryDirs];
+			const linkResult = validateMemoryLinks(allMemoryDirs);
+			if (!linkResult.valid) {
+				const broken = linkResult.brokenLinks.map((l) => `  ${l.indexFile}: ${l.pointer} → ${l.target}`).join("\n");
+				this.showWarning(`Broken memory links detected:\n${broken}`);
+			}
+
+			// Prune old backups
+			await pruneOldBackups(dreamContext.archivePath);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.showError(`Dream failed: ${message}`);
+		} finally {
+			// Always clean up
+			dreamLoader.stop();
+			this.statusContainer.clear();
+			this.defaultEditor.onEscape = originalOnEscape;
+			if (releaseLock) {
+				try {
+					releaseLock();
+				} catch {
+					/* ignore release errors */
+				}
+			}
+			// Clean up temp dirs on abort/crash too
+			if (dreamContext) {
+				cleanupDreamTmpDirs([dreamContext.globalMemoryDir, ...dreamContext.projectMemoryDirs]);
+			}
+		}
 	}
 
 	private async handleCompactCommand(customInstructions?: string): Promise<void> {

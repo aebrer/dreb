@@ -22,6 +22,28 @@ describe("path-utils", () => {
 			const result = expandPath(withNBSP);
 			expect(result).toBe("file name.txt");
 		});
+
+		it("should strip surrounding double quotes", () => {
+			const result = expandPath('"/mnt/c/path with spaces/file.txt"');
+			expect(result).toBe("/mnt/c/path with spaces/file.txt");
+		});
+
+		it("should strip surrounding single quotes", () => {
+			const result = expandPath("'/mnt/c/path with spaces/file.txt'");
+			expect(result).toBe("/mnt/c/path with spaces/file.txt");
+		});
+
+		it("should not strip mismatched quotes", () => {
+			const result = expandPath("'/mnt/c/path\"");
+			expect(result).toBe("'/mnt/c/path\"");
+		});
+
+		it("should handle quoted tilde paths", () => {
+			const result = expandPath('"~/Documents/my file.txt"');
+			expect(result).toContain("Documents/my file.txt");
+			expect(result).not.toContain('"');
+			expect(result).not.toContain("~");
+		});
 	});
 
 	describe("resolveToCwd", () => {

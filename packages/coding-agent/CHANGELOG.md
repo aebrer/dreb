@@ -18,6 +18,7 @@
 
 - Added skill system enhancements: `argument-hint` frontmatter field shown in `/` menu autocomplete, `user-invocable` field to hide skills from the `/` menu while keeping them available to the model, `disable-model-invocation` field to restrict skills to user-only invocation, and a dedicated `skill` tool for model-invocable skill execution with full content substitution (`$ARGUMENTS`, `$0`..`$N`, `$@`, `${@:N}`, `${DREB_SKILL_DIR}`, `${DREB_SESSION_ID}`) ([#7](https://github.com/aebrer/dreb/issues/7))
 - Added `sessionDir` setting support in global and project `settings.json` so session storage can be configured without passing `--session-dir` on every invocation ([#2598](https://github.com/badlogic/pi-mono/pull/2598) by [@smcllns](https://github.com/smcllns))
+- Added `/dream` memory consolidation command — backs up all memory directories, merges duplicates, scans session history for unrecorded patterns, prunes stale entries, and validates links. Uses tar.gz archives with retention policy (keep last 10), lockfile-based concurrency protection, and a 10-step LLM pipeline with explicit backup verification. Configurable archive path via `dream.archivePath` setting. ([#99](https://github.com/aebrer/dreb/issues/99))
 
 ### Fixed
 

@@ -1,8 +1,10 @@
+import { homedir } from "node:os";
 import type { Transport } from "@dreb/ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join, resolve } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
+import { expandPath } from "./tools/path-utils.js";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -95,6 +97,9 @@ export interface Settings {
 	markdown?: MarkdownSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	forbiddenCommands?: string[]; // Regex patterns for commands blocked by the forbidden-commands guard
+	dream?: {
+		archivePath?: string; // Custom archive location for dream backups (default: ~/.dreb/memory-archive/)
+	};
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -941,5 +946,20 @@ export class SettingsManager {
 
 	getForbiddenCommands(): string[] | undefined {
 		return this.settings.forbiddenCommands;
+	}
+
+	getDreamArchivePath(): string {
+		const configured = this.settings.dream?.archivePath;
+		if (configured) {
+			return resolve(expandPath(configured));
+		}
+		return join(homedir(), ".dreb", "memory-archive");
+	}
+
+	setDreamArchivePath(path: string): void {
+		if (!this.globalSettings.dream) this.globalSettings.dream = {};
+		this.globalSettings.dream.archivePath = path;
+		this.markModified("dream", "archivePath");
+		this.save();
 	}
 }
