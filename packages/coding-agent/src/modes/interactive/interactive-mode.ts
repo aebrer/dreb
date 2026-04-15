@@ -70,7 +70,7 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
-import { expandPath } from "../../core/tools/path-utils.js";
+import { resolveToCwd } from "../../core/tools/path-utils.js";
 import { abortBackgroundAgents, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.js";
@@ -4639,10 +4639,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 			}
 			case "setBackup": {
 				try {
-					const expandedPath = expandPath(command.path);
-					const absolutePath = path.isAbsolute(expandedPath)
-						? expandedPath
-						: path.resolve(process.cwd(), expandedPath);
+					const absolutePath = resolveToCwd(command.path, process.cwd());
 					const context = await resolveDreamContext(this.settingsManager);
 					const allMemoryDirs = [
 						context.globalMemoryDir,

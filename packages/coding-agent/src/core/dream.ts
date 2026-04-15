@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
 	closeSync,
@@ -16,6 +16,7 @@ import {
 import { cp, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import lockfile from "proper-lockfile";
 import { getSessionsDir } from "../config.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -93,11 +94,11 @@ export function parseDreamCommand(text: string): DreamCommand {
  * Uses synchronous low-level reads to avoid loading entire files.
  */
 function readSessionCwd(filePath: string): string | undefined {
+	let fd: number | undefined;
 	try {
-		const fd = openSync(filePath, "r");
+		fd = openSync(filePath, "r");
 		const buffer = Buffer.alloc(4096);
 		const bytesRead = readSync(fd, buffer, 0, 4096, 0);
-		closeSync(fd);
 		const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
 		if (!firstLine) return undefined;
 		const header = JSON.parse(firstLine);
@@ -106,12 +107,20 @@ function readSessionCwd(filePath: string): string | undefined {
 		}
 	} catch {
 		// Corrupt or unreadable — skip
+	} finally {
+		if (fd !== undefined) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Best-effort close
+			}
+		}
 	}
 	return undefined;
 }
 
-export function discoverAllProjectMemoryDirs(): string[] {
-	const sessionsDir = getSessionsDir();
+export function discoverAllProjectMemoryDirs(overrideSessionsDir?: string): string[] {
+	const sessionsDir = overrideSessionsDir ?? getSessionsDir();
 	if (!existsSync(sessionsDir)) return [];
 
 	let dirEntries: string[];
@@ -393,7 +402,8 @@ export async function performDreamBackup(context: DreamContext): Promise<BackupR
 		}
 
 		// Create .tar.gz archive from staging directory
-		execFileSync("tar", ["czf", backupPath, "-C", dirname(stagingDir), basename(stagingDir)]);
+		const execFileAsync = promisify(execFile);
+		await execFileAsync("tar", ["czf", backupPath, "-C", dirname(stagingDir), basename(stagingDir)]);
 	} finally {
 		// Clean up staging directory
 		try {
@@ -565,8 +575,8 @@ Write the current ISO timestamp to ${dreamLastRunPath}
 // Locking
 // =============================================================================
 
-export async function acquireDreamLock(): Promise<() => void> {
-	const memDir = join(homedir(), ".dreb", "memory");
+export async function acquireDreamLock(overrideMemDir?: string): Promise<() => void> {
+	const memDir = overrideMemDir ?? join(homedir(), ".dreb", "memory");
 	const lockPath = join(memDir, DREAM_LOCK_FILE);
 
 	// Ensure directory and lock file exist (proper-lockfile requires the file to exist)
