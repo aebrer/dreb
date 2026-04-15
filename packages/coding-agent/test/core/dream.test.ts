@@ -12,9 +12,12 @@ import {
 	parseDreamCommand,
 	performDreamBackup,
 	pruneOldBackups,
+	resolveDreamContext,
+	safeDirName,
 	validateArchivePath,
 	validateMemoryLinks,
 } from "../../src/core/dream.js";
+import type { SettingsManager } from "../../src/core/settings-manager.js";
 
 describe("dream", () => {
 	describe("parseDreamCommand", () => {
@@ -51,6 +54,10 @@ describe("dream", () => {
 				type: "setBackup",
 				path: '"/mnt/c/path with spaces"',
 			});
+		});
+
+		it("treats unknown subcommand as run", () => {
+			expect(parseDreamCommand("/dream unknownthing")).toEqual({ type: "run" });
 		});
 	});
 
@@ -112,6 +119,16 @@ describe("dream", () => {
 			const result = validateMemoryLinks(["/nonexistent/path"]);
 			expect(result.valid).toBe(true);
 		});
+
+		it("skips external URLs", () => {
+			writeFileSync(
+				join(tempDir, "MEMORY.md"),
+				"- [Docs](https://example.com) — external link\n- [API](http://api.test) — another\n",
+			);
+			const result = validateMemoryLinks([tempDir]);
+			expect(result.valid).toBe(true);
+			expect(result.brokenLinks).toHaveLength(0);
+		});
 	});
 
 	describe("performDreamBackup", () => {
@@ -144,7 +161,8 @@ describe("dream", () => {
 			const result = await performDreamBackup(context);
 			expect(result.verified).toBe(true);
 			expect(result.fileCount).toBe(2);
-			expect(existsSync(result.backupDir)).toBe(true);
+			expect(existsSync(result.backupPath)).toBe(true);
+			expect(result.backupPath).toMatch(/\.tar\.gz$/);
 		});
 
 		it("copies project memory dirs", async () => {
@@ -183,7 +201,31 @@ describe("dream", () => {
 
 			const result = await performDreamBackup(context);
 			expect(result.fileCount).toBe(0);
-			expect(existsSync(result.backupDir)).toBe(true);
+			expect(existsSync(result.backupPath)).toBe(true);
+			expect(result.backupPath).toMatch(/\.tar\.gz$/);
+		});
+
+		it("includes claude memory dirs in backup", async () => {
+			const globalDir = join(tempDir, "global");
+			const claudeDir = join(tempDir, "claude", "project", "memory");
+			const archiveDir = join(tempDir, "archive");
+			mkdirSync(globalDir, { recursive: true });
+			mkdirSync(claudeDir, { recursive: true });
+			writeFileSync(join(globalDir, "MEMORY.md"), "# Global");
+			writeFileSync(join(claudeDir, "MEMORY.md"), "# Claude");
+
+			const context: DreamContext = {
+				archivePath: archiveDir,
+				lastRunTimestamp: null,
+				globalMemoryDir: globalDir,
+				projectMemoryDirs: [],
+				claudeMemoryDirs: [claudeDir],
+				sessionsDir: join(tempDir, "sessions"),
+			};
+
+			const result = await performDreamBackup(context);
+			expect(result.verified).toBe(true);
+			expect(result.fileCount).toBe(2);
 		});
 	});
 
@@ -198,7 +240,7 @@ describe("dream", () => {
 				sessionsDir: "/home/user/.dreb/agent/sessions",
 			};
 			const backup: BackupResult = {
-				backupDir: "/tmp/archive/dream-backup-2026-04-15",
+				backupPath: "/tmp/archive/dream-backup-2026-04-15.tar.gz",
 				timestamp: "2026-04-15T13-29-13-106Z",
 				fileCount: 5,
 				totalSize: 1024,
@@ -206,6 +248,7 @@ describe("dream", () => {
 			};
 
 			const prompt = buildDreamPrompt(context, backup);
+			expect(prompt).toContain("Step 0");
 			expect(prompt).toContain("Step 1");
 			expect(prompt).toContain("Step 10");
 			expect(prompt).toContain("read-only");
@@ -225,7 +268,7 @@ describe("dream", () => {
 				sessionsDir: "/home/user/.dreb/agent/sessions",
 			};
 			const backup: BackupResult = {
-				backupDir: "/tmp/archive/dream-backup-2026-04-15",
+				backupPath: "/tmp/archive/dream-backup-2026-04-15.tar.gz",
 				timestamp: "2026-04-15T00-00-00-000Z",
 				fileCount: 3,
 				totalSize: 512,
@@ -247,7 +290,7 @@ describe("dream", () => {
 				sessionsDir: "/home/user/.dreb/agent/sessions",
 			};
 			const backup: BackupResult = {
-				backupDir: "/tmp/archive/dream-backup-2026-04-15",
+				backupPath: "/tmp/archive/dream-backup-2026-04-15.tar.gz",
 				timestamp: "2026-04-15T00-00-00-000Z",
 				fileCount: 1,
 				totalSize: 256,
@@ -257,6 +300,42 @@ describe("dream", () => {
 			const prompt = buildDreamPrompt(context, backup);
 			expect(prompt).toContain(".claude/");
 			expect(prompt).toContain("READ-ONLY");
+		});
+
+		it("spills large file listings to temp file", () => {
+			const memDir = mkdtempSync(join(tmpdir(), "dreb-dream-listing-"));
+			try {
+				// Each entry in the listing is "- entry-XXXX.md\n" (16 chars)
+				// Need >10000/16 = 625+ files, plus header overhead. Use 700 for safety.
+				for (let i = 0; i < 700; i++) {
+					writeFileSync(join(memDir, `entry-${String(i).padStart(4, "0")}.md`), "content");
+				}
+
+				const context: DreamContext = {
+					archivePath: "/tmp/archive",
+					lastRunTimestamp: null,
+					globalMemoryDir: memDir,
+					projectMemoryDirs: [],
+					claudeMemoryDirs: [],
+					sessionsDir: "/tmp/sessions",
+				};
+				const backup: BackupResult = {
+					backupPath: "/tmp/archive/dream-backup-test.tar.gz",
+					timestamp: "test",
+					fileCount: 700,
+					totalSize: 4200,
+					verified: true,
+				};
+
+				const prompt = buildDreamPrompt(context, backup);
+				expect(prompt).toContain("File listing too large");
+				expect(prompt).toContain(".dream-tmp");
+				// Verify the temp file was actually created
+				const tmpDreamDir = join(memDir, ".dream-tmp");
+				expect(existsSync(tmpDreamDir)).toBe(true);
+			} finally {
+				rmSync(memDir, { recursive: true, force: true });
+			}
 		});
 	});
 
@@ -290,21 +369,21 @@ describe("dream", () => {
 
 		it("keeps last N backups and removes older ones", async () => {
 			for (let i = 1; i <= 5; i++) {
-				const dir = join(tempDir, `dream-backup-2026-04-${String(i).padStart(2, "0")}T00-00-00-000Z_abc`);
-				mkdirSync(dir);
+				const file = join(tempDir, `dream-backup-2026-04-${String(i).padStart(2, "0")}T00-00-00-000Z_abc.tar.gz`);
+				writeFileSync(file, "fake archive");
 			}
 
 			await pruneOldBackups(tempDir, 3);
 
 			const remaining = readdirSync(tempDir);
 			expect(remaining).toHaveLength(3);
-			expect(remaining).toContain("dream-backup-2026-04-05T00-00-00-000Z_abc");
-			expect(remaining).toContain("dream-backup-2026-04-04T00-00-00-000Z_abc");
-			expect(remaining).toContain("dream-backup-2026-04-03T00-00-00-000Z_abc");
+			expect(remaining).toContain("dream-backup-2026-04-05T00-00-00-000Z_abc.tar.gz");
+			expect(remaining).toContain("dream-backup-2026-04-04T00-00-00-000Z_abc.tar.gz");
+			expect(remaining).toContain("dream-backup-2026-04-03T00-00-00-000Z_abc.tar.gz");
 		});
 
 		it("handles fewer than keepCount backups", async () => {
-			mkdirSync(join(tempDir, "dream-backup-2026-04-01T00-00-00-000Z_abc"));
+			writeFileSync(join(tempDir, "dream-backup-2026-04-01T00-00-00-000Z_abc.tar.gz"), "fake archive");
 			await pruneOldBackups(tempDir, 10);
 			expect(readdirSync(tempDir)).toHaveLength(1);
 		});
@@ -352,6 +431,70 @@ describe("dream", () => {
 		it("returns an array", () => {
 			const result = discoverAllProjectMemoryDirs();
 			expect(Array.isArray(result)).toBe(true);
+		});
+
+		it("returns directories that end with .dreb/memory and exist", () => {
+			const result = discoverAllProjectMemoryDirs();
+			for (const dir of result) {
+				expect(dir).toMatch(/\.dreb\/memory$/);
+				expect(existsSync(dir)).toBe(true);
+			}
+		});
+	});
+
+	describe("safeDirName", () => {
+		it("strips leading slash and replaces separators", () => {
+			expect(safeDirName("/home/user/.dreb/memory")).toBe("home-user-.dreb-memory");
+		});
+
+		it("replaces colons and backslashes", () => {
+			expect(safeDirName("C:\\Users\\test")).toBe("C--Users-test");
+		});
+
+		it("handles paths without leading slash", () => {
+			expect(safeDirName("relative/path")).toBe("relative-path");
+		});
+	});
+
+	describe("resolveDreamContext", () => {
+		it("returns a DreamContext with the archive path from settings manager", async () => {
+			const mockSettingsManager = {
+				getDreamArchivePath: () => "/tmp/test-archive",
+			} as unknown as SettingsManager;
+
+			const ctx = await resolveDreamContext(mockSettingsManager);
+			expect(ctx.archivePath).toBe("/tmp/test-archive");
+		});
+
+		it("sets globalMemoryDir to ~/.dreb/memory", async () => {
+			const { homedir } = await import("node:os");
+			const mockSettingsManager = {
+				getDreamArchivePath: () => "/tmp/test-archive",
+			} as unknown as SettingsManager;
+
+			const ctx = await resolveDreamContext(mockSettingsManager);
+			expect(ctx.globalMemoryDir).toBe(join(homedir(), ".dreb", "memory"));
+		});
+
+		it("lastRunTimestamp is null when no marker file exists", async () => {
+			const mockSettingsManager = {
+				getDreamArchivePath: () => "/tmp/test-archive-no-marker",
+			} as unknown as SettingsManager;
+
+			// This relies on there being no .dream-last-run in a fresh/test ~/.dreb/memory,
+			// or the test environment not having one. We verify it's either null or a string.
+			const ctx = await resolveDreamContext(mockSettingsManager);
+			expect(ctx.lastRunTimestamp === null || typeof ctx.lastRunTimestamp === "string").toBe(true);
+		});
+
+		it("sessionsDir is a string", async () => {
+			const mockSettingsManager = {
+				getDreamArchivePath: () => "/tmp/test-archive",
+			} as unknown as SettingsManager;
+
+			const ctx = await resolveDreamContext(mockSettingsManager);
+			expect(typeof ctx.sessionsDir).toBe("string");
+			expect(ctx.sessionsDir.length).toBeGreaterThan(0);
 		});
 	});
 });

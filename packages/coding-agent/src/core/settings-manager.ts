@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
+import { expandPath } from "./tools/path-utils.js";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -950,12 +951,7 @@ export class SettingsManager {
 	getDreamArchivePath(): string {
 		const configured = this.settings.dream?.archivePath;
 		if (configured) {
-			const expanded = configured.startsWith("~/")
-				? join(homedir(), configured.slice(2))
-				: configured === "~"
-					? homedir()
-					: configured;
-			return resolve(expanded);
+			return resolve(expandPath(configured));
 		}
 		return join(homedir(), ".dreb", "memory-archive");
 	}

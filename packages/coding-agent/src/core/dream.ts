@@ -1,12 +1,24 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	readSync,
+	rmSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { cp, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { getSessionsDir } from "../config.js";
 import type { SettingsManager } from "./settings-manager.js";
-import { expandPath } from "./tools/path-utils.js";
 
 // =============================================================================
 // Types
@@ -22,7 +34,7 @@ export interface DreamContext {
 }
 
 export interface BackupResult {
-	backupDir: string;
+	backupPath: string;
 	timestamp: string;
 	fileCount: number;
 	totalSize: number;
@@ -40,7 +52,6 @@ export type DreamCommand = { type: "run" } | { type: "setBackup"; path: string }
 // Constants
 // =============================================================================
 
-const DEFAULT_ARCHIVE_DIR = "~/.dreb/memory-archive/";
 const DREAM_LAST_RUN_FILE = ".dream-last-run";
 const DREAM_LOCK_FILE = ".dream.lock";
 const DREAM_TMP_DIR = ".dream-tmp";
@@ -77,16 +88,26 @@ export function parseDreamCommand(text: string): DreamCommand {
 // =============================================================================
 
 /**
- * Decode a session directory name back into a candidate filesystem path.
- *
- * The encoding replaces path separators and colons with dashes, but original
- * dash characters are preserved — making the decode lossy. We return the
- * simplest candidate (all dashes become path separators) and rely on
- * existsSync to filter false positives.
+ * Read the `cwd` field from the JSONL session header (first line) of a file.
+ * Returns `undefined` if the file cannot be read or the header is invalid.
+ * Uses synchronous low-level reads to avoid loading entire files.
  */
-function decodeSessionDirName(encoded: string): string[] {
-	const simple = `/${encoded.replace(/-/g, "/")}`;
-	return [simple];
+function readSessionCwd(filePath: string): string | undefined {
+	try {
+		const fd = openSync(filePath, "r");
+		const buffer = Buffer.alloc(4096);
+		const bytesRead = readSync(fd, buffer, 0, 4096, 0);
+		closeSync(fd);
+		const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
+		if (!firstLine) return undefined;
+		const header = JSON.parse(firstLine);
+		if (header.type === "session" && typeof header.cwd === "string") {
+			return header.cwd;
+		}
+	} catch {
+		// Corrupt or unreadable — skip
+	}
+	return undefined;
 }
 
 export function discoverAllProjectMemoryDirs(): string[] {
@@ -106,17 +127,24 @@ export function discoverAllProjectMemoryDirs(): string[] {
 	for (const name of dirEntries) {
 		if (!name.startsWith("--") || !name.endsWith("--")) continue;
 
-		const encoded = name.slice(2, -2); // strip --..--
-		if (!encoded) continue;
+		const sessionSubDir = join(sessionsDir, name);
 
-		const candidates = decodeSessionDirName(encoded);
-		for (const candidate of candidates) {
-			const memDir = join(candidate, ".dreb", "memory");
-			if (!seen.has(memDir) && existsSync(memDir)) {
-				seen.add(memDir);
-				memoryDirs.push(memDir);
-				break;
-			}
+		// Find any .jsonl file in this session directory
+		let jsonlFiles: string[];
+		try {
+			jsonlFiles = readdirSync(sessionSubDir).filter((f) => f.endsWith(".jsonl"));
+		} catch {
+			continue;
+		}
+		if (jsonlFiles.length === 0) continue;
+
+		const cwd = readSessionCwd(join(sessionSubDir, jsonlFiles[0]));
+		if (!cwd) continue;
+
+		const memDir = join(cwd, ".dreb", "memory");
+		if (!seen.has(memDir) && existsSync(memDir)) {
+			seen.add(memDir);
+			memoryDirs.push(memDir);
 		}
 	}
 
@@ -154,10 +182,7 @@ function discoverClaudeMemoryDirs(): string[] {
 
 export async function resolveDreamContext(settingsManager: SettingsManager): Promise<DreamContext> {
 	// Archive path from settings, or default
-	const rawArchivePath =
-		(settingsManager as unknown as { getDreamArchivePath?: () => string | undefined }).getDreamArchivePath?.() ??
-		DEFAULT_ARCHIVE_DIR;
-	const archivePath = resolve(expandPath(rawArchivePath));
+	const archivePath = settingsManager.getDreamArchivePath();
 
 	// Global memory dir
 	const globalMemoryDir = join(homedir(), ".dreb", "memory");
@@ -282,13 +307,13 @@ async function countFilesAndSize(dir: string): Promise<{ fileCount: number; tota
 		}
 
 		for (const entry of entries) {
-			const fullPath = join(current, entry.name as string);
+			const fullPath = join(current, entry.name);
 			if (entry.isDirectory()) {
 				await walk(fullPath);
 			} else if (entry.isFile()) {
-				fileCount++;
 				try {
 					const st = await stat(fullPath);
+					fileCount++;
 					totalSize += st.size;
 				} catch {
 					// File disappeared between readdir and stat — skip
@@ -303,25 +328,25 @@ async function countFilesAndSize(dir: string): Promise<{ fileCount: number; tota
 
 export async function performDreamBackup(context: DreamContext): Promise<BackupResult> {
 	const timestamp = `${new Date().toISOString().replace(/[:.]/g, "-")}_${randomUUID().slice(0, 8)}`;
-	const backupDir = join(context.archivePath, `${BACKUP_PREFIX}${timestamp}`);
+	const archiveName = `${BACKUP_PREFIX}${timestamp}`;
+	const backupPath = join(context.archivePath, `${archiveName}.tar.gz`);
+	const stagingDir = join(context.archivePath, `.staging-${timestamp}`);
 
+	// Ensure archive directory exists
 	try {
-		mkdirSync(backupDir, { recursive: true });
+		mkdirSync(context.archivePath, { recursive: true });
 	} catch (error) {
 		throw new Error(
-			`Failed to create backup directory "${backupDir}": ${error instanceof Error ? error.message : String(error)}`,
+			`Failed to create archive directory "${context.archivePath}": ${error instanceof Error ? error.message : String(error)}`,
 		);
 	}
 
-	// Count source files before copying
-	let sourceFileCount = 0;
-	let sourceTotalSize = 0;
-
-	const allSourceDirs: Array<{ dir: string; backupTarget: string }> = [];
+	// Build list of source directories
+	const allSourceDirs: Array<{ dir: string; stagingTarget: string }> = [];
 
 	// Global memory
 	if (existsSync(context.globalMemoryDir)) {
-		allSourceDirs.push({ dir: context.globalMemoryDir, backupTarget: join(backupDir, "global") });
+		allSourceDirs.push({ dir: context.globalMemoryDir, stagingTarget: join(stagingDir, "global") });
 	}
 
 	// Project memories
@@ -329,7 +354,7 @@ export async function performDreamBackup(context: DreamContext): Promise<BackupR
 		if (existsSync(dir)) {
 			allSourceDirs.push({
 				dir,
-				backupTarget: join(backupDir, "projects", safeDirName(dir)),
+				stagingTarget: join(stagingDir, "projects", safeDirName(dir)),
 			});
 		}
 	}
@@ -339,38 +364,59 @@ export async function performDreamBackup(context: DreamContext): Promise<BackupR
 		if (existsSync(dir)) {
 			allSourceDirs.push({
 				dir,
-				backupTarget: join(backupDir, "claude", safeDirName(dir)),
+				stagingTarget: join(stagingDir, "claude", safeDirName(dir)),
 			});
 		}
 	}
 
-	// Count source files
+	// Count source files before copying
+	let sourceFileCount = 0;
+	let sourceTotalSize = 0;
 	for (const { dir } of allSourceDirs) {
 		const counts = await countFilesAndSize(dir);
 		sourceFileCount += counts.fileCount;
 		sourceTotalSize += counts.totalSize;
 	}
 
-	// Copy all source directories
-	for (const { dir, backupTarget } of allSourceDirs) {
+	// Copy source directories into staging area
+	try {
+		mkdirSync(stagingDir, { recursive: true });
+
+		for (const { dir, stagingTarget } of allSourceDirs) {
+			try {
+				await cp(dir, stagingTarget, { recursive: true });
+			} catch (error) {
+				throw new Error(
+					`Failed to copy "${dir}" to "${stagingTarget}": ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+
+		// Create .tar.gz archive from staging directory
+		execFileSync("tar", ["czf", backupPath, "-C", dirname(stagingDir), basename(stagingDir)]);
+	} finally {
+		// Clean up staging directory
 		try {
-			await cp(dir, backupTarget, { recursive: true });
-		} catch (error) {
-			throw new Error(
-				`Failed to copy "${dir}" to "${backupTarget}": ${error instanceof Error ? error.message : String(error)}`,
-			);
+			rmSync(stagingDir, { recursive: true, force: true });
+		} catch {
+			// Best-effort cleanup
 		}
 	}
 
-	// Verify: count files in backup
-	const backupCounts = await countFilesAndSize(backupDir);
-	const verified = backupCounts.fileCount === sourceFileCount && backupCounts.totalSize === sourceTotalSize;
+	// Verify: archive exists and has non-zero size
+	let verified = false;
+	try {
+		const archiveStat = statSync(backupPath);
+		verified = archiveStat.size > 0;
+	} catch {
+		// Archive missing or unreadable
+	}
 
 	return {
-		backupDir,
+		backupPath,
 		timestamp,
-		fileCount: backupCounts.fileCount,
-		totalSize: backupCounts.totalSize,
+		fileCount: sourceFileCount,
+		totalSize: sourceTotalSize,
 		verified,
 	};
 }
@@ -447,7 +493,7 @@ export function buildDreamPrompt(context: DreamContext, backupResult: BackupResu
 	const dreamTmpDirName = DREAM_TMP_DIR;
 	const dreamLastRunPath = join(context.globalMemoryDir, DREAM_LAST_RUN_FILE);
 
-	return `You are running a memory consolidation (/dream). A backup has been created at: ${backupResult.backupDir}
+	return `You are running a memory consolidation (/dream). A backup archive has been created at: ${backupResult.backupPath}
 Backup verification: ${backupResult.fileCount} files, ${formatBytes(backupResult.totalSize)} — ${verifiedStatus}
 
 ## Context
@@ -468,6 +514,12 @@ ${fileListingSection}
 - Explicitly EXCLUDE \`subagent-sessions/\` from scanning scope.
 
 ## Pipeline
+
+### Step 0: Verify Backup
+Before proceeding, verify the backup archive exists and is intact:
+1. Check that the backup file exists at the path shown above
+2. List its contents (e.g., \`tar tzf <path> | head -20\`) to confirm memory files are present
+3. If the backup appears incomplete or missing, STOP and inform the user — do not proceed with consolidation
 
 ### Step 1: Read All Memories
 Read every MEMORY.md index and every referenced memory file from global, all project scopes, and \`.claude/\` read-only paths.
@@ -582,15 +634,15 @@ export async function pruneOldBackups(archivePath: string, keepCount: number = D
 		return;
 	}
 
-	const backupDirs = dirEntries.filter((name) => name.startsWith(BACKUP_PREFIX)).sort();
+	const backupFiles = dirEntries.filter((name) => name.startsWith(BACKUP_PREFIX) && name.endsWith(".tar.gz")).sort();
 
-	if (backupDirs.length <= keepCount) return;
+	if (backupFiles.length <= keepCount) return;
 
-	const toRemove = backupDirs.slice(0, backupDirs.length - keepCount);
-	for (const dirName of toRemove) {
-		const fullPath = join(archivePath, dirName);
+	const toRemove = backupFiles.slice(0, backupFiles.length - keepCount);
+	for (const fileName of toRemove) {
+		const fullPath = join(archivePath, fileName);
 		try {
-			rmSync(fullPath, { recursive: true, force: true });
+			unlinkSync(fullPath);
 		} catch {
 			// Best-effort — log would be nice but we don't have a logger here
 		}

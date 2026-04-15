@@ -2200,9 +2200,8 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/dream" || text.startsWith("/dream ")) {
-				const args = text.startsWith("/dream ") ? text.slice(7).trim() : undefined;
 				this.editor.setText("");
-				await this.handleDreamCommand(args);
+				await this.handleDreamCommand(text);
 				return;
 			}
 			if (text === "/reload") {
@@ -4629,8 +4628,8 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 	// Dream (memory consolidation) handler
 	// =========================================================================
 
-	private async handleDreamCommand(args?: string): Promise<void> {
-		const command = parseDreamCommand(args ? `/dream ${args}` : "/dream");
+	private async handleDreamCommand(text: string): Promise<void> {
+		const command = parseDreamCommand(text);
 
 		switch (command.type) {
 			case "showBackup": {
@@ -4725,9 +4724,10 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 			try {
 				backupResult = await performDreamBackup(dreamContext);
 				if (!backupResult.verified) {
-					this.showWarning(
-						`Backup verification failed — file counts may not match. Backup at: ${backupResult.backupDir}`,
+					this.showError(
+						`Backup verification failed — aborting to protect your data. Check backup at: ${backupResult.backupPath}`,
 					);
+					return;
 				}
 			} catch (error) {
 				this.showError(`Backup failed: ${error instanceof Error ? error.message : String(error)}`);
