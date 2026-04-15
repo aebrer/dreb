@@ -466,7 +466,13 @@ export function buildDreamPrompt(context: DreamContext, backupResult: BackupResu
 		try {
 			const entries = readdirSync(dir);
 			for (const entry of entries) {
-				if (entry === DREAM_TMP_DIR || entry === DREAM_LOCK_FILE || entry === DREAM_LAST_RUN_FILE) continue;
+				if (
+					entry === DREAM_TMP_DIR ||
+					entry === DREAM_LOCK_FILE ||
+					entry === `${DREAM_LOCK_FILE}.lock` ||
+					entry === DREAM_LAST_RUN_FILE
+				)
+					continue;
 				fileListing += `- ${entry}\n`;
 			}
 		} catch {
@@ -528,6 +534,7 @@ ${fileListingSection}
 ## HARD CONSTRAINTS
 - The \`.claude/\` memory directories are read-only compatibility imports. Do NOT modify, delete, or rewrite any files under \`.claude/\` paths. Only \`~/.dreb/memory/\` and \`<project>/.dreb/memory/\` are writable.
 - NEVER remove session JSONL data files.
+- NEVER delete or modify \`.dream.lock\`, \`.dream.lock.lock\`, or \`.dream-last-run\` files — these are managed by the dream infrastructure, not by you.
 - Explicitly EXCLUDE \`subagent-sessions/\` from scanning scope.
 
 ## Pipeline
