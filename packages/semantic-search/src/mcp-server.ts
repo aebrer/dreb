@@ -4,7 +4,7 @@
  * Exposes the SearchEngine as a single "search" tool over the Model Context Protocol,
  * enabling any MCP-compatible client to run semantic codebase queries.
  *
- * The server defaults to using its CWD as the project directory. Claude Code
+ * The server defaults to using its CWD as the search directory. Claude Code
  * launches MCP servers with CWD set to the project root, so no configuration
  * is needed for typical per-project usage.
  */
@@ -32,15 +32,18 @@ const SEARCH_TOOL = {
 		type: "object" as const,
 		properties: {
 			query: { type: "string", description: "Search query (natural language, identifier, or path)" },
-			projectDir: {
+			searchDir: {
 				type: "string",
-				description: "Absolute path to the project directory to search. Use your current working directory.",
+				description: "Directory to index and search. This controls which directory gets indexed.",
 			},
-			path: { type: "string", description: "Restrict search to files under this path" },
+			restrictToDir: {
+				type: "string",
+				description: "Restrict results to files under this path (filters the already-built index).",
+			},
 			limit: { type: "number", description: "Maximum results to return (default: 20)" },
 			rebuild: { type: "boolean", description: "Force index rebuild (default: false)" },
 		},
-		required: ["query", "projectDir"],
+		required: ["query", "searchDir"],
 	},
 };
 
@@ -67,11 +70,11 @@ function getSearchEngine(projectRoot: string): SearchEngine {
 /**
  * Create an MCP server instance configured with the semantic search tool.
  *
- * @param defaultProjectDir - Default project directory for searches. Used when
- *   the client doesn't specify `projectDir` in the tool call. Typically the
+ * @param defaultSearchDir - Default directory to index and search. Used when
+ *   the client doesn't specify `searchDir` in the tool call. Typically the
  *   server's CWD, which Claude Code sets to the project root.
  */
-export function createMcpServer(defaultProjectDir: string): Server {
+export function createMcpServer(defaultSearchDir: string): Server {
 	const server = new Server(
 		{ name: "semantic-search", version: packageVersion },
 		{ capabilities: { tools: {}, logging: {} } },
@@ -91,15 +94,15 @@ export function createMcpServer(defaultProjectDir: string): Server {
 
 		const args = (request.params.arguments ?? {}) as {
 			query?: string;
-			projectDir?: string;
-			path?: string;
+			searchDir?: string;
+			restrictToDir?: string;
 			limit?: number;
 			rebuild?: boolean;
 		};
-		const { query, path: searchPath, rebuild = false } = args;
+		const { query, restrictToDir: pathFilter, rebuild = false } = args;
 		const limit = typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : 20;
 
-		const projectDir = args.projectDir ? resolve(args.projectDir) : defaultProjectDir;
+		const searchDir = args.searchDir ? resolve(args.searchDir) : defaultSearchDir;
 
 		if (!SearchEngine.isAvailable()) {
 			return {
@@ -121,7 +124,7 @@ export function createMcpServer(defaultProjectDir: string): Server {
 		}
 
 		try {
-			const engine = getSearchEngine(projectDir);
+			const engine = getSearchEngine(searchDir);
 
 			if (rebuild) {
 				await engine.resetIndex();
@@ -130,7 +133,7 @@ export function createMcpServer(defaultProjectDir: string): Server {
 			// Send progress via logging messages
 			const results = await engine.search(query, {
 				limit,
-				pathFilter: searchPath,
+				pathFilter: pathFilter,
 				onProgress: (phase, current, total) => {
 					server
 						.sendLoggingMessage({
@@ -174,8 +177,8 @@ export function createMcpServer(defaultProjectDir: string): Server {
  * Create and start an MCP server over stdio.
  * This blocks until the transport is closed.
  */
-export async function startServer(projectDir: string): Promise<void> {
-	const server = createMcpServer(projectDir);
+export async function startServer(searchDir: string): Promise<void> {
+	const server = createMcpServer(searchDir);
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
 }

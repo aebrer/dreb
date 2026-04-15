@@ -24,10 +24,18 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const searchSchema = Type.Object({
 	query: Type.String({ description: "The search query (natural language, identifier, or path)" }),
-	path: Type.Optional(Type.String({ description: "Restrict search to files under this path (relative to cwd)" })),
+	restrictToDir: Type.Optional(
+		Type.String({
+			description:
+				"Filter results to files under this path (relative to searchDir or cwd). Does not affect indexing — the entire searchDir is still indexed.",
+		}),
+	),
 	limit: Type.Optional(Type.Number({ description: "Maximum number of results to return (default: 20)" })),
-	projectDir: Type.Optional(
-		Type.String({ description: "Directory to index and search instead of cwd (useful when cwd is ~/)" }),
+	searchDir: Type.Optional(
+		Type.String({
+			description:
+				"Directory to index and search instead of cwd (useful when cwd is ~/). The entire contents of this directory are scanned and indexed.",
+		}),
 	),
 	rebuild: Type.Optional(Type.Boolean({ description: "Force a clean rebuild of the search index (default: false)" })),
 });
@@ -50,18 +58,18 @@ export interface SearchToolDetails {
 
 /** @internal Exported for testing. */
 export function formatSearchCall(
-	args: { query?: string; path?: string; limit?: number; projectDir?: string; rebuild?: boolean } | undefined,
+	args: { query?: string; restrictToDir?: string; limit?: number; searchDir?: string; rebuild?: boolean } | undefined,
 	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
 ): string {
 	const query = str(args?.query);
-	const searchPath = str(args?.path);
-	const projectDir = str(args?.projectDir);
+	const restrictToDir = str(args?.restrictToDir);
+	const searchDir = str(args?.searchDir);
 	let text = `${theme.fg("toolTitle", theme.bold("search"))} ${theme.fg("accent", `"${query ?? ""}"`)}`;
-	if (projectDir) {
-		text += theme.fg("toolOutput", ` project ${shortenPath(projectDir)}`);
+	if (searchDir) {
+		text += theme.fg("toolOutput", ` project ${shortenPath(searchDir)}`);
 	}
-	if (searchPath) {
-		text += theme.fg("toolOutput", ` in ${shortenPath(searchPath)}`);
+	if (restrictToDir) {
+		text += theme.fg("toolOutput", ` in ${shortenPath(restrictToDir)}`);
 	}
 	if (args?.rebuild) {
 		text += theme.fg("toolOutput", " [rebuild]");
@@ -156,7 +164,7 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 				};
 			}
 
-			const { query, path: searchPath, limit, projectDir, rebuild } = params;
+			const { query, restrictToDir, limit, searchDir, rebuild } = params;
 
 			if (!query || query.trim().length === 0) {
 				return {
@@ -165,21 +173,21 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 				};
 			}
 
-			const resolvedProjectDir = projectDir ? resolveToCwd(projectDir, cwd) : cwd;
+			const resolvedSearchDir = searchDir ? resolveToCwd(searchDir, cwd) : cwd;
 
-			if (projectDir && (!existsSync(resolvedProjectDir) || !statSync(resolvedProjectDir).isDirectory())) {
+			if (searchDir && (!existsSync(resolvedSearchDir) || !statSync(resolvedSearchDir).isDirectory())) {
 				return {
 					content: [
 						{
 							type: "text",
-							text: `projectDir does not exist or is not a directory: ${resolvedProjectDir}`,
+							text: `searchDir does not exist or is not a directory: ${resolvedSearchDir}`,
 						},
 					],
 					details: { resultCount: 0, indexBuilt: false },
 				};
 			}
 
-			const engine = getSearchEngine(resolvedProjectDir);
+			const engine = getSearchEngine(resolvedSearchDir);
 
 			if (rebuild) {
 				await engine.resetIndex();
@@ -188,7 +196,7 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 			let indexBuilt = false;
 			const results = await engine.search(query, {
 				limit: typeof limit === "number" && limit > 0 ? Math.floor(limit) : 20,
-				pathFilter: searchPath,
+				pathFilter: restrictToDir,
 				onProgress: (phase, current, total) => {
 					if (phase === "indexing" || phase === "scanning" || phase === "loading model" || phase === "embedding") {
 						indexBuilt = true;

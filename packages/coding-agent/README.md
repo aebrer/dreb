@@ -333,9 +333,9 @@ Task tracking is prompt-driven: the system prompt includes guidelines for when t
 
 The `search` tool provides natural language queries over the codebase using embeddings and full-text search. It supports identifier queries (e.g., `AuthMiddleware`), natural language (e.g., `where is rate limiting handled`), and path queries (e.g., `src/auth/`).
 
-**Parameters:** `query` (required), `path` (restrict to subdirectory), `limit` (max results, default 20), `projectDir` (index/search a different directory instead of cwd — useful for Telegram sessions where cwd is `~/`), `rebuild` (force a clean re-index when results look stale or corrupt).
+**Parameters:** `query` (required), `searchDir` (directory to index and search — each unique value gets its own independent index; defaults to cwd, but should be set explicitly in Telegram sessions where cwd is `~/`), `restrictToDir` (filter results to files under this subdirectory within the already-built index — does not affect which files are indexed), `limit` (max results, default 20), `rebuild` (force a clean re-index when results look stale or corrupt).
 
-**How it works:** The first query builds a project index (typically 10–60s, longer for very large repos). Subsequent queries use the cached index, with incremental re-indexing for changed files (mtime-based). Each unique `projectDir` gets its own independent index.
+**How it works:** The first query builds a project index (typically 10–60s, longer for very large repos). Subsequent queries use the cached index, with incremental re-indexing for changed files (mtime-based). Each unique `searchDir` gets its own independent index.
 
 **Indexing pipeline:**
 - AST-aware code chunking via tree-sitter (TypeScript, JavaScript, Python, Go, Rust, Java, C, C++, GDScript) — extracts functions, classes, methods, and exports as individual chunks

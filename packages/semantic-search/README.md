@@ -47,8 +47,8 @@ The package exposes a `search` tool over the Model Context Protocol (stdio trans
 | Parameter    | Required | Description                                      |
 | ------------ | -------- | ------------------------------------------------ |
 | `query`      | yes      | Natural language, identifier, or path query       |
-| `projectDir` | yes      | Absolute path to the project directory to search  |
-| `path`       | no       | Restrict search to files under this path          |
+| `searchDir` | yes      | Directory to index and search — each unique value gets its own independent index |
+| `restrictToDir` | no       | Filter results to files under this path within the already-built index (does not affect indexing) |
 | `limit`      | no       | Maximum results to return (default: 20)           |
 | `rebuild`    | no       | Force a clean index rebuild (default: false)      |
 

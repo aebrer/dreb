@@ -24,8 +24,8 @@ The search tool supports three kinds of queries, automatically classified:
 | Parameter    | Required | Description                                                                 |
 | ------------ | -------- | --------------------------------------------------------------------------- |
 | `query`      | Yes      | Search query — natural language, identifier, or path                        |
-| `projectDir` | Yes      | Absolute path to the project directory. Set this to your current working directory |
-| `path`       | No       | Restrict search to files under this subdirectory (relative to project root) |
+| `searchDir` | Yes      | Directory to index and search — each unique value gets its own independent index |
+| `restrictToDir` | No       | Filter results to files under this subdirectory within the already-built index (does not affect which files are indexed) |
 | `limit`      | No       | Maximum number of results to return (default: 20)                           |
 | `rebuild`    | No       | Force a clean index rebuild — use when files have changed significantly     |
 
@@ -53,7 +53,7 @@ Each result includes:
 
 ## Tips
 
-- Start broad, then narrow with `path` if you get too many results from different areas
+- Start broad, then narrow with `restrictToDir` if you get too many results from different areas
 - Use `limit` to get more results when exploring a broad topic (e.g. `limit: 50`)
 - Use `rebuild: true` after major refactors, branch switches, or large file changes
 - Identifier queries work best for finding where something is defined or used

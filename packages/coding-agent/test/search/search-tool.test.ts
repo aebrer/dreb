@@ -130,10 +130,10 @@ describe("createSearchToolDefinition", () => {
 			expect(schema.required).toContain("query");
 		});
 
-		it("has path as an optional property", () => {
-			expect(schema.properties.path).toBeDefined();
+		it("has restrictToDir as an optional property", () => {
+			expect(schema.properties.restrictToDir).toBeDefined();
 			// Optional properties are not in the required array
-			expect(schema.required ?? []).not.toContain("path");
+			expect(schema.required ?? []).not.toContain("restrictToDir");
 		});
 
 		it("has limit as an optional property", () => {
@@ -141,10 +141,10 @@ describe("createSearchToolDefinition", () => {
 			expect(schema.required ?? []).not.toContain("limit");
 		});
 
-		it("has projectDir as an optional property", () => {
-			expect(schema.properties.projectDir).toBeDefined();
-			expect(schema.properties.projectDir.type).toBe("string");
-			expect(schema.required ?? []).not.toContain("projectDir");
+		it("has searchDir as an optional property", () => {
+			expect(schema.properties.searchDir).toBeDefined();
+			expect(schema.properties.searchDir.type).toBe("string");
+			expect(schema.required ?? []).not.toContain("searchDir");
 		});
 
 		it("has rebuild as an optional property", () => {
@@ -171,14 +171,14 @@ describe("createSearchToolDefinition", () => {
 			expect(result).toContain('"AuthMiddleware"');
 		});
 
-		it("renders projectDir when provided", () => {
-			const result = formatSearchCall({ query: "test", projectDir: "/home/user/project" }, stubTheme);
+		it("renders searchDir when provided", () => {
+			const result = formatSearchCall({ query: "test", searchDir: "/home/user/project" }, stubTheme);
 			expect(result).toContain("project");
 			expect(result).toContain("/home/user/project"); // shortenPath output
 		});
 
-		it("renders searchPath when provided", () => {
-			const result = formatSearchCall({ query: "test", path: "src/auth" }, stubTheme);
+		it("renders restrictToDir when provided", () => {
+			const result = formatSearchCall({ query: "test", restrictToDir: "src/auth" }, stubTheme);
 			expect(result).toContain("in");
 			expect(result).toContain("src/auth");
 		});
@@ -200,7 +200,7 @@ describe("createSearchToolDefinition", () => {
 
 		it("renders all options together", () => {
 			const result = formatSearchCall(
-				{ query: "auth", projectDir: "/proj", path: "src", rebuild: true, limit: 10 },
+				{ query: "auth", searchDir: "/proj", restrictToDir: "src", rebuild: true, limit: 10 },
 				stubTheme,
 			);
 			expect(result).toContain('"auth"');
@@ -405,10 +405,24 @@ describe("createSearchToolDefinition", () => {
 				expect(typeof details.indexBuilt).toBe("boolean");
 			});
 
+			it("restrictToDir pointing outside searchDir returns no results", async () => {
+				const result = await fixtureTool.execute(
+					"t-restrict-outside",
+					{ query: "AuthMiddleware", restrictToDir: "/tmp/this-path-definitely-does-not-exist-abc123" },
+					undefined,
+					undefined,
+					undefined as any,
+				);
+				const text = (result.content[0] as { type: "text"; text: string }).text;
+
+				expect(text).toBe("No results found.");
+				expect(result.details!.resultCount).toBe(0);
+			});
+
 			it("no results returns 'No results found' message", async () => {
 				const result = await fixtureTool.execute(
 					"t-empty",
-					{ query: "anything", path: "nonexistent/dir" },
+					{ query: "anything", restrictToDir: "nonexistent/dir" },
 					undefined,
 					undefined,
 					undefined as any,
@@ -421,45 +435,45 @@ describe("createSearchToolDefinition", () => {
 		});
 
 		// ============================================================================
-		// Execute — projectDir parameter
+		// Execute — searchDir parameter
 		// ============================================================================
 
-		describe("projectDir parameter", () => {
-			let projectDirFixture: string;
+		describe("searchDir parameter", () => {
+			let searchDirFixture: string;
 			let differentCwdTool: ReturnType<typeof createSearchToolDefinition>;
 
 			beforeAll(() => {
 				// Create a fixture project in a separate directory
-				projectDirFixture = mkdtempSync(path.join(tmpdir(), "search-projectdir-"));
-				createFixtureProject(projectDirFixture);
+				searchDirFixture = mkdtempSync(path.join(tmpdir(), "search-projectdir-"));
+				createFixtureProject(searchDirFixture);
 				// Create the tool with a DIFFERENT cwd (empty temp dir)
 				const emptyCwd = mkdtempSync(path.join(tmpdir(), "search-empty-cwd-"));
 				differentCwdTool = createSearchToolDefinition(emptyCwd);
 			});
 
 			afterAll(() => {
-				rmSync(projectDirFixture, { recursive: true, force: true });
+				rmSync(searchDirFixture, { recursive: true, force: true });
 			});
 
-			it("searches the projectDir instead of cwd when provided", async () => {
+			it("searches the searchDir instead of cwd when provided", async () => {
 				const result = await differentCwdTool.execute(
 					"t-projdir",
-					{ query: "AuthMiddleware", projectDir: projectDirFixture },
+					{ query: "AuthMiddleware", searchDir: searchDirFixture },
 					undefined,
 					undefined,
 					undefined as any,
 				);
 				const text = (result.content[0] as { type: "text"; text: string }).text;
 
-				// Should find results from the projectDir fixture
+				// Should find results from the searchDir fixture
 				expect(text).toContain("AuthMiddleware");
 				expect(result.details!.resultCount).toBeGreaterThan(0);
 			});
 
-			it("returns error when projectDir does not exist", async () => {
+			it("returns error when searchDir does not exist", async () => {
 				const result = await differentCwdTool.execute(
 					"t-projdir-noexist",
-					{ query: "AuthMiddleware", projectDir: "/tmp/this-path-definitely-does-not-exist-abc123" },
+					{ query: "AuthMiddleware", searchDir: "/tmp/this-path-definitely-does-not-exist-abc123" },
 					undefined,
 					undefined,
 					undefined as any,
@@ -471,13 +485,13 @@ describe("createSearchToolDefinition", () => {
 				expect(result.details!.indexBuilt).toBe(false);
 			});
 
-			it("returns error when projectDir is a file, not a directory", async () => {
+			it("returns error when searchDir is a file, not a directory", async () => {
 				const tmpFile = path.join(mkdtempSync(path.join(tmpdir(), "search-file-")), "not-a-dir.txt");
 				writeFileSync(tmpFile, "hello", "utf-8");
 				try {
 					const result = await differentCwdTool.execute(
 						"t-projdir-file",
-						{ query: "AuthMiddleware", projectDir: tmpFile },
+						{ query: "AuthMiddleware", searchDir: tmpFile },
 						undefined,
 						undefined,
 						undefined as any,
@@ -491,12 +505,12 @@ describe("createSearchToolDefinition", () => {
 				}
 			});
 
-			it("does not find project-specific content when projectDir points elsewhere", async () => {
+			it("does not find project-specific content when searchDir points elsewhere", async () => {
 				const emptyProject = mkdtempSync(path.join(tmpdir(), "search-empty-proj-"));
 				try {
 					const result = await differentCwdTool.execute(
 						"t-projdir-empty",
-						{ query: "AuthMiddleware", projectDir: emptyProject },
+						{ query: "AuthMiddleware", searchDir: emptyProject },
 						undefined,
 						undefined,
 						undefined as any,
@@ -600,10 +614,10 @@ describe("createSearchToolDefinition", () => {
 		});
 
 		// ============================================================================
-		// Execute — projectDir + rebuild isolation
+		// Execute — searchDir + rebuild isolation
 		// ============================================================================
 
-		describe("projectDir + rebuild isolation", () => {
+		describe("searchDir + rebuild isolation", () => {
 			let projectA: string;
 			let projectB: string;
 			let isolationTool: ReturnType<typeof createSearchToolDefinition>;
@@ -628,10 +642,10 @@ describe("createSearchToolDefinition", () => {
 				rmSync(projectB, { recursive: true, force: true });
 			});
 
-			it("each projectDir gets its own index", async () => {
+			it("each searchDir gets its own index", async () => {
 				const resultA = await isolationTool.execute(
 					"t-iso-a",
-					{ query: "AuthMiddleware", projectDir: projectA },
+					{ query: "AuthMiddleware", searchDir: projectA },
 					undefined,
 					undefined,
 					undefined as any,
@@ -640,7 +654,7 @@ describe("createSearchToolDefinition", () => {
 
 				const resultB = await isolationTool.execute(
 					"t-iso-b",
-					{ query: "PaymentProcessor", projectDir: projectB },
+					{ query: "PaymentProcessor", searchDir: projectB },
 					undefined,
 					undefined,
 					undefined as any,
@@ -656,7 +670,7 @@ describe("createSearchToolDefinition", () => {
 				// Rebuild project A
 				await isolationTool.execute(
 					"t-iso-rebuild-a",
-					{ query: "AuthMiddleware", projectDir: projectA, rebuild: true },
+					{ query: "AuthMiddleware", searchDir: projectA, rebuild: true },
 					undefined,
 					undefined,
 					undefined as any,
@@ -667,7 +681,7 @@ describe("createSearchToolDefinition", () => {
 
 				const resultB = await isolationTool.execute(
 					"t-iso-b-after",
-					{ query: "PaymentProcessor", projectDir: projectB },
+					{ query: "PaymentProcessor", searchDir: projectB },
 					undefined,
 					undefined,
 					undefined as any,
