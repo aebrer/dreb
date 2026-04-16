@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-
+import { type SessionHeader, SessionManager } from "../src/core/session-manager.js";
 import { discoverSessionFile, type SubagentResult } from "../src/core/tools/subagent.js";
 
 // ---------------------------------------------------------------------------
@@ -104,5 +104,86 @@ describe("SubagentResult interface", () => {
 
 		expect(withoutSession.sessionFile).toBeUndefined();
 		expect(withSession.sessionFile).toBe("/tmp/test-session.jsonl");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// SessionHeader agentType field tests
+// ---------------------------------------------------------------------------
+
+describe("SessionHeader agentType", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = createTempDir();
+	});
+
+	afterEach(() => {
+		if (existsSync(tempDir)) {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("setAgentType includes agentType in session header", () => {
+		const sm = SessionManager.create("/tmp", tempDir);
+		sm.setAgentType("feature-dev");
+
+		expect(sm.getSessionId()).toBeTruthy();
+
+		// SessionManager stores the header as fileEntries[0]
+		const header = (sm as any).fileEntries[0] as SessionHeader;
+		expect(header.type).toBe("session");
+		expect(header.agentType).toBe("feature-dev");
+	});
+
+	test("session header omits agentType when setAgentType is not called", () => {
+		const sm = SessionManager.create("/tmp", tempDir);
+		const header = (sm as any).fileEntries[0] as SessionHeader;
+		expect(header.type).toBe("session");
+		expect(header.agentType).toBeUndefined();
+	});
+
+	test("setAgentType is safe to call on empty session manager", () => {
+		const sm = SessionManager.inMemory();
+		// Should not throw even though inMemory creates a session
+		sm.setAgentType("test-agent");
+		const header = (sm as any).fileEntries[0] as SessionHeader;
+		expect(header.agentType).toBe("test-agent");
+	});
+
+	test("setAgentType persists agentType to disk in session header", () => {
+		const sm = SessionManager.create("/tmp", tempDir);
+		sm.setAgentType("feature-dev");
+
+		// Add a user message then an assistant message to trigger flush to disk
+		sm.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		sm.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "hi" }],
+			api: "anthropic-messages",
+			model: "test-model",
+			provider: "test",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		// Read back the JSONL file from disk
+		const sessionFile = sm.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		expect(existsSync(sessionFile!)).toBe(true);
+
+		const content = readFileSync(sessionFile!, "utf8");
+		const firstLine = content.trim().split("\n")[0];
+		const diskHeader = JSON.parse(firstLine) as SessionHeader;
+		expect(diskHeader.type).toBe("session");
+		expect(diskHeader.agentType).toBe("feature-dev");
 	});
 });

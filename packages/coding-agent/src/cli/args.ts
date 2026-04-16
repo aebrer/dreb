@@ -39,6 +39,7 @@ export interface Args {
 	noPromptTemplates?: boolean;
 	themes?: string[];
 	noThemes?: boolean;
+	agentType?: string;
 	listModels?: string | true;
 	offline?: boolean;
 	verbose?: boolean;
@@ -149,6 +150,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.noPromptTemplates = true;
 		} else if (arg === "--no-themes") {
 			result.noThemes = true;
+		} else if (arg === "--agent-type" && i + 1 < args.length) {
+			result.agentType = args[++i];
 		} else if (arg === "--list-models") {
 			// Check if next arg is a search pattern (not a flag or file arg)
 			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {

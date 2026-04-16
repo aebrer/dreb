@@ -2,8 +2,14 @@ import { describe, expect, it } from "vitest";
 import { findModel, getModel, supportsXhigh } from "../src/models.js";
 
 describe("supportsXhigh", () => {
-	it("returns true for Anthropic Opus 4.6 on anthropic-messages API", () => {
+	it("returns true for latest Anthropic Opus on anthropic-messages API", () => {
 		const model = findModel("anthropic", "opus")!;
+		expect(model).toBeDefined();
+		expect(supportsXhigh(model!)).toBe(true);
+	});
+
+	it("returns true for Opus 4.6 by exact ID", () => {
+		const model = getModel("anthropic", "claude-opus-4-6");
 		expect(model).toBeDefined();
 		expect(supportsXhigh(model!)).toBe(true);
 	});

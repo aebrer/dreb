@@ -64,10 +64,11 @@ Extended messages from [`packages/coding-agent/src/core/messages.ts`](https://gi
 
 ## Output Format
 
-Each line is a JSON object. The first line is the session header (`version` is the session schema version; increments indicate breaking format changes):
+Each line is a JSON object. The first line is the session header (`version` is the session schema version; increments indicate breaking format changes). Subagent child sessions also include `agentType`:
 
 ```json
 {"type":"session","version":3,"id":"uuid","timestamp":"...","cwd":"/path"}
+{"type":"session","version":3,"id":"uuid","timestamp":"...","cwd":"/path","agentType":"feature-dev"}
 ```
 
 Followed by events as they occur:

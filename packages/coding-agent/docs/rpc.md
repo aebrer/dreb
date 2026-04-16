@@ -285,7 +285,7 @@ Set the reasoning/thinking level for models that support it.
 
 Levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`
 
-Note: `"xhigh"` is only supported by OpenAI codex-max models.
+Note: `"xhigh"` is supported by OpenAI codex-max models and Anthropic Opus 4.6+ (maps to adaptive effort `"max"`).
 
 Response:
 ```json

@@ -4,6 +4,10 @@
 
 ### Added
 
+- Subagent parallel/chain tasks now inherit the top-level `agent` and `model` parameters when not overridden per-item. Precedence: per-task > top-level > default (`"Explore"`). ([#167](https://github.com/aebrer/dreb/issues/167))
+- Subagent child session JSONL headers now include an `agentType` field recording which agent definition executed the session, providing an audit trail for post-hoc debugging. ([#167](https://github.com/aebrer/dreb/issues/167))
+- `formatSubagentCall` for parallel and chain modes now displays agent type(s) in the tool call header (e.g. `parallel (3 feature-dev tasks)`, `chain (feature-dev, 2 steps)`). ([#167](https://github.com/aebrer/dreb/issues/167))
+
 - Added `warnInSession()` on `AgentSession` — surfaces warnings in the conversation so both the human and AI agent can see and act on them. Supports `{ informational: true }` for non-interrupting context notes vs. actionable warnings that prompt the agent to inform the user. ([#115](https://github.com/aebrer/dreb/issues/115))
 - Added `warnResourceDiagnostics()` on `AgentSession` — collects all resource loading diagnostics (skills, prompts, themes, context files, extensions) and surfaces them via `warnInSession()`. Called automatically on startup and `/reload`.
 - Added `getContextDiagnostics()` to `ResourceLoader` interface — returns `ResourceDiagnostic[]` for context file loading failures (AGENTS.md, memory indexes, etc.)
