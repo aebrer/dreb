@@ -494,6 +494,7 @@ describe("reactions", () => {
 
 		await controller.triggerReaction("something happened");
 		expect(callbacks.onSpeech).not.toHaveBeenCalled();
+		expect(controller.buildContext()).not.toContain("__BUDDY_PENDING_");
 	});
 
 	it("should handle react errors gracefully", async () => {
@@ -506,6 +507,7 @@ describe("reactions", () => {
 		await controller.triggerReaction("something happened");
 		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
 		expect(callbacks.onSpeech).not.toHaveBeenCalled();
+		expect(controller.buildContext()).not.toContain("__BUDDY_PENDING_");
 	});
 });
 
@@ -515,7 +517,7 @@ describe("reactions", () => {
 describe("buddy self-continuity", () => {
 	it("should append Buddy: entry after triggerReaction", async () => {
 		writeStoredBuddy();
-		const { controller, callbacks, manager } = createTestController();
+		const { controller, manager } = createTestController();
 		manager.load();
 
 		vi.spyOn(manager, "react").mockResolvedValue("quip");
@@ -526,7 +528,7 @@ describe("buddy self-continuity", () => {
 
 	it("should append Buddy: entry after handleNameCall", async () => {
 		writeStoredBuddy();
-		const { controller, callbacks, manager } = createTestController();
+		const { controller, manager } = createTestController();
 		manager.load();
 
 		vi.spyOn(manager, "respondToNameCall").mockResolvedValue("response");
@@ -537,7 +539,7 @@ describe("buddy self-continuity", () => {
 
 	it("should include prior buddy utterances in context", async () => {
 		writeStoredBuddy();
-		const { controller, callbacks, manager } = createTestController();
+		const { controller, manager } = createTestController();
 		manager.load();
 
 		vi.spyOn(manager, "react").mockResolvedValue("first quip");
@@ -572,7 +574,7 @@ describe("buddy self-continuity", () => {
 
 	it("should maintain causal ordering for async buddy utterances", async () => {
 		writeStoredBuddy();
-		const { controller, callbacks, manager } = createTestController();
+		const { controller, manager } = createTestController();
 		manager.load();
 
 		// Make react slow — it won't resolve until we call resolveReaction
@@ -598,6 +600,59 @@ describe("buddy self-continuity", () => {
 		// The Buddy: entry should appear BEFORE User: next because the marker
 		// was placed before the user message, and replaceContextEntry swapped in-place
 		expect(buddyIdx).toBeLessThan(userNextIdx);
+	});
+
+	it("should append Buddy: entry even when onSpeech throws in handleNameCall", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		callbacks.onSpeech = vi.fn(() => {
+			throw new Error("UI exploded");
+		});
+
+		vi.spyOn(manager, "respondToNameCall").mockResolvedValue("response");
+
+		await controller.handleNameCall("Hey Testbud!");
+		expect(controller.buildContext()).toContain("Buddy: response");
+	});
+
+	it("should handle evicted marker by appending Buddy entry at the end", async () => {
+		writeStoredBuddy();
+		const { manager } = createTestController();
+		const callbacks: BuddyCallbacks = {
+			onSpeech: vi.fn(),
+			onThinkingStart: vi.fn(),
+			onThinkingEnd: vi.fn(),
+			onHatch: vi.fn(),
+			onReroll: vi.fn(),
+		};
+		const controller = new BuddyController(manager, callbacks, {
+			contextMaxEntries: 2,
+			reactionCooldownMs: 0,
+		});
+		manager.load();
+
+		let resolveReaction: (val: string | null) => void;
+		const reactionPromise = new Promise<string | null>((resolve) => {
+			resolveReaction = resolve;
+		});
+		vi.spyOn(manager, "react").mockReturnValue(reactionPromise);
+
+		const triggerPromise = controller.triggerReaction("event");
+
+		// Fill and evict the marker from the 2-entry buffer
+		controller.appendContext("User: first");
+		controller.appendContext("User: second");
+
+		resolveReaction!("quip");
+		await triggerPromise;
+
+		const ctx = controller.buildContext();
+		expect(ctx).not.toContain("__BUDDY_PENDING_");
+		expect(ctx).toContain("Buddy: quip");
+		// Buddy entry should be at the end since marker was evicted
+		expect(ctx.lastIndexOf("Buddy: quip")).toBeGreaterThan(ctx.indexOf("User: second"));
 	});
 });
 
@@ -654,6 +709,7 @@ describe("handleNameCall", () => {
 
 		await controller.handleNameCall("Hey Testbud!");
 		expect(callbacks.onSpeech).not.toHaveBeenCalled();
+		expect(controller.buildContext()).not.toContain("__BUDDY_PENDING_");
 	});
 
 	it("should handle no buddy gracefully", async () => {
@@ -673,6 +729,7 @@ describe("handleNameCall", () => {
 		expect(callbacks.onThinkingStart).toHaveBeenCalled();
 		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
 		expect(callbacks.onSpeech).not.toHaveBeenCalled();
+		expect(controller.buildContext()).not.toContain("__BUDDY_PENDING_");
 	});
 
 	it("should load from disk when handling name-call with no in-memory state", async () => {
@@ -861,6 +918,23 @@ describe("handleEvent", () => {
 
 		const ctx = controller.buildContext();
 		expect(ctx).toContain(`Tool bash completed: ${longOutput}`);
+	});
+
+	it("should capture plain-string tool output from result.output", () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		controller.handleEvent({
+			type: "tool_execution_end",
+			toolName: "bash",
+			toolCallId: "1",
+			result: { output: "plain string output" },
+			isError: false,
+		});
+
+		const ctx = controller.buildContext();
+		expect(ctx).toContain("Tool bash completed: plain string output");
 	});
 });
 

@@ -93,7 +93,7 @@ export class BuddyController {
 	private replaceContextEntry(oldEntry: string, newEntry: string): void {
 		const idx = this.contextBuffer.indexOf(oldEntry);
 		if (idx !== -1) {
-			this.contextBuffer[idx] = newEntry;
+			this.contextBuffer[idx] = newEntry.slice(0, 2000);
 		} else {
 			// Evicted — append normally
 			this.appendContext(newEntry);
@@ -196,8 +196,10 @@ export class BuddyController {
 		this.appendContext(marker);
 
 		this.callbacks.onThinkingStart();
+		let thinkingEnded = false;
 		try {
 			const quip = await this.manager.react(event);
+			thinkingEnded = true;
 			this.callbacks.onThinkingEnd();
 			if (quip) {
 				this.lastReactionTime = Date.now();
@@ -208,7 +210,7 @@ export class BuddyController {
 				this.removeContextEntry(marker);
 			}
 		} catch (err) {
-			this.callbacks.onThinkingEnd();
+			if (!thinkingEnded) this.callbacks.onThinkingEnd();
 			this.removeContextEntry(marker);
 			console.error("[buddy] triggerReaction failed:", err instanceof Error ? err.message : err);
 		}
@@ -231,8 +233,10 @@ export class BuddyController {
 		this.appendContext(marker);
 
 		this.callbacks.onThinkingStart();
+		let thinkingEnded = false;
 		try {
 			const response = await this.manager.respondToNameCall(userMessage, this.buildContext());
+			thinkingEnded = true;
 			this.callbacks.onThinkingEnd();
 			if (response) {
 				this.lastReactionTime = Date.now();
@@ -243,7 +247,7 @@ export class BuddyController {
 				this.removeContextEntry(marker);
 			}
 		} catch (err) {
-			this.callbacks.onThinkingEnd();
+			if (!thinkingEnded) this.callbacks.onThinkingEnd();
 			this.removeContextEntry(marker);
 			console.error("[buddy] handleNameCall failed:", err instanceof Error ? err.message : err);
 		}
