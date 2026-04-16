@@ -510,6 +510,19 @@ describe("reactions", () => {
 		expect(controller.buildContext()).not.toContain("__BUDDY_PENDING_");
 	});
 
+	it("should clean up marker when onThinkingStart throws in triggerReaction", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		callbacks.onThinkingStart = vi.fn(() => {
+			throw new Error("UI crashed");
+		});
+
+		await controller.triggerReaction("something happened");
+		expect(controller.buildContext()).not.toContain("__BUDDY_PENDING_");
+	});
+
 	it("should update lastReactionTime before async react resolves", async () => {
 		writeStoredBuddy();
 		const { controller, manager } = createTestController();
@@ -750,6 +763,19 @@ describe("handleNameCall", () => {
 		expect(callbacks.onThinkingStart).toHaveBeenCalled();
 		expect(callbacks.onThinkingEnd).toHaveBeenCalled();
 		expect(callbacks.onSpeech).not.toHaveBeenCalled();
+		expect(controller.buildContext()).not.toContain("__BUDDY_PENDING_");
+	});
+
+	it("should clean up marker when onThinkingStart throws in handleNameCall", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		callbacks.onThinkingStart = vi.fn(() => {
+			throw new Error("UI crashed");
+		});
+
+		await controller.handleNameCall("Hey Testbud!");
 		expect(controller.buildContext()).not.toContain("__BUDDY_PENDING_");
 	});
 

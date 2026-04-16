@@ -196,9 +196,9 @@ export class BuddyController {
 		const marker = `__BUDDY_PENDING_${id}__`;
 		this.appendContext(marker);
 
-		this.callbacks.onThinkingStart();
 		let thinkingEnded = false;
 		try {
+			this.callbacks.onThinkingStart();
 			const quip = await this.manager.react(event);
 			thinkingEnded = true;
 			this.callbacks.onThinkingEnd();
@@ -232,9 +232,9 @@ export class BuddyController {
 		const marker = `__BUDDY_PENDING_${id}__`;
 		this.appendContext(marker);
 
-		this.callbacks.onThinkingStart();
 		let thinkingEnded = false;
 		try {
+			this.callbacks.onThinkingStart();
 			const response = await this.manager.respondToNameCall(userMessage, this.buildContext());
 			thinkingEnded = true;
 			this.callbacks.onThinkingEnd();
