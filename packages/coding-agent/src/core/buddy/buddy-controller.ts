@@ -62,6 +62,7 @@ export class BuddyController {
 	private idleTimer: ReturnType<typeof setTimeout> | null = null;
 	private lastActivityTime = 0;
 	private reactionTimestamps: number[] = []; // for budget tracking
+	private pendingUtteranceId = 0;
 	/** When false, all active functionality is disabled: no reactions, name-calls,
 	 *  idle timer, or Ollama calls. Context capture (passive) still happens. */
 	enabled = true;
@@ -82,13 +83,30 @@ export class BuddyController {
 		};
 	}
 
+	private removeContextEntry(entry: string): void {
+		const idx = this.contextBuffer.indexOf(entry);
+		if (idx !== -1) {
+			this.contextBuffer.splice(idx, 1);
+		}
+	}
+
+	private replaceContextEntry(oldEntry: string, newEntry: string): void {
+		const idx = this.contextBuffer.indexOf(oldEntry);
+		if (idx !== -1) {
+			this.contextBuffer[idx] = newEntry.slice(0, 2000);
+		} else {
+			// Evicted — append normally
+			this.appendContext(newEntry);
+		}
+	}
+
 	// =========================================================================
 	// Context buffer
 	// =========================================================================
 
 	/** Append an entry to the buddy context buffer (evicts oldest if at capacity) */
 	appendContext(entry: string): void {
-		this.contextBuffer.push(entry);
+		this.contextBuffer.push(entry.slice(0, 2000));
 		if (this.contextBuffer.length > this.config.contextMaxEntries) {
 			this.contextBuffer.shift();
 		}
@@ -99,7 +117,7 @@ export class BuddyController {
 		if (this.contextBuffer.length === 0) {
 			return "No recent activity.";
 		}
-		return this.contextBuffer.join("\n");
+		return this.contextBuffer.join("\n").slice(0, 8000);
 	}
 
 	// =========================================================================
@@ -172,18 +190,28 @@ export class BuddyController {
 	 */
 	async triggerReaction(event: string): Promise<void> {
 		if (!this.canReact()) return;
+		this.lastReactionTime = Date.now();
 
-		this.callbacks.onThinkingStart();
+		const id = ++this.pendingUtteranceId;
+		const marker = `__BUDDY_PENDING_${id}__`;
+		this.appendContext(marker);
+
+		let thinkingEnded = false;
 		try {
+			this.callbacks.onThinkingStart();
 			const quip = await this.manager.react(event);
+			thinkingEnded = true;
 			this.callbacks.onThinkingEnd();
 			if (quip) {
-				this.lastReactionTime = Date.now();
 				this.reactionTimestamps.push(Date.now());
+				this.replaceContextEntry(marker, `Buddy: ${quip}`);
 				this.callbacks.onSpeech(quip);
+			} else {
+				this.removeContextEntry(marker);
 			}
 		} catch (err) {
-			this.callbacks.onThinkingEnd();
+			if (!thinkingEnded) this.callbacks.onThinkingEnd();
+			this.removeContextEntry(marker);
 			console.error("[buddy] triggerReaction failed:", err instanceof Error ? err.message : err);
 		}
 	}
@@ -196,20 +224,29 @@ export class BuddyController {
 		if (!this.enabled) return;
 		let state = this.manager.getState();
 		if (!state) {
-			// Try loading from disk (buddy may have been hatched in another frontend)
 			state = this.manager.load();
 		}
 		if (!state) return;
 
-		this.callbacks.onThinkingStart();
+		const id = ++this.pendingUtteranceId;
+		const marker = `__BUDDY_PENDING_${id}__`;
+		this.appendContext(marker);
+
+		let thinkingEnded = false;
 		try {
+			this.callbacks.onThinkingStart();
 			const response = await this.manager.respondToNameCall(userMessage, this.buildContext());
+			thinkingEnded = true;
 			this.callbacks.onThinkingEnd();
 			if (response) {
+				this.replaceContextEntry(marker, `Buddy: ${response}`);
 				this.callbacks.onSpeech(response);
+			} else {
+				this.removeContextEntry(marker);
 			}
 		} catch (err) {
-			this.callbacks.onThinkingEnd();
+			if (!thinkingEnded) this.callbacks.onThinkingEnd();
+			this.removeContextEntry(marker);
 			console.error("[buddy] handleNameCall failed:", err instanceof Error ? err.message : err);
 		}
 	}
@@ -250,8 +287,7 @@ export class BuddyController {
 					const textParts = event.message.content
 						?.filter((c: any) => c.type === "text")
 						?.map((c: any) => c.text)
-						?.join("")
-						?.slice(0, 200);
+						?.join("");
 					if (textParts) {
 						this.appendContext(`Assistant: ${textParts}`);
 					}
@@ -270,13 +306,12 @@ export class BuddyController {
 				const output = event.result?.output || event.result?.content;
 				const outputText =
 					typeof output === "string"
-						? output.slice(0, 100)
+						? output
 						: Array.isArray(output)
 							? output
 									.filter((c: any) => c.type === "text")
 									.map((c: any) => c.text)
 									.join("")
-									.slice(0, 100)
 							: "";
 				this.appendContext(`Tool ${event.toolName} ${status}${outputText ? `: ${outputText}` : ""}`);
 
@@ -288,13 +323,12 @@ export class BuddyController {
 						errorText = result.content
 							.filter((c: any) => c.type === "text")
 							.map((c: any) => c.text)
-							.join("")
-							.slice(0, 200);
+							.join("");
 					} else if (typeof result?.error === "string") {
-						errorText = result.error.slice(0, 200);
+						errorText = result.error;
 					}
 					if (!errorText) errorText = "unknown error";
-					this.triggerReaction(`Tool "${event.toolName}" failed: ${errorText}`).catch(() => {
+					this.triggerReaction(`Tool "${event.toolName}" failed: ${errorText.slice(0, 2000)}`).catch(() => {
 						/* triggerReaction() logs errors internally */
 					});
 				}
