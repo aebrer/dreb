@@ -190,6 +190,7 @@ export class BuddyController {
 	 */
 	async triggerReaction(event: string): Promise<void> {
 		if (!this.canReact()) return;
+		this.lastReactionTime = Date.now();
 
 		const id = ++this.pendingUtteranceId;
 		const marker = `__BUDDY_PENDING_${id}__`;
@@ -202,7 +203,6 @@ export class BuddyController {
 			thinkingEnded = true;
 			this.callbacks.onThinkingEnd();
 			if (quip) {
-				this.lastReactionTime = Date.now();
 				this.reactionTimestamps.push(Date.now());
 				this.replaceContextEntry(marker, `Buddy: ${quip}`);
 				this.callbacks.onSpeech(quip);
@@ -221,7 +221,7 @@ export class BuddyController {
 	 * No-op if disabled — returns immediately without calling Ollama.
 	 */
 	async handleNameCall(userMessage: string): Promise<void> {
-		if (!this.enabled || !this.canReact()) return;
+		if (!this.enabled) return;
 		let state = this.manager.getState();
 		if (!state) {
 			state = this.manager.load();
@@ -239,8 +239,6 @@ export class BuddyController {
 			thinkingEnded = true;
 			this.callbacks.onThinkingEnd();
 			if (response) {
-				this.lastReactionTime = Date.now();
-				this.reactionTimestamps.push(Date.now());
 				this.replaceContextEntry(marker, `Buddy: ${response}`);
 				this.callbacks.onSpeech(response);
 			} else {

@@ -509,6 +509,27 @@ describe("reactions", () => {
 		expect(callbacks.onSpeech).not.toHaveBeenCalled();
 		expect(controller.buildContext()).not.toContain("__BUDDY_PENDING_");
 	});
+
+	it("should update lastReactionTime before async react resolves", async () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		let resolveReaction: (val: string | null) => void;
+		const reactionPromise = new Promise<string | null>((resolve) => {
+			resolveReaction = resolve;
+		});
+		vi.spyOn(manager, "react").mockReturnValue(reactionPromise);
+
+		const beforeTime = (controller as any).lastReactionTime;
+		const triggerPromise = controller.triggerReaction("something happened");
+
+		// lastReactionTime should be updated synchronously, before the promise resolves
+		expect((controller as any).lastReactionTime).toBeGreaterThan(beforeTime);
+
+		resolveReaction!("quip");
+		await triggerPromise;
+	});
 });
 
 // ===========================================================================
@@ -742,23 +763,6 @@ describe("handleNameCall", () => {
 		await controller.handleNameCall("Hey Zorp!");
 		expect(callbacks.onThinkingStart).toHaveBeenCalled();
 		expect(callbacks.onSpeech).toHaveBeenCalledWith("Hello from disk!");
-	});
-
-	it("should throttle rapid name-calls with canReact", async () => {
-		writeStoredBuddy();
-		const { controller, callbacks, manager } = createTestController();
-		manager.load();
-
-		const nameCallSpy = vi.spyOn(manager, "respondToNameCall").mockResolvedValue("Hey!");
-
-		// First call should succeed
-		await controller.handleNameCall("Hey Testbud!");
-		expect(nameCallSpy).toHaveBeenCalledTimes(1);
-		expect(callbacks.onSpeech).toHaveBeenCalledWith("Hey!");
-
-		// Second call within cooldown should be throttled
-		await controller.handleNameCall("Hey Testbud again!");
-		expect(nameCallSpy).toHaveBeenCalledTimes(1); // still 1
 	});
 });
 
