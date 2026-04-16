@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -149,5 +149,41 @@ describe("SessionHeader agentType", () => {
 		sm.setAgentType("test-agent");
 		const header = (sm as any).fileEntries[0] as SessionHeader;
 		expect(header.agentType).toBe("test-agent");
+	});
+
+	test("setAgentType persists agentType to disk in session header", () => {
+		const sm = SessionManager.create("/tmp", tempDir);
+		sm.setAgentType("feature-dev");
+
+		// Add a user message then an assistant message to trigger flush to disk
+		sm.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		sm.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "hi" }],
+			api: "anthropic-messages",
+			model: "test-model",
+			provider: "test",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		// Read back the JSONL file from disk
+		const sessionFile = sm.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		expect(existsSync(sessionFile!)).toBe(true);
+
+		const content = readFileSync(sessionFile!, "utf8");
+		const firstLine = content.trim().split("\n")[0];
+		const diskHeader = JSON.parse(firstLine) as SessionHeader;
+		expect(diskHeader.type).toBe("session");
+		expect(diskHeader.agentType).toBe("feature-dev");
 	});
 });

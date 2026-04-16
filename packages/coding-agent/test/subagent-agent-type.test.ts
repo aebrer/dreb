@@ -263,3 +263,60 @@ describe("formatSubagentCall — parallel agent types", () => {
 		expect(rendered).toContain("2 feature-dev");
 	});
 });
+
+describe("formatSubagentCall — chain agent type", () => {
+	it("shows agent type from top-level agent param", () => {
+		const { tool } = createTool();
+		const mockTheme = {
+			fg: (_style: string, text: string) => text,
+			bold: (text: string) => text,
+		} as any;
+		const mockContext = { lastComponent: undefined, argsComplete: true, showImages: false };
+		const component = tool.renderCall?.(
+			{ chain: [{ task: "step1" }, { task: "step2" }], agent: "feature-dev" } as any,
+			mockTheme,
+			mockContext as any,
+		);
+		const rendered = (component as any)?.text ?? "";
+		expect(rendered).toContain("chain");
+		expect(rendered).toContain("feature-dev");
+		expect(rendered).toContain("2 steps");
+	});
+
+	it("shows agent type from first chain step when no top-level agent", () => {
+		const { tool } = createTool();
+		const mockTheme = {
+			fg: (_style: string, text: string) => text,
+			bold: (text: string) => text,
+		} as any;
+		const mockContext = { lastComponent: undefined, argsComplete: true, showImages: false };
+		const component = tool.renderCall?.(
+			{ chain: [{ task: "step1", agent: "Sandbox" }, { task: "step2" }] } as any,
+			mockTheme,
+			mockContext as any,
+		);
+		const rendered = (component as any)?.text ?? "";
+		expect(rendered).toContain("chain");
+		expect(rendered).toContain("Sandbox");
+		expect(rendered).toContain("2 steps");
+	});
+
+	it("falls back to default agent when no agent specified", () => {
+		const { tool } = createTool();
+		const mockTheme = {
+			fg: (_style: string, text: string) => text,
+			bold: (text: string) => text,
+		} as any;
+		const mockContext = { lastComponent: undefined, argsComplete: true, showImages: false };
+		const component = tool.renderCall?.(
+			{ chain: [{ task: "step1" }, { task: "step2" }, { task: "step3" }] } as any,
+			mockTheme,
+			mockContext as any,
+		);
+		const rendered = (component as any)?.text ?? "";
+		expect(rendered).toContain("chain");
+		expect(rendered).toContain("3 steps");
+		// Should contain the default agent name (not be empty)
+		expect(rendered).toMatch(/chain \([^,]+, 3 steps\)/);
+	});
+});

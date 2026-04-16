@@ -130,6 +130,16 @@ describe("parseArgs", () => {
 			const result = parseArgs(["--models", "gpt-4o,claude-sonnet,gemini-pro"]);
 			expect(result.models).toEqual(["gpt-4o", "claude-sonnet", "gemini-pro"]);
 		});
+
+		test("parses --agent-type", () => {
+			const result = parseArgs(["--agent-type", "feature-dev"]);
+			expect(result.agentType).toBe("feature-dev");
+		});
+
+		test("--agent-type with no following value does not set agentType", () => {
+			const result = parseArgs(["--agent-type"]);
+			expect(result.agentType).toBeUndefined();
+		});
 	});
 
 	describe("--no-session flag", () => {

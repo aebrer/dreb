@@ -826,7 +826,8 @@ function formatSubagentCall(
 		return `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", `parallel (${typeLabel})`)}`;
 	}
 	if (args?.chain) {
-		return `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", `chain (${args.chain.length} steps)`)}`;
+		const agentName = str(args.agent) || args.chain[0]?.agent || DEFAULT_AGENT;
+		return `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", `chain (${agentName}, ${args.chain.length} steps)`)}`;
 	}
 
 	const agent = str(args?.agent) || DEFAULT_AGENT;
