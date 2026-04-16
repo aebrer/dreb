@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionContext } from "../src/core/extensions/types.js";
-import { createSubagentToolDefinition } from "../src/core/tools/subagent.js";
+import { createSubagentToolDefinition, getBackgroundAgents } from "../src/core/tools/subagent.js";
 
 /**
  * Tests for background parallel mode — specifically the skipped-task path
@@ -98,5 +98,48 @@ describe("subagent background parallel — skipped tasks", () => {
 		expect(text).toContain("SKIPPED");
 		expect(text).toContain("resolves outside parent cwd");
 		expect(text).toContain("No agents were launched");
+	});
+
+	it("should register inherited agent type in background agent registry", async () => {
+		const tool = createTool();
+		const result = await tool.execute(
+			"call-4",
+			{
+				agent: "feature-dev",
+				tasks: [{ task: "valid task with inherited agent" }],
+			},
+			undefined,
+			undefined,
+			dummyCtx,
+		);
+
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		expect(text).toContain("1 background agents started");
+
+		// Check that the background agent registry has the correct agent type
+		const agents = getBackgroundAgents();
+		const ourAgent = agents.find((a) => a.agentType === "feature-dev");
+		expect(ourAgent).toBeDefined();
+		expect(ourAgent!.agentType).toBe("feature-dev");
+	});
+
+	it("should show inherited agent type in launch listing", async () => {
+		const tool = createTool();
+		const result = await tool.execute(
+			"call-5",
+			{
+				agent: "feature-dev",
+				tasks: [{ task: "task one" }, { task: "task two" }],
+			},
+			undefined,
+			undefined,
+			dummyCtx,
+		);
+
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+		// Each task line should include (feature-dev)
+		expect(text).toContain("(feature-dev):");
+		// Should NOT contain (Explore) since all tasks inherit feature-dev
+		expect(text).not.toContain("(Explore)");
 	});
 });

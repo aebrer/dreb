@@ -208,6 +208,8 @@ async function spawnSubagent(
 	if (agentConfig.systemPrompt) {
 		args.push("--append-system-prompt", agentConfig.systemPrompt);
 	}
+	// Pass agent type metadata so the child session can record it in its JSONL header
+	args.push("--agent-type", agentConfig.name);
 	args.push("-p", task);
 
 	// Early abort check — if the signal is already aborted (e.g. queued task whose
@@ -616,6 +618,8 @@ async function executeChain(
 	parentProvider?: string,
 	registry?: ModelRegistry,
 	sessionBaseDir?: string,
+	defaultAgent?: string,
+	defaultModel?: string,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -629,7 +633,7 @@ async function executeChain(
 		// Validate task length after {previous} substitution (can compound across steps)
 		if (task.length > MAX_TASK_LENGTH) {
 			results.push({
-				agent: step.agent || DEFAULT_AGENT,
+				agent: step.agent || defaultAgent || DEFAULT_AGENT,
 				task: `${task.slice(0, 200)}...`,
 				exitCode: 1,
 				output: "",
@@ -642,7 +646,7 @@ async function executeChain(
 		const cwdResult = clampCwd(defaultCwd, step.cwd);
 		if (!cwdResult.ok) {
 			results.push({
-				agent: step.agent || DEFAULT_AGENT,
+				agent: step.agent || defaultAgent || DEFAULT_AGENT,
 				task,
 				exitCode: 1,
 				output: "",
@@ -656,12 +660,12 @@ async function executeChain(
 		const stepSessionDir = sessionBaseDir ? join(sessionBaseDir, `step-${i + 1}`) : undefined;
 		const result = await executeSingle(
 			agents,
-			step.agent,
+			step.agent || defaultAgent,
 			task,
 			cwdResult.cwd,
 			signal,
 			onProgress,
-			step.model,
+			step.model || defaultModel,
 			parentProvider,
 			registry,
 			stepSessionDir,
@@ -805,11 +809,21 @@ function formatSubagentCall(
 	const invalidArg = invalidArgText(theme);
 
 	if (args?.tasks) {
-		return (
-			theme.fg("toolTitle", theme.bold("subagent")) +
-			" " +
-			theme.fg("accent", `parallel (${args.tasks.length} tasks)`)
-		);
+		// Show agent type(s) in the parallel label
+		const agentCounts = new Map<string, number>();
+		for (const t of args.tasks) {
+			const name = t.agent || args.agent || DEFAULT_AGENT;
+			agentCounts.set(name, (agentCounts.get(name) || 0) + 1);
+		}
+		let typeLabel: string;
+		if (agentCounts.size === 1) {
+			const [name] = [...agentCounts.keys()];
+			typeLabel = `${args.tasks.length} ${name} tasks`;
+		} else {
+			const parts = [...agentCounts.entries()].map(([name, count]) => `${count} ${name}`);
+			typeLabel = `${args.tasks.length} tasks: ${parts.join(", ")}`;
+		}
+		return `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", `parallel (${typeLabel})`)}`;
 	}
 	if (args?.chain) {
 		return `${theme.fg("toolTitle", theme.bold("subagent"))} ${theme.fg("accent", `chain (${args.chain.length} steps)`)}`;
@@ -1104,11 +1118,11 @@ export function createSubagentToolDefinition(
 					};
 				} else if (params.tasks) {
 					// Parallel background tasks — each gets its own agent ID and notifies independently
-					const launched: Array<{ id: string; taskText: string }> = [];
+					const launched: Array<{ id: string; agentName: string; taskText: string }> = [];
 					const skipped: Array<{ taskText: string; error: string }> = [];
 					for (let i = 0; i < params.tasks.length; i++) {
 						const item = params.tasks[i];
-						const agentName = item.agent || DEFAULT_AGENT;
+						const agentName = item.agent || params.agent || DEFAULT_AGENT;
 						const cwdResult = clampCwd(cwd, item.cwd);
 						if (!cwdResult.ok) {
 							skipped.push({ taskText: item.task, error: cwdResult.error });
@@ -1119,11 +1133,13 @@ export function createSubagentToolDefinition(
 							item.task,
 							`${agentName} task ${i + 1}/${params.tasks.length}`,
 							cwdResult.cwd,
-							item.model,
+							item.model || params.model,
 						);
-						launched.push({ id: agentId, taskText: item.task });
+						launched.push({ id: agentId, agentName, taskText: item.task });
 					}
-					const listing = launched.map(({ id, taskText }) => `  ${id}: ${taskText.slice(0, 80)}`).join("\n");
+					const listing = launched
+						.map(({ id, agentName, taskText }) => `  ${id} (${agentName}): ${taskText.slice(0, 80)}`)
+						.join("\n");
 					const skippedListing = skipped
 						.map(({ taskText, error }) => `  SKIPPED: ${taskText.slice(0, 60)} — ${error}`)
 						.join("\n");
@@ -1148,7 +1164,7 @@ export function createSubagentToolDefinition(
 					};
 				} else {
 					// Chain mode — sequential, stays as one agent since steps depend on each other
-					const agentName = params.chain![0].agent || DEFAULT_AGENT;
+					const agentName = params.agent || params.chain![0].agent || DEFAULT_AGENT;
 					const taskSummary = `${params.chain!.length}-step chain`;
 					const chainSteps = params.chain!;
 
@@ -1163,6 +1179,8 @@ export function createSubagentToolDefinition(
 							getParentProvider(),
 							modelRegistry,
 							chainSessionDir,
+							params.agent,
+							params.model,
 						);
 						const resultText = results
 							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
@@ -1170,7 +1188,7 @@ export function createSubagentToolDefinition(
 						const failed = results.filter((r) => r.exitCode !== 0);
 						// Per-step session logs are already embedded in resultText via formatSingleResult
 						return {
-							agent: "chain",
+							agent: agentName,
 							task: taskSummary,
 							exitCode: failed.length > 0 ? 1 : 0,
 							output: resultText,

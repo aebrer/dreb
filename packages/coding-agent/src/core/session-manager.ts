@@ -33,6 +33,8 @@ export interface SessionHeader {
 	timestamp: string;
 	cwd: string;
 	parentSession?: string;
+	/** Agent type that executed this session (set for subagent child processes via --agent-type) */
+	agentType?: string;
 }
 
 export interface NewSessionOptions {
@@ -744,6 +746,18 @@ export class SessionManager {
 			this.sessionFile = join(this.getSessionDir(), `${fileTimestamp}_${this.sessionId}.jsonl`);
 		}
 		return this.sessionFile;
+	}
+
+	/**
+	 * Set agent type metadata on the current session header.
+	 * Must be called before the first flush (i.e., before the first assistant message).
+	 * Used by subagent child processes to record which agent definition executed the session.
+	 */
+	setAgentType(agentType: string): void {
+		const header = this.fileEntries[0] as SessionHeader | undefined;
+		if (header?.type === "session") {
+			header.agentType = agentType;
+		}
 	}
 
 	private _buildIndex(): void {

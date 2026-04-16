@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-
+import { type SessionHeader, SessionManager } from "../src/core/session-manager.js";
 import { discoverSessionFile, type SubagentResult } from "../src/core/tools/subagent.js";
 
 // ---------------------------------------------------------------------------
@@ -104,5 +104,50 @@ describe("SubagentResult interface", () => {
 
 		expect(withoutSession.sessionFile).toBeUndefined();
 		expect(withSession.sessionFile).toBe("/tmp/test-session.jsonl");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// SessionHeader agentType field tests
+// ---------------------------------------------------------------------------
+
+describe("SessionHeader agentType", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = createTempDir();
+	});
+
+	afterEach(() => {
+		if (existsSync(tempDir)) {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("setAgentType includes agentType in session header", () => {
+		const sm = SessionManager.create("/tmp", tempDir);
+		sm.setAgentType("feature-dev");
+
+		expect(sm.getSessionId()).toBeTruthy();
+
+		// SessionManager stores the header as fileEntries[0]
+		const header = (sm as any).fileEntries[0] as SessionHeader;
+		expect(header.type).toBe("session");
+		expect(header.agentType).toBe("feature-dev");
+	});
+
+	test("session header omits agentType when setAgentType is not called", () => {
+		const sm = SessionManager.create("/tmp", tempDir);
+		const header = (sm as any).fileEntries[0] as SessionHeader;
+		expect(header.type).toBe("session");
+		expect(header.agentType).toBeUndefined();
+	});
+
+	test("setAgentType is safe to call on empty session manager", () => {
+		const sm = SessionManager.inMemory();
+		// Should not throw even though inMemory creates a session
+		sm.setAgentType("test-agent");
+		const header = (sm as any).fileEntries[0] as SessionHeader;
+		expect(header.agentType).toBe("test-agent");
 	});
 });

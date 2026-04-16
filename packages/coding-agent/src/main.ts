@@ -796,6 +796,11 @@ export async function main(args: string[]) {
 	let sessionManager = await createSessionManager(parsed, cwd, extensionsResult, settingsManager);
 	time("createSessionManager");
 
+	// Set agent type metadata for subagent child processes (must happen before first flush)
+	if (parsed.agentType && sessionManager) {
+		sessionManager.setAgentType(parsed.agentType);
+	}
+
 	// Handle --resume: show session picker
 	if (parsed.resume) {
 		// Compute effective session dir for resume (same logic as createSessionManager)
