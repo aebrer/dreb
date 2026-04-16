@@ -27,6 +27,7 @@ What you get in exchange: a skill system, an extension API, custom agent definit
 - [Context Files](#context-files)
 - [Memory](#memory)
 - [Task Tracking](#task-tracking)
+- [Subagents](#subagents)
 - [Semantic Search](#semantic-search)
 - [Customization](#customization)
   - [Prompt Templates](#prompt-templates)
@@ -326,6 +327,23 @@ The `tasks_update` tool lets the model maintain a visible task list during multi
 The tool uses a full-replacement model — the model sends the complete task list on each call, no incremental updates. The TUI panel is visible by default and renders when active tasks exist. It auto-hides when the task list is empty or all tasks are completed. Toggle visibility with the `app.tasks.toggle` keybinding (unbound by default, configurable in [keybindings](docs/keybindings.md)). The panel displays up to 10 tasks at a time; overflow shows as "... and N more".
 
 Task tracking is prompt-driven: the system prompt includes guidelines for when to use it (3+ step work), concise titles, and a maximum of 20 tasks.
+
+---
+
+## Subagents
+
+The `subagent` tool delegates tasks to independent child agent processes. Each subagent runs in its own process with its own context window, and notifies the parent when complete.
+
+**Modes:**
+- **Single** (`task`): One background agent
+- **Parallel** (`tasks`): Up to 8 concurrent agents (max 4 at a time)
+- **Chain** (`chain`): Sequential pipeline where each step can reference the previous step's output via `{previous}`
+
+**Agent type inheritance:** The top-level `agent` parameter is inherited by parallel tasks and chain steps that don't specify their own. Precedence: per-task `agent` > top-level `agent` > default (`"Explore"`). The `model` parameter follows the same inheritance.
+
+**Agent definitions** live in `~/.dreb/agents/` (global) and `.dreb/agents/` (project). Each is a markdown file with YAML frontmatter specifying `name`, `model` (with provider fallback list), and optional `systemPrompt`. Built-in agents include `Explore` (read-only codebase exploration), `Sandbox` (restricted to `/tmp`), `feature-dev` (strong-tier coding), and several review agents.
+
+**Session metadata:** Each child process records its agent type in the session JSONL header (`agentType` field), providing an audit trail of which agent definition executed the work.
 
 ---
 
