@@ -330,6 +330,75 @@ describe("context buffer", () => {
 		const { controller } = createTestController();
 		expect(controller.buildContext()).toBe("No recent activity.");
 	});
+
+	it("should cap individual entries at 2000 chars", () => {
+		const { controller } = createTestController();
+		const longEntry = "X".repeat(2500);
+		controller.appendContext(longEntry);
+		const ctx = controller.buildContext();
+		// The entry should be capped at 2000 chars
+		expect(ctx.length).toBe(2000);
+	});
+
+	it("should cap total buildContext output at ~8000 chars", () => {
+		const { controller } = createTestController(); // contextMaxEntries: 5
+		// Add 5 entries of 2000 chars each = 10000 chars unbounded
+		for (let i = 0; i < 5; i++) {
+			controller.appendContext(`Entry ${i}: ${"Z".repeat(1900)}`);
+		}
+		const ctx = controller.buildContext();
+		expect(ctx.length).toBeLessThanOrEqual(8000);
+	});
+
+	it("should evict oldest entries with production contextMaxEntries", () => {
+		const { manager } = createTestController();
+		const callbacks: BuddyCallbacks = {
+			onSpeech: vi.fn(),
+			onThinkingStart: vi.fn(),
+			onThinkingEnd: vi.fn(),
+			onHatch: vi.fn(),
+			onReroll: vi.fn(),
+		};
+		const controller = new BuddyController(manager, callbacks, {
+			contextMaxEntries: 20,
+			reactionCooldownMs: 100,
+		});
+
+		for (let i = 0; i < 22; i++) {
+			controller.appendContext(`Entry ${i}: ${"Y".repeat(50)}`);
+		}
+
+		const ctx = controller.buildContext();
+		// Should only contain entries 2-21 (the last 20)
+		expect(ctx).toContain("Entry 2:");
+		expect(ctx).toContain("Entry 21:");
+		expect(ctx).not.toContain("Entry 0:");
+		expect(ctx).not.toContain("Entry 1:");
+	});
+
+	it("should only contain expected prefixes", () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		controller.appendContext("User: hello");
+		controller.appendContext("Assistant: hi there");
+		controller.handleEvent({
+			type: "tool_execution_end",
+			toolName: "bash",
+			toolCallId: "1",
+			result: { content: [{ type: "text", text: "output" }] },
+			isError: false,
+		});
+
+		const ctx = controller.buildContext();
+		const lines = ctx.split("\n");
+		const allowedPrefixes = ["User:", "Assistant:", "Tool ", "Buddy:", "No recent activity."];
+		for (const line of lines) {
+			const hasAllowedPrefix = allowedPrefixes.some((p) => line.startsWith(p));
+			expect(hasAllowedPrefix).toBe(true);
+		}
+	});
 });
 
 // ===========================================================================
@@ -441,6 +510,98 @@ describe("reactions", () => {
 });
 
 // ===========================================================================
+// Buddy self-continuity
+// ===========================================================================
+describe("buddy self-continuity", () => {
+	it("should append Buddy: entry after triggerReaction", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		vi.spyOn(manager, "react").mockResolvedValue("quip");
+
+		await controller.triggerReaction("something happened");
+		expect(controller.buildContext()).toContain("Buddy: quip");
+	});
+
+	it("should append Buddy: entry after handleNameCall", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		vi.spyOn(manager, "respondToNameCall").mockResolvedValue("response");
+
+		await controller.handleNameCall("Hey Testbud!");
+		expect(controller.buildContext()).toContain("Buddy: response");
+	});
+
+	it("should include prior buddy utterances in context", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		vi.spyOn(manager, "react").mockResolvedValue("first quip");
+		await controller.triggerReaction("event 1");
+		expect(controller.buildContext()).toContain("Buddy: first quip");
+
+		// Clear cooldown
+		(controller as any).lastReactionTime = 0;
+
+		vi.spyOn(manager, "react").mockResolvedValue("second quip");
+		await controller.triggerReaction("event 2");
+		const ctx = controller.buildContext();
+		expect(ctx).toContain("Buddy: first quip");
+		expect(ctx).toContain("Buddy: second quip");
+	});
+
+	it("should append Buddy: entry even when onSpeech throws", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		callbacks.onSpeech = vi.fn(() => {
+			throw new Error("UI exploded");
+		});
+
+		vi.spyOn(manager, "react").mockResolvedValue("quip");
+
+		await controller.triggerReaction("something happened");
+		// Context should still have the Buddy: entry (it was set before onSpeech)
+		expect(controller.buildContext()).toContain("Buddy: quip");
+	});
+
+	it("should maintain causal ordering for async buddy utterances", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		// Make react slow — it won't resolve until we call resolveReaction
+		let resolveReaction: (val: string | null) => void;
+		const reactionPromise = new Promise<string | null>((resolve) => {
+			resolveReaction = resolve;
+		});
+		vi.spyOn(manager, "react").mockReturnValue(reactionPromise);
+
+		// Fire a reaction (don't await it)
+		const triggerPromise = controller.triggerReaction("event");
+
+		// While buddy is "thinking", a user message arrives
+		controller.processUserMessage("next");
+
+		// Now resolve the reaction
+		resolveReaction!("quip");
+		await triggerPromise;
+
+		const ctx = controller.buildContext();
+		const buddyIdx = ctx.indexOf("Buddy: quip");
+		const userNextIdx = ctx.indexOf("User: next");
+		// The Buddy: entry should appear BEFORE User: next because the marker
+		// was placed before the user message, and replaceContextEntry swapped in-place
+		expect(buddyIdx).toBeLessThan(userNextIdx);
+	});
+});
+
+// ===========================================================================
 // Name-call detection
 // ===========================================================================
 describe("name-call detection", () => {
@@ -524,6 +685,23 @@ describe("handleNameCall", () => {
 		await controller.handleNameCall("Hey Zorp!");
 		expect(callbacks.onThinkingStart).toHaveBeenCalled();
 		expect(callbacks.onSpeech).toHaveBeenCalledWith("Hello from disk!");
+	});
+
+	it("should throttle rapid name-calls with canReact", async () => {
+		writeStoredBuddy();
+		const { controller, callbacks, manager } = createTestController();
+		manager.load();
+
+		const nameCallSpy = vi.spyOn(manager, "respondToNameCall").mockResolvedValue("Hey!");
+
+		// First call should succeed
+		await controller.handleNameCall("Hey Testbud!");
+		expect(nameCallSpy).toHaveBeenCalledTimes(1);
+		expect(callbacks.onSpeech).toHaveBeenCalledWith("Hey!");
+
+		// Second call within cooldown should be throttled
+		await controller.handleNameCall("Hey Testbud again!");
+		expect(nameCallSpy).toHaveBeenCalledTimes(1); // still 1
 	});
 });
 
@@ -646,6 +824,43 @@ describe("handleEvent", () => {
 
 		controller.handleEvent({ type: "agent_end", messages: [] });
 		expect(reactSpy).not.toHaveBeenCalled();
+	});
+
+	it("should capture full assistant text without truncating", () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		const longText = "A".repeat(300);
+		controller.handleEvent({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: longText }],
+			},
+		});
+
+		const ctx = controller.buildContext();
+		// Should contain the full text (up to 2000-char appendContext cap)
+		expect(ctx).toContain(`Assistant: ${"A".repeat(300)}`);
+	});
+
+	it("should capture full tool output without truncating", () => {
+		writeStoredBuddy();
+		const { controller, manager } = createTestController();
+		manager.load();
+
+		const longOutput = "B".repeat(150);
+		controller.handleEvent({
+			type: "tool_execution_end",
+			toolName: "bash",
+			toolCallId: "1",
+			result: { content: [{ type: "text", text: longOutput }] },
+			isError: false,
+		});
+
+		const ctx = controller.buildContext();
+		expect(ctx).toContain(`Tool bash completed: ${longOutput}`);
 	});
 });
 
