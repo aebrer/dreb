@@ -422,7 +422,7 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 		}
 	} else if (compat.thinkingFormat === "kimi" && model.reasoning) {
 		// Kimi uses thinking: { type: "enabled" | "disabled" } + reasoning_effort + prompt_cache_key.
-		const kimiParams = params as typeof params & {
+		const kimiParams = params as Omit<typeof params, "reasoning_effort"> & {
 			thinking?: { type: "enabled" | "disabled" };
 			reasoning_effort?: string;
 			prompt_cache_key?: string;
@@ -432,7 +432,7 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 			if (effort === "off") {
 				kimiParams.thinking = { type: "disabled" };
 			} else if (effort !== "auto") {
-				(kimiParams as any).reasoning_effort = effort;
+				kimiParams.reasoning_effort = effort;
 				kimiParams.thinking = { type: "enabled" };
 			}
 			// "auto" → omit both thinking and reasoning_effort

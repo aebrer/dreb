@@ -361,6 +361,297 @@ describe("Kimi For Coding OAuth", () => {
 	});
 
 	// ------------------------------------------------------------------------
+	// Abort signal
+	// ------------------------------------------------------------------------
+	describe("abort signal", () => {
+		it("loginKimiCoding rejects with 'Login cancelled' when signal is aborted before polling", async () => {
+			const controller = new AbortController();
+			controller.abort();
+
+			const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+				const url = getUrl(input);
+
+				if (url === DEVICE_AUTH_URL) {
+					return jsonResponse(MOCK_DEVICE_CODE_RESPONSE);
+				}
+
+				if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
+					return jsonResponse({ error: "authorization_pending" });
+				}
+
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			vi.stubGlobal("fetch", fetchMock);
+
+			await expect(
+				loginKimiCoding({
+					onAuth: () => {},
+					signal: controller.signal,
+				}),
+			).rejects.toThrow("Login cancelled");
+		});
+
+		it("loginKimiCoding rejects with 'Login cancelled' when signal is aborted during polling", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date("2026-04-17T00:00:00Z"));
+
+			const controller = new AbortController();
+			let pollCount = 0;
+
+			const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+				const url = getUrl(input);
+
+				if (url === DEVICE_AUTH_URL) {
+					return jsonResponse(MOCK_DEVICE_CODE_RESPONSE);
+				}
+
+				if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
+					pollCount++;
+					return jsonResponse({ error: "authorization_pending" });
+				}
+
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			vi.stubGlobal("fetch", fetchMock);
+
+			const loginPromise = loginKimiCoding({
+				onAuth: () => {},
+				signal: controller.signal,
+			});
+
+			// First poll at interval (5s)
+			await vi.advanceTimersByTimeAsync(5000);
+			expect(pollCount).toBe(1);
+
+			// Abort during the wait before the next poll
+			controller.abort();
+
+			await expect(loginPromise).rejects.toThrow("Login cancelled");
+		});
+
+		it("refreshWithRetry rejects with 'Refresh cancelled' when signal is aborted", async () => {
+			const controller = new AbortController();
+			controller.abort();
+
+			const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+				const url = getUrl(input);
+				if (url === TOKEN_URL) {
+					return new Response("service unavailable", { status: 503 });
+				}
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			vi.stubGlobal("fetch", fetchMock);
+
+			// Call refreshKimiCodingToken with signal to test the underlying refreshWithRetry
+			await expect(
+				refreshKimiCodingToken(
+					{
+						refresh: "old-refresh",
+						access: "old-access",
+						expires: 0,
+					},
+					controller.signal,
+				),
+			).rejects.toThrow("Refresh cancelled");
+
+			// Should not have made any fetch calls
+			expect(fetchMock).not.toHaveBeenCalled();
+		});
+	});
+
+	// ------------------------------------------------------------------------
+	// Network error retry
+	// ------------------------------------------------------------------------
+	describe("network error retry in refresh", () => {
+		it("retries on TypeError (network failure) and then succeeds", async () => {
+			let tokenCall = 0;
+
+			const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+				const url = getUrl(input);
+
+				if (url === TOKEN_URL) {
+					tokenCall++;
+					if (tokenCall === 1) {
+						throw new TypeError("fetch failed");
+					}
+					return jsonResponse({
+						access_token: "retried-access",
+						refresh_token: "retried-refresh",
+						expires_in: 3600,
+					});
+				}
+
+				if (url === MODELS_URL) {
+					return jsonResponse(MOCK_MODELS_RESPONSE);
+				}
+
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			vi.stubGlobal("fetch", fetchMock);
+
+			const fresh = await refreshKimiCodingToken({
+				refresh: "old-refresh",
+				access: "old-access",
+				expires: 0,
+			});
+
+			expect(fresh.access).toBe("retried-access");
+			expect(tokenCall).toBe(2);
+		});
+
+		it("retries on ECONNREFUSED and then succeeds", async () => {
+			let tokenCall = 0;
+
+			const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+				const url = getUrl(input);
+
+				if (url === TOKEN_URL) {
+					tokenCall++;
+					if (tokenCall === 1) {
+						throw new Error("connect ECONNREFUSED 127.0.0.1:443");
+					}
+					return jsonResponse({
+						access_token: "retried-access",
+						refresh_token: "retried-refresh",
+						expires_in: 3600,
+					});
+				}
+
+				if (url === MODELS_URL) {
+					return jsonResponse(MOCK_MODELS_RESPONSE);
+				}
+
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			vi.stubGlobal("fetch", fetchMock);
+
+			const fresh = await refreshKimiCodingToken({
+				refresh: "old-refresh",
+				access: "old-access",
+				expires: 0,
+			});
+
+			expect(fresh.access).toBe("retried-access");
+			expect(tokenCall).toBe(2);
+		});
+	});
+
+	// ------------------------------------------------------------------------
+	// Unexpected poll response
+	// ------------------------------------------------------------------------
+	describe("unexpected poll response", () => {
+		it("throws on response object with neither access_token nor error", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date("2026-04-17T00:00:00Z"));
+
+			const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+				const url = getUrl(input);
+
+				if (url === DEVICE_AUTH_URL) {
+					return jsonResponse(MOCK_DEVICE_CODE_RESPONSE);
+				}
+
+				if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
+					return jsonResponse({ foo: "bar", baz: 42 });
+				}
+
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			vi.stubGlobal("fetch", fetchMock);
+
+			const loginPromise = loginKimiCoding({
+				onAuth: () => {},
+			});
+
+			const rejection = expect(loginPromise).rejects.toThrow("Unexpected token response");
+
+			await vi.advanceTimersByTimeAsync(5000);
+
+			await rejection;
+		});
+	});
+
+	// ------------------------------------------------------------------------
+	// listModels failure resilience
+	// ------------------------------------------------------------------------
+	describe("listModels failure resilience", () => {
+		it("loginKimiCoding proceeds without model enrichment when listModels fails", async () => {
+			const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+				const url = getUrl(input);
+
+				if (url === DEVICE_AUTH_URL) {
+					return jsonResponse(MOCK_DEVICE_CODE_RESPONSE);
+				}
+
+				if (url === TOKEN_URL) {
+					if (String(init?.body).includes("grant_type=urn")) {
+						return jsonResponse(MOCK_TOKEN_SUCCESS);
+					}
+					throw new Error(`Unexpected TOKEN_URL call`);
+				}
+
+				if (url === MODELS_URL) {
+					throw new Error("Models endpoint is down");
+				}
+
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			vi.stubGlobal("fetch", fetchMock);
+
+			const creds = await loginKimiCoding({
+				onAuth: () => {},
+				onProgress: () => {},
+			});
+
+			expect(creds.access).toBe("kimi-access-token-123");
+			expect(creds.refresh).toBe("kimi-refresh-token-456");
+			expect(creds.modelId).toBeUndefined();
+			expect(creds.contextLength).toBeUndefined();
+			expect(creds.modelDisplay).toBeUndefined();
+		});
+
+		it("refreshKimiCodingToken proceeds without model enrichment when listModels fails", async () => {
+			const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+				const url = getUrl(input);
+
+				if (url === TOKEN_URL) {
+					return jsonResponse({
+						access_token: "new-access",
+						refresh_token: "new-refresh",
+						expires_in: 3600,
+					});
+				}
+
+				if (url === MODELS_URL) {
+					throw new Error("Models endpoint is down");
+				}
+
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			vi.stubGlobal("fetch", fetchMock);
+
+			const fresh = await refreshKimiCodingToken({
+				refresh: "old-refresh",
+				access: "old-access",
+				expires: 0,
+			});
+
+			expect(fresh.access).toBe("new-access");
+			expect(fresh.refresh).toBe("new-refresh");
+			expect(fresh.modelId).toBeUndefined();
+			expect(fresh.contextLength).toBeUndefined();
+		});
+	});
+
+	// ------------------------------------------------------------------------
 	// Token refresh
 	// ------------------------------------------------------------------------
 	describe("refreshKimiCodingToken", () => {

@@ -318,6 +318,9 @@ async function pollForAccessToken(
 				const descriptionSuffix = description ? `: ${description}` : "";
 				throw new Error(`Device flow failed: ${error}${descriptionSuffix}`);
 			}
+
+			// Unexpected response: valid object but no access_token or error field
+			throw new Error(`Unexpected token response: ${JSON.stringify(resp)}`);
 		}
 	}
 
@@ -335,6 +338,19 @@ class RetriableError extends Error {
 		super(message);
 		this.name = "RetriableError";
 	}
+}
+
+/**
+ * Heuristic to detect network-level errors that should be retried.
+ * Fetch throws TypeError on network failures; some runtimes include
+ * recognizable substrings in the message.
+ */
+function isNetworkError(error: Error): boolean {
+	if (error instanceof TypeError) return true;
+	const msg = error.message.toLowerCase();
+	return ["fetch failed", "econnrefused", "etimedout", "enotfound", "econnreset", "socket hang up"].some((s) =>
+		msg.includes(s),
+	);
 }
 
 async function refreshWithRetry(refreshToken: string, signal?: AbortSignal): Promise<TokenSuccessResponse> {
@@ -378,10 +394,15 @@ async function refreshWithRetry(refreshToken: string, signal?: AbortSignal): Pro
 		} catch (error) {
 			lastError = error instanceof Error ? error : new Error(String(error));
 
-			// Only retry on retriable errors (network failures or retriable HTTP status codes)
+			// Wrap network errors (TypeError from fetch, or common network failure indicators) as retriable
+			if (!(lastError instanceof RetriableError) && isNetworkError(lastError)) {
+				lastError = new RetriableError(lastError.message);
+			}
+
+			// Retry on retriable errors (network failures or retriable HTTP status codes)
 			if (lastError instanceof RetriableError && attempt < MAX_REFRESH_RETRIES - 1) {
 				const backoffMs = Math.min(1000 * 2 ** attempt, 10000);
-				await new Promise((resolve) => setTimeout(resolve, backoffMs));
+				await abortableSleep(backoffMs, signal);
 				continue;
 			}
 
@@ -411,7 +432,12 @@ export async function loginKimiCoding(options: {
 
 	// Discover model entitlement
 	options.onProgress?.("Discovering available models...");
-	const models = await listModels(tokenResp.access_token);
+	let models: KimiModelInfo[] = [];
+	try {
+		models = await listModels(tokenResp.access_token);
+	} catch {
+		// Proceed without model enrichment if the models endpoint fails
+	}
 
 	const credentials: KimiCredentials = {
 		refresh: tokenResp.refresh_token,
@@ -433,11 +459,19 @@ export async function loginKimiCoding(options: {
 // Refresh
 // ============================================================================
 
-export async function refreshKimiCodingToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-	const tokenResp = await refreshWithRetry(credentials.refresh);
+export async function refreshKimiCodingToken(
+	credentials: OAuthCredentials,
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
+	const tokenResp = await refreshWithRetry(credentials.refresh, signal);
 
 	// Re-discover model entitlement
-	const models = await listModels(tokenResp.access_token);
+	let models: KimiModelInfo[] = [];
+	try {
+		models = await listModels(tokenResp.access_token);
+	} catch {
+		// Proceed without model enrichment if the models endpoint fails
+	}
 
 	const fresh: KimiCredentials = {
 		refresh: tokenResp.refresh_token ?? credentials.refresh,
