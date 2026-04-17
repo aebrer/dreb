@@ -4,6 +4,8 @@
 
 ### Added
 
+- Expanded forbidden-commands guard with destructive operation patterns: `rm -rf /` and variants, `dd` to block devices, `mkfs`, fork bomb `:(){ :|:& };:`, and block device redirects (`> /dev/sda`). Guard now also checks quoted content (catches `echo "rm -rf /" | bash`) and inspects script files before execution (`bash script.sh`). ([#170](https://github.com/aebrer/dreb/issues/170))
+
 - Subagent parallel/chain tasks now inherit the top-level `agent` and `model` parameters when not overridden per-item. Precedence: per-task > top-level > default (`"Explore"`). ([#167](https://github.com/aebrer/dreb/issues/167))
 - Subagent child session JSONL headers now include an `agentType` field recording which agent definition executed the session, providing an audit trail for post-hoc debugging. ([#167](https://github.com/aebrer/dreb/issues/167))
 - `formatSubagentCall` for parallel and chain modes now displays agent type(s) in the tool call header (e.g. `parallel (3 feature-dev tasks)`, `chain (feature-dev, 2 steps)`). ([#167](https://github.com/aebrer/dreb/issues/167))
