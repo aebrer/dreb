@@ -1459,7 +1459,7 @@ async function generateModels() {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 262144,
 			maxTokens: 32768,
-			compat: { thinkingFormat: "kimi" },
+			compat: { thinkingFormat: "kimi", supportsDeveloperRole: false },
 		},
 	];
 	for (const model of kimiCodingOAuthModels) {
