@@ -367,4 +367,128 @@ describe("model fallback lists", () => {
 			}
 		});
 	});
+
+	describe("resolveModelWithFallbacks — parent model final fallback (issue 176)", () => {
+		const parentModels: Model<"anthropic-messages">[] = [
+			{
+				id: "claude-sonnet-4-5",
+				name: "Claude Sonnet 4.5",
+				api: "anthropic-messages",
+				provider: "anthropic",
+				baseUrl: "https://api.anthropic.com",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+				contextWindow: 200000,
+				maxTokens: 8192,
+			},
+			{
+				id: "gpt-4o",
+				name: "GPT-4o",
+				api: "anthropic-messages",
+				provider: "openai",
+				baseUrl: "https://api.openai.com",
+				reasoning: false,
+				input: ["text", "image"],
+				cost: { input: 5, output: 15, cacheRead: 0.5, cacheWrite: 5 },
+				contextWindow: 128000,
+				maxTokens: 4096,
+			},
+		];
+
+		const registry = {
+			getAll: () => parentModels,
+			authStorage: { hasAuth: () => true },
+		} as unknown as Parameters<typeof resolveModelWithFallbacks>[2];
+
+		test("parent model is used when all configured fallbacks fail", () => {
+			// Parent is running openai/gpt-4o; configured fallbacks are anthropic-only unknown models
+			const result = resolveModelWithFallbacks(["nonexistent-a", "nonexistent-b"], "openai", registry, "gpt-4o");
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.modelId).toBe("gpt-4o");
+				expect(result.provider).toBe("openai");
+				expect(result.warning).toContain("Falling back to parent model");
+				expect(result.warning).toContain("gpt-4o");
+			}
+		});
+
+		test("parent model is only tried after configured fallbacks are exhausted", () => {
+			// First configured fallback succeeds — parent model should not be tried
+			const result = resolveModelWithFallbacks(
+				["claude-sonnet-4-5", "nonexistent-b"],
+				"anthropic",
+				registry,
+				"gpt-4o",
+			);
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.modelId).toBe("claude-sonnet-4-5");
+				expect(result.warning).toBeUndefined();
+			}
+		});
+
+		test("if parent model also fails, existing error behavior is preserved", () => {
+			const result = resolveModelWithFallbacks(
+				["nonexistent-a", "nonexistent-b"],
+				"anthropic",
+				registry,
+				"also-nonexistent",
+			);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toContain("None of the fallback models resolved");
+				expect(result.error).toContain("nonexistent-a");
+				expect(result.error).toContain("nonexistent-b");
+				expect(result.error).toContain("also-nonexistent");
+			}
+		});
+
+		test("single configured model fails, parent model succeeds", () => {
+			// Parent is running openai/gpt-4o
+			const result = resolveModelWithFallbacks("nonexistent-model", "openai", registry, "gpt-4o");
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.modelId).toBe("gpt-4o");
+				expect(result.warning).toBeDefined();
+			}
+		});
+
+		test("without parentModel, all failing returns original error", () => {
+			const result = resolveModelWithFallbacks(["nonexistent-a", "nonexistent-b"], "anthropic", registry);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toContain("None of the fallback models resolved");
+				expect(result.error).not.toContain("also-nonexistent");
+			}
+		});
+
+		test("parent model with provider prefix resolves correctly", () => {
+			const result = resolveModelWithFallbacks(["nonexistent-model"], undefined, registry, "openai/gpt-4o");
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.modelId).toBe("gpt-4o");
+				expect(result.provider).toBe("openai");
+			}
+		});
+
+		test("lazy parentModel getter pattern — fresh value after switch", () => {
+			// Simulate mutable session state
+			let currentModel = "claude-sonnet-4-5";
+			const getParentModel = () => currentModel;
+
+			// First call: parent model is claude
+			const before = resolveModelWithFallbacks(["nonexistent-model"], "anthropic", registry, getParentModel());
+			expect(before.ok).toBe(true);
+			if (before.ok) expect(before.modelId).toBe("claude-sonnet-4-5");
+
+			// Simulate mid-session model switch
+			currentModel = "gpt-4o";
+
+			// Second call: parent model is now gpt-4o
+			const after = resolveModelWithFallbacks(["nonexistent-model"], "openai", registry, getParentModel());
+			expect(after.ok).toBe(true);
+			if (after.ok) expect(after.modelId).toBe("gpt-4o");
+		});
+	});
 });

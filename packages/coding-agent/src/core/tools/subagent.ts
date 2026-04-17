@@ -432,7 +432,8 @@ export function resolveModelWithFallbacks(
 	models: string | string[],
 	parentProvider: string | undefined,
 	registry: ModelRegistry | undefined,
-): { ok: true; modelId: string; provider?: string } | { ok: false; error: string } {
+	parentModel?: string,
+): { ok: true; modelId: string; provider?: string; warning?: string } | { ok: false; error: string } {
 	const modelList = Array.isArray(models) ? models : [models];
 	let lastError = "";
 	for (const modelStr of modelList) {
@@ -440,10 +441,21 @@ export function resolveModelWithFallbacks(
 		if (result.ok) return result;
 		lastError = result.error;
 	}
-	if (modelList.length > 1) {
+	// After all configured fallbacks are exhausted, try the parent model as a last resort
+	if (parentModel) {
+		const result = resolveModelStringSingle(parentModel, parentProvider, registry);
+		if (result.ok) {
+			return {
+				...result,
+				warning: `Agent preferred models were unavailable. Falling back to parent model "${result.modelId}".`,
+			};
+		}
+		lastError = result.error;
+	}
+	if (modelList.length > 1 || parentModel) {
 		return {
 			ok: false,
-			error: `None of the fallback models resolved: ${modelList.join(", ")}. Last error: ${lastError}`,
+			error: `None of the fallback models resolved: ${[...modelList, ...(parentModel ? [parentModel] : [])].join(", ")}. Last error: ${lastError}`,
 		};
 	}
 	return { ok: false, error: lastError };
@@ -553,6 +565,7 @@ async function executeSingle(
 	parentProvider?: string,
 	registry?: ModelRegistry,
 	sessionDir?: string,
+	parentModel?: string,
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -582,13 +595,14 @@ async function executeSingle(
 	const modelSpec = modelOverride || config.model;
 	let effectiveConfig: AgentTypeConfig = modelOverride ? { ...config, model: modelOverride } : config;
 	let resolvedProvider = parentProvider;
+	let warning: string | undefined;
 
 	// Resolve and validate the model against the registry before spawning.
 	// This catches typos and invalid model names immediately instead of failing
 	// silently in the child process. Also passes the canonical model ID to the
 	// child, avoiding fuzzy matching entirely.
 	if (modelSpec) {
-		const resolved = resolveModelWithFallbacks(modelSpec, parentProvider, registry);
+		const resolved = resolveModelWithFallbacks(modelSpec, parentProvider, registry, parentModel);
 		if (!resolved.ok) {
 			return {
 				agent: name,
@@ -603,10 +617,15 @@ async function executeSingle(
 		if (resolved.provider) {
 			resolvedProvider = resolved.provider;
 		}
+		warning = resolved.warning;
 	}
 
 	onProgress?.(`Running ${name} agent...`);
-	return spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider, sessionDir);
+	const result = await spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider, sessionDir);
+	if (warning) {
+		result.output = `[WARNING: ${warning}]\n\n${result.output}`;
+	}
+	return result;
 }
 
 async function executeChain(
@@ -620,6 +639,7 @@ async function executeChain(
 	sessionBaseDir?: string,
 	defaultAgent?: string,
 	defaultModel?: string,
+	parentModel?: string,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -669,6 +689,7 @@ async function executeChain(
 			parentProvider,
 			registry,
 			stepSessionDir,
+			parentModel,
 		);
 		results.push(result);
 
@@ -744,6 +765,8 @@ export interface SubagentToolOptions {
 	onBackgroundComplete?: (agentId: string, result: SubagentResult, cancelled: boolean) => void;
 	/** Parent session's current provider (e.g. "anthropic"). Called at each invocation to get the live value after mid-session model switches. */
 	parentProvider?: () => string | undefined;
+	/** Parent session's current model ID. Used as a final fallback when all subagent-configured models fail to resolve. Called at each invocation for fresh value. */
+	parentModel?: () => string | undefined;
 	/** Model registry for validating model names before spawning child processes. */
 	modelRegistry?: ModelRegistry;
 }
@@ -903,6 +926,7 @@ export function createSubagentToolDefinition(
 	const onBackgroundStart = options?.onBackgroundStart;
 	const onBackgroundComplete = options?.onBackgroundComplete;
 	const getParentProvider = options?.parentProvider ?? (() => undefined);
+	const getParentModel = options?.parentModel ?? (() => undefined);
 	const modelRegistry = options?.modelRegistry;
 
 	// Discover agents at definition time to build the prompt guidelines.
@@ -1093,6 +1117,7 @@ export function createSubagentToolDefinition(
 							getParentProvider(),
 							modelRegistry,
 							sessionDir,
+							getParentModel(),
 						),
 					);
 				};
@@ -1182,6 +1207,7 @@ export function createSubagentToolDefinition(
 							chainSessionDir,
 							params.agent,
 							params.model,
+							getParentModel(),
 						);
 						const resultText = results
 							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
