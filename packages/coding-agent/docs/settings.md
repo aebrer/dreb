@@ -128,6 +128,36 @@ When a provider requests a retry delay longer than `maxDelayMs` (e.g., Google's 
 
 `npmCommand` is used for all npm package-manager operations, including `npm root -g`, installs, uninstalls, and `npm install` inside git packages. Use argv-style entries exactly as the process should be launched.
 
+### Security
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `sensitiveFilePaths` | string[] | `[]` | Additional glob patterns for sensitive file paths blocked by the read/bash guard (appended to built-in defaults) |
+| `secretOutputPatterns` | `{ name, pattern }[]` | `[]` | Additional regex patterns for secret scrubbing in tool output (appended to built-in defaults) |
+
+dreb includes two built-in layers of protection against accidental credential exposure through the tool pipeline:
+
+**Output scrubbing** — Tool output is scanned for known secret patterns before it enters the LLM conversation. Detected secrets are replaced with `<REDACTED:pattern_name>` markers. Built-in patterns cover AWS access keys, GitHub tokens (classic and fine-grained PATs), GitLab tokens, OpenAI keys, Anthropic keys, Slack tokens, Stripe keys, URL credentials, PEM private key blocks, and OpenSSH private key blocks. Add custom patterns via `secretOutputPatterns`:
+
+```json
+{
+  "secretOutputPatterns": [
+    { "name": "internal_api_key", "pattern": "INTERNAL_[A-Z0-9]{32,}" }
+  ]
+}
+```
+
+**Sensitive file access guard** — The `read` tool and common bash file-reading commands (`cat`, `head`, `tail`, `grep`, `sed`, `base64`, etc.) are blocked from accessing known credential files. Built-in protected paths: `~/.ssh/id_*` (not `.pub`), `~/.gnupg/private-keys-v1.d/*`, `~/.dreb/secrets/*`, `~/.dreb/agent/auth.json`, `~/.aws/credentials`, `~/.config/gcloud/credentials.db`. Add custom paths via `sensitiveFilePaths` — only trailing wildcards (`*`, `/**`) are supported:
+
+```json
+{
+  "sensitiveFilePaths": [
+    "~/.vault/token",
+    "~/.config/hub"
+  ]
+}
+```
+
 ### Sessions
 
 | Setting | Type | Default | Description |

@@ -4,6 +4,8 @@
 
 ### Added
 
+- Secret scrubbing and sensitive file access guards — two layers of defense against accidental credential leaks through the tool pipeline. Output scrubbing detects and redacts known secret patterns (AWS, GitHub, OpenAI, Anthropic, Slack, Stripe, PEM/SSH keys, URL credentials) in tool output before it enters the LLM conversation. Sensitive file guard blocks read access to credential files (`~/.ssh/id_*`, `~/.aws/credentials`, `~/.dreb/secrets/`, etc.) via both the `read` tool and bash commands. Both layers configurable via `sensitiveFilePaths` and `secretOutputPatterns` settings. ([#171](https://github.com/aebrer/dreb/issues/171))
+
 - Expanded forbidden-commands guard with destructive operation patterns: `rm -rf /` and variants, `dd` to block devices, `mkfs`, fork bomb `:(){ :|:& };:`, and block device redirects (`> /dev/sda`). Guard now also checks quoted content (catches `echo "rm -rf /" | bash`) and inspects script files before execution (`bash script.sh`). ([#170](https://github.com/aebrer/dreb/issues/170))
 
 - Subagent parallel/chain tasks now inherit the top-level `agent` and `model` parameters when not overridden per-item. Precedence: per-task > top-level > default (`"Explore"`). ([#167](https://github.com/aebrer/dreb/issues/167))

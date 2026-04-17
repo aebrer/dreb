@@ -97,6 +97,8 @@ export interface Settings {
 	markdown?: MarkdownSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	forbiddenCommands?: string[]; // Regex patterns for commands blocked by the forbidden-commands guard
+	sensitiveFilePaths?: string[]; // Additional glob patterns for sensitive file paths blocked by the read/bash guard
+	secretOutputPatterns?: { name: string; pattern: string }[]; // Additional regex patterns for secret scrubbing in tool output
 	dream?: {
 		archivePath?: string; // Custom archive location for dream backups (default: ~/.dreb/memory-archive/)
 	};
@@ -946,6 +948,14 @@ export class SettingsManager {
 
 	getForbiddenCommands(): string[] | undefined {
 		return this.settings.forbiddenCommands;
+	}
+
+	getSensitiveFilePaths(): string[] | undefined {
+		return this.settings.sensitiveFilePaths;
+	}
+
+	getSecretOutputPatterns(): { name: string; pattern: string }[] | undefined {
+		return this.settings.secretOutputPatterns;
 	}
 
 	getDreamArchivePath(): string {

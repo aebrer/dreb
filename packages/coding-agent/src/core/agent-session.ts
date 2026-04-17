@@ -66,6 +66,8 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
+import { type SecretPattern, scrubSecrets } from "./secret-scrubber.js";
+import { isSensitivePath } from "./sensitive-paths.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -391,6 +393,21 @@ export class AgentSession {
 				}
 			}
 
+			// Check sensitive file paths — blocks read tool access to credential files
+			if (toolCall.name === "read") {
+				const filePath = (args as Record<string, unknown>)?.path;
+				if (typeof filePath === "string") {
+					const extraSensitivePaths = this.settingsManager?.getSensitiveFilePaths();
+					const sensitiveResult = isSensitivePath(filePath, extraSensitivePaths);
+					if (sensitiveResult.blocked) {
+						return {
+							block: true as const,
+							reason: `File blocked by sensitive-path guard: "${sensitiveResult.pattern}". This file contains credentials that should not be sent to the model.`,
+						};
+					}
+				}
+			}
+
 			const runner = this._extensionRunner;
 			if (!runner?.hasHandlers("tool_call")) {
 				return undefined;
@@ -414,9 +431,44 @@ export class AgentSession {
 		});
 
 		this.agent.setAfterToolCall(async ({ toolCall, args, result, isError }) => {
+			// Scrub secrets from tool output — runs before extensions, cannot be bypassed
+			let scrubbedContent = result.content;
+			const extraSecretPatterns = this.settingsManager?.getSecretOutputPatterns();
+			const compiledExtras: SecretPattern[] | undefined = extraSecretPatterns?.flatMap((p) => {
+				if (!p.pattern || typeof p.pattern !== "string" || p.pattern.trim() === "") {
+					console.warn(`[secret-scrubber] Skipping empty or invalid pattern in secretOutputPatterns: "${p.name}"`);
+					return [];
+				}
+				try {
+					return [{ name: p.name, pattern: new RegExp(p.pattern, "g") }];
+				} catch (err) {
+					console.warn(
+						`[secret-scrubber] Skipping invalid regex in secretOutputPatterns "${p.name}": ${p.pattern} — ${err instanceof Error ? err.message : String(err)}`,
+					);
+					return [];
+				}
+			});
+			let totalRedactions = 0;
+			scrubbedContent = scrubbedContent.map((item) => {
+				if (item.type === "text" && item.text) {
+					const { scrubbed, redactionCount } = scrubSecrets(item.text, compiledExtras);
+					totalRedactions += redactionCount;
+					if (redactionCount > 0) {
+						return { ...item, text: scrubbed };
+					}
+				}
+				return item;
+			});
+
+			// Build override result if secrets were scrubbed
+			let scrubOverride: { content?: typeof scrubbedContent; details?: unknown } | undefined;
+			if (totalRedactions > 0) {
+				scrubOverride = { content: scrubbedContent };
+			}
+
 			const runner = this._extensionRunner;
 			if (!runner?.hasHandlers("tool_result")) {
-				return undefined;
+				return scrubOverride;
 			}
 
 			const hookResult = await runner.emitToolResult({
@@ -424,17 +476,17 @@ export class AgentSession {
 				toolName: toolCall.name,
 				toolCallId: toolCall.id,
 				input: args as Record<string, unknown>,
-				content: result.content,
+				content: scrubbedContent,
 				details: isError ? undefined : result.details,
 				isError,
 			});
 
 			if (!hookResult || isError) {
-				return undefined;
+				return scrubOverride;
 			}
 
 			return {
-				content: hookResult.content,
+				content: hookResult.content ?? scrubOverride?.content,
 				details: hookResult.details,
 			};
 		});
