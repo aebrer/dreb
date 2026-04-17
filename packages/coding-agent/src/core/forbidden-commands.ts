@@ -30,6 +30,13 @@ const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
 	"^dd\\s+.*of=/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)", // dd writing to block devices
 	"^mkfs", // format filesystem (mkfs.ext4, mkfs.xfs, etc.)
 	"^>>?\\s*/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)", // redirect to block device (> and >>)
+	// Sensitive file access — block reading credential files via bash
+	"^(?:cat|head|tail|less|more|strings)\\s+.*(?:~|\\.ssh)/id_(?!.*\\.pub\\b)", // SSH private keys (not .pub)
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/secrets/", // dreb credential store
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/agent/auth\\.json", // dreb auth storage
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.aws/credentials", // AWS credentials
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.gnupg/private-keys", // GPG private keys
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.config/gcloud/credentials\\.db", // GCloud credentials
 ];
 
 /**
@@ -67,6 +74,13 @@ const QUOTED_CONTENT_PATTERNS: string[] = [
 	"^gh api.*bypass",
 	"^git\\s+commit.*--no-verify",
 	":\\(\\)\\s*\\{", // fork bomb
+	// Sensitive file access in quoted content
+	"^(?:cat|head|tail|less|more|strings)\\s+.*(?:~|\\.ssh)/id_(?!.*\\.pub\\b)",
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/secrets/",
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/agent/auth\\.json",
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.aws/credentials",
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.gnupg/private-keys",
+	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.config/gcloud/credentials\\.db",
 ];
 
 /**

@@ -666,6 +666,113 @@ describe("isForbiddenCommand", () => {
 			expect(isForbiddenCommand('echo "rm --no-preserve-root -rf /"')).toBe("^rm\\s+.*--no-preserve-root");
 		});
 	});
+
+	describe("sensitive file access via bash commands", () => {
+		const SSH_PATTERN = "^(?:cat|head|tail|less|more|strings)\\s+.*(?:~|\\.ssh)/id_(?!.*\\.pub\\b)";
+		const DREB_SECRETS_PATTERN = "^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/secrets/";
+		const DREB_AUTH_PATTERN = "^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/agent/auth\\.json";
+		const AWS_CREDS_PATTERN = "^(?:cat|head|tail|less|more|strings)\\s+.*\\.aws/credentials";
+
+		it("blocks cat ~/.ssh/id_rsa", () => {
+			expect(isForbiddenCommand("cat ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks cat ~/.ssh/id_ed25519", () => {
+			expect(isForbiddenCommand("cat ~/.ssh/id_ed25519")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks head -5 ~/.ssh/id_rsa", () => {
+			expect(isForbiddenCommand("head -5 ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks tail ~/.ssh/id_ecdsa", () => {
+			expect(isForbiddenCommand("tail ~/.ssh/id_ecdsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks less ~/.ssh/id_dsa", () => {
+			expect(isForbiddenCommand("less ~/.ssh/id_dsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks more ~/.ssh/id_rsa", () => {
+			expect(isForbiddenCommand("more ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks strings ~/.ssh/id_rsa", () => {
+			expect(isForbiddenCommand("strings ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("allows cat ~/.ssh/id_rsa.pub", () => {
+			expect(isForbiddenCommand("cat ~/.ssh/id_rsa.pub")).toBeUndefined();
+		});
+
+		it("allows cat ~/.ssh/id_ed25519.pub", () => {
+			expect(isForbiddenCommand("cat ~/.ssh/id_ed25519.pub")).toBeUndefined();
+		});
+
+		it("allows cat ~/.ssh/known_hosts", () => {
+			expect(isForbiddenCommand("cat ~/.ssh/known_hosts")).toBeUndefined();
+		});
+
+		it("allows cat ~/.ssh/config", () => {
+			expect(isForbiddenCommand("cat ~/.ssh/config")).toBeUndefined();
+		});
+
+		it("blocks cat on absolute path with .ssh", () => {
+			expect(isForbiddenCommand("cat /home/user/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks cat ~/.dreb/secrets/providers.env", () => {
+			expect(isForbiddenCommand("cat ~/.dreb/secrets/providers.env")).toBe(DREB_SECRETS_PATTERN);
+		});
+
+		it("blocks head ~/.dreb/secrets/anything", () => {
+			expect(isForbiddenCommand("head ~/.dreb/secrets/anything")).toBe(DREB_SECRETS_PATTERN);
+		});
+
+		it("blocks cat ~/.dreb/agent/auth.json", () => {
+			expect(isForbiddenCommand("cat ~/.dreb/agent/auth.json")).toBe(DREB_AUTH_PATTERN);
+		});
+
+		it("blocks cat ~/.aws/credentials", () => {
+			expect(isForbiddenCommand("cat ~/.aws/credentials")).toBe(AWS_CREDS_PATTERN);
+		});
+
+		it("blocks head -5 ~/.aws/credentials", () => {
+			expect(isForbiddenCommand("head -5 ~/.aws/credentials")).toBe(AWS_CREDS_PATTERN);
+		});
+
+		it("allows cat /tmp/normal-file", () => {
+			expect(isForbiddenCommand("cat /tmp/normal-file")).toBeUndefined();
+		});
+
+		it("allows cat ./src/index.ts", () => {
+			expect(isForbiddenCommand("cat ./src/index.ts")).toBeUndefined();
+		});
+
+		it("blocks sensitive file after chaining", () => {
+			expect(isForbiddenCommand("cd /tmp && cat ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks sensitive file inside subshell", () => {
+			expect(isForbiddenCommand("$(cat ~/.ssh/id_rsa)")).toBe(SSH_PATTERN);
+		});
+
+		it('blocks echo "cat ~/.ssh/id_rsa" (quoted content check)', () => {
+			expect(isForbiddenCommand('echo "cat ~/.ssh/id_rsa"')).toBe(SSH_PATTERN);
+		});
+
+		it("blocks cat ~/.gnupg/private-keys path", () => {
+			expect(isForbiddenCommand("cat ~/.gnupg/private-keys-v1.d/abc")).toBe(
+				"^(?:cat|head|tail|less|more|strings)\\s+.*\\.gnupg/private-keys",
+			);
+		});
+
+		it("blocks cat ~/.config/gcloud/credentials.db", () => {
+			expect(isForbiddenCommand("cat ~/.config/gcloud/credentials.db")).toBe(
+				"^(?:cat|head|tail|less|more|strings)\\s+.*\\.config/gcloud/credentials\\.db",
+			);
+		});
+	});
 });
 
 describe("extractScriptPaths", () => {
