@@ -595,6 +595,21 @@ describe("isForbiddenCommand", () => {
 		it("handles multiple consecutive operators", () => {
 			expect(isForbiddenCommand("echo a &&  echo b && git push --force")).toBe("^git push.*(-f\\b|--force)");
 		});
+
+		it("blocks single-quote escape bypass: echo '\\' && rm -rf /", () => {
+			// In bash, single quotes are literal — backslashes don't escape closing '
+			// echo '\' is a complete quoted string, && rm -rf / is a separate command
+			const RM_ROOT_PATTERN = "^rm\\s+.*\\s[\"']?/(\\*|[\\w.-]+/?)?[\"']?(\\s|$)";
+			expect(isForbiddenCommand("echo '\\' && rm -rf /")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks single-quote escape bypass with force push: echo '\\' && git push --force", () => {
+			expect(isForbiddenCommand("echo '\\' && git push --force")).toBe("^git push.*(-f\\b|--force)");
+		});
+
+		it("allows legitimate backslash in single quotes", () => {
+			expect(isForbiddenCommand("echo '\\'")).toBeUndefined();
+		});
 	});
 
 	describe("quoted content checking", () => {
@@ -641,6 +656,14 @@ describe("isForbiddenCommand", () => {
 
 		it('blocks echo "git commit --no-verify"', () => {
 			expect(isForbiddenCommand('echo "git commit --no-verify"')).toBe("^git\\s+commit.*--no-verify");
+		});
+
+		it('blocks echo "gh api repos/r --field bypass=true"', () => {
+			expect(isForbiddenCommand('echo "gh api repos/r --field bypass=true"')).toBe("^gh api.*bypass");
+		});
+
+		it('blocks echo "rm --no-preserve-root -rf /"', () => {
+			expect(isForbiddenCommand('echo "rm --no-preserve-root -rf /"')).toBe("^rm\\s+.*--no-preserve-root");
 		});
 	});
 });

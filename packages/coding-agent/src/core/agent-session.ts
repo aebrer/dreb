@@ -368,7 +368,7 @@ export class AgentSession {
 					if (scriptPaths.length > 0) {
 						const { readFileSync, existsSync } = await import("node:fs");
 						const { resolve } = await import("node:path");
-						const cwd = process.cwd();
+						const cwd = this._cwd;
 
 						for (const scriptPath of scriptPaths) {
 							const resolved = resolve(cwd, scriptPath);

@@ -87,9 +87,9 @@ function maskQuotedContent(command: string): string {
 		const ch = command[i];
 
 		if (ch === "'" && !inDouble) {
-			if (!isEscaped(command, i)) {
-				inSingle = !inSingle;
-			}
+			// In bash, single-quoted strings are completely literal — backslashes
+			// have no escape function inside single quotes. Always toggle.
+			inSingle = !inSingle;
 			result += ch;
 		} else if (ch === '"' && !inSingle) {
 			if (!isEscaped(command, i)) {
@@ -141,7 +141,7 @@ function extractQuotedContent(text: string): string[] {
 
 	for (let i = 0; i < text.length; i++) {
 		const ch = text[i];
-		if ((ch === '"' || ch === "'") && !isEscaped(text, i)) {
+		if ((ch === '"' || ch === "'") && (ch === "'" || !isEscaped(text, i))) {
 			if (inQuote === null) {
 				inQuote = ch;
 				start = i + 1;
