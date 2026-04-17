@@ -1445,6 +1445,29 @@ async function generateModels() {
 		}
 	}
 
+	// Kimi For Coding OAuth models (OpenAI Completions API at api.kimi.com/coding/v1)
+	const KIMI_CODING_OAUTH_BASE_URL = "https://api.kimi.com/coding/v1";
+	const kimiCodingOAuthModels: Model<"openai-completions">[] = [
+		{
+			id: "kimi-for-coding",
+			name: "Kimi For Coding",
+			api: "openai-completions",
+			provider: "kimi-coding-oauth",
+			baseUrl: KIMI_CODING_OAUTH_BASE_URL,
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 262144,
+			maxTokens: 32768,
+			compat: { thinkingFormat: "kimi", supportsDeveloperRole: false },
+		},
+	];
+	for (const model of kimiCodingOAuthModels) {
+		if (!allModels.some(m => m.provider === "kimi-coding-oauth" && m.id === model.id)) {
+			allModels.push(model);
+		}
+	}
+
 	const azureOpenAiModels: Model<Api>[] = allModels
 		.filter((model) => model.provider === "openai" && model.api === "openai-responses")
 		.map((model) => ({

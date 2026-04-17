@@ -91,6 +91,7 @@ For each built-in provider, dreb maintains a list of tool-capable models, update
 - GitHub Copilot
 - Google Gemini CLI
 - Google Antigravity
+- Kimi For Coding
 
 **API keys:**
 - Anthropic
