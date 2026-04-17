@@ -668,10 +668,14 @@ describe("isForbiddenCommand", () => {
 	});
 
 	describe("sensitive file access via bash commands", () => {
-		const SSH_PATTERN = "^(?:cat|head|tail|less|more|strings)\\s+.*(?:~|\\.ssh)/id_(?!.*\\.pub\\b)";
-		const DREB_SECRETS_PATTERN = "^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/secrets/";
-		const DREB_AUTH_PATTERN = "^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/agent/auth\\.json";
-		const AWS_CREDS_PATTERN = "^(?:cat|head|tail|less|more|strings)\\s+.*\\.aws/credentials";
+		const SSH_PATTERN =
+			"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*(?:~|\\.ssh)/id_(?!.*\\.pub\\b)";
+		const DREB_SECRETS_PATTERN =
+			"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.dreb/secrets/";
+		const DREB_AUTH_PATTERN =
+			"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.dreb/agent/auth\\.json";
+		const AWS_CREDS_PATTERN =
+			"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.aws/credentials";
 
 		it("blocks cat ~/.ssh/id_rsa", () => {
 			expect(isForbiddenCommand("cat ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
@@ -763,14 +767,55 @@ describe("isForbiddenCommand", () => {
 
 		it("blocks cat ~/.gnupg/private-keys path", () => {
 			expect(isForbiddenCommand("cat ~/.gnupg/private-keys-v1.d/abc")).toBe(
-				"^(?:cat|head|tail|less|more|strings)\\s+.*\\.gnupg/private-keys",
+				"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.gnupg/private-keys",
 			);
 		});
 
 		it("blocks cat ~/.config/gcloud/credentials.db", () => {
 			expect(isForbiddenCommand("cat ~/.config/gcloud/credentials.db")).toBe(
-				"^(?:cat|head|tail|less|more|strings)\\s+.*\\.config/gcloud/credentials\\.db",
+				"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.config/gcloud/credentials\\.db",
 			);
+		});
+
+		// Finding 3 fixes: absolute paths and additional commands
+		it("blocks /bin/cat ~/.ssh/id_rsa (absolute path)", () => {
+			expect(isForbiddenCommand("/bin/cat ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks /usr/bin/cat ~/.ssh/id_rsa (absolute path)", () => {
+			expect(isForbiddenCommand("/usr/bin/cat ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks grep on SSH private key", () => {
+			expect(isForbiddenCommand('grep "" ~/.ssh/id_rsa')).toBe(SSH_PATTERN);
+		});
+
+		it("blocks sed on SSH private key", () => {
+			expect(isForbiddenCommand("sed '' ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks base64 on SSH private key", () => {
+			expect(isForbiddenCommand("base64 ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks xxd on SSH private key", () => {
+			expect(isForbiddenCommand("xxd ~/.ssh/id_rsa")).toBe(SSH_PATTERN);
+		});
+
+		it("blocks awk on AWS credentials", () => {
+			expect(isForbiddenCommand("awk '{print}' ~/.aws/credentials")).toBe(AWS_CREDS_PATTERN);
+		});
+
+		it("blocks /usr/bin/base64 on AWS credentials (absolute path)", () => {
+			expect(isForbiddenCommand("/usr/bin/base64 ~/.aws/credentials")).toBe(AWS_CREDS_PATTERN);
+		});
+
+		it("still allows grep on normal files", () => {
+			expect(isForbiddenCommand("grep pattern ./src/index.ts")).toBeUndefined();
+		});
+
+		it("still allows base64 on normal files", () => {
+			expect(isForbiddenCommand("base64 /tmp/safe-file")).toBeUndefined();
 		});
 	});
 });

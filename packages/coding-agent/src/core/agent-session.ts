@@ -434,10 +434,14 @@ export class AgentSession {
 			// Scrub secrets from tool output — runs before extensions, cannot be bypassed
 			let scrubbedContent = result.content;
 			const extraSecretPatterns = this.settingsManager?.getSecretOutputPatterns();
-			const compiledExtras: SecretPattern[] | undefined = extraSecretPatterns?.map((p) => ({
-				name: p.name,
-				pattern: new RegExp(p.pattern, "g"),
-			}));
+			const compiledExtras: SecretPattern[] | undefined = extraSecretPatterns?.flatMap((p) => {
+				try {
+					return [{ name: p.name, pattern: new RegExp(p.pattern, "g") }];
+				} catch {
+					// Invalid regex in settings — skip silently rather than crashing the session
+					return [];
+				}
+			});
 			let totalRedactions = 0;
 			scrubbedContent = scrubbedContent.map((item) => {
 				if (item.type === "text" && item.text) {

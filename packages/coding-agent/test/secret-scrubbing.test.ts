@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_SECRET_PATTERNS, type SecretPattern, scrubSecrets } from "../src/core/secret-scrubber.js";
 import { DEFAULT_SENSITIVE_PATTERNS, isSensitivePath } from "../src/core/sensitive-paths.js";
 
@@ -88,6 +88,22 @@ describe("scrubSecrets", () => {
 
 		it("does not redact ghp_ with insufficient length", () => {
 			const input = "ghp_short";
+			const { scrubbed, redactionCount } = scrubSecrets(input);
+			expect(scrubbed).toBe(input);
+			expect(redactionCount).toBe(0);
+		});
+	});
+
+	describe("GitHub fine-grained PATs", () => {
+		it("redacts github_pat_ token", () => {
+			const token = `github_pat_${"A".repeat(82)}`;
+			const { scrubbed, redactionCount } = scrubSecrets(`GITHUB_TOKEN=${token}`);
+			expect(scrubbed).toBe("GITHUB_TOKEN=<REDACTED:github_token>");
+			expect(redactionCount).toBe(1);
+		});
+
+		it("does not redact github_pat_ with insufficient length", () => {
+			const input = "github_pat_short";
 			const { scrubbed, redactionCount } = scrubSecrets(input);
 			expect(scrubbed).toBe(input);
 			expect(redactionCount).toBe(0);
@@ -577,6 +593,23 @@ describe("isSensitivePath", () => {
 		it("extra patterns do not override default allowlists", () => {
 			// .pub files are still allowed even with extra patterns
 			expect(isSensitivePath("~/.ssh/id_rsa.pub", ["~/.extra/*"]).blocked).toBe(false);
+		});
+
+		it("warns and skips mid-path wildcard patterns", () => {
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			const result = isSensitivePath("~/vaults/myteam/key.pem", ["~/vaults/*/key.pem"]);
+			expect(result.blocked).toBe(false);
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining("Skipping unsupported mid-path wildcard pattern"),
+			);
+			warnSpy.mockRestore();
+		});
+
+		it("does not warn for trailing wildcard patterns", () => {
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			isSensitivePath("~/.vault/token", ["~/.vault/*"]);
+			expect(warnSpy).not.toHaveBeenCalled();
+			warnSpy.mockRestore();
 		});
 	});
 });

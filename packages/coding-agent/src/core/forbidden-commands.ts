@@ -31,12 +31,13 @@ const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
 	"^mkfs", // format filesystem (mkfs.ext4, mkfs.xfs, etc.)
 	"^>>?\\s*/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)", // redirect to block device (> and >>)
 	// Sensitive file access — block reading credential files via bash
-	"^(?:cat|head|tail|less|more|strings)\\s+.*(?:~|\\.ssh)/id_(?!.*\\.pub\\b)", // SSH private keys (not .pub)
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/secrets/", // dreb credential store
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/agent/auth\\.json", // dreb auth storage
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.aws/credentials", // AWS credentials
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.gnupg/private-keys", // GPG private keys
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.config/gcloud/credentials\\.db", // GCloud credentials
+	// Matches bare commands AND absolute-path invocations (/bin/cat, /usr/bin/cat, etc.)
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*(?:~|\\.ssh)/id_(?!.*\\.pub\\b)", // SSH private keys (not .pub)
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.dreb/secrets/", // dreb credential store
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.dreb/agent/auth\\.json", // dreb auth storage
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.aws/credentials", // AWS credentials
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.gnupg/private-keys", // GPG private keys
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.config/gcloud/credentials\\.db", // GCloud credentials
 ];
 
 /**
@@ -75,12 +76,12 @@ const QUOTED_CONTENT_PATTERNS: string[] = [
 	"^git\\s+commit.*--no-verify",
 	":\\(\\)\\s*\\{", // fork bomb
 	// Sensitive file access in quoted content
-	"^(?:cat|head|tail|less|more|strings)\\s+.*(?:~|\\.ssh)/id_(?!.*\\.pub\\b)",
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/secrets/",
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.dreb/agent/auth\\.json",
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.aws/credentials",
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.gnupg/private-keys",
-	"^(?:cat|head|tail|less|more|strings)\\s+.*\\.config/gcloud/credentials\\.db",
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*(?:~|\\.ssh)/id_(?!.*\\.pub\\b)",
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.dreb/secrets/",
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.dreb/agent/auth\\.json",
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.aws/credentials",
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.gnupg/private-keys",
+	"^(?:/\\S+/)?(?:cat|head|tail|less|more|strings|grep|sed|awk|base64|xxd)\\s+.*\\.config/gcloud/credentials\\.db",
 ];
 
 /**

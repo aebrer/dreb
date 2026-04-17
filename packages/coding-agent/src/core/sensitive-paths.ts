@@ -35,6 +35,16 @@ function resolvePath(filepath: string): string {
 }
 
 /**
+ * Check whether a pattern contains unsupported mid-path wildcards.
+ * Only trailing wildcards are supported. Mid-path wildcards silently fail.
+ */
+function hasMidPathWildcard(pattern: string): boolean {
+	// Strip trailing wildcard(s), then check if any wildcards remain
+	const withoutTrailing = pattern.replace(/\/?\*{1,2}$/, "");
+	return withoutTrailing.includes("*");
+}
+
+/**
  * Check whether a single pattern matches a resolved absolute path.
  * Returns true if the path matches the pattern.
  *
@@ -42,33 +52,27 @@ function resolvePath(filepath: string): string {
  *   - Ends with `/*` or `/**` → directory prefix match
  *   - Ends with `*` (but not `/*`) → prefix match on the literal prefix
  *   - Otherwise → exact match
+ *
+ * Mid-path wildcards are NOT supported and will not match anything.
+ * Use hasMidPathWildcard() to detect and warn about these before calling.
  */
-function matchesPattern(resolvedPath: string, pattern: string): { matches: boolean; allowlisted?: boolean } {
+function matchesPattern(resolvedPath: string, pattern: string): boolean {
 	const expandedPattern = resolvePath(pattern.replace(/\/?\*{1,2}$/, ""));
 
 	// Directory match: pattern ends with /* or /**
 	if (pattern.endsWith("/**") || pattern.endsWith("/*")) {
 		const dirPrefix = expandedPattern.endsWith("/") ? expandedPattern : `${expandedPattern}/`;
 		// Match the directory itself or anything under it
-		if (resolvedPath === expandedPattern || resolvedPath.startsWith(dirPrefix)) {
-			return { matches: true };
-		}
-		return { matches: false };
+		return resolvedPath === expandedPattern || resolvedPath.startsWith(dirPrefix);
 	}
 
 	// Prefix match: pattern ends with * (e.g. ~/.ssh/id_*)
 	if (pattern.endsWith("*")) {
-		if (resolvedPath.startsWith(expandedPattern)) {
-			return { matches: true };
-		}
-		return { matches: false };
+		return resolvedPath.startsWith(expandedPattern);
 	}
 
 	// Exact match
-	if (resolvedPath === resolvePath(pattern)) {
-		return { matches: true };
-	}
-	return { matches: false };
+	return resolvedPath === resolvePath(pattern);
 }
 
 /**
@@ -85,8 +89,7 @@ export function isSensitivePath(filepath: string, extraPatterns?: string[]): Sen
 
 	// Check default patterns
 	for (const pattern of DEFAULT_SENSITIVE_PATTERNS) {
-		const result = matchesPattern(resolved, pattern);
-		if (result.matches) {
+		if (matchesPattern(resolved, pattern)) {
 			// Special case: SSH id_* pattern — allowlist .pub files
 			if (pattern === "~/.ssh/id_*" && resolved.endsWith(SSH_PUB_SUFFIX)) {
 				continue;
@@ -98,8 +101,15 @@ export function isSensitivePath(filepath: string, extraPatterns?: string[]): Sen
 	// Check extra patterns
 	if (extraPatterns) {
 		for (const pattern of extraPatterns) {
-			const result = matchesPattern(resolved, pattern);
-			if (result.matches) {
+			if (hasMidPathWildcard(pattern)) {
+				// Mid-path wildcards like ~/vaults/*/key.pem are not supported.
+				// Skip with a console warning so misconfigurations are visible.
+				console.warn(
+					`[sensitive-paths] Skipping unsupported mid-path wildcard pattern: "${pattern}". Only trailing wildcards (e.g. "~/.ssh/id_*", "~/.secrets/*") are supported.`,
+				);
+				continue;
+			}
+			if (matchesPattern(resolved, pattern)) {
 				return { blocked: true, pattern };
 			}
 		}

@@ -16,7 +16,7 @@ const opensshPrivateKey = /-----BEGIN OPENSSH PRIVATE KEY-----[\s\S]*?-----END O
 // Single-line patterns
 const awsAccessKey = /\bAKIA[0-9A-Z]{16}\b/g;
 const githubToken =
-	/ghp_[A-Za-z0-9_]{36,}|gho_[A-Za-z0-9_]{36,}|ghu_[A-Za-z0-9_]{36,}|ghs_[A-Za-z0-9_]{36,}|ghr_[A-Za-z0-9_]{36,}/g;
+	/ghp_[A-Za-z0-9_]{36,}|gho_[A-Za-z0-9_]{36,}|ghu_[A-Za-z0-9_]{36,}|ghs_[A-Za-z0-9_]{36,}|ghr_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{22,}/g;
 const gitlabToken = /glpat-[0-9a-zA-Z_-]{20,}/g;
 const anthropicKey = /sk-ant-[a-zA-Z0-9_-]{90,}/g;
 const openaiKey = /sk-(?!ant-)[a-zA-Z0-9_-]{20,}/g;
