@@ -613,3 +613,21 @@ describe("isSensitivePath", () => {
 		});
 	});
 });
+
+// ============================================================================
+// Empty/Invalid Pattern Guards (agent-session.ts wiring validation)
+// ============================================================================
+
+describe("empty-string regex behavior", () => {
+	it("empty-string regex pattern mangles output (documents why caller must guard)", () => {
+		// An empty-string regex matches every zero-width position between characters.
+		// This is why agent-session.ts guards against empty patterns before calling scrubSecrets.
+		const emptyPattern: SecretPattern[] = [{ name: "bad", pattern: /(?:)/g }];
+		const input = "hello";
+		const { scrubbed, redactionCount } = scrubSecrets(input, emptyPattern);
+		// Inserts <REDACTED:bad> between every character + at start/end
+		expect(redactionCount).toBe(6); // h-e-l-l-o = 5 chars, 6 zero-width positions
+		expect(scrubbed).toContain("<REDACTED:bad>");
+		expect(scrubbed.length).toBeGreaterThan(input.length * 5);
+	});
+});

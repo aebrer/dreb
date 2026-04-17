@@ -435,10 +435,16 @@ export class AgentSession {
 			let scrubbedContent = result.content;
 			const extraSecretPatterns = this.settingsManager?.getSecretOutputPatterns();
 			const compiledExtras: SecretPattern[] | undefined = extraSecretPatterns?.flatMap((p) => {
+				if (!p.pattern || typeof p.pattern !== "string" || p.pattern.trim() === "") {
+					console.warn(`[secret-scrubber] Skipping empty or invalid pattern in secretOutputPatterns: "${p.name}"`);
+					return [];
+				}
 				try {
 					return [{ name: p.name, pattern: new RegExp(p.pattern, "g") }];
-				} catch {
-					// Invalid regex in settings — skip silently rather than crashing the session
+				} catch (err) {
+					console.warn(
+						`[secret-scrubber] Skipping invalid regex in secretOutputPatterns "${p.name}": ${p.pattern} — ${err instanceof Error ? err.message : String(err)}`,
+					);
 					return [];
 				}
 			});
