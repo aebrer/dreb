@@ -61,7 +61,7 @@ import {
 	type TurnStartEvent,
 	wrapRegisteredTools,
 } from "./extensions/index.js";
-import { isForbiddenCommand } from "./forbidden-commands.js";
+import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./forbidden-commands.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
@@ -361,6 +361,32 @@ export class AgentSession {
 							block: true as const,
 							reason: `Command blocked by forbidden-commands guard: "${pattern}" matched "${command}"`,
 						};
+					}
+
+					// Check script files referenced by the command (e.g., bash script.sh)
+					const scriptPaths = extractScriptPaths(command);
+					if (scriptPaths.length > 0) {
+						const { readFileSync, existsSync } = await import("node:fs");
+						const { resolve } = await import("node:path");
+						const cwd = process.cwd();
+
+						for (const scriptPath of scriptPaths) {
+							const resolved = resolve(cwd, scriptPath);
+							if (existsSync(resolved)) {
+								try {
+									const content = readFileSync(resolved, "utf-8");
+									const match = checkScriptContent(content, customPatterns);
+									if (match) {
+										return {
+											block: true as const,
+											reason: `Command blocked by forbidden-commands guard: script "${scriptPath}" contains forbidden command at line ${match.line}: "${match.text}" (matched pattern "${match.pattern}")`,
+										};
+									}
+								} catch {
+									// File not readable — skip (could be binary, permission denied, etc.)
+								}
+							}
+						}
 					}
 				}
 			}

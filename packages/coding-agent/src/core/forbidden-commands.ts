@@ -26,10 +26,10 @@ const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
 	"^git\\s+commit.*--no-verify", // bypass pre-commit hooks via --no-verify flag
 	"^(?:export\\s+)?SKIP_?VALIDATION=1", // bypass pre-commit hooks via SKIP_VALIDATION env var
 	"^rm\\s+.*--no-preserve-root", // rm with explicit safety override
-	"^rm\\s+.*\\s/(\\*|[\\w.-]+/?)?\\s*$", // rm targeting root or top-level dirs (/, /*, /home, /etc)
+	"^rm\\s+.*\\s[\"']?/(\\*|[\\w.-]+/?)?[\"']?(\\s|$)", // rm targeting root or top-level dirs (/, /*, /home, /etc)
 	"^dd\\s+.*of=/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)", // dd writing to block devices
 	"^mkfs", // format filesystem (mkfs.ext4, mkfs.xfs, etc.)
-	"^>\\s*/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)", // redirect to block device
+	"^>>?\\s*/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)", // redirect to block device (> and >>)
 ];
 
 /**
@@ -42,6 +42,31 @@ const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
  */
 const FULL_COMMAND_PATTERNS: string[] = [
 	":\\(\\)\\s*\\{", // fork bomb :(){ :|:& };:
+];
+
+/**
+ * Patterns also checked against content extracted from within quoted strings.
+ * Catches commands like `echo "rm -rf /"` where the quoted content is a
+ * destructive command that could be piped to execution via `| bash`.
+ *
+ * These are intentionally limited to destructive/dangerous patterns — env var
+ * patterns like HUSKY=0 are excluded because they appear legitimately in
+ * contexts like `git log --grep="HUSKY=0"`.
+ *
+ * The fork bomb pattern from FULL_COMMAND_PATTERNS is included here because
+ * it also needs to be caught when quoted (e.g., `echo ":(){ :|:& };:"`).
+ */
+const QUOTED_CONTENT_PATTERNS: string[] = [
+	"^rm\\s+.*--no-preserve-root",
+	"^rm\\s+.*\\s/(\\*|[\\w.-]+/?)?(\\s|$)",
+	"^dd\\s+.*of=/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)",
+	"^mkfs",
+	"^>>?\\s*/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)",
+	"^gh pr merge.*--admin",
+	"^git push.*(-f\\b|--force)",
+	"^gh api.*bypass",
+	"^git\\s+commit.*--no-verify",
+	":\\(\\)\\s*\\{", // fork bomb
 ];
 
 /**
@@ -99,6 +124,37 @@ function isEscaped(str: string, i: number): boolean {
 		j--;
 	}
 	return count % 2 === 1;
+}
+
+/**
+ * Extract text content from within quoted strings in a segment.
+ * Used to catch commands like `echo "rm -rf /" | bash` where dangerous
+ * content is hidden inside quotes. The normal segment check won't catch
+ * this because `echo` (not `rm`) starts the segment. By extracting the
+ * quoted content and checking it separately, we block segments that
+ * contain forbidden commands in their quoted arguments.
+ */
+function extractQuotedContent(text: string): string[] {
+	const results: string[] = [];
+	let inQuote: string | null = null;
+	let start = -1;
+
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if ((ch === '"' || ch === "'") && !isEscaped(text, i)) {
+			if (inQuote === null) {
+				inQuote = ch;
+				start = i + 1;
+			} else if (ch === inQuote) {
+				const content = text.substring(start, i).trim();
+				if (content.length > 0) {
+					results.push(content);
+				}
+				inQuote = null;
+			}
+		}
+	}
+	return results;
 }
 
 /**
@@ -205,6 +261,11 @@ export function isForbiddenCommand(command: string, extraPatterns?: string[]): s
 
 	const segments = splitCommandSegments(command);
 
+	// Combine quoted-content patterns with any user extras for quoted checking
+	const allQuotedPatterns = validatedExtras
+		? [...QUOTED_CONTENT_PATTERNS, ...validatedExtras]
+		: QUOTED_CONTENT_PATTERNS;
+
 	for (const segment of segments) {
 		// Check both the raw segment and the subshell-unwrapped version
 		const toCheck = [segment, stripSubshellWrapper(segment)];
@@ -219,6 +280,102 @@ export function isForbiddenCommand(command: string, extraPatterns?: string[]): s
 					// Invalid regex in user settings — skip it
 				}
 			}
+		}
+
+		// Check content within quotes for embedded dangerous commands.
+		// There is no legitimate reason for an agent to output/echo forbidden
+		// commands, and quoted content could be piped to execution via | bash.
+		const quotedContent = extractQuotedContent(segment);
+		for (const content of quotedContent) {
+			for (const pattern of allQuotedPatterns) {
+				try {
+					const re = new RegExp(pattern);
+					if (re.test(content)) {
+						return pattern;
+					}
+				} catch {
+					// Invalid regex — skip
+				}
+			}
+		}
+	}
+
+	return undefined;
+}
+
+/**
+ * Extract file paths from a command that executes a script file.
+ * Detects: `bash file`, `sh file`, `source file`, `. file`, and input
+ * redirects like `bash < file`.
+ *
+ * Returns an array of file paths (usually 0 or 1). Does not check whether
+ * the files exist — the caller handles that.
+ *
+ * @returns Array of script file paths referenced by the command.
+ */
+export function extractScriptPaths(command: string): string[] {
+	const paths: string[] = [];
+	const segments = splitCommandSegments(command);
+
+	for (const segment of segments) {
+		const trimmed = segment.trim();
+
+		// bash < file.sh (input redirect) — check before shell exec to avoid
+		// the shell exec regex matching "<" as a filename
+		const redirectMatch = trimmed.match(/^(?:bash|sh|zsh|ksh)(?:\s+-\S+)*\s+<\s*(\S+)/);
+		if (redirectMatch?.[1]) {
+			paths.push(redirectMatch[1]);
+			continue;
+		}
+
+		// bash [flags] file.sh, sh [flags] file.sh
+		// Flags are short options like -x, -e, -ex, etc.
+		// Exclude -c (inline command — handled by quoted content check)
+		if (/^(?:bash|sh|zsh|ksh)\s+-c\b/.test(trimmed)) {
+			continue;
+		}
+		const shellExecMatch = trimmed.match(/^(?:bash|sh|zsh|ksh)\s+(?:-\S+\s+)*(\S+)/);
+		if (shellExecMatch) {
+			const filePath = shellExecMatch[1];
+			if (filePath && !filePath.startsWith("-")) {
+				paths.push(filePath);
+			}
+		}
+
+		// source file.sh, . file.sh
+		const sourceMatch = trimmed.match(/^(?:source|\.)\s+(\S+)/);
+		if (sourceMatch?.[1]) {
+			paths.push(sourceMatch[1]);
+		}
+	}
+
+	return [...new Set(paths)]; // deduplicate
+}
+
+/**
+ * Check file content line-by-line for forbidden commands.
+ * Each non-empty, non-comment line is passed through `isForbiddenCommand`.
+ *
+ * This is a pure function — the caller is responsible for reading the file
+ * and passing the content string.
+ *
+ * @returns The first match with pattern, line number, and line text, or undefined.
+ */
+export function checkScriptContent(
+	content: string,
+	extraPatterns?: string[],
+): { pattern: string; line: number; text: string } | undefined {
+	const lines = content.split("\n");
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i].trim();
+
+		// Skip empty lines and comments
+		if (!line || line.startsWith("#")) continue;
+
+		const pattern = isForbiddenCommand(line, extraPatterns);
+		if (pattern) {
+			return { pattern, line: i + 1, text: line };
 		}
 	}
 
