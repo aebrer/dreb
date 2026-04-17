@@ -272,7 +272,7 @@ async function pollForAccessToken(
 		const waitMs = Math.min(intervalMs, remainingMs);
 		await abortableSleep(waitMs, signal);
 
-		const raw = await fetchJson(OAUTH_TOKEN_URL, {
+		const tokenResponse = await fetch(OAUTH_TOKEN_URL, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
@@ -285,43 +285,43 @@ async function pollForAccessToken(
 			}),
 		});
 
-		if (raw && typeof raw === "object") {
-			const resp = raw as Record<string, unknown>;
+		// The token endpoint returns 400 for authorization_pending / slow_down / expired_token.
+		// We must read the body regardless of status to handle the OAuth error codes.
+		const resp = (await tokenResponse.json()) as Record<string, unknown>;
 
-			// Success: has access_token
-			if (typeof resp.access_token === "string") {
-				return resp as unknown as TokenSuccessResponse;
-			}
-
-			// Error response
-			if (typeof resp.error === "string") {
-				const error = resp.error;
-				const description = resp.error_description as string | undefined;
-				const newInterval = resp.interval as number | undefined;
-
-				if (error === "authorization_pending") {
-					continue;
-				}
-
-				if (error === "slow_down") {
-					intervalMs =
-						typeof newInterval === "number" && newInterval > 0
-							? newInterval * 1000
-							: Math.max(1000, intervalMs + 5000);
-					continue;
-				}
-
-				if (error === "expired_token") {
-					throw new Error("Device code expired. Please try logging in again.");
-				}
-
-				const descriptionSuffix = description ? `: ${description}` : "";
-				throw new Error(`Device flow failed: ${error}${descriptionSuffix}`);
-			}
-
-			// Unexpected response: valid object but no access_token or error field
-			throw new Error(`Unexpected token response: ${JSON.stringify(resp)}`);
+		// Success: has access_token
+		if (typeof resp.access_token === "string") {
+			return resp as unknown as TokenSuccessResponse;
 		}
+
+		// Error response (RFC 8628 §3.5)
+		if (typeof resp.error === "string") {
+			const error = resp.error;
+			const description = resp.error_description as string | undefined;
+			const newInterval = resp.interval as number | undefined;
+
+			if (error === "authorization_pending") {
+				continue;
+			}
+
+			if (error === "slow_down") {
+				intervalMs =
+					typeof newInterval === "number" && newInterval > 0
+						? newInterval * 1000
+						: Math.max(1000, intervalMs + 5000);
+				continue;
+			}
+
+			if (error === "expired_token") {
+				throw new Error("Device code expired. Please try logging in again.");
+			}
+
+			const descriptionSuffix = description ? `: ${description}` : "";
+			throw new Error(`Device flow failed: ${error}${descriptionSuffix}`);
+		}
+
+		// Unexpected response: valid object but no access_token or error field
+		throw new Error(`Unexpected token response: ${JSON.stringify(resp)}`);
 	}
 
 	throw new Error("Device flow timed out");
@@ -423,8 +423,11 @@ export async function loginKimiCoding(options: {
 	signal?: AbortSignal;
 }): Promise<OAuthCredentials> {
 	const device = await startDeviceFlow();
+	// Kimi's device page expects user_code as a query parameter
+	const authUrl = new URL(device.verification_uri);
+	authUrl.searchParams.set("user_code", device.user_code);
 	options.onAuth({
-		url: device.verification_uri,
+		url: authUrl.toString(),
 		instructions: `Enter code: ${device.user_code}`,
 	});
 

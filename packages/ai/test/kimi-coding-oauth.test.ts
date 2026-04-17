@@ -130,7 +130,7 @@ describe("Kimi For Coding OAuth", () => {
 							(c) => getUrl(c[0]) === TOKEN_URL && String(c[1]?.body).includes("grant_type=urn"),
 						).length;
 						if (callCount === 1) {
-							return jsonResponse({ error: "authorization_pending" });
+							return jsonResponse({ error: "authorization_pending" }, 400);
 						}
 						return jsonResponse(MOCK_TOKEN_SUCCESS);
 					}
@@ -155,9 +155,11 @@ describe("Kimi For Coding OAuth", () => {
 				},
 			});
 
-			// Auth callback was called with the verification URI and user code
+			// Auth callback was called with the verification URI including user_code
 			expect(authCalls).toHaveLength(1);
-			expect(authCalls[0].url).toBe("https://auth.kimi.com/device");
+			const authUrl = new URL(authCalls[0].url);
+			expect(authUrl.origin + authUrl.pathname).toBe("https://auth.kimi.com/device");
+			expect(authUrl.searchParams.get("user_code")).toBe("WXYZ-1234");
 			expect(authCalls[0].instructions).toContain("WXYZ-1234");
 
 			// Credentials include model discovery extras
@@ -179,8 +181,8 @@ describe("Kimi For Coding OAuth", () => {
 
 			const pollTimes: number[] = [];
 			const tokenResponses = [
-				jsonResponse({ error: "authorization_pending" }),
-				jsonResponse({ error: "authorization_pending" }),
+				jsonResponse({ error: "authorization_pending" }, 400),
+				jsonResponse({ error: "authorization_pending" }, 400),
 				jsonResponse(MOCK_TOKEN_SUCCESS),
 			];
 
@@ -234,8 +236,8 @@ describe("Kimi For Coding OAuth", () => {
 
 			const pollTimes: number[] = [];
 			const tokenResponses = [
-				jsonResponse({ error: "authorization_pending" }),
-				jsonResponse({ error: "slow_down", interval: 10 }),
+				jsonResponse({ error: "authorization_pending" }, 400),
+				jsonResponse({ error: "slow_down", interval: 10 }, 400),
 				jsonResponse(MOCK_TOKEN_SUCCESS),
 			];
 
@@ -300,7 +302,7 @@ describe("Kimi For Coding OAuth", () => {
 				}
 
 				if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
-					return jsonResponse({ error: "expired_token", error_description: "code expired" });
+					return jsonResponse({ error: "expired_token", error_description: "code expired" }, 400);
 				}
 
 				throw new Error(`Unexpected URL: ${url}`);
@@ -338,7 +340,7 @@ describe("Kimi For Coding OAuth", () => {
 				}
 
 				if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
-					return jsonResponse({ error: "authorization_pending" });
+					return jsonResponse({ error: "authorization_pending" }, 400);
 				}
 
 				throw new Error(`Unexpected URL: ${url}`);
@@ -376,7 +378,7 @@ describe("Kimi For Coding OAuth", () => {
 				}
 
 				if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
-					return jsonResponse({ error: "authorization_pending" });
+					return jsonResponse({ error: "authorization_pending" }, 400);
 				}
 
 				throw new Error(`Unexpected URL: ${url}`);
@@ -408,7 +410,7 @@ describe("Kimi For Coding OAuth", () => {
 
 				if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
 					pollCount++;
-					return jsonResponse({ error: "authorization_pending" });
+					return jsonResponse({ error: "authorization_pending" }, 400);
 				}
 
 				throw new Error(`Unexpected URL: ${url}`);
