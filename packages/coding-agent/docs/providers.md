@@ -19,6 +19,7 @@ Use `/login` in interactive mode, then select a provider:
 - GitHub Copilot
 - Google Gemini CLI
 - Google Antigravity
+- Kimi For Coding (requires active Kimi For Coding subscription)
 
 Use `/logout` to clear credentials. Tokens are stored in `~/.dreb/agent/auth.json` and auto-refresh when expired.
 
