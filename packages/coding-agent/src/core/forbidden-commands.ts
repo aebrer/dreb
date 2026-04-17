@@ -25,6 +25,23 @@ const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
 	"^(?:export\\s+)?HUSKY=0", // bypass pre-commit hooks (anchored with optional export prefix)
 	"^git\\s+commit.*--no-verify", // bypass pre-commit hooks via --no-verify flag
 	"^(?:export\\s+)?SKIP_?VALIDATION=1", // bypass pre-commit hooks via SKIP_VALIDATION env var
+	"^rm\\s+.*--no-preserve-root", // rm with explicit safety override
+	"^rm\\s+.*\\s/(\\*|[\\w.-]+/?)?\\s*$", // rm targeting root or top-level dirs (/, /*, /home, /etc)
+	"^dd\\s+.*of=/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)", // dd writing to block devices
+	"^mkfs", // format filesystem (mkfs.ext4, mkfs.xfs, etc.)
+	"^>\\s*/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)", // redirect to block device
+];
+
+/**
+ * Patterns checked against the full (quote-masked) command string before
+ * splitting into segments. These catch dangerous constructs that span
+ * shell operators and would be fragmented by the segment splitter.
+ *
+ * Matched against the masked string so quoted content doesn't trigger
+ * false positives (e.g., `echo ":(){ :|:& };:"` is safe).
+ */
+const FULL_COMMAND_PATTERNS: string[] = [
+	":\\(\\)\\s*\\{", // fork bomb :(){ :|:& };:
 ];
 
 /**
@@ -170,6 +187,22 @@ export function isForbiddenCommand(command: string, extraPatterns?: string[]): s
 	const allPatterns = validatedExtras
 		? [...DEFAULT_FORBIDDEN_PATTERNS, ...validatedExtras]
 		: DEFAULT_FORBIDDEN_PATTERNS;
+
+	// Pre-split check: match full-command patterns against the quote-masked
+	// string to catch constructs that span shell operators (e.g., fork bombs).
+	// Using the masked string prevents false positives from quoted content.
+	const masked = maskQuotedContent(command);
+	for (const pattern of FULL_COMMAND_PATTERNS) {
+		try {
+			const re = new RegExp(pattern);
+			if (re.test(masked)) {
+				return pattern;
+			}
+		} catch {
+			// Invalid regex — skip
+		}
+	}
+
 	const segments = splitCommandSegments(command);
 
 	for (const segment of segments) {

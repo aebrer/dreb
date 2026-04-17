@@ -210,8 +210,9 @@ describe("isForbiddenCommand", () => {
 
 	describe("custom patterns from settings", () => {
 		it("checks custom patterns in addition to defaults", () => {
-			expect(isForbiddenCommand("rm -rf /")).toBeUndefined();
-			expect(isForbiddenCommand("rm -rf /", ["rm -rf /"])).toBe("rm -rf /");
+			// rm -rf / is now blocked by default — use a command not covered by defaults
+			expect(isForbiddenCommand("shutdown -h now")).toBeUndefined();
+			expect(isForbiddenCommand("shutdown -h now", ["^shutdown"])).toBe("^shutdown");
 		});
 
 		it("custom patterns do not replace defaults", () => {
@@ -234,7 +235,7 @@ describe("isForbiddenCommand", () => {
 		});
 
 		it("custom patterns apply to each segment independently", () => {
-			expect(isForbiddenCommand("echo hello && rm -rf /", ["^rm -rf /"])).toBe("^rm -rf /");
+			expect(isForbiddenCommand("echo hello && shutdown -h now", ["^shutdown"])).toBe("^shutdown");
 		});
 	});
 
@@ -316,6 +317,222 @@ describe("isForbiddenCommand", () => {
 		it("simple escaped quote is still treated as escaped", () => {
 			// \" — 1 backslash, odd → the " is escaped, we stay in the string
 			expect(isForbiddenCommand('echo "hello\\" && git push --force"')).toBeUndefined();
+		});
+	});
+
+	describe("destructive rm commands", () => {
+		const RM_ROOT_PATTERN = "^rm\\s+.*\\s/(\\*|[\\w.-]+/?)?\\s*$";
+
+		it("blocks rm -rf /", () => {
+			expect(isForbiddenCommand("rm -rf /")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf /*", () => {
+			expect(isForbiddenCommand("rm -rf /*")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -r -f /", () => {
+			expect(isForbiddenCommand("rm -r -f /")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -fr /", () => {
+			expect(isForbiddenCommand("rm -fr /")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf /home", () => {
+			expect(isForbiddenCommand("rm -rf /home")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf /etc", () => {
+			expect(isForbiddenCommand("rm -rf /etc")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf /var", () => {
+			expect(isForbiddenCommand("rm -rf /var")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf /home/", () => {
+			expect(isForbiddenCommand("rm -rf /home/")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf / after chaining", () => {
+			expect(isForbiddenCommand("cd /tmp && rm -rf /")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf /home after chaining", () => {
+			expect(isForbiddenCommand("cd /tmp && rm -rf /home")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("blocks rm -rf / inside subshell", () => {
+			expect(isForbiddenCommand("$(rm -rf /)")).toBe(RM_ROOT_PATTERN);
+		});
+
+		it("allows rm -rf /tmp/foo (deep path)", () => {
+			expect(isForbiddenCommand("rm -rf /tmp/foo")).toBeUndefined();
+		});
+
+		it("allows rm -rf /home/user/project (deep path)", () => {
+			expect(isForbiddenCommand("rm -rf /home/user/project")).toBeUndefined();
+		});
+
+		it("allows rm file.txt", () => {
+			expect(isForbiddenCommand("rm file.txt")).toBeUndefined();
+		});
+
+		it("allows rm -rf ./build", () => {
+			expect(isForbiddenCommand("rm -rf ./build")).toBeUndefined();
+		});
+
+		it('does not false-positive on echo "rm -rf /"', () => {
+			expect(isForbiddenCommand('echo "rm -rf /"')).toBeUndefined();
+		});
+	});
+
+	describe("rm --no-preserve-root", () => {
+		const NO_PRESERVE_PATTERN = "^rm\\s+.*--no-preserve-root";
+
+		it("blocks rm --no-preserve-root -rf /", () => {
+			expect(isForbiddenCommand("rm --no-preserve-root -rf /")).toBe(NO_PRESERVE_PATTERN);
+		});
+
+		it("blocks rm -rf / --no-preserve-root", () => {
+			expect(isForbiddenCommand("rm -rf / --no-preserve-root")).toBe(NO_PRESERVE_PATTERN);
+		});
+
+		it("blocks rm --no-preserve-root after chaining", () => {
+			expect(isForbiddenCommand("cd /tmp && rm --no-preserve-root -rf /")).toBe(NO_PRESERVE_PATTERN);
+		});
+
+		it("allows grep for --no-preserve-root in docs", () => {
+			expect(isForbiddenCommand("grep no-preserve-root man.txt")).toBeUndefined();
+		});
+	});
+
+	describe("dd to block devices", () => {
+		const DD_PATTERN = "^dd\\s+.*of=/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)";
+
+		it("blocks dd if=/dev/zero of=/dev/sda", () => {
+			expect(isForbiddenCommand("dd if=/dev/zero of=/dev/sda")).toBe(DD_PATTERN);
+		});
+
+		it("blocks dd of=/dev/nvme0n1 if=/dev/zero (reversed args)", () => {
+			expect(isForbiddenCommand("dd of=/dev/nvme0n1 if=/dev/zero")).toBe(DD_PATTERN);
+		});
+
+		it("blocks dd if=/dev/zero of=/dev/disk0", () => {
+			expect(isForbiddenCommand("dd if=/dev/zero of=/dev/disk0")).toBe(DD_PATTERN);
+		});
+
+		it("blocks dd if=/dev/zero of=/dev/loop0", () => {
+			expect(isForbiddenCommand("dd if=/dev/zero of=/dev/loop0")).toBe(DD_PATTERN);
+		});
+
+		it("blocks dd if=/dev/zero of=/dev/mmcblk0", () => {
+			expect(isForbiddenCommand("dd if=/dev/zero of=/dev/mmcblk0")).toBe(DD_PATTERN);
+		});
+
+		it("blocks dd to block device after chaining", () => {
+			expect(isForbiddenCommand("echo start && dd if=/dev/zero of=/dev/sda")).toBe(DD_PATTERN);
+		});
+
+		it("allows dd if=file.img of=output.img", () => {
+			expect(isForbiddenCommand("dd if=file.img of=output.img")).toBeUndefined();
+		});
+
+		it("allows dd if=/dev/zero of=/tmp/test.img", () => {
+			expect(isForbiddenCommand("dd if=/dev/zero of=/tmp/test.img")).toBeUndefined();
+		});
+
+		it("allows dd if=/dev/sda of=backup.img (reading from device is fine)", () => {
+			expect(isForbiddenCommand("dd if=/dev/sda of=backup.img")).toBeUndefined();
+		});
+	});
+
+	describe("mkfs commands", () => {
+		const MKFS_PATTERN = "^mkfs";
+
+		it("blocks mkfs.ext4 /dev/sda1", () => {
+			expect(isForbiddenCommand("mkfs.ext4 /dev/sda1")).toBe(MKFS_PATTERN);
+		});
+
+		it("blocks mkfs /dev/sda1", () => {
+			expect(isForbiddenCommand("mkfs /dev/sda1")).toBe(MKFS_PATTERN);
+		});
+
+		it("blocks mkfs.xfs /dev/vda", () => {
+			expect(isForbiddenCommand("mkfs.xfs /dev/vda")).toBe(MKFS_PATTERN);
+		});
+
+		it("blocks mkfs.btrfs /dev/sdb1", () => {
+			expect(isForbiddenCommand("mkfs.btrfs /dev/sdb1")).toBe(MKFS_PATTERN);
+		});
+
+		it("blocks mkfs after chaining", () => {
+			expect(isForbiddenCommand("umount /dev/sda1 && mkfs.ext4 /dev/sda1")).toBe(MKFS_PATTERN);
+		});
+
+		it("allows grep mkfs in log files", () => {
+			expect(isForbiddenCommand("grep mkfs log.txt")).toBeUndefined();
+		});
+
+		it('allows echo "mkfs.ext4"', () => {
+			expect(isForbiddenCommand('echo "mkfs.ext4"')).toBeUndefined();
+		});
+	});
+
+	describe("fork bomb", () => {
+		const FORK_BOMB_PATTERN = ":\\(\\)\\s*\\{";
+
+		it("blocks :(){ :|:& };:", () => {
+			expect(isForbiddenCommand(":(){ :|:& };:")).toBe(FORK_BOMB_PATTERN);
+		});
+
+		it("blocks fork bomb after chaining", () => {
+			expect(isForbiddenCommand("echo hello && :(){ :|:& };:")).toBe(FORK_BOMB_PATTERN);
+		});
+
+		it("blocks fork bomb with spaces", () => {
+			expect(isForbiddenCommand(":() { :|:& };:")).toBe(FORK_BOMB_PATTERN);
+		});
+
+		it('does not false-positive on echo ":(){ :|:& };:"', () => {
+			expect(isForbiddenCommand('echo ":(){ :|:& };:"')).toBeUndefined();
+		});
+
+		it("does not false-positive on single-quoted fork bomb", () => {
+			expect(isForbiddenCommand("echo ':(){ :|:& };:'")).toBeUndefined();
+		});
+
+		it("allows normal function definitions", () => {
+			expect(isForbiddenCommand("myfunc() { echo hi; }")).toBeUndefined();
+		});
+	});
+
+	describe("block device redirects", () => {
+		const REDIRECT_PATTERN = "^>\\s*/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)";
+
+		it("blocks > /dev/sda", () => {
+			expect(isForbiddenCommand("> /dev/sda")).toBe(REDIRECT_PATTERN);
+		});
+
+		it("blocks > /dev/nvme0n1", () => {
+			expect(isForbiddenCommand("> /dev/nvme0n1")).toBe(REDIRECT_PATTERN);
+		});
+
+		it("blocks >/dev/sda (no space)", () => {
+			expect(isForbiddenCommand(">/dev/sda")).toBe(REDIRECT_PATTERN);
+		});
+
+		it("blocks > /dev/disk0", () => {
+			expect(isForbiddenCommand("> /dev/disk0")).toBe(REDIRECT_PATTERN);
+		});
+
+		it("allows > /tmp/output.txt", () => {
+			expect(isForbiddenCommand("> /tmp/output.txt")).toBeUndefined();
+		});
+
+		it('does not false-positive on echo "> /dev/sda"', () => {
+			expect(isForbiddenCommand('echo "> /dev/sda"')).toBeUndefined();
 		});
 	});
 
