@@ -480,6 +480,9 @@ export async function refreshKimiCodingToken(
 		refresh: tokenResp.refresh_token ?? credentials.refresh,
 		access: tokenResp.access_token,
 		expires: Date.now() + tokenResp.expires_in * 1000,
+		modelId: (credentials as KimiCredentials).modelId,
+		contextLength: (credentials as KimiCredentials).contextLength,
+		modelDisplay: (credentials as KimiCredentials).modelDisplay,
 	};
 
 	if (models.length > 0) {
