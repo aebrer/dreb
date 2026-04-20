@@ -18,6 +18,7 @@ This skill has two modes:
 2. **No `#N` in comment bodies** — Use "finding 3", "item 3" etc. instead.
 3. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
+5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks.
 
 ## Step 1: Parse input
 
@@ -120,6 +121,8 @@ tasks_update([
 gh pr checks <pr-number>
 gh run view <run-id> --log-failed
 ```
+
+**Note:** `gh pr checks` returns exit code 8 while checks are still pending — this is expected, not a failure. Wait and re-run if needed.
 
 Read the failed CI logs and identify issues. Extract test failures, stack traces, error messages. If all checks pass, report this and stop.
 

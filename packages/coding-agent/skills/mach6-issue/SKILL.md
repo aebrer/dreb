@@ -16,6 +16,7 @@ argument-hint: "[issue-number | description]"
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets (.env, credentials, tokens, keys).
 5. **Task tracking** — Use the `tasks_update` tool to show progress through multi-step commands.
 6. **Project conventions** — Check for CLAUDE.md, AGENTS.md, .dreb/CONTEXT.md, and CONTRIBUTING.md before planning or implementing.
+7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks.
 
 ## Determine Mode
 
@@ -75,13 +76,16 @@ Present to the user:
 Post as an issue comment:
 
 ```bash
-gh issue comment <number> --body "<!-- mach6-assessment -->
+cat > /tmp/gh-comment.md << 'MACH6_EOF'
+<!-- mach6-assessment -->
 ## Issue Assessment
 
 <assessment content>
 
 ---
-*Automated assessment by mach6*"
+*Automated assessment by mach6*
+MACH6_EOF
+gh issue comment <number> --body-file /tmp/gh-comment.md
 ```
 
 Update task: post → completed.
@@ -123,7 +127,10 @@ Present the draft to the user for approval.
 ### Step 3: Create the issue
 
 ```bash
-gh issue create --title "<title>" --body "<body>" [--label "<labels>"]
+cat > /tmp/gh-body.md << 'MACH6_EOF'
+<body>
+MACH6_EOF
+gh issue create --title "<title>" --body-file /tmp/gh-body.md [--label "<labels>"]
 ```
 
 Report the issue number and URL. Suggest next step: `/skill:mach6-plan <number>`
