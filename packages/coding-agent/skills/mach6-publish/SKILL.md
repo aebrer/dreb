@@ -181,7 +181,10 @@ git push --tags
 
 3. Present draft to user for approval, then create:
    ```bash
-   gh release create v<version> --title "v<version>" --notes "<release-notes>"
+   cat > /tmp/gh-release-notes.md << 'MACH6_EOF'
+   <release-notes>
+   MACH6_EOF
+   gh release create v<version> --title "v<version>" --notes-file /tmp/gh-release-notes.md
    ```
 
 Update task: release → completed.

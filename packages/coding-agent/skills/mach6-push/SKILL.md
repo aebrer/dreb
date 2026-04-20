@@ -81,7 +81,7 @@ If session context points to an issue but a PR also exists on the current branch
 
 Post a progress comment:
 ```bash
-cat > /tmp/gh-comment.md << 'EOF'
+cat > /tmp/gh-comment.md << 'MACH6_EOF'
 <!-- mach6-progress -->
 ## Progress Update
 
@@ -91,7 +91,7 @@ cat > /tmp/gh-comment.md << 'EOF'
 
 ---
 *Progress tracked by mach6*
-EOF
+MACH6_EOF
 gh pr comment <number> --body-file /tmp/gh-comment.md
 ```
 

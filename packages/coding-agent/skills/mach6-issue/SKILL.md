@@ -76,7 +76,7 @@ Present to the user:
 Post as an issue comment:
 
 ```bash
-cat > /tmp/gh-comment.md << 'EOF'
+cat > /tmp/gh-comment.md << 'MACH6_EOF'
 <!-- mach6-assessment -->
 ## Issue Assessment
 
@@ -84,7 +84,7 @@ cat > /tmp/gh-comment.md << 'EOF'
 
 ---
 *Automated assessment by mach6*
-EOF
+MACH6_EOF
 gh issue comment <number> --body-file /tmp/gh-comment.md
 ```
 
@@ -127,9 +127,9 @@ Present the draft to the user for approval.
 ### Step 3: Create the issue
 
 ```bash
-cat > /tmp/gh-body.md << 'EOF'
+cat > /tmp/gh-body.md << 'MACH6_EOF'
 <body>
-EOF
+MACH6_EOF
 gh issue create --title "<title>" --body-file /tmp/gh-body.md [--label "<labels>"]
 ```
 

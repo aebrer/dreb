@@ -98,13 +98,13 @@ git commit --allow-empty -m "chore: open PR for issue <N>"
 git push -u origin feature/issue-<N>-<slug>
 
 # Open draft PR
-cat > /tmp/gh-body.md << 'EOF'
+cat > /tmp/gh-body.md << 'MACH6_EOF'
 Closes #<N>
 
 <brief description>
 
 Implementation plan posted as a comment below.
-EOF
+MACH6_EOF
 gh pr create --draft --title "<title>" --body-file /tmp/gh-body.md
 ```
 
@@ -113,7 +113,7 @@ Update task: branch → completed, post → in_progress.
 ## Step 7: Post plan to PR
 
 ```bash
-cat > /tmp/gh-comment.md << 'EOF'
+cat > /tmp/gh-comment.md << 'MACH6_EOF'
 <!-- mach6-plan -->
 ## Implementation Plan
 
@@ -121,7 +121,7 @@ cat > /tmp/gh-comment.md << 'EOF'
 
 ---
 *Plan created by mach6*
-EOF
+MACH6_EOF
 gh pr comment <pr-number> --body-file /tmp/gh-comment.md
 ```
 

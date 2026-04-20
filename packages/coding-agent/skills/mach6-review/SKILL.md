@@ -96,7 +96,7 @@ Update task: review → completed, post-review → in_progress.
 Compile all findings from all agents into a single structured comment:
 
 ```bash
-cat > /tmp/gh-comment.md << 'EOF'
+cat > /tmp/gh-comment.md << 'MACH6_EOF'
 <!-- mach6-review -->
 ## Code Review
 
@@ -116,7 +116,7 @@ cat > /tmp/gh-comment.md << 'EOF'
 
 ---
 *Reviewed by mach6*
-EOF
+MACH6_EOF
 gh pr comment <pr-number> --body-file /tmp/gh-comment.md
 ```
 
@@ -156,7 +156,7 @@ Update task: assess → completed, post-assess → in_progress.
 ## Step 7: Post assessment
 
 ```bash
-cat > /tmp/gh-comment.md << 'EOF'
+cat > /tmp/gh-comment.md << 'MACH6_EOF'
 <!-- mach6-assessment -->
 ## Review Assessment
 
@@ -174,7 +174,7 @@ cat > /tmp/gh-comment.md << 'EOF'
 
 ---
 *Assessment by mach6*
-EOF
+MACH6_EOF
 gh pr comment <pr-number> --body-file /tmp/gh-comment.md
 ```
 
@@ -189,9 +189,9 @@ Present to the user:
 
 If any findings were classified as **deferred**, ask the user if they want to create issues for them:
 ```bash
-cat > /tmp/gh-body.md << 'EOF'
+cat > /tmp/gh-body.md << 'MACH6_EOF'
 <body referencing PR and finding>
-EOF
+MACH6_EOF
 gh issue create --title "<title>" --body-file /tmp/gh-body.md
 ```
 
