@@ -18,6 +18,7 @@ This command is strictly for **planning**. Do NOT implement any code changes —
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
 5. **Task tracking** — Use the `tasks_update` tool to show progress through multi-step commands.
 6. **Project conventions** — Check for CLAUDE.md, AGENTS.md, .dreb/CONTEXT.md, and CONTRIBUTING.md before planning.
+7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks.
 
 ## Step 1: Set up task tracking
 
@@ -97,11 +98,14 @@ git commit --allow-empty -m "chore: open PR for issue <N>"
 git push -u origin feature/issue-<N>-<slug>
 
 # Open draft PR
-gh pr create --draft --title "<title>" --body "Closes #<N>
+cat > /tmp/gh-body.md << 'EOF'
+Closes #<N>
 
 <brief description>
 
-Implementation plan posted as a comment below."
+Implementation plan posted as a comment below.
+EOF
+gh pr create --draft --title "<title>" --body-file /tmp/gh-body.md
 ```
 
 Update task: branch → completed, post → in_progress.
@@ -109,13 +113,16 @@ Update task: branch → completed, post → in_progress.
 ## Step 7: Post plan to PR
 
 ```bash
-gh pr comment <pr-number> --body "<!-- mach6-plan -->
+cat > /tmp/gh-comment.md << 'EOF'
+<!-- mach6-plan -->
 ## Implementation Plan
 
 <full plan content>
 
 ---
-*Plan created by mach6*"
+*Plan created by mach6*
+EOF
+gh pr comment <pr-number> --body-file /tmp/gh-comment.md
 ```
 
 Update task: post → completed.

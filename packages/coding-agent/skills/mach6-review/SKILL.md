@@ -14,6 +14,7 @@ argument-hint: "<pr-number> [code|errors|tests|completeness|simplify]"
 2. **HTML markers** — Use `<!-- mach6-review -->` and `<!-- mach6-assessment -->` as the first line of comment bodies.
 3. **No `#N` in comment bodies** — Use "finding 3", "item 3", "stage 2" etc. instead.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
+5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks.
 
 **Important: Do NOT fix any issues in this session. Fixes happen via `/skill:mach6-implement`.**
 
@@ -95,7 +96,8 @@ Update task: review → completed, post-review → in_progress.
 Compile all findings from all agents into a single structured comment:
 
 ```bash
-gh pr comment <pr-number> --body "<!-- mach6-review -->
+cat > /tmp/gh-comment.md << 'EOF'
+<!-- mach6-review -->
 ## Code Review
 
 ### Critical
@@ -113,7 +115,9 @@ gh pr comment <pr-number> --body "<!-- mach6-review -->
 **Agents run:** <list of agents>
 
 ---
-*Reviewed by mach6*"
+*Reviewed by mach6*
+EOF
+gh pr comment <pr-number> --body-file /tmp/gh-comment.md
 ```
 
 Save the review comment URL:
@@ -152,7 +156,8 @@ Update task: assess → completed, post-assess → in_progress.
 ## Step 7: Post assessment
 
 ```bash
-gh pr comment <pr-number> --body "<!-- mach6-assessment -->
+cat > /tmp/gh-comment.md << 'EOF'
+<!-- mach6-assessment -->
 ## Review Assessment
 
 <link to review comment>
@@ -168,7 +173,9 @@ gh pr comment <pr-number> --body "<!-- mach6-assessment -->
 <numbered list of what to fix, ordered by priority>
 
 ---
-*Assessment by mach6*"
+*Assessment by mach6*
+EOF
+gh pr comment <pr-number> --body-file /tmp/gh-comment.md
 ```
 
 Update task: post-assess → completed, summary → in_progress.
@@ -182,7 +189,10 @@ Present to the user:
 
 If any findings were classified as **deferred**, ask the user if they want to create issues for them:
 ```bash
-gh issue create --title "<title>" --body "<body referencing PR and finding>"
+cat > /tmp/gh-body.md << 'EOF'
+<body referencing PR and finding>
+EOF
+gh issue create --title "<title>" --body-file /tmp/gh-body.md
 ```
 
 Update task: summary → completed.
