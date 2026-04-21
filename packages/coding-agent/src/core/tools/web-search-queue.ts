@@ -63,9 +63,19 @@ export class WebSearchQueue {
 			try {
 				return await fn();
 			} finally {
+				// Ensure time file directory exists before writing
+				const timeDir = dirname(this.timeFilePath);
+				if (!existsSync(timeDir)) {
+					mkdirSync(timeDir, { recursive: true });
+				}
 				// Update timestamp even on error to prevent retry storms
-				const timestampData: TimestampData = { lastSearchTime: Date.now() };
-				writeFileSync(this.timeFilePath, JSON.stringify(timestampData));
+				try {
+					const timestampData: TimestampData = { lastSearchTime: Date.now() };
+					writeFileSync(this.timeFilePath, JSON.stringify(timestampData));
+				} catch (tsErr) {
+					// Don't let timestamp write failure mask the original error
+					console.error(`Failed to write search timestamp: ${tsErr}`);
+				}
 			}
 		} finally {
 			try {

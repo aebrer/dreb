@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeSearch } from "../src/core/tools/web.js";
 import { WebSearchQueue } from "../src/core/tools/web-search-queue.js";
 
 describe("WebSearchQueue", () => {
@@ -41,6 +42,17 @@ describe("WebSearchQueue", () => {
 		await Promise.all([queue.enqueue(track), queue.enqueue(track), queue.enqueue(track)]);
 
 		expect(maxConcurrent).toBe(1);
+	});
+
+	it("returns the value from the wrapped function", async () => {
+		const queue = new WebSearchQueue({
+			rateLimitMs: 0,
+			lockFilePath,
+			timeFilePath,
+		});
+
+		const result = await queue.enqueue(async () => 42);
+		expect(result).toBe(42);
 	});
 
 	it("enforces minimum spacing", async () => {
@@ -148,5 +160,77 @@ describe("WebSearchQueue", () => {
 
 		// Should complete very quickly — no 5-second delay
 		expect(elapsed).toBeLessThan(500);
+	});
+});
+
+describe("executeSearch integration", () => {
+	let tempDir: string;
+	let originalAgentDir: string | undefined;
+	let originalRateLimit: string | undefined;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(join(tmpdir(), "dreb-web-search-int-"));
+		originalAgentDir = process.env.DREB_CODING_AGENT_DIR;
+		originalRateLimit = process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS;
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS = "0";
+	});
+
+	afterEach(() => {
+		if (originalAgentDir !== undefined) {
+			process.env.DREB_CODING_AGENT_DIR = originalAgentDir;
+		} else {
+			delete process.env.DREB_CODING_AGENT_DIR;
+		}
+		if (originalRateLimit !== undefined) {
+			process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS = originalRateLimit;
+		} else {
+			delete process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS;
+		}
+		rmSync(tempDir, { recursive: true, force: true });
+		vi.restoreAllMocks();
+	});
+
+	it("routes through the queue and returns search results", async () => {
+		const mockHtml = `
+			<div class="result results_links">
+				<a class="result__a" href="https://example.com/page">Test Title</a>
+				<div class="result__snippet">Test snippet content</div>
+			</div>
+		`;
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			text: async () => mockHtml,
+		});
+
+		const results = await executeSearch("test query");
+
+		expect(results).toHaveLength(1);
+		expect(results[0].title).toBe("Test Title");
+		expect(results[0].url).toBe("https://example.com/page");
+		expect(results[0].snippet).toBe("Test snippet content");
+	});
+
+	it("serializes concurrent executeSearch calls through the queue", async () => {
+		let running = 0;
+		let maxConcurrent = 0;
+
+		globalThis.fetch = vi.fn().mockImplementation(async () => {
+			running++;
+			maxConcurrent = Math.max(maxConcurrent, running);
+			await new Promise((r) => setTimeout(r, 50));
+			running--;
+			return {
+				ok: true,
+				status: 200,
+				text: async () =>
+					`<div class="result results_links"><a class="result__a" href="https://example.com">Title</a><div class="result__snippet">Snippet</div></div>`,
+			};
+		});
+
+		await Promise.all([executeSearch("q1"), executeSearch("q2"), executeSearch("q3")]);
+
+		expect(maxConcurrent).toBe(1);
 	});
 });

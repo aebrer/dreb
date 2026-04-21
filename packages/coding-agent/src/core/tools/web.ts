@@ -372,7 +372,7 @@ function getSearchQueue(): WebSearchQueue {
 	return searchQueue;
 }
 
-async function executeSearch(query: string): Promise<SearchResult[]> {
+export async function executeSearch(query: string): Promise<SearchResult[]> {
 	return getSearchQueue().enqueue(async () => {
 		const config = getSearchConfig();
 		switch (config.backend) {
