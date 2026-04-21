@@ -10,6 +10,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
+import { WebSearchQueue } from "./web-search-queue.js";
 
 // ---------------------------------------------------------------------------
 // Shared: HTTP fetching and HTML extraction
@@ -289,6 +290,7 @@ export interface WebSearchConfig {
 	backend?: "ddg" | "searxng" | "brave";
 	searxngUrl?: string;
 	braveApiKey?: string;
+	rateLimitMs?: number;
 }
 
 interface DrebConfig {
@@ -296,6 +298,7 @@ interface DrebConfig {
 		backend?: string;
 		searxng_url?: string;
 		brave_api_key?: string;
+		rate_limit_ms?: number;
 	};
 }
 
@@ -336,24 +339,52 @@ function getSearchConfig(): WebSearchConfig {
 			);
 		}
 	}
+
+	const rateLimitEnv = process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS;
+	let rateLimitMs = 10_000;
+	if (rateLimitEnv) {
+		const parsed = parseInt(rateLimitEnv, 10);
+		if (!Number.isNaN(parsed) && parsed >= 0) {
+			rateLimitMs = parsed;
+		} else {
+			console.error(`Warning: invalid DREB_WEB_SEARCH_RATE_LIMIT_MS "${rateLimitEnv}", using default`);
+		}
+	} else if (fileConfig.search?.rate_limit_ms !== undefined) {
+		const parsed = parseInt(String(fileConfig.search.rate_limit_ms), 10);
+		if (!Number.isNaN(parsed) && parsed >= 0) {
+			rateLimitMs = parsed;
+		}
+	}
+
 	return {
 		backend,
 		searxngUrl: process.env.DREB_SEARXNG_URL || fileConfig.search?.searxng_url || "http://localhost:8888",
 		braveApiKey: process.env.DREB_BRAVE_API_KEY || fileConfig.search?.brave_api_key,
+		rateLimitMs,
 	};
 }
 
-async function executeSearch(query: string): Promise<SearchResult[]> {
-	const config = getSearchConfig();
-	switch (config.backend) {
-		case "searxng":
-			return searchSearXNG(query, config.searxngUrl!);
-		case "brave":
-			if (!config.braveApiKey) throw new Error("DREB_BRAVE_API_KEY not set");
-			return searchBrave(query, config.braveApiKey);
-		default:
-			return searchDuckDuckGo(query);
+let searchQueue: WebSearchQueue | undefined;
+function getSearchQueue(): WebSearchQueue {
+	if (!searchQueue) {
+		searchQueue = new WebSearchQueue({ rateLimitMs: getSearchConfig().rateLimitMs });
 	}
+	return searchQueue;
+}
+
+async function executeSearch(query: string): Promise<SearchResult[]> {
+	return getSearchQueue().enqueue(async () => {
+		const config = getSearchConfig();
+		switch (config.backend) {
+			case "searxng":
+				return searchSearXNG(query, config.searxngUrl!);
+			case "brave":
+				if (!config.braveApiKey) throw new Error("DREB_BRAVE_API_KEY not set");
+				return searchBrave(query, config.braveApiKey);
+			default:
+				return searchDuckDuckGo(query);
+		}
+	});
 }
 
 function formatSearchCall(
