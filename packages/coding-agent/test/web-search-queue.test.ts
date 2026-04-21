@@ -1,8 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { executeSearch } from "../src/core/tools/web.js";
+import { executeSearch, getSearchConfig } from "../src/core/tools/web.js";
 import { WebSearchQueue } from "../src/core/tools/web-search-queue.js";
 
 describe("WebSearchQueue", () => {
@@ -161,6 +161,23 @@ describe("WebSearchQueue", () => {
 		// Should complete very quickly — no 5-second delay
 		expect(elapsed).toBeLessThan(500);
 	});
+
+	it("handles corrupted time file gracefully", async () => {
+		const queue = new WebSearchQueue({
+			rateLimitMs: 5000,
+			lockFilePath,
+			timeFilePath,
+		});
+		// Write garbage to the time file
+		writeFileSync(timeFilePath, "{broken json");
+
+		const start = Date.now();
+		await queue.enqueue(async () => "ok");
+		const elapsed = Date.now() - start;
+
+		// Should complete quickly — no 5-second delay
+		expect(elapsed).toBeLessThan(500);
+	});
 });
 
 describe("executeSearch integration", () => {
@@ -232,5 +249,103 @@ describe("executeSearch integration", () => {
 		await Promise.all([executeSearch("q1"), executeSearch("q2"), executeSearch("q3")]);
 
 		expect(maxConcurrent).toBe(1);
+	});
+
+	it("propagates backend errors through the queue", async () => {
+		globalThis.fetch = vi.fn().mockRejectedValue(new Error("network failure"));
+
+		await expect(executeSearch("query")).rejects.toThrow("network failure");
+	});
+});
+
+describe("getSearchConfig", () => {
+	let tempDir: string;
+	let originalCwd: string;
+	let originalRateLimit: string | undefined;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(join(tmpdir(), "dreb-search-config-"));
+		originalCwd = process.cwd();
+		originalRateLimit = process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS;
+	});
+
+	afterEach(() => {
+		process.chdir(originalCwd);
+		if (originalRateLimit !== undefined) {
+			process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS = originalRateLimit;
+		} else {
+			delete process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS;
+		}
+		rmSync(tempDir, { recursive: true, force: true });
+		vi.restoreAllMocks();
+	});
+
+	it("returns default rateLimitMs of 10000 when nothing is configured", () => {
+		// Change to temp dir with no config file
+		process.chdir(tempDir);
+		delete process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS;
+
+		const config = getSearchConfig();
+		expect(config.rateLimitMs).toBe(10_000);
+	});
+
+	it("reads rateLimitMs from env var", () => {
+		process.chdir(tempDir);
+		process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS = "500";
+
+		const config = getSearchConfig();
+		expect(config.rateLimitMs).toBe(500);
+	});
+
+	it("reads rateLimitMs from config file", () => {
+		process.chdir(tempDir);
+		delete process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS;
+
+		// Create .dreb/config.json in the temp dir
+		const configDir = join(tempDir, ".dreb");
+		mkdirSync(configDir, { recursive: true });
+		writeFileSync(join(configDir, "config.json"), JSON.stringify({ search: { rate_limit_ms: 300 } }));
+
+		const config = getSearchConfig();
+		expect(config.rateLimitMs).toBe(300);
+	});
+
+	it("env var takes precedence over config file", () => {
+		process.chdir(tempDir);
+		process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS = "500";
+
+		// Also create a config file — env var should win
+		const configDir = join(tempDir, ".dreb");
+		mkdirSync(configDir, { recursive: true });
+		writeFileSync(join(configDir, "config.json"), JSON.stringify({ search: { rate_limit_ms: 300 } }));
+
+		const config = getSearchConfig();
+		expect(config.rateLimitMs).toBe(500);
+	});
+
+	it("falls back to default on invalid env var and logs warning", () => {
+		process.chdir(tempDir);
+		process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS = "abc";
+
+		const errorSpy = vi.spyOn(console, "error");
+		const config = getSearchConfig();
+		expect(config.rateLimitMs).toBe(10_000);
+		expect(errorSpy).toHaveBeenCalledWith(`Warning: invalid DREB_WEB_SEARCH_RATE_LIMIT_MS "abc", using default`);
+	});
+
+	it("falls back to default on invalid config file value and logs warning", () => {
+		process.chdir(tempDir);
+		delete process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS;
+
+		const configDir = join(tempDir, ".dreb");
+		mkdirSync(configDir, { recursive: true });
+		writeFileSync(join(configDir, "config.json"), JSON.stringify({ search: { rate_limit_ms: "invalid" } }));
+
+		const errorSpy = vi.spyOn(console, "error");
+		const config = getSearchConfig();
+		expect(config.rateLimitMs).toBe(10_000);
+		expect(errorSpy).toHaveBeenCalledWith(
+			'Warning: invalid search.rate_limit_ms in config file "invalid", using default',
+		);
 	});
 });

@@ -26,12 +26,17 @@ export class WebSearchQueue {
 
 	async enqueue<T>(fn: () => Promise<T>): Promise<T> {
 		// Ensure parent directory and lock file exist (proper-lockfile requires the file to exist)
-		const dir = dirname(this.lockFilePath);
-		if (!existsSync(dir)) {
-			mkdirSync(dir, { recursive: true });
-		}
-		if (!existsSync(this.lockFilePath)) {
-			writeFileSync(this.lockFilePath, "");
+		try {
+			const dir = dirname(this.lockFilePath);
+			if (!existsSync(dir)) {
+				mkdirSync(dir, { recursive: true });
+			}
+			if (!existsSync(this.lockFilePath)) {
+				writeFileSync(this.lockFilePath, "");
+			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			throw new Error(`Failed to initialize web search queue lock file at ${this.lockFilePath}: ${msg}`);
 		}
 
 		let release: (() => Promise<void>) | undefined;

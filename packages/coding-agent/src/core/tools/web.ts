@@ -325,7 +325,7 @@ function loadDrebConfig(): DrebConfig {
 	return {};
 }
 
-function getSearchConfig(): WebSearchConfig {
+export function getSearchConfig(): WebSearchConfig {
 	const fileConfig = loadDrebConfig();
 	// Environment variables override config file
 	const rawBackend = process.env.DREB_SEARCH_BACKEND || fileConfig.search?.backend;
@@ -353,6 +353,10 @@ function getSearchConfig(): WebSearchConfig {
 		const parsed = parseInt(String(fileConfig.search.rate_limit_ms), 10);
 		if (!Number.isNaN(parsed) && parsed >= 0) {
 			rateLimitMs = parsed;
+		} else {
+			console.error(
+				`Warning: invalid search.rate_limit_ms in config file "${fileConfig.search.rate_limit_ms}", using default`,
+			);
 		}
 	}
 
@@ -364,12 +368,8 @@ function getSearchConfig(): WebSearchConfig {
 	};
 }
 
-let searchQueue: WebSearchQueue | undefined;
 function getSearchQueue(): WebSearchQueue {
-	if (!searchQueue) {
-		searchQueue = new WebSearchQueue({ rateLimitMs: getSearchConfig().rateLimitMs });
-	}
-	return searchQueue;
+	return new WebSearchQueue({ rateLimitMs: getSearchConfig().rateLimitMs });
 }
 
 export async function executeSearch(query: string): Promise<SearchResult[]> {
