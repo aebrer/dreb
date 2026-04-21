@@ -1,7 +1,7 @@
 ---
 name: Explore
-description: Codebase exploration — find files, search code, answer questions. Read-only.
-tools: read, grep, find, ls, bash, search
+description: Codebase and web exploration — find files, search code, search the web, answer questions. Read-only.
+tools: read, grep, find, ls, bash, search, web_search, web_fetch
 model: zai/glm-5-turbo, anthropic/sonnet
 ---
 
