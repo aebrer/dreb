@@ -665,6 +665,10 @@ dreb --thinking high "Solve this complex problem"
 | `DREB_PACKAGE_DIR` | Override package directory (useful for Nix/Guix where store paths tokenize poorly) |
 | `DREB_CACHE_RETENTION` | Set to `long` for extended prompt cache (Anthropic: 1h, OpenAI: 24h) |
 | `DREB_OFFLINE` | Disable startup network ops (same as `--offline`) |
+| `DREB_SEARCH_BACKEND` | Search backend: `ddg` (default), `searxng`, or `brave` |
+| `DREB_SEARXNG_URL` | Base URL for SearXNG backend (default: `http://localhost:8888`) |
+| `DREB_BRAVE_API_KEY` | API key for Brave search backend |
+| `DREB_WEB_SEARCH_RATE_LIMIT_MS` | Minimum delay between web searches in milliseconds (default: `10000`) |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
 ---
