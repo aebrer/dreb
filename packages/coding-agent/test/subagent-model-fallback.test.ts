@@ -4,6 +4,7 @@ import {
 	parseAgentFrontmatter,
 	resolveModelStringSingle,
 	resolveModelWithFallbacks,
+	subagentToolDefinition,
 } from "../src/core/tools/subagent.js";
 
 /**
@@ -490,5 +491,29 @@ describe("model fallback lists", () => {
 			expect(after.ok).toBe(true);
 			if (after.ok) expect(after.modelId).toBe("gpt-4o");
 		});
+	});
+});
+
+describe("subagent promptGuidelines", () => {
+	test("waiting guideline mentions agent_end explicitly", () => {
+		const guidelines = subagentToolDefinition.promptGuidelines ?? [];
+		const waitingGuideline = guidelines.find((g) => g.includes("Each agent notifies independently when done"));
+		expect(waitingGuideline).toBeDefined();
+		expect(waitingGuideline).toContain("agent_end");
+	});
+
+	test("waiting guideline uses the asking-a-question analogy", () => {
+		const guidelines = subagentToolDefinition.promptGuidelines ?? [];
+		const waitingGuideline = guidelines.find((g) => g.includes("Each agent notifies independently when done"));
+		expect(waitingGuideline).toBeDefined();
+		expect(waitingGuideline).toContain("asking the user a question");
+	});
+
+	test("waiting guideline prohibits sleep and filler work", () => {
+		const guidelines = subagentToolDefinition.promptGuidelines ?? [];
+		const waitingGuideline = guidelines.find((g) => g.includes("Each agent notifies independently when done"));
+		expect(waitingGuideline).toBeDefined();
+		expect(waitingGuideline).toContain("Do not call `sleep`");
+		expect(waitingGuideline).toContain("do not launch filler work");
 	});
 });
