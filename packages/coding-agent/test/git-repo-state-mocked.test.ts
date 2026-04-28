@@ -98,4 +98,40 @@ describe("getGitRepoState edge cases (mocked spawnSync)", () => {
 		expect(result).not.toBeNull();
 		expect(result!.recentTags).toEqual([{ name: "v1.0.0", date: "" }]);
 	});
+
+	test("returns null when git branch exits non-zero with empty stdout", () => {
+		mockedSpawnSync.mockReturnValue(makeSpawnResult({ status: 128, stdout: "" }));
+		expect(getGitRepoState("/fake/repo")).toBeNull();
+	});
+
+	test("parses multi-line porcelain output for correct dirtyCount", () => {
+		mockedSpawnSync.mockImplementation(((cmd: string, args: string[]) => {
+			if (cmd === "git" && args?.[0] === "branch") return makeSpawnResult({ stdout: "main\n" });
+			if (cmd === "git" && args?.[0] === "status")
+				return makeSpawnResult({ stdout: " M file1.ts\nA  file2.ts\n?? new.ts\n" });
+			if (cmd === "git" && args?.[0] === "log") return makeSpawnResult({ stdout: "abc1234 fix stuff\n" });
+			if (cmd === "git" && args?.[0] === "tag") return makeSpawnResult({ stdout: "" });
+			if (cmd === "gh") return makeSpawnResult({ stdout: "[]" });
+			return makeSpawnResult();
+		}) as typeof spawnSync);
+
+		const result = getGitRepoState("/fake/repo");
+		expect(result).not.toBeNull();
+		expect(result!.dirtyCount).toBe(3);
+	});
+
+	test("non-array JSON from gh results in empty openPRs", () => {
+		mockedSpawnSync.mockImplementation(((cmd: string, args: string[]) => {
+			if (cmd === "git" && args?.[0] === "branch") return makeSpawnResult({ stdout: "main\n" });
+			if (cmd === "git" && args?.[0] === "status") return makeSpawnResult({ stdout: "" });
+			if (cmd === "git" && args?.[0] === "log") return makeSpawnResult({ stdout: "abc1234 fix stuff\n" });
+			if (cmd === "git" && args?.[0] === "tag") return makeSpawnResult({ stdout: "" });
+			if (cmd === "gh") return makeSpawnResult({ stdout: '{"message":"error"}' });
+			return makeSpawnResult();
+		}) as typeof spawnSync);
+
+		const result = getGitRepoState("/fake/repo");
+		expect(result).not.toBeNull();
+		expect(result!.openPRs).toEqual([]);
+	});
 });

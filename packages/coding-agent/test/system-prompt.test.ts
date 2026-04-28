@@ -201,7 +201,7 @@ describe("buildSystemPrompt", () => {
 			});
 
 			expect(prompt).toContain("- Branch: `main`");
-			expect(prompt).toContain("- Status: 1 uncommitted changes");
+			expect(prompt).toContain("- Status: 1 uncommitted change");
 			expect(prompt).toContain("- Recent commits:");
 			expect(prompt).toContain("  - `aaa1111 — fix bug`");
 			expect(prompt).not.toContain("Recent releases");

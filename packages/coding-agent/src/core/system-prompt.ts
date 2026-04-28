@@ -94,7 +94,7 @@ function formatUiSection(uiType: string): string {
 function formatGitStateSection(state: GitRepoState): string {
 	let section = "\n\n## Project state (true at session start only)\n\n";
 	section += `- Branch: \`${state.branch}\`\n`;
-	section += `- Status: ${state.dirtyCount === 0 ? "clean" : `${state.dirtyCount} uncommitted changes`}\n`;
+	section += `- Status: ${state.dirtyCount === 0 ? "clean" : `${state.dirtyCount} uncommitted ${state.dirtyCount === 1 ? "change" : "changes"}`}\n`;
 
 	if (state.recentCommits.length > 0) {
 		section += "- Recent commits:\n";

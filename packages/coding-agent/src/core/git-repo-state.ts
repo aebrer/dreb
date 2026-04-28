@@ -86,7 +86,10 @@ export function getGitRepoState(cwd: string): GitRepoState | null {
 		);
 		if (prResult.status === 0 && prResult.stdout) {
 			try {
-				openPRs = JSON.parse(prResult.stdout);
+				const parsed = JSON.parse(prResult.stdout);
+				if (Array.isArray(parsed)) {
+					openPRs = parsed;
+				}
 			} catch {
 				// malformed JSON — keep empty array
 			}
