@@ -3,6 +3,7 @@
  */
 
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
+import type { GitRepoState } from "./git-repo-state.js";
 import { getMemoryInstructions } from "./memory-prompt.js";
 import type { MemoryIndexes } from "./resource-loader.js";
 import { formatSkillsForPrompt, type Skill } from "./skills.js";
@@ -28,6 +29,8 @@ export interface BuildSystemPromptOptions {
 	memoryIndexes?: MemoryIndexes;
 	/** Pre-loaded skills. */
 	skills?: Skill[];
+	/** Git repo state snapshot (branch, dirty count, recent commits, tags, open PRs). */
+	gitRepoState?: GitRepoState;
 }
 
 function formatMemoryScope(sources: readonly import("./resource-loader.js").MemorySource[], heading: string): string {
@@ -87,6 +90,36 @@ function formatUiSection(uiType: string): string {
 	return `\nUI: ${description}`;
 }
 
+/** Format the git repo state section for the system prompt */
+function formatGitStateSection(state: GitRepoState): string {
+	let section = "\n\n## Project state (true at session start only)\n\n";
+	section += `- Branch: \`${state.branch}\`\n`;
+	section += `- Status: ${state.dirtyCount === 0 ? "clean" : `${state.dirtyCount} uncommitted changes`}\n`;
+
+	if (state.recentCommits.length > 0) {
+		section += "- Recent commits:\n";
+		for (const commit of state.recentCommits) {
+			section += `  - \`${commit.hash} — ${commit.subject}\`\n`;
+		}
+	}
+
+	if (state.recentTags.length > 0) {
+		section += "- Recent releases:\n";
+		for (const tag of state.recentTags) {
+			section += `  - \`${tag.name}\` (${tag.date})\n`;
+		}
+	}
+
+	if (state.openPRs.length > 0) {
+		section += "- Open PRs on this branch:\n";
+		for (const pr of state.openPRs) {
+			section += `  - PR ${pr.number} — ${pr.title} (${pr.url})\n`;
+		}
+	}
+
+	return section;
+}
+
 /** Build the system prompt with tools, guidelines, and context */
 export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): string {
 	const {
@@ -134,6 +167,11 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
 		// Append memory indexes
 		prompt += buildMemorySection(options.memoryIndexes);
+
+		// Append git repo state
+		if (options.gitRepoState) {
+			prompt += formatGitStateSection(options.gitRepoState);
+		}
 
 		// Add date and working directory last
 		prompt += `\nCurrent date: ${date}`;
@@ -251,6 +289,11 @@ Dreb documentation (read only when the user asks about dreb itself, its SDK, ext
 
 	// Append memory indexes
 	prompt += buildMemorySection(options.memoryIndexes);
+
+	// Append git repo state
+	if (options.gitRepoState) {
+		prompt += formatGitStateSection(options.gitRepoState);
+	}
 
 	// Add date and working directory last
 	prompt += `\nCurrent date: ${date}`;

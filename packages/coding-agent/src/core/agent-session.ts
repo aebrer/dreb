@@ -62,6 +62,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.js";
 import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./forbidden-commands.js";
+import { getGitRepoState } from "./git-repo-state.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
@@ -1225,6 +1226,7 @@ export class AgentSession {
 			toolSnippets,
 			promptGuidelines,
 			uiType: this._uiType,
+			gitRepoState: getGitRepoState(this._cwd) ?? undefined,
 		});
 	}
 
