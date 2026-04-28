@@ -62,7 +62,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.js";
 import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./forbidden-commands.js";
-import { getGitRepoState } from "./git-repo-state.js";
+import { type GitRepoState, getGitRepoState } from "./git-repo-state.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
@@ -312,6 +312,9 @@ export class AgentSession {
 	private _baseSystemPrompt = "";
 	private _uiType?: string;
 
+	// Git repo state captured once at session start
+	private _gitRepoState: GitRepoState | undefined;
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -325,6 +328,9 @@ export class AgentSession {
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._uiType = config.uiType;
+
+		// Capture git repo state once at session start (before building runtime/system prompt)
+		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
@@ -1226,7 +1232,7 @@ export class AgentSession {
 			toolSnippets,
 			promptGuidelines,
 			uiType: this._uiType,
-			gitRepoState: getGitRepoState(this._cwd) ?? undefined,
+			gitRepoState: this._gitRepoState,
 		});
 	}
 

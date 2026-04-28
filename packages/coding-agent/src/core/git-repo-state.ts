@@ -20,10 +20,9 @@ export function getGitRepoState(cwd: string): GitRepoState | null {
 
 	// Branch
 	const branchResult = spawnSync("git", ["branch", "--show-current"], { ...SPAWN_OPTS, cwd });
-	if (branchResult.status !== 0 && branchResult.status !== null) {
-		// git binary unavailable or not a repo at all
-		if (!branchResult.stdout) return null;
-	}
+	// git binary unavailable (ENOENT) or timed out (status: null)
+	if (branchResult.status === null) return null;
+	if (branchResult.status !== 0 && !branchResult.stdout) return null;
 	const branch = branchResult.stdout?.trim() || "detached";
 
 	// Dirty count
