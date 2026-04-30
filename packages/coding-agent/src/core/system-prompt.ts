@@ -56,6 +56,33 @@ function formatMemoryScope(sources: readonly import("./resource-loader.js").Memo
 	return out;
 }
 
+/**
+ * Format a dream last-run ISO timestamp as a human-readable relative age.
+ * Returns "Never" if timestamp is null.
+ * Uses hours for <24h, days otherwise.
+ * @param isoTimestamp ISO timestamp string or null
+ * @param now Reference date for computing age (default: current time)
+ */
+export function formatDreamAge(isoTimestamp: string | null, now?: Date): string {
+	if (!isoTimestamp) return "Never";
+
+	const then = new Date(isoTimestamp);
+	if (Number.isNaN(then.getTime())) return "Never";
+
+	const reference = now ?? new Date();
+	const diffMs = reference.getTime() - then.getTime();
+
+	// Future or zero — treat as just now
+	if (diffMs <= 0) return "just now";
+
+	const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+	if (diffHours < 1) return "less than an hour ago";
+	if (diffHours < 24) return `${diffHours} ${diffHours === 1 ? "hour" : "hours"} ago`;
+
+	const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+	return `${diffDays} ${diffDays === 1 ? "day" : "days"} ago`;
+}
+
 function buildMemorySection(memoryIndexes?: MemoryIndexes): string {
 	if (!memoryIndexes) return "";
 
@@ -63,6 +90,15 @@ function buildMemorySection(memoryIndexes?: MemoryIndexes): string {
 	let section = `\n\n${getMemoryInstructions({ globalMemoryDir: memoryIndexes.globalMemoryDir, projectMemoryDir: memoryIndexes.projectMemoryDir })}`;
 
 	const { global: globalSources, project: projectSources } = memoryIndexes;
+
+	// Append dream last-run age indicator
+	const dreamAge = formatDreamAge(memoryIndexes.dreamLastRun);
+	if (dreamAge === "Never") {
+		section += "\n\nMemory last consolidated: Never";
+	} else {
+		const dateStr = memoryIndexes.dreamLastRun!.slice(0, 10);
+		section += `\n\nMemory last consolidated: ${dateStr} (${dreamAge})`;
+	}
 
 	// Append the actual memory indexes if any exist
 	if (globalSources.length > 0 || projectSources.length > 0) {

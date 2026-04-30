@@ -136,6 +136,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 						project: [],
 						globalMemoryDir: "/tmp/test/memory",
 						projectMemoryDir: "/tmp/test/memory",
+						dreamLastRun: null,
 					}),
 					getSkills: () => ({
 						skills: options.skills ?? [],

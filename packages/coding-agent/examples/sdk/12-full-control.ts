@@ -56,6 +56,7 @@ const resourceLoader: ResourceLoader = {
 		project: [],
 		globalMemoryDir: "",
 		projectMemoryDir: "",
+		dreamLastRun: null,
 	}),
 	getSystemPrompt: () => `You are a minimal assistant.
 Available: read, bash. Be concise.`,

@@ -36,6 +36,8 @@ export interface MemoryIndexes {
 	readonly project: readonly MemorySource[];
 	readonly globalMemoryDir: string;
 	readonly projectMemoryDir: string;
+	/** ISO timestamp from .dream-last-run, or null if file is missing/invalid. */
+	readonly dreamLastRun: string | null;
 }
 
 export interface ResourceLoader {
@@ -306,11 +308,27 @@ function loadMemoryIndexes(
 		}
 	}
 
+	// Read dream last-run timestamp (graceful null on missing/invalid)
+	let dreamLastRun: string | null = null;
+	try {
+		const dreamLastRunPath = join(globalMemoryDir, ".dream-last-run");
+		if (existsSync(dreamLastRunPath)) {
+			const raw = readFileSync(dreamLastRunPath, "utf-8").trim();
+			// Validate it parses as a date
+			if (raw && !Number.isNaN(Date.parse(raw))) {
+				dreamLastRun = raw;
+			}
+		}
+	} catch {
+		// Silently ignore — missing/unreadable file is fine
+	}
+
 	return {
 		global: globalSources,
 		project: projectSources,
 		globalMemoryDir,
 		projectMemoryDir,
+		dreamLastRun,
 	};
 }
 
@@ -447,6 +465,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			project: [],
 			globalMemoryDir: join(resolve(this.agentDir, ".."), "memory"),
 			projectMemoryDir: join(this.cwd, ".dreb", "memory"),
+			dreamLastRun: null,
 		};
 		this.appendSystemPrompt = [];
 		this.contextDiagnostics = [];
