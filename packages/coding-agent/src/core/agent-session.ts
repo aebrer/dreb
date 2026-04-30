@@ -3118,8 +3118,9 @@ export class AgentSession {
 			this.sessionManager.appendThinkingLevelChange(effectiveLevel);
 		}
 
-		// Refresh git state for the resumed session
+		// Refresh git state and dream timestamp for the resumed session
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
+		this._resourceLoader.refreshDreamLastRun();
 		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
 
 		this._reconnectToAgent();

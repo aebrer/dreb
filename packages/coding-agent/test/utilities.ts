@@ -230,6 +230,7 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 			projectMemoryDir: "/tmp/dreb-test/memory",
 			dreamLastRun: null,
 		}),
+		refreshDreamLastRun: () => {},
 		getSystemPrompt: () => undefined,
 		getAppendSystemPrompt: () => [],
 		extendResources: () => {},

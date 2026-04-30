@@ -48,6 +48,8 @@ export interface ResourceLoader {
 	getContextDiagnostics(): ResourceDiagnostic[];
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
 	getMemoryIndexes(): MemoryIndexes;
+	/** Re-read the .dream-last-run timestamp from disk without a full reload. */
+	refreshDreamLastRun(): void;
 	getSystemPrompt(): string | undefined;
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
@@ -503,6 +505,25 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getMemoryIndexes(): MemoryIndexes {
 		return this.memoryIndexes;
+	}
+
+	refreshDreamLastRun(): void {
+		const globalMemoryDir = join(resolve(this.agentDir, ".."), "memory");
+		let dreamLastRun: string | null = null;
+		try {
+			const dreamLastRunPath = join(globalMemoryDir, ".dream-last-run");
+			if (existsSync(dreamLastRunPath)) {
+				const raw = readFileSync(dreamLastRunPath, "utf-8").trim();
+				if (raw && !Number.isNaN(Date.parse(raw))) {
+					dreamLastRun = raw;
+				}
+			}
+		} catch {
+			// Silently ignore — missing/unreadable file is fine
+		}
+		if (dreamLastRun !== this.memoryIndexes.dreamLastRun) {
+			this.memoryIndexes = { ...this.memoryIndexes, dreamLastRun };
+		}
 	}
 
 	getSystemPrompt(): string | undefined {

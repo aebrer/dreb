@@ -162,6 +162,7 @@ function createMinimalResourceLoader(systemPrompt: string): ResourceLoader {
 			projectMemoryDir: "/tmp/test/memory",
 			dreamLastRun: null,
 		}),
+		refreshDreamLastRun: () => {},
 		getSystemPrompt: () => systemPrompt,
 		getAppendSystemPrompt: () => [],
 		extendResources: () => {},

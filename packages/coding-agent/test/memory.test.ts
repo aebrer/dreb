@@ -349,7 +349,8 @@ describe("readMemoryIndex via DefaultResourceLoader", () => {
 	test("returns null dreamLastRun when file is missing", async () => {
 		mkdirSync(join(tempDir, ".git"));
 
-		const memoryDir = join(tempDir, ".dreb-global", "memory");
+		// globalMemoryDir resolves to join(resolve(agentDir, ".."), "memory") = join(tempDir, "memory")
+		const memoryDir = join(tempDir, "memory");
 		mkdirSync(memoryDir, { recursive: true });
 		// No .dream-last-run file
 
@@ -367,7 +368,8 @@ describe("readMemoryIndex via DefaultResourceLoader", () => {
 	test("returns null dreamLastRun when file contains garbage", async () => {
 		mkdirSync(join(tempDir, ".git"));
 
-		const memoryDir = join(tempDir, ".dreb-global", "memory");
+		// globalMemoryDir resolves to join(resolve(agentDir, ".."), "memory") = join(tempDir, "memory")
+		const memoryDir = join(tempDir, "memory");
 		mkdirSync(memoryDir, { recursive: true });
 		writeFileSync(join(memoryDir, ".dream-last-run"), "not a valid timestamp");
 
@@ -385,7 +387,8 @@ describe("readMemoryIndex via DefaultResourceLoader", () => {
 	test("returns null dreamLastRun when file is empty", async () => {
 		mkdirSync(join(tempDir, ".git"));
 
-		const memoryDir = join(tempDir, ".dreb-global", "memory");
+		// globalMemoryDir resolves to join(resolve(agentDir, ".."), "memory") = join(tempDir, "memory")
+		const memoryDir = join(tempDir, "memory");
 		mkdirSync(memoryDir, { recursive: true });
 		writeFileSync(join(memoryDir, ".dream-last-run"), "");
 
