@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { findGitRoot } from "../src/core/git-root.js";
 import { getMemoryInstructions } from "../src/core/memory-prompt.js";
 import { encodeClaudeProjectPath, type MemoryIndexes, type MemorySource } from "../src/core/resource-loader.js";
-import { buildSystemPrompt } from "../src/core/system-prompt.js";
+import { buildSystemPrompt, formatDreamAge } from "../src/core/system-prompt.js";
 
 // Helper to create a unique temp directory for each test
 function createTempDir(prefix: string): string {
@@ -22,6 +22,7 @@ function makeIndexes(opts: {
 	projectDir?: string;
 	globalSource?: "dreb" | "claude";
 	projectSource?: "dreb" | "claude";
+	dreamLastRun?: string | null;
 }): MemoryIndexes {
 	const globalDir = opts.globalDir ?? "/home/user/.dreb/memory";
 	const projectDir = opts.projectDir ?? "/project/.dreb/memory";
@@ -48,6 +49,7 @@ function makeIndexes(opts: {
 		project: projectSources,
 		globalMemoryDir: globalDir,
 		projectMemoryDir: projectDir,
+		dreamLastRun: opts.dreamLastRun ?? null,
 	};
 }
 
@@ -206,6 +208,7 @@ describe("buildSystemPrompt with memory", () => {
 			project: [],
 			globalMemoryDir: "/home/user/.dreb/memory",
 			projectMemoryDir: "/project/.dreb/memory",
+			dreamLastRun: null,
 		};
 		const prompt = buildSystemPrompt({
 			selectedTools: [],
@@ -322,5 +325,171 @@ describe("readMemoryIndex via DefaultResourceLoader", () => {
 		expect(loadedLines.length).toBe(200);
 		expect(loadedLines[0]).toBe("- [Memory 0](mem_0.md) — entry 0");
 		expect(loadedLines[199]).toBe("- [Memory 199](mem_199.md) — entry 199");
+	});
+
+	test("reads .dream-last-run timestamp when present", async () => {
+		mkdirSync(join(tempDir, ".git"));
+
+		// globalMemoryDir resolves to join(resolve(agentDir, ".."), "memory") = join(tempDir, "memory")
+		const memoryDir = join(tempDir, "memory");
+		mkdirSync(memoryDir, { recursive: true });
+		writeFileSync(join(memoryDir, ".dream-last-run"), "2026-04-20T12:00:00.000Z");
+
+		const { DefaultResourceLoader } = await import("../src/core/resource-loader.js");
+		const loader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir: join(tempDir, ".dreb-global"),
+		});
+		await loader.reload();
+
+		const indexes = loader.getMemoryIndexes();
+		expect(indexes.dreamLastRun).toBe("2026-04-20T12:00:00.000Z");
+	});
+
+	test("returns null dreamLastRun when file is missing", async () => {
+		mkdirSync(join(tempDir, ".git"));
+
+		// globalMemoryDir resolves to join(resolve(agentDir, ".."), "memory") = join(tempDir, "memory")
+		const memoryDir = join(tempDir, "memory");
+		mkdirSync(memoryDir, { recursive: true });
+		// No .dream-last-run file
+
+		const { DefaultResourceLoader } = await import("../src/core/resource-loader.js");
+		const loader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir: join(tempDir, ".dreb-global"),
+		});
+		await loader.reload();
+
+		const indexes = loader.getMemoryIndexes();
+		expect(indexes.dreamLastRun).toBeNull();
+	});
+
+	test("returns null dreamLastRun when file contains garbage", async () => {
+		mkdirSync(join(tempDir, ".git"));
+
+		// globalMemoryDir resolves to join(resolve(agentDir, ".."), "memory") = join(tempDir, "memory")
+		const memoryDir = join(tempDir, "memory");
+		mkdirSync(memoryDir, { recursive: true });
+		writeFileSync(join(memoryDir, ".dream-last-run"), "not a valid timestamp");
+
+		const { DefaultResourceLoader } = await import("../src/core/resource-loader.js");
+		const loader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir: join(tempDir, ".dreb-global"),
+		});
+		await loader.reload();
+
+		const indexes = loader.getMemoryIndexes();
+		expect(indexes.dreamLastRun).toBeNull();
+	});
+
+	test("returns null dreamLastRun when file is empty", async () => {
+		mkdirSync(join(tempDir, ".git"));
+
+		// globalMemoryDir resolves to join(resolve(agentDir, ".."), "memory") = join(tempDir, "memory")
+		const memoryDir = join(tempDir, "memory");
+		mkdirSync(memoryDir, { recursive: true });
+		writeFileSync(join(memoryDir, ".dream-last-run"), "");
+
+		const { DefaultResourceLoader } = await import("../src/core/resource-loader.js");
+		const loader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir: join(tempDir, ".dreb-global"),
+		});
+		await loader.reload();
+
+		const indexes = loader.getMemoryIndexes();
+		expect(indexes.dreamLastRun).toBeNull();
+	});
+});
+
+describe("formatDreamAge", () => {
+	const now = new Date("2026-04-30T12:00:00.000Z");
+
+	test("returns 'Never' for null", () => {
+		expect(formatDreamAge(null, now)).toBe("Never");
+	});
+
+	test("returns 'Never' for invalid timestamp", () => {
+		expect(formatDreamAge("garbage", now)).toBe("Never");
+	});
+
+	test("returns 'just now' for future timestamp", () => {
+		expect(formatDreamAge("2026-05-01T00:00:00.000Z", now)).toBe("just now");
+	});
+
+	test("returns 'less than an hour ago' for 30 minutes", () => {
+		expect(formatDreamAge("2026-04-30T11:30:00.000Z", now)).toBe("less than an hour ago");
+	});
+
+	test("returns '1 hour ago' for 1 hour", () => {
+		expect(formatDreamAge("2026-04-30T11:00:00.000Z", now)).toBe("1 hour ago");
+	});
+
+	test("returns '23 hours ago' for 23 hours", () => {
+		expect(formatDreamAge("2026-04-29T13:00:00.000Z", now)).toBe("23 hours ago");
+	});
+
+	test("returns '1 day ago' for 24 hours", () => {
+		expect(formatDreamAge("2026-04-29T12:00:00.000Z", now)).toBe("1 day ago");
+	});
+
+	test("returns '7 days ago' for one week", () => {
+		expect(formatDreamAge("2026-04-23T12:00:00.000Z", now)).toBe("7 days ago");
+	});
+
+	test("returns '30 days ago' for one month", () => {
+		expect(formatDreamAge("2026-03-31T12:00:00.000Z", now)).toBe("30 days ago");
+	});
+});
+
+describe("dream age in system prompt", () => {
+	test("shows 'Memory last consolidated: Never' when dreamLastRun is null", () => {
+		const prompt = buildSystemPrompt({
+			selectedTools: [],
+			contextFiles: [],
+			skills: [],
+			memoryIndexes: makeIndexes({}),
+		});
+		expect(prompt).toContain("Memory last consolidated: Never");
+	});
+
+	test("shows date and relative age when dreamLastRun is set", () => {
+		const prompt = buildSystemPrompt({
+			selectedTools: [],
+			contextFiles: [],
+			skills: [],
+			memoryIndexes: makeIndexes({ dreamLastRun: "2026-04-20T12:00:00.000Z" }),
+		});
+		expect(prompt).toContain("Memory last consolidated: 2026-04-20");
+		expect(prompt).toMatch(/Memory last consolidated: 2026-04-20 \(\d+ days ago\)/);
+	});
+
+	test("dream age appears before Current Memory Indexes", () => {
+		const prompt = buildSystemPrompt({
+			selectedTools: [],
+			contextFiles: [],
+			skills: [],
+			memoryIndexes: makeIndexes({
+				global: "- [Test](test.md) — test entry",
+				dreamLastRun: "2026-04-20T12:00:00.000Z",
+			}),
+		});
+		const ageIdx = prompt.indexOf("Memory last consolidated:");
+		const indexesIdx = prompt.indexOf("## Current Memory Indexes");
+		expect(ageIdx).toBeGreaterThan(-1);
+		expect(indexesIdx).toBeGreaterThan(ageIdx);
+	});
+
+	test("dream age works with custom prompt", () => {
+		const prompt = buildSystemPrompt({
+			customPrompt: "You are a custom agent.",
+			selectedTools: ["read"],
+			contextFiles: [],
+			skills: [],
+			memoryIndexes: makeIndexes({ dreamLastRun: "2026-04-25T08:00:00.000Z" }),
+		});
+		expect(prompt).toContain("Memory last consolidated: 2026-04-25");
 	});
 });
