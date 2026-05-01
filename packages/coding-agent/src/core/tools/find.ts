@@ -209,7 +209,7 @@ export function createFindToolDefinition(
 						// Manual --ignore-file collection was removed because fd applies
 						// those patterns globally, causing venv/.gitignore files containing
 						// bare "*" to suppress all results. See issue #17.
-						args.push(pattern, searchPath);
+						args.push("--", pattern, searchPath);
 
 						// Include tool-visible .dreb/ subdirs when searching from project root.
 						// fd bypasses .gitignore for explicit path arguments.

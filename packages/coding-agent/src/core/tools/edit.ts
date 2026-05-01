@@ -168,12 +168,13 @@ export function createEditToolDefinition(
 								// Check if file exists.
 								try {
 									await ops.access(absolutePath);
-								} catch {
+								} catch (accessErr: any) {
 									// access() threw — file missing or unreadable
 									if (signal) {
 										signal.removeEventListener("abort", onAbort);
 									}
-									reject(new Error(`File not found: ${path}`));
+									const code = accessErr?.code ? `. Error code: ${accessErr.code}` : "";
+									reject(new Error(`Could not access file: ${path}${code}`));
 									return;
 								}
 

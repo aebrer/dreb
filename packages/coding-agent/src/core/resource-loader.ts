@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
@@ -89,11 +89,32 @@ function loadContextFilesFromDir(
 	dir: string,
 	diagnostics?: ResourceDiagnostic[],
 ): Array<{ path: string; content: string }> {
-	const candidates = ["AGENTS.md", "CLAUDE.md", join(".claude", "CLAUDE.md"), join(".dreb", "CONTEXT.md")];
+	const candidates = [
+		"AGENTS.md",
+		"AGENTS.MD",
+		"CLAUDE.md",
+		"CLAUDE.MD",
+		join(".claude", "CLAUDE.md"),
+		join(".claude", "CLAUDE.MD"),
+		join(".dreb", "CONTEXT.md"),
+		join(".dreb", "CONTEXT.MD"),
+	];
 	const results: Array<{ path: string; content: string }> = [];
+	const seenRealPaths = new Set<string>();
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
 		if (existsSync(filePath)) {
+			// Deduplicate by realpath to avoid loading the same file twice on
+			// case-insensitive filesystems (macOS) where AGENTS.md and AGENTS.MD
+			// resolve to the same inode.
+			let realPath: string;
+			try {
+				realPath = realpathSync(filePath);
+			} catch {
+				realPath = filePath;
+			}
+			if (seenRealPaths.has(realPath)) continue;
+			seenRealPaths.add(realPath);
 			try {
 				results.push({
 					path: filePath,

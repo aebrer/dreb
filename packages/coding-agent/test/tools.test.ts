@@ -515,6 +515,23 @@ describe("Coding Agent Tools", () => {
 			// Ensure second match is not present
 			expect(output).not.toContain("match two");
 		});
+
+		it("should treat flag-shaped patterns as literal text, not as rg options (security)", async () => {
+			// Regression test: without the "--" end-of-options separator, a pattern like
+			// "--pre=/tmp/evil.sh" would be interpreted as an rg flag, enabling RCE.
+			const testFile = join(testDir, "safe.txt");
+			writeFileSync(testFile, "some content\n");
+
+			const scopedGrep = createGrepTool(testDir);
+			const result = await scopedGrep.execute("test-flag-injection", {
+				pattern: "--pre=/tmp/evil.sh",
+			});
+
+			const output = getTextOutput(result);
+			// Should complete without error — the flag-shaped string is treated as a
+			// literal pattern that simply doesn't match anything.
+			expect(output).toContain("No matches found");
+		});
 	});
 
 	describe("find tool", () => {
@@ -617,6 +634,22 @@ describe("Coding Agent Tools", () => {
 			const output = getTextOutput(result);
 			expect(output).toContain("kept.txt");
 			expect(output).not.toContain("ignored.txt");
+		});
+
+		it("should treat flag-shaped patterns as literal text, not as fd options (security)", async () => {
+			// Regression test: without the "--" end-of-options separator, a pattern like
+			// "--exec=evil" would be interpreted as an fd flag.
+			writeFileSync(join(testDir, "safe.txt"), "content");
+
+			const scopedFind = createFindTool(testDir);
+			const result = await scopedFind.execute("test-flag-injection-find", {
+				pattern: "--exec=evil",
+			});
+
+			const output = getTextOutput(result);
+			// Should complete without error — the flag-shaped string is treated as a
+			// literal glob pattern that simply doesn't match anything.
+			expect(output).toContain("No files found");
 		});
 	});
 
