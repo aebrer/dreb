@@ -273,14 +273,20 @@ describe("Context overflow error handling", () => {
 
 	describe("OpenAI Codex (OAuth)", () => {
 		it.skipIf(!openaiCodexToken)(
-			"gpt-5.2-codex - should detect overflow via isContextOverflow",
+			"gpt-5.3-codex - should detect overflow via isContextOverflow",
 			async () => {
-				const model = getModel("openai-codex", "gpt-5.2-codex");
+				const model = getModel("openai-codex", "gpt-5.3-codex");
 				const result = await testContextOverflow(model, openaiCodexToken!);
 				logResult(result);
 
-				expect(result.stopReason).toBe("error");
-				expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
+				if (result.stopReason === "error") {
+					expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
+				} else {
+					expect(result.stopReason).toBe("stop");
+					expect(result.hasUsageData).toBe(true);
+					expect(result.usage.input + result.usage.cacheRead).toBeGreaterThan(model.contextWindow);
+					expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
+				}
 			},
 			120000,
 		);

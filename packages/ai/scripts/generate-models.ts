@@ -904,9 +904,11 @@ async function generateModels() {
 
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
-	// Context window is based on observed server limits (400s above ~272k), not marketing numbers.
+	// Most Codex models use the observed 272k ChatGPT-auth server limit. GPT-5.5
+	// is documented for Codex with a larger 400k context window.
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	const CODEX_CONTEXT = 272000;
+	const CODEX_GPT_55_CONTEXT = 400000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
 		{
@@ -946,30 +948,6 @@ async function generateModels() {
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
-			id: "gpt-5.2",
-			name: "GPT-5.2",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.2-codex",
-			name: "GPT-5.2 Codex",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
 			id: "gpt-5.3-codex",
 			name: "GPT-5.3 Codex",
 			api: "openai-codex-responses",
@@ -1003,6 +981,18 @@ async function generateModels() {
 			input: ["text", "image"],
 			cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
 			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.5",
+			name: "GPT-5.5",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+			contextWindow: CODEX_GPT_55_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{

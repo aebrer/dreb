@@ -69,6 +69,16 @@ export interface OpenAIResponsesStreamOptions {
 		usage: Usage,
 		serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
 	) => void;
+	/**
+	 * Optional callback to resolve the effective service tier when the API
+	 * returns a generic tier (e.g. "default") rather than the requested one.
+	 * Receives the tier from the response and the tier that was requested.
+	 * Should return the tier to use for pricing.
+	 */
+	resolveServiceTier?: (
+		responseTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+		requestedTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	) => ResponseCreateParamsStreaming["service_tier"];
 	/** Optional callback for non-fatal warnings during streaming (e.g. malformed JSON chunks). */
 	onWarning?: (code: string, message: string) => void;
 }
@@ -448,6 +458,11 @@ export async function processResponsesStream<TApi extends Api>(
 					arguments: args,
 				};
 
+				// Clean up partialJson from the output block before finalising
+				if (currentBlock && "partialJson" in currentBlock) {
+					delete (currentBlock as ToolCall & { partialJson?: string }).partialJson;
+				}
+
 				currentBlock = null;
 				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 			}
@@ -470,7 +485,10 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 			calculateCost(model, output.usage);
 			if (options?.applyServiceTierPricing) {
-				const serviceTier = response?.service_tier ?? options.serviceTier;
+				let serviceTier = response?.service_tier ?? options.serviceTier;
+				if (options?.resolveServiceTier) {
+					serviceTier = options.resolveServiceTier(response?.service_tier, options.serviceTier);
+				}
 				options.applyServiceTierPricing(output.usage, serviceTier);
 			}
 			// Map status to stop reason

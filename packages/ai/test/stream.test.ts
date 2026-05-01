@@ -214,7 +214,11 @@ async function handleThinking<TApi extends Api>(model: Model<TApi>, options?: St
 
 	expect(response.stopReason, `Error: ${response.errorMessage}`).toBe("stop");
 	expect(thinkingStarted).toBe(true);
-	expect(thinkingChunks.length).toBeGreaterThan(0);
+	// ChatGPT Codex may emit reasoning lifecycle events with encrypted reasoning
+	// content but no human-readable thinking deltas.
+	if (model.provider !== "openai-codex") {
+		expect(thinkingChunks.length).toBeGreaterThan(0);
+	}
 	expect(thinkingCompleted).toBe(true);
 	expect(response.content.some((b) => b.type === "thinking")).toBeTruthy();
 }
@@ -1027,8 +1031,8 @@ describe("Generate E2E Tests", () => {
 		});
 	});
 
-	describe("OpenAI Codex Provider (gpt-5.2-codex)", () => {
-		const llm = getModel("openai-codex", "gpt-5.2-codex");
+	describe("OpenAI Codex Provider (gpt-5.3-codex)", () => {
+		const llm = getModel("openai-codex", "gpt-5.3-codex");
 
 		it.skipIf(!openaiCodexToken)("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm, { apiKey: openaiCodexToken });

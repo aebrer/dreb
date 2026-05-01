@@ -31,4 +31,16 @@ describe("supportsXhigh", () => {
 		expect(model).toBeDefined();
 		expect(supportsXhigh(model!)).toBe(true);
 	});
+
+	it("returns true for GPT-5.5 models", () => {
+		const model = getModel("openai-codex", "gpt-5.5");
+		expect(model).toBeDefined();
+		expect(supportsXhigh(model!)).toBe(true);
+	});
+
+	it("returns true for OpenRouter GPT-5.5", () => {
+		const model = getModel("openrouter", "openai/gpt-5.5");
+		expect(model).toBeDefined();
+		expect(supportsXhigh(model!)).toBe(true);
+	});
 });

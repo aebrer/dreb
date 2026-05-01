@@ -151,7 +151,7 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
  * - Opus 4.6+ models (xhigh maps to adaptive effort "max" on Anthropic-compatible providers)
  */
 export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
-	if (model.id.includes("gpt-5.2") || model.id.includes("gpt-5.3") || model.id.includes("gpt-5.4")) {
+	if (model.id.includes("gpt-5.2") || model.id.includes("gpt-5.3") || model.id.includes("gpt-5.4") || model.id.includes("gpt-5.5")) {
 		return true;
 	}
 

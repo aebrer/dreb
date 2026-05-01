@@ -1,5 +1,10 @@
 import type * as NodeOs from "node:os";
-import type { Tool as OpenAITool, ResponseInput, ResponseStreamEvent } from "openai/resources/responses/responses.js";
+import type {
+	Tool as OpenAITool,
+	ResponseCreateParamsStreaming,
+	ResponseInput,
+	ResponseStreamEvent,
+} from "openai/resources/responses/responses.js";
 
 // NEVER convert to top-level runtime imports - breaks browser/Vite builds (web-ui)
 let _os: typeof NodeOs | null = null;
@@ -25,6 +30,7 @@ import type {
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
+	Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
@@ -57,6 +63,9 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 	reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
 	textVerbosity?: "low" | "medium" | "high";
+	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+	/** Optional callback invoked when the HTTP response headers are received (SSE only). */
+	onResponse?: (response: { status: number; headers: Record<string, string> }) => void | Promise<void>;
 }
 
 type CodexResponseStatus = "completed" | "incomplete" | "failed" | "cancelled" | "queued" | "in_progress";
@@ -75,6 +84,8 @@ interface RequestBody {
 	text?: { verbosity?: string };
 	include?: string[];
 	prompt_cache_key?: string;
+	service_tier?: ResponseCreateParamsStreaming["service_tier"];
+	previous_response_id?: string;
 	[key: string]: unknown;
 }
 
@@ -206,6 +217,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						body: bodyJson,
 						signal: options?.signal,
 					});
+					await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) });
 
 					if (response.ok) {
 						break;
@@ -308,7 +320,7 @@ function buildRequestBody(
 		stream: true,
 		instructions: context.systemPrompt,
 		input: messages,
-		text: { verbosity: options?.textVerbosity || "medium" },
+		text: { verbosity: options?.textVerbosity || "low" },
 		include: ["reasoning.encrypted_content"],
 		prompt_cache_key: options?.sessionId,
 		tool_choice: "auto",
@@ -330,12 +342,19 @@ function buildRequestBody(
 		};
 	}
 
+	if (options?.serviceTier !== undefined) {
+		body.service_tier = options.serviceTier;
+	}
+
 	return body;
 }
 
 function clampReasoningEffort(modelId: string, effort: string): string {
 	const id = modelId.includes("/") ? modelId.split("/").pop()! : modelId;
-	if ((id.startsWith("gpt-5.2") || id.startsWith("gpt-5.3") || id.startsWith("gpt-5.4")) && effort === "minimal")
+	if (
+		(id.startsWith("gpt-5.2") || id.startsWith("gpt-5.3") || id.startsWith("gpt-5.4") || id.startsWith("gpt-5.5")) &&
+		effort === "minimal"
+	)
 		return "low";
 	if (id === "gpt-5.1" && effort === "xhigh") return "high";
 	if (id === "gpt-5.1-codex-mini") return effort === "high" || effort === "xhigh" ? "high" : "medium";
@@ -368,7 +387,11 @@ async function processStream(
 	model: Model<"openai-codex-responses">,
 	options?: OpenAICodexResponsesOptions,
 ): Promise<void> {
-	await processResponsesStream(mapCodexEvents(parseSSE(response, options)), output, stream, model, options);
+	await processResponsesStream(mapCodexEvents(parseSSE(response, options)), output, stream, model, {
+		serviceTier: options?.serviceTier,
+		resolveServiceTier: resolveCodexServiceTier,
+		applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+	});
 }
 
 async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): AsyncGenerator<ResponseStreamEvent> {
@@ -486,10 +509,17 @@ interface WebSocketLike {
 	removeEventListener(type: WebSocketEventType, listener: WebSocketListener): void;
 }
 
+interface CachedWebSocketContinuationState {
+	lastRequestBody: RequestBody;
+	lastResponseId: string;
+	lastResponseItems: ResponseInput;
+}
+
 interface CachedWebSocketConnection {
 	socket: WebSocketLike;
 	busy: boolean;
 	idleTimer?: ReturnType<typeof setTimeout>;
+	continuation?: CachedWebSocketContinuationState;
 }
 
 const websocketSessionCache = new Map<string, CachedWebSocketConnection>();
@@ -610,7 +640,11 @@ async function acquireWebSocket(
 	headers: Headers,
 	sessionId: string | undefined,
 	signal?: AbortSignal,
-): Promise<{ socket: WebSocketLike; release: (options?: { keep?: boolean }) => void }> {
+): Promise<{
+	socket: WebSocketLike;
+	entry?: CachedWebSocketConnection;
+	release: (options?: { keep?: boolean }) => void;
+}> {
 	if (!sessionId) {
 		const socket = await connectWebSocket(url, headers, signal);
 		return {
@@ -635,6 +669,7 @@ async function acquireWebSocket(
 			cached.busy = true;
 			return {
 				socket: cached.socket,
+				entry: cached,
 				release: ({ keep } = {}) => {
 					if (!keep || !isWebSocketReusable(cached.socket)) {
 						closeWebSocketSilently(cached.socket);
@@ -666,6 +701,7 @@ async function acquireWebSocket(
 	websocketSessionCache.set(sessionId, entry);
 	return {
 		socket,
+		entry,
 		release: ({ keep } = {}) => {
 			if (!keep || !isWebSocketReusable(entry.socket)) {
 				closeWebSocketSilently(entry.socket);
@@ -819,6 +855,60 @@ async function* parseWebSocket(
 	}
 }
 
+function requestBodyWithoutInput(body: RequestBody): RequestBody {
+	const { input: _input, previous_response_id: _previousResponseId, ...rest } = body;
+	return rest;
+}
+
+function responseInputsEqual(a: ResponseInput | undefined, b: ResponseInput | undefined): boolean {
+	return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
+
+function requestBodiesMatchExceptInput(a: RequestBody, b: RequestBody): boolean {
+	return JSON.stringify(requestBodyWithoutInput(a)) === JSON.stringify(requestBodyWithoutInput(b));
+}
+
+function getCachedWebSocketInputDelta(
+	body: RequestBody,
+	continuation: CachedWebSocketContinuationState,
+): ResponseInput | undefined {
+	if (!requestBodiesMatchExceptInput(body, continuation.lastRequestBody)) {
+		return undefined;
+	}
+
+	const currentInput = body.input ?? [];
+	const baseline = [...(continuation.lastRequestBody.input ?? []), ...continuation.lastResponseItems];
+	if (currentInput.length < baseline.length) {
+		return undefined;
+	}
+
+	const prefix = currentInput.slice(0, baseline.length);
+	if (!responseInputsEqual(prefix, baseline)) {
+		return undefined;
+	}
+
+	return currentInput.slice(baseline.length);
+}
+
+function buildCachedWebSocketRequestBody(entry: CachedWebSocketConnection, body: RequestBody): RequestBody {
+	const continuation = entry.continuation;
+	if (!continuation) {
+		return body;
+	}
+
+	const delta = getCachedWebSocketInputDelta(body, continuation);
+	if (!delta || !continuation.lastResponseId) {
+		entry.continuation = undefined;
+		return body;
+	}
+
+	return {
+		...body,
+		previous_response_id: continuation.lastResponseId,
+		input: delta,
+	};
+}
+
 async function processWebSocketStream(
 	url: string,
 	body: RequestBody,
@@ -829,10 +919,12 @@ async function processWebSocketStream(
 	onStart: () => void,
 	options?: OpenAICodexResponsesOptions,
 ): Promise<void> {
-	const { socket, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
+	const { socket, entry, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
 	let keepConnection = true;
+	const fullBody = body;
+	const requestBody = entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
 	try {
-		socket.send(JSON.stringify({ type: "response.create", ...body }));
+		socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
 		onStart();
 		stream.push({ type: "start", partial: output });
 		await processResponsesStream(
@@ -840,17 +932,80 @@ async function processWebSocketStream(
 			output,
 			stream,
 			model,
-			options,
+			{
+				serviceTier: options?.serviceTier,
+				resolveServiceTier: resolveCodexServiceTier,
+				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+			},
 		);
+		if (entry && output.responseId && !options?.signal?.aborted) {
+			const responseItems = convertResponsesMessages(model, { messages: [output] }, CODEX_TOOL_CALL_PROVIDERS, {
+				includeSystemPrompt: false,
+			}).filter((item) => item.type !== "function_call_output");
+			entry.continuation = {
+				lastRequestBody: fullBody,
+				lastResponseId: output.responseId,
+				lastResponseItems: responseItems,
+			};
+		}
 		if (options?.signal?.aborted) {
 			keepConnection = false;
 		}
 	} catch (error) {
+		if (entry) {
+			entry.continuation = undefined;
+		}
 		keepConnection = false;
 		throw error;
 	} finally {
 		release({ keep: keepConnection });
 	}
+}
+
+// ============================================================================
+// Service Tier Pricing
+// ============================================================================
+
+function getServiceTierCostMultiplier(
+	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	modelId?: string,
+): number {
+	switch (serviceTier) {
+		case "flex":
+			return 0.5;
+		case "priority": {
+			const id = modelId?.includes("/") ? modelId.split("/").pop()! : modelId;
+			if (id?.startsWith("gpt-5.5")) return 2.5;
+			return 2;
+		}
+		default:
+			return 1;
+	}
+}
+
+function applyServiceTierPricing(
+	usage: Usage,
+	serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	model: Pick<Model<"openai-codex-responses">, "id">,
+) {
+	const multiplier = getServiceTierCostMultiplier(serviceTier, model.id);
+	if (multiplier === 1) return;
+
+	usage.cost.input *= multiplier;
+	usage.cost.output *= multiplier;
+	usage.cost.cacheRead *= multiplier;
+	usage.cost.cacheWrite *= multiplier;
+	usage.cost.total = usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
+}
+
+function resolveCodexServiceTier(
+	responseTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+	requestedTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+): ResponseCreateParamsStreaming["service_tier"] | undefined {
+	if (responseTier === "default" && (requestedTier === "flex" || requestedTier === "priority")) {
+		return requestedTier;
+	}
+	return responseTier ?? requestedTier;
 }
 
 // ============================================================================
