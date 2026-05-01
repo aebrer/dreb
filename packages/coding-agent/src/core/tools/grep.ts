@@ -220,7 +220,7 @@ export function createGrepToolDefinition(
 						if (ignoreCase) args.push("--ignore-case");
 						if (literal) args.push("--fixed-strings");
 						if (glob) args.push("--glob", glob);
-						args.push(pattern, searchPath);
+						args.push("--", pattern, searchPath);
 
 						// Include tool-visible .dreb/ subdirs when searching from project root.
 						// rg bypasses .gitignore for explicit path arguments.

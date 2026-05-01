@@ -262,8 +262,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
 			const blocks = output.content as Block[];
 
+			let sawMessageStart = false;
+			let sawMessageStop = false;
+
 			for await (const event of anthropicStream) {
 				if (event.type === "message_start") {
+					sawMessageStart = true;
 					output.responseId = event.message.id;
 					// Capture initial token usage from message_start event
 					// This ensures we have input token counts even if the stream is aborted early
@@ -415,11 +419,18 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					output.usage.totalTokens =
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 					calculateCost(model, output.usage);
+				} else if (event.type === "message_stop") {
+					sawMessageStop = true;
 				}
 			}
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
+			}
+
+			// Detect incomplete streams — connection dropped after start but before stop
+			if (sawMessageStart && !sawMessageStop) {
+				throw new Error("Anthropic stream ended before message_stop — response may be incomplete");
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {

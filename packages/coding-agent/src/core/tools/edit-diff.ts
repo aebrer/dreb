@@ -252,9 +252,10 @@ export async function computeEditDiff(
 		// Check if file exists and is readable
 		try {
 			await access(absolutePath, constants.R_OK);
-		} catch {
+		} catch (accessErr: any) {
 			// access() threw — file missing or unreadable
-			return { error: `File not found: ${path}` };
+			const code = accessErr?.code ? `. Error code: ${accessErr.code}` : "";
+			return { error: `Could not access file: ${path}${code}` };
 		}
 
 		// Read the file

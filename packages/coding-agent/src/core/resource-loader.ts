@@ -89,7 +89,16 @@ function loadContextFilesFromDir(
 	dir: string,
 	diagnostics?: ResourceDiagnostic[],
 ): Array<{ path: string; content: string }> {
-	const candidates = ["AGENTS.md", "CLAUDE.md", join(".claude", "CLAUDE.md"), join(".dreb", "CONTEXT.md")];
+	const candidates = [
+		"AGENTS.md",
+		"AGENTS.MD",
+		"CLAUDE.md",
+		"CLAUDE.MD",
+		join(".claude", "CLAUDE.md"),
+		join(".claude", "CLAUDE.MD"),
+		join(".dreb", "CONTEXT.md"),
+		join(".dreb", "CONTEXT.MD"),
+	];
 	const results: Array<{ path: string; content: string }> = [];
 	for (const filename of candidates) {
 		const filePath = join(dir, filename);
