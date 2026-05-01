@@ -453,7 +453,12 @@ describe("openai-codex WebSocket streaming", () => {
 				response: {
 					id: "resp_bm_first",
 					status: "completed",
-					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+					usage: {
+						input_tokens: 5,
+						output_tokens: 1,
+						total_tokens: 6,
+						input_tokens_details: { cached_tokens: 0 },
+					},
 				},
 			},
 		];
@@ -509,7 +514,12 @@ describe("openai-codex WebSocket streaming", () => {
 				response: {
 					id: "resp_bm_second",
 					status: "completed",
-					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+					usage: {
+						input_tokens: 5,
+						output_tokens: 1,
+						total_tokens: 6,
+						input_tokens_details: { cached_tokens: 0 },
+					},
 				},
 			},
 		];
@@ -611,7 +621,12 @@ describe("openai-codex WebSocket streaming", () => {
 				response: {
 					id: "resp_pm_first",
 					status: "completed",
-					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+					usage: {
+						input_tokens: 5,
+						output_tokens: 1,
+						total_tokens: 6,
+						input_tokens_details: { cached_tokens: 0 },
+					},
 				},
 			},
 		];
@@ -668,7 +683,12 @@ describe("openai-codex WebSocket streaming", () => {
 				response: {
 					id: "resp_pm_second",
 					status: "completed",
-					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+					usage: {
+						input_tokens: 5,
+						output_tokens: 1,
+						total_tokens: 6,
+						input_tokens_details: { cached_tokens: 0 },
+					},
 				},
 			},
 		];
@@ -771,7 +791,12 @@ describe("openai-codex WebSocket streaming", () => {
 				response: {
 					// No "id" field!
 					status: "completed",
-					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+					usage: {
+						input_tokens: 5,
+						output_tokens: 1,
+						total_tokens: 6,
+						input_tokens_details: { cached_tokens: 0 },
+					},
 				},
 			},
 		];
@@ -827,7 +852,12 @@ describe("openai-codex WebSocket streaming", () => {
 				response: {
 					id: "resp_mr_second",
 					status: "completed",
-					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+					usage: {
+						input_tokens: 5,
+						output_tokens: 1,
+						total_tokens: 6,
+						input_tokens_details: { cached_tokens: 0 },
+					},
 				},
 			},
 		];
@@ -928,7 +958,12 @@ describe("openai-codex WebSocket streaming", () => {
 				response: {
 					id: "resp_ec_first",
 					status: "completed",
-					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+					usage: {
+						input_tokens: 5,
+						output_tokens: 1,
+						total_tokens: 6,
+						input_tokens_details: { cached_tokens: 0 },
+					},
 				},
 			},
 		];
@@ -1018,7 +1053,12 @@ describe("openai-codex WebSocket streaming", () => {
 				response: {
 					id: "resp_ec_third",
 					status: "completed",
-					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+					usage: {
+						input_tokens: 5,
+						output_tokens: 1,
+						total_tokens: 6,
+						input_tokens_details: { cached_tokens: 0 },
+					},
 				},
 			},
 		];

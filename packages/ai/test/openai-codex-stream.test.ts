@@ -303,7 +303,7 @@ describe("openai-codex streaming", () => {
 		expect(result.stopReason).toBe("length");
 	});
 
-	it("sets conversation_id/session_id headers and prompt_cache_key when sessionId is provided", async () => {
+	it("sets session_id header and prompt_cache_key when sessionId is provided", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 
@@ -364,13 +364,11 @@ describe("openai-codex streaming", () => {
 			if (url === "https://chatgpt.com/backend-api/codex/responses") {
 				const headers = init?.headers instanceof Headers ? init.headers : undefined;
 				// Verify sessionId is set in headers
-				expect(headers?.get("conversation_id")).toBe(sessionId);
 				expect(headers?.get("session_id")).toBe(sessionId);
 
 				// Verify sessionId is set in request body as prompt_cache_key
 				const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
 				expect(body?.prompt_cache_key).toBe(sessionId);
-				expect(body?.prompt_cache_retention).toBe("in-memory");
 
 				return new Response(stream, {
 					status: 200,
@@ -1405,14 +1403,14 @@ describe("openai-codex streaming", () => {
 		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, onResponse });
 		await streamResult.result();
 
-		// onResponse fires for each fetch response, including retries
-		expect(onResponse).toHaveBeenCalled();
+		// onResponse fires once after the retry loop succeeds with a 200
+		expect(onResponse).toHaveBeenCalledOnce();
 		// The final call should have status 200
 		const lastCall = onResponse.mock.calls[onResponse.mock.calls.length - 1];
 		expect(lastCall[0].status).toBe(200);
 	});
 
-	it("calls onResponse once with error status for non-retryable 4xx", async () => {
+	it("does NOT call onResponse for non-retryable 4xx errors", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
@@ -1462,12 +1460,73 @@ describe("openai-codex streaming", () => {
 		expect(onResponse).not.toHaveBeenCalled();
 	});
 
-	it("applies priority service tier pricing (2x for non-gpt-5.5 models)", async () => {
+	it("swallows onResponse callback errors without disrupting the stream", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 		const token = mockToken();
 
 		const sse = buildSSEPayload({ status: "completed" });
+		const encoder = new TextEncoder();
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(encoder.encode(sse));
+							controller.close();
+						},
+					}),
+					{
+						status: 200,
+						headers: { "content-type": "text/event-stream" },
+					},
+				);
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const onResponse = vi.fn(() => {
+			throw new Error("onResponse explosion");
+		});
+		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, onResponse });
+		const result = await streamResult.result();
+
+		expect(onResponse).toHaveBeenCalledOnce();
+		expect(result.stopReason).toBe("stop");
+		expect(result.content.find((c) => c.type === "text")?.text).toBe("Hello");
+	});
+
+	it("applies priority service tier pricing (2x for non-gpt-5.5 models)", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+
 		const encoder = new TextEncoder();
 
 		// Override usage in the SSE payload — buildSSEPayload uses small values, we need large ones

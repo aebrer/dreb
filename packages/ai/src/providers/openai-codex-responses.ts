@@ -398,6 +398,7 @@ async function processStream(
 		serviceTier: options?.serviceTier,
 		resolveServiceTier: resolveCodexServiceTier,
 		applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+		onWarning: options?.onWarning,
 	});
 }
 
@@ -779,9 +780,13 @@ async function* parseWebSocket(
 	const onMessage: WebSocketListener = (event) => {
 		void (async () => {
 			if (!event || typeof event !== "object" || !("data" in event)) return;
-			const text = await decodeWebSocketData((event as { data?: unknown }).data);
-			if (!text) return;
+			let text: string | null | undefined;
 			try {
+				text = await decodeWebSocketData((event as { data?: unknown }).data);
+				if (!text) {
+					wake();
+					return;
+				}
 				const parsed = JSON.parse(text) as Record<string, unknown>;
 				const type = typeof parsed.type === "string" ? parsed.type : "";
 				if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
@@ -789,9 +794,19 @@ async function* parseWebSocket(
 					done = true;
 				}
 				queue.push(parsed);
-			} catch {
+			} catch (e) {
 				// Malformed WebSocket message — warn but don't drop wake()
-				options?.onWarning?.("ws_parse_error", `Malformed WebSocket message dropped: ${text.slice(0, 200)}`);
+				if (text === undefined) {
+					options?.onWarning?.(
+						"ws_decode_error",
+						`Failed to decode WebSocket message: ${e instanceof Error ? e.message : String(e)}`,
+					);
+				} else {
+					options?.onWarning?.(
+						"ws_parse_error",
+						`Malformed WebSocket message dropped: ${text?.slice(0, 200) ?? ""}`,
+					);
+				}
 			} finally {
 				// Always wake the consumer — even on parse failure — to prevent stream hangs
 				wake();
@@ -939,6 +954,7 @@ async function processWebSocketStream(
 				serviceTier: options?.serviceTier,
 				resolveServiceTier: resolveCodexServiceTier,
 				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+				onWarning: options?.onWarning,
 			},
 		);
 		if (entry && output.responseId && !options?.signal?.aborted) {
