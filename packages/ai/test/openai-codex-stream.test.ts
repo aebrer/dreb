@@ -1250,6 +1250,311 @@ describe("openai-codex streaming", () => {
 		expect(result.usage.cost.total).toBeCloseTo(30, 5);
 	});
 
+	it("resolves 'default' response tier back to requested tier for pricing (gpt-5.5 priority 2.5x)", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+
+		// Build SSE with service_tier: "default" in response.completed
+		const sse = `${[
+			`data: ${JSON.stringify({
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+			})}`,
+			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
+			`data: ${JSON.stringify({
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hello" }],
+				},
+			})}`,
+			`data: ${JSON.stringify({
+				type: "response.completed",
+				response: {
+					status: "completed",
+					service_tier: "default",
+					usage: {
+						input_tokens: 1000000,
+						output_tokens: 1000000,
+						total_tokens: 2000000,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			})}`,
+		].join("\n\n")}\n\n`;
+
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode(sse));
+				controller.close();
+			},
+		});
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				return new Response(stream, {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.5",
+			name: "GPT-5.5",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 10, output: 20, cacheRead: 1, cacheWrite: 2 },
+			contextWindow: 272000,
+			maxTokens: 128000,
+		};
+
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		// Request priority tier — response returns "default", should resolve to "priority" → 2.5x for gpt-5.5
+		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, serviceTier: "priority" });
+		const result = await streamResult.result();
+
+		// 2.5x multiplier applied (not 1x), because "default" resolves to requested "priority"
+		expect(result.usage.cost.input).toBeCloseTo(25, 5);
+		expect(result.usage.cost.output).toBeCloseTo(50, 5);
+		expect(result.usage.cost.total).toBeCloseTo(75, 5);
+	});
+
+	it("calls onResponse once with final status when retries succeed", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+
+		const sse = buildSSEPayload({ status: "completed" });
+		const encoder = new TextEncoder();
+
+		let codexCallCount = 0;
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				codexCallCount++;
+				if (codexCallCount === 1) {
+					// First attempt: 429 rate limit (retryable)
+					return new Response(JSON.stringify({ error: { message: "rate limit", type: "rate_limit_exceeded" } }), {
+						status: 429,
+					});
+				}
+				// Second attempt: success with SSE stream
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(encoder.encode(sse));
+							controller.close();
+						},
+					}),
+					{
+						status: 200,
+						headers: { "content-type": "text/event-stream" },
+					},
+				);
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const onResponse = vi.fn();
+		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, onResponse });
+		await streamResult.result();
+
+		// onResponse fires for each fetch response, including retries
+		expect(onResponse).toHaveBeenCalled();
+		// The final call should have status 200
+		const lastCall = onResponse.mock.calls[onResponse.mock.calls.length - 1];
+		expect(lastCall[0].status).toBe(200);
+	});
+
+	it("calls onResponse once with error status for non-retryable 4xx", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				// 400 is not retryable
+				return new Response(JSON.stringify({ error: { message: "Bad request", type: "invalid_request_error" } }), {
+					status: 400,
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const onResponse = vi.fn();
+		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, onResponse });
+
+		// The stream catches the error internally and returns a result with stopReason "error"
+		const result = await streamResult.result();
+		expect(result.stopReason).toBe("error");
+		// onResponse is NOT called for error responses — it only fires after successful retries
+		expect(onResponse).not.toHaveBeenCalled();
+	});
+
+	it("applies priority service tier pricing (2x for non-gpt-5.5 models)", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+
+		const sse = buildSSEPayload({ status: "completed" });
+		const encoder = new TextEncoder();
+
+		// Override usage in the SSE payload — buildSSEPayload uses small values, we need large ones
+		const ssePricing = `${[
+			`data: ${JSON.stringify({
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+			})}`,
+			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
+			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
+			`data: ${JSON.stringify({
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hello" }],
+				},
+			})}`,
+			`data: ${JSON.stringify({
+				type: "response.completed",
+				response: {
+					status: "completed",
+					usage: {
+						input_tokens: 1000000,
+						output_tokens: 1000000,
+						total_tokens: 2000000,
+						input_tokens_details: { cached_tokens: 0 },
+					},
+				},
+			})}`,
+		].join("\n\n")}\n\n`;
+
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode(ssePricing));
+				controller.close();
+			},
+		});
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				return new Response(stream, {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 10, output: 20, cacheRead: 1, cacheWrite: 2 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, serviceTier: "priority" });
+		const result = await streamResult.result();
+
+		// 2x multiplier for non-gpt-5.5 models with priority tier
+		expect(result.usage.cost.input).toBeCloseTo(20, 5);
+		expect(result.usage.cost.output).toBeCloseTo(40, 5);
+		expect(result.usage.cost.cacheRead).toBeCloseTo(0, 5);
+		expect(result.usage.cost.cacheWrite).toBeCloseTo(0, 5);
+		expect(result.usage.cost.total).toBeCloseTo(60, 5);
+	});
+
 	it("cleans up partialJson after function call arguments are done", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;

@@ -217,7 +217,6 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 						body: bodyJson,
 						signal: options?.signal,
 					});
-					await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) });
 
 					if (response.ok) {
 						break;
@@ -256,6 +255,14 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 
 			if (!response?.ok) {
 				throw lastError ?? new Error("Failed after retries");
+			}
+
+			// Fire onResponse exactly once, after the retry loop succeeds.
+			// Wrap in its own try/catch so callback errors don't affect stream processing.
+			try {
+				await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) });
+			} catch {
+				// Intentionally ignored — callback errors must not disrupt the stream
 			}
 
 			if (!response.body) {
@@ -649,11 +656,7 @@ async function acquireWebSocket(
 		const socket = await connectWebSocket(url, headers, signal);
 		return {
 			socket,
-			release: ({ keep } = {}) => {
-				if (keep === false) {
-					closeWebSocketSilently(socket);
-					return;
-				}
+			release: () => {
 				closeWebSocketSilently(socket);
 			},
 		};

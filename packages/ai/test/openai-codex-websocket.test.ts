@@ -367,4 +367,673 @@ describe("openai-codex WebSocket streaming", () => {
 		expect(secondPayload.input.length).toBeLessThan(firstPayload.input.length + 2);
 		expect(secondPayload.input).toHaveLength(1);
 	});
+
+	// --- Fallback tests: getCachedWebSocketInputDelta returns undefined ---
+
+	it("sends full body without previous_response_id when request body changes (body mismatch)", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-ws-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+		const sessionId = "test-body-mismatch";
+
+		const sockets: MockWebSocket[] = [];
+		const sentMessages: string[] = [];
+
+		(globalThis as { WebSocket?: unknown }).WebSocket = class extends MockWebSocket {
+			constructor(url: string, opts?: unknown) {
+				super(url, opts);
+				sockets.push(this);
+			}
+			send(data: string): void {
+				sentMessages.push(data);
+			}
+		};
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		// --- First request ---
+		const context1: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
+		};
+
+		const streamResult1 = streamOpenAICodexResponses(model, context1, {
+			apiKey: token,
+			transport: "websocket",
+			sessionId,
+		});
+
+		await vi.waitFor(() => {
+			if (sockets.length === 0) throw new Error("WebSocket not yet created");
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Complete first request with a responseId
+		const firstEvents = [
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_bm_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Hi" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_bm_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hi" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_bm_first",
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		];
+		for (const event of firstEvents) {
+			sockets[0]!.emit("message", { data: JSON.stringify(event) });
+			await new Promise((r) => setTimeout(r, 5));
+		}
+
+		const result1 = await streamResult1.result();
+		expect(result1.responseId).toBe("resp_bm_first");
+
+		// --- Second request with DIFFERENT systemPrompt (body mismatch) ---
+		const context2: Context = {
+			systemPrompt: "You are a pirate.", // Different system prompt → body mismatch
+			messages: [
+				{ role: "user", content: "Hello", timestamp: Date.now() },
+				result1,
+				{ role: "user", content: "Follow-up", timestamp: Date.now() },
+			],
+		};
+
+		const streamResult2 = streamOpenAICodexResponses(model, context2, {
+			apiKey: token,
+			transport: "websocket",
+			sessionId,
+		});
+
+		await vi.waitFor(() => {
+			if (sentMessages.length < 2) throw new Error("Second WebSocket message not yet sent");
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Complete second request
+		const secondEvents = [
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_bm_2", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Arrr" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_bm_2",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Arrr" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_bm_second",
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		];
+		for (const event of secondEvents) {
+			sockets[0]!.emit("message", { data: JSON.stringify(event) });
+			await new Promise((r) => setTimeout(r, 5));
+		}
+
+		const result2 = await streamResult2.result();
+		expect(result2.content.find((c) => c.type === "text")?.text).toBe("Arrr");
+
+		// Assert: second request should NOT use previous_response_id
+		// because the body (systemPrompt) changed
+		const secondPayload = JSON.parse(sentMessages[1]);
+		expect(secondPayload).not.toHaveProperty("previous_response_id");
+		// And it should contain the full input array (not a delta)
+		expect(secondPayload.input.length).toBeGreaterThan(1);
+	});
+
+	it("sends full body without previous_response_id when input prefix no longer matches baseline (prefix mismatch)", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-ws-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+		const sessionId = "test-prefix-mismatch";
+
+		const sockets: MockWebSocket[] = [];
+		const sentMessages: string[] = [];
+
+		(globalThis as { WebSocket?: unknown }).WebSocket = class extends MockWebSocket {
+			constructor(url: string, opts?: unknown) {
+				super(url, opts);
+				sockets.push(this);
+			}
+			send(data: string): void {
+				sentMessages.push(data);
+			}
+		};
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		// --- First request ---
+		const context1: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Original question", timestamp: Date.now() }],
+		};
+
+		const streamResult1 = streamOpenAICodexResponses(model, context1, {
+			apiKey: token,
+			transport: "websocket",
+			sessionId,
+		});
+
+		await vi.waitFor(() => {
+			if (sockets.length === 0) throw new Error("WebSocket not yet created");
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		const firstEvents = [
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_pm_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Answer" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_pm_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Answer" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_pm_first",
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		];
+		for (const event of firstEvents) {
+			sockets[0]!.emit("message", { data: JSON.stringify(event) });
+			await new Promise((r) => setTimeout(r, 5));
+		}
+
+		const result1 = await streamResult1.result();
+		expect(result1.responseId).toBe("resp_pm_first");
+
+		// --- Second request where the user EDITED the earlier message ---
+		// The first message changed from "Original question" to "Edited question",
+		// so the input no longer starts with the previous baseline → prefix mismatch.
+		const context2: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [
+				{ role: "user", content: "Edited question", timestamp: Date.now() }, // Changed!
+				result1,
+				{ role: "user", content: "Follow-up", timestamp: Date.now() },
+			],
+		};
+
+		const streamResult2 = streamOpenAICodexResponses(model, context2, {
+			apiKey: token,
+			transport: "websocket",
+			sessionId,
+		});
+
+		await vi.waitFor(() => {
+			if (sentMessages.length < 2) throw new Error("Second WebSocket message not yet sent");
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		const secondEvents = [
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_pm_2", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "New answer" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_pm_2",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "New answer" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_pm_second",
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		];
+		for (const event of secondEvents) {
+			sockets[0]!.emit("message", { data: JSON.stringify(event) });
+			await new Promise((r) => setTimeout(r, 5));
+		}
+
+		const result2 = await streamResult2.result();
+		expect(result2.content.find((c) => c.type === "text")?.text).toBe("New answer");
+
+		// Assert: second request should NOT use previous_response_id
+		// because the input prefix (edited message) doesn't match the baseline
+		const secondPayload = JSON.parse(sentMessages[1]);
+		expect(secondPayload).not.toHaveProperty("previous_response_id");
+		// Full input array should be present, not a delta
+		expect(secondPayload.input.length).toBeGreaterThan(1);
+	});
+
+	it("sends full body without previous_response_id when first response has no responseId (missing lastResponseId)", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-ws-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+		const sessionId = "test-missing-responseid";
+
+		const sockets: MockWebSocket[] = [];
+		const sentMessages: string[] = [];
+
+		(globalThis as { WebSocket?: unknown }).WebSocket = class extends MockWebSocket {
+			constructor(url: string, opts?: unknown) {
+				super(url, opts);
+				sockets.push(this);
+			}
+			send(data: string): void {
+				sentMessages.push(data);
+			}
+		};
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		// --- First request: response.completed with NO id ---
+		const context1: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
+		};
+
+		const streamResult1 = streamOpenAICodexResponses(model, context1, {
+			apiKey: token,
+			transport: "websocket",
+			sessionId,
+		});
+
+		await vi.waitFor(() => {
+			if (sockets.length === 0) throw new Error("WebSocket not yet created");
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		// response.completed WITHOUT an id field → output.responseId stays undefined
+		const firstEvents = [
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_mr_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Hi" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_mr_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hi" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					// No "id" field!
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		];
+		for (const event of firstEvents) {
+			sockets[0]!.emit("message", { data: JSON.stringify(event) });
+			await new Promise((r) => setTimeout(r, 5));
+		}
+
+		const result1 = await streamResult1.result();
+		// No responseId was in the completion event
+		expect(result1.responseId).toBeUndefined();
+
+		// --- Second request: should send full body since continuation was never set ---
+		const context2: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [
+				{ role: "user", content: "Hello", timestamp: Date.now() },
+				result1,
+				{ role: "user", content: "Follow-up", timestamp: Date.now() },
+			],
+		};
+
+		const streamResult2 = streamOpenAICodexResponses(model, context2, {
+			apiKey: token,
+			transport: "websocket",
+			sessionId,
+		});
+
+		await vi.waitFor(() => {
+			if (sentMessages.length < 2) throw new Error("Second WebSocket message not yet sent");
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		const secondEvents = [
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_mr_2", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "World" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_mr_2",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "World" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_mr_second",
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		];
+		for (const event of secondEvents) {
+			sockets[0]!.emit("message", { data: JSON.stringify(event) });
+			await new Promise((r) => setTimeout(r, 5));
+		}
+
+		const result2 = await streamResult2.result();
+		expect(result2.content.find((c) => c.type === "text")?.text).toBe("World");
+
+		// Assert: second request should NOT use previous_response_id
+		// because no continuation was stored (first response had no id)
+		const secondPayload = JSON.parse(sentMessages[1]);
+		expect(secondPayload).not.toHaveProperty("previous_response_id");
+		expect(secondPayload.input.length).toBeGreaterThan(1);
+	});
+
+	it("sends full body without previous_response_id after a WebSocket error clears continuation", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-ws-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+		const sessionId = "test-error-clears-continuation";
+
+		const sockets: MockWebSocket[] = [];
+		const sentMessages: string[] = [];
+
+		(globalThis as { WebSocket?: unknown }).WebSocket = class extends MockWebSocket {
+			constructor(url: string, opts?: unknown) {
+				super(url, opts);
+				sockets.push(this);
+			}
+			send(data: string): void {
+				sentMessages.push(data);
+			}
+		};
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		// --- First request: succeeds normally ---
+		const context1: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],
+		};
+
+		const streamResult1 = streamOpenAICodexResponses(model, context1, {
+			apiKey: token,
+			transport: "websocket",
+			sessionId,
+		});
+
+		await vi.waitFor(() => {
+			if (sockets.length === 0) throw new Error("WebSocket not yet created");
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		const firstEvents = [
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_ec_1", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Hi" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_ec_1",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Hi" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_ec_first",
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		];
+		for (const event of firstEvents) {
+			sockets[0]!.emit("message", { data: JSON.stringify(event) });
+			await new Promise((r) => setTimeout(r, 5));
+		}
+
+		const result1 = await streamResult1.result();
+		expect(result1.responseId).toBe("resp_ec_first");
+
+		// --- Second request: triggers a WebSocket error ---
+		const context2: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [
+				{ role: "user", content: "Hello", timestamp: Date.now() },
+				result1,
+				{ role: "user", content: "Follow-up", timestamp: Date.now() },
+			],
+		};
+
+		const streamResult2 = streamOpenAICodexResponses(model, context2, {
+			apiKey: token,
+			transport: "websocket",
+			sessionId,
+		});
+
+		await vi.waitFor(() => {
+			if (sentMessages.length < 2) throw new Error("Second WebSocket message not yet sent");
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		// Emit an error on the socket — this should clear continuation
+		sockets[0]!.emit("error", { message: "Connection lost" });
+
+		// The error is caught at the stream level and returned with stopReason "error"
+		const result2 = await streamResult2.result();
+		expect(result2.stopReason).toBe("error");
+		expect(result2.errorMessage).toContain("Connection lost");
+
+		// --- Third request: should send full body without previous_response_id ---
+		// (The error cleared the continuation and removed the cached socket)
+		const context3: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [
+				{ role: "user", content: "Hello", timestamp: Date.now() },
+				result1,
+				{ role: "user", content: "New follow-up", timestamp: Date.now() },
+			],
+		};
+
+		const streamResult3 = streamOpenAICodexResponses(model, context3, {
+			apiKey: token,
+			transport: "websocket",
+			sessionId,
+		});
+
+		// A new socket should be created since the old one was closed on error
+		await vi.waitFor(() => {
+			if (sockets.length < 2) throw new Error("Third WebSocket not yet created");
+		});
+		await new Promise((r) => setTimeout(r, 50));
+
+		await vi.waitFor(() => {
+			if (sentMessages.length < 3) throw new Error("Third WebSocket message not yet sent");
+		});
+
+		const thirdEvents = [
+			{
+				type: "response.output_item.added",
+				item: { type: "message", id: "msg_ec_3", role: "assistant", status: "in_progress", content: [] },
+			},
+			{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+			{ type: "response.output_text.delta", delta: "Retry" },
+			{
+				type: "response.output_item.done",
+				item: {
+					type: "message",
+					id: "msg_ec_3",
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "Retry" }],
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					id: "resp_ec_third",
+					status: "completed",
+					usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6, input_tokens_details: { cached_tokens: 0 } },
+				},
+			},
+		];
+		for (const event of thirdEvents) {
+			sockets[1]!.emit("message", { data: JSON.stringify(event) });
+			await new Promise((r) => setTimeout(r, 5));
+		}
+
+		const result3 = await streamResult3.result();
+		expect(result3.content.find((c) => c.type === "text")?.text).toBe("Retry");
+
+		// Assert: third request should NOT use previous_response_id
+		// because the error cleared the continuation state
+		const thirdPayload = JSON.parse(sentMessages[2]);
+		expect(thirdPayload).not.toHaveProperty("previous_response_id");
+		expect(thirdPayload.input.length).toBeGreaterThan(1);
+	});
 });
