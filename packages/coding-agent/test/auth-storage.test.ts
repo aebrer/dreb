@@ -452,14 +452,18 @@ describe("AuthStorage", () => {
 			const sharedBackend = new InMemoryAuthStorageBackend();
 			sharedBackend.withLock(() => ({
 				result: undefined,
-				next: JSON.stringify({
-					[providerId]: {
-						type: "oauth",
-						refresh: "refresh-token",
-						access: "current-access-token",
-						expires: now + REFRESH_BUFFER_MS - 1000,
+				next: JSON.stringify(
+					{
+						[providerId]: {
+							type: "oauth",
+							refresh: "refresh-token",
+							access: "current-access-token",
+							expires: now + REFRESH_BUFFER_MS - 1000,
+						},
 					},
-				}, null, 2),
+					null,
+					2,
+				),
 			}));
 
 			// Create two instances sharing the same backend
@@ -506,6 +510,69 @@ describe("AuthStorage", () => {
 
 			const apiKey = await authStorage.getApiKey(providerId);
 			expect(apiKey).toBeUndefined();
+
+			const errors = authStorage.drainErrors();
+			expect(errors.length).toBeGreaterThan(0);
+			expect(errors[0]).toBeInstanceOf(Error);
+			expect(errors[0].message).toContain("Failed to refresh OAuth token");
+		});
+
+		test("recovers with fresh credentials when another instance refreshed during failed refresh", async () => {
+			const providerId = `test-oauth-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			const now = Date.now();
+			const sharedBackend = new InMemoryAuthStorageBackend();
+
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test OAuth Provider",
+				async login() {
+					throw new Error("Not used");
+				},
+				async refreshToken() {
+					// Simulate another instance refreshing the token while this one fails
+					sharedBackend.withLock(() => ({
+						result: undefined,
+						next: JSON.stringify(
+							{
+								[providerId]: {
+									type: "oauth",
+									refresh: "refresh-token",
+									access: "fresh-access-token-from-another-instance",
+									expires: now + 3600_000,
+								},
+							},
+							null,
+							2,
+						),
+					}));
+					throw new Error("Refresh failed");
+				},
+				getApiKey(credentials) {
+					return `Bearer ${credentials.access}`;
+				},
+			});
+
+			// Initialize with expired credentials
+			sharedBackend.withLock(() => ({
+				result: undefined,
+				next: JSON.stringify(
+					{
+						[providerId]: {
+							type: "oauth",
+							refresh: "refresh-token",
+							access: "expired-access-token",
+							expires: now - 10_000,
+						},
+					},
+					null,
+					2,
+				),
+			}));
+
+			authStorage = AuthStorage.fromStorage(sharedBackend);
+
+			const apiKey = await authStorage.getApiKey(providerId);
+			expect(apiKey).toBe("Bearer fresh-access-token-from-another-instance");
 
 			const errors = authStorage.drainErrors();
 			expect(errors.length).toBeGreaterThan(0);
