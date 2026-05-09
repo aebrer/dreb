@@ -199,6 +199,43 @@ describe("agentLoop with AgentMessage", () => {
 		expect(assistantMessage.stopReason).toBe("error");
 	});
 
+	it("should set durationMs when the stream iterator throws", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		const streamFn = (() => ({
+			async *[Symbol.asyncIterator]() {
+				const shouldYield = Math.random() < 0;
+				if (shouldYield) yield undefined as any;
+				throw new Error("stream failed");
+			},
+			result: async () => createAssistantMessage([{ type: "text", text: "" }], "error"),
+		})) as any;
+
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		for await (const _ of stream) {
+			// consume
+		}
+
+		const messages = await stream.result();
+		const assistantMessage = messages.find((m) => m.role === "assistant") as AssistantMessage;
+		expect(assistantMessage).toBeDefined();
+		expect(assistantMessage.durationMs).toBeGreaterThanOrEqual(0);
+		expect(assistantMessage.stopReason).toBe("error");
+		expect(assistantMessage.errorMessage).toBe("stream failed");
+	});
+
 	it("should handle custom message types via convertToLlm", async () => {
 		// Create a custom message type
 		interface CustomNotification {

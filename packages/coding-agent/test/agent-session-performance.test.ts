@@ -2,12 +2,13 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@dreb/agent-core";
-import { type AssistantMessage, EventStream, findModel } from "@dreb/ai";
 import type { AssistantMessageEvent } from "@dreb/ai";
+import { type AssistantMessage, EventStream, findModel } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
+import { PerformanceTracker } from "../src/core/performance-tracker.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { createTestResourceLoader } from "./utilities.js";
@@ -64,14 +65,19 @@ describe("AgentSession performance tracking", () => {
 		}
 	});
 
-	function createSession(overrides?: { stopReason?: "stop" | "error" | "aborted"; outputTokens?: number; durationMs?: number }) {
+	function createSession(overrides?: {
+		stopReason?: "stop" | "error" | "aborted";
+		outputTokens?: number;
+		durationMs?: number;
+		omitDurationMs?: boolean;
+	}) {
 		const model = findModel("anthropic", "sonnet")!;
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: "Test", tools: [] },
 			streamFn: () => {
 				const stream = new MockAssistantStream();
-				queueMicrotask(() => {
+				setTimeout(() => {
 					const msg = createAssistantMessage("Hello", {
 						stopReason: overrides?.stopReason ?? "stop",
 						usage: {
@@ -82,7 +88,7 @@ describe("AgentSession performance tracking", () => {
 							totalTokens: overrides?.outputTokens ?? 10,
 							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 						},
-						durationMs: overrides?.durationMs ?? 1000,
+						...(overrides?.omitDurationMs ? {} : { durationMs: overrides?.durationMs ?? 1000 }),
 					});
 					stream.push({ type: "start", partial: msg });
 					if (overrides?.stopReason === "error") {
@@ -90,7 +96,7 @@ describe("AgentSession performance tracking", () => {
 					} else {
 						stream.push({ type: "done", reason: overrides?.stopReason ?? "stop", message: msg });
 					}
-				});
+				}, 15);
 				return stream;
 			},
 		});
@@ -101,6 +107,8 @@ describe("AgentSession performance tracking", () => {
 		const modelRegistry = new ModelRegistry(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 
+		const performanceTracker = new PerformanceTracker(join(tempDir, "performance.jsonl"));
+
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -108,6 +116,7 @@ describe("AgentSession performance tracking", () => {
 			cwd: tempDir,
 			modelRegistry,
 			resourceLoader: createTestResourceLoader(),
+			performanceTracker,
 		});
 
 		return { session, sessionManager };
@@ -149,4 +158,39 @@ describe("AgentSession performance tracking", () => {
 		expect(after - before).toBe(0);
 	});
 
+	it("does not record performance when durationMs is 0", async () => {
+		const { session } = createSession();
+		const before = session.getPerformanceTracker().getRollingAverage("anthropic", "mock").count;
+		await (session as any)._processAgentEvent({
+			type: "message_end",
+			message: createAssistantMessage("Hello", { durationMs: 0 }),
+		});
+		const after = session.getPerformanceTracker().getRollingAverage("anthropic", "mock").count;
+
+		expect(after - before).toBe(0);
+	});
+
+	it("does not record performance when durationMs is missing", async () => {
+		const { session } = createSession();
+		const before = session.getPerformanceTracker().getRollingAverage("anthropic", "mock").count;
+		await (session as any)._processAgentEvent({
+			type: "message_end",
+			message: createAssistantMessage("Hello"),
+		});
+		const after = session.getPerformanceTracker().getRollingAverage("anthropic", "mock").count;
+
+		expect(after - before).toBe(0);
+	});
+
+	it("does not record performance for implausibly tiny durations", async () => {
+		const { session } = createSession();
+		const before = session.getPerformanceTracker().getRollingAverage("anthropic", "mock").count;
+		await (session as any)._processAgentEvent({
+			type: "message_end",
+			message: createAssistantMessage("Hello", { durationMs: 0.1 }),
+		});
+		const after = session.getPerformanceTracker().getRollingAverage("anthropic", "mock").count;
+
+		expect(after - before).toBe(0);
+	});
 });

@@ -163,6 +163,8 @@ export interface AgentSessionConfig {
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	/** UI type for system prompt context (e.g. "tui", "telegram", "rpc") */
 	uiType?: string;
+	/** Optional performance tracker override, primarily for isolated tests. */
+	performanceTracker?: PerformanceTracker;
 }
 
 export interface ExtensionBindings {
@@ -226,6 +228,7 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 
 /** Thinking levels including xhigh (for supported models) */
 const THINKING_LEVELS_WITH_XHIGH: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const MIN_PERFORMANCE_DURATION_MS = 10;
 
 // ============================================================================
 // AgentSession Class
@@ -322,7 +325,7 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
-		this.performanceTracker = new PerformanceTracker();
+		this.performanceTracker = config.performanceTracker ?? new PerformanceTracker();
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -854,12 +857,12 @@ export class AgentSession {
 					this._retryAttempt = 0;
 				}
 
+				const durationMs = assistantMsg.durationMs ?? 0;
 				if (
 					assistantMsg.stopReason !== "error" &&
 					assistantMsg.stopReason !== "aborted" &&
 					assistantMsg.usage.output > 0 &&
-					assistantMsg.durationMs != null &&
-					assistantMsg.durationMs > 0
+					durationMs >= MIN_PERFORMANCE_DURATION_MS
 				) {
 					this.performanceTracker.record({
 						timestamp: new Date().toISOString(),
@@ -867,8 +870,8 @@ export class AgentSession {
 						provider: assistantMsg.provider,
 						modelId: assistantMsg.model,
 						outputTokens: assistantMsg.usage.output,
-						durationMs: assistantMsg.durationMs,
-						tps: assistantMsg.usage.output / (assistantMsg.durationMs / 1000),
+						durationMs,
+						tps: (assistantMsg.usage.output * 1000) / durationMs,
 					});
 				}
 			}

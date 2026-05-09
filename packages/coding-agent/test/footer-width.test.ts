@@ -56,6 +56,14 @@ function createSession(options: {
 		getPerformanceTracker: () => ({
 			getRollingAverage: () => ({ median: 0, mean: 0, count: 0 }),
 			getTrend: () => "stable",
+			getPerformanceDelta: () => ({
+				baselineMedian: 0,
+				recentMedian: 0,
+				percentDelta: 0,
+				direction: "stable",
+				baselineCount: 0,
+				recentCount: 0,
+			}),
 		}),
 	};
 
@@ -161,7 +169,7 @@ describe("FooterComponent width handling", () => {
 		}
 	});
 
-	it("renders TPS suffix and trend arrow when sufficient samples exist", () => {
+	it("renders TPS suffix with median delta when sufficient samples exist", () => {
 		const width = 120;
 		const session = createSession({
 			sessionName: "test",
@@ -179,13 +187,58 @@ describe("FooterComponent width handling", () => {
 		(session as any).getPerformanceTracker = () => ({
 			getRollingAverage: () => ({ median: 30.5, mean: 32, count: 10 }),
 			getTrend: () => "increasing",
+			getPerformanceDelta: () => ({
+				baselineMedian: 30,
+				recentMedian: 33,
+				percentDelta: 10,
+				direction: "above",
+				baselineCount: 10,
+				recentCount: 3,
+			}),
 		});
 		const footer = new FooterComponent(session, createFooterData(1));
 
 		const lines = footer.render(width);
 		const statsLine = lines[1];
 		expect(statsLine).toContain("~31 tok/s");
+		expect(statsLine).toContain("10%");
 		expect(statsLine).toContain("↑");
+		expect(statsLine).toContain("median");
+	});
+
+	it("renders stable median delta when rounded TPS is unchanged", () => {
+		const width = 120;
+		const session = createSession({
+			sessionName: "test",
+			modelId: "claude-3-sonnet",
+			provider: "anthropic",
+			usage: {
+				input: 1000,
+				output: 500,
+				cacheRead: 0,
+				cacheWrite: 0,
+				cost: { total: 0.1 },
+			},
+		});
+		(session as any).getPerformanceTracker = () => ({
+			getRollingAverage: () => ({ median: 30.4, mean: 30.4, count: 10 }),
+			getTrend: () => "stable",
+			getPerformanceDelta: () => ({
+				baselineMedian: 30.4,
+				recentMedian: 30.6,
+				percentDelta: 0.66,
+				direction: "stable",
+				baselineCount: 10,
+				recentCount: 3,
+			}),
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+
+		const statsLine = footer.render(width)[1];
+		expect(statsLine).toContain("~30 tok/s");
+		expect(statsLine).toContain("0%");
+		expect(statsLine).toContain("→");
+		expect(statsLine).toContain("median");
 	});
 
 	it("omits TPS suffix when sample count is below threshold", () => {
@@ -205,6 +258,14 @@ describe("FooterComponent width handling", () => {
 		(session as any).getPerformanceTracker = () => ({
 			getRollingAverage: () => ({ median: 30, mean: 32, count: 1 }),
 			getTrend: () => "stable",
+			getPerformanceDelta: () => ({
+				baselineMedian: 30,
+				recentMedian: 30,
+				percentDelta: 0,
+				direction: "stable",
+				baselineCount: 1,
+				recentCount: 1,
+			}),
 		});
 		const footer = new FooterComponent(session, createFooterData(1));
 

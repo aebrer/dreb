@@ -156,10 +156,19 @@ export class FooterComponent implements Component {
 		if (model) {
 			const rolling = perf.getRollingAverage(model.provider, model.id);
 			if (rolling.count >= 3) {
-				const trend = perf.getTrend(model.provider, model.id);
-				const arrow = trend === "increasing" ? "↑" : trend === "decreasing" ? "↓" : "→";
-				const arrowColor = trend === "increasing" ? "success" : trend === "decreasing" ? "warning" : "dim";
-				tpsSuffix = ` (~${Math.round(rolling.median)} tok/s ${theme.fg(arrowColor, arrow)})`;
+				const delta = perf.getPerformanceDelta(model.provider, model.id);
+				const trendStyle = {
+					above: { arrow: "↑", color: "success" },
+					below: { arrow: "↓", color: "warning" },
+					stable: { arrow: "→", color: "dim" },
+				} as const;
+				const { arrow, color: arrowColor } = trendStyle[delta.direction];
+				const deltaPercent = delta.direction === "stable" ? 0 : Math.round(Math.abs(delta.percentDelta));
+				const medianDelta =
+					delta.recentCount >= 3 && delta.baselineCount >= 3
+						? ` · ${deltaPercent}% ${theme.fg(arrowColor, arrow)} median`
+						: "";
+				tpsSuffix = ` (~${Math.round(rolling.median)} tok/s${medianDelta})`;
 			}
 		}
 

@@ -19,9 +19,9 @@ vi.mock("node:fs", () => ({
 }));
 
 import { existsSync, statSync } from "node:fs";
+import { cmdStats } from "../src/commands/agent.js";
 // Import after mock setup
 import { cmdNew } from "../src/commands/core.js";
-import { cmdStats } from "../src/commands/agent.js";
 
 function createConfig(overrides?: Partial<Config>): Config {
 	return {
@@ -175,7 +175,9 @@ describe("cmdStats", () => {
 			cost: number;
 			contextUsage: { percent: number; tokens: number; contextWindow: number };
 		}>;
-		perf?: { models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }> } | null;
+		perf?: {
+			models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
+		} | null;
 	}) {
 		return {
 			isAlive: true,
@@ -189,9 +191,11 @@ describe("cmdStats", () => {
 					contextUsage: { percent: 10, tokens: 5000, contextWindow: 50000 },
 				},
 			),
-			getPerformanceStats: vi
-				.fn()
-				.mockResolvedValue(overrides?.perf ?? { models: [{ provider: "anthropic", modelId: "claude-3-sonnet", median: 30.5, mean: 32, count: 100 }] }),
+			getPerformanceStats: vi.fn().mockResolvedValue(
+				overrides?.perf ?? {
+					models: [{ provider: "anthropic", modelId: "claude-3-sonnet", median: 30.5, mean: 32, count: 100 }],
+				},
+			),
 		} as any;
 	}
 

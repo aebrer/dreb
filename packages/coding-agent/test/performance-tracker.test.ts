@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type PerformanceEntry, PerformanceTracker } from "../src/core/performance-tracker.js";
 
 // ---------------------------------------------------------------------------
@@ -44,6 +44,7 @@ describe("PerformanceTracker", () => {
 
 	afterEach(() => {
 		tracker?.dispose();
+		vi.useRealTimers();
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
@@ -150,7 +151,7 @@ describe("PerformanceTracker", () => {
 		expect(trend).toBe("decreasing");
 	});
 
-	it("getTrend() returns 'stable' when change is small (<10% and <3 tok/s)", () => {
+	it("getTrend() returns 'stable' when change is small by both thresholds", () => {
 		tracker = new PerformanceTracker(logPath);
 		// Previous window: tps = 10, 10, 10  → median 10
 		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 10 }));
@@ -160,6 +161,34 @@ describe("PerformanceTracker", () => {
 		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 10.5 }));
 		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 10.5 }));
 		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 10.5 }));
+
+		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
+		expect(trend).toBe("stable");
+	});
+
+	it("getTrend() returns 'stable' when percentage change is small even if absolute change is >= 3 tok/s", () => {
+		tracker = new PerformanceTracker(logPath);
+		// Previous median 100, recent median 105: 5% change, 5 tok/s absolute difference
+		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 100 }));
+		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 100 }));
+		tracker.record(makeEntryAtOffsetMs(13 * 60 * 1000, { tps: 100 }));
+		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 105 }));
+		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 105 }));
+		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 105 }));
+
+		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
+		expect(trend).toBe("stable");
+	});
+
+	it("getTrend() returns 'stable' when absolute change is small even if percentage change is >= 10%", () => {
+		tracker = new PerformanceTracker(logPath);
+		// Previous median 5, recent median 6: 20% change, 1 tok/s absolute difference
+		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 5 }));
+		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 5 }));
+		tracker.record(makeEntryAtOffsetMs(13 * 60 * 1000, { tps: 5 }));
+		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 6 }));
+		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 6 }));
+		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 6 }));
 
 		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
 		expect(trend).toBe("stable");
@@ -177,6 +206,37 @@ describe("PerformanceTracker", () => {
 
 		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
 		expect(trend).toBe("stable");
+	});
+
+	// getPerformanceDelta() ----------------------------------------------------
+
+	it("getPerformanceDelta() compares recent performance to the 24h baseline", () => {
+		tracker = new PerformanceTracker(logPath);
+		// Baseline values include recent samples: 30, 30, 30, 36, 36, 36 → baseline median 33, recent median 36
+		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { tps: 30 }));
+		tracker.record(makeEntryAtOffsetMs(50 * 60 * 1000, { tps: 30 }));
+		tracker.record(makeEntryAtOffsetMs(40 * 60 * 1000, { tps: 30 }));
+		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 36 }));
+		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 36 }));
+		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 36 }));
+
+		const delta = tracker.getPerformanceDelta("anthropic", "claude-3-sonnet");
+		expect(delta.direction).toBe("above");
+		expect(delta.recentMedian).toBe(36);
+		expect(delta.percentDelta).toBeCloseTo(9.09, 2);
+	});
+
+	it("getPerformanceDelta() returns stable when recent sample count is too low", () => {
+		tracker = new PerformanceTracker(logPath);
+		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { tps: 30 }));
+		tracker.record(makeEntryAtOffsetMs(50 * 60 * 1000, { tps: 30 }));
+		tracker.record(makeEntryAtOffsetMs(40 * 60 * 1000, { tps: 30 }));
+		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 36 }));
+		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 36 }));
+
+		const delta = tracker.getPerformanceDelta("anthropic", "claude-3-sonnet");
+		expect(delta.direction).toBe("stable");
+		expect(delta.recentCount).toBe(2);
 	});
 
 	// getAllRollingAverages() --------------------------------------------------
@@ -262,6 +322,27 @@ describe("PerformanceTracker", () => {
 		expect(JSON.parse(lines[1]).tps).toBe(3);
 	});
 
+	it("prune() keeps entries appended by another tracker after construction", () => {
+		tracker = new PerformanceTracker(logPath);
+		tracker.record(makeEntry({ tps: 10 }));
+
+		const otherTracker = new PerformanceTracker(logPath);
+		try {
+			otherTracker.record(makeEntry({ tps: 20 }));
+			tracker.prune();
+
+			const content = readFileSync(logPath, "utf8");
+			const tpsValues = content
+				.trim()
+				.split("\n")
+				.filter((l) => l.trim())
+				.map((line) => JSON.parse(line).tps);
+			expect(tpsValues).toEqual([10, 20]);
+		} finally {
+			otherTracker.dispose();
+		}
+	});
+
 	// malformed lines ----------------------------------------------------------
 
 	it("skips malformed JSONL lines gracefully", () => {
@@ -333,6 +414,24 @@ describe("PerformanceTracker", () => {
 	});
 
 	// auto-prune timer ----------------------------------------------------------
+
+	it("auto-prune timer removes old entries when it fires", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-05-09T12:00:00.000Z"));
+		tracker = new PerformanceTracker(logPath);
+		tracker.record(makeEntryAtOffsetMs(31 * 24 * 60 * 60 * 1000, { tps: 1 }));
+		tracker.record(makeEntry({ tps: 2 }));
+
+		await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+
+		const content = readFileSync(logPath, "utf8");
+		const lines = content
+			.trim()
+			.split("\n")
+			.filter((l) => l.trim());
+		expect(lines).toHaveLength(1);
+		expect(JSON.parse(lines[0]).tps).toBe(2);
+	});
 
 	it("schedules auto-prune and clears it on dispose", () => {
 		tracker = new PerformanceTracker(logPath);

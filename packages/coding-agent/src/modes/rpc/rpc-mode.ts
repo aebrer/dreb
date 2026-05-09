@@ -43,6 +43,13 @@ export type {
 	RpcSessionState,
 } from "./rpc-types.js";
 
+export function getPerformanceStatsData(session: Pick<AgentSession, "getPerformanceTracker">): {
+	models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
+} {
+	const tracker = session.getPerformanceTracker();
+	return { models: tracker.getAllRollingAverages() };
+}
+
 /**
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
@@ -550,9 +557,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "get_performance_stats": {
-				const tracker = session.getPerformanceTracker();
-				const models = tracker.getAllRollingAverages();
-				return success(id, "get_performance_stats", { models });
+				return success(id, "get_performance_stats", getPerformanceStatsData(session));
 			}
 
 			case "export_html": {
