@@ -55,7 +55,6 @@ function createSession(options: {
 		},
 		getPerformanceTracker: () => ({
 			getRollingAverage: () => ({ median: 0, mean: 0, count: 0 }),
-			getTrend: () => "stable",
 			getPerformanceDelta: () => ({
 				baselineMedian: 0,
 				recentMedian: 0,
@@ -186,7 +185,6 @@ describe("FooterComponent width handling", () => {
 		// Override getPerformanceTracker to return a non-zero count
 		(session as any).getPerformanceTracker = () => ({
 			getRollingAverage: () => ({ median: 30.5, mean: 32, count: 10 }),
-			getTrend: () => "increasing",
 			getPerformanceDelta: () => ({
 				baselineMedian: 30,
 				recentMedian: 33,
@@ -222,7 +220,6 @@ describe("FooterComponent width handling", () => {
 		});
 		(session as any).getPerformanceTracker = () => ({
 			getRollingAverage: () => ({ median: 30.4, mean: 30.4, count: 10 }),
-			getTrend: () => "stable",
 			getPerformanceDelta: () => ({
 				baselineMedian: 30.4,
 				recentMedian: 30.6,
@@ -257,7 +254,6 @@ describe("FooterComponent width handling", () => {
 		});
 		(session as any).getPerformanceTracker = () => ({
 			getRollingAverage: () => ({ median: 30.5, mean: 32, count: 10 }),
-			getTrend: () => "increasing",
 			getPerformanceDelta: () => ({
 				baselineMedian: 30,
 				recentMedian: 33,
@@ -291,7 +287,6 @@ describe("FooterComponent width handling", () => {
 		});
 		(session as any).getPerformanceTracker = () => ({
 			getRollingAverage: () => ({ median: 25, mean: 26, count: 10 }),
-			getTrend: () => "decreasing",
 			getPerformanceDelta: () => ({
 				baselineMedian: 30,
 				recentMedian: 25,
@@ -325,7 +320,6 @@ describe("FooterComponent width handling", () => {
 		});
 		(session as any).getPerformanceTracker = () => ({
 			getRollingAverage: () => ({ median: 30.5, mean: 32, count: 10 }),
-			getTrend: () => "stable",
 			getPerformanceDelta: () => ({
 				baselineMedian: 30,
 				recentMedian: 30,
@@ -360,7 +354,6 @@ describe("FooterComponent width handling", () => {
 		});
 		(session as any).getPerformanceTracker = () => ({
 			getRollingAverage: () => ({ median: 30, mean: 32, count: 1 }),
-			getTrend: () => "stable",
 			getPerformanceDelta: () => ({
 				baselineMedian: 30,
 				recentMedian: 30,

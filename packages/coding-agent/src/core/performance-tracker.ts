@@ -28,8 +28,6 @@ export interface RollingAverage {
 	count: number;
 }
 
-export type Trend = "increasing" | "decreasing" | "stable";
-
 export type PerformanceDeltaDirection = "above" | "below" | "stable";
 
 export interface PerformanceDelta {
@@ -56,7 +54,11 @@ export class PerformanceTracker {
 	constructor(logPath?: string) {
 		this.logPath = logPath ?? getPerformanceLogPath();
 		this.lockPath = `${this.logPath}.lock`;
-		this.entries = this.readEntries();
+		try {
+			this.entries = this.readEntries();
+		} catch {
+			this.entries = [];
+		}
 		this.ensureDir();
 		this.schedulePrune();
 	}
@@ -94,45 +96,6 @@ export class PerformanceTracker {
 			mean: computeMean(values),
 			count: values.length,
 		};
-	}
-
-	getTrend(
-		provider: string,
-		modelId: string,
-		recentWindowMs = 10 * 60 * 1000,
-		previousWindowMs = 10 * 60 * 1000,
-	): Trend {
-		const now = Date.now();
-		const recentCutoff = now - recentWindowMs;
-		const previousCutoff = now - recentWindowMs - previousWindowMs;
-		const recentValues: number[] = [];
-		const previousValues: number[] = [];
-
-		for (const entry of this.entries) {
-			if (entry.provider !== provider || entry.modelId !== modelId) continue;
-			const time = entryTime(entry);
-			if (time >= recentCutoff) {
-				recentValues.push(entry.tps);
-			} else if (time >= previousCutoff) {
-				previousValues.push(entry.tps);
-			}
-		}
-
-		if (recentValues.length < 3 || previousValues.length < 3) {
-			return "stable";
-		}
-
-		const recentMedian = computeMedian(recentValues);
-		const previousMedian = computeMedian(previousValues);
-
-		const absDiff = Math.abs(recentMedian - previousMedian);
-		const pctDiff = previousMedian === 0 ? (recentMedian === 0 ? 0 : Infinity) : absDiff / previousMedian;
-
-		if (pctDiff < 0.1 || absDiff < 3) {
-			return "stable";
-		}
-
-		return recentMedian > previousMedian ? "increasing" : "decreasing";
 	}
 
 	getPerformanceDelta(
@@ -299,8 +262,7 @@ export class PerformanceTracker {
 			if (isENOENT(error)) {
 				return [];
 			}
-			console.warn(`[PerformanceTracker] Failed to read performance log: ${error}`);
-			return [];
+			throw error;
 		}
 	}
 

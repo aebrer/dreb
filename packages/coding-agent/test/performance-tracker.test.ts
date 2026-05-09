@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -45,6 +45,7 @@ describe("PerformanceTracker", () => {
 	afterEach(() => {
 		tracker?.dispose();
 		vi.useRealTimers();
+		vi.restoreAllMocks();
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
@@ -117,95 +118,6 @@ describe("PerformanceTracker", () => {
 		const result = tracker.getRollingAverage("anthropic", "claude-3-opus");
 		expect(result.count).toBe(1);
 		expect(result.mean).toBe(20);
-	});
-
-	// getTrend() ---------------------------------------------------------------
-
-	it("getTrend() returns 'increasing' when recent median is higher", () => {
-		tracker = new PerformanceTracker(logPath);
-		// Previous window (15 min ago): tps = 5, 5, 6  → median 5
-		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 5 }));
-		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 5 }));
-		tracker.record(makeEntryAtOffsetMs(13 * 60 * 1000, { tps: 6 }));
-		// Recent window (5 min ago): tps = 15, 15, 16  → median 15
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 15 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 15 }));
-		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 16 }));
-
-		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
-		expect(trend).toBe("increasing");
-	});
-
-	it("getTrend() returns 'decreasing' when recent median is lower", () => {
-		tracker = new PerformanceTracker(logPath);
-		// Previous window: tps = 15, 15, 16  → median 15
-		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 15 }));
-		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 15 }));
-		tracker.record(makeEntryAtOffsetMs(13 * 60 * 1000, { tps: 16 }));
-		// Recent window: tps = 5, 5, 6  → median 5
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 5 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 5 }));
-		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 6 }));
-
-		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
-		expect(trend).toBe("decreasing");
-	});
-
-	it("getTrend() returns 'stable' when change is small by both thresholds", () => {
-		tracker = new PerformanceTracker(logPath);
-		// Previous window: tps = 10, 10, 10  → median 10
-		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 10 }));
-		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 10 }));
-		tracker.record(makeEntryAtOffsetMs(13 * 60 * 1000, { tps: 10 }));
-		// Recent window: tps = 10.5, 10.5, 10.5  → median 10.5
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 10.5 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 10.5 }));
-		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 10.5 }));
-
-		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
-		expect(trend).toBe("stable");
-	});
-
-	it("getTrend() returns 'stable' when percentage change is small even if absolute change is >= 3 tok/s", () => {
-		tracker = new PerformanceTracker(logPath);
-		// Previous median 100, recent median 105: 5% change, 5 tok/s absolute difference
-		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 100 }));
-		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 100 }));
-		tracker.record(makeEntryAtOffsetMs(13 * 60 * 1000, { tps: 100 }));
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 105 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 105 }));
-		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 105 }));
-
-		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
-		expect(trend).toBe("stable");
-	});
-
-	it("getTrend() returns 'stable' when absolute change is small even if percentage change is >= 10%", () => {
-		tracker = new PerformanceTracker(logPath);
-		// Previous median 5, recent median 6: 20% change, 1 tok/s absolute difference
-		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 5 }));
-		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 5 }));
-		tracker.record(makeEntryAtOffsetMs(13 * 60 * 1000, { tps: 5 }));
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 6 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 6 }));
-		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 6 }));
-
-		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
-		expect(trend).toBe("stable");
-	});
-
-	it("getTrend() returns 'stable' when count < 3 in either window", () => {
-		tracker = new PerformanceTracker(logPath);
-		// Previous window: only 2 entries
-		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 5 }));
-		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 5 }));
-		// Recent window: 3 entries with big jump
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 100 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 100 }));
-		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 100 }));
-
-		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
-		expect(trend).toBe("stable");
 	});
 
 	// getPerformanceDelta() ----------------------------------------------------
@@ -386,6 +298,88 @@ describe("PerformanceTracker", () => {
 		}
 	});
 
+	it("prune() preserves data when readEntries() throws non-ENOENT error", () => {
+		tracker = new PerformanceTracker(logPath);
+		tracker.record(makeEntry({ tps: 10 }));
+		tracker.record(makeEntry({ tps: 20 }));
+
+		chmodSync(logPath, 0o000);
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			tracker.prune();
+			chmodSync(logPath, 0o644);
+			const content = readFileSync(logPath, "utf8");
+			const lines = content
+				.trim()
+				.split("\n")
+				.filter((l) => l.trim());
+			expect(lines).toHaveLength(2);
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to prune performance log"));
+		} finally {
+			try {
+				chmodSync(logPath, 0o644);
+			} catch {
+				// Best-effort cleanup
+			}
+			warnSpy.mockRestore();
+		}
+	});
+
+	// file locking --------------------------------------------------------------
+
+	it("record() warns and skips when lock cannot be acquired", () => {
+		tracker = new PerformanceTracker(logPath);
+		const lockPath = `${logPath}.lock`;
+		const fd = openSync(lockPath, "w");
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			tracker.record(makeEntry({ tps: 10 }));
+			let content = "";
+			try {
+				content = readFileSync(logPath, "utf8");
+			} catch {
+				// File doesn't exist because record was blocked
+			}
+			expect(content.trim()).toBe("");
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("could not acquire log lock"));
+		} finally {
+			closeSync(fd);
+			warnSpy.mockRestore();
+		}
+	});
+
+	it("stale lock is removed and record succeeds", () => {
+		tracker = new PerformanceTracker(logPath);
+		const lockPath = `${logPath}.lock`;
+		writeFileSync(lockPath, "", "utf8");
+		const oldTime = new Date(Date.now() - 6 * 60 * 1000);
+		utimesSync(lockPath, oldTime, oldTime);
+
+		tracker.record(makeEntry({ tps: 10 }));
+
+		const content = readFileSync(logPath, "utf8");
+		expect(content.trim()).not.toBe("");
+		const parsed = JSON.parse(content.trim());
+		expect(parsed.tps).toBe(10);
+	});
+
+	it("prune() warns when lock cannot be acquired", () => {
+		tracker = new PerformanceTracker(logPath);
+		tracker.record(makeEntry({ tps: 10 }));
+		const lockPath = `${logPath}.lock`;
+		const fd = openSync(lockPath, "w");
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			tracker.prune();
+			const content = readFileSync(logPath, "utf8");
+			expect(content.trim()).not.toBe("");
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("could not acquire log lock"));
+		} finally {
+			closeSync(fd);
+			warnSpy.mockRestore();
+		}
+	});
+
 	// malformed lines ----------------------------------------------------------
 
 	it("skips malformed JSONL lines gracefully", () => {
@@ -437,23 +431,6 @@ describe("PerformanceTracker", () => {
 		const lines = content.trim().split("\n");
 		expect(lines).toHaveLength(1);
 		expect(JSON.parse(lines[0]).tps).toBe(10);
-	});
-
-	// getTrend() Infinity branch ------------------------------------------------
-
-	it("getTrend() returns 'increasing' when previous median is 0 and recent is >0", () => {
-		tracker = new PerformanceTracker(logPath);
-		// Previous window: all tps = 0  → median 0
-		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 0 }));
-		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 0 }));
-		tracker.record(makeEntryAtOffsetMs(13 * 60 * 1000, { tps: 0 }));
-		// Recent window: tps > 0  → median 10
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 10 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 10 }));
-		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 10 }));
-
-		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
-		expect(trend).toBe("increasing");
 	});
 
 	// auto-prune timer ----------------------------------------------------------
