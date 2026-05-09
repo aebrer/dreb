@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getOAuthApiKey, registerOAuthProvider, unregisterOAuthProvider } from "../src/utils/oauth/index.js";
-import { isOAuthTokenExpired, REFRESH_BUFFER_MS } from "../src/utils/oauth/types.js";
 import type { OAuthCredentials } from "../src/utils/oauth/types.js";
+import { isOAuthTokenExpired, REFRESH_BUFFER_MS } from "../src/utils/oauth/types.js";
 
 describe("isOAuthTokenExpired", () => {
 	it("returns false when now is exactly 1ms before the buffer boundary", () => {

@@ -47,7 +47,13 @@ import { antigravityOAuthProvider } from "./google-antigravity.js";
 import { geminiCliOAuthProvider } from "./google-gemini-cli.js";
 import { kimiCodingOAuthProvider } from "./kimi-coding.js";
 import { openaiCodexOAuthProvider } from "./openai-codex.js";
-import { isOAuthTokenExpired, type OAuthCredentials, type OAuthProviderId, type OAuthProviderInfo, type OAuthProviderInterface } from "./types.js";
+import {
+	isOAuthTokenExpired,
+	type OAuthCredentials,
+	type OAuthProviderId,
+	type OAuthProviderInfo,
+	type OAuthProviderInterface,
+} from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 	githubCopilotOAuthProvider,
