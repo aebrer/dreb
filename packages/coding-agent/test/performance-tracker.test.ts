@@ -226,6 +226,40 @@ describe("PerformanceTracker", () => {
 		expect(delta.percentDelta).toBeCloseTo(9.09, 2);
 	});
 
+	it("getPerformanceDelta() returns 'below' when recent median is lower than baseline", () => {
+		tracker = new PerformanceTracker(logPath);
+		// Baseline: tps = 40, 40, 40
+		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { tps: 40 }));
+		tracker.record(makeEntryAtOffsetMs(50 * 60 * 1000, { tps: 40 }));
+		tracker.record(makeEntryAtOffsetMs(40 * 60 * 1000, { tps: 40 }));
+		// Recent: tps = 20, 20, 20 (also included in baseline window)
+		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 20 }));
+		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 20 }));
+		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 20 }));
+
+		const delta = tracker.getPerformanceDelta("anthropic", "claude-3-sonnet");
+		expect(delta.direction).toBe("below");
+		expect(delta.recentMedian).toBe(20);
+		expect(delta.baselineMedian).toBe(30);
+		expect(delta.percentDelta).toBeCloseTo(-33.33, 2);
+	});
+
+	it("getPerformanceDelta() returns stable when baseline median is 0", () => {
+		tracker = new PerformanceTracker(logPath);
+		// Baseline + recent all zero → baseline median 0
+		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { tps: 0 }));
+		tracker.record(makeEntryAtOffsetMs(50 * 60 * 1000, { tps: 0 }));
+		tracker.record(makeEntryAtOffsetMs(40 * 60 * 1000, { tps: 0 }));
+		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 0 }));
+		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 0 }));
+		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 0 }));
+
+		const delta = tracker.getPerformanceDelta("anthropic", "claude-3-sonnet");
+		expect(delta.direction).toBe("stable");
+		expect(delta.percentDelta).toBe(0);
+		expect(delta.baselineMedian).toBe(0);
+	});
+
 	it("getPerformanceDelta() returns stable when recent sample count is too low", () => {
 		tracker = new PerformanceTracker(logPath);
 		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { tps: 30 }));
@@ -302,6 +336,16 @@ describe("PerformanceTracker", () => {
 		expect(lines).toHaveLength(2);
 		expect(JSON.parse(lines[0]).tps).toBe(2);
 		expect(JSON.parse(lines[1]).tps).toBe(3);
+	});
+
+	it("prune() with all-stale entries leaves an empty file", () => {
+		tracker = new PerformanceTracker(logPath);
+		tracker.record(makeEntryAtOffsetMs(31 * 24 * 60 * 60 * 1000, { tps: 1 }));
+
+		tracker.prune();
+
+		const content = readFileSync(logPath, "utf8");
+		expect(content).toBe("");
 	});
 
 	it("prune() with custom ageMs removes only older entries", () => {

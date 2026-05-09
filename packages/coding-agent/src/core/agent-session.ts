@@ -14,6 +14,7 @@
  */
 
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
@@ -317,6 +318,7 @@ export class AgentSession {
 	private _uiType?: string;
 
 	private performanceTracker: PerformanceTracker;
+	private _ownsPerformanceTracker: boolean;
 
 	// Git repo state captured once at session start
 	private _gitRepoState: GitRepoState | undefined;
@@ -325,7 +327,19 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
-		this.performanceTracker = config.performanceTracker ?? new PerformanceTracker();
+		if (config.performanceTracker !== undefined) {
+			this.performanceTracker = config.performanceTracker;
+			this._ownsPerformanceTracker = false;
+		} else if (process.env.VITEST) {
+			// In tests, use an isolated temp log to avoid polluting the real performance log
+			this.performanceTracker = new PerformanceTracker(
+				join(tmpdir(), `dreb-perf-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`),
+			);
+			this._ownsPerformanceTracker = true;
+		} else {
+			this.performanceTracker = new PerformanceTracker();
+			this._ownsPerformanceTracker = true;
+		}
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -1048,7 +1062,9 @@ export class AgentSession {
 	 */
 	dispose(): void {
 		this._disconnectFromAgent();
-		this.performanceTracker.dispose();
+		if (this._ownsPerformanceTracker) {
+			this.performanceTracker.dispose();
+		}
 		this._eventListeners = [];
 	}
 

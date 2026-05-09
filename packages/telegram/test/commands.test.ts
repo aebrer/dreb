@@ -233,4 +233,23 @@ describe("cmdStats", () => {
 
 		expect(mockSafeSend).toHaveBeenCalledWith(expect.anything(), 100, "No active session.");
 	});
+
+	it("replies with 'No stats available' when getSessionStats returns null", async () => {
+		const bridge = createMockBridge();
+		bridge.getSessionStats = vi.fn().mockResolvedValue(null);
+		const userState = createUserState({ bridge });
+		await cmdStats(ctx, userState);
+
+		expect(mockSafeSend).toHaveBeenCalledWith(expect.anything(), 100, "No stats available.");
+	});
+
+	it("replies with error message when getSessionStats throws", async () => {
+		const bridge = createMockBridge();
+		bridge.getSessionStats = vi.fn().mockRejectedValue(new Error("RPC timeout"));
+		const userState = createUserState({ bridge });
+		await cmdStats(ctx, userState);
+
+		expect(mockSafeSend).toHaveBeenCalledWith(expect.anything(), 100, expect.stringContaining("Failed to get stats"));
+		expect(mockSafeSend).toHaveBeenCalledWith(expect.anything(), 100, expect.stringContaining("RPC timeout"));
+	});
 });

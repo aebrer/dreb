@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@dreb/agent-core";
@@ -129,6 +129,11 @@ describe("AgentSession performance tracking", () => {
 		const after = session.getPerformanceTracker().getRollingAverage("anthropic", "mock").count;
 
 		expect(after - before).toBe(1);
+
+		const logContent = readFileSync(join(tempDir, "performance.jsonl"), "utf8");
+		const lines = logContent.trim().split("\n");
+		const lastEntry = JSON.parse(lines[lines.length - 1]);
+		expect(lastEntry.tps).toBe((lastEntry.outputTokens * 1000) / lastEntry.durationMs);
 	});
 
 	it("does not record performance when stopReason is error", async () => {

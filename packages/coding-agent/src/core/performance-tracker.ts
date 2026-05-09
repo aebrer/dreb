@@ -264,8 +264,11 @@ export class PerformanceTracker {
 	private ensureDir(): void {
 		try {
 			mkdirSync(dirname(this.logPath), { recursive: true });
-		} catch {
-			// Directory may already exist
+		} catch (error) {
+			if (isFileExistsError(error)) {
+				return;
+			}
+			console.warn(`[PerformanceTracker] Failed to create log directory: ${error}`);
 		}
 	}
 
@@ -284,13 +287,27 @@ export class PerformanceTracker {
 			for (const line of content.split("\n")) {
 				if (!line.trim()) continue;
 				try {
-					entries.push(JSON.parse(line) as PerformanceEntry);
+					const parsed = JSON.parse(line) as unknown;
+					if (!isValidPerformanceEntry(parsed)) {
+						console.warn(`[PerformanceTracker] Skipping invalid performance entry line: ${line}`);
+						continue;
+					}
+					const time = entryTime(parsed);
+					if (!Number.isFinite(time)) {
+						console.warn(`[PerformanceTracker] Skipping entry with invalid timestamp: ${line}`);
+						continue;
+					}
+					entries.push(parsed);
 				} catch {
 					// Skip malformed lines
 				}
 			}
 			return entries;
-		} catch {
+		} catch (error) {
+			if (isENOENT(error)) {
+				return [];
+			}
+			console.warn(`[PerformanceTracker] Failed to read performance log: ${error}`);
 			return [];
 		}
 	}
@@ -310,8 +327,8 @@ export class PerformanceTracker {
 	}
 
 	private acquireLock(timeoutMs: number): number | undefined {
-		const start = Date.now();
-		while (Date.now() - start <= timeoutMs) {
+		const start = performance.now();
+		while (performance.now() - start <= timeoutMs) {
 			try {
 				return openSync(this.lockPath, "wx");
 			} catch (error) {
@@ -338,7 +355,8 @@ export class PerformanceTracker {
 }
 
 function entryTime(entry: PerformanceEntry): number {
-	return new Date(entry.timestamp).getTime();
+	const time = new Date(entry.timestamp).getTime();
+	return Number.isFinite(time) ? time : NaN;
 }
 
 function computeMedian(values: number[]): number {
@@ -358,6 +376,26 @@ function computeMean(values: number[]): number {
 
 function isFileExistsError(error: unknown): boolean {
 	return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
+}
+
+function isENOENT(error: unknown): boolean {
+	return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function isValidPerformanceEntry(entry: unknown): entry is PerformanceEntry {
+	if (typeof entry !== "object" || entry === null) return false;
+	const e = entry as Record<string, unknown>;
+	return (
+		typeof e.timestamp === "string" &&
+		typeof e.provider === "string" &&
+		typeof e.modelId === "string" &&
+		typeof e.outputTokens === "number" &&
+		Number.isFinite(e.outputTokens) &&
+		typeof e.durationMs === "number" &&
+		Number.isFinite(e.durationMs) &&
+		typeof e.tps === "number" &&
+		Number.isFinite(e.tps)
+	);
 }
 
 function sleepSync(ms: number): void {

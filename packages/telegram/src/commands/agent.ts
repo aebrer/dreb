@@ -95,8 +95,8 @@ export async function cmdStats(ctx: Context, userState: UserState): Promise<void
 					lines.push(`  ${m.provider}/${m.modelId}: ~${m.median.toFixed(1)} tok/s (n=${m.count})`);
 				}
 			}
-		} catch {
-			// omit performance section if unavailable
+		} catch (e) {
+			log(`[CMD] /stats performance section error: ${e}`);
 		}
 
 		await safeSend(ctx.api, chatId, lines.join("\n"));
