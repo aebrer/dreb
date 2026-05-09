@@ -535,6 +535,36 @@ Response:
 
 `contextUsage` is omitted when no model or context window is available. `contextUsage.tokens` and `contextUsage.percent` are `null` immediately after compaction until a fresh post-compaction assistant response provides valid usage data.
 
+#### get_performance_stats
+
+Get rolling performance statistics (tokens-per-second) for all models with recorded data.
+
+```json
+{"type": "get_performance_stats"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_performance_stats",
+  "success": true,
+  "data": {
+    "models": [
+      {
+        "provider": "anthropic",
+        "modelId": "claude-sonnet-4",
+        "median": 31,
+        "mean": 32,
+        "count": 100
+      }
+    ]
+  }
+}
+```
+
+`models` contains per-model rolling averages computed from the agent's performance log. Each entry includes the median TPS, mean TPS, and number of recorded turns for that model. Returns an empty `models` array when no performance data has been recorded.
+
 #### export_html
 
 Export session to an HTML file.

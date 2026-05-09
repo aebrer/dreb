@@ -84,7 +84,7 @@ systemctl --user enable --now dreb-telegram
 
 ### Agent
 - `/status` — Connection & version info
-- `/stats` — Token usage & cost
+- `/stats` — Token usage, cost, and per-model performance stats (rolling TPS)
 - `/compact` — Compact context
 - `/model [pattern]` — View/switch model
 - `/thinking [level]` — View/set thinking level
