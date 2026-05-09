@@ -237,6 +237,11 @@ export function getDebugLogPath(): string {
 	return join(getAgentDir(), `${APP_NAME}-debug.log`);
 }
 
+/** Get path to performance log file */
+export function getPerformanceLogPath(): string {
+	return join(getAgentDir(), "performance.jsonl");
+}
+
 /** Get path to secrets directory */
 export function getSecretsDir(): string {
 	return join(homedir(), `.${APP_NAME}`, "secrets");

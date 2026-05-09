@@ -549,6 +549,12 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "get_session_stats", stats);
 			}
 
+			case "get_performance_stats": {
+				const tracker = session.getPerformanceTracker();
+				const models = tracker.getAllRollingAverages();
+				return success(id, "get_performance_stats", { models });
+			}
+
 			case "export_html": {
 				const path = await session.exportToHtml(command.outputPath);
 				return success(id, "export_html", { path });

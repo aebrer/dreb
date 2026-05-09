@@ -53,6 +53,10 @@ function createSession(options: {
 		modelRegistry: {
 			isUsingOAuth: () => false,
 		},
+		getPerformanceTracker: () => ({
+			getRollingAverage: () => ({ median: 0, mean: 0, count: 0 }),
+			getTrend: () => "stable",
+		}),
 	};
 
 	return session as unknown as AgentSession;

@@ -362,6 +362,14 @@ export class RpcClient {
 	}
 
 	/**
+	 * Get performance statistics.
+	 */
+	async getPerformanceStats(): Promise<any> {
+		const response = await this.send({ type: "get_performance_stats" });
+		return this.getData(response);
+	}
+
+	/**
 	 * Export session to HTML.
 	 */
 	async exportHtml(outputPath?: string): Promise<{ path: string }> {

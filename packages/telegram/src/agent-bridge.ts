@@ -238,6 +238,19 @@ export class AgentBridge {
 	}
 
 	/**
+	 * Get performance statistics.
+	 */
+	async getPerformanceStats(): Promise<any> {
+		if (!this.client) return null;
+		try {
+			return await this.client.getPerformanceStats();
+		} catch (e) {
+			this.handleProcessError(e);
+			throw e;
+		}
+	}
+
+	/**
 	 * Get current state.
 	 */
 	async getState(): Promise<any> {

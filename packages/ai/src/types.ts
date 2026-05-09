@@ -204,6 +204,7 @@ export interface AssistantMessage {
 	stopReason: StopReason;
 	errorMessage?: string;
 	timestamp: number; // Unix timestamp in milliseconds
+	durationMs?: number; // Time from stream start to completion in milliseconds
 }
 
 export interface ToolResultMessage<TDetails = any> {

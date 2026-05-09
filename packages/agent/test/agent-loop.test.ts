@@ -128,6 +128,80 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("agent_end");
 	});
 
+	it("should set durationMs > 0 on successful assistant responses", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			setTimeout(() => {
+				const message = createAssistantMessage([{ type: "text", text: "Hi there!" }]);
+				stream.push({ type: "done", reason: "stop", message });
+			}, 2);
+			return stream;
+		};
+
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		for await (const _ of stream) {
+			// consume
+		}
+
+		const messages = await stream.result();
+		const assistantMessage = messages.find((m) => m.role === "assistant") as AssistantMessage;
+		expect(assistantMessage).toBeDefined();
+		expect(assistantMessage.durationMs).toBeGreaterThan(0);
+	});
+
+	it("should set durationMs when the stream emits an error", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			setTimeout(() => {
+				const message = createAssistantMessage(
+					[{ type: "text", text: "Oops" }],
+					"error",
+				);
+				stream.push({ type: "error", reason: "error", error: message });
+			}, 2);
+			return stream;
+		};
+
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		for await (const _ of stream) {
+			// consume
+		}
+
+		const messages = await stream.result();
+		const assistantMessage = messages.find((m) => m.role === "assistant") as AssistantMessage;
+		expect(assistantMessage).toBeDefined();
+		expect(assistantMessage.durationMs).toBeGreaterThanOrEqual(0);
+		expect(assistantMessage.stopReason).toBe("error");
+	});
+
 	it("should handle custom message types via convertToLlm", async () => {
 		// Create a custom message type
 		interface CustomNotification {

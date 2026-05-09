@@ -65,6 +65,7 @@ import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./fo
 import { type GitRepoState, getGitRepoState } from "./git-repo-state.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
+import { PerformanceTracker } from "./performance-tracker.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
 import { type SecretPattern, scrubSecrets } from "./secret-scrubber.js";
@@ -312,6 +313,8 @@ export class AgentSession {
 	private _baseSystemPrompt = "";
 	private _uiType?: string;
 
+	private performanceTracker: PerformanceTracker;
+
 	// Git repo state captured once at session start
 	private _gitRepoState: GitRepoState | undefined;
 
@@ -319,6 +322,7 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
+		this.performanceTracker = new PerformanceTracker();
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -347,6 +351,11 @@ export class AgentSession {
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
 		return this._modelRegistry;
+	}
+
+	/** Performance tracker for recording and querying model throughput */
+	getPerformanceTracker(): PerformanceTracker {
+		return this.performanceTracker;
 	}
 
 	/**
@@ -844,6 +853,24 @@ export class AgentSession {
 					});
 					this._retryAttempt = 0;
 				}
+
+				if (
+					assistantMsg.stopReason !== "error" &&
+					assistantMsg.stopReason !== "aborted" &&
+					assistantMsg.usage.output > 0 &&
+					assistantMsg.durationMs != null &&
+					assistantMsg.durationMs > 0
+				) {
+					this.performanceTracker.record({
+						timestamp: new Date().toISOString(),
+						sessionId: this.sessionId,
+						provider: assistantMsg.provider,
+						modelId: assistantMsg.model,
+						outputTokens: assistantMsg.usage.output,
+						durationMs: assistantMsg.durationMs,
+						tps: assistantMsg.usage.output / (assistantMsg.durationMs / 1000),
+					});
+				}
 			}
 		}
 
@@ -1018,6 +1045,7 @@ export class AgentSession {
 	 */
 	dispose(): void {
 		this._disconnectFromAgent();
+		this.performanceTracker.dispose();
 		this._eventListeners = [];
 	}
 

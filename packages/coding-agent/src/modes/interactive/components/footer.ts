@@ -149,6 +149,20 @@ export class FooterComponent implements Component {
 		// Add model name on the right side, plus thinking level if model supports it
 		const modelName = state.model?.id || "no-model";
 
+		// Query performance tracker for rolling TPS + trend
+		const perf = this.session.getPerformanceTracker();
+		const model = state.model;
+		let tpsSuffix = "";
+		if (model) {
+			const rolling = perf.getRollingAverage(model.provider, model.id);
+			if (rolling.count >= 3) {
+				const trend = perf.getTrend(model.provider, model.id);
+				const arrow = trend === "increasing" ? "↑" : trend === "decreasing" ? "↓" : "→";
+				const arrowColor = trend === "increasing" ? "success" : trend === "decreasing" ? "warning" : "dim";
+				tpsSuffix = ` (~${Math.round(rolling.median)} tok/s ${theme.fg(arrowColor, arrow)})`;
+			}
+		}
+
 		let statsLeftWidth = visibleWidth(statsLeft);
 
 		// If statsLeft is too wide, truncate it
@@ -161,11 +175,12 @@ export class FooterComponent implements Component {
 		const minPadding = 2;
 
 		// Add thinking level indicator if model supports reasoning
-		let rightSideWithoutProvider = modelName;
+		const displayModelName = modelName + tpsSuffix;
+		let rightSideWithoutProvider = displayModelName;
 		if (state.model?.reasoning) {
 			const thinkingLevel = state.thinkingLevel || "off";
 			rightSideWithoutProvider =
-				thinkingLevel === "off" ? `${modelName} • thinking off` : `${modelName} • ${thinkingLevel}`;
+				thinkingLevel === "off" ? `${displayModelName} • thinking off` : `${displayModelName} • ${thinkingLevel}`;
 		}
 
 		// Prepend the provider in parentheses if there are multiple providers and there's enough room
