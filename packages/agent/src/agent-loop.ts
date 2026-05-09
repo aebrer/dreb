@@ -292,7 +292,7 @@ async function streamAssistantResponse(
 	const resolvedApiKey =
 		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
 
-	const streamStart = Date.now();
+	const streamStart = performance.now();
 	const response = await streamFunction(config.model, llmContext, {
 		...config,
 		apiKey: resolvedApiKey,
@@ -334,7 +334,7 @@ async function streamAssistantResponse(
 			case "done":
 			case "error": {
 				const finalMessage = await response.result();
-				finalMessage.durationMs = Math.max(0, Date.now() - streamStart);
+				finalMessage.durationMs = Math.max(0, performance.now() - streamStart);
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMessage;
 				} else {
@@ -350,7 +350,7 @@ async function streamAssistantResponse(
 	}
 
 	const finalMessage = await response.result();
-	finalMessage.durationMs = Math.max(0, Date.now() - streamStart);
+	finalMessage.durationMs = Math.max(0, performance.now() - streamStart);
 	if (addedPartial) {
 		context.messages[context.messages.length - 1] = finalMessage;
 	} else {

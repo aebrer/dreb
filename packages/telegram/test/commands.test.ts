@@ -21,6 +21,7 @@ vi.mock("node:fs", () => ({
 import { existsSync, statSync } from "node:fs";
 // Import after mock setup
 import { cmdNew } from "../src/commands/core.js";
+import { cmdStats } from "../src/commands/agent.js";
 
 function createConfig(overrides?: Partial<Config>): Config {
 	return {
@@ -154,5 +155,78 @@ describe("cmdNew", () => {
 			// Should NOT be the generic "fresh session" message without a path
 			expect(reply).not.toBe("🆕 Next message will start a fresh session.");
 		});
+	});
+});
+
+describe("cmdStats", () => {
+	let ctx: ReturnType<typeof createMockContext>;
+
+	beforeEach(() => {
+		ctx = createMockContext();
+		vi.clearAllMocks();
+	});
+
+	function createMockBridge(overrides?: {
+		stats?: Partial<{
+			userMessages: number;
+			assistantMessages: number;
+			toolCalls: number;
+			tokens: { total: number; input: number; output: number; cacheRead?: number };
+			cost: number;
+			contextUsage: { percent: number; tokens: number; contextWindow: number };
+		}>;
+		perf?: { models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }> } | null;
+	}) {
+		return {
+			isAlive: true,
+			getSessionStats: vi.fn().mockResolvedValue(
+				overrides?.stats ?? {
+					userMessages: 2,
+					assistantMessages: 3,
+					toolCalls: 1,
+					tokens: { total: 5000, input: 3000, output: 2000 },
+					cost: 0.05,
+					contextUsage: { percent: 10, tokens: 5000, contextWindow: 50000 },
+				},
+			),
+			getPerformanceStats: vi
+				.fn()
+				.mockResolvedValue(overrides?.perf ?? { models: [{ provider: "anthropic", modelId: "claude-3-sonnet", median: 30.5, mean: 32, count: 100 }] }),
+		} as any;
+	}
+
+	it("includes performance section when stats are available", async () => {
+		const userState = createUserState({ bridge: createMockBridge() });
+		await cmdStats(ctx, userState);
+
+		const sentMessage = mockSafeSend.mock.calls[0][2] as string;
+		expect(sentMessage).toContain("⚡ *Performance (last 24h):*");
+		expect(sentMessage).toContain("anthropic/claude-3-sonnet: ~30.5 tok/s (n=100)");
+	});
+
+	it("omits performance section when models array is empty", async () => {
+		const userState = createUserState({ bridge: createMockBridge({ perf: { models: [] } }) });
+		await cmdStats(ctx, userState);
+
+		const sentMessage = mockSafeSend.mock.calls[0][2] as string;
+		expect(sentMessage).not.toContain("⚡ *Performance (last 24h):*");
+	});
+
+	it("omits performance section when getPerformanceStats throws", async () => {
+		const bridge = createMockBridge();
+		bridge.getPerformanceStats = vi.fn().mockRejectedValue(new Error("RPC failed"));
+		const userState = createUserState({ bridge });
+		await cmdStats(ctx, userState);
+
+		const sentMessage = mockSafeSend.mock.calls[0][2] as string;
+		expect(sentMessage).not.toContain("⚡ *Performance (last 24h):*");
+		expect(sentMessage).toContain("Session Stats");
+	});
+
+	it("replies with 'No active session' when bridge is null", async () => {
+		const userState = createUserState({ bridge: null });
+		await cmdStats(ctx, userState);
+
+		expect(mockSafeSend).toHaveBeenCalledWith(expect.anything(), 100, "No active session.");
 	});
 });

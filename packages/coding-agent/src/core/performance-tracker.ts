@@ -1,5 +1,6 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname } from "path";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
+import { tmpdir } from "os";
 import { getPerformanceLogPath } from "../config.js";
 
 export interface PerformanceEntry {
@@ -24,28 +25,30 @@ export class PerformanceTracker {
 	private static readonly PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 	private logPath: string;
+	private entries: PerformanceEntry[];
 	private pruneTimer: ReturnType<typeof setInterval> | null = null;
 	private disposed = false;
 
 	constructor(logPath?: string) {
 		this.logPath = logPath ?? getPerformanceLogPath();
+		this.entries = this.readEntries();
+		this.ensureDir();
 		this.schedulePrune();
 	}
 
 	record(entry: PerformanceEntry): void {
 		if (this.disposed) return;
 		try {
-			mkdirSync(dirname(this.logPath), { recursive: true });
 			appendFileSync(this.logPath, `${JSON.stringify(entry)}\n`, "utf8");
-		} catch {
-			// Silently ignore write failures
+			this.entries.push(entry);
+		} catch (error) {
+			console.warn(`[PerformanceTracker] Failed to write performance entry: ${error}`);
 		}
 	}
 
 	getRollingAverage(provider: string, modelId: string, windowMs = 24 * 60 * 60 * 1000): RollingAverage {
-		const entries = this.readEntries();
 		const cutoff = Date.now() - windowMs;
-		const values = entries
+		const values = this.entries
 			.filter((e) => e.provider === provider && e.modelId === modelId && new Date(e.timestamp).getTime() >= cutoff)
 			.map((e) => e.tps);
 
@@ -66,19 +69,18 @@ export class PerformanceTracker {
 		recentWindowMs = 10 * 60 * 1000,
 		previousWindowMs = 10 * 60 * 1000,
 	): Trend {
-		const entries = this.readEntries();
 		const now = Date.now();
 
 		const recentCutoff = now - recentWindowMs;
 		const previousCutoff = now - recentWindowMs - previousWindowMs;
 
-		const recentValues = entries
+		const recentValues = this.entries
 			.filter(
 				(e) => e.provider === provider && e.modelId === modelId && new Date(e.timestamp).getTime() >= recentCutoff,
 			)
 			.map((e) => e.tps);
 
-		const previousValues = entries
+		const previousValues = this.entries
 			.filter(
 				(e) =>
 					e.provider === provider &&
@@ -108,9 +110,8 @@ export class PerformanceTracker {
 	getAllRollingAverages(
 		windowMs = 24 * 60 * 60 * 1000,
 	): Array<{ provider: string; modelId: string; median: number; mean: number; count: number }> {
-		const entries = this.readEntries();
 		const cutoff = Date.now() - windowMs;
-		const filtered = entries.filter((e) => new Date(e.timestamp).getTime() >= cutoff);
+		const filtered = this.entries.filter((e) => new Date(e.timestamp).getTime() >= cutoff);
 
 		const groups = new Map<string, number[]>();
 		for (const entry of filtered) {
@@ -141,25 +142,24 @@ export class PerformanceTracker {
 	prune(ageMs = 30 * 24 * 60 * 60 * 1000): void {
 		if (this.disposed) return;
 		try {
-			const content = readFileSync(this.logPath, "utf8");
 			const cutoff = Date.now() - ageMs;
+			const kept: PerformanceEntry[] = [];
 			const lines: string[] = [];
 
-			for (const line of content.split("\n")) {
-				if (!line.trim()) continue;
-				try {
-					const entry = JSON.parse(line) as PerformanceEntry;
-					if (new Date(entry.timestamp).getTime() >= cutoff) {
-						lines.push(line);
-					}
-				} catch {
-					// Skip malformed lines
+			for (const entry of this.entries) {
+				if (new Date(entry.timestamp).getTime() >= cutoff) {
+					kept.push(entry);
+					lines.push(JSON.stringify(entry));
 				}
 			}
 
-			writeFileSync(this.logPath, lines.length > 0 ? `${lines.join("\n")}\n` : "", "utf8");
-		} catch {
-			// Silently ignore read/write failures (e.g. file doesn't exist yet)
+			this.entries = kept;
+
+			const tempPath = join(tmpdir(), `dreb-perf-prune-${process.pid}-${Date.now()}.jsonl`);
+			writeFileSync(tempPath, lines.length > 0 ? `${lines.join("\n")}\n` : "", "utf8");
+			renameSync(tempPath, this.logPath);
+		} catch (error) {
+			console.warn(`[PerformanceTracker] Failed to prune performance log: ${error}`);
 		}
 	}
 
@@ -171,14 +171,20 @@ export class PerformanceTracker {
 		}
 	}
 
+	private ensureDir(): void {
+		try {
+			mkdirSync(dirname(this.logPath), { recursive: true });
+		} catch {
+			// Directory may already exist
+		}
+	}
+
 	private schedulePrune(): void {
 		if (this.disposed) return;
 		this.pruneTimer = setInterval(() => {
 			this.prune();
 		}, PerformanceTracker.PRUNE_INTERVAL_MS);
-		if (this.pruneTimer && typeof this.pruneTimer === "object" && "unref" in this.pruneTimer) {
-			this.pruneTimer.unref();
-		}
+		this.pruneTimer?.unref?.();
 	}
 
 	private readEntries(): PerformanceEntry[] {

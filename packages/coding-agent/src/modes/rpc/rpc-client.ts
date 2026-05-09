@@ -364,7 +364,9 @@ export class RpcClient {
 	/**
 	 * Get performance statistics.
 	 */
-	async getPerformanceStats(): Promise<any> {
+	async getPerformanceStats(): Promise<{
+		models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
+	}> {
 		const response = await this.send({ type: "get_performance_stats" });
 		return this.getData(response);
 	}

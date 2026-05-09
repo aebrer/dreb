@@ -265,7 +265,6 @@ describe("PerformanceTracker", () => {
 	// malformed lines ----------------------------------------------------------
 
 	it("skips malformed JSONL lines gracefully", () => {
-		tracker = new PerformanceTracker(logPath);
 		const content = [
 			JSON.stringify(makeEntry({ tps: 10 })),
 			"THIS IS NOT JSON",
@@ -274,6 +273,7 @@ describe("PerformanceTracker", () => {
 		].join("\n");
 		writeFileSync(logPath, content, "utf8");
 
+		tracker = new PerformanceTracker(logPath);
 		const result = tracker.getRollingAverage("anthropic", "claude-3-sonnet");
 		expect(result.count).toBe(2);
 		expect(result.mean).toBe(15);
@@ -309,6 +309,38 @@ describe("PerformanceTracker", () => {
 		tracker.dispose();
 		tracker.record(makeEntry({ tps: 20 }));
 
+		const content = readFileSync(logPath, "utf8");
+		const lines = content.trim().split("\n");
+		expect(lines).toHaveLength(1);
+		expect(JSON.parse(lines[0]).tps).toBe(10);
+	});
+
+	// getTrend() Infinity branch ------------------------------------------------
+
+	it("getTrend() returns 'increasing' when previous median is 0 and recent is >0", () => {
+		tracker = new PerformanceTracker(logPath);
+		// Previous window: all tps = 0  → median 0
+		tracker.record(makeEntryAtOffsetMs(15 * 60 * 1000, { tps: 0 }));
+		tracker.record(makeEntryAtOffsetMs(14 * 60 * 1000, { tps: 0 }));
+		tracker.record(makeEntryAtOffsetMs(13 * 60 * 1000, { tps: 0 }));
+		// Recent window: tps > 0  → median 10
+		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 10 }));
+		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 10 }));
+		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 10 }));
+
+		const trend = tracker.getTrend("anthropic", "claude-3-sonnet");
+		expect(trend).toBe("increasing");
+	});
+
+	// auto-prune timer ----------------------------------------------------------
+
+	it("schedules auto-prune and clears it on dispose", () => {
+		tracker = new PerformanceTracker(logPath);
+		tracker.record(makeEntry({ tps: 10 }));
+		// Timer is scheduled internally; dispose should clear it without throwing
+		tracker.dispose();
+		// After dispose, record should not write
+		tracker.record(makeEntry({ tps: 99 }));
 		const content = readFileSync(logPath, "utf8");
 		const lines = content.trim().split("\n");
 		expect(lines).toHaveLength(1);

@@ -160,4 +160,56 @@ describe("FooterComponent width handling", () => {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 		}
 	});
+
+	it("renders TPS suffix and trend arrow when sufficient samples exist", () => {
+		const width = 120;
+		const session = createSession({
+			sessionName: "test",
+			modelId: "claude-3-sonnet",
+			provider: "anthropic",
+			usage: {
+				input: 1000,
+				output: 500,
+				cacheRead: 0,
+				cacheWrite: 0,
+				cost: { total: 0.1 },
+			},
+		});
+		// Override getPerformanceTracker to return a non-zero count
+		(session as any).getPerformanceTracker = () => ({
+			getRollingAverage: () => ({ median: 30.5, mean: 32, count: 10 }),
+			getTrend: () => "increasing",
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+
+		const lines = footer.render(width);
+		const statsLine = lines[1];
+		expect(statsLine).toContain("~31 tok/s");
+		expect(statsLine).toContain("↑");
+	});
+
+	it("omits TPS suffix when sample count is below threshold", () => {
+		const width = 120;
+		const session = createSession({
+			sessionName: "test",
+			modelId: "claude-3-sonnet",
+			provider: "anthropic",
+			usage: {
+				input: 1000,
+				output: 500,
+				cacheRead: 0,
+				cacheWrite: 0,
+				cost: { total: 0.1 },
+			},
+		});
+		(session as any).getPerformanceTracker = () => ({
+			getRollingAverage: () => ({ median: 30, mean: 32, count: 1 }),
+			getTrend: () => "stable",
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+
+		const lines = footer.render(width);
+		const statsLine = lines[1];
+		expect(statsLine).not.toContain("tok/s");
+	});
 });
