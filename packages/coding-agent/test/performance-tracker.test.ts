@@ -89,17 +89,17 @@ describe("PerformanceTracker", () => {
 		expect(result.median).toBe(20);
 	});
 
-	it("getRollingAverage() ignores entries outside the window", () => {
+	it("getRollingAverage() respects the count limit", () => {
 		tracker = new PerformanceTracker(logPath);
-		// Entry 25 hours ago — outside default 24h window
-		tracker.record(makeEntryAtOffsetMs(25 * 60 * 60 * 1000, { tps: 999 }));
-		// Entry 1 hour ago — inside window
-		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { tps: 15 }));
+		// Record 102 entries — only the most recent 100 should be kept
+		for (let i = 0; i < 102; i++) {
+			tracker.record(makeEntryAtOffsetMs((102 - i) * 1000, { tps: i + 1 }));
+		}
 
 		const result = tracker.getRollingAverage("anthropic", "claude-3-sonnet");
-		expect(result.count).toBe(1);
-		expect(result.mean).toBe(15);
-		expect(result.median).toBe(15);
+		expect(result.count).toBe(100);
+		// The most recent 100 entries have tps = 3..102 (oldest of the 100 is tps=3)
+		expect(result.median).toBe((3 + 102) / 2); // 52.5
 	});
 
 	it("getRollingAverage() returns zeroes when no entries match", () => {
@@ -210,38 +210,40 @@ describe("PerformanceTracker", () => {
 
 	// getPerformanceDelta() ----------------------------------------------------
 
-	it("getPerformanceDelta() compares recent performance to the 24h baseline", () => {
+	it("getPerformanceDelta() compares recent entries to the baseline", () => {
 		tracker = new PerformanceTracker(logPath);
-		// Baseline values include recent samples: 30, 30, 30, 36, 36, 36 → baseline median 33, recent median 36
-		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { tps: 30 }));
-		tracker.record(makeEntryAtOffsetMs(50 * 60 * 1000, { tps: 30 }));
-		tracker.record(makeEntryAtOffsetMs(40 * 60 * 1000, { tps: 30 }));
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 36 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 36 }));
-		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 36 }));
+		// 20 baseline entries with tps=30 (older)
+		for (let i = 0; i < 20; i++) {
+			tracker.record(makeEntryAtOffsetMs((100 + i) * 1000, { tps: 30 }));
+		}
+		// 10 recent entries with tps=36 (newer)
+		for (let i = 0; i < 10; i++) {
+			tracker.record(makeEntryAtOffsetMs((10 + i) * 1000, { tps: 36 }));
+		}
 
 		const delta = tracker.getPerformanceDelta("anthropic", "claude-3-sonnet");
 		expect(delta.direction).toBe("above");
 		expect(delta.recentMedian).toBe(36);
-		expect(delta.percentDelta).toBeCloseTo(9.09, 2);
+		expect(delta.baselineMedian).toBe(30);
+		expect(delta.percentDelta).toBeCloseTo(20, 2);
 	});
 
 	it("getPerformanceDelta() returns 'below' when recent median is lower than baseline", () => {
 		tracker = new PerformanceTracker(logPath);
-		// Baseline: tps = 40, 40, 40
-		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { tps: 40 }));
-		tracker.record(makeEntryAtOffsetMs(50 * 60 * 1000, { tps: 40 }));
-		tracker.record(makeEntryAtOffsetMs(40 * 60 * 1000, { tps: 40 }));
-		// Recent: tps = 20, 20, 20 (also included in baseline window)
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 20 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 20 }));
-		tracker.record(makeEntryAtOffsetMs(3 * 60 * 1000, { tps: 20 }));
+		// 20 baseline entries with tps=40 (older)
+		for (let i = 0; i < 20; i++) {
+			tracker.record(makeEntryAtOffsetMs((100 + i) * 1000, { tps: 40 }));
+		}
+		// 10 recent entries with tps=20 (newer)
+		for (let i = 0; i < 10; i++) {
+			tracker.record(makeEntryAtOffsetMs((10 + i) * 1000, { tps: 20 }));
+		}
 
 		const delta = tracker.getPerformanceDelta("anthropic", "claude-3-sonnet");
 		expect(delta.direction).toBe("below");
 		expect(delta.recentMedian).toBe(20);
-		expect(delta.baselineMedian).toBe(30);
-		expect(delta.percentDelta).toBeCloseTo(-33.33, 2);
+		expect(delta.baselineMedian).toBe(40);
+		expect(delta.percentDelta).toBeCloseTo(-50, 2);
 	});
 
 	it("getPerformanceDelta() returns stable when baseline median is 0", () => {
@@ -264,9 +266,6 @@ describe("PerformanceTracker", () => {
 		tracker = new PerformanceTracker(logPath);
 		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { tps: 30 }));
 		tracker.record(makeEntryAtOffsetMs(50 * 60 * 1000, { tps: 30 }));
-		tracker.record(makeEntryAtOffsetMs(40 * 60 * 1000, { tps: 30 }));
-		tracker.record(makeEntryAtOffsetMs(5 * 60 * 1000, { tps: 36 }));
-		tracker.record(makeEntryAtOffsetMs(4 * 60 * 1000, { tps: 36 }));
 
 		const delta = tracker.getPerformanceDelta("anthropic", "claude-3-sonnet");
 		expect(delta.direction).toBe("stable");

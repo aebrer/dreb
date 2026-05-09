@@ -166,9 +166,9 @@ export class FooterComponent implements Component {
 				const deltaPercent = delta.direction === "stable" ? 0 : Math.round(Math.abs(delta.percentDelta));
 				const medianDelta =
 					delta.recentCount >= 3 && delta.baselineCount >= 3
-						? ` · ${deltaPercent}% ${theme.fg(arrowColor, arrow)}${theme.getFgAnsi("dim")} median`
+						? ` · ${deltaPercent}% ${theme.fg(arrowColor, arrow)}${theme.getFgAnsi("dim")} median [${delta.baselineCount}]`
 						: "";
-				tpsSuffix = ` (~${Math.round(rolling.median)} tok/s${medianDelta})`;
+				tpsSuffix = ` (~${Math.round(rolling.median)} tok/s [${rolling.count}]${medianDelta})`;
 			}
 		}
 

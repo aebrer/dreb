@@ -78,10 +78,11 @@ export class PerformanceTracker {
 		}
 	}
 
-	getRollingAverage(provider: string, modelId: string, windowMs = 24 * 60 * 60 * 1000): RollingAverage {
-		const cutoff = Date.now() - windowMs;
+	getRollingAverage(provider: string, modelId: string, count = 100): RollingAverage {
 		const values = this.entries
-			.filter((e) => e.provider === provider && e.modelId === modelId && entryTime(e) >= cutoff)
+			.filter((e) => e.provider === provider && e.modelId === modelId)
+			.sort((a, b) => entryTime(b) - entryTime(a))
+			.slice(0, count)
 			.map((e) => e.tps);
 
 		if (values.length === 0) {
@@ -137,26 +138,17 @@ export class PerformanceTracker {
 	getPerformanceDelta(
 		provider: string,
 		modelId: string,
-		recentWindowMs = 10 * 60 * 1000,
-		baselineWindowMs = 24 * 60 * 60 * 1000,
+		recentCount = 10,
+		baselineCount = 10_000,
 		stablePercent = 1,
 	): PerformanceDelta {
-		const now = Date.now();
-		const recentCutoff = now - recentWindowMs;
-		const baselineCutoff = now - baselineWindowMs;
-		const recentValues: number[] = [];
-		const baselineValues: number[] = [];
+		const modelEntries = this.entries
+			.filter((e) => e.provider === provider && e.modelId === modelId)
+			.sort((a, b) => entryTime(b) - entryTime(a));
 
-		for (const entry of this.entries) {
-			if (entry.provider !== provider || entry.modelId !== modelId) continue;
-			const time = entryTime(entry);
-			if (time >= baselineCutoff) {
-				baselineValues.push(entry.tps);
-				if (time >= recentCutoff) {
-					recentValues.push(entry.tps);
-				}
-			}
-		}
+		const baselineSlice = baselineCount > 0 ? baselineCount : modelEntries.length;
+		const baselineValues = modelEntries.slice(0, baselineSlice).map((e) => e.tps);
+		const recentValues = modelEntries.slice(0, recentCount).map((e) => e.tps);
 
 		const baselineMedian = computeMedian(baselineValues);
 		const recentMedian = computeMedian(recentValues);
