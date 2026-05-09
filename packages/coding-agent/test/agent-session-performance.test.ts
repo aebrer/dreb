@@ -26,7 +26,7 @@ class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMe
 	}
 }
 
-function createAssistantMessage(text: string, overrides?: Partial<AssistantMessage>): AssistantMessage {
+function createAssistantMessage(text: string, overrides?: any): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
@@ -44,7 +44,7 @@ function createAssistantMessage(text: string, overrides?: Partial<AssistantMessa
 		stopReason: "stop",
 		timestamp: Date.now(),
 		...overrides,
-	};
+	} as AssistantMessage;
 }
 
 describe("AgentSession performance tracking", () => {
@@ -94,7 +94,11 @@ describe("AgentSession performance tracking", () => {
 					if (overrides?.stopReason === "error") {
 						stream.push({ type: "error", reason: "error", error: msg });
 					} else {
-						stream.push({ type: "done", reason: overrides?.stopReason ?? "stop", message: msg });
+						stream.push({
+							type: "done",
+							reason: (overrides?.stopReason ?? "stop") as "length" | "stop" | "toolUse",
+							message: msg,
+						});
 					}
 				}, 15);
 				return stream;
