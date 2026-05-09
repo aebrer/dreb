@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { registerOAuthProvider } from "@dreb/ai/oauth";
+import { REFRESH_BUFFER_MS, registerOAuthProvider } from "@dreb/ai/oauth";
 import lockfile from "proper-lockfile";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { AuthStorage } from "../src/core/auth-storage.js";
+import { AuthStorage, InMemoryAuthStorageBackend } from "../src/core/auth-storage.js";
 import { clearConfigValueCache } from "../src/core/resolve-config-value.js";
 
 describe("AuthStorage", () => {
@@ -344,6 +344,240 @@ describe("AuthStorage", () => {
 
 			const secondTry = await authStorage.getApiKey(providerId);
 			expect(secondTry).toBe("Bearer refreshed-access-token");
+		});
+	});
+
+	describe("oauth refresh buffer", () => {
+		test("returns existing OAuth key without refresh when token is outside buffer", async () => {
+			const providerId = `test-oauth-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			const refreshSpy = vi.fn(async (credentials: { refresh: string; access: string; expires: number }) => ({
+				...credentials,
+				access: "refreshed-access-token",
+				expires: Date.now() + 3600_000,
+			}));
+
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test OAuth Provider",
+				async login() {
+					throw new Error("Not used");
+				},
+				refreshToken: refreshSpy,
+				getApiKey(credentials) {
+					return `Bearer ${credentials.access}`;
+				},
+			});
+
+			const now = Date.now();
+			authStorage = AuthStorage.inMemory({
+				[providerId]: {
+					type: "oauth",
+					refresh: "refresh-token",
+					access: "current-access-token",
+					expires: now + REFRESH_BUFFER_MS + 5000,
+				},
+			});
+
+			const apiKey = await authStorage.getApiKey(providerId);
+			expect(apiKey).toBe("Bearer current-access-token");
+			expect(refreshSpy).not.toHaveBeenCalled();
+		});
+
+		test("refreshes and persists when token is within the buffer", async () => {
+			const providerId = `test-oauth-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			const refreshSpy = vi.fn(async (credentials: { refresh: string; access: string; expires: number }) => ({
+				...credentials,
+				access: "refreshed-access-token",
+				expires: Date.now() + 3600_000,
+			}));
+
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test OAuth Provider",
+				async login() {
+					throw new Error("Not used");
+				},
+				refreshToken: refreshSpy,
+				getApiKey(credentials) {
+					return `Bearer ${credentials.access}`;
+				},
+			});
+
+			const now = Date.now();
+			authStorage = AuthStorage.inMemory({
+				[providerId]: {
+					type: "oauth",
+					refresh: "refresh-token",
+					access: "current-access-token",
+					expires: now + REFRESH_BUFFER_MS - 1000,
+				},
+			});
+
+			const apiKey = await authStorage.getApiKey(providerId);
+			expect(apiKey).toBe("Bearer refreshed-access-token");
+			expect(refreshSpy).toHaveBeenCalledTimes(1);
+
+			// Verify persisted credentials were updated
+			const stored = authStorage.get(providerId);
+			expect(stored?.type).toBe("oauth");
+			if (stored?.type === "oauth") {
+				expect(stored.access).toBe("refreshed-access-token");
+			}
+		});
+
+		test("inside-lock double-check does not re-refresh after another instance succeeded", async () => {
+			const providerId = `test-oauth-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			let refreshCount = 0;
+
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test OAuth Provider",
+				async login() {
+					throw new Error("Not used");
+				},
+				async refreshToken(credentials) {
+					refreshCount++;
+					return {
+						...credentials,
+						access: `refreshed-v${refreshCount}`,
+						expires: Date.now() + 3600_000,
+					};
+				},
+				getApiKey(credentials) {
+					return `Bearer ${credentials.access}`;
+				},
+			});
+
+			const now = Date.now();
+			const sharedBackend = new InMemoryAuthStorageBackend();
+			sharedBackend.withLock(() => ({
+				result: undefined,
+				next: JSON.stringify(
+					{
+						[providerId]: {
+							type: "oauth",
+							refresh: "refresh-token",
+							access: "current-access-token",
+							expires: now + REFRESH_BUFFER_MS - 1000,
+						},
+					},
+					null,
+					2,
+				),
+			}));
+
+			// Create two instances sharing the same backend
+			const storage1 = AuthStorage.fromStorage(sharedBackend);
+			const storage2 = AuthStorage.fromStorage(sharedBackend);
+
+			// First instance refreshes
+			const key1 = await storage1.getApiKey(providerId);
+			expect(key1).toBe("Bearer refreshed-v1");
+			expect(refreshCount).toBe(1);
+
+			// Second instance with same backend should not re-refresh
+			const key2 = await storage2.getApiKey(providerId);
+			expect(key2).toBe("Bearer refreshed-v1");
+			expect(refreshCount).toBe(1);
+		});
+
+		test("returns undefined when refresh truly fails", async () => {
+			const providerId = `test-oauth-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test OAuth Provider",
+				async login() {
+					throw new Error("Not used");
+				},
+				async refreshToken() {
+					throw new Error("Refresh failed");
+				},
+				getApiKey(credentials) {
+					return `Bearer ${credentials.access}`;
+				},
+			});
+
+			const now = Date.now();
+			authStorage = AuthStorage.inMemory({
+				[providerId]: {
+					type: "oauth",
+					refresh: "refresh-token",
+					access: "expired-access-token",
+					expires: now - 10_000,
+				},
+			});
+
+			const apiKey = await authStorage.getApiKey(providerId);
+			expect(apiKey).toBeUndefined();
+
+			const errors = authStorage.drainErrors();
+			expect(errors.length).toBeGreaterThan(0);
+			expect(errors[0]).toBeInstanceOf(Error);
+			expect(errors[0].message).toContain("Failed to refresh OAuth token");
+		});
+
+		test("recovers with fresh credentials when another instance refreshed during failed refresh", async () => {
+			const providerId = `test-oauth-provider-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			const now = Date.now();
+			const sharedBackend = new InMemoryAuthStorageBackend();
+
+			registerOAuthProvider({
+				id: providerId,
+				name: "Test OAuth Provider",
+				async login() {
+					throw new Error("Not used");
+				},
+				async refreshToken() {
+					// Simulate another instance refreshing the token while this one fails
+					sharedBackend.withLock(() => ({
+						result: undefined,
+						next: JSON.stringify(
+							{
+								[providerId]: {
+									type: "oauth",
+									refresh: "refresh-token",
+									access: "fresh-access-token-from-another-instance",
+									expires: now + 3600_000,
+								},
+							},
+							null,
+							2,
+						),
+					}));
+					throw new Error("Refresh failed");
+				},
+				getApiKey(credentials) {
+					return `Bearer ${credentials.access}`;
+				},
+			});
+
+			// Initialize with expired credentials
+			sharedBackend.withLock(() => ({
+				result: undefined,
+				next: JSON.stringify(
+					{
+						[providerId]: {
+							type: "oauth",
+							refresh: "refresh-token",
+							access: "expired-access-token",
+							expires: now - 10_000,
+						},
+					},
+					null,
+					2,
+				),
+			}));
+
+			authStorage = AuthStorage.fromStorage(sharedBackend);
+
+			const apiKey = await authStorage.getApiKey(providerId);
+			expect(apiKey).toBe("Bearer fresh-access-token-from-another-instance");
+
+			const errors = authStorage.drainErrors();
+			expect(errors.length).toBeGreaterThan(0);
+			expect(errors[0]).toBeInstanceOf(Error);
+			expect(errors[0].message).toContain("Failed to refresh OAuth token");
 		});
 	});
 

@@ -7,7 +7,7 @@
  */
 
 import { getEnvApiKey, type OAuthCredentials, type OAuthLoginCallbacks, type OAuthProviderId } from "@dreb/ai";
-import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@dreb/ai/oauth";
+import { getOAuthApiKey, getOAuthProvider, getOAuthProviders, isOAuthTokenExpired } from "@dreb/ai/oauth";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -379,7 +379,7 @@ export class AuthStorage {
 				return { result: null };
 			}
 
-			if (Date.now() < cred.expires) {
+			if (!isOAuthTokenExpired(cred)) {
 				return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
 			}
 
@@ -436,7 +436,7 @@ export class AuthStorage {
 				// Fall through to env var / fallback resolver instead of returning undefined.
 			} else {
 				// Check if token needs refresh
-				const needsRefresh = Date.now() >= cred.expires;
+				const needsRefresh = isOAuthTokenExpired(cred);
 
 				if (needsRefresh) {
 					// Use locked refresh to prevent race conditions
@@ -451,7 +451,7 @@ export class AuthStorage {
 						this.reload();
 						const updatedCred = this.data[providerId];
 
-						if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
+						if (updatedCred?.type === "oauth" && !isOAuthTokenExpired(updatedCred)) {
 							// Another instance refreshed successfully, use those credentials
 							return provider.getApiKey(updatedCred);
 						}

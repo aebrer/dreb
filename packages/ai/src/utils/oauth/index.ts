@@ -47,7 +47,13 @@ import { antigravityOAuthProvider } from "./google-antigravity.js";
 import { geminiCliOAuthProvider } from "./google-gemini-cli.js";
 import { kimiCodingOAuthProvider } from "./kimi-coding.js";
 import { openaiCodexOAuthProvider } from "./openai-codex.js";
-import type { OAuthCredentials, OAuthProviderId, OAuthProviderInfo, OAuthProviderInterface } from "./types.js";
+import {
+	isOAuthTokenExpired,
+	type OAuthCredentials,
+	type OAuthProviderId,
+	type OAuthProviderInfo,
+	type OAuthProviderInterface,
+} from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
 	githubCopilotOAuthProvider,
@@ -158,8 +164,8 @@ export async function getOAuthApiKey(
 		return null;
 	}
 
-	// Refresh if expired
-	if (Date.now() >= creds.expires) {
+	// Refresh if expired or within proactive buffer
+	if (isOAuthTokenExpired(creds)) {
 		try {
 			creds = await provider.refreshToken(creds);
 		} catch (_error) {
