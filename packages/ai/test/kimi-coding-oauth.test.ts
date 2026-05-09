@@ -794,7 +794,7 @@ describe("Kimi For Coding OAuth", () => {
 			const creds: OAuthCredentials = {
 				refresh: "r",
 				access: "my-access-token",
-				expires: Date.now() + 1000,
+				expires: Date.now() + 120_000,
 			};
 			expect(kimiCodingOAuthProvider.getApiKey(creds)).toBe("my-access-token");
 		});
@@ -811,7 +811,7 @@ describe("Kimi For Coding OAuth", () => {
 			} = {
 				refresh: "r",
 				access: "a",
-				expires: Date.now() + 1000,
+				expires: Date.now() + 120_000,
 				modelId: "kimi-k2-0715-chat",
 				contextLength: 131072,
 			};
@@ -864,7 +864,7 @@ describe("Kimi For Coding OAuth", () => {
 			const creds: OAuthCredentials = {
 				refresh: "r",
 				access: "a",
-				expires: Date.now() + 1000,
+				expires: Date.now() + 120_000,
 			};
 
 			const models = [

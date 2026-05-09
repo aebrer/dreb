@@ -7,6 +7,14 @@ export type OAuthCredentials = {
 	[key: string]: unknown;
 };
 
+/** Proactive refresh buffer to avoid 401s from clock skew / server-side early expiry (ms) */
+export const REFRESH_BUFFER_MS = 60_000;
+
+/** Check whether an OAuth token is expired or within the proactive refresh buffer. */
+export function isOAuthTokenExpired(credentials: OAuthCredentials, now = Date.now()): boolean {
+	return now >= credentials.expires - REFRESH_BUFFER_MS;
+}
+
 export type OAuthProviderId = string;
 
 /** @deprecated Use OAuthProviderId instead */
