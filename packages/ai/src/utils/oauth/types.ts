@@ -12,7 +12,9 @@ export const REFRESH_BUFFER_MS = 60_000;
 
 /** Check whether an OAuth token is expired or within the proactive refresh buffer. */
 export function isOAuthTokenExpired(credentials: OAuthCredentials, now = Date.now()): boolean {
-	return now >= credentials.expires - REFRESH_BUFFER_MS;
+	const expires = Number(credentials.expires);
+	if (!Number.isFinite(expires)) return true;
+	return now >= expires - REFRESH_BUFFER_MS;
 }
 
 export type OAuthProviderId = string;
