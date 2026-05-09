@@ -1,17 +1,21 @@
 # dreb
 
-An open-source terminal coding agent, forked from [pi-mono](https://github.com/badlogic/pi-mono) (itself derived from Claude Code). It has *fewer* features than Claude Code by design — the bet is that a small, hackable core you can shape beats a large feature set you can't.
+dreb is a hackable, open-source terminal coding agent and agent runtime for people who want to own their AI development workflow. It gives you a practical coding assistant today — tools, sessions, memory, model switching, subagents, and a polished TUI — while keeping the core flexible enough to reshape with skills, extensions, packages, custom providers, and alternate frontends.
 
-Claude Code is a great product. dreb isn't trying to compete on features — it's trying to compete on flexibility. The core is kept minimal; what you'd find baked into other tools, you build here with skills (markdown workflows), extensions (TypeScript), or install from third-party packages.
+Use dreb if you want a coding agent that can run against direct APIs, coding subscriptions, proxies, cloud providers, local models, or your own provider code; if you want workflows such as issue-to-merge automation and multi-agent review to be inspectable and replaceable; or if you want an agent runtime you can embed in a CLI, an RPC process, an SDK integration, or a Telegram bot.
 
-Concretely, dreb ships *without* things Claude Code has — and that's intentional:
+## Why choose dreb?
 
-- **No MCP.** Build CLI tools with READMEs (Skills), or build an extension that adds MCP support.
-- **No permission popups.** Run in a container, or build your own confirmation flow with extensions.
-- **No plan mode.** Write plans to files, or build it with extensions, or install a package.
-- **No background bash in the main agent.** The main agent runs commands synchronously. For parallel work, use the subagent tool.
-
-What you get in exchange: a skill system, an extension API, custom agent definitions, custom provider support (route through any proxy, use any API-compatible backend), and a subagent system for parallel work. From those primitives, you build what you need.
+- **Model and provider freedom.** Authenticate with API keys or `/login` subscriptions, switch models at runtime with `/model`, scope model sets, tune thinking levels, route built-in providers through proxies, use cloud providers such as Bedrock/Vertex/Azure, or add local/proxy/custom models through [Custom Models](packages/coding-agent/docs/models.md) and [Custom Providers](packages/coding-agent/docs/custom-provider.md). See [Providers](packages/coding-agent/docs/providers.md) for the current setup list.
+- **A real development workflow.** [mach6](packages/coding-agent/docs/mach6.md) is a built-in issue-to-merge workflow: assess issues, plan work, open draft PRs, implement, push progress, run multi-agent reviews, independently assess findings, fix CI or review items, and publish. Plans, reviews, and progress live on GitHub as shared memory.
+- **Composable agent building blocks.** [Skills](packages/coding-agent/docs/skills.md) are markdown workflows loaded on demand; [extensions](packages/coding-agent/docs/extensions.md) are TypeScript modules for custom tools, commands, event hooks, UI components, renderers, keybindings, provider registration, permission gates, and workflow automation; [packages](packages/coding-agent/docs/packages.md) bundle skills, extensions, prompts, and themes for npm, git, or local sharing.
+- **Parallel and specialized agents.** The `subagent` tool runs independent child agents in single, parallel, or chain mode. Custom agent definitions can inherit models, record child-session metadata for audit trails, and power workflows such as mach6's specialized code, error, test, completeness, and simplification reviewers.
+- **Durable context.** [Sessions](packages/coding-agent/docs/session.md) are JSONL trees with resume/continue, `/tree` navigation, `/fork`, CLI `--fork`, compaction, HTML export, and JSONL import/export. [Memory](packages/coding-agent/README.md#memory) is file-based, global + project-scoped, survives sessions, can read Claude Code project memory, and can be maintained with `/dream` memory consolidation.
+- **A capable terminal workspace.** The TUI supports slash commands, file references with `@`, path completion, image paste/drag, bash shortcuts, hotkeys, settings, model cycling, steering/follow-up queues while the agent is working, token/cost/context status, custom themes, and extension-provided UI surfaces.
+- **Optional local companion.** [`/buddy`](packages/coding-agent/docs/buddy.md) hatches an Ollama-powered terminal companion with persistent state, generated personality/backstory, event reactions, idle quips, name-call responses, pet/reroll/stats commands, and a sidebar presence while you work.
+- **Codebase and web understanding.** dreb includes file, grep/find/ls, bash, web search/fetch, task tracking, skill invocation, and semantic `search`. Semantic search uses AST-aware chunks, embeddings, POEM ranking, memory indexing, and also ships as [`@dreb/semantic-search`](packages/semantic-search/) with an MCP server for other harnesses. The semantic search package requires Node.js 22+.
+- **Safety and reliability primitives.** Recent dreb-specific hardening includes secret output scrubbing, sensitive-file guards, destructive-command guards, resource diagnostics surfaced in-session, warning propagation, rate-limited web search across parallel subagents, and JSON/RPC protocol hardening.
+- **Multiple interfaces.** Run dreb as an interactive TUI, print/headless CLI, JSON event stream, RPC process, embedded [SDK](packages/coding-agent/docs/sdk.md), or [Telegram bot](packages/telegram/).
 
 ## Quick Start
 
@@ -19,16 +23,23 @@ What you get in exchange: a skill system, an extension API, custom agent definit
 npm install -g @dreb/coding-agent
 ```
 
-Then authenticate and run:
+Authenticate with an API key and start the TUI:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 dreb
 ```
 
-Or use a coding subscription (Codex, GitHub Copilot): run `dreb` then `/login`.
+Or use a coding subscription such as ChatGPT/Codex, GitHub Copilot, Gemini CLI, Antigravity, or Kimi:
 
-Or use a custom provider — corporate proxy, Bedrock, local models, anything OpenAI/Anthropic-compatible. See [Custom Models](packages/coding-agent/docs/models.md).
+```bash
+dreb
+/login
+```
+
+Or route through a custom provider — corporate proxy, OpenAI-compatible local server such as Ollama/LM Studio/vLLM, Bedrock proxy, Anthropic-compatible endpoint, Google-compatible endpoint, or extension-registered provider. See [Custom Models](packages/coding-agent/docs/models.md) and [Providers](packages/coding-agent/docs/providers.md).
+
+Platform notes: [Windows](packages/coding-agent/docs/windows.md), [Termux/Android](packages/coding-agent/docs/termux.md), [tmux](packages/coding-agent/docs/tmux.md), [terminal setup](packages/coding-agent/docs/terminal-setup.md), and [shell aliases](packages/coding-agent/docs/shell-aliases.md).
 
 ### Building from source
 
@@ -40,27 +51,65 @@ npm run build
 npm link -w packages/coding-agent
 ```
 
-## What's In It
+See the full coding-agent docs in [packages/coding-agent](packages/coding-agent/).
 
-**10 built-in tools:** `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent` — plus always-active `search`, `skill`, and `tasks_update`.
+## Core capabilities
 
-**[mach6](packages/coding-agent/docs/mach6.md)** — a built-in development workflow covering the full issue-to-merge lifecycle: assess → plan → implement → push → review → fix → publish. Multi-agent code review with 5 specialized agents running in parallel, independent assessment of findings, iterative review-fix cycles, GitHub as shared memory. Inspired by [mach10](https://github.com/LeanAndMean/mach10) by Kevin Ryan.
+### Tools and interaction
 
-**[Skills](packages/coding-agent/docs/skills.md)** — markdown workflow definitions the agent loads on-demand. Built-in skills ship with dreb; add your own or install third-party ones.
+dreb ships with 10 built-in tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, and `subagent`. Three more tools are always active when available: `search` for semantic codebase search, `skill` for loading workflows, and `tasks_update` for visible task tracking.
 
-**[Extensions](packages/coding-agent/docs/extensions.md)** — TypeScript modules for custom tools, commands, keyboard shortcuts, event handlers, UI components, custom providers.
+Interactive mode adds slash commands such as `/model`, `/settings`, `/resume`, `/tree`, `/fork`, `/compact`, `/dream`, `/buddy`, `/export`, `/reload`, `/hotkeys`, and `/changelog`. The message queue lets you steer a running agent or queue follow-up work without waiting for the current turn to finish.
 
-**[Sessions](packages/coding-agent/README.md#sessions)** — persistent session tree with branching, compaction, and in-place navigation.
+### Provider and model routing
 
-**[Memory](packages/coding-agent/README.md#memory)** — persistent, file-based memory (global + project-scoped) that survives across sessions.
+dreb supports both subscription and API-key providers, with model metadata updated in releases. Current provider docs cover subscriptions such as Codex, GitHub Copilot, Gemini CLI, Antigravity, and Kimi; API-key providers such as Anthropic, OpenAI, Azure OpenAI, Google Gemini/Vertex, Amazon Bedrock, Mistral, Groq, Cerebras, xAI, OpenRouter, Vercel AI Gateway, ZAI, OpenCode, Hugging Face, Kimi, and MiniMax; plus custom local/proxy providers.
 
-**[Custom Providers](packages/coding-agent/docs/models.md)** — route any built-in provider through a proxy, add new providers via JSON config or extensions. 20+ providers supported out of the box.
+Custom model configuration can override built-in provider base URLs, merge custom models into built-in providers, set compatibility flags for OpenAI-compatible servers, resolve API keys from shell commands or environment variables, and register providers dynamically from extensions.
 
-**Modes:** Interactive TUI, print/JSON CLI, RPC (for process integration), SDK (for embedding in your own apps).
+### Workflows and customization
 
-## Why Fork?
+Skills provide progressively loaded instructions for specialized tasks. They can be invoked by users as `/skill:name` or by the model through the `skill` tool, support argument substitution, and can live globally, per-project, in packages, or on the CLI.
 
-A hard fork means we control the update cadence. No upstream changes land without us reading the diff first. We cherry-pick what's useful and skip what isn't.
+Extensions are TypeScript modules loaded with full access to dreb's extension API. They can add or override tools, intercept tool calls, mutate provider payloads, add commands and flags, define custom keyboard shortcuts, render custom tool output, open overlays and custom editors, persist state in sessions, register providers, surface warnings, and implement custom permission or workflow gates.
+
+Resources carry source provenance so commands, tools, skills, and prompts can be traced through autocomplete, RPC discovery, and SDK introspection.
+
+dreb packages make those resources installable and shareable through npm, git, URLs, or local paths. Use `dreb install`, `dreb list`, `dreb update`, and `dreb config` to manage them; project-local packages can be checked into settings so teams get the same skills, extensions, prompts, and themes.
+
+### Sessions, memory, and continuity
+
+Sessions are persistent JSONL files with a tree structure. You can resume recent sessions, browse past sessions, branch in-place with `/tree`, fork sessions into new files, compact long conversations, import/export JSONL, export HTML, or choose a custom session directory.
+
+Memory is just files. Global and project memory indexes are loaded into the system prompt at startup, and entries can store user preferences, good practices, project context, or navigation pointers. `/dream` backs up memory, merges duplicates, scans recent sessions for unrecorded patterns, prunes stale entries, and validates links.
+
+### Interfaces and embedding
+
+The same agent runtime powers multiple surfaces:
+
+- **Interactive TUI** — the default terminal coding workspace.
+- **Print/headless CLI** — `dreb -p` for one-shot prompts, including piped stdin.
+- **JSON mode** — event stream for scripts and automation.
+- **RPC mode** — strict [JSONL stdin/stdout protocol](packages/coding-agent/docs/rpc.md) for non-Node clients and custom UIs.
+- **SDK** — import `@dreb/coding-agent` and create agent sessions directly in TypeScript.
+- **Telegram** — `@dreb/telegram` runs dreb as a bot with sessions, model controls, file upload/download, and live tool status.
+
+## Design philosophy
+
+dreb is a hard fork of [pi-mono](https://github.com/badlogic/pi-mono), itself derived from Claude Code. Claude Code is a great product; dreb is not trying to win by cloning every feature into a bigger built-in core. It is trying to win on control, hackability, provider choice, and inspectable workflows.
+
+That means some features other tools bake in are intentionally left as user-space building blocks:
+
+- **No built-in MCP client in the core.** Prefer CLI tools with clear READMEs, skills, or extensions. Separately, `@dreb/semantic-search` exposes an MCP server for other harnesses.
+- **No mandatory permission-popup system.** Run in a container, rely on dreb's guards, or build the confirmation flow you want with extensions.
+- **No separate plan mode primitive.** Write plans to files or GitHub, use mach6, install a package, or build your own planning UI with extensions.
+- **No background bash in the main agent.** The main agent runs shell commands synchronously; parallel work belongs in subagents.
+
+The tradeoff is a smaller core with stronger escape hatches: markdown skills, TypeScript extensions, custom agents, custom providers, installable packages, and multiple frontends.
+
+## Why fork?
+
+A hard fork means dreb controls the update cadence. Upstream changes do not land automatically; useful fixes can be cherry-picked, product direction can diverge, and dreb-specific work such as mach6, memory maintenance, Telegram, safety guards, and provider routing can evolve on its own schedule.
 
 See [FORK.md](FORK.md) for details.
 
@@ -68,11 +117,12 @@ See [FORK.md](FORK.md) for details.
 
 | Package | Description |
 |---|---|
-| [packages/coding-agent](packages/coding-agent/) | CLI tool, built-in tools, skills, sessions, extensions — [full docs](packages/coding-agent/README.md) |
-| [packages/telegram](packages/telegram/) | Telegram bot frontend — run dreb as a Telegram bot |
-| [packages/ai](packages/ai/) | LLM provider abstraction — 20+ adapters, OAuth, model discovery |
-| [packages/agent](packages/agent/) | Agent runtime — tool loop, state, streaming, hooks |
-| [packages/tui](packages/tui/) | Terminal UI — differential rendering, markdown, syntax highlighting |
+| [`@dreb/coding-agent`](packages/coding-agent/) | CLI, TUI mode, built-in tools, sessions, memory, skills, extensions, packages, SDK/RPC, and full product docs |
+| [`@dreb/ai`](packages/ai/) | LLM provider abstraction with model catalogs, OAuth/API-key providers, streaming, thinking levels, proxy/custom-provider support |
+| [`@dreb/agent-core`](packages/agent/) | General-purpose agent runtime: tool loop, state, streaming, hooks, steering/follow-up queue semantics |
+| [`@dreb/tui`](packages/tui/) | Terminal UI library with differential rendering, markdown/syntax rendering, editor/input components, overlays, keybindings |
+| [`@dreb/semantic-search`](packages/semantic-search/) | Semantic codebase search engine with AST chunking, embeddings, POEM ranking, library API, and MCP server |
+| [`@dreb/telegram`](packages/telegram/) | Telegram bot frontend for dreb over the native RPC protocol |
 
 ## License
 
