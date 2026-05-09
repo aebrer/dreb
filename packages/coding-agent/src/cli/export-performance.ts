@@ -2,8 +2,8 @@
  * CLI performance data export helper
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import chalk from "chalk";
@@ -284,7 +284,9 @@ export async function exportPerformance(options: ExportOptions): Promise<void> {
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : String(error);
 			console.error(chalk.red(`PNG export failed: ${message}`));
-			console.log(chalk.yellow("Tip: Use --format csv for a text-based export that does not require Python/matplotlib."));
+			console.log(
+				chalk.yellow("Tip: Use --format csv for a text-based export that does not require Python/matplotlib."),
+			);
 		}
 	}
 }

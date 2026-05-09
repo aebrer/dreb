@@ -42,20 +42,11 @@ export class PerformanceTracker {
 		}
 	}
 
-	getRollingAverage(
-		provider: string,
-		modelId: string,
-		windowMs = 24 * 60 * 60 * 1000,
-	): RollingAverage {
+	getRollingAverage(provider: string, modelId: string, windowMs = 24 * 60 * 60 * 1000): RollingAverage {
 		const entries = this.readEntries();
 		const cutoff = Date.now() - windowMs;
 		const values = entries
-			.filter(
-				(e) =>
-					e.provider === provider &&
-					e.modelId === modelId &&
-					new Date(e.timestamp).getTime() >= cutoff,
-			)
+			.filter((e) => e.provider === provider && e.modelId === modelId && new Date(e.timestamp).getTime() >= cutoff)
 			.map((e) => e.tps);
 
 		if (values.length === 0) {
@@ -83,10 +74,7 @@ export class PerformanceTracker {
 
 		const recentValues = entries
 			.filter(
-				(e) =>
-					e.provider === provider &&
-					e.modelId === modelId &&
-					new Date(e.timestamp).getTime() >= recentCutoff,
+				(e) => e.provider === provider && e.modelId === modelId && new Date(e.timestamp).getTime() >= recentCutoff,
 			)
 			.map((e) => e.tps);
 
@@ -108,12 +96,7 @@ export class PerformanceTracker {
 		const previousMedian = computeMedian(previousValues);
 
 		const absDiff = Math.abs(recentMedian - previousMedian);
-		const pctDiff =
-			previousMedian === 0
-				? recentMedian === 0
-					? 0
-					: Infinity
-				: absDiff / previousMedian;
+		const pctDiff = previousMedian === 0 ? (recentMedian === 0 ? 0 : Infinity) : absDiff / previousMedian;
 
 		if (pctDiff < 0.1 && absDiff < 3) {
 			return "stable";

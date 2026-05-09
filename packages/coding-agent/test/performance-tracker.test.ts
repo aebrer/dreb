@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PerformanceTracker, type PerformanceEntry } from "../src/core/performance-tracker.js";
+import { type PerformanceEntry, PerformanceTracker } from "../src/core/performance-tracker.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -210,7 +210,9 @@ describe("PerformanceTracker", () => {
 
 	it("getAllRollingAverages() respects the window", () => {
 		tracker = new PerformanceTracker(logPath);
-		tracker.record(makeEntryAtOffsetMs(25 * 60 * 60 * 1000, { provider: "anthropic", modelId: "claude-3-sonnet", tps: 999 }));
+		tracker.record(
+			makeEntryAtOffsetMs(25 * 60 * 60 * 1000, { provider: "anthropic", modelId: "claude-3-sonnet", tps: 999 }),
+		);
 		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { provider: "openai", modelId: "gpt-4", tps: 40 }));
 
 		const results = tracker.getAllRollingAverages();
@@ -233,7 +235,10 @@ describe("PerformanceTracker", () => {
 		tracker.prune();
 
 		const content = readFileSync(logPath, "utf8");
-		const lines = content.trim().split("\n").filter((l) => l.trim());
+		const lines = content
+			.trim()
+			.split("\n")
+			.filter((l) => l.trim());
 		expect(lines).toHaveLength(2);
 		expect(JSON.parse(lines[0]).tps).toBe(2);
 		expect(JSON.parse(lines[1]).tps).toBe(3);
@@ -248,7 +253,10 @@ describe("PerformanceTracker", () => {
 		tracker.prune(60 * 60 * 1000); // 1 hour
 
 		const content = readFileSync(logPath, "utf8");
-		const lines = content.trim().split("\n").filter((l) => l.trim());
+		const lines = content
+			.trim()
+			.split("\n")
+			.filter((l) => l.trim());
 		expect(lines).toHaveLength(2);
 		expect(JSON.parse(lines[0]).tps).toBe(2);
 		expect(JSON.parse(lines[1]).tps).toBe(3);

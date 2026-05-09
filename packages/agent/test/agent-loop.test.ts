@@ -180,10 +180,7 @@ describe("agentLoop with AgentMessage", () => {
 		const streamFn = () => {
 			const stream = new MockAssistantStream();
 			setTimeout(() => {
-				const message = createAssistantMessage(
-					[{ type: "text", text: "Oops" }],
-					"error",
-				);
+				const message = createAssistantMessage([{ type: "text", text: "Oops" }], "error");
 				stream.push({ type: "error", reason: "error", error: message });
 			}, 2);
 			return stream;
