@@ -765,6 +765,14 @@ ctx.ui.setWidget("my-widget", undefined);
 
 **Examples:** [plan-mode.ts](../examples/extensions/plan-mode.ts)
 
+### Built-in Footer
+
+The default footer shows three lines (when space allows):
+
+1. **Path** — Current working directory (with `~` for home), git branch in parentheses, and session name if set. Dimmed.
+2. **Stats** — Cumulative token usage (↑input ↓output Rread Wwrite), cost (with daily total when cross-session), and context-window percentage (colored red above 90%, yellow above 70%). When a model is selected and enough turns have been recorded, a rolling TPS suffix appears: `~31 tok/s [100] · 10% ↑ median [10000]`. The recent median (last 10 turns) is compared against the long-term baseline (last 10,000 turns). Dimmed.
+3. **Extension statuses** — Alphabetical list of persistent status texts set by extensions via `ctx.ui.setStatus()`.
+
 ### Pattern 6: Custom Footer
 
 Replace the footer. `footerData` exposes data not otherwise accessible to extensions.

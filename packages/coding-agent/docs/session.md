@@ -416,3 +416,27 @@ Key methods for working with sessions programmatically.
 - `getSessionId()` - Session UUID
 - `getSessionFile()` - Session file path (undefined for in-memory)
 - `isPersisted()` - Whether session is saved to disk
+
+---
+
+## Performance Log
+
+Assistant response performance is recorded to a JSONL file for rolling TPS statistics:
+
+```
+~/.dreb/agent/performance.jsonl
+```
+
+Each line is a JSON object with the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `timestamp` | ISO string | When the response completed |
+| `sessionId` | string | Session that produced the response |
+| `provider` | string | Model provider (e.g. `anthropic`) |
+| `modelId` | string | Model identifier (e.g. `claude-sonnet-4`) |
+| `outputTokens` | number | Output tokens from the response |
+| `durationMs` | number | Response duration in milliseconds |
+| `tps` | number | Computed tokens per second (`outputTokens * 1000 / durationMs`) |
+
+Entries are written atomically with file locking for safe concurrent access. The log is pruned daily, removing entries older than 30 days. Responses with `stopReason` of `error` or `aborted`, zero output tokens, or durations under 10ms are not recorded.
