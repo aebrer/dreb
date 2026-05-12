@@ -129,7 +129,8 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
 	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean }
-	| { type: "tasks_update"; tasks: readonly SessionTask[] };
+	| { type: "tasks_update"; tasks: readonly SessionTask[] }
+	| { type: "suggest_next"; command: string };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -2744,6 +2745,15 @@ export class AgentSession {
 								// Swallow emit errors (e.g. TUI rendering failures)
 							}
 							return result;
+						},
+					},
+					suggestNext: {
+						onSuggest: (command) => {
+							try {
+								this._emit({ type: "suggest_next", command });
+							} catch {
+								// Swallow emit errors
+							}
 						},
 					},
 					subagent: {

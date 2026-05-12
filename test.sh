@@ -16,13 +16,14 @@ if NO_COLOR=1 npm test > "$LOG_FILE" 2>&1; then
     # Aggregate results across all test runners (vitest + node:test)
     # Vitest lines have leading whitespace: "      Tests  N passed | M skipped (T)"
     # Node test runner lines: "# tests N", "# pass N", "# fail N"
-    VITEST_PASSED=$(grep -oP 'Tests\s+\K\d+(?=\s+passed)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
+    # Use awk instead of grep -P for macOS compatibility (BSD grep lacks -P)
+    VITEST_PASSED=$(awk '/Tests[[:space:]]+[0-9]+[[:space:]]+passed/ { for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/ && $(i+1) == "passed") s+=$i } END {print s+0}' "$LOG_FILE")
     # Vitest format: "Tests  N failed | M passed" — "N failed" comes before "passed"
-    VITEST_FAILED=$(grep -oP 'Tests\s+\K\d+(?=\s+failed)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
-    VITEST_SKIPPED=$(grep -oP '\|\s+\K\d+(?=\s+skipped)' "$LOG_FILE" | awk '{s+=$1} END {print s+0}')
+    VITEST_FAILED=$(awk '/Tests[[:space:]]+[0-9]+[[:space:]]+failed/ { for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/ && $(i+1) == "failed") s+=$i } END {print s+0}' "$LOG_FILE")
+    VITEST_SKIPPED=$(awk '/\|[[:space:]]+[0-9]+[[:space:]]+skipped/ { for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/ && $(i+1) == "skipped") s+=$i } END {print s+0}' "$LOG_FILE")
     # Node v24: "# pass N" / "# fail N" — Node v25: "ℹ pass N" / "ℹ fail N"
-    NODE_PASSED=$(grep -P '^(\s*#|ℹ)\s+pass\s' "$LOG_FILE" | grep -oP '\d+' | awk '{s+=$1} END {print s+0}')
-    NODE_FAILED=$(grep -P '^(\s*#|ℹ)\s+fail\s' "$LOG_FILE" | grep -oP '\d+' | awk '{s+=$1} END {print s+0}')
+    NODE_PASSED=$(awk '/^[[:space:]]*(#|ℹ)[[:space:]]+pass[[:space:]]/ { for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/) s+=$i } END {print s+0}' "$LOG_FILE")
+    NODE_FAILED=$(awk '/^[[:space:]]*(#|ℹ)[[:space:]]+fail[[:space:]]/ { for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/) s+=$i } END {print s+0}' "$LOG_FILE")
 
     TOTAL_PASSED=$((VITEST_PASSED + NODE_PASSED))
     TOTAL_FAILED=$((VITEST_FAILED + NODE_FAILED))
@@ -47,7 +48,7 @@ else
     echo "─────────────────────────────────"
     echo ""
     # Show per-runner summaries
-    grep -P '(Tests\s+\d+|# tests\s+\d+|# fail\s+\d+|Test Files)' "$LOG_FILE" | tail -10
+    grep -E '(Tests[[:space:]]+[0-9]+|# tests[[:space:]]+[0-9]+|# fail[[:space:]]+[0-9]+|Test Files)' "$LOG_FILE" | tail -10
     echo ""
     echo "Full log: $LOG_FILE"
     exit $EXIT_CODE

@@ -93,7 +93,7 @@ describe("tmp_read path validation", () => {
 	describe("blocked paths — symlink escapes", () => {
 		const testDir = "/tmp/dreb-tmp-read-test";
 		const symlinkPath = `${testDir}/symlink-escape`;
-		const targetPath = "/etc/hostname"; // a readable file outside /tmp
+		const targetPath = "/etc/hosts"; // a readable file outside /tmp (exists on both Linux and macOS)
 
 		beforeAll(() => {
 			mkdirSync(testDir, { recursive: true });

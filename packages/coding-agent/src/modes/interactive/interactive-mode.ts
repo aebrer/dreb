@@ -2318,6 +2318,8 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				// Clear ghost text when a new agent turn starts
+				this.editor.setGhostText?.(null);
 				// Restore main escape handler if retry handler is still active
 				// (retry success event fires later, but we need main handler now)
 				if (this.retryEscapeHandler) {
@@ -2616,6 +2618,15 @@ export class InteractiveMode {
 			case "tasks_update": {
 				this.tasksPanel.update(event.tasks);
 				this.ui.requestRender();
+				break;
+			}
+
+			case "suggest_next": {
+				// Show suggestion as ghost text if editor is empty
+				if (this.editor.setGhostText && this.editor.getText() === "") {
+					this.editor.setGhostText(event.command);
+					this.ui.requestRender();
+				}
 				break;
 			}
 		}
