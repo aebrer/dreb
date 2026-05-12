@@ -92,6 +92,12 @@ export {
 	subagentToolDefinition,
 } from "./subagent.js";
 export {
+	createSuggestNextToolDefinition,
+	type SuggestNextCallback,
+	type SuggestNextDetails,
+	type SuggestNextInput,
+} from "./suggest-next.js";
+export {
 	createTasksToolDefinition,
 	type SessionTask,
 	type TaskStatus,

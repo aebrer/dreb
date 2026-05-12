@@ -93,6 +93,8 @@ describe("Editor ghost text", () => {
 
 			// Editor is not empty so Tab should not accept ghost text — content preserved
 			assert.strictEqual(editor.getText(), "hello");
+			// Ghost text is retained (Tab is excluded from the general dismiss guard)
+			assert.strictEqual(editor.getGhostText(), "/skill:mach6-push");
 		});
 	});
 

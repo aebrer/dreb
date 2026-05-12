@@ -56,4 +56,42 @@ describe("suggest_next tool", () => {
 		await execute("call-6", { command: "/skill:mach6-plan 201" });
 		expect(onSuggest).toHaveBeenCalledWith("/skill:mach6-plan 201");
 	});
+
+	describe("control character sanitization", () => {
+		it("strips control characters and accepts valid command", async () => {
+			const { execute, onSuggest } = createTool();
+
+			const result = await execute("call-7", { command: "/skill:mach6-push\nrm -rf /" });
+
+			expect(onSuggest).toHaveBeenCalledWith("/skill:mach6-pushrm -rf /");
+			expect(result.details).toEqual({ suggestion: "/skill:mach6-pushrm -rf /" });
+		});
+
+		it("strips leading newline — resulting command starts with / so it passes", async () => {
+			const { execute, onSuggest } = createTool();
+
+			const result = await execute("call-8", { command: "\n/compact" });
+
+			expect(onSuggest).toHaveBeenCalledWith("/compact");
+			expect(result.details).toEqual({ suggestion: "/compact" });
+		});
+
+		it("rejects command that becomes empty after stripping control chars", async () => {
+			const { execute, onSuggest } = createTool();
+
+			const result = await execute("call-9", { command: "\n\t\r" });
+
+			expect(onSuggest).not.toHaveBeenCalled();
+			expect(result.details).toBeUndefined();
+		});
+
+		it("strips tabs and other control chars from middle of command", async () => {
+			const { execute, onSuggest } = createTool();
+
+			const result = await execute("call-10", { command: "/skill:mach6\t-plan 42" });
+
+			expect(onSuggest).toHaveBeenCalledWith("/skill:mach6-plan 42");
+			expect(result.details).toEqual({ suggestion: "/skill:mach6-plan 42" });
+		});
+	});
 });

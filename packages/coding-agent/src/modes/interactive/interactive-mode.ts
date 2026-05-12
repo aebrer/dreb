@@ -1248,6 +1248,7 @@ export class InteractiveMode {
 					}
 
 					// Clear UI state
+					this.editor.setGhostText?.(null);
 					this.chatContainer.clear();
 					this.pendingMessagesContainer.clear();
 					this.compactionQueuedMessages = [];
@@ -3940,6 +3941,7 @@ export class InteractiveMode {
 		this.statusContainer.clear();
 
 		// Clear UI state
+		this.editor.setGhostText?.(null);
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
