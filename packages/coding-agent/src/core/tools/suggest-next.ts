@@ -72,7 +72,9 @@ export function createSuggestNextToolDefinition(
 			"Don't suggest if the conversation is open-ended with no obvious next action",
 		],
 
-		async execute(_toolCallId, { command }: SuggestNextInput, _signal?, _onUpdate?, _ctx?) {
+		async execute(_toolCallId, { command: rawCommand }: SuggestNextInput, _signal?, _onUpdate?, _ctx?) {
+			// Strip control characters (newlines, tabs, etc.) that would corrupt TUI rendering
+			const command = rawCommand?.replace(/[\x00-\x1f\x7f]/g, "").trim();
 			if (!command || !command.startsWith("/")) {
 				return {
 					content: [{ type: "text" as const, text: "Error: command must start with /" }],

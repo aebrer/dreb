@@ -2023,6 +2023,8 @@ export class InteractiveMode {
 		// Set up handlers on defaultEditor - they use this.editor for text access
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
+			// Always clear ghost text on Escape (CustomEditor intercepts before super.handleInput)
+			this.editor.setGhostText?.(null);
 			if (this.loadingAnimation) {
 				this.cancelBackgroundAgents();
 				this.restoreQueuedMessagesToEditor({ abort: true });
