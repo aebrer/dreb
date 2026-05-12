@@ -200,6 +200,7 @@ interface LayoutLine {
 export interface EditorTheme {
 	borderColor: (str: string) => string;
 	selectList: SelectListTheme;
+	ghostText?: (str: string) => string;
 }
 
 export interface EditorOptions {
@@ -268,6 +269,9 @@ export class Editor implements Component, Focusable {
 	// Character jump mode
 	private jumpMode: "forward" | "backward" | null = null;
 
+	// Ghost text suggestion (dim text shown after cursor, Tab to accept)
+	private ghostText: string | null = null;
+
 	// Preferred visual column for vertical cursor movement (sticky column)
 	private preferredVisualCol: number | null = null;
 
@@ -325,6 +329,18 @@ export class Editor implements Component, Focusable {
 	setAutocompleteProvider(provider: AutocompleteProvider): void {
 		this.cancelAutocomplete();
 		this.autocompleteProvider = provider;
+	}
+
+	/** Set ghost text (dim suggestion shown after cursor). Tab accepts, any input dismisses. */
+	setGhostText(text: string | null): void {
+		if (this.ghostText !== text) {
+			this.ghostText = text;
+			this.tui.requestRender();
+		}
+	}
+
+	getGhostText(): string | null {
+		return this.ghostText;
 	}
 
 	/**
@@ -490,6 +506,18 @@ export class Editor implements Component, Focusable {
 					if (lineVisibleWidth > contentWidth && paddingX > 0) {
 						cursorInPadding = true;
 					}
+					// Ghost text: show dim suggestion after cursor when editor is empty
+					if (this.ghostText && this.isEditorEmpty()) {
+						const availableWidth = contentWidth - lineVisibleWidth;
+						if (availableWidth > 0) {
+							const truncatedGhost = truncateToWidth(this.ghostText, availableWidth);
+							const styled = this.theme.ghostText
+								? this.theme.ghostText(truncatedGhost)
+								: `\x1b[2m${truncatedGhost}\x1b[0m`;
+							displayText = displayText + styled;
+							lineVisibleWidth = lineVisibleWidth + visibleWidth(truncatedGhost);
+						}
+					}
 				}
 			}
 
@@ -571,6 +599,11 @@ export class Editor implements Component, Focusable {
 				return;
 			}
 			return;
+		}
+
+		// Clear ghost text on any input except Tab (Tab is handled by handleTabCompletion)
+		if (this.ghostText && !kb.matches(data, "tui.input.tab")) {
+			this.setGhostText(null);
 		}
 
 		// Ctrl+C - let parent handle (exit/clear)
@@ -930,6 +963,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	setText(text: string): void {
+		this.ghostText = null;
 		this.cancelAutocomplete();
 		this.lastAction = null;
 		this.historyIndex = -1; // Exit history browsing mode
@@ -2036,6 +2070,16 @@ export class Editor implements Component, Focusable {
 	}
 
 	private handleTabCompletion(): void {
+		// Ghost text takes priority: Tab accepts ghost text when editor is empty
+		if (this.ghostText && this.isEditorEmpty()) {
+			const text = this.ghostText;
+			this.ghostText = null;
+			this.pushUndoSnapshot();
+			this.lastAction = null;
+			this.setTextInternal(text);
+			return;
+		}
+
 		if (!this.autocompleteProvider) return;
 
 		const currentLine = this.state.lines[this.state.cursorLine] || "";

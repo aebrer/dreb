@@ -60,6 +60,16 @@ export interface EditorComponent extends Component {
 	setAutocompleteProvider?(provider: AutocompleteProvider): void;
 
 	// =========================================================================
+	// Ghost text (optional)
+	// =========================================================================
+
+	/** Set ghost text suggestion (dim text after cursor, Tab to accept) */
+	setGhostText?(text: string | null): void;
+
+	/** Get current ghost text */
+	getGhostText?(): string | null;
+
+	// =========================================================================
 	// Appearance (optional)
 	// =========================================================================
 

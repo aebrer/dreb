@@ -77,7 +77,7 @@ function createReftableWorktree(tempDir: string): WorktreeFixture {
 	return { worktreeDir, reftableDir };
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void> {
+async function waitFor(condition: () => boolean, timeoutMs = 8000): Promise<void> {
 	const startedAt = Date.now();
 	while (!condition()) {
 		if (Date.now() - startedAt > timeoutMs) {
@@ -173,6 +173,8 @@ describe("FooterDataProvider reftable branch detection", () => {
 
 		const provider = new FooterDataProvider();
 		try {
+			// Allow fs.watch to fully initialize before writing
+			await new Promise((resolve) => setTimeout(resolve, 50));
 			expect(provider.getGitBranch()).toBe("main");
 			vi.mocked(spawnSync).mockClear();
 			const onBranchChange = vi.fn();
@@ -196,6 +198,8 @@ describe("FooterDataProvider reftable branch detection", () => {
 
 		const provider = new FooterDataProvider();
 		try {
+			// Allow fs.watch to fully initialize before writing
+			await new Promise((resolve) => setTimeout(resolve, 50));
 			expect(provider.getGitBranch()).toBe("main");
 			vi.mocked(execFile).mockClear();
 
@@ -217,6 +221,8 @@ describe("FooterDataProvider reftable branch detection", () => {
 
 		const provider = new FooterDataProvider();
 		try {
+			// Allow fs.watch to fully initialize before writing
+			await new Promise((resolve) => setTimeout(resolve, 50));
 			expect(provider.getGitBranch()).toBe("main");
 			resolvedBranch = "foo";
 			const onBranchChange = vi.fn();

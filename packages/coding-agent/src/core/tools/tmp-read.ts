@@ -15,12 +15,27 @@ import { createReadToolDefinition, type ReadToolOptions } from "./read.js";
 const ALLOWED_PREFIX = "/tmp";
 const SANDBOX_CWD = "/tmp";
 
+// On macOS, /tmp is a symlink to /private/tmp. Resolve it once at startup
+// so that realpathSync results (which follow symlinks) can be correctly matched.
+let resolvedAllowedPrefix: string;
+try {
+	resolvedAllowedPrefix = realpathSync(ALLOWED_PREFIX);
+} catch {
+	resolvedAllowedPrefix = ALLOWED_PREFIX;
+}
+
 /**
  * Check whether a resolved absolute path is under /tmp.
  * Handles exact "/tmp" match and "/tmp/..." paths, rejects "/tmpevil" etc.
+ * Also handles macOS where /tmp resolves to /private/tmp.
  */
 function isUnderTmp(absolutePath: string): boolean {
-	return absolutePath === ALLOWED_PREFIX || absolutePath.startsWith(`${ALLOWED_PREFIX}/`);
+	return (
+		absolutePath === ALLOWED_PREFIX ||
+		absolutePath.startsWith(`${ALLOWED_PREFIX}/`) ||
+		absolutePath === resolvedAllowedPrefix ||
+		absolutePath.startsWith(`${resolvedAllowedPrefix}/`)
+	);
 }
 
 export function createTmpReadToolDefinition(options?: ReadToolOptions): ToolDefinition<any, any> {

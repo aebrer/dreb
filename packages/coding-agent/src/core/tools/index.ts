@@ -92,6 +92,12 @@ export {
 	subagentToolDefinition,
 } from "./subagent.js";
 export {
+	createSuggestNextToolDefinition,
+	type SuggestNextCallback,
+	type SuggestNextDetails,
+	type SuggestNextInput,
+} from "./suggest-next.js";
+export {
 	createTasksToolDefinition,
 	type SessionTask,
 	type TaskStatus,
@@ -164,6 +170,7 @@ import {
 	subagentTool,
 	subagentToolDefinition,
 } from "./subagent.js";
+import { createSuggestNextToolDefinition, type SuggestNextCallback } from "./suggest-next.js";
 import { createTasksToolDefinition, type TasksUpdateCallback } from "./tasks.js";
 import { createTmpReadToolDefinition } from "./tmp-read.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -224,6 +231,7 @@ export interface ToolsOptions {
 	subagent?: SubagentToolOptions;
 	skill?: SkillToolOptions;
 	tasks?: { onUpdate: TasksUpdateCallback };
+	suggestNext?: { onSuggest: SuggestNextCallback };
 }
 
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
@@ -267,6 +275,9 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 	if (options?.tasks) {
 		tools.tasks_update = createTasksToolDefinition(options.tasks.onUpdate);
 	}
+	if (options?.suggestNext) {
+		tools.suggest_next = createSuggestNextToolDefinition(options.suggestNext.onSuggest);
+	}
 	return tools as Record<ToolName | "skill", ToolDef>;
 }
 
@@ -305,6 +316,9 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 	}
 	if (options?.tasks) {
 		tools.tasks_update = wrapToolDefinition(createTasksToolDefinition(options.tasks.onUpdate));
+	}
+	if (options?.suggestNext) {
+		tools.suggest_next = wrapToolDefinition(createSuggestNextToolDefinition(options.suggestNext.onSuggest));
 	}
 	return tools as Record<ToolName | "skill", Tool>;
 }

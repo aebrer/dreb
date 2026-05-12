@@ -1248,6 +1248,7 @@ export class InteractiveMode {
 					}
 
 					// Clear UI state
+					this.editor.setGhostText?.(null);
 					this.chatContainer.clear();
 					this.pendingMessagesContainer.clear();
 					this.compactionQueuedMessages = [];
@@ -2023,6 +2024,8 @@ export class InteractiveMode {
 		// Set up handlers on defaultEditor - they use this.editor for text access
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
+			// Always clear ghost text on Escape (CustomEditor intercepts before super.handleInput)
+			this.editor.setGhostText?.(null);
 			if (this.loadingAnimation) {
 				this.cancelBackgroundAgents();
 				this.restoreQueuedMessagesToEditor({ abort: true });
@@ -2318,6 +2321,8 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				// Clear ghost text when a new agent turn starts
+				this.editor.setGhostText?.(null);
 				// Restore main escape handler if retry handler is still active
 				// (retry success event fires later, but we need main handler now)
 				if (this.retryEscapeHandler) {
@@ -2616,6 +2621,14 @@ export class InteractiveMode {
 			case "tasks_update": {
 				this.tasksPanel.update(event.tasks);
 				this.ui.requestRender();
+				break;
+			}
+
+			case "suggest_next": {
+				// Show suggestion as ghost text if editor is empty
+				if (this.editor.setGhostText && this.editor.getText() === "") {
+					this.editor.setGhostText(event.command);
+				}
 				break;
 			}
 		}
@@ -3928,6 +3941,7 @@ export class InteractiveMode {
 		this.statusContainer.clear();
 
 		// Clear UI state
+		this.editor.setGhostText?.(null);
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
