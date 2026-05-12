@@ -603,8 +603,7 @@ export class Editor implements Component, Focusable {
 
 		// Clear ghost text on any input except Tab (Tab is handled by handleTabCompletion)
 		if (this.ghostText && !kb.matches(data, "tui.input.tab")) {
-			this.ghostText = null;
-			this.tui.requestRender();
+			this.setGhostText(null);
 		}
 
 		// Ctrl+C - let parent handle (exit/clear)
@@ -964,6 +963,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	setText(text: string): void {
+		this.ghostText = null;
 		this.cancelAutocomplete();
 		this.lastAction = null;
 		this.historyIndex = -1; // Exit history browsing mode
@@ -2074,6 +2074,8 @@ export class Editor implements Component, Focusable {
 		if (this.ghostText && this.isEditorEmpty()) {
 			const text = this.ghostText;
 			this.ghostText = null;
+			this.pushUndoSnapshot();
+			this.lastAction = null;
 			this.setTextInternal(text);
 			return;
 		}

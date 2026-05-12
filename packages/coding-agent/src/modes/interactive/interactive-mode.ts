@@ -2625,7 +2625,6 @@ export class InteractiveMode {
 				// Show suggestion as ghost text if editor is empty
 				if (this.editor.setGhostText && this.editor.getText() === "") {
 					this.editor.setGhostText(event.command);
-					this.ui.requestRender();
 				}
 				break;
 			}

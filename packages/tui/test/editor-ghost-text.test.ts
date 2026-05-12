@@ -91,9 +91,8 @@ describe("Editor ghost text", () => {
 
 			editor.handleInput("\t"); // Tab
 
-			// Ghost text should have been cleared by setText, but even if set manually,
-			// editor is not empty so Tab should not accept
-			assert.notStrictEqual(editor.getText(), "/skill:mach6-push");
+			// Editor is not empty so Tab should not accept ghost text — content preserved
+			assert.strictEqual(editor.getText(), "hello");
 		});
 	});
 
@@ -136,6 +135,39 @@ describe("Editor ghost text", () => {
 			assert.strictEqual(editor.getGhostText(), null);
 			// Content should be the ghost text
 			assert.strictEqual(editor.getText(), "/skill:mach6-push");
+		});
+	});
+
+	describe("setText clears ghost text", () => {
+		it("setText clears ghost text to prevent stale suggestions", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.setGhostText("/skill:mach6-push");
+
+			editor.setText("");
+
+			assert.strictEqual(editor.getGhostText(), null);
+		});
+
+		it("setText with content also clears ghost text", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.setGhostText("/skill:mach6-push");
+
+			editor.setText("hello");
+
+			assert.strictEqual(editor.getGhostText(), null);
+		});
+	});
+
+	describe("undo after Tab-accept", () => {
+		it("Tab-accept is undoable with undo key", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			editor.setGhostText("/skill:mach6-push");
+
+			editor.handleInput("\t"); // Tab to accept
+			assert.strictEqual(editor.getText(), "/skill:mach6-push");
+
+			editor.handleInput("\x1f"); // Ctrl+- (undo keybinding)
+			assert.strictEqual(editor.getText(), "");
 		});
 	});
 });
