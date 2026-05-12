@@ -2816,6 +2816,7 @@ export class AgentSession {
 					"search",
 					"skill",
 					"tasks_update",
+					"suggest_next",
 				];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
