@@ -42,6 +42,13 @@ Or route through a custom provider — corporate proxy, OpenAI-compatible local 
 
 Platform notes: [Windows](packages/coding-agent/docs/windows.md), [Termux/Android](packages/coding-agent/docs/termux.md), [tmux](packages/coding-agent/docs/tmux.md), [terminal setup](packages/coding-agent/docs/terminal-setup.md), and [shell aliases](packages/coding-agent/docs/shell-aliases.md).
 
+**Bun users:** Bun's lockfile can cache stale versions of `@dreb/*` packages, causing import errors after upgrades. If you hit missing export errors with `bunx dreb`, clear the cache and re-install:
+
+```bash
+bun pm cache rm
+bunx --force dreb
+```
+
 ### Building from source
 
 ```bash

@@ -68,6 +68,8 @@ Then just talk to dreb. All 10 built-in tools are enabled by default: `read`, `w
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
+**Bun users:** Bun's lockfile can cache stale `@dreb/*` versions after upgrades, causing missing-export errors. Fix with `bun pm cache rm && bunx --force dreb`.
+
 ---
 
 ### Building from source
