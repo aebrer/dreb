@@ -19,7 +19,8 @@ type AgentSessionEvent =
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
   | { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
   | { type: "background_agent_end"; agentId: string; agentType: string; success: boolean }
-  | { type: "tasks_update"; tasks: readonly SessionTask[] };
+  | { type: "tasks_update"; tasks: readonly SessionTask[] }
+  | { type: "suggest_next"; command: string };
 
 // SessionTask shape:
 interface SessionTask {
