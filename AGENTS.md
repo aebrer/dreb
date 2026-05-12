@@ -53,6 +53,16 @@ If it reports stale packages, remove the stale directories and re-establish work
 
 **Never create a git tag without first bumping `package.json` to match.**
 
+## Documentation
+
+**The root `README.md` is the most important documentation file in this repo.** It is the first thing users and contributors see. When features, tools, or capabilities change, the root README must be updated alongside `packages/coding-agent/README.md` and any relevant files in `packages/coding-agent/docs/`. Do not assume that updating package-level docs is sufficient — if the root README describes the feature, it must stay accurate.
+
+Documentation files to check on every feature change:
+- `README.md` (root — the public face of the project)
+- `packages/coding-agent/README.md` (detailed product docs)
+- `packages/coding-agent/docs/` (feature-specific docs: extensions, json, rpc, sdk, etc.)
+- `AGENTS.md` (this file — development guide)
+
 ## Completeness Rule
 
 **Don't defer parts of categorical work.** If the task is "fix docs," fix ALL docs — don't cherry-pick the easy ones and punt the rest to a follow-up. Same applies to failing tests and discovered bugs: if you find it during the work, fix it now. "Out of scope" is not an excuse to ship known-broken things.
