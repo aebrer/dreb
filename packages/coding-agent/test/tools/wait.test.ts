@@ -4,6 +4,7 @@ import {
 	createWaitToolDefinition,
 	formatWaitCall,
 	formatWaitResult,
+	type WaitAgentInfo,
 	type WaitToolDetails,
 	waitToolDefinition,
 } from "../../src/core/tools/wait.js";
@@ -21,13 +22,14 @@ describe("wait tool", () => {
 		params: { reason?: string },
 		signal?: AbortSignal,
 		onUpdate?: any,
-	) => Promise<{ content: Array<{ type: string; text?: string }>; details?: WaitToolDetails }>;
+	) => Promise<{ content: Array<{ type: string; text?: string }>; details?: WaitToolDetails; endTurn?: boolean }>;
 
 	it("returns confirmation text with no reason", async () => {
 		const result = await execute("call-1", {});
 
 		expect(result.content[0]).toEqual({ type: "text", text: "Waiting…" });
 		expect(result.details?.reason).toBeUndefined();
+		expect(result.endTurn).toBe(true);
 	});
 
 	it("returns confirmation text with a reason", async () => {
@@ -35,6 +37,7 @@ describe("wait tool", () => {
 
 		expect(result.content[0]).toEqual({ type: "text", text: "Waiting: background subagent still running" });
 		expect(result.details?.reason).toBe("background subagent still running");
+		expect(result.endTurn).toBe(true);
 	});
 
 	it("trims whitespace-only reason to undefined", async () => {
@@ -85,11 +88,40 @@ describe("wait tool", () => {
 	});
 
 	describe("createWaitToolDefinition factory", () => {
-		it("returns the same shape as the singleton", () => {
+		it("returns the same shape as the singleton when called without args", () => {
 			const created = createWaitToolDefinition();
 			expect(created.name).toBe("wait");
 			expect(created.label).toBe("wait");
 			expect(created.description).toBe(waitToolDefinition.description);
+		});
+
+		it("populates runningAgents from the injected callback", async () => {
+			const agents: WaitAgentInfo[] = [
+				{ agentId: "abc123def456gh", agentType: "code-reviewer", taskSummary: "review PR" },
+			];
+			const tool = createWaitToolDefinition({ getRunningAgents: () => agents });
+			const result = (await tool.execute("id", {}, undefined, undefined, undefined as any)) as any;
+			expect(result.details?.runningAgents).toEqual(agents);
+			expect(result.endTurn).toBe(true);
+		});
+
+		it("trims reason when callback is provided", async () => {
+			const tool = createWaitToolDefinition({ getRunningAgents: () => [] });
+			const result = (await tool.execute(
+				"id",
+				{ reason: "  trimmed  " },
+				undefined,
+				undefined,
+				undefined as any,
+			)) as any;
+			expect(result.details?.reason).toBe("trimmed");
+			expect(result.content[0]).toEqual({ type: "text", text: "Waiting: trimmed" });
+		});
+
+		it("returns endTurn: true from factory-created tool", async () => {
+			const tool = createWaitToolDefinition({ getRunningAgents: () => [] });
+			const result = (await tool.execute("id", {}, undefined, undefined, undefined as any)) as any;
+			expect(result.endTurn).toBe(true);
 		});
 	});
 });

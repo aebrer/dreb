@@ -91,6 +91,7 @@ export const waitToolDefinition: ToolDefinition<typeof waitSchema, WaitToolDetai
 		return {
 			content: [{ type: "text" as const, text }],
 			details: { reason, runningAgents: [] as WaitAgentInfo[] },
+			endTurn: true,
 		};
 	},
 
@@ -127,6 +128,7 @@ export function createWaitToolDefinition(
 			return {
 				content: [{ type: "text" as const, text }],
 				details: { reason, runningAgents },
+				endTurn: true,
 			};
 		},
 	};
