@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
+import { type Api, type AssistantMessage, type Context, complete, type Model } from "@dreb/ai";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { CONFIG_DIR_NAME, getPackageDir, getSubagentSessionsDir } from "../../config.js";
@@ -537,6 +538,185 @@ export function resolveModelStringSingle(
 	return { ok: true, modelId: resolved.model.id, provider: resolved.model.provider };
 }
 
+export interface ProbeModelAvailabilityOptions {
+	/** Parent/tool abort signal. A 10s probe timeout is layered on top. */
+	signal?: AbortSignal;
+	/** Model registry used to resolve provider API keys for the probe call. */
+	registry?: ModelRegistry;
+	/** Override the default 10s probe timeout; primarily useful for tests. */
+	timeoutMs?: number;
+}
+
+export type ProbeModelAvailabilityResult = { ok: true } | { ok: false; reason: string };
+
+function compactErrorReason(reason: string): string {
+	const singleLine = reason.replace(/\s+/g, " ").trim();
+	return singleLine.length > 180 ? `${singleLine.slice(0, 177)}...` : singleLine || "unknown error";
+}
+
+function reasonFromRuntimeError(value: unknown): string {
+	if (value instanceof Error) return value.message;
+	if (typeof value === "string") return value;
+	if (value && typeof value === "object") {
+		const maybeMessage = value as Partial<AssistantMessage> & { message?: unknown };
+		if (typeof maybeMessage.errorMessage === "string") return maybeMessage.errorMessage;
+		if (typeof maybeMessage.message === "string") return maybeMessage.message;
+	}
+	return String(value);
+}
+
+export function isRuntimeUnavailableError(value: unknown): boolean {
+	if (value instanceof Error || typeof value === "string") return true;
+	if (value && typeof value === "object") {
+		const maybeMessage = value as Partial<AssistantMessage>;
+		return maybeMessage.stopReason === "error" || maybeMessage.stopReason === "aborted";
+	}
+	return false;
+}
+
+function makeProbeSignal(
+	parentSignal: AbortSignal | undefined,
+	timeoutMs: number,
+): { signal: AbortSignal; cleanup: () => void } {
+	const controller = new AbortController();
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	let parentAbortHandler: (() => void) | undefined;
+
+	if (parentSignal?.aborted) {
+		controller.abort(parentSignal.reason);
+	} else {
+		timeout = setTimeout(
+			() => controller.abort(new Error(`Model availability probe timed out after ${timeoutMs}ms`)),
+			timeoutMs,
+		);
+		parentAbortHandler = () => controller.abort(parentSignal?.reason);
+		parentSignal?.addEventListener("abort", parentAbortHandler, { once: true });
+	}
+
+	return {
+		signal: controller.signal,
+		cleanup: () => {
+			if (timeout) clearTimeout(timeout);
+			if (parentAbortHandler) parentSignal?.removeEventListener("abort", parentAbortHandler);
+		},
+	};
+}
+
+export async function probeModelAvailability(
+	model: Model<Api>,
+	options: ProbeModelAvailabilityOptions = {},
+): Promise<ProbeModelAvailabilityResult> {
+	const { signal, registry, timeoutMs = 10_000 } = options;
+	const probeSignal = makeProbeSignal(signal, timeoutMs);
+	try {
+		const context: Context = {
+			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
+		};
+		const apiKey = registry ? await registry.getApiKey(model) : undefined;
+		const result = await complete(model, context, {
+			apiKey,
+			maxRetryDelayMs: 0,
+			maxTokens: 1,
+			signal: probeSignal.signal,
+		});
+		if (isRuntimeUnavailableError(result)) {
+			return { ok: false, reason: compactErrorReason(reasonFromRuntimeError(result)) };
+		}
+		return { ok: true };
+	} catch (err) {
+		return { ok: false, reason: compactErrorReason(reasonFromRuntimeError(err)) };
+	} finally {
+		probeSignal.cleanup();
+	}
+}
+
+interface SkippedFallbackModel {
+	model: string;
+	reason: string;
+}
+
+export type SubagentModelResolution =
+	| {
+			ok: true;
+			modelId: string;
+			provider?: string;
+			warning?: string;
+			skippedModels: SkippedFallbackModel[];
+	  }
+	| { ok: false; error: string; skippedModels: SkippedFallbackModel[] };
+
+export async function resolveModelForSubagentSpawn(
+	models: string | string[],
+	parentProvider: string | undefined,
+	registry: ModelRegistry | undefined,
+	parentModel?: string,
+	signal?: AbortSignal,
+): Promise<SubagentModelResolution> {
+	// Runtime probing only applies to agent definition fallback lists. Single
+	// models, per-invocation overrides, and registry-less environments keep the
+	// existing spawn-time resolution behavior exactly.
+	if (!Array.isArray(models) || !registry) {
+		const resolved = resolveModelWithFallbacks(models, parentProvider, registry, parentModel);
+		return resolved.ok ? { ...resolved, skippedModels: [] } : { ...resolved, skippedModels: [] };
+	}
+
+	const skippedModels: SkippedFallbackModel[] = [];
+	let lastError = "";
+
+	for (const modelStr of models) {
+		const resolved = resolveModelStringSingle(modelStr, parentProvider, registry);
+		if (!resolved.ok) {
+			lastError = resolved.error;
+			const reason = compactErrorReason(resolved.error);
+			skippedModels.push({ model: modelStr, reason });
+			console.error(`[subagent] Model "${modelStr}" unavailable (${reason}). Trying next fallback...`);
+			continue;
+		}
+
+		const modelObj = resolved.provider ? registry.find(resolved.provider, resolved.modelId) : undefined;
+		if (modelObj) {
+			const probe = await probeModelAvailability(modelObj, { signal, registry });
+			if (!probe.ok) {
+				lastError = probe.reason;
+				skippedModels.push({ model: modelStr, reason: probe.reason });
+				console.error(`[subagent] Model "${modelStr}" failed probe (${probe.reason}). Trying next fallback...`);
+				continue;
+			}
+		}
+
+		console.error(`[subagent] Using model "${resolved.modelId}" for subagent.`);
+		return { ...resolved, skippedModels };
+	}
+
+	if (parentModel) {
+		const parentResolved = resolveModelStringSingle(parentModel, parentProvider, registry);
+		if (parentResolved.ok) {
+			const warning = `Agent preferred models were unavailable. Falling back to parent model "${parentResolved.modelId}".`;
+			console.error(`[subagent] ${warning}`);
+			return { ...parentResolved, warning, skippedModels };
+		}
+		lastError = parentResolved.error;
+	}
+
+	return {
+		ok: false,
+		skippedModels,
+		error: `None of the fallback models passed availability checks: ${[
+			...models,
+			...(parentModel ? [parentModel] : []),
+		].join(", ")}. Last error: ${lastError || "all probes failed"}`,
+	};
+}
+
+function formatModelFallbackSummary(
+	skippedModels: SkippedFallbackModel[],
+	selectedModel: string | undefined,
+): string | undefined {
+	if (skippedModels.length === 0) return undefined;
+	const skipped = skippedModels.map((s) => `- ${s.model}: ${s.reason}`).join("\n");
+	return `[MODEL FALLBACK: skipped ${skippedModels.length} unavailable model(s); using "${selectedModel ?? "unknown"}".]\n${skipped}`;
+}
+
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
@@ -623,13 +803,17 @@ async function executeSingle(
 	let effectiveConfig: AgentTypeConfig = modelOverride ? { ...config, model: modelOverride } : config;
 	let resolvedProvider = parentProvider;
 	let warning: string | undefined;
+	let skippedModels: SkippedFallbackModel[] = [];
 
 	// Resolve and validate the model against the registry before spawning.
 	// This catches typos and invalid model names immediately instead of failing
 	// silently in the child process. Also passes the canonical model ID to the
-	// child, avoiding fuzzy matching entirely.
+	// child, avoiding fuzzy matching entirely. Agent definition fallback lists get
+	// an additional best-effort 1-token probe before spawn so runtime-unavailable
+	// models are skipped before committing to a child process.
 	if (modelSpec) {
-		const resolved = resolveModelWithFallbacks(modelSpec, parentProvider, registry, parentModel);
+		const resolved = await resolveModelForSubagentSpawn(modelSpec, parentProvider, registry, parentModel, signal);
+		skippedModels = resolved.skippedModels;
 		if (!resolved.ok) {
 			return {
 				agent: name,
@@ -649,6 +833,10 @@ async function executeSingle(
 
 	onProgress?.(`Running ${name} agent...`);
 	const result = await spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider, sessionDir);
+	const fallbackSummary = formatModelFallbackSummary(skippedModels, result.model ?? effectiveConfig.model?.toString());
+	if (fallbackSummary) {
+		result.output = `${fallbackSummary}\n\n${result.output}`;
+	}
 	if (warning) {
 		result.output = `[WARNING: ${warning}]\n\n${result.output}`;
 	}

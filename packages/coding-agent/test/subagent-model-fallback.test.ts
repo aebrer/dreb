@@ -1,11 +1,31 @@
-import type { Model } from "@dreb/ai";
-import { describe, expect, test } from "vitest";
+import { complete, type Model } from "@dreb/ai";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
+	isRuntimeUnavailableError,
 	parseAgentFrontmatter,
+	probeModelAvailability,
+	resolveModelForSubagentSpawn,
 	resolveModelStringSingle,
 	resolveModelWithFallbacks,
 	subagentToolDefinition,
 } from "../src/core/tools/subagent.js";
+
+vi.mock("@dreb/ai", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@dreb/ai")>();
+	return {
+		...actual,
+		complete: vi.fn(),
+	};
+});
+
+beforeEach(() => {
+	vi.mocked(complete).mockReset();
+	vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
 
 /**
  * Tests for agent model fallback lists (issue 80).
@@ -491,6 +511,192 @@ describe("model fallback lists", () => {
 			expect(after.ok).toBe(true);
 			if (after.ok) expect(after.modelId).toBe("gpt-4o");
 		});
+	});
+});
+
+const probeModels: Model<"anthropic-messages">[] = [
+	{
+		id: "primary-model",
+		name: "Primary Model",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+	},
+	{
+		id: "fallback-model",
+		name: "Fallback Model",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 1, output: 3, cacheRead: 0.1, cacheWrite: 1 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	},
+	{
+		id: "parent-model",
+		name: "Parent Model",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 1, output: 3, cacheRead: 0.1, cacheWrite: 1 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	},
+];
+
+function assistantResult(stopReason: "stop" | "error", errorMessage?: string) {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text: stopReason === "stop" ? "ok" : "" }],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "primary-model",
+		usage: { input: 1, output: stopReason === "stop" ? 1 : 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1 },
+		stopReason,
+		errorMessage,
+		timestamp: Date.now(),
+	} as Awaited<ReturnType<typeof complete>>;
+}
+
+function probeRegistry() {
+	return {
+		getAll: () => probeModels,
+		find: (provider: string, modelId: string) => probeModels.find((m) => m.provider === provider && m.id === modelId),
+		getApiKey: async () => "test-key",
+		authStorage: { hasAuth: () => true },
+	} as unknown as Parameters<typeof resolveModelForSubagentSpawn>[2];
+}
+
+describe("spawn-time model availability probing", () => {
+	test("probeModelAvailability succeeds on a clean completion", async () => {
+		vi.mocked(complete).mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 100 });
+
+		expect(result).toEqual({ ok: true });
+		expect(complete).toHaveBeenCalledTimes(1);
+		expect(complete).toHaveBeenCalledWith(
+			probeModels[0],
+			expect.objectContaining({ messages: [expect.objectContaining({ role: "user", content: "hi" })] }),
+			expect.objectContaining({ apiKey: "test-key", maxRetryDelayMs: 0, maxTokens: 1 }),
+		);
+	});
+
+	test("probeModelAvailability reports thrown errors", async () => {
+		vi.mocked(complete).mockRejectedValueOnce(new Error("rate limit exceeded"));
+
+		const result = await probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 100 });
+
+		expect(result).toEqual({ ok: false, reason: "rate limit exceeded" });
+	});
+
+	test("isRuntimeUnavailableError treats provider error messages as unavailable", () => {
+		expect(isRuntimeUnavailableError(assistantResult("error", "quota exhausted"))).toBe(true);
+		expect(isRuntimeUnavailableError(new Error("timeout"))).toBe(true);
+		expect(isRuntimeUnavailableError("HTTP 500")).toBe(true);
+		expect(isRuntimeUnavailableError(assistantResult("stop"))).toBe(false);
+	});
+
+	test("fallback loop uses the first model when its probe succeeds", async () => {
+		vi.mocked(complete).mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+			expect(result.provider).toBe("anthropic");
+			expect(result.skippedModels).toEqual([]);
+		}
+		expect(complete).toHaveBeenCalledTimes(1);
+	});
+
+	test("fallback loop skips a failed probe and uses the next fallback", async () => {
+		vi.mocked(complete)
+			.mockResolvedValueOnce(assistantResult("error", "429 rate limit"))
+			.mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("fallback-model");
+			expect(result.skippedModels).toEqual([{ model: "primary-model", reason: "429 rate limit" }]);
+		}
+		expect(complete).toHaveBeenCalledTimes(2);
+		expect(console.error).toHaveBeenCalledWith(
+			'[subagent] Model "primary-model" failed probe (429 rate limit). Trying next fallback...',
+		);
+	});
+
+	test.each(["429 rate limit", "insufficient quota", "probe timeout", "HTTP 503 upstream unavailable"])(
+		"fallback loop skips probe error: %s",
+		async (message) => {
+			vi.mocked(complete)
+				.mockResolvedValueOnce(assistantResult("error", message))
+				.mockResolvedValueOnce(assistantResult("stop"));
+
+			const result = await resolveModelForSubagentSpawn(
+				["primary-model", "fallback-model"],
+				"anthropic",
+				probeRegistry(),
+				"parent-model",
+			);
+
+			expect(result.ok).toBe(true);
+			if (result.ok) expect(result.modelId).toBe("fallback-model");
+		},
+	);
+
+	test("fallback loop uses parent model when all configured model probes fail", async () => {
+		vi.mocked(complete)
+			.mockResolvedValueOnce(assistantResult("error", "primary quota exhausted"))
+			.mockRejectedValueOnce(new Error("fallback auth revoked"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("parent-model");
+			expect(result.warning).toContain('Falling back to parent model "parent-model"');
+			expect(result.skippedModels).toEqual([
+				{ model: "primary-model", reason: "primary quota exhausted" },
+				{ model: "fallback-model", reason: "fallback auth revoked" },
+			]);
+		}
+		expect(complete).toHaveBeenCalledTimes(2);
+	});
+
+	test("single model config skips probing", async () => {
+		const result = await resolveModelForSubagentSpawn("primary-model", "anthropic", probeRegistry(), "parent-model");
+
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.modelId).toBe("primary-model");
+		expect(complete).not.toHaveBeenCalled();
 	});
 });
 
