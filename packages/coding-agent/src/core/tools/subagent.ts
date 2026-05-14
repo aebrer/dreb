@@ -202,8 +202,22 @@ async function spawnSubagent(
 			args.push("--provider", parentProvider);
 		}
 	}
+	// Tools that must never be available to subagents — wait (subagents should
+	// never no-op; they have a task to complete) and subagent (no recursive spawning).
+	const SUBAGENT_EXCLUDED_TOOLS = ["wait", "subagent"];
 	if (agentConfig.tools) {
-		args.push("--tools", agentConfig.tools);
+		const filtered = agentConfig.tools
+			.split(",")
+			.map((t) => t.trim())
+			.filter((t) => !SUBAGENT_EXCLUDED_TOOLS.includes(t))
+			.join(",");
+		if (filtered) {
+			args.push("--tools", filtered);
+		}
+	} else {
+		// No tools specified — pass explicit defaults minus excluded tools
+		const defaults = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch", "search"];
+		args.push("--tools", defaults.join(","));
 	}
 	if (agentConfig.systemPrompt) {
 		args.push("--append-system-prompt", agentConfig.systemPrompt);

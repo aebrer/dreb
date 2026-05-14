@@ -2813,6 +2813,7 @@ export class AgentSession {
 					"web_search",
 					"web_fetch",
 					"subagent",
+					"wait",
 					"search",
 					"skill",
 					"tasks_update",

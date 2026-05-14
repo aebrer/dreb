@@ -326,5 +326,6 @@ ${chalk.bold("Available Tools (default: all):")}
   web_search - Search the web
   web_fetch  - Fetch URL content
   subagent   - Delegate tasks to independent subagents
+  wait       - Do nothing and end your turn (explicit no-op)
 `);
 }
