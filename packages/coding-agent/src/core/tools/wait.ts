@@ -12,8 +12,21 @@ import type { ToolDefinition } from "../extensions/types.js";
 // ============================================================================
 // Types
 
+/** Minimal shape of a running background agent (avoids importing from subagent.ts to prevent circular deps). */
+export interface WaitAgentInfo {
+	agentId: string;
+	agentType: string;
+	taskSummary: string;
+}
+
 export interface WaitToolDetails {
 	reason: string | undefined;
+	runningAgents: readonly WaitAgentInfo[];
+}
+
+export interface WaitToolOptions {
+	/** Returns currently running background agents. Injected by the factory to avoid circular imports. */
+	getRunningAgents?: () => readonly WaitAgentInfo[];
 }
 
 // ============================================================================
@@ -32,7 +45,7 @@ export type WaitToolInput = Static<typeof waitSchema>;
 // ============================================================================
 // Render helpers
 
-function formatWaitCall(args: { reason?: string } | undefined, theme: any): string {
+export function formatWaitCall(args: { reason?: string } | undefined, theme: any): string {
 	const reason = args?.reason;
 	if (reason) {
 		return `${theme.fg("toolTitle", theme.bold("wait"))} ${theme.fg("muted", reason)}`;
@@ -40,11 +53,16 @@ function formatWaitCall(args: { reason?: string } | undefined, theme: any): stri
 	return theme.fg("toolTitle", theme.bold("wait"));
 }
 
-function formatWaitResult(
-	_result: { content: Array<{ type: string; text?: string }>; details?: WaitToolDetails },
+export function formatWaitResult(
+	result: { content: Array<{ type: string; text?: string }>; details?: WaitToolDetails },
 	theme: any,
 ): string {
-	return theme.fg("muted", "→ resumed");
+	const agents = result.details?.runningAgents ?? [];
+	if (agents.length > 0) {
+		const agentList = agents.map((a) => `${a.agentId.slice(0, 12)} ${a.agentType}`).join(", ");
+		return theme.fg("muted", `→ doing nothing (waiting on: ${agentList})`);
+	}
+	return theme.fg("muted", "→ doing nothing — no subagents running");
 }
 
 // ============================================================================
@@ -72,7 +90,7 @@ export const waitToolDefinition: ToolDefinition<typeof waitSchema, WaitToolDetai
 
 		return {
 			content: [{ type: "text" as const, text }],
-			details: { reason },
+			details: { reason, runningAgents: [] as WaitAgentInfo[] },
 		};
 	},
 
@@ -90,8 +108,26 @@ export const waitToolDefinition: ToolDefinition<typeof waitSchema, WaitToolDetai
 };
 
 // ============================================================================
-// Factory (for consistency with other tools, though wait has no dependencies)
+// Factory — accepts optional getRunningAgents callback to show background agent
+// status in the result. The callback is injected here (rather than imported from
+// subagent.ts) to avoid a circular dependency through model-resolver → args → index.
 
-export function createWaitToolDefinition(): ToolDefinition<typeof waitSchema, WaitToolDetails | undefined> {
-	return waitToolDefinition;
+export function createWaitToolDefinition(
+	options?: WaitToolOptions,
+): ToolDefinition<typeof waitSchema, WaitToolDetails | undefined> {
+	if (!options?.getRunningAgents) return waitToolDefinition;
+
+	return {
+		...waitToolDefinition,
+		async execute(_toolCallId, params: WaitToolInput, _signal?, _onUpdate?, _ctx?) {
+			const reason = params.reason?.trim() || undefined;
+			const runningAgents = options.getRunningAgents!();
+			const text = reason ? `Waiting: ${reason}` : "Waiting…";
+
+			return {
+				content: [{ type: "text" as const, text }],
+				details: { reason, runningAgents },
+			};
+		},
+	};
 }

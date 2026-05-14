@@ -153,6 +153,39 @@ export interface SubagentResult {
 const DREB_SCRIPT = process.argv[1] || "dreb";
 const NODE_EXEC = process.execPath;
 
+// Tools that must never be available to subagents — wait (subagents should
+// never no-op; they have a task to complete) and subagent (no recursive spawning).
+const SUBAGENT_EXCLUDED_TOOLS = ["wait", "subagent"] as const;
+
+// Default tools for subagents when no tools are specified in the agent definition.
+// Intentionally excludes everything in SUBAGENT_EXCLUDED_TOOLS.
+const SUBAGENT_DEFAULT_TOOLS = [
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"grep",
+	"find",
+	"ls",
+	"web_search",
+	"web_fetch",
+	"search",
+];
+
+/**
+ * Filter a comma-separated tools string, removing any tools in SUBAGENT_EXCLUDED_TOOLS.
+ * Returns the filtered tools as a comma-separated string, or undefined if all were excluded.
+ */
+export function filterSubagentTools(tools: string | undefined): string | undefined {
+	if (!tools) return SUBAGENT_DEFAULT_TOOLS.join(",");
+	const filtered = tools
+		.split(",")
+		.map((t) => t.trim())
+		.filter((t) => !SUBAGENT_EXCLUDED_TOOLS.includes(t as any))
+		.join(",");
+	return filtered || SUBAGENT_DEFAULT_TOOLS.join(",");
+}
+
 // TODO: Support PATH-based binary discovery.
 // Currently returns the captured argv[1].
 function findDrebBinary(): string {
@@ -202,22 +235,9 @@ async function spawnSubagent(
 			args.push("--provider", parentProvider);
 		}
 	}
-	// Tools that must never be available to subagents — wait (subagents should
-	// never no-op; they have a task to complete) and subagent (no recursive spawning).
-	const SUBAGENT_EXCLUDED_TOOLS = ["wait", "subagent"];
-	if (agentConfig.tools) {
-		const filtered = agentConfig.tools
-			.split(",")
-			.map((t) => t.trim())
-			.filter((t) => !SUBAGENT_EXCLUDED_TOOLS.includes(t))
-			.join(",");
-		if (filtered) {
-			args.push("--tools", filtered);
-		}
-	} else {
-		// No tools specified — pass explicit defaults minus excluded tools
-		const defaults = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch", "search"];
-		args.push("--tools", defaults.join(","));
+	const toolsArg = filterSubagentTools(agentConfig.tools);
+	if (toolsArg) {
+		args.push("--tools", toolsArg);
 	}
 	if (agentConfig.systemPrompt) {
 		args.push("--append-system-prompt", agentConfig.systemPrompt);
