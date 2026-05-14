@@ -157,31 +157,25 @@ const NODE_EXEC = process.execPath;
 // never no-op; they have a task to complete) and subagent (no recursive spawning).
 const SUBAGENT_EXCLUDED_TOOLS = ["wait", "subagent"] as const;
 
-// Default tools for subagents when no tools are specified in the agent definition.
-// Intentionally excludes everything in SUBAGENT_EXCLUDED_TOOLS.
-const SUBAGENT_DEFAULT_TOOLS = [
-	"read",
-	"bash",
-	"edit",
-	"write",
-	"grep",
-	"find",
-	"ls",
-	"web_search",
-	"web_fetch",
-	"search",
-];
+// Default standard tools for subagents when no tools are specified in the agent
+// definition. This is the set passed via --tools to the child process.
+//
+// NOTE: Always-active tools (search, skill, tasks_update, suggest_next) are NOT
+// listed here — the child process adds them unconditionally regardless of --tools.
+// Internal tools (tmp_read) are also excluded.
+const SUBAGENT_DEFAULT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch"];
 
 /**
  * Filter a comma-separated tools string, removing any tools in SUBAGENT_EXCLUDED_TOOLS.
- * Returns the filtered tools as a comma-separated string, or undefined if all were excluded.
+ * Returns the filtered tools as a comma-separated string (always non-empty — falls
+ * back to SUBAGENT_DEFAULT_TOOLS if all specified tools were excluded).
  */
-export function filterSubagentTools(tools: string | undefined): string | undefined {
+export function filterSubagentTools(tools: string | undefined): string {
 	if (!tools) return SUBAGENT_DEFAULT_TOOLS.join(",");
 	const filtered = tools
 		.split(",")
 		.map((t) => t.trim())
-		.filter((t) => !SUBAGENT_EXCLUDED_TOOLS.includes(t as any))
+		.filter((t) => !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(t))
 		.join(",");
 	return filtered || SUBAGENT_DEFAULT_TOOLS.join(",");
 }
@@ -235,10 +229,9 @@ async function spawnSubagent(
 			args.push("--provider", parentProvider);
 		}
 	}
-	const toolsArg = filterSubagentTools(agentConfig.tools);
-	if (toolsArg) {
-		args.push("--tools", toolsArg);
-	}
+	// Always pass --tools to ensure wait/subagent are excluded from child processes.
+	// filterSubagentTools always returns a non-empty string.
+	args.push("--tools", filterSubagentTools(agentConfig.tools));
 	if (agentConfig.systemPrompt) {
 		args.push("--append-system-prompt", agentConfig.systemPrompt);
 	}

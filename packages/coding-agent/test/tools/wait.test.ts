@@ -154,7 +154,7 @@ describe("formatWaitResult", () => {
 describe("filterSubagentTools", () => {
 	it("returns defaults when tools is undefined", () => {
 		const result = filterSubagentTools(undefined);
-		expect(result).toBe("read,bash,edit,write,grep,find,ls,web_search,web_fetch,search");
+		expect(result).toBe("read,bash,edit,write,grep,find,ls,web_search,web_fetch");
 	});
 
 	it("filters out wait from tool list", () => {
@@ -174,12 +174,12 @@ describe("filterSubagentTools", () => {
 
 	it("returns defaults when all tools are excluded", () => {
 		const result = filterSubagentTools("wait,subagent");
-		expect(result).toBe("read,bash,edit,write,grep,find,ls,web_search,web_fetch,search");
+		expect(result).toBe("read,bash,edit,write,grep,find,ls,web_search,web_fetch");
 	});
 
 	it("returns defaults when only wait is specified", () => {
 		const result = filterSubagentTools("wait");
-		expect(result).toBe("read,bash,edit,write,grep,find,ls,web_search,web_fetch,search");
+		expect(result).toBe("read,bash,edit,write,grep,find,ls,web_search,web_fetch");
 	});
 
 	it("trims whitespace around tool names", () => {
