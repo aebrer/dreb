@@ -1,8 +1,10 @@
 import { complete, type Model } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
+	formatModelFallbackSummary,
 	isRuntimeUnavailableError,
 	parseAgentFrontmatter,
+	prependModelFallbackSummary,
 	probeModelAvailability,
 	resolveModelForSubagentSpawn,
 	resolveModelStringSingle,
@@ -24,6 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 });
 
@@ -553,7 +556,7 @@ const probeModels: Model<"anthropic-messages">[] = [
 	},
 ];
 
-function assistantResult(stopReason: "stop" | "error", errorMessage?: string) {
+function assistantResult(stopReason: "stop" | "error" | "aborted", errorMessage?: string) {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text: stopReason === "stop" ? "ok" : "" }],
@@ -586,7 +589,10 @@ describe("spawn-time model availability probing", () => {
 		expect(complete).toHaveBeenCalledTimes(1);
 		expect(complete).toHaveBeenCalledWith(
 			probeModels[0],
-			expect.objectContaining({ messages: [expect.objectContaining({ role: "user", content: "hi" })] }),
+			expect.objectContaining({
+				systemPrompt: "You are a model availability probe. Reply briefly.",
+				messages: [expect.objectContaining({ role: "user", content: "hi" })],
+			}),
 			expect.objectContaining({ apiKey: "test-key", maxRetryDelayMs: 0, maxTokens: 1 }),
 		);
 	});
@@ -597,6 +603,62 @@ describe("spawn-time model availability probing", () => {
 		const result = await probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 100 });
 
 		expect(result).toEqual({ ok: false, reason: "rate limit exceeded" });
+	});
+
+	test("probeModelAvailability treats returned aborted messages as unavailable", async () => {
+		vi.mocked(complete).mockResolvedValueOnce(assistantResult("aborted", "request cancelled"));
+
+		const result = await probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 100 });
+
+		expect(result).toEqual({ ok: false, reason: "request cancelled" });
+	});
+
+	test("probeModelAvailability short-circuits an already-aborted parent signal", async () => {
+		const controller = new AbortController();
+		controller.abort(new Error("user cancelled"));
+
+		const result = await probeModelAvailability(probeModels[0], {
+			registry: probeRegistry(),
+			signal: controller.signal,
+			timeoutMs: 100,
+		});
+
+		expect(result).toEqual({ ok: false, reason: "Aborted before spawn", aborted: true });
+		expect(complete).not.toHaveBeenCalled();
+	});
+
+	test("probeModelAvailability propagates parent abort while in flight", async () => {
+		const controller = new AbortController();
+		vi.mocked(complete).mockImplementationOnce(
+			(_model, _context, options) =>
+				new Promise<Awaited<ReturnType<typeof complete>>>((resolve) => {
+					options?.signal?.addEventListener("abort", () =>
+						resolve(assistantResult("aborted", "request cancelled")),
+					);
+					queueMicrotask(() => controller.abort(new Error("user cancelled")));
+				}),
+		);
+
+		const resultPromise = probeModelAvailability(probeModels[0], {
+			registry: probeRegistry(),
+			signal: controller.signal,
+			timeoutMs: 1_000,
+		});
+
+		await expect(resultPromise).resolves.toEqual({ ok: false, reason: "Aborted before spawn", aborted: true });
+	});
+
+	test("probeModelAvailability enforces timeout even if provider ignores abort", async () => {
+		vi.useFakeTimers();
+		vi.mocked(complete).mockImplementationOnce(() => new Promise<Awaited<ReturnType<typeof complete>>>(() => {}));
+
+		const resultPromise = probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 50 });
+		await vi.advanceTimersByTimeAsync(50);
+
+		await expect(resultPromise).resolves.toEqual({
+			ok: false,
+			reason: "Model availability probe timed out after 50ms",
+		});
 	});
 
 	test("isRuntimeUnavailableError treats provider error messages as unavailable", () => {
@@ -691,12 +753,96 @@ describe("spawn-time model availability probing", () => {
 		expect(complete).toHaveBeenCalledTimes(2);
 	});
 
+	test("fallback loop returns an error when parent model also fails", async () => {
+		vi.mocked(complete)
+			.mockResolvedValueOnce(assistantResult("error", "primary down"))
+			.mockResolvedValueOnce(assistantResult("error", "fallback down"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"missing-parent",
+		);
+
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toContain("None of the fallback models passed availability checks");
+			expect(result.error).toContain("missing-parent");
+			expect(result.skippedModels).toEqual([
+				{ model: "primary-model", reason: "primary down" },
+				{ model: "fallback-model", reason: "fallback down" },
+			]);
+		}
+	});
+
+	test("fallback loop exits immediately when signal is already aborted", async () => {
+		const controller = new AbortController();
+		controller.abort(new Error("user cancelled"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			controller.signal,
+		);
+
+		expect(result).toEqual({ ok: false, error: "Aborted before spawn", skippedModels: [] });
+		expect(complete).not.toHaveBeenCalled();
+	});
+
+	test("fallback loop exits when signal aborts during probing", async () => {
+		const controller = new AbortController();
+		vi.mocked(complete).mockImplementationOnce(async () => {
+			controller.abort(new Error("user cancelled"));
+			return assistantResult("aborted", "request cancelled");
+		});
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			controller.signal,
+		);
+
+		expect(result).toEqual({ ok: false, error: "Aborted before spawn", skippedModels: [] });
+		expect(complete).toHaveBeenCalledTimes(1);
+	});
+
+	test("array model config without registry skips probing", async () => {
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			undefined,
+			"parent-model",
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.modelId).toBe("primary-model");
+		expect(complete).not.toHaveBeenCalled();
+	});
+
 	test("single model config skips probing", async () => {
 		const result = await resolveModelForSubagentSpawn("primary-model", "anthropic", probeRegistry(), "parent-model");
 
 		expect(result.ok).toBe(true);
 		if (result.ok) expect(result.modelId).toBe("primary-model");
 		expect(complete).not.toHaveBeenCalled();
+	});
+
+	test("fallback summary formatting and prepending are visible in output", () => {
+		const skipped = [{ model: "primary-model", reason: "429 rate limit" }];
+
+		expect(formatModelFallbackSummary([], "fallback-model")).toBeUndefined();
+		expect(formatModelFallbackSummary(skipped, "fallback-model")).toBe(
+			'[MODEL FALLBACK: skipped 1 unavailable model(s); using "fallback-model".]\n- primary-model: 429 rate limit',
+		);
+		expect(prependModelFallbackSummary("child output", skipped, "fallback-model")).toBe(
+			'[MODEL FALLBACK: skipped 1 unavailable model(s); using "fallback-model".]\n- primary-model: 429 rate limit\n\nchild output',
+		);
+		expect(prependModelFallbackSummary("child output", [], "fallback-model")).toBe("child output");
 	});
 });
 

@@ -547,7 +547,7 @@ export interface ProbeModelAvailabilityOptions {
 	timeoutMs?: number;
 }
 
-export type ProbeModelAvailabilityResult = { ok: true } | { ok: false; reason: string };
+export type ProbeModelAvailabilityResult = { ok: true } | { ok: false; reason: string; aborted?: boolean };
 
 function compactErrorReason(reason: string): string {
 	const singleLine = reason.replace(/\s+/g, " ").trim();
@@ -577,27 +577,26 @@ export function isRuntimeUnavailableError(value: unknown): boolean {
 function makeProbeSignal(
 	parentSignal: AbortSignal | undefined,
 	timeoutMs: number,
-): { signal: AbortSignal; cleanup: () => void } {
+): { signal: AbortSignal; timeoutPromise: Promise<never>; cleanup: () => void } {
 	const controller = new AbortController();
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	let parentAbortHandler: (() => void) | undefined;
-
-	if (parentSignal?.aborted) {
-		controller.abort(parentSignal.reason);
-	} else {
-		timeout = setTimeout(
-			() => controller.abort(new Error(`Model availability probe timed out after ${timeoutMs}ms`)),
-			timeoutMs,
-		);
-		parentAbortHandler = () => controller.abort(parentSignal?.reason);
-		parentSignal?.addEventListener("abort", parentAbortHandler, { once: true });
-	}
+	const timeoutError = new Error(`Model availability probe timed out after ${timeoutMs}ms`);
+	let timeout: ReturnType<typeof setTimeout>;
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		timeout = setTimeout(() => {
+			controller.abort(timeoutError);
+			reject(timeoutError);
+		}, timeoutMs);
+	});
+	const parentAbortHandler = () => controller.abort(parentSignal?.reason);
+	parentSignal?.addEventListener("abort", parentAbortHandler, { once: true });
+	if (parentSignal?.aborted) controller.abort(parentSignal.reason);
 
 	return {
 		signal: controller.signal,
+		timeoutPromise,
 		cleanup: () => {
-			if (timeout) clearTimeout(timeout);
-			if (parentAbortHandler) parentSignal?.removeEventListener("abort", parentAbortHandler);
+			clearTimeout(timeout);
+			parentSignal?.removeEventListener("abort", parentAbortHandler);
 		},
 	};
 }
@@ -607,30 +606,42 @@ export async function probeModelAvailability(
 	options: ProbeModelAvailabilityOptions = {},
 ): Promise<ProbeModelAvailabilityResult> {
 	const { signal, registry, timeoutMs = 10_000 } = options;
+	if (signal?.aborted) return { ok: false, reason: "Aborted before spawn", aborted: true };
+
 	const probeSignal = makeProbeSignal(signal, timeoutMs);
 	try {
 		const context: Context = {
+			systemPrompt: "You are a model availability probe. Reply briefly.",
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 		};
-		const apiKey = registry ? await registry.getApiKey(model) : undefined;
-		const result = await complete(model, context, {
-			apiKey,
-			maxRetryDelayMs: 0,
-			maxTokens: 1,
-			signal: probeSignal.signal,
-		});
+		const apiKey = await Promise.race([
+			registry ? registry.getApiKey(model) : Promise.resolve(undefined),
+			probeSignal.timeoutPromise,
+		]);
+		if (signal?.aborted) return { ok: false, reason: "Aborted before spawn", aborted: true };
+		const result = await Promise.race([
+			complete(model, context, {
+				apiKey,
+				maxRetryDelayMs: 0,
+				maxTokens: 1,
+				signal: probeSignal.signal,
+			}),
+			probeSignal.timeoutPromise,
+		]);
+		if (signal?.aborted) return { ok: false, reason: "Aborted before spawn", aborted: true };
 		if (isRuntimeUnavailableError(result)) {
 			return { ok: false, reason: compactErrorReason(reasonFromRuntimeError(result)) };
 		}
 		return { ok: true };
 	} catch (err) {
+		if (signal?.aborted) return { ok: false, reason: "Aborted before spawn", aborted: true };
 		return { ok: false, reason: compactErrorReason(reasonFromRuntimeError(err)) };
 	} finally {
 		probeSignal.cleanup();
 	}
 }
 
-interface SkippedFallbackModel {
+export interface SkippedFallbackModel {
 	model: string;
 	reason: string;
 }
@@ -652,18 +663,22 @@ export async function resolveModelForSubagentSpawn(
 	parentModel?: string,
 	signal?: AbortSignal,
 ): Promise<SubagentModelResolution> {
+	if (signal?.aborted) return { ok: false, error: "Aborted before spawn", skippedModels: [] };
+
 	// Runtime probing only applies to agent definition fallback lists. Single
 	// models, per-invocation overrides, and registry-less environments keep the
 	// existing spawn-time resolution behavior exactly.
 	if (!Array.isArray(models) || !registry) {
 		const resolved = resolveModelWithFallbacks(models, parentProvider, registry, parentModel);
-		return resolved.ok ? { ...resolved, skippedModels: [] } : { ...resolved, skippedModels: [] };
+		return { ...resolved, skippedModels: [] };
 	}
 
 	const skippedModels: SkippedFallbackModel[] = [];
 	let lastError = "";
 
 	for (const modelStr of models) {
+		if (signal?.aborted) return { ok: false, error: "Aborted before spawn", skippedModels };
+
 		const resolved = resolveModelStringSingle(modelStr, parentProvider, registry);
 		if (!resolved.ok) {
 			lastError = resolved.error;
@@ -676,6 +691,10 @@ export async function resolveModelForSubagentSpawn(
 		const modelObj = resolved.provider ? registry.find(resolved.provider, resolved.modelId) : undefined;
 		if (modelObj) {
 			const probe = await probeModelAvailability(modelObj, { signal, registry });
+			if (!probe.ok && probe.aborted) {
+				return { ok: false, error: "Aborted before spawn", skippedModels };
+			}
+			if (signal?.aborted) return { ok: false, error: "Aborted before spawn", skippedModels };
 			if (!probe.ok) {
 				lastError = probe.reason;
 				skippedModels.push({ model: modelStr, reason: probe.reason });
@@ -687,6 +706,8 @@ export async function resolveModelForSubagentSpawn(
 		console.error(`[subagent] Using model "${resolved.modelId}" for subagent.`);
 		return { ...resolved, skippedModels };
 	}
+
+	if (signal?.aborted) return { ok: false, error: "Aborted before spawn", skippedModels };
 
 	if (parentModel) {
 		const parentResolved = resolveModelStringSingle(parentModel, parentProvider, registry);
@@ -708,13 +729,27 @@ export async function resolveModelForSubagentSpawn(
 	};
 }
 
-function formatModelFallbackSummary(
+export function formatModelFallbackSummary(
 	skippedModels: SkippedFallbackModel[],
 	selectedModel: string | undefined,
 ): string | undefined {
 	if (skippedModels.length === 0) return undefined;
 	const skipped = skippedModels.map((s) => `- ${s.model}: ${s.reason}`).join("\n");
 	return `[MODEL FALLBACK: skipped ${skippedModels.length} unavailable model(s); using "${selectedModel ?? "unknown"}".]\n${skipped}`;
+}
+
+export function prependModelFallbackSummary(
+	output: string,
+	skippedModels: SkippedFallbackModel[],
+	selectedModel: string | undefined,
+): string {
+	const fallbackSummary = formatModelFallbackSummary(skippedModels, selectedModel);
+	return fallbackSummary ? `${fallbackSummary}\n\n${output}` : output;
+}
+
+function formatSkippedModelFailureDetails(skippedModels: SkippedFallbackModel[]): string | undefined {
+	if (skippedModels.length === 0) return undefined;
+	return `Skipped models:\n${skippedModels.map((s) => `- ${s.model}: ${s.reason}`).join("\n")}`;
 }
 
 const MAX_PARALLEL_TASKS = 8;
@@ -815,13 +850,14 @@ async function executeSingle(
 		const resolved = await resolveModelForSubagentSpawn(modelSpec, parentProvider, registry, parentModel, signal);
 		skippedModels = resolved.skippedModels;
 		if (!resolved.ok) {
+			const skippedDetails = formatSkippedModelFailureDetails(skippedModels);
 			return {
 				agent: name,
 				task,
 				exitCode: 1,
 				output: "",
 				stderr: "",
-				errorMessage: resolved.error,
+				errorMessage: skippedDetails ? `${resolved.error}\n\n${skippedDetails}` : resolved.error,
 			};
 		}
 		effectiveConfig = { ...effectiveConfig, model: resolved.modelId };
@@ -833,10 +869,11 @@ async function executeSingle(
 
 	onProgress?.(`Running ${name} agent...`);
 	const result = await spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider, sessionDir);
-	const fallbackSummary = formatModelFallbackSummary(skippedModels, result.model ?? effectiveConfig.model?.toString());
-	if (fallbackSummary) {
-		result.output = `${fallbackSummary}\n\n${result.output}`;
-	}
+	result.output = prependModelFallbackSummary(
+		result.output,
+		skippedModels,
+		result.model ?? effectiveConfig.model?.toString(),
+	);
 	if (warning) {
 		result.output = `[WARNING: ${warning}]\n\n${result.output}`;
 	}
