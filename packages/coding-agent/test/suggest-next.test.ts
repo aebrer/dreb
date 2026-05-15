@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { Container, Text } from "@dreb/tui";
+import stripAnsi from "strip-ansi";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { ToolRenderContext, ToolRenderResultOptions } from "../src/core/extensions/types.js";
 import { createSuggestNextToolDefinition, type SuggestNextDetails } from "../src/core/tools/suggest-next.js";
+import { initTheme, theme } from "../src/modes/interactive/theme/theme.js";
 
 describe("suggest_next tool", () => {
 	function createTool() {
@@ -214,6 +218,121 @@ describe("suggest_next tool", () => {
 
 			expect(onSuggest).toHaveBeenCalledWith("/skill:mach6-plan 42");
 			expect(result.details).toEqual({ suggestion: "/skill:mach6-plan 42" });
+		});
+	});
+
+	describe("renderResult", () => {
+		beforeAll(() => {
+			initTheme("dark");
+		});
+
+		function createRenderContext(overrides: Partial<ToolRenderContext> = {}): ToolRenderContext {
+			return {
+				args: {},
+				toolCallId: "test-call",
+				invalidate: () => {},
+				lastComponent: undefined,
+				state: {},
+				cwd: process.cwd(),
+				executionStarted: true,
+				argsComplete: true,
+				isPartial: false,
+				expanded: false,
+				showImages: false,
+				isError: false,
+				...overrides,
+			};
+		}
+
+		const renderOptions: ToolRenderResultOptions = { expanded: false, isPartial: false };
+
+		it("renders error message when no details present", () => {
+			const tool = createSuggestNextToolDefinition(() => {});
+			const result = {
+				content: [{ type: "text" as const, text: "Error: command must start with /" }],
+				details: undefined,
+				isError: true,
+			};
+
+			const component = tool.renderResult!(result, renderOptions, theme, createRenderContext());
+
+			expect(component).toBeInstanceOf(Text);
+			const rendered = stripAnsi(component.render(120).join("\n"));
+			expect(rendered).toContain("Error: command must start with /");
+		});
+
+		it("renders arrow with suggestion when details present but no summary", () => {
+			const tool = createSuggestNextToolDefinition(() => {});
+			const result = {
+				content: [{ type: "text" as const, text: "Suggestion registered: /compact" }],
+				details: { suggestion: "/compact" },
+				isError: false,
+			};
+
+			const component = tool.renderResult!(result, renderOptions, theme, createRenderContext());
+
+			expect(component).toBeInstanceOf(Text);
+			const rendered = stripAnsi(component.render(120).join("\n"));
+			expect(rendered).toContain("→ /compact");
+		});
+
+		it("renders Container with summary markdown and arrow when summary present", () => {
+			const tool = createSuggestNextToolDefinition(() => {});
+			const result = {
+				content: [{ type: "text" as const, text: "Suggestion registered: /skill:mach6-push" }],
+				details: { suggestion: "/skill:mach6-push", summary: "Updated the auth handler." },
+				isError: false,
+			};
+
+			const component = tool.renderResult!(result, renderOptions, theme, createRenderContext());
+
+			expect(component).toBeInstanceOf(Container);
+			const rendered = stripAnsi(component.render(120).join("\n"));
+			expect(rendered).toContain("Updated the auth handler.");
+			expect(rendered).toContain("→ /skill:mach6-push");
+		});
+
+		it("reuses lastComponent Text on re-render without summary", () => {
+			const tool = createSuggestNextToolDefinition(() => {});
+			const existingText = new Text("old", 0, 0);
+			const result = {
+				content: [{ type: "text" as const, text: "Suggestion registered: /compact" }],
+				details: { suggestion: "/compact" },
+				isError: false,
+			};
+
+			const component = tool.renderResult!(
+				result,
+				renderOptions,
+				theme,
+				createRenderContext({ lastComponent: existingText }),
+			);
+
+			expect(component).toBe(existingText);
+			const rendered = stripAnsi(component.render(120).join("\n"));
+			expect(rendered).toContain("→ /compact");
+		});
+
+		it("reuses lastComponent Container on re-render with summary", () => {
+			const tool = createSuggestNextToolDefinition(() => {});
+			const existingContainer = new Container();
+			const result = {
+				content: [{ type: "text" as const, text: "Suggestion registered: /compact" }],
+				details: { suggestion: "/compact", summary: "Done." },
+				isError: false,
+			};
+
+			const component = tool.renderResult!(
+				result,
+				renderOptions,
+				theme,
+				createRenderContext({ lastComponent: existingContainer }),
+			);
+
+			expect(component).toBe(existingContainer);
+			const rendered = stripAnsi(component.render(120).join("\n"));
+			expect(rendered).toContain("Done.");
+			expect(rendered).toContain("→ /compact");
 		});
 	});
 });
