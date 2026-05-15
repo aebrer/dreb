@@ -14,6 +14,7 @@ import type { ToolDefinition } from "../extensions/types.js";
 
 export interface SuggestNextDetails {
 	suggestion: string;
+	summary?: string;
 }
 
 export type SuggestNextCallback = (suggestion: string) => void;
@@ -25,6 +26,12 @@ const suggestNextSchema = Type.Object({
 	command: Type.String({
 		description: "The suggested command for the user to run next (e.g. /skill:mach6-push, /compact)",
 	}),
+	summary: Type.Optional(
+		Type.String({
+			description:
+				"Brief markdown summary of the work done this turn. Displayed to the user as the final message before the suggestion.",
+		}),
+	),
 });
 
 export type SuggestNextInput = Static<typeof suggestNextSchema>;
@@ -46,7 +53,13 @@ function formatSuggestNextResult(
 		const text = result.content?.[0];
 		return text?.type === "text" && text.text ? theme.fg("toolOutput", text.text) : "";
 	}
-	return theme.fg("toolOutput", `→ ${details.suggestion}`);
+	const lines: string[] = [];
+	if (details.summary) {
+		lines.push(details.summary);
+		lines.push("");
+	}
+	lines.push(theme.fg("toolOutput", `→ ${details.suggestion}`));
+	return lines.join("\n");
 }
 
 // ============================================================================
@@ -70,9 +83,10 @@ export function createSuggestNextToolDefinition(
 			"Use full command syntax: /skill:name args, /compact, etc.",
 			"Only suggest one command — pick the most likely next step",
 			"Don't suggest if the conversation is open-ended with no obvious next action",
+			"Include a brief summary of work done in the `summary` parameter — this is your last chance to communicate before the turn ends",
 		],
 
-		async execute(_toolCallId, { command: rawCommand }: SuggestNextInput, _signal?, _onUpdate?, _ctx?) {
+		async execute(_toolCallId, { command: rawCommand, summary }: SuggestNextInput, _signal?, _onUpdate?, _ctx?) {
 			// Strip control characters (newlines, tabs, etc.) that would corrupt TUI rendering
 			const command = rawCommand?.replace(/[\x00-\x1f\x7f]/g, "").trim();
 			if (!command || !command.startsWith("/")) {
@@ -86,7 +100,8 @@ export function createSuggestNextToolDefinition(
 
 			return {
 				content: [{ type: "text" as const, text: `Suggestion registered: ${command}` }],
-				details: { suggestion: command },
+				details: { suggestion: command, summary: summary?.trim() || undefined },
+				endTurn: true,
 			};
 		},
 

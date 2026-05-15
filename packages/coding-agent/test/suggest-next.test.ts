@@ -8,10 +8,14 @@ describe("suggest_next tool", () => {
 		// Cast execute to skip the ctx parameter (not used by this tool)
 		const execute = tool.execute.bind(tool) as (
 			toolCallId: string,
-			params: { command: string },
+			params: { command: string; summary?: string },
 			signal?: AbortSignal,
 			onUpdate?: any,
-		) => Promise<{ content: Array<{ type: string; text?: string }>; details?: SuggestNextDetails }>;
+		) => Promise<{
+			content: Array<{ type: string; text?: string }>;
+			details?: SuggestNextDetails;
+			endTurn?: boolean;
+		}>;
 		return { execute, onSuggest };
 	}
 
@@ -55,6 +59,79 @@ describe("suggest_next tool", () => {
 
 		await execute("call-6", { command: "/skill:mach6-plan 201" });
 		expect(onSuggest).toHaveBeenCalledWith("/skill:mach6-plan 201");
+	});
+
+	describe("endTurn behavior", () => {
+		it("sets endTurn: true on successful execution", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-et-1", { command: "/compact" });
+
+			expect(result.endTurn).toBe(true);
+		});
+
+		it("does not set endTurn on error (invalid command)", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-et-2", { command: "npm run build" });
+
+			expect(result.endTurn).toBeUndefined();
+		});
+
+		it("does not set endTurn on error (empty command)", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-et-3", { command: "" });
+
+			expect(result.endTurn).toBeUndefined();
+		});
+	});
+
+	describe("summary parameter", () => {
+		it("includes summary in details when provided", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-s-1", {
+				command: "/skill:mach6-push",
+				summary: "Updated the auth handler and added tests.",
+			});
+
+			expect(result.details).toEqual({
+				suggestion: "/skill:mach6-push",
+				summary: "Updated the auth handler and added tests.",
+			});
+		});
+
+		it("works without summary (backward compat)", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-s-2", { command: "/compact" });
+
+			expect(result.details).toEqual({ suggestion: "/compact" });
+			expect(result.details!.summary).toBeUndefined();
+		});
+
+		it("trims whitespace from summary", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-s-3", {
+				command: "/compact",
+				summary: "  Done with the refactor.  ",
+			});
+
+			expect(result.details!.summary).toBe("Done with the refactor.");
+		});
+
+		it("treats empty summary as undefined", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-s-4", {
+				command: "/compact",
+				summary: "   ",
+			});
+
+			expect(result.details!.summary).toBeUndefined();
+		});
 	});
 
 	describe("control character sanitization", () => {
