@@ -2183,7 +2183,10 @@ export class DefaultPackageManager implements PackageManager {
 				});
 			}
 			child.on("error", reject);
-			child.on("exit", (code) => {
+			// Use "close" instead of "exit" to ensure all piped stdio data
+			// has been delivered before we resolve/reject. "exit" can fire while
+			// buffered data events are still pending in the pipe.
+			child.on("close", (code) => {
 				if (code === 0) {
 					resolvePromise();
 				} else {
