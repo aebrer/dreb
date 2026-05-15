@@ -1,0 +1,125 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isStderrTakenOver, restoreStderr, takeOverStderr, writeRawStderr } from "../src/core/stderr-guard.js";
+
+describe("stderr-guard", () => {
+	// Save original so we can restore after each test
+	let originalStderrWrite: typeof process.stderr.write;
+
+	beforeEach(() => {
+		originalStderrWrite = process.stderr.write;
+		// Ensure clean state
+		restoreStderr();
+	});
+
+	afterEach(() => {
+		restoreStderr();
+		// Safety: make sure process.stderr.write is the real one
+		process.stderr.write = originalStderrWrite;
+	});
+
+	it("isStderrTakenOver returns false initially", () => {
+		expect(isStderrTakenOver()).toBe(false);
+	});
+
+	it("takeOverStderr intercepts writes and routes to callback", () => {
+		const messages: string[] = [];
+		takeOverStderr((msg) => messages.push(msg));
+
+		expect(isStderrTakenOver()).toBe(true);
+
+		process.stderr.write("hello");
+		process.stderr.write(" world");
+
+		expect(messages).toEqual(["hello", " world"]);
+	});
+
+	it("callback does not fire for empty strings", () => {
+		const messages: string[] = [];
+		takeOverStderr((msg) => messages.push(msg));
+
+		process.stderr.write("");
+
+		expect(messages).toEqual([]);
+	});
+
+	it("restoreStderr reverts to original behavior", () => {
+		const messages: string[] = [];
+		takeOverStderr((msg) => messages.push(msg));
+
+		restoreStderr();
+
+		expect(isStderrTakenOver()).toBe(false);
+
+		// After restore, writes should go to original stderr
+		// We spy on the original to confirm
+		const spy = vi.spyOn({ write: originalStderrWrite }, "write");
+		process.stderr.write = spy as unknown as typeof process.stderr.write;
+		process.stderr.write("after restore");
+		expect(spy).toHaveBeenCalledWith("after restore");
+	});
+
+	it("is idempotent — multiple takeOverStderr calls are no-ops", () => {
+		const messages1: string[] = [];
+		const messages2: string[] = [];
+
+		takeOverStderr((msg) => messages1.push(msg));
+		takeOverStderr((msg) => messages2.push(msg)); // Should be ignored
+
+		process.stderr.write("test");
+
+		expect(messages1).toEqual(["test"]);
+		expect(messages2).toEqual([]); // Second callback never registered
+	});
+
+	it("writeRawStderr bypasses interception", () => {
+		const messages: string[] = [];
+		const rawWrites: string[] = [];
+
+		// Replace the real stderr.write with a tracker before taking over
+		const fakeWrite = ((chunk: string | Uint8Array) => {
+			rawWrites.push(String(chunk));
+			return true;
+		}) as typeof process.stderr.write;
+		process.stderr.write = fakeWrite;
+
+		takeOverStderr((msg) => messages.push(msg));
+
+		// Regular write goes through callback
+		process.stderr.write("intercepted");
+		expect(messages).toEqual(["intercepted"]);
+		expect(rawWrites).toEqual([]); // Did not reach raw
+
+		// writeRawStderr bypasses
+		writeRawStderr("bypass");
+		expect(rawWrites).toEqual(["bypass"]);
+		expect(messages).toEqual(["intercepted"]); // callback not called
+	});
+
+	it("calls the callback argument on success", () => {
+		const messages: string[] = [];
+		takeOverStderr((msg) => messages.push(msg));
+
+		let callbackCalled = false;
+		// biome-ignore lint/complexity/noBannedTypes: testing overloaded write signature
+		(process.stderr.write as Function)("data", () => {
+			callbackCalled = true;
+		});
+
+		expect(callbackCalled).toBe(true);
+		expect(messages).toEqual(["data"]);
+	});
+
+	it("handles encoding + callback signature", () => {
+		const messages: string[] = [];
+		takeOverStderr((msg) => messages.push(msg));
+
+		let callbackCalled = false;
+		// biome-ignore lint/complexity/noBannedTypes: testing overloaded write signature
+		(process.stderr.write as Function)("data", "utf-8", () => {
+			callbackCalled = true;
+		});
+
+		expect(callbackCalled).toBe(true);
+		expect(messages).toEqual(["data"]);
+	});
+});

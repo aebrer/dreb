@@ -7,8 +7,10 @@ import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
+import { log } from "./logger.js";
 import { isStdoutTakenOver } from "./output-guard.js";
 import type { PackageSource, SettingsManager } from "./settings-manager.js";
+import { isStderrTakenOver } from "./stderr-guard.js";
 
 const NETWORK_TIMEOUT_MS = 10000;
 const UPDATE_CHECK_CONCURRENCY = 4;
@@ -2157,11 +2159,29 @@ export class DefaultPackageManager implements PackageManager {
 
 	private runCommand(command: string, args: string[], options?: { cwd?: string }): Promise<void> {
 		return new Promise((resolvePromise, reject) => {
+			const stderrTaken = isStderrTakenOver();
+			const stdoutTaken = isStdoutTakenOver();
+			// When TUI owns the terminal, pipe stdout/stderr to avoid corrupting the display.
+			// When stdout is taken over (non-interactive pipe mode), route to fd 2 (stderr) as before.
+			// Otherwise inherit for normal terminal output.
+			const stdio: import("node:child_process").StdioOptions = stderrTaken
+				? ["ignore", "pipe", "pipe"]
+				: stdoutTaken
+					? ["ignore", 2, 2]
+					: "inherit";
 			const child = spawn(command, args, {
 				cwd: options?.cwd,
-				stdio: isStdoutTakenOver() ? ["ignore", 2, 2] : "inherit",
+				stdio,
 				shell: process.platform === "win32",
 			});
+			if (stderrTaken) {
+				child.stdout?.on("data", (chunk: Buffer) => {
+					log.debug(chunk.toString());
+				});
+				child.stderr?.on("data", (chunk: Buffer) => {
+					log.warn(chunk.toString());
+				});
+			}
 			child.on("error", reject);
 			child.on("exit", (code) => {
 				if (code === 0) {

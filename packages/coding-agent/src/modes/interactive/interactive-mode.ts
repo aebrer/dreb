@@ -70,6 +70,7 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
+import { restoreStderr, takeOverStderr } from "../../core/stderr-guard.js";
 import { resolveToCwd } from "../../core/tools/path-utils.js";
 import { abortBackgroundAgents, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
@@ -585,6 +586,15 @@ export class InteractiveMode {
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
+
+		// Intercept stderr to prevent raw writes from corrupting the TUI.
+		// Route intercepted messages to the chat feed as warnings.
+		takeOverStderr((message) => {
+			// Strip trailing newlines for cleaner display
+			const trimmed = message.replace(/\n$/, "");
+			if (trimmed.length === 0) return;
+			this.showWarning(trimmed);
+		});
 
 		// Initialize extensions first so resources are shown before messages
 		await this.initExtensions();
@@ -2963,11 +2973,17 @@ export class InteractiveMode {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
+			takeOverStderr((message) => {
+				const trimmed = message.replace(/\n$/, "");
+				if (trimmed.length === 0) return;
+				this.showWarning(trimmed);
+			});
 			this.ui.requestRender(true);
 		});
 
 		try {
 			// Stop the TUI (restore terminal to normal mode)
+			restoreStderr();
 			this.ui.stop();
 
 			// Send SIGTSTP to process group (pid=0 means all processes in group)
@@ -3111,7 +3127,8 @@ export class InteractiveMode {
 			// Write current content to temp file
 			fs.writeFileSync(tmpFile, currentText, "utf-8");
 
-			// Stop TUI to release terminal
+			// Stop TUI and restore stderr to release terminal for editor
+			restoreStderr();
 			this.ui.stop();
 
 			// Split by space to support editor arguments (e.g., "code --wait")
@@ -3137,8 +3154,13 @@ export class InteractiveMode {
 				// Ignore cleanup errors
 			}
 
-			// Restart TUI
+			// Restart TUI and re-intercept stderr
 			this.ui.start();
+			takeOverStderr((message) => {
+				const trimmed = message.replace(/\n$/, "");
+				if (trimmed.length === 0) return;
+				this.showWarning(trimmed);
+			});
 			// Force full re-render since external editor uses alternate screen
 			this.ui.requestRender(true);
 		}
@@ -5091,6 +5113,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 			this.unsubscribe();
 		}
 		if (this.isInitialized) {
+			restoreStderr();
 			this.ui.stop();
 			this.isInitialized = false;
 		}

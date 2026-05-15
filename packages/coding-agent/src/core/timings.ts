@@ -3,6 +3,8 @@
  * Enable with DREB_TIMING=1 environment variable.
  */
 
+import { log } from "./logger.js";
+
 const ENABLED = process.env.DREB_TIMING === "1";
 const timings: Array<{ label: string; ms: number }> = [];
 let lastTime = Date.now();
@@ -22,10 +24,10 @@ export function time(label: string): void {
 
 export function printTimings(): void {
 	if (!ENABLED || timings.length === 0) return;
-	console.error("\n--- Startup Timings ---");
+	log.debug("\n--- Startup Timings ---");
 	for (const t of timings) {
-		console.error(`  ${t.label}: ${t.ms}ms`);
+		log.debug(`  ${t.label}: ${t.ms}ms`);
 	}
-	console.error(`  TOTAL: ${timings.reduce((a, b) => a + b.ms, 0)}ms`);
-	console.error("------------------------\n");
+	log.debug(`  TOTAL: ${timings.reduce((a, b) => a + b.ms, 0)}ms`);
+	log.debug("------------------------\n");
 }

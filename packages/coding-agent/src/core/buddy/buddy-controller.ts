@@ -13,6 +13,7 @@
  * and Telegram (activity gating + reaction budget) can use different strategies.
  */
 
+import { log } from "../logger.js";
 import { type BuddyManager, checkOllama } from "./buddy-manager.js";
 import type { BuddyState } from "./buddy-types.js";
 
@@ -212,7 +213,7 @@ export class BuddyController {
 		} catch (err) {
 			if (!thinkingEnded) this.callbacks.onThinkingEnd();
 			this.removeContextEntry(marker);
-			console.error("[buddy] triggerReaction failed:", err instanceof Error ? err.message : err);
+			log.debug(`[buddy] triggerReaction failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -247,7 +248,7 @@ export class BuddyController {
 		} catch (err) {
 			if (!thinkingEnded) this.callbacks.onThinkingEnd();
 			this.removeContextEntry(marker);
-			console.error("[buddy] handleNameCall failed:", err instanceof Error ? err.message : err);
+			log.debug(`[buddy] handleNameCall failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 

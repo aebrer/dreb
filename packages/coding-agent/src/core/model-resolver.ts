@@ -8,6 +8,7 @@ import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
+import { log } from "./logger.js";
 import type { ModelRegistry } from "./model-registry.js";
 
 /** Default model IDs for each known provider */
@@ -483,7 +484,7 @@ export async function findInitialModel(options: {
 			modelRegistry,
 		});
 		if (resolved.error) {
-			console.error(chalk.red(resolved.error));
+			log.error(chalk.red(resolved.error));
 			process.exit(1);
 		}
 		if (resolved.model) {
@@ -559,7 +560,7 @@ export async function restoreModelFromSession(
 	const reason = !restoredModel ? "model no longer exists" : "no API key available";
 
 	if (shouldPrintMessages) {
-		console.error(chalk.yellow(`Warning: Could not restore model ${savedProvider}/${savedModelId} (${reason}).`));
+		log.warn(chalk.yellow(`Warning: Could not restore model ${savedProvider}/${savedModelId} (${reason}).`));
 	}
 
 	// If we already have a model, use it as fallback

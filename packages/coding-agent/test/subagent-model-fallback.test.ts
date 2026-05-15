@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { complete, type Model } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { log } from "../src/core/logger.js";
 import {
 	type AgentTypeConfig,
 	executeSingle,
@@ -37,6 +38,7 @@ beforeEach(() => {
 	vi.mocked(complete).mockReset();
 	vi.mocked(spawn).mockReset();
 	vi.spyOn(console, "error").mockImplementation(() => {});
+	vi.spyOn(log, "debug").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -773,7 +775,7 @@ describe("spawn-time model availability probing", () => {
 			expect(result.skippedModels).toEqual([{ model: "primary-model", reason: "429 rate limit" }]);
 		}
 		expect(complete).toHaveBeenCalledTimes(2);
-		expect(console.error).toHaveBeenCalledWith(
+		expect(log.debug).toHaveBeenCalledWith(
 			'[subagent] Model "primary-model" failed probe (429 rate limit). Trying next fallback...',
 		);
 	});

@@ -13,6 +13,7 @@ import { resolve } from "path";
 import { describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
+import { log } from "../src/core/logger.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
@@ -139,11 +140,11 @@ describe("AgentSession._expandSkillCommand", () => {
 	it("returns original text for unknown skill name", () => {
 		const session = createSession([validSkill]);
 		try {
-			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+			const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
 			const result = expandSkillCommand(session, "/skill:nonexistent");
 			expect(result).toBe("/skill:nonexistent");
-			expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown skill "nonexistent"'));
-			consoleSpy.mockRestore();
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Unknown skill "nonexistent"'));
+			warnSpy.mockRestore();
 		} finally {
 			session.dispose();
 		}

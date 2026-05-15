@@ -5,6 +5,7 @@
 import type { ThinkingLevel } from "@dreb/agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR } from "../config.js";
+import { log } from "../core/logger.js";
 import { allTools, type ToolName } from "../core/tools/index.js";
 
 export type Mode = "text" | "json" | "rpc";
@@ -109,7 +110,7 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 				if (name in allTools) {
 					validTools.push(name as ToolName);
 				} else {
-					console.error(
+					log.warn(
 						chalk.yellow(`Warning: Unknown tool "${name}". Valid tools: ${Object.keys(allTools).join(", ")}`),
 					);
 				}
@@ -120,7 +121,7 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			if (isValidThinkingLevel(level)) {
 				result.thinking = level;
 			} else {
-				console.error(
+				log.warn(
 					chalk.yellow(
 						`Warning: Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
 					),

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { log } from "../src/core/logger.js";
 import { executeSearch, getSearchConfig } from "../src/core/tools/web.js";
 import { WebSearchQueue } from "../src/core/tools/web-search-queue.js";
 
@@ -327,10 +328,10 @@ describe("getSearchConfig", () => {
 		process.chdir(tempDir);
 		process.env.DREB_WEB_SEARCH_RATE_LIMIT_MS = "abc";
 
-		const errorSpy = vi.spyOn(console, "error");
+		const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
 		const config = getSearchConfig();
 		expect(config.rateLimitMs).toBe(10_000);
-		expect(errorSpy).toHaveBeenCalledWith(`Warning: invalid DREB_WEB_SEARCH_RATE_LIMIT_MS "abc", using default`);
+		expect(warnSpy).toHaveBeenCalledWith(`Warning: invalid DREB_WEB_SEARCH_RATE_LIMIT_MS "abc", using default`);
 	});
 
 	it("falls back to default on invalid config file value and logs warning", () => {
@@ -341,10 +342,10 @@ describe("getSearchConfig", () => {
 		mkdirSync(configDir, { recursive: true });
 		writeFileSync(join(configDir, "config.json"), JSON.stringify({ search: { rate_limit_ms: "invalid" } }));
 
-		const errorSpy = vi.spyOn(console, "error");
+		const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
 		const config = getSearchConfig();
 		expect(config.rateLimitMs).toBe(10_000);
-		expect(errorSpy).toHaveBeenCalledWith(
+		expect(warnSpy).toHaveBeenCalledWith(
 			'Warning: invalid search.rate_limit_ms in config file "invalid", using default',
 		);
 	});

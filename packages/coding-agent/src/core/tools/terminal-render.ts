@@ -1,4 +1,5 @@
 import { TerminalTextRender } from "terminal-render";
+import { log } from "../logger.js";
 
 /**
  * Maximum row or column value allowed in ANSI cursor positioning sequences.
@@ -147,7 +148,7 @@ export function renderTerminalOutput(raw: string): string {
 		return renderer.render();
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
-		console.error(`[dreb] terminal-render fallback: TerminalTextRender failed (${detail}), returning raw output`);
+		log.debug(`[dreb] terminal-render fallback: TerminalTextRender failed (${detail}), returning raw output`);
 		return raw;
 	}
 }

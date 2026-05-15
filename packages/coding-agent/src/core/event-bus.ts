@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { log } from "./logger.js";
 
 export interface EventBus {
 	emit(channel: string, data: unknown): void;
@@ -20,7 +21,7 @@ export function createEventBus(): EventBusController {
 				try {
 					await handler(data);
 				} catch (err) {
-					console.error(`Event handler error (${channel}):`, err);
+					log.warn(`Event handler error (${channel}): ${err instanceof Error ? err.message : String(err)}`);
 				}
 			};
 			emitter.on(channel, safeHandler);

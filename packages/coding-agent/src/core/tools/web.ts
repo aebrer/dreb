@@ -7,6 +7,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import { CONFIG_DIR_NAME } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { log } from "../logger.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
@@ -240,7 +241,7 @@ async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
 	}
 	if (results.length === 0 && html.length > 1000) {
 		// Got a substantial response but parsed 0 results — DDG HTML structure may have changed
-		console.error("Warning: DDG returned HTML but 0 results were parsed. The HTML structure may have changed.");
+		log.warn("Warning: DDG returned HTML but 0 results were parsed. The HTML structure may have changed.");
 	}
 	return results;
 }
@@ -318,7 +319,7 @@ function loadDrebConfig(): DrebConfig {
 				return JSON.parse(readFileSync(configPath, "utf-8")) as DrebConfig;
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				console.error(`Warning: failed to parse config at ${configPath}: ${msg}`);
+				log.warn(`Warning: failed to parse config at ${configPath}: ${msg}`);
 			}
 		}
 	}
@@ -334,7 +335,7 @@ export function getSearchConfig(): WebSearchConfig {
 		if ((VALID_BACKENDS as readonly string[]).includes(rawBackend)) {
 			backend = rawBackend as WebSearchConfig["backend"];
 		} else {
-			console.error(
+			log.warn(
 				`Warning: unrecognized search backend "${rawBackend}", falling back to ddg. Valid: ${VALID_BACKENDS.join(", ")}`,
 			);
 		}
@@ -347,14 +348,14 @@ export function getSearchConfig(): WebSearchConfig {
 		if (!Number.isNaN(parsed) && parsed >= 0) {
 			rateLimitMs = parsed;
 		} else {
-			console.error(`Warning: invalid DREB_WEB_SEARCH_RATE_LIMIT_MS "${rateLimitEnv}", using default`);
+			log.warn(`Warning: invalid DREB_WEB_SEARCH_RATE_LIMIT_MS "${rateLimitEnv}", using default`);
 		}
 	} else if (fileConfig.search?.rate_limit_ms !== undefined) {
 		const parsed = parseInt(String(fileConfig.search.rate_limit_ms), 10);
 		if (!Number.isNaN(parsed) && parsed >= 0) {
 			rateLimitMs = parsed;
 		} else {
-			console.error(
+			log.warn(
 				`Warning: invalid search.rate_limit_ms in config file "${fileConfig.search.rate_limit_ms}", using default`,
 			);
 		}

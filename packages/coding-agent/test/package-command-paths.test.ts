@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ENV_AGENT_DIR } from "../src/config.js";
+import { log } from "../src/core/logger.js";
 import { main } from "../src/main.js";
 
 describe("package commands", () => {
@@ -71,7 +72,7 @@ describe("package commands", () => {
 
 	it("shows install subcommand help", async () => {
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
 
 		try {
 			await expect(main(["install", "--help"])).resolves.toBeUndefined();
@@ -88,7 +89,7 @@ describe("package commands", () => {
 	});
 
 	it("shows a friendly error for unknown install options", async () => {
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
 
 		try {
 			await expect(main(["install", "--unknown"])).resolves.toBeUndefined();
@@ -103,7 +104,7 @@ describe("package commands", () => {
 	});
 
 	it("shows a friendly error for missing install source", async () => {
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
 
 		try {
 			await expect(main(["install"])).resolves.toBeUndefined();
@@ -122,7 +123,7 @@ describe("package commands", () => {
 		const settingsPath = join(agentDir, "settings.json");
 		writeFileSync(settingsPath, JSON.stringify({ packages: ["npm:dreb-formatter"] }, null, 2));
 
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
 		try {

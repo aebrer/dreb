@@ -64,6 +64,7 @@ import {
 } from "./extensions/index.js";
 import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./forbidden-commands.js";
 import { type GitRepoState, getGitRepoState } from "./git-repo-state.js";
+import { log } from "./logger.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { PerformanceTracker } from "./performance-tracker.js";
@@ -646,7 +647,7 @@ export class AgentSession {
 				this._emit({ type: "message_start", message });
 				this._emit({ type: "message_end", message });
 			} catch (err) {
-				console.error(
+				log.warn(
 					`[subagent] Failed to deliver cancellation message for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
 				);
 			}
@@ -662,13 +663,13 @@ export class AgentSession {
 			} else {
 				// Fallback: if streaming started between the isStreaming check and this call, deliver as follow-up
 				this.agent.prompt(message).catch((promptErr) => {
-					console.error(
+					log.warn(
 						`[subagent] prompt() failed for background agent ${agentId}: ${promptErr instanceof Error ? promptErr.message : String(promptErr)}`,
 					);
 					try {
 						this.agent.followUp(message);
 					} catch (followUpErr) {
-						console.error(
+						log.error(
 							`[subagent] followUp() also failed for background agent ${agentId}: ${followUpErr instanceof Error ? followUpErr.message : String(followUpErr)}. Background result lost.`,
 						);
 					}
@@ -684,7 +685,7 @@ export class AgentSession {
 				success: result.exitCode === 0,
 			});
 		} catch (emitErr) {
-			console.error(
+			log.warn(
 				`[subagent] background_agent_end emit failed: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
 			);
 		}
@@ -1484,7 +1485,7 @@ export class AgentSession {
 
 		const skill = this.resourceLoader.getSkills().skills.find((s) => s.name === skillName);
 		if (!skill) {
-			console.error(`Unknown skill "${skillName}" — no skill found with that name`);
+			log.warn(`Unknown skill "${skillName}" — no skill found with that name`);
 			return text;
 		}
 

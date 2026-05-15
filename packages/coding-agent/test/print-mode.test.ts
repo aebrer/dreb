@@ -1,5 +1,6 @@
 import type { AssistantMessage, ImageContent } from "@dreb/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { log } from "../src/core/logger.js";
 import { runPrintMode } from "../src/modes/print-mode.js";
 
 type EmitEvent = { type: string };
@@ -110,7 +111,7 @@ describe("runPrintMode", () => {
 
 	it("emits session_shutdown and returns non-zero on assistant error", async () => {
 		const session = createSession(createAssistantMessage({ stopReason: "error", errorMessage: "provider failure" }));
-		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
 
 		const exitCode = await runPrintMode(session as unknown as Parameters<typeof runPrintMode>[0], {
 			mode: "text",

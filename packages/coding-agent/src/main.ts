@@ -19,6 +19,7 @@ import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
 import type { LoadExtensionsResult } from "./core/extensions/index.js";
 import { migrateKeybindingsConfigFile } from "./core/keybindings.js";
+import { log } from "./core/logger.js";
 import { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
@@ -29,7 +30,6 @@ import { SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 import { allTools } from "./core/tools/index.js";
-
 import { runMigrations, showDeprecationWarnings } from "./migrations.js";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.js";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.js";
@@ -60,9 +60,9 @@ async function readPipedStdin(): Promise<string | undefined> {
 function reportSettingsErrors(settingsManager: SettingsManager, context: string): void {
 	const errors = settingsManager.drainErrors();
 	for (const { scope, error } of errors) {
-		console.error(chalk.yellow(`Warning (${context}, ${scope} settings): ${error.message}`));
+		log.warn(chalk.yellow(`Warning (${context}, ${scope} settings): ${error.message}`));
 		if (error.stack) {
-			console.error(chalk.dim(error.stack));
+			log.warn(chalk.dim(error.stack));
 		}
 	}
 }
@@ -208,16 +208,16 @@ async function handlePackageCommand(args: string[]): Promise<boolean> {
 	}
 
 	if (options.invalidOption) {
-		console.error(chalk.red(`Unknown option ${options.invalidOption} for "${options.command}".`));
-		console.error(chalk.dim(`Use "${APP_NAME} --help" or "${getPackageCommandUsage(options.command)}".`));
+		log.error(chalk.red(`Unknown option ${options.invalidOption} for "${options.command}".`));
+		log.error(chalk.dim(`Use "${APP_NAME} --help" or "${getPackageCommandUsage(options.command)}".`));
 		process.exitCode = 1;
 		return true;
 	}
 
 	const source = options.source;
 	if ((options.command === "install" || options.command === "remove") && !source) {
-		console.error(chalk.red(`Missing ${options.command} source.`));
-		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
+		log.error(chalk.red(`Missing ${options.command} source.`));
+		log.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
 		process.exitCode = 1;
 		return true;
 	}
@@ -246,7 +246,7 @@ async function handlePackageCommand(args: string[]): Promise<boolean> {
 				await packageManager.remove(source!, { local: options.local });
 				const removed = packageManager.removeSourceFromSettings(source!, { local: options.local });
 				if (!removed) {
-					console.error(chalk.red(`No matching package found for ${source}`));
+					log.error(chalk.red(`No matching package found for ${source}`));
 					process.exitCode = 1;
 					return true;
 				}
@@ -305,7 +305,7 @@ async function handlePackageCommand(args: string[]): Promise<boolean> {
 		}
 	} catch (error: unknown) {
 		const message = error instanceof Error ? error.message : "Unknown package command error";
-		console.error(chalk.red(`Error: ${message}`));
+		log.error(chalk.red(`Error: ${message}`));
 		process.exitCode = 1;
 		return true;
 	}
@@ -402,7 +402,7 @@ async function callSessionDirectoryHook(extensions: LoadExtensionsResult, cwd: s
 				}
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
-				console.error(chalk.red(`Extension "${ext.path}" session_directory handler failed: ${message}`));
+				log.warn(chalk.red(`Extension "${ext.path}" session_directory handler failed: ${message}`));
 			}
 		}
 	}
@@ -421,7 +421,7 @@ function validateForkFlags(parsed: Args): void {
 	].filter((flag): flag is string => flag !== undefined);
 
 	if (conflictingFlags.length > 0) {
-		console.error(chalk.red(`Error: --fork cannot be combined with ${conflictingFlags.join(", ")}`));
+		log.error(chalk.red(`Error: --fork cannot be combined with ${conflictingFlags.join(", ")}`));
 		process.exit(1);
 	}
 }
@@ -431,7 +431,7 @@ function forkSessionOrExit(sourcePath: string, cwd: string, sessionDir?: string)
 		return SessionManager.forkFrom(sourcePath, cwd, sessionDir);
 	} catch (error: unknown) {
 		const message = error instanceof Error ? error.message : String(error);
-		console.error(chalk.red(`Error: ${message}`));
+		log.error(chalk.red(`Error: ${message}`));
 		process.exit(1);
 	}
 }
@@ -460,7 +460,7 @@ async function createSessionManager(
 				return forkSessionOrExit(resolved.path, cwd, effectiveSessionDir);
 
 			case "not_found":
-				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
+				log.error(chalk.red(`No session found matching '${resolved.arg}'`));
 				process.exit(1);
 		}
 	}
@@ -485,7 +485,7 @@ async function createSessionManager(
 			}
 
 			case "not_found":
-				console.error(chalk.red(`No session found matching '${resolved.arg}'`));
+				log.error(chalk.red(`No session found matching '${resolved.arg}'`));
 				process.exit(1);
 		}
 	}
@@ -528,7 +528,7 @@ function buildSessionOptions(
 			console.warn(chalk.yellow(`Warning: ${resolved.warning}`));
 		}
 		if (resolved.error) {
-			console.error(chalk.red(resolved.error));
+			log.error(chalk.red(resolved.error));
 			process.exit(1);
 		}
 		if (resolved.model) {
@@ -682,7 +682,7 @@ export async function main(args: string[]) {
 
 	const extensionsResult: LoadExtensionsResult = resourceLoader.getExtensions();
 	for (const { path, error } of extensionsResult.errors) {
-		console.error(chalk.red(`Failed to load extension "${path}": ${error}`));
+		log.warn(chalk.red(`Failed to load extension "${path}": ${error}`));
 	}
 
 	// Apply pending provider registrations from extensions immediately
@@ -692,7 +692,7 @@ export async function main(args: string[]) {
 			modelRegistry.registerProvider(name, config);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			console.error(chalk.red(`Extension "${extensionPath}" error: ${message}`));
+			log.warn(chalk.red(`Extension "${extensionPath}" error: ${message}`));
 		}
 	}
 	extensionsResult.runtime.pendingProviderRegistrations = [];
@@ -747,7 +747,7 @@ export async function main(args: string[]) {
 			result = await exportFromFile(parsed.export, outputPath);
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : "Failed to export session";
-			console.error(chalk.red(`Error: ${message}`));
+			log.error(chalk.red(`Error: ${message}`));
 			process.exit(1);
 		}
 		console.log(`Exported to: ${result}`);
@@ -758,7 +758,7 @@ export async function main(args: string[]) {
 	time("migrateKeybindingsConfigFile");
 
 	if (parsed.mode === "rpc" && parsed.fileArgs.length > 0) {
-		console.error(chalk.red("Error: @file arguments are not supported in RPC mode"));
+		log.error(chalk.red("Error: @file arguments are not supported in RPC mode"));
 		process.exit(1);
 	}
 
@@ -773,7 +773,7 @@ export async function main(args: string[]) {
 	const isInteractive = !parsed.print && parsed.mode === undefined;
 	const startupBenchmark = isTruthyEnvFlag(process.env.DREB_STARTUP_BENCHMARK);
 	if (startupBenchmark && !isInteractive) {
-		console.error(chalk.red("Error: DREB_STARTUP_BENCHMARK only supports interactive mode"));
+		log.error(chalk.red("Error: DREB_STARTUP_BENCHMARK only supports interactive mode"));
 		process.exit(1);
 	}
 	const mode = parsed.mode || "text";
@@ -846,7 +846,7 @@ export async function main(args: string[]) {
 	// Handle CLI --api-key as runtime override (not persisted)
 	if (parsed.apiKey) {
 		if (!sessionOptions.model) {
-			console.error(
+			log.error(
 				chalk.red("--api-key requires a model to be specified via --model, --provider/--model, or --models"),
 			);
 			process.exit(1);
@@ -858,10 +858,10 @@ export async function main(args: string[]) {
 	time("createAgentSession");
 
 	if (!isInteractive && !session.model) {
-		console.error(chalk.red("No models available."));
-		console.error(chalk.yellow("\nSet an API key environment variable:"));
-		console.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.");
-		console.error(chalk.yellow(`\nOr create ${getModelsPath()}`));
+		log.error(chalk.red("No models available."));
+		log.error(chalk.yellow("\nSet an API key environment variable:"));
+		log.error("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.");
+		log.error(chalk.yellow(`\nOr create ${getModelsPath()}`));
 		process.exit(1);
 	}
 

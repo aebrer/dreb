@@ -8,6 +8,7 @@
 
 import type { AssistantMessage, ImageContent } from "@dreb/ai";
 import type { AgentSession } from "../core/agent-session.js";
+import { log } from "../core/logger.js";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.js";
 
 /**
@@ -72,7 +73,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				},
 			},
 			onError: (err) => {
-				console.error(`Extension error (${err.extensionPath}): ${err.error}`);
+				log.warn(`Extension error (${err.extensionPath}): ${err.error}`);
 			},
 		});
 
@@ -104,7 +105,7 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 
 				// Check for error/aborted
 				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+					log.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
 					exitCode = 1;
 				} else {
 					// Output text content

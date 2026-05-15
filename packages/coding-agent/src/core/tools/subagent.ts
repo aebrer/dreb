@@ -11,6 +11,7 @@ import { CONFIG_DIR_NAME, getPackageDir, getSubagentSessionsDir } from "../../co
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { log } from "../logger.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { resolveCliModel } from "../model-resolver.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
@@ -113,19 +114,19 @@ function loadAgentsFromDir(dir: string, agents: Map<string, AgentTypeConfig>): v
 				const content = readFileSync(join(dir, file), "utf-8");
 				const parsed = parseAgentFrontmatter(content);
 				if (!parsed.ok) {
-					console.error(`[subagent] Skipping agent file ${join(dir, file)}: ${parsed.error}`);
+					log.warn(`[subagent] Skipping agent file ${join(dir, file)}: ${parsed.error}`);
 				} else {
 					agents.set(parsed.config.name, parsed.config);
 				}
 			} catch (err) {
-				console.error(
+				log.warn(
 					`[subagent] Could not read agent file ${join(dir, file)}: ${err instanceof Error ? err.message : String(err)}`,
 				);
 			}
 		}
 	} catch (err) {
 		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-			console.error(
+			log.warn(
 				`[subagent] Could not read agents directory ${dir}: ${err instanceof Error ? err.message : String(err)}`,
 			);
 		}
@@ -197,7 +198,7 @@ async function spawnSubagent(
 	sessionDir?: string,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
-	console.error(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
+	log.debug(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
 
 	// Validate cwd exists — spawn() throws a misleading ENOENT blaming the
 	// binary when the cwd is invalid, making the real cause hard to diagnose
@@ -287,13 +288,13 @@ async function spawnSubagent(
 			}
 		});
 		proc.stderr?.on("error", (err) => {
-			console.error(`[subagent] stderr stream error (agent=${agentConfig.name}): ${err.message}`);
+			log.warn(`[subagent] stderr stream error (agent=${agentConfig.name}): ${err.message}`);
 		});
 
 		// Parse JSONL events from stdout
 		if (proc.stdout) {
 			proc.stdout.on("error", (err) => {
-				console.error(`[subagent] stdout stream error (agent=${agentConfig.name}): ${err.message}`);
+				log.warn(`[subagent] stdout stream error (agent=${agentConfig.name}): ${err.message}`);
 			});
 			attachJsonlLineReader(proc.stdout, (line) => {
 				if (!line.trim()) return;
@@ -307,7 +308,7 @@ async function spawnSubagent(
 					// (e.g. startup errors printed before JSONL mode begins)
 					plainStdoutLines.push(line.trim());
 					if (line.trim().startsWith("{")) {
-						console.error(`[subagent] Failed to parse JSONL event: ${line.slice(0, 200)}`);
+						log.warn(`[subagent] Failed to parse JSONL event: ${line.slice(0, 200)}`);
 					}
 					return;
 				}
@@ -359,7 +360,7 @@ async function spawnSubagent(
 			signal?.removeEventListener("abort", onAbort);
 			const exitCode = code ?? 1;
 			const stderr = stderrChunks.join("");
-			console.error(
+			log.debug(
 				`[subagent] close: agent=${agentConfig.name} exit=${exitCode} messages=${collectedMessages.length}${exitCode !== 0 ? ` stderr=${stderr.slice(0, 200)} stdout=${plainStdoutLines.join("|").slice(0, 200)}` : ""}`,
 			);
 
@@ -436,11 +437,11 @@ export function discoverSessionFile(sessionDir: string, agentName: string): stri
 			}
 		}
 		if (best) {
-			console.error(`[subagent] session file: ${best.path} (agent=${agentName})`);
+			log.debug(`[subagent] session file: ${best.path} (agent=${agentName})`);
 			return best.path;
 		}
 	} catch (err) {
-		console.error(
+		log.warn(
 			`[subagent] failed to discover session file (agent=${agentName}): ${err instanceof Error ? err.message : String(err)}`,
 		);
 	}
@@ -684,7 +685,7 @@ export async function resolveModelForSubagentSpawn(
 			lastError = resolved.error;
 			const reason = compactErrorReason(resolved.error);
 			skippedModels.push({ model: modelStr, reason });
-			console.error(`[subagent] Model "${modelStr}" unavailable (${reason}). Trying next fallback...`);
+			log.debug(`[subagent] Model "${modelStr}" unavailable (${reason}). Trying next fallback...`);
 			continue;
 		}
 
@@ -698,12 +699,12 @@ export async function resolveModelForSubagentSpawn(
 			if (!probe.ok) {
 				lastError = probe.reason;
 				skippedModels.push({ model: modelStr, reason: probe.reason });
-				console.error(`[subagent] Model "${modelStr}" failed probe (${probe.reason}). Trying next fallback...`);
+				log.debug(`[subagent] Model "${modelStr}" failed probe (${probe.reason}). Trying next fallback...`);
 				continue;
 			}
 		}
 
-		console.error(`[subagent] Using model "${resolved.modelId}" for subagent.`);
+		log.debug(`[subagent] Using model "${resolved.modelId}" for subagent.`);
 		return { ...resolved, skippedModels };
 	}
 
@@ -713,7 +714,7 @@ export async function resolveModelForSubagentSpawn(
 		const parentResolved = resolveModelStringSingle(parentModel, parentProvider, registry);
 		if (parentResolved.ok) {
 			const warning = `Agent preferred models were unavailable. Falling back to parent model "${parentResolved.modelId}".`;
-			console.error(`[subagent] ${warning}`);
+			log.warn(`[subagent] ${warning}`);
 			return { ...parentResolved, warning, skippedModels };
 		}
 		lastError = parentResolved.error;
@@ -1284,7 +1285,7 @@ export function createSubagentToolDefinition(
 						try {
 							onBackgroundComplete(agentId, result, bgSignal.aborted);
 						} catch (err) {
-							console.error(
+							log.warn(
 								`[subagent] onBackgroundComplete threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}. Background result lost.`,
 							);
 						}
@@ -1315,7 +1316,7 @@ export function createSubagentToolDefinition(
 						}
 					};
 					run().catch((err) => {
-						console.error(
+						log.warn(
 							`[subagent] Unhandled background error (${agentId}): ${err instanceof Error ? err.message : String(err)}`,
 						);
 						const entry = backgroundAgentRegistry.get(agentId);
@@ -1335,7 +1336,7 @@ export function createSubagentToolDefinition(
 								bgSignal.aborted,
 							);
 						} catch (notifyErr) {
-							console.error(
+							log.error(
 								`[subagent] CRITICAL: Last-resort notification failed for ${agentId}: ${notifyErr instanceof Error ? notifyErr.message : String(notifyErr)}`,
 							);
 						}

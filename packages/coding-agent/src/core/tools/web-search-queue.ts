@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../../config.js";
+import { log } from "../logger.js";
 
 export interface WebSearchQueueOptions {
 	rateLimitMs?: number;
@@ -79,7 +80,7 @@ export class WebSearchQueue {
 					writeFileSync(this.timeFilePath, JSON.stringify(timestampData));
 				} catch (tsErr) {
 					// Don't let timestamp write failure mask the original error
-					console.error(`Failed to write search timestamp: ${tsErr}`);
+					log.warn(`Failed to write search timestamp: ${tsErr}`);
 				}
 			}
 		} finally {
