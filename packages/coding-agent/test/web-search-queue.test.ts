@@ -65,7 +65,7 @@ describe("WebSearchQueue", () => {
 		const startTimes: number[] = [];
 
 		const record = async () => {
-			startTimes.push(Date.now());
+			startTimes.push(performance.now());
 		};
 
 		await queue.enqueue(record);
@@ -86,7 +86,7 @@ describe("WebSearchQueue", () => {
 		const startTimes: number[] = [];
 
 		const record = async () => {
-			startTimes.push(Date.now());
+			startTimes.push(performance.now());
 		};
 
 		await queue.enqueue(record);
@@ -118,9 +118,9 @@ describe("WebSearchQueue", () => {
 		expect(data.lastSearchTime).toBeGreaterThan(0);
 
 		// Second call should be delayed (proving timestamp was written by the failed call)
-		const start = Date.now();
+		const start = performance.now();
 		await queue.enqueue(async () => "ok");
-		const elapsed = Date.now() - start;
+		const elapsed = performance.now() - start;
 		// Should have waited ~100ms minus whatever already elapsed
 		expect(elapsed).toBeGreaterThanOrEqual(80);
 	});
@@ -154,9 +154,9 @@ describe("WebSearchQueue", () => {
 
 		expect(existsSync(timeFilePath)).toBe(false);
 
-		const start = Date.now();
+		const start = performance.now();
 		await queue.enqueue(async () => "first");
-		const elapsed = Date.now() - start;
+		const elapsed = performance.now() - start;
 
 		// Should complete very quickly — no 5-second delay
 		expect(elapsed).toBeLessThan(500);
@@ -171,9 +171,9 @@ describe("WebSearchQueue", () => {
 		// Write garbage to the time file
 		writeFileSync(timeFilePath, "{broken json");
 
-		const start = Date.now();
+		const start = performance.now();
 		await queue.enqueue(async () => "ok");
-		const elapsed = Date.now() - start;
+		const elapsed = performance.now() - start;
 
 		// Should complete quickly — no 5-second delay
 		expect(elapsed).toBeLessThan(500);

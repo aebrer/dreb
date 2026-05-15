@@ -346,6 +346,8 @@ The `subagent` tool delegates tasks to independent child agent processes. Each s
 
 **Agent definitions** live in `~/.dreb/agents/` (global) and `.dreb/agents/` (project). Each is a markdown file with YAML frontmatter specifying `name`, `model` (with provider fallback list), and optional `systemPrompt`. Built-in agents include `Explore` (read-only codebase exploration), `Sandbox` (restricted to `/tmp`), `feature-dev` (strong-tier coding), and several review agents.
 
+**Model availability probes:** When an agent definition specifies a fallback list (comma-separated models), each model is verified with a lightweight 1-token API call before the subagent is spawned. Models that fail the probe (rate limit, quota exhaustion, auth failure, timeout) are skipped with a loud log line, and the next fallback is tried. If all configured models fail, the parent session's model is used as a last resort. Per-invocation model overrides and single-model configs skip probing entirely.
+
 **Session metadata:** Each child process records its agent type in the session JSONL header (`agentType` field), providing an audit trail of which agent definition executed the work.
 
 ---
