@@ -5,8 +5,9 @@
  * The suggestion is shown as ghost text in the editor prompt (Tab to accept).
  */
 
-import { Text } from "@dreb/tui";
+import { Container, Markdown, Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
+import { getMarkdownTheme } from "../../modes/interactive/theme/theme.js";
 import type { ToolDefinition } from "../extensions/types.js";
 
 // ============================================================================
@@ -42,24 +43,6 @@ export type SuggestNextInput = Static<typeof suggestNextSchema>;
 function formatSuggestNextCall(args: { command?: string } | undefined, theme: any): string {
 	const cmd = args?.command ?? "";
 	return `${theme.fg("toolTitle", theme.bold("suggest_next"))} ${theme.fg("accent", cmd)}`;
-}
-
-function formatSuggestNextResult(
-	result: { content: Array<{ type: string; text?: string }>; details?: SuggestNextDetails },
-	theme: any,
-): string {
-	const details = result.details;
-	if (!details) {
-		const text = result.content?.[0];
-		return text?.type === "text" && text.text ? theme.fg("toolOutput", text.text) : "";
-	}
-	const lines: string[] = [];
-	if (details.summary) {
-		lines.push(details.summary);
-		lines.push("");
-	}
-	lines.push(theme.fg("toolOutput", `→ ${details.suggestion}`));
-	return lines.join("\n");
 }
 
 // ============================================================================
@@ -98,9 +81,12 @@ export function createSuggestNextToolDefinition(
 
 			onSuggest(command);
 
+			// Strip control characters from summary (preserve newlines for markdown)
+			const sanitizedSummary = summary?.replace(/[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]/g, "").trim() || undefined;
+
 			return {
 				content: [{ type: "text" as const, text: `Suggestion registered: ${command}` }],
-				details: { suggestion: command, summary: summary?.trim() || undefined },
+				details: { suggestion: command, summary: sanitizedSummary },
 				endTurn: true,
 			};
 		},
@@ -112,8 +98,25 @@ export function createSuggestNextToolDefinition(
 		},
 
 		renderResult(result, _options, theme, context) {
+			const details = (result as any).details as SuggestNextDetails | undefined;
+			if (!details) {
+				const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+				const content = result.content?.[0];
+				const msg = content?.type === "text" && content.text ? content.text : "";
+				text.setText(theme.fg("toolOutput", msg));
+				return text;
+			}
+
+			if (details.summary) {
+				const container = (context.lastComponent as Container | undefined) ?? new Container();
+				container.clear();
+				container.addChild(new Markdown(details.summary, 0, 0, getMarkdownTheme()));
+				container.addChild(new Text(theme.fg("toolOutput", `→ ${details.suggestion}`), 0, 0));
+				return container;
+			}
+
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatSuggestNextResult(result as any, theme));
+			text.setText(theme.fg("toolOutput", `→ ${details.suggestion}`));
 			return text;
 		},
 	};

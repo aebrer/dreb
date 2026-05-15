@@ -132,6 +132,28 @@ describe("suggest_next tool", () => {
 
 			expect(result.details!.summary).toBeUndefined();
 		});
+
+		it("strips control characters from summary but preserves newlines", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-s-5", {
+				command: "/compact",
+				summary: "Line one\nLine two\x00\x1b[2J\x07end",
+			});
+
+			expect(result.details!.summary).toBe("Line one\nLine two[2Jend");
+		});
+
+		it("treats control-character-only summary as undefined", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-s-6", {
+				command: "/compact",
+				summary: "\x01\x02\x03",
+			});
+
+			expect(result.details!.summary).toBeUndefined();
+		});
 	});
 
 	describe("control character sanitization", () => {
