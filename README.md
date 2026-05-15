@@ -65,7 +65,7 @@ See the full coding-agent docs in [packages/coding-agent](packages/coding-agent/
 
 ### Tools and interaction
 
-dreb ships with 11 built-in tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, and `wait`. Four more tools are always active when available: `search` for semantic codebase search, `skill` for loading workflows, `tasks_update` for visible task tracking, and `suggest_next` for ghost text command suggestions (Tab to accept).
+dreb ships with 11 built-in tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, and `wait`. Three more tools are always active: `search` for semantic codebase search, `skill` for loading workflows, and `tasks_update` for visible task tracking. `suggest_next` (ghost text command suggestions, Tab to accept) is active by default but excluded when `--tools` is specified.
 
 Interactive mode adds slash commands such as `/model`, `/settings`, `/resume`, `/tree`, `/fork`, `/compact`, `/dream`, `/buddy`, `/export`, `/reload`, `/hotkeys`, and `/changelog`. The message queue lets you steer a running agent or queue follow-up work without waiting for the current turn to finish.
 
