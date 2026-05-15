@@ -9,7 +9,7 @@
  * but specifically for protecting the TUI's display in interactive mode.
  */
 
-type StderrCallback = (message: string) => void;
+export type StderrCallback = (message: string, level?: "warn" | "error" | "debug") => void;
 
 interface StderrTakeoverState {
 	rawStderrWrite: (chunk: string, callback?: (error?: Error | null) => void) => boolean;
@@ -36,9 +36,13 @@ export function takeOverStderr(callback: StderrCallback): void {
 		encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
 		callback?: (error?: Error | null) => void,
 	): boolean => {
-		const text = String(chunk);
+		const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
 		if (text.length > 0) {
-			stderrTakeoverState?.callback(text);
+			try {
+				stderrTakeoverState?.callback(text);
+			} catch {
+				rawStderrWrite(text);
+			}
 		}
 		// Signal success to caller — call the callback if provided
 		const cb = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
@@ -51,6 +55,23 @@ export function takeOverStderr(callback: StderrCallback): void {
 		originalStderrWrite,
 		callback,
 	};
+}
+
+/**
+ * Write a message directly through the interceptor callback with level info.
+ * Used by the logger to pass severity through without going via process.stderr.write.
+ * Falls back to rawStderrWrite if stderr is not taken over.
+ */
+export function writeIntercepted(message: string, level: "warn" | "error" | "debug"): void {
+	if (stderrTakeoverState) {
+		try {
+			stderrTakeoverState.callback(message, level);
+		} catch {
+			stderrTakeoverState.rawStderrWrite(message);
+		}
+	} else {
+		process.stderr.write(`${message}\n`);
+	}
 }
 
 /**

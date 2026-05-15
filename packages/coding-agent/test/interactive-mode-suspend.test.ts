@@ -9,6 +9,7 @@ type FakeUi = {
 
 type HandleCtrlZThis = {
 	ui: FakeUi;
+	activateStderrGuard: () => void;
 };
 
 type ProcessSignalHandler = () => void;
@@ -34,7 +35,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			stop: vi.fn(),
 			requestRender: vi.fn(),
 		};
-		const context: HandleCtrlZThis = { ui };
+		const context: HandleCtrlZThis = { ui, activateStderrGuard: vi.fn() };
 		const keepAliveHandle = setTimeout(() => undefined, 0);
 		clearTimeout(keepAliveHandle);
 
@@ -84,7 +85,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			stop: vi.fn(),
 			requestRender: vi.fn(),
 		};
-		const context: HandleCtrlZThis = { ui };
+		const context: HandleCtrlZThis = { ui, activateStderrGuard: vi.fn() };
 		const keepAliveHandle = setTimeout(() => undefined, 0);
 		clearTimeout(keepAliveHandle);
 		const suspendError = new Error("suspend failed");

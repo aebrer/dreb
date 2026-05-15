@@ -39,6 +39,7 @@ beforeEach(() => {
 	vi.mocked(spawn).mockReset();
 	vi.spyOn(console, "error").mockImplementation(() => {});
 	vi.spyOn(log, "debug").mockImplementation(() => {});
+	vi.spyOn(log, "warn").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -775,7 +776,7 @@ describe("spawn-time model availability probing", () => {
 			expect(result.skippedModels).toEqual([{ model: "primary-model", reason: "429 rate limit" }]);
 		}
 		expect(complete).toHaveBeenCalledTimes(2);
-		expect(log.debug).toHaveBeenCalledWith(
+		expect(log.warn).toHaveBeenCalledWith(
 			'[subagent] Model "primary-model" failed probe (429 rate limit). Trying next fallback...',
 		);
 	});

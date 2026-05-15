@@ -685,7 +685,7 @@ export async function resolveModelForSubagentSpawn(
 			lastError = resolved.error;
 			const reason = compactErrorReason(resolved.error);
 			skippedModels.push({ model: modelStr, reason });
-			log.debug(`[subagent] Model "${modelStr}" unavailable (${reason}). Trying next fallback...`);
+			log.warn(`[subagent] Model "${modelStr}" unavailable (${reason}). Trying next fallback...`);
 			continue;
 		}
 
@@ -699,7 +699,7 @@ export async function resolveModelForSubagentSpawn(
 			if (!probe.ok) {
 				lastError = probe.reason;
 				skippedModels.push({ model: modelStr, reason: probe.reason });
-				log.debug(`[subagent] Model "${modelStr}" failed probe (${probe.reason}). Trying next fallback...`);
+				log.warn(`[subagent] Model "${modelStr}" failed probe (${probe.reason}). Trying next fallback...`);
 				continue;
 			}
 		}

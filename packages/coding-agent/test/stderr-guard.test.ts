@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { isStderrTakenOver, restoreStderr, takeOverStderr, writeRawStderr } from "../src/core/stderr-guard.js";
+import {
+	isStderrTakenOver,
+	restoreStderr,
+	takeOverStderr,
+	writeIntercepted,
+	writeRawStderr,
+} from "../src/core/stderr-guard.js";
 
 describe("stderr-guard", () => {
 	// Save original so we can restore after each test
@@ -121,5 +127,91 @@ describe("stderr-guard", () => {
 
 		expect(callbackCalled).toBe(true);
 		expect(messages).toEqual(["data"]);
+	});
+
+	it("falls back to rawStderrWrite when callback throws", () => {
+		const rawWrites: string[] = [];
+
+		// Install a tracker as the raw write target
+		const fakeWrite = ((chunk: string | Uint8Array) => {
+			rawWrites.push(String(chunk));
+			return true;
+		}) as typeof process.stderr.write;
+		process.stderr.write = fakeWrite;
+
+		takeOverStderr(() => {
+			throw new Error("callback exploded");
+		});
+
+		// Write should not throw — it falls back to raw
+		process.stderr.write("fallback message");
+		expect(rawWrites).toEqual(["fallback message"]);
+	});
+
+	it("decodes Uint8Array correctly instead of producing garbage", () => {
+		const messages: string[] = [];
+		takeOverStderr((msg) => messages.push(msg));
+
+		const bytes = new Uint8Array([104, 101, 108, 108, 111]); // "hello"
+		// biome-ignore lint/complexity/noBannedTypes: testing Uint8Array input
+		(process.stderr.write as Function)(bytes);
+
+		expect(messages).toEqual(["hello"]);
+	});
+
+	it("decodes Buffer correctly", () => {
+		const messages: string[] = [];
+		takeOverStderr((msg) => messages.push(msg));
+
+		const buf = Buffer.from("buffer text");
+		// biome-ignore lint/complexity/noBannedTypes: testing Buffer input
+		(process.stderr.write as Function)(buf);
+
+		expect(messages).toEqual(["buffer text"]);
+	});
+
+	describe("writeIntercepted", () => {
+		it("passes message and level to callback", () => {
+			const calls: Array<{ msg: string; level?: string }> = [];
+			takeOverStderr((msg, level) => calls.push({ msg, level }));
+
+			writeIntercepted("a warning", "warn");
+			writeIntercepted("an error", "error");
+			writeIntercepted("debug info", "debug");
+
+			expect(calls).toEqual([
+				{ msg: "a warning", level: "warn" },
+				{ msg: "an error", level: "error" },
+				{ msg: "debug info", level: "debug" },
+			]);
+		});
+
+		it("falls back to rawStderrWrite when callback throws", () => {
+			const rawWrites: string[] = [];
+
+			const fakeWrite = ((chunk: string | Uint8Array) => {
+				rawWrites.push(String(chunk));
+				return true;
+			}) as typeof process.stderr.write;
+			process.stderr.write = fakeWrite;
+
+			takeOverStderr(() => {
+				throw new Error("boom");
+			});
+
+			writeIntercepted("safe fallback", "error");
+			expect(rawWrites).toEqual(["safe fallback"]);
+		});
+
+		it("writes to stderr directly when not taken over", () => {
+			const writes: string[] = [];
+			process.stderr.write = ((chunk: string | Uint8Array) => {
+				writes.push(String(chunk));
+				return true;
+			}) as typeof process.stderr.write;
+
+			writeIntercepted("not intercepted", "warn");
+			expect(writes).toEqual(["not intercepted\n"]);
+		});
 	});
 });

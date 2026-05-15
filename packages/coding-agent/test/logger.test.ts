@@ -4,7 +4,7 @@ import { restoreStderr, takeOverStderr } from "../src/core/stderr-guard.js";
 
 describe("logger", () => {
 	let originalStderrWrite: typeof process.stderr.write;
-	let interceptedMessages: string[] = [];
+	let interceptedMessages: Array<{ msg: string; level?: string }> = [];
 
 	beforeEach(() => {
 		originalStderrWrite = process.stderr.write;
@@ -56,7 +56,7 @@ describe("logger", () => {
 
 	describe("when stderr IS taken over (interactive TUI mode)", () => {
 		beforeEach(() => {
-			takeOverStderr((msg) => interceptedMessages.push(msg));
+			takeOverStderr((msg, level) => interceptedMessages.push({ msg, level }));
 		});
 
 		it("log.debug is suppressed (no callback fire)", () => {
@@ -64,23 +64,32 @@ describe("logger", () => {
 			expect(interceptedMessages).toEqual([]);
 		});
 
-		it("log.debug fires callback when DREB_DEBUG=1", () => {
+		it("log.debug fires callback with level 'debug' when DREB_DEBUG=1", () => {
 			restoreStderr();
 			process.env.DREB_DEBUG = "1";
-			takeOverStderr((msg) => interceptedMessages.push(msg));
+			takeOverStderr((msg, level) => interceptedMessages.push({ msg, level }));
 
 			log.debug("debug visible");
-			expect(interceptedMessages).toEqual(["debug visible"]);
+			expect(interceptedMessages).toEqual([{ msg: "debug visible", level: "debug" }]);
 		});
 
-		it("log.warn fires callback", () => {
+		it("log.warn fires callback with level 'warn'", () => {
 			log.warn("warning message");
-			expect(interceptedMessages).toEqual(["warning message"]);
+			expect(interceptedMessages).toEqual([{ msg: "warning message", level: "warn" }]);
 		});
 
-		it("log.error fires callback", () => {
+		it("log.error fires callback with level 'error'", () => {
 			log.error("error message");
-			expect(interceptedMessages).toEqual(["error message"]);
+			expect(interceptedMessages).toEqual([{ msg: "error message", level: "error" }]);
+		});
+
+		it("log.warn and log.error use different levels", () => {
+			log.warn("w");
+			log.error("e");
+			expect(interceptedMessages).toEqual([
+				{ msg: "w", level: "warn" },
+				{ msg: "e", level: "error" },
+			]);
 		});
 	});
 });

@@ -70,7 +70,7 @@ import type { ResourceDiagnostic } from "../../core/resource-loader.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
-import { restoreStderr, takeOverStderr } from "../../core/stderr-guard.js";
+import { restoreStderr, type StderrCallback, takeOverStderr } from "../../core/stderr-guard.js";
 import { resolveToCwd } from "../../core/tools/path-utils.js";
 import { abortBackgroundAgents, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
@@ -588,13 +588,8 @@ export class InteractiveMode {
 		this.isInitialized = true;
 
 		// Intercept stderr to prevent raw writes from corrupting the TUI.
-		// Route intercepted messages to the chat feed as warnings.
-		takeOverStderr((message) => {
-			// Strip trailing newlines for cleaner display
-			const trimmed = message.replace(/\n$/, "");
-			if (trimmed.length === 0) return;
-			this.showWarning(trimmed);
-		});
+		// Route intercepted messages to the chat feed as warnings/errors.
+		this.activateStderrGuard();
 
 		// Initialize extensions first so resources are shown before messages
 		await this.initExtensions();
@@ -2973,11 +2968,7 @@ export class InteractiveMode {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
-			takeOverStderr((message) => {
-				const trimmed = message.replace(/\n$/, "");
-				if (trimmed.length === 0) return;
-				this.showWarning(trimmed);
-			});
+			this.activateStderrGuard();
 			this.ui.requestRender(true);
 		});
 
@@ -3156,14 +3147,31 @@ export class InteractiveMode {
 
 			// Restart TUI and re-intercept stderr
 			this.ui.start();
-			takeOverStderr((message) => {
-				const trimmed = message.replace(/\n$/, "");
-				if (trimmed.length === 0) return;
-				this.showWarning(trimmed);
-			});
+			this.activateStderrGuard();
 			// Force full re-render since external editor uses alternate screen
 			this.ui.requestRender(true);
 		}
+	}
+
+	// =========================================================================
+	// Stderr guard
+	// =========================================================================
+
+	/**
+	 * Activate stderr interception, routing messages to the TUI chat feed.
+	 * Errors are shown with error styling; everything else as warnings.
+	 */
+	private activateStderrGuard(): void {
+		const callback: StderrCallback = (message, level) => {
+			const trimmed = message.replace(/\n$/, "");
+			if (trimmed.length === 0) return;
+			if (level === "error") {
+				this.showError(trimmed);
+			} else {
+				this.showWarning(trimmed);
+			}
+		};
+		takeOverStderr(callback);
 	}
 
 	// =========================================================================
