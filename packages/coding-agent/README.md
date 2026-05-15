@@ -674,6 +674,7 @@ dreb --thinking high "Solve this complex problem"
 | `DREB_SEARXNG_URL` | Base URL for SearXNG backend (default: `http://localhost:8888`) |
 | `DREB_BRAVE_API_KEY` | API key for Brave search backend |
 | `DREB_WEB_SEARCH_RATE_LIMIT_MS` | Minimum delay between web searches in milliseconds (default: `10000`) |
+| `DREB_DEBUG` | Show debug-level messages in the TUI chat feed (default: suppressed) |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 
 ---
