@@ -144,6 +144,18 @@ describe("suggest_next tool", () => {
 			expect(result.details!.summary).toBe("Line one\nLine two[2Jend");
 		});
 
+		it("strips carriage return from summary", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-s-7", {
+				command: "/compact",
+				summary: "Line one\r\nLine two\rLine three",
+			});
+
+			// \r\n → \n (CR stripped, LF preserved), bare \r → removed
+			expect(result.details!.summary).toBe("Line one\nLine twoLine three");
+		});
+
 		it("treats control-character-only summary as undefined", async () => {
 			const { execute } = createTool();
 
@@ -153,6 +165,17 @@ describe("suggest_next tool", () => {
 			});
 
 			expect(result.details!.summary).toBeUndefined();
+		});
+
+		it("converts literal backslash-n sequences to actual newlines", async () => {
+			const { execute } = createTool();
+
+			const result = await execute("call-s-8", {
+				command: "/compact",
+				summary: "Line one\\nLine two\\n\\nFinal line",
+			});
+
+			expect(result.details!.summary).toBe("Line one\nLine two\n\nFinal line");
 		});
 	});
 

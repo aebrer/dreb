@@ -67,6 +67,7 @@ export function createSuggestNextToolDefinition(
 			"Only suggest one command — pick the most likely next step",
 			"Don't suggest if the conversation is open-ended with no obvious next action",
 			"Include a brief summary of work done in the `summary` parameter — this is your last chance to communicate before the turn ends",
+			"Calling this tool ends your turn automatically — do not call wait afterwards",
 		],
 
 		async execute(_toolCallId, { command: rawCommand, summary }: SuggestNextInput, _signal?, _onUpdate?, _ctx?) {
@@ -81,8 +82,13 @@ export function createSuggestNextToolDefinition(
 
 			onSuggest(command);
 
-			// Strip control characters from summary (preserve newlines for markdown)
-			const sanitizedSummary = summary?.replace(/[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]/g, "").trim() || undefined;
+			// Convert literal \n sequences to actual newlines (LLMs emit these in XML tool calls),
+			// then strip control characters (preserve only newlines for markdown)
+			const sanitizedSummary =
+				summary
+					?.replace(/\\n/g, "\n")
+					.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, "")
+					.trim() || undefined;
 
 			return {
 				content: [{ type: "text" as const, text: `Suggestion registered: ${command}` }],

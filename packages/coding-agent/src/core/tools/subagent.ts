@@ -156,14 +156,15 @@ const DREB_SCRIPT = process.argv[1] || "dreb";
 const NODE_EXEC = process.execPath;
 
 // Tools that must never be available to subagents — wait (subagents should
-// never no-op; they have a task to complete) and subagent (no recursive spawning).
-const SUBAGENT_EXCLUDED_TOOLS = ["wait", "subagent"] as const;
+// never no-op; they have a task to complete), subagent (no recursive spawning),
+// and suggest_next (would end the subagent's turn mid-work).
+const SUBAGENT_EXCLUDED_TOOLS = ["wait", "subagent", "suggest_next"] as const;
 
 // Default standard tools for subagents when no tools are specified in the agent
 // definition. This is the set passed via --tools to the child process.
 //
-// NOTE: Always-active tools (search, skill, tasks_update, suggest_next) are NOT
-// listed here — the child process adds them unconditionally regardless of --tools.
+// NOTE: Always-active tools (search, skill, tasks_update) are NOT listed here —
+// the child process adds them unconditionally regardless of --tools.
 // Internal tools (tmp_read) are also excluded.
 const SUBAGENT_DEFAULT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch"];
 
@@ -231,7 +232,7 @@ async function spawnSubagent(
 			args.push("--provider", parentProvider);
 		}
 	}
-	// Always pass --tools to ensure wait/subagent are excluded from child processes.
+	// Always pass --tools to ensure wait/subagent/suggest_next are excluded from child processes.
 	// filterSubagentTools always returns a non-empty string.
 	args.push("--tools", filterSubagentTools(agentConfig.tools));
 	if (agentConfig.systemPrompt) {

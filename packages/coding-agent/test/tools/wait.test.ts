@@ -199,13 +199,13 @@ describe("filterSubagentTools", () => {
 		expect(result).toBe("read,bash");
 	});
 
-	it("filters out both wait and subagent", () => {
-		const result = filterSubagentTools("read,wait,bash,subagent,grep");
+	it("filters out wait, subagent, and suggest_next", () => {
+		const result = filterSubagentTools("read,wait,bash,subagent,suggest_next,grep");
 		expect(result).toBe("read,bash,grep");
 	});
 
 	it("returns defaults when all tools are excluded", () => {
-		const result = filterSubagentTools("wait,subagent");
+		const result = filterSubagentTools("wait,subagent,suggest_next");
 		expect(result).toBe("read,bash,edit,write,grep,find,ls,web_search,web_fetch");
 	});
 

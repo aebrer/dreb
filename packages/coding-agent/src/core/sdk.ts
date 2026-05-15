@@ -256,8 +256,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = "off";
 	}
 
-	// Tools that are always active when available (created by factory, not in allTools singleton)
-	const alwaysActiveBuiltins = ["skill", "tasks_update", "search", "suggest_next"];
+	// Tools that are always active when available (created by factory, not in allTools singleton).
+	// suggest_next is only auto-activated when tools aren't explicitly specified — subagent
+	// child processes pass --tools which excludes suggest_next (it would end the turn mid-work).
+	const alwaysActiveBuiltins = options.tools
+		? ["skill", "tasks_update", "search"]
+		: ["skill", "tasks_update", "search", "suggest_next"];
 	const defaultActiveToolNames: ToolName[] = [
 		"read",
 		"bash",
