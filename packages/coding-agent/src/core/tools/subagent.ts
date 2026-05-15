@@ -21,7 +21,7 @@ import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate
 // Agent type system
 // ---------------------------------------------------------------------------
 
-interface AgentTypeConfig {
+export interface AgentTypeConfig {
 	name: string;
 	description: string;
 	tools?: string;
@@ -796,7 +796,7 @@ function clampCwd(defaultCwd: string, itemCwd?: string): { ok: true; cwd: string
 	return { ok: true, cwd: resolved };
 }
 
-async function executeSingle(
+export async function executeSingle(
 	agents: Map<string, AgentTypeConfig>,
 	agentName: string | undefined,
 	task: string,

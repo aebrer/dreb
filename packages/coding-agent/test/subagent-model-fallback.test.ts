@@ -1,6 +1,11 @@
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { complete, type Model } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
+	type AgentTypeConfig,
+	executeSingle,
 	formatModelFallbackSummary,
 	isRuntimeUnavailableError,
 	parseAgentFrontmatter,
@@ -12,6 +17,14 @@ import {
 	subagentToolDefinition,
 } from "../src/core/tools/subagent.js";
 
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	return {
+		...actual,
+		spawn: vi.fn(),
+	};
+});
+
 vi.mock("@dreb/ai", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@dreb/ai")>();
 	return {
@@ -22,6 +35,7 @@ vi.mock("@dreb/ai", async (importOriginal) => {
 
 beforeEach(() => {
 	vi.mocked(complete).mockReset();
+	vi.mocked(spawn).mockReset();
 	vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -579,6 +593,60 @@ function probeRegistry() {
 	} as unknown as Parameters<typeof resolveModelForSubagentSpawn>[2];
 }
 
+function makeAgents(model: string | string[]): Map<string, AgentTypeConfig> {
+	return new Map([
+		[
+			"test-agent",
+			{
+				name: "test-agent",
+				description: "Test agent",
+				model,
+				systemPrompt: "Test system prompt",
+			},
+		],
+	]);
+}
+
+function mockSpawnSubagentResult(
+	options: { model?: string; output?: string; exitCode?: number; stderr?: string } = {},
+) {
+	const { model = "fallback-model", output = "child output", exitCode = 0, stderr = "" } = options;
+	vi.mocked(spawn).mockImplementationOnce((() => {
+		const stdout = new PassThrough();
+		const stderrStream = new PassThrough();
+		const proc = new EventEmitter() as ReturnType<typeof spawn> & {
+			stdout: PassThrough;
+			stderr: PassThrough;
+			killed: boolean;
+		};
+		proc.stdout = stdout;
+		proc.stderr = stderrStream;
+		proc.killed = false;
+		proc.kill = vi.fn(() => {
+			proc.killed = true;
+			return true;
+		}) as ReturnType<typeof spawn>["kill"];
+
+		process.nextTick(() => {
+			if (stderr) stderrStream.write(stderr);
+			stdout.write(`${JSON.stringify({ type: "agent_start", model: { id: model } })}\n`);
+			if (output) {
+				stdout.write(
+					`${JSON.stringify({
+						type: "message_end",
+						message: { role: "assistant", content: [{ type: "text", text: output }] },
+					})}\n`,
+				);
+			}
+			stdout.end();
+			stderrStream.end();
+			proc.emit("close", exitCode);
+		});
+
+		return proc;
+	}) as typeof spawn);
+}
+
 describe("spawn-time model availability probing", () => {
 	test("probeModelAvailability succeeds on a clean completion", async () => {
 		vi.mocked(complete).mockResolvedValueOnce(assistantResult("stop"));
@@ -843,6 +911,91 @@ describe("spawn-time model availability probing", () => {
 			'[MODEL FALLBACK: skipped 1 unavailable model(s); using "fallback-model".]\n- primary-model: 429 rate limit\n\nchild output',
 		);
 		expect(prependModelFallbackSummary("child output", [], "fallback-model")).toBe("child output");
+	});
+
+	test("executeSingle prepends warning before fallback summary when parent model is used", async () => {
+		vi.mocked(complete)
+			.mockResolvedValueOnce(assistantResult("error", "primary quota exhausted"))
+			.mockRejectedValueOnce(new Error("fallback auth revoked"));
+		mockSpawnSubagentResult({ model: "parent-model", output: "child output" });
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"parent-model",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.model).toBe("parent-model");
+		expect(result.output).toBe(
+			'[WARNING: Agent preferred models were unavailable. Falling back to parent model "parent-model".]\n\n' +
+				'[MODEL FALLBACK: skipped 2 unavailable model(s); using "parent-model".]\n' +
+				"- primary-model: primary quota exhausted\n" +
+				"- fallback-model: fallback auth revoked\n\n" +
+				"child output",
+		);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(spawn).mock.calls[0][1]).toContain("parent-model");
+	});
+
+	test("executeSingle includes skipped model details when model resolution fails", async () => {
+		vi.mocked(complete)
+			.mockResolvedValueOnce(assistantResult("error", "primary down"))
+			.mockResolvedValueOnce(assistantResult("error", "fallback down"));
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"missing-parent",
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.errorMessage).toContain("None of the fallback models passed availability checks");
+		expect(result.errorMessage).toContain("Skipped models:");
+		expect(result.errorMessage).toContain("- primary-model: primary down");
+		expect(result.errorMessage).toContain("- fallback-model: fallback down");
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	test("executeSingle model override skips fallback probes and uses the override model", async () => {
+		mockSpawnSubagentResult({ model: "parent-model", output: "override output" });
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"parent-model",
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.model).toBe("parent-model");
+		expect(result.output).toBe("override output");
+		expect(complete).not.toHaveBeenCalled();
+		expect(spawn).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(spawn).mock.calls[0][1]).toContain("parent-model");
 	});
 });
 
