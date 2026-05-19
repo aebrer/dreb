@@ -1,10 +1,24 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findModel } from "@dreb/ai";
+import { findModel, type Model } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
+import { createTestResourceLoader } from "./utilities.js";
+
+const nonReasoningModel: Model<"anthropic-messages"> = {
+	id: "non-reasoning-model",
+	name: "Non-reasoning Model",
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 1, output: 3, cacheRead: 0.1, cacheWrite: 1 },
+	contextWindow: 128000,
+	maxTokens: 8192,
+};
 
 describe("createAgentSession session manager defaults", () => {
 	let tempDir: string;
@@ -63,4 +77,24 @@ describe("createAgentSession session manager defaults", () => {
 
 		session.dispose();
 	});
+
+	it.each(["high", "xhigh"] as const)(
+		"clamps explicit %s thinking to off for a non-reasoning model",
+		async (thinkingLevel) => {
+			const { session } = await createAgentSession({
+				cwd,
+				agentDir,
+				model: nonReasoningModel,
+				thinkingLevel,
+				sessionManager: SessionManager.inMemory(cwd),
+				resourceLoader: createTestResourceLoader(),
+			});
+
+			try {
+				expect(session.thinkingLevel).toBe("off");
+			} finally {
+				session.dispose();
+			}
+		},
+	);
 });

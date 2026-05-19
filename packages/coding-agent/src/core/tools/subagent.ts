@@ -33,6 +33,7 @@ export interface AgentTypeConfig {
 }
 
 const DEFAULT_AGENT = "Explore";
+export const DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS = 120_000;
 
 export function parseAgentFrontmatter(
 	content: string,
@@ -542,11 +543,11 @@ export function resolveModelStringSingle(
 }
 
 export interface ProbeModelAvailabilityOptions {
-	/** Parent/tool abort signal. A 10s probe timeout is layered on top. */
+	/** Parent/tool abort signal. A model availability probe timeout is layered on top. */
 	signal?: AbortSignal;
 	/** Model registry used to resolve provider API keys for the probe call. */
 	registry?: ModelRegistry;
-	/** Override the default 10s probe timeout; primarily useful for tests. */
+	/** Override the default model availability probe timeout; primarily useful for tests. */
 	timeoutMs?: number;
 }
 
@@ -608,7 +609,7 @@ export async function probeModelAvailability(
 	model: Model<Api>,
 	options: ProbeModelAvailabilityOptions = {},
 ): Promise<ProbeModelAvailabilityResult> {
-	const { signal, registry, timeoutMs = 10_000 } = options;
+	const { signal, registry, timeoutMs = DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS } = options;
 	if (signal?.aborted) return { ok: false, reason: "Aborted before spawn", aborted: true };
 
 	const probeSignal = makeProbeSignal(signal, timeoutMs);

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { log } from "../src/core/logger.js";
 import {
 	type AgentTypeConfig,
+	DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS,
 	executeSingle,
 	formatModelFallbackSummary,
 	isRuntimeUnavailableError,
@@ -738,6 +739,21 @@ describe("spawn-time model availability probing", () => {
 		await expect(resultPromise).resolves.toEqual({
 			ok: false,
 			reason: "Model availability probe timed out after 50ms",
+		});
+	});
+
+	test("probeModelAvailability uses the named default timeout", async () => {
+		vi.useFakeTimers();
+		vi.mocked(completeSimple).mockImplementationOnce(
+			() => new Promise<Awaited<ReturnType<typeof completeSimple>>>(() => {}),
+		);
+
+		const resultPromise = probeModelAvailability(probeModels[0], { registry: probeRegistry() });
+		await vi.advanceTimersByTimeAsync(DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS);
+
+		await expect(resultPromise).resolves.toEqual({
+			ok: false,
+			reason: `Model availability probe timed out after ${DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS}ms`,
 		});
 	});
 
