@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { complete, type Model } from "@dreb/ai";
+import { complete, completeSimple, type Model } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { log } from "../src/core/logger.js";
 import {
@@ -31,11 +31,13 @@ vi.mock("@dreb/ai", async (importOriginal) => {
 	return {
 		...actual,
 		complete: vi.fn(),
+		completeSimple: vi.fn(),
 	};
 });
 
 beforeEach(() => {
 	vi.mocked(complete).mockReset();
+	vi.mocked(completeSimple).mockReset();
 	vi.mocked(spawn).mockReset();
 	vi.spyOn(console, "error").mockImplementation(() => {});
 	vi.spyOn(log, "debug").mockImplementation(() => {});
@@ -584,7 +586,7 @@ function assistantResult(stopReason: "stop" | "error" | "aborted", errorMessage?
 		stopReason,
 		errorMessage,
 		timestamp: Date.now(),
-	} as Awaited<ReturnType<typeof complete>>;
+	} as Awaited<ReturnType<typeof completeSimple>>;
 }
 
 function probeRegistry() {
@@ -651,25 +653,30 @@ function mockSpawnSubagentResult(
 }
 
 describe("spawn-time model availability probing", () => {
-	test("probeModelAvailability succeeds on a clean completion", async () => {
-		vi.mocked(complete).mockResolvedValueOnce(assistantResult("stop"));
+	test("probeModelAvailability succeeds on a clean completion via completeSimple (streamSimple path)", async () => {
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
 
 		const result = await probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 100 });
 
 		expect(result).toEqual({ ok: true });
-		expect(complete).toHaveBeenCalledTimes(1);
-		expect(complete).toHaveBeenCalledWith(
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(completeSimple).toHaveBeenCalledWith(
 			probeModels[0],
 			expect.objectContaining({
-				systemPrompt: "You are a model availability probe. Reply briefly.",
+				systemPrompt: "Reply with the single word OK.",
 				messages: [expect.objectContaining({ role: "user", content: "hi" })],
 			}),
-			expect.objectContaining({ apiKey: "test-key", maxRetryDelayMs: 0, maxTokens: 1 }),
+			expect.objectContaining({ apiKey: "test-key", maxRetryDelayMs: 0, reasoning: "xhigh" }),
 		);
+		// Must NOT pass maxTokens — normal model defaults are used, which avoids
+		// tripping reasoning model minimums (e.g. OpenAI o-series with maxTokens:1).
+		const callOptions = vi.mocked(completeSimple).mock.calls[0][2];
+		expect(callOptions).not.toHaveProperty("maxTokens");
+		expect(callOptions).toHaveProperty("reasoning", "xhigh");
 	});
 
 	test("probeModelAvailability reports thrown errors", async () => {
-		vi.mocked(complete).mockRejectedValueOnce(new Error("rate limit exceeded"));
+		vi.mocked(completeSimple).mockRejectedValueOnce(new Error("rate limit exceeded"));
 
 		const result = await probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 100 });
 
@@ -677,7 +684,7 @@ describe("spawn-time model availability probing", () => {
 	});
 
 	test("probeModelAvailability treats returned aborted messages as unavailable", async () => {
-		vi.mocked(complete).mockResolvedValueOnce(assistantResult("aborted", "request cancelled"));
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("aborted", "request cancelled"));
 
 		const result = await probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 100 });
 
@@ -695,14 +702,14 @@ describe("spawn-time model availability probing", () => {
 		});
 
 		expect(result).toEqual({ ok: false, reason: "Aborted before spawn", aborted: true });
-		expect(complete).not.toHaveBeenCalled();
+		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
 	test("probeModelAvailability propagates parent abort while in flight", async () => {
 		const controller = new AbortController();
-		vi.mocked(complete).mockImplementationOnce(
+		vi.mocked(completeSimple).mockImplementationOnce(
 			(_model, _context, options) =>
-				new Promise<Awaited<ReturnType<typeof complete>>>((resolve) => {
+				new Promise<Awaited<ReturnType<typeof completeSimple>>>((resolve) => {
 					options?.signal?.addEventListener("abort", () =>
 						resolve(assistantResult("aborted", "request cancelled")),
 					);
@@ -721,7 +728,9 @@ describe("spawn-time model availability probing", () => {
 
 	test("probeModelAvailability enforces timeout even if provider ignores abort", async () => {
 		vi.useFakeTimers();
-		vi.mocked(complete).mockImplementationOnce(() => new Promise<Awaited<ReturnType<typeof complete>>>(() => {}));
+		vi.mocked(completeSimple).mockImplementationOnce(
+			() => new Promise<Awaited<ReturnType<typeof completeSimple>>>(() => {}),
+		);
 
 		const resultPromise = probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 50 });
 		await vi.advanceTimersByTimeAsync(50);
@@ -740,7 +749,7 @@ describe("spawn-time model availability probing", () => {
 	});
 
 	test("fallback loop uses the first model when its probe succeeds", async () => {
-		vi.mocked(complete).mockResolvedValueOnce(assistantResult("stop"));
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
 
 		const result = await resolveModelForSubagentSpawn(
 			["primary-model", "fallback-model"],
@@ -755,11 +764,11 @@ describe("spawn-time model availability probing", () => {
 			expect(result.provider).toBe("anthropic");
 			expect(result.skippedModels).toEqual([]);
 		}
-		expect(complete).toHaveBeenCalledTimes(1);
+		expect(completeSimple).toHaveBeenCalledTimes(1);
 	});
 
 	test("fallback loop skips a failed probe and uses the next fallback", async () => {
-		vi.mocked(complete)
+		vi.mocked(completeSimple)
 			.mockResolvedValueOnce(assistantResult("error", "429 rate limit"))
 			.mockResolvedValueOnce(assistantResult("stop"));
 
@@ -775,7 +784,7 @@ describe("spawn-time model availability probing", () => {
 			expect(result.modelId).toBe("fallback-model");
 			expect(result.skippedModels).toEqual([{ model: "primary-model", reason: "429 rate limit" }]);
 		}
-		expect(complete).toHaveBeenCalledTimes(2);
+		expect(completeSimple).toHaveBeenCalledTimes(2);
 		expect(log.warn).toHaveBeenCalledWith(
 			'[subagent] Model "primary-model" failed probe (429 rate limit). Trying next fallback...',
 		);
@@ -784,7 +793,7 @@ describe("spawn-time model availability probing", () => {
 	test.each(["429 rate limit", "insufficient quota", "probe timeout", "HTTP 503 upstream unavailable"])(
 		"fallback loop skips probe error: %s",
 		async (message) => {
-			vi.mocked(complete)
+			vi.mocked(completeSimple)
 				.mockResolvedValueOnce(assistantResult("error", message))
 				.mockResolvedValueOnce(assistantResult("stop"));
 
@@ -801,7 +810,7 @@ describe("spawn-time model availability probing", () => {
 	);
 
 	test("fallback loop uses parent model when all configured model probes fail", async () => {
-		vi.mocked(complete)
+		vi.mocked(completeSimple)
 			.mockResolvedValueOnce(assistantResult("error", "primary quota exhausted"))
 			.mockRejectedValueOnce(new Error("fallback auth revoked"));
 
@@ -821,11 +830,11 @@ describe("spawn-time model availability probing", () => {
 				{ model: "fallback-model", reason: "fallback auth revoked" },
 			]);
 		}
-		expect(complete).toHaveBeenCalledTimes(2);
+		expect(completeSimple).toHaveBeenCalledTimes(2);
 	});
 
 	test("fallback loop returns an error when parent model also fails", async () => {
-		vi.mocked(complete)
+		vi.mocked(completeSimple)
 			.mockResolvedValueOnce(assistantResult("error", "primary down"))
 			.mockResolvedValueOnce(assistantResult("error", "fallback down"));
 
@@ -860,12 +869,12 @@ describe("spawn-time model availability probing", () => {
 		);
 
 		expect(result).toEqual({ ok: false, error: "Aborted before spawn", skippedModels: [] });
-		expect(complete).not.toHaveBeenCalled();
+		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
 	test("fallback loop exits when signal aborts during probing", async () => {
 		const controller = new AbortController();
-		vi.mocked(complete).mockImplementationOnce(async () => {
+		vi.mocked(completeSimple).mockImplementationOnce(async () => {
 			controller.abort(new Error("user cancelled"));
 			return assistantResult("aborted", "request cancelled");
 		});
@@ -879,7 +888,7 @@ describe("spawn-time model availability probing", () => {
 		);
 
 		expect(result).toEqual({ ok: false, error: "Aborted before spawn", skippedModels: [] });
-		expect(complete).toHaveBeenCalledTimes(1);
+		expect(completeSimple).toHaveBeenCalledTimes(1);
 	});
 
 	test("array model config without registry skips probing", async () => {
@@ -892,7 +901,7 @@ describe("spawn-time model availability probing", () => {
 
 		expect(result.ok).toBe(true);
 		if (result.ok) expect(result.modelId).toBe("primary-model");
-		expect(complete).not.toHaveBeenCalled();
+		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
 	test("single model config skips probing", async () => {
@@ -900,7 +909,7 @@ describe("spawn-time model availability probing", () => {
 
 		expect(result.ok).toBe(true);
 		if (result.ok) expect(result.modelId).toBe("primary-model");
-		expect(complete).not.toHaveBeenCalled();
+		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
 	test("fallback summary formatting and prepending are visible in output", () => {
@@ -917,7 +926,7 @@ describe("spawn-time model availability probing", () => {
 	});
 
 	test("executeSingle prepends warning before fallback summary when parent model is used", async () => {
-		vi.mocked(complete)
+		vi.mocked(completeSimple)
 			.mockResolvedValueOnce(assistantResult("error", "primary quota exhausted"))
 			.mockRejectedValueOnce(new Error("fallback auth revoked"));
 		mockSpawnSubagentResult({ model: "parent-model", output: "child output" });
@@ -950,7 +959,7 @@ describe("spawn-time model availability probing", () => {
 	});
 
 	test("executeSingle includes skipped model details when model resolution fails", async () => {
-		vi.mocked(complete)
+		vi.mocked(completeSimple)
 			.mockResolvedValueOnce(assistantResult("error", "primary down"))
 			.mockResolvedValueOnce(assistantResult("error", "fallback down"));
 
@@ -996,9 +1005,93 @@ describe("spawn-time model availability probing", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.model).toBe("parent-model");
 		expect(result.output).toBe("override output");
-		expect(complete).not.toHaveBeenCalled();
+		expect(completeSimple).not.toHaveBeenCalled();
 		expect(spawn).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(spawn).mock.calls[0][1]).toContain("parent-model");
+	});
+});
+
+describe("probe uses streamSimple path (issue 215 regression)", () => {
+	test("probe does NOT use low-level complete() — uses completeSimple (streamSimple path)", async () => {
+		// The old implementation used complete() which calls provider.stream() directly.
+		// The new implementation uses completeSimple() which calls provider.streamSimple(),
+		// the same unified path the agent loop uses. This ensures probes exercise the
+		// same code path as real subagent execution.
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		await probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 100 });
+
+		// completeSimple was called, not the low-level complete path.
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(complete).not.toHaveBeenCalled();
+	});
+
+	test("probe does NOT pass maxTokens:1 — avoids reasoning model failures", async () => {
+		// OpenAI reasoning models (o1, o3, etc.) reject or malfunction with maxTokens:1
+		// because reasoning tokens count against the completion token budget. The probe
+		// must not set maxTokens at all, letting buildBaseOptions apply normal defaults.
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		await probeModelAvailability(probeModels[0], { registry: probeRegistry(), timeoutMs: 100 });
+
+		const callOptions = vi.mocked(completeSimple).mock.calls[0][2];
+		expect(callOptions).not.toHaveProperty("maxTokens");
+	});
+
+	test("probe leaves reasoning disabled for non-reasoning models", async () => {
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		await probeModelAvailability(probeModels[1], { registry: probeRegistry(), timeoutMs: 100 });
+
+		const callOptions = vi.mocked(completeSimple).mock.calls[0][2];
+		expect(callOptions).not.toHaveProperty("maxTokens");
+		expect(callOptions?.reasoning).toBeUndefined();
+	});
+
+	test("probe works for openai-responses reasoning model with normal reasoning default", async () => {
+		// Simulate an OpenAI reasoning model (e.g. gpt-5.5) — the old maxTokens:1 probe
+		// would fail on these because the provider sends max_output_tokens:1 which
+		// is too small for reasoning token overhead. The probe must also pass the
+		// normal coding-agent thinking default so streamSimple does not disable reasoning.
+		const reasoningModel: Model<"openai-responses"> = {
+			id: "gpt-5.5",
+			name: "gpt-5.5",
+			api: "openai-responses",
+			provider: "openai",
+			baseUrl: "https://api.openai.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 10, output: 40, cacheRead: 1, cacheWrite: 10 },
+			contextWindow: 200000,
+			maxTokens: 100000,
+		};
+		const reasoningRegistry = {
+			getAll: () => [reasoningModel],
+			find: (provider: string, modelId: string) =>
+				provider === "openai" && modelId === "gpt-5.5" ? reasoningModel : undefined,
+			getApiKey: async () => "test-key",
+			authStorage: { hasAuth: () => true },
+		} as unknown as Parameters<typeof resolveModelForSubagentSpawn>[2];
+
+		vi.mocked(completeSimple).mockResolvedValueOnce({
+			...assistantResult("stop"),
+			api: "openai-responses",
+			provider: "openai",
+			model: "gpt-5.5",
+		});
+
+		const result = await probeModelAvailability(reasoningModel, {
+			registry: reasoningRegistry,
+			timeoutMs: 100,
+		});
+
+		expect(result).toEqual({ ok: true });
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		// Verify no maxTokens was passed — critical for reasoning models — and
+		// the normal coding-agent thinking default was forwarded through streamSimple.
+		const callOptions = vi.mocked(completeSimple).mock.calls[0][2];
+		expect(callOptions).not.toHaveProperty("maxTokens");
+		expect(callOptions).toHaveProperty("reasoning", "xhigh");
 	});
 });
 

@@ -233,8 +233,8 @@ describe("Agent E2E Tests", () => {
 		});
 	});
 
-	describe.skipIf(!process.env.XAI_API_KEY)("xAI Provider (grok-3)", () => {
-		const model = getModel("xai", "grok-3");
+	describe.skipIf(!process.env.XAI_API_KEY)("xAI Provider (grok-4.3)", () => {
+		const model = getModel("xai", "grok-4.3");
 
 		it("should handle basic text prompt", async () => {
 			await basicPrompt(model);

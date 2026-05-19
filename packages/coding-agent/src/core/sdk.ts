@@ -14,6 +14,7 @@ import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
+import { resolveEffectiveThinkingLevel } from "./thinking.js";
 import { time } from "./timings.js";
 import {
 	allTools,
@@ -252,9 +253,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Clamp to model capabilities
-	if (!model || !model.reasoning) {
-		thinkingLevel = "off";
-	}
+	thinkingLevel = resolveEffectiveThinkingLevel(model, thinkingLevel);
 
 	// Tools that are always active when available (created by factory, not in allTools singleton).
 	// suggest_next is only auto-activated when tools aren't explicitly specified — subagent

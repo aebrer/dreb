@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
-import { type Api, type AssistantMessage, type Context, complete, type Model } from "@dreb/ai";
+import { type Api, type AssistantMessage, type Context, completeSimple, type Model } from "@dreb/ai";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { CONFIG_DIR_NAME, getPackageDir, getSubagentSessionsDir } from "../../config.js";
@@ -14,6 +14,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { log } from "../logger.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { resolveCliModel } from "../model-resolver.js";
+import { resolveEffectiveThinkingLevel, thinkingLevelToReasoning } from "../thinking.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.js";
@@ -613,7 +614,7 @@ export async function probeModelAvailability(
 	const probeSignal = makeProbeSignal(signal, timeoutMs);
 	try {
 		const context: Context = {
-			systemPrompt: "You are a model availability probe. Reply briefly.",
+			systemPrompt: "Reply with the single word OK.",
 			messages: [{ role: "user", content: "hi", timestamp: Date.now() }],
 		};
 		const apiKey = await Promise.race([
@@ -621,11 +622,18 @@ export async function probeModelAvailability(
 			probeSignal.timeoutPromise,
 		]);
 		if (signal?.aborted) return { ok: false, reason: "Aborted before spawn", aborted: true };
+		const thinkingLevel = resolveEffectiveThinkingLevel(model, undefined);
+		const reasoning = thinkingLevelToReasoning(thinkingLevel);
+		// Use completeSimple — the same streamSimple path the agent loop uses.
+		// No maxTokens override is passed by the probe; buildBaseOptions applies
+		// normal model defaults. Reasoning is resolved through the shared normal
+		// coding-agent thinking default/clamp path instead of provider-specific
+		// probe logic, so reasoning models are probed with representative options.
 		const result = await Promise.race([
-			complete(model, context, {
+			completeSimple(model, context, {
 				apiKey,
 				maxRetryDelayMs: 0,
-				maxTokens: 1,
+				reasoning,
 				signal: probeSignal.signal,
 			}),
 			probeSignal.timeoutPromise,
