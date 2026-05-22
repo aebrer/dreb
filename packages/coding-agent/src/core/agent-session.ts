@@ -2761,6 +2761,7 @@ export class AgentSession {
 						parentProvider: () => this.model?.provider,
 						parentModel: () => this.model?.id,
 						modelRegistry: this._modelRegistry,
+						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
 						onBackgroundStart: (agentId, agentType, taskSummary) => {
 							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary });
 						},

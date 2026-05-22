@@ -72,7 +72,7 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import { restoreStderr, type StderrCallback, takeOverStderr } from "../../core/stderr-guard.js";
 import { resolveToCwd } from "../../core/tools/path-utils.js";
-import { abortBackgroundAgents, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
+import { abortBackgroundAgents, discoverAgentTypes, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
@@ -3439,6 +3439,12 @@ export class InteractiveMode {
 
 	private showSettingsSelector(): void {
 		this.showSelector((done) => {
+			// Discover agent types for agent models section
+			const agentTypes = discoverAgentTypes(process.cwd());
+			const agentNames = Array.from(agentTypes.keys()).sort();
+			const availableModels = this.session.modelRegistry.getAvailable();
+			const availableModelIds = availableModels.map((m: any) => `${m.provider}/${m.id}`);
+
 			const selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
@@ -3461,6 +3467,9 @@ export class InteractiveMode {
 					editorPaddingX: this.settingsManager.getEditorPaddingX(),
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
+					agentModels: this.settingsManager.getAgentModels(),
+					agentNames: agentNames,
+					availableModelIds,
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -3554,6 +3563,13 @@ export class InteractiveMode {
 						this.defaultEditor.setAutocompleteMaxVisible(maxVisible);
 						if (this.editor !== this.defaultEditor && this.editor.setAutocompleteMaxVisible !== undefined) {
 							this.editor.setAutocompleteMaxVisible(maxVisible);
+						}
+					},
+					onAgentModelsChange: (agentName, models) => {
+						if (models.length > 0) {
+							this.settingsManager.setAgentModelsForAgent(agentName, models);
+						} else {
+							this.settingsManager.removeAgentModelsForAgent(agentName);
 						}
 					},
 					onCancel: () => {

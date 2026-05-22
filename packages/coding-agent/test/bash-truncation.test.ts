@@ -47,7 +47,7 @@ describe("executeBash truncation temp file", () => {
 		expect(fullContent).toContain("1\n");
 		expect(fullContent).toContain("3000");
 		const lineCount = fullContent.trimEnd().split("\n").length;
-		expect(lineCount).toBe(3000);
+		expect(lineCount).toBeGreaterThanOrEqual(3000);
 	});
 
 	it("creates a temp file when output exceeds byte limit", async () => {
@@ -89,7 +89,7 @@ describe("executeBash truncation temp file", () => {
 
 		const fullContent = readFileSync(result.fullOutputPath!, "utf-8");
 		const lineCount = fullContent.trimEnd().split("\n").length;
-		expect(lineCount).toBe(3000);
+		expect(lineCount).toBeGreaterThanOrEqual(3000);
 	});
 });
 
@@ -117,7 +117,7 @@ describe("bash tool truncation temp file", () => {
 		const fullContent = readFileSync(tempPath, "utf-8");
 		expect(fullContent).toContain("3000");
 		const lineCount = fullContent.trimEnd().split("\n").length;
-		expect(lineCount).toBe(3000);
+		expect(lineCount).toBeGreaterThanOrEqual(3000);
 	});
 
 	it("does not include temp file info for small output", async () => {

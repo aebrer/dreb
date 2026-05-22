@@ -88,7 +88,7 @@ export function parseAgentFrontmatter(
 	};
 }
 
-function discoverAgentTypes(cwd: string): Map<string, AgentTypeConfig> {
+export function discoverAgentTypes(cwd: string): Map<string, AgentTypeConfig> {
 	const agents = new Map<string, AgentTypeConfig>();
 
 	// Package-bundled agents (shipped with dreb — the canonical source of truth for built-in agents)
@@ -819,6 +819,7 @@ export async function executeSingle(
 	registry?: ModelRegistry,
 	sessionDir?: string,
 	parentModel?: string,
+	agentModels?: string[],
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -843,9 +844,9 @@ export async function executeSingle(
 			errorMessage: `Task prompt too long (${task.length} chars, max ${MAX_TASK_LENGTH}). Shorten the prompt.`,
 		};
 	}
-	// Per-invocation model override takes precedence over agent definition model.
-	// Override is always a single string; agent config may be a string or fallback list.
-	const modelSpec = modelOverride || config.model;
+	// Per-invocation model override takes precedence over agent settings, which take precedence over agent definition model.
+	// Override is always a single string; agentModels and agent config may be arrays.
+	const modelSpec = modelOverride || (agentModels && agentModels.length > 0 ? agentModels : undefined) || config.model;
 	let effectiveConfig: AgentTypeConfig = modelOverride ? { ...config, model: modelOverride } : config;
 	let resolvedProvider = parentProvider;
 	let warning: string | undefined;
@@ -878,13 +879,10 @@ export async function executeSingle(
 		warning = resolved.warning;
 	}
 
-	onProgress?.(`Running ${name} agent...`);
+	const usedModel = effectiveConfig.model?.toString();
+	onProgress?.(`Running ${name} agent${usedModel ? ` (${usedModel})` : ""}...`);
 	const result = await spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider, sessionDir);
-	result.output = prependModelFallbackSummary(
-		result.output,
-		skippedModels,
-		result.model ?? effectiveConfig.model?.toString(),
-	);
+	result.output = prependModelFallbackSummary(result.output, skippedModels, result.model ?? usedModel);
 	if (warning) {
 		result.output = `[WARNING: ${warning}]\n\n${result.output}`;
 	}
@@ -903,6 +901,7 @@ async function executeChain(
 	defaultAgent?: string,
 	defaultModel?: string,
 	parentModel?: string,
+	getAgentModelsForAgentFn?: (name: string) => string[] | undefined,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -941,6 +940,8 @@ async function executeChain(
 
 		// Each chain step gets its own session subdirectory
 		const stepSessionDir = sessionBaseDir ? join(sessionBaseDir, `step-${i + 1}`) : undefined;
+		const stepAgentName = step.agent || defaultAgent || DEFAULT_AGENT;
+		const stepMach6Models = getAgentModelsForAgentFn?.(stepAgentName);
 		const result = await executeSingle(
 			agents,
 			step.agent || defaultAgent,
@@ -953,6 +954,7 @@ async function executeChain(
 			registry,
 			stepSessionDir,
 			parentModel,
+			stepMach6Models,
 		);
 		results.push(result);
 
@@ -1032,6 +1034,8 @@ export interface SubagentToolOptions {
 	parentModel?: () => string | undefined;
 	/** Model registry for validating model names before spawning child processes. */
 	modelRegistry?: ModelRegistry;
+	/** Settings-based model override getter for mach6.models. */
+	getAgentModelsForAgent?: (agentName: string) => string[] | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,6 +1195,7 @@ export function createSubagentToolDefinition(
 	const getParentProvider = options?.parentProvider ?? (() => undefined);
 	const getParentModel = options?.parentModel ?? (() => undefined);
 	const modelRegistry = options?.modelRegistry;
+	const getAgentModelsForAgent = options?.getAgentModelsForAgent;
 
 	// Discover agents at definition time to build the prompt guidelines.
 	// This is cheap (reads .md files) and the same call happens on every execute().
@@ -1368,6 +1373,7 @@ export function createSubagentToolDefinition(
 					// Each background agent gets its own session subdirectory
 					const sessionId = generateAgentId();
 					const sessionDir = join(subagentSessionsBase, sessionId);
+					const agentModels = getAgentModelsForAgent?.(agentName || DEFAULT_AGENT);
 					return launchBackgroundLifecycle(agentName, taskLabel, (signal) =>
 						executeSingle(
 							agents,
@@ -1381,6 +1387,7 @@ export function createSubagentToolDefinition(
 							modelRegistry,
 							sessionDir,
 							getParentModel(),
+							agentModels,
 						),
 					);
 				};
@@ -1471,6 +1478,7 @@ export function createSubagentToolDefinition(
 							params.agent,
 							params.model,
 							getParentModel(),
+							getAgentModelsForAgent,
 						);
 						const resultText = results
 							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
