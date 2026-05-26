@@ -17,6 +17,11 @@ export { Input } from "./components/input.js";
 export { Loader } from "./components/loader.js";
 export { type DefaultTextStyle, Markdown, type MarkdownTheme } from "./components/markdown.js";
 export {
+	type RankedItem,
+	RankedList,
+	type RankedListTheme,
+} from "./components/ranked-list.js";
+export {
 	type SelectItem,
 	SelectList,
 	type SelectListLayoutOptions,

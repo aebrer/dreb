@@ -44,6 +44,10 @@ export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
 }
 
+export interface AgentModelsSettings {
+	models?: Record<string, string[]>;
+}
+
 export type TransportSetting = Transport;
 
 /**
@@ -99,6 +103,7 @@ export interface Settings {
 	forbiddenCommands?: string[]; // Regex patterns for commands blocked by the forbidden-commands guard
 	sensitiveFilePaths?: string[]; // Additional glob patterns for sensitive file paths blocked by the read/bash guard
 	secretOutputPatterns?: { name: string; pattern: string }[]; // Additional regex patterns for secret scrubbing in tool output
+	agentModels?: AgentModelsSettings;
 	dream?: {
 		archivePath?: string; // Custom archive location for dream backups (default: ~/.dreb/memory-archive/)
 	};
@@ -971,5 +976,34 @@ export class SettingsManager {
 		this.globalSettings.dream.archivePath = path;
 		this.markModified("dream", "archivePath");
 		this.save();
+	}
+
+	getAgentModels(): Record<string, string[]> {
+		return this.settings.agentModels?.models ? { ...this.settings.agentModels.models } : {};
+	}
+
+	getAgentModelsForAgent(agentName: string): string[] | undefined {
+		const models = this.settings.agentModels?.models?.[agentName];
+		return models && models.length > 0 ? [...models] : undefined;
+	}
+
+	setAgentModelsForAgent(agentName: string, models: string[]): void {
+		if (!this.globalSettings.agentModels) {
+			this.globalSettings.agentModels = {};
+		}
+		if (!this.globalSettings.agentModels.models) {
+			this.globalSettings.agentModels.models = {};
+		}
+		this.globalSettings.agentModels.models[agentName] = [...models];
+		this.markModified("agentModels", "models");
+		this.save();
+	}
+
+	removeAgentModelsForAgent(agentName: string): void {
+		if (this.globalSettings.agentModels?.models) {
+			delete this.globalSettings.agentModels.models[agentName];
+			this.markModified("agentModels", "models");
+			this.save();
+		}
 	}
 }

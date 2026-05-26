@@ -1,8 +1,13 @@
 import type { ThinkingLevel } from "@dreb/agent-core";
 import type { Transport } from "@dreb/ai";
 import {
+	type Component,
 	Container,
 	getCapabilities,
+	getKeybindings,
+	type RankedItem,
+	RankedList,
+	type RankedListTheme,
 	type SelectItem,
 	SelectList,
 	type SelectListLayoutOptions,
@@ -49,6 +54,12 @@ export interface SettingsConfig {
 	editorPaddingX: number;
 	autocompleteMaxVisible: number;
 	quietStartup: boolean;
+	/** Per-agent model overrides from agentModels settings */
+	agentModels: Record<string, string[]>;
+	/** Known agent names for the mach6 models submenu */
+	agentNames: string[];
+	/** Available model IDs for selection in the ranked list */
+	availableModelIds: string[];
 }
 
 export interface SettingsCallbacks {
@@ -71,6 +82,7 @@ export interface SettingsCallbacks {
 	onEditorPaddingXChange: (padding: number) => void;
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
+	onAgentModelsChange: (agentName: string, models: string[]) => void;
 	onCancel: () => void;
 }
 
@@ -138,6 +150,217 @@ class SelectSubmenu extends Container {
 
 	handleInput(data: string): void {
 		this.selectList.handleInput(data);
+	}
+}
+
+function getRankedListTheme(): RankedListTheme {
+	return {
+		selectedPrefix: (t: string) => theme.fg("accent", t),
+		selectedText: (t: string) => theme.bold(t),
+		rank: (t: string) => theme.fg("muted", t),
+		description: (t: string) => theme.fg("dim", t),
+		hint: (t: string) => theme.fg("dim", t),
+		empty: (t: string) => theme.fg("dim", t),
+	};
+}
+
+/**
+ * Top-level Mach6 Models submenu. Shows a list of agents, selecting one opens
+ * a RankedList editor for that agent's model fallback list.
+ *
+ * Navigation: Agent list → RankedList → (optional) Add Model picker
+ */
+class AgentModelsSubmenu implements Component {
+	private agentList: SelectList;
+	private rankedList: RankedList | null = null;
+	private addList: SelectList | null = null;
+	private addListSearchQuery = "";
+	private activeView: "agents" | "ranked" | "add" = "agents";
+	private currentAgentName: string | null = null;
+	private agentNames: string[];
+	private agentModels: Record<string, string[]>;
+	private availableModelIds: string[];
+	private onModelsChange: (agentName: string, models: string[]) => void;
+	private onCancel: () => void;
+
+	constructor(
+		agentNames: string[],
+		agentModels: Record<string, string[]>,
+		availableModelIds: string[],
+		onModelsChange: (agentName: string, models: string[]) => void,
+		onCancel: () => void,
+	) {
+		this.agentNames = agentNames;
+		this.agentModels = agentModels;
+		this.availableModelIds = availableModelIds;
+		this.onModelsChange = onModelsChange;
+		this.onCancel = onCancel;
+
+		this.agentList = this.buildAgentList();
+	}
+
+	private buildAgentList(): SelectList {
+		const agentItems: SelectItem[] = this.agentNames.map((name) => {
+			const models = this.agentModels[name];
+			const desc = models && models.length > 0 ? models.join(", ") : "default";
+			return { value: name, label: name, description: desc };
+		});
+
+		const list = new SelectList(agentItems, Math.min(agentItems.length, 12), getSelectListTheme(), {
+			minPrimaryColumnWidth: 20,
+			maxPrimaryColumnWidth: 30,
+		});
+
+		list.onSelect = (item) => {
+			this.openRankedList(item.value);
+		};
+
+		list.onCancel = this.onCancel;
+		return list;
+	}
+
+	private openRankedList(agentName: string): void {
+		this.currentAgentName = agentName;
+		const currentModels = this.agentModels[agentName] ?? [];
+		const items: RankedItem[] = currentModels.map((m) => ({ value: m, label: m }));
+		this.rankedList = new RankedList(items, 10, getRankedListTheme());
+
+		this.rankedList.onReorder = (reorderedItems) => {
+			this.saveModels(
+				agentName,
+				reorderedItems.map((i) => i.value),
+			);
+		};
+
+		this.rankedList.onRemove = (_removed, remaining) => {
+			this.saveModels(
+				agentName,
+				remaining.map((i) => i.value),
+			);
+		};
+
+		this.rankedList.onSelect = () => {
+			this.openAddModelPicker();
+		};
+
+		this.rankedList.onCancel = () => {
+			this.rankedList = null;
+			this.currentAgentName = null;
+			this.activeView = "agents";
+			// Rebuild agent list so descriptions reflect any changes made
+			this.agentList = this.buildAgentList();
+		};
+
+		this.activeView = "ranked";
+	}
+
+	private openAddModelPicker(): void {
+		if (!this.rankedList) return;
+
+		const existingValues = new Set(this.rankedList.getItems().map((i) => i.value));
+		const allOptions = this.availableModelIds
+			.filter((m) => !existingValues.has(m))
+			.map((m) => ({ value: m, label: m }));
+
+		if (allOptions.length === 0) return;
+
+		this.addList = new SelectList(
+			allOptions,
+			Math.min(allOptions.length, 10),
+			getSelectListTheme(),
+			SETTINGS_SUBMENU_SELECT_LIST_LAYOUT,
+		);
+
+		this.addListSearchQuery = "";
+
+		this.addList.onSelect = (item) => {
+			if (!this.rankedList || !this.currentAgentName) return;
+			const newItems = [...this.rankedList.getItems(), { value: item.value, label: item.value }];
+			this.rankedList.setItems(newItems);
+			this.addList = null;
+			this.addListSearchQuery = "";
+			this.activeView = "ranked";
+			this.saveModels(
+				this.currentAgentName,
+				newItems.map((i) => i.value),
+			);
+		};
+
+		this.addList.onCancel = () => {
+			this.addList = null;
+			this.addListSearchQuery = "";
+			this.activeView = "ranked";
+		};
+
+		this.activeView = "add";
+	}
+
+	private saveModels(agentName: string, models: string[]): void {
+		this.agentModels[agentName] = models;
+		this.onModelsChange(agentName, models);
+	}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const lines: string[] = [];
+
+		if (this.activeView === "add" && this.addList) {
+			lines.push(theme.bold(theme.fg("accent", "Add Model")));
+			lines.push("");
+			const searchDisplay = this.addListSearchQuery
+				? `  Search: ${this.addListSearchQuery}▋`
+				: theme.fg("dim", "  Type to filter · ↑↓: navigate · Enter: add · Esc: back");
+			lines.push(searchDisplay);
+			lines.push("");
+			lines.push(...this.addList.render(width));
+			return lines;
+		}
+
+		if (this.activeView === "ranked" && this.rankedList && this.currentAgentName) {
+			lines.push(theme.bold(theme.fg("accent", `Agent Models › ${this.currentAgentName}`)));
+			lines.push("");
+			lines.push(theme.fg("muted", "Configure model fallback priority (first = preferred)"));
+			lines.push("");
+			lines.push(...this.rankedList.render(width));
+			return lines;
+		}
+
+		// Default: agent list
+		lines.push(theme.bold(theme.fg("accent", "Agent Models")));
+		lines.push("");
+		lines.push(theme.fg("muted", "Select an agent to configure its model fallback list"));
+		lines.push("");
+		lines.push(...this.agentList.render(width));
+		lines.push("");
+		lines.push(theme.fg("dim", "  Enter to configure · Esc to go back"));
+		return lines;
+	}
+
+	handleInput(data: string): void {
+		if (this.activeView === "add" && this.addList) {
+			const kb = getKeybindings();
+			if (
+				kb.matches(data, "tui.select.cancel") ||
+				kb.matches(data, "tui.select.up") ||
+				kb.matches(data, "tui.select.down") ||
+				kb.matches(data, "tui.select.confirm")
+			) {
+				this.addList.handleInput(data);
+			} else if (data === "\x7f" || data === "\x08") {
+				// Backspace — remove last char from search
+				this.addListSearchQuery = this.addListSearchQuery.slice(0, -1);
+				this.addList.setFilter(this.addListSearchQuery);
+			} else if (data.length === 1 && data >= " ") {
+				// Printable char — add to search
+				this.addListSearchQuery += data;
+				this.addList.setFilter(this.addListSearchQuery);
+			}
+		} else if (this.activeView === "ranked" && this.rankedList) {
+			this.rankedList.handleInput(data);
+		} else {
+			this.agentList.handleInput(data);
+		}
 	}
 }
 
@@ -270,6 +493,26 @@ export class SettingsSelectorComponent extends Container {
 					),
 			},
 		];
+
+		// Single "Agent Models" entry that opens the agent picker submenu
+		if (config.agentNames.length > 0) {
+			items.push({
+				id: "agent-models",
+				label: "Agent Models",
+				description: "Configure model fallback lists for subagents",
+				currentValue: "",
+				submenu: (_currentValue, done) =>
+					new AgentModelsSubmenu(
+						config.agentNames,
+						config.agentModels,
+						config.availableModelIds,
+						(agentName, models) => {
+							callbacks.onAgentModelsChange(agentName, models);
+						},
+						() => done(),
+					),
+			});
+		}
 
 		// Only show image toggle if terminal supports it
 		if (supportsImages) {
