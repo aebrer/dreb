@@ -100,7 +100,7 @@ The same agent runtime powers multiple surfaces:
 - **JSON mode** — event stream for scripts and automation.
 - **RPC mode** — strict [JSONL stdin/stdout protocol](packages/coding-agent/docs/rpc.md) for non-Node clients and custom UIs.
 - **SDK** — import `@dreb/coding-agent` and create agent sessions directly in TypeScript.
-- **Telegram** — `@dreb/telegram` runs dreb as a bot with sessions, model controls, file upload/download, and live tool status.
+- **Telegram** — `@dreb/telegram` runs dreb as a bot with sessions, model controls, file upload/download, live tool status, and visible results for user-facing tools.
 
 ## Design philosophy
 
