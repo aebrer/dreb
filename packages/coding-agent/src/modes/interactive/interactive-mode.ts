@@ -107,6 +107,7 @@ import { ToolExecutionComponent } from "./components/tool-execution.js";
 import { TreeSelectorComponent } from "./components/tree-selector.js";
 import { UserMessageComponent } from "./components/user-message.js";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.js";
+import { TabTitleGenerator } from "./tab-title.js";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -252,6 +253,9 @@ export class InteractiveMode {
 	// Buddy companion
 	private buddyController: BuddyController;
 	private buddyComponent: BuddyComponent | null = null;
+
+	// Tab title auto-generation
+	private tabTitleGenerator: TabTitleGenerator | undefined = undefined;
 
 	// Convenience accessors
 	private get agent() {
@@ -600,6 +604,9 @@ export class InteractiveMode {
 		// Set terminal title
 		this.updateTerminalTitle();
 
+		// Initialize tab title auto-generation
+		this.initTabTitleGenerator();
+
 		// Subscribe to agent events
 		this.subscribeToAgent();
 
@@ -636,6 +643,24 @@ export class InteractiveMode {
 		} else {
 			this.ui.terminal.setTitle(`dreb - ${cwdBasename}`);
 		}
+	}
+
+	/**
+	 * Initialize the tab title auto-generator. Sets up a TabTitleGenerator that
+	 * will fire a background LLM call after a threshold of tool calls to produce
+	 * a concise, task-descriptive terminal tab title.
+	 */
+	private initTabTitleGenerator(): void {
+		const settings = this.settingsManager.getTabTitleSettings();
+		if (settings?.enabled === false) return;
+
+		this.tabTitleGenerator = new TabTitleGenerator(settings, {
+			setTitle: (title) => this.ui.terminal.setTitle(title),
+			getMessages: () => this.session.state.messages,
+			getModel: () => this.session.model,
+			getModelRegistry: () => this.session.modelRegistry,
+			getProvider: () => this.session.model?.provider,
+		});
 	}
 
 	/**
@@ -2494,6 +2519,8 @@ export class InteractiveMode {
 				}
 				// Buddy context + reaction for tool execution
 				this.buddyController.handleEvent(event);
+				// Tab title auto-generation
+				this.tabTitleGenerator?.onToolEnd();
 				break;
 			}
 
