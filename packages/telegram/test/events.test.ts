@@ -134,7 +134,7 @@ describe("agent_end", () => {
 
 	it("does NOT set done for retryable errors, sets pendingRetry and resets per-cycle state", async () => {
 		const send = vi.fn();
-		const state = makeState({ toolCount: 5, textBlocks: ["some text"] });
+		const state = makeState({ toolCount: 5, textBlocks: ["some text"], visibleToolResultCount: 1 });
 
 		await handleAgentEvent(send, mockApi(), state, {
 			type: "agent_end",
@@ -145,12 +145,13 @@ describe("agent_end", () => {
 		expect(state.pendingRetry).toBe(true);
 		// Per-cycle state is reset
 		expect(state.textBlocks).toEqual([]);
+		expect(state.visibleToolResultCount).toBe(0);
 		expect(state.toolCount).toBe(0);
 	});
 
 	it("does NOT set done for 'ended without' errors (stream termination)", async () => {
 		const send = vi.fn();
-		const state = makeState({ toolCount: 2, textBlocks: ["partial"] });
+		const state = makeState({ toolCount: 2, textBlocks: ["partial"], visibleToolResultCount: 1 });
 
 		await handleAgentEvent(send, mockApi(), state, {
 			type: "agent_end",
@@ -160,12 +161,13 @@ describe("agent_end", () => {
 		expect(state.done).toBe(false);
 		expect(state.pendingRetry).toBe(true);
 		expect(state.textBlocks).toEqual([]);
+		expect(state.visibleToolResultCount).toBe(0);
 		expect(state.toolCount).toBe(0);
 	});
 
 	it("does NOT set done when background agents are still running", async () => {
 		const send = vi.fn();
-		const state = makeState();
+		const state = makeState({ visibleToolResultCount: 1 });
 		state.backgroundAgents.set("bg-1", {
 			agentId: "bg-1",
 			agentType: "researcher",
@@ -181,6 +183,7 @@ describe("agent_end", () => {
 		expect(state.done).toBe(false);
 		// Per-cycle state is reset
 		expect(state.textBlocks).toEqual([]);
+		expect(state.visibleToolResultCount).toBe(0);
 		expect(state.toolCount).toBe(0);
 	});
 
@@ -193,6 +196,28 @@ describe("agent_end", () => {
 			messages: [],
 		});
 
+		expect(send).not.toHaveBeenCalledWith("(No response)");
+		expect(state.done).toBe(true);
+	});
+
+	it("does NOT send no-response after a visible tool result in the same cycle", async () => {
+		const send = vi.fn();
+		const state = makeState();
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "tool_execution_end",
+			toolName: "suggest_next",
+			result: {
+				content: [{ type: "text", text: "Suggestion registered: /compact" }],
+				details: { suggestion: "/compact", summary: "Done." },
+			},
+		});
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "agent_end",
+			messages: [],
+		});
+
+		expect(send).toHaveBeenCalledWith(expect.stringContaining("Done."), true);
 		expect(send).not.toHaveBeenCalledWith("(No response)");
 		expect(state.done).toBe(true);
 	});
@@ -311,6 +336,29 @@ describe("tool_execution_end", () => {
 		expect(state.visibleToolResultCount).toBe(1);
 	});
 
+	it("flushes accumulated tool summaries before sending a visible tool result", async () => {
+		const send = vi.fn();
+		const state = makeState({ toolsSinceText: ["🔧 *bash*", "💡 *suggest\\_next*: /compact"] });
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "tool_execution_end",
+			toolName: "suggest_next",
+			result: {
+				content: [{ type: "text", text: "Suggestion registered: /compact" }],
+				details: { suggestion: "/compact" },
+			},
+		});
+
+		expect(send).toHaveBeenCalledTimes(2);
+		expect(send.mock.calls[0][0]).toContain("📋 *2 tools*:");
+		expect(send.mock.calls[0][0]).toContain("🔧 *bash*");
+		expect(send.mock.calls[0][0]).toContain("💡 *suggest\\_next*: /compact");
+		expect(send.mock.calls[0][1]).toBe(true);
+		expect(send.mock.calls[1]).toEqual(["→ /compact", true]);
+		expect(state.toolsSinceText).toEqual([]);
+		expect(state.visibleToolResultCount).toBe(1);
+	});
+
 	it("sends search result text via the long-message path", async () => {
 		const send = vi.fn();
 		const state = makeState();
@@ -387,6 +435,23 @@ describe("tool_execution_end", () => {
 		});
 
 		expect(send).toHaveBeenCalledWith("⏳ Waiting…", true);
+		expect(state.visibleToolResultCount).toBe(1);
+	});
+
+	it("sends wait reason when no background agents are running", async () => {
+		const send = vi.fn();
+		const state = makeState();
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "tool_execution_end",
+			toolName: "wait",
+			result: {
+				content: [{ type: "text", text: "Waiting…" }],
+				details: { reason: "compacting context", runningAgents: [] },
+			},
+		});
+
+		expect(send).toHaveBeenCalledWith("⏳ Waiting: compacting context", true);
 		expect(state.visibleToolResultCount).toBe(1);
 	});
 
