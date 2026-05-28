@@ -58,6 +58,107 @@ describe("isForbiddenCommand", () => {
 		});
 	});
 
+	describe("privilege escalation (sudo, doas, su)", () => {
+		const SUDO_PATTERN = "^sudo\\b";
+		const DOAS_PATTERN = "^doas\\b";
+		const SU_PATTERN = "^su\\b";
+
+		// sudo
+		it("blocks sudo at start of command", () => {
+			expect(isForbiddenCommand("sudo apt install foo")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks sudo with flags", () => {
+			expect(isForbiddenCommand("sudo -u root cat /etc/shadow")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks sudo after shell operator", () => {
+			expect(isForbiddenCommand("echo hello && sudo rm -rf /tmp/test")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks sudo after pipe", () => {
+			expect(isForbiddenCommand("echo password | sudo -S apt install foo")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks sudo after semicolon", () => {
+			expect(isForbiddenCommand("cd /tmp; sudo cat /etc/passwd")).toBe(SUDO_PATTERN);
+		});
+
+		// doas
+		it("blocks doas at start of command", () => {
+			expect(isForbiddenCommand("doas apt install foo")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks doas with flags", () => {
+			expect(isForbiddenCommand("doas -u root cat /etc/shadow")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks doas after shell operator", () => {
+			expect(isForbiddenCommand("echo hello && doas rm -rf /tmp/test")).toBe(DOAS_PATTERN);
+		});
+
+		// su
+		it("blocks su at start of command", () => {
+			expect(isForbiddenCommand("su -c 'whoami'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks su with username", () => {
+			expect(isForbiddenCommand("su root -c 'cat /etc/shadow'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks su - (switch to root)", () => {
+			expect(isForbiddenCommand("su -")).toBe(SU_PATTERN);
+		});
+
+		it("blocks su after shell operator", () => {
+			expect(isForbiddenCommand("echo hello && su -c 'whoami'")).toBe(SU_PATTERN);
+		});
+
+		// Word boundary — false positive avoidance
+		it("allows commands starting with 'su' prefix (sum)", () => {
+			expect(isForbiddenCommand("sum file.txt")).toBeUndefined();
+		});
+
+		it("allows commands starting with 'su' prefix (suspend)", () => {
+			expect(isForbiddenCommand("suspend")).toBeUndefined();
+		});
+
+		it("allows commands starting with 'su' prefix (subl)", () => {
+			expect(isForbiddenCommand("subl file.txt")).toBeUndefined();
+		});
+
+		it("allows commands starting with 'sudo' prefix but not sudo (sudoedit-like)", () => {
+			// sudoedit is actually a sudo alias, but tests word boundary behavior
+			expect(isForbiddenCommand("sudoku")).toBeUndefined();
+		});
+
+		it("allows commands starting with 'doas' prefix (doasomething)", () => {
+			expect(isForbiddenCommand("doasomething --flag")).toBeUndefined();
+		});
+
+		// Quoted content — evasion prevention
+		it("blocks sudo in quoted content (echo evasion)", () => {
+			expect(isForbiddenCommand('echo "sudo rm -rf /" | bash')).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks doas in quoted content (echo evasion)", () => {
+			expect(isForbiddenCommand('echo "doas rm -rf /" | bash')).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks su in quoted content (echo evasion)", () => {
+			expect(isForbiddenCommand('echo "su -c whoami" | bash')).toBe(SU_PATTERN);
+		});
+
+		// Subshell wrappers
+		it("blocks sudo inside subshell", () => {
+			expect(isForbiddenCommand("$(sudo cat /etc/shadow)")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks doas inside subshell", () => {
+			expect(isForbiddenCommand("$(doas cat /etc/shadow)")).toBe(DOAS_PATTERN);
+		});
+	});
+
 	describe("HUSKY=0 (bypass pre-commit hooks)", () => {
 		const HUSKY_PATTERN = "^(?:export\\s+)?HUSKY=0";
 

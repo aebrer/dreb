@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import type { GitRepoState } from "../src/core/git-repo-state.js";
 import { buildSystemPrompt } from "../src/core/system-prompt.js";
 
@@ -244,6 +244,83 @@ describe("buildSystemPrompt", () => {
 			expect(stateIdx).toBeGreaterThan(-1);
 			expect(dateIdx).toBeGreaterThan(-1);
 			expect(stateIdx).toBeLessThan(dateIdx);
+		});
+	});
+
+	describe("root security warning", () => {
+		const originalGetuid = process.getuid;
+
+		afterEach(() => {
+			// Restore original getuid
+			process.getuid = originalGetuid;
+		});
+
+		test("includes root security section when running as root", () => {
+			process.getuid = () => 0;
+
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+			});
+
+			expect(prompt).toContain("## ⚠️ Security: Running as Root");
+			expect(prompt).toContain("running as root (UID 0)");
+			expect(prompt).toContain("Never");
+			expect(prompt).toContain("privilege escalation");
+		});
+
+		test("does not include root security section when not root", () => {
+			process.getuid = () => 1000;
+
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+			});
+
+			expect(prompt).not.toContain("Security: Running as Root");
+		});
+
+		test("does not include root security section when getuid is unavailable (Windows)", () => {
+			process.getuid = undefined as unknown as () => number;
+
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+			});
+
+			expect(prompt).not.toContain("Security: Running as Root");
+		});
+
+		test("root section appears before date in default prompt", () => {
+			process.getuid = () => 0;
+
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+			});
+
+			const secIdx = prompt.indexOf("Security: Running as Root");
+			const dateIdx = prompt.indexOf("Current date:");
+			expect(secIdx).toBeGreaterThan(-1);
+			expect(dateIdx).toBeGreaterThan(-1);
+			expect(secIdx).toBeLessThan(dateIdx);
+		});
+
+		test("root section works with custom prompt", () => {
+			process.getuid = () => 0;
+
+			const prompt = buildSystemPrompt({
+				customPrompt: "Custom system prompt.",
+				contextFiles: [],
+				skills: [],
+			});
+
+			expect(prompt).toContain("Custom system prompt.");
+			expect(prompt).toContain("Security: Running as Root");
 		});
 	});
 });

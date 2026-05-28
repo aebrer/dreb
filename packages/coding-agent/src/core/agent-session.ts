@@ -396,7 +396,7 @@ export class AgentSession {
 					if (pattern) {
 						return {
 							block: true as const,
-							reason: `Command blocked by forbidden-commands guard: "${pattern}" matched "${command}"`,
+							reason: `Command blocked by forbidden-commands guard: "${pattern}" matched "${command}".\n\nThis command was blocked for safety. Do not attempt workarounds or alternative escalation paths. If there is no obviously safe, root-free way to accomplish the task, use \`suggest_next\` to provide the user with instructions on how to unblock you (e.g., running the privileged command manually).`,
 						};
 					}
 
@@ -416,7 +416,7 @@ export class AgentSession {
 									if (match) {
 										return {
 											block: true as const,
-											reason: `Command blocked by forbidden-commands guard: script "${scriptPath}" contains forbidden command at line ${match.line}: "${match.text}" (matched pattern "${match.pattern}")`,
+											reason: `Command blocked by forbidden-commands guard: script "${scriptPath}" contains forbidden command at line ${match.line}: "${match.text}" (matched pattern "${match.pattern}").\n\nThis command was blocked for safety. Do not attempt workarounds or alternative escalation paths. If there is no obviously safe, root-free way to accomplish the task, use \`suggest_next\` to provide the user with instructions on how to unblock you (e.g., running the privileged command manually).`,
 										};
 									}
 								} catch {

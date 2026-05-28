@@ -691,6 +691,13 @@ export class InteractiveMode {
 			}
 		});
 
+		// Warn if running as root
+		if (process.getuid?.() === 0) {
+			this.showWarning(
+				"Running as root (UID 0). The agent has unrestricted system access — all commands execute with full root privileges.",
+			);
+		}
+
 		// Show startup warnings
 		const { migratedProviders, modelFallbackMessage, initialMessage, initialImages, initialMessages } = this.options;
 
