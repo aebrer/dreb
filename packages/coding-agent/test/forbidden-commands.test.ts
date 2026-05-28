@@ -58,6 +58,245 @@ describe("isForbiddenCommand", () => {
 		});
 	});
 
+	describe("privilege escalation (sudo, doas, su)", () => {
+		const SUDO_PATTERN = "^(?:/\\S+/)?sudo\\b";
+		const DOAS_PATTERN = "^(?:/\\S+/)?doas\\b";
+		const SU_PATTERN = "^(?:/\\S+/)?su\\b";
+
+		// sudo
+		it("blocks sudo at start of command", () => {
+			expect(isForbiddenCommand("sudo apt install foo")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks sudo with flags", () => {
+			expect(isForbiddenCommand("sudo -u root cat /etc/shadow")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks sudo after shell operator", () => {
+			expect(isForbiddenCommand("echo hello && sudo rm -rf /tmp/test")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks sudo after pipe", () => {
+			expect(isForbiddenCommand("echo password | sudo -S apt install foo")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks sudo after semicolon", () => {
+			expect(isForbiddenCommand("cd /tmp; sudo cat /etc/passwd")).toBe(SUDO_PATTERN);
+		});
+
+		// doas
+		it("blocks doas at start of command", () => {
+			expect(isForbiddenCommand("doas apt install foo")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks doas with flags", () => {
+			expect(isForbiddenCommand("doas -u root cat /etc/shadow")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks doas after shell operator", () => {
+			expect(isForbiddenCommand("echo hello && doas rm -rf /tmp/test")).toBe(DOAS_PATTERN);
+		});
+
+		// su
+		it("blocks su at start of command", () => {
+			expect(isForbiddenCommand("su -c 'whoami'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks su with username", () => {
+			expect(isForbiddenCommand("su root -c 'cat /etc/shadow'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks su - (switch to root)", () => {
+			expect(isForbiddenCommand("su -")).toBe(SU_PATTERN);
+		});
+
+		it("blocks su after shell operator", () => {
+			expect(isForbiddenCommand("echo hello && su -c 'whoami'")).toBe(SU_PATTERN);
+		});
+
+		// Word boundary — false positive avoidance
+		it("allows commands starting with 'su' prefix (sum)", () => {
+			expect(isForbiddenCommand("sum file.txt")).toBeUndefined();
+		});
+
+		it("allows commands starting with 'su' prefix (suspend)", () => {
+			expect(isForbiddenCommand("suspend")).toBeUndefined();
+		});
+
+		it("allows commands starting with 'su' prefix (subl)", () => {
+			expect(isForbiddenCommand("subl file.txt")).toBeUndefined();
+		});
+
+		it("allows commands starting with 'sudo' prefix but not sudo (sudoedit-like)", () => {
+			// sudoedit is actually a sudo alias, but tests word boundary behavior
+			expect(isForbiddenCommand("sudoku")).toBeUndefined();
+		});
+
+		it("allows commands starting with 'doas' prefix (doasomething)", () => {
+			expect(isForbiddenCommand("doasomething --flag")).toBeUndefined();
+		});
+
+		it("allows commands starting with 'su' prefix (superior)", () => {
+			expect(isForbiddenCommand("superior --flag")).toBeUndefined();
+		});
+
+		// Quoted content — evasion prevention
+		it("blocks sudo in quoted content (echo evasion)", () => {
+			expect(isForbiddenCommand('echo "sudo rm -rf /" | bash')).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks doas in quoted content (echo evasion)", () => {
+			expect(isForbiddenCommand('echo "doas rm -rf /" | bash')).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks su in quoted content (echo evasion)", () => {
+			expect(isForbiddenCommand('echo "su -c whoami" | bash')).toBe(SU_PATTERN);
+		});
+
+		// Subshell wrappers
+		it("blocks sudo inside subshell", () => {
+			expect(isForbiddenCommand("$(sudo cat /etc/shadow)")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks doas inside subshell", () => {
+			expect(isForbiddenCommand("$(doas cat /etc/shadow)")).toBe(DOAS_PATTERN);
+		});
+
+		// Shell prefix bypass prevention
+		it("blocks env sudo (env prefix bypass)", () => {
+			expect(isForbiddenCommand("env sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks exec sudo (exec prefix bypass)", () => {
+			expect(isForbiddenCommand("exec sudo bash")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks command sudo (command prefix bypass)", () => {
+			expect(isForbiddenCommand("command sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks backslash-escaped sudo (alias bypass)", () => {
+			expect(isForbiddenCommand("\\sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env doas (env prefix bypass)", () => {
+			expect(isForbiddenCommand("env doas apt install pkg")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks stacked prefixes (env command sudo)", () => {
+			expect(isForbiddenCommand("env command sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env backslash sudo", () => {
+			expect(isForbiddenCommand("env \\sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks prefix bypass inside subshell", () => {
+			expect(isForbiddenCommand("$(env sudo cat /etc/shadow)")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks prefix bypass after shell operator", () => {
+			expect(isForbiddenCommand("echo hello && env sudo rm -rf /")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env with flags before sudo (env -i sudo)", () => {
+			expect(isForbiddenCommand("env -i sudo rm -rf /")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env with variable assignment before sudo", () => {
+			expect(isForbiddenCommand("env VAR=value sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env with multiple assignments before sudo", () => {
+			expect(isForbiddenCommand("env TERM=dumb PATH=/usr/bin sudo bash")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env with flag and assignment before doas", () => {
+			expect(isForbiddenCommand("env -i TERM=dumb doas apt install pkg")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks env with -u flag before su", () => {
+			expect(isForbiddenCommand("env -u PATH su -c 'whoami'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks builtin sudo (builtin prefix bypass)", () => {
+			expect(isForbiddenCommand("builtin sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("allows builtin with non-forbidden commands", () => {
+			expect(isForbiddenCommand("builtin echo hello")).toBeUndefined();
+		});
+
+		it("blocks exec doas (exec prefix bypass)", () => {
+			expect(isForbiddenCommand("exec doas cat /etc/shadow")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks command doas (command prefix bypass)", () => {
+			expect(isForbiddenCommand("command doas apt install pkg")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks backslash-escaped doas (alias bypass)", () => {
+			expect(isForbiddenCommand("\\doas apt install pkg")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks env su (env prefix bypass)", () => {
+			expect(isForbiddenCommand("env su -c 'whoami'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks exec su (exec prefix bypass)", () => {
+			expect(isForbiddenCommand("exec su -")).toBe(SU_PATTERN);
+		});
+
+		it("blocks backslash-escaped su (alias bypass)", () => {
+			expect(isForbiddenCommand("\\su -c 'cat /etc/shadow'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks su inside subshell", () => {
+			expect(isForbiddenCommand("$(su -c 'whoami')")).toBe(SU_PATTERN);
+		});
+
+		it("allows env with non-forbidden commands", () => {
+			expect(isForbiddenCommand("env NODE_ENV=production node app.js")).toBeUndefined();
+		});
+
+		it("allows command with non-forbidden commands", () => {
+			expect(isForbiddenCommand("command ls -la")).toBeUndefined();
+		});
+
+		// Absolute path bypass prevention
+		it("blocks /usr/bin/sudo (absolute path)", () => {
+			expect(isForbiddenCommand("/usr/bin/sudo apt-get install python3")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks /bin/su (absolute path)", () => {
+			expect(isForbiddenCommand("/bin/su -")).toBe(SU_PATTERN);
+		});
+
+		it("blocks /usr/bin/doas (absolute path)", () => {
+			expect(isForbiddenCommand("/usr/bin/doas reboot")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks /usr/local/bin/sudo (deep absolute path)", () => {
+			expect(isForbiddenCommand("/usr/local/bin/sudo rm -rf /tmp/test")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks /usr/bin/env sudo (absolute path env bypass)", () => {
+			expect(isForbiddenCommand("/usr/bin/env sudo bash")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks /usr/bin/env with flags before sudo (absolute path env args bypass)", () => {
+			expect(isForbiddenCommand("/usr/bin/env -i sudo rm -rf /")).toBe(SUDO_PATTERN);
+		});
+
+		it("allows /usr/bin/sum (absolute path, word boundary)", () => {
+			expect(isForbiddenCommand("/usr/bin/sum file.txt")).toBeUndefined();
+		});
+
+		it("allows /usr/bin/env with non-forbidden command (absolute path)", () => {
+			expect(isForbiddenCommand("/usr/bin/env NODE_ENV=production node app.js")).toBeUndefined();
+		});
+	});
+
 	describe("HUSKY=0 (bypass pre-commit hooks)", () => {
 		const HUSKY_PATTERN = "^(?:export\\s+)?HUSKY=0";
 

@@ -20,6 +20,18 @@ describe("supportsXhigh", () => {
 		expect(supportsXhigh(model!)).toBe(false);
 	});
 
+	it("returns false for base Opus 4 dated model (opus-4-20250514)", () => {
+		const model = getModel("anthropic", "claude-opus-4-20250514");
+		expect(model).toBeDefined();
+		expect(supportsXhigh(model!)).toBe(false);
+	});
+
+	it("returns false for Opus 4.5 (below threshold)", () => {
+		const model = getModel("anthropic", "claude-opus-4-5");
+		expect(model).toBeDefined();
+		expect(supportsXhigh(model!)).toBe(false);
+	});
+
 	it("returns true for GPT-5.4 models", () => {
 		const model = getModel("openai-codex", "gpt-5.4");
 		expect(model).toBeDefined();

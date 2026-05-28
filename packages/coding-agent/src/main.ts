@@ -785,6 +785,15 @@ export async function main(args: string[]) {
 		await showDeprecationWarnings(deprecationWarnings);
 	}
 
+	// Warn if running as root (non-interactive modes only — interactive mode shows its own TUI warning)
+	if (!isInteractive && process.getuid?.() === 0) {
+		log.warn(
+			chalk.yellow(
+				"Warning: Running as root (UID 0). The agent has unrestricted system access — all commands execute with full root privileges.",
+			),
+		);
+	}
+
 	let scopedModels: ScopedModel[] = [];
 	const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
 	if (modelPatterns && modelPatterns.length > 0) {

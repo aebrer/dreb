@@ -673,6 +673,8 @@ export async function resolveModelForSubagentSpawn(
 	registry: ModelRegistry | undefined,
 	parentModel?: string,
 	signal?: AbortSignal,
+	/** Optional log prefix for warning messages (defaults to "[subagent]") */
+	logPrefix = "[subagent]",
 ): Promise<SubagentModelResolution> {
 	if (signal?.aborted) return { ok: false, error: "Aborted before spawn", skippedModels: [] };
 
@@ -695,7 +697,7 @@ export async function resolveModelForSubagentSpawn(
 			lastError = resolved.error;
 			const reason = compactErrorReason(resolved.error);
 			skippedModels.push({ model: modelStr, reason });
-			log.warn(`[subagent] Model "${modelStr}" unavailable (${reason}). Trying next fallback...`);
+			log.warn(`${logPrefix} Model "${modelStr}" unavailable (${reason}). Trying next fallback...`);
 			continue;
 		}
 
@@ -709,12 +711,12 @@ export async function resolveModelForSubagentSpawn(
 			if (!probe.ok) {
 				lastError = probe.reason;
 				skippedModels.push({ model: modelStr, reason: probe.reason });
-				log.warn(`[subagent] Model "${modelStr}" failed probe (${probe.reason}). Trying next fallback...`);
+				log.warn(`${logPrefix} Model "${modelStr}" failed probe (${probe.reason}). Trying next fallback...`);
 				continue;
 			}
 		}
 
-		log.debug(`[subagent] Using model "${resolved.modelId}" for subagent.`);
+		log.debug(`${logPrefix} Using model "${resolved.modelId}".`);
 		return { ...resolved, skippedModels };
 	}
 
@@ -724,7 +726,7 @@ export async function resolveModelForSubagentSpawn(
 		const parentResolved = resolveModelStringSingle(parentModel, parentProvider, registry);
 		if (parentResolved.ok) {
 			const warning = `Agent preferred models were unavailable. Falling back to parent model "${parentResolved.modelId}".`;
-			log.warn(`[subagent] ${warning}`);
+			log.warn(`${logPrefix} ${warning}`);
 			return { ...parentResolved, warning, skippedModels };
 		}
 		lastError = parentResolved.error;

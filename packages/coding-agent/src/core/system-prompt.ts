@@ -110,6 +110,21 @@ function buildMemorySection(memoryIndexes?: MemoryIndexes): string {
 	return section;
 }
 
+/** Build the root security warning section if running as UID 0 */
+function buildRootSecuritySection(): string {
+	if (process.getuid?.() !== 0) return "";
+
+	return `
+
+## ⚠️ Security: Running as Root
+
+You are running as root (UID 0). You have unrestricted system access. This means:
+- **Never** attempt privilege escalation (sudo, doas, su) — you already have full privileges
+- Be extremely conservative with file modifications, package installations, and system commands
+- Prefer the least-destructive approach for every operation
+- If a task could affect system stability, inform the user before proceeding`;
+}
+
 /** UI type descriptions for system prompt context */
 const UI_DESCRIPTIONS: Record<string, string> = {
 	tui: "Terminal UI (interactive terminal with rich rendering)",
@@ -208,6 +223,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		if (options.gitRepoState) {
 			prompt += formatGitStateSection(options.gitRepoState);
 		}
+
+		// Append root security warning if running as UID 0
+		prompt += buildRootSecuritySection();
 
 		// Add date and working directory last
 		prompt += `\nCurrent date: ${date}`;
@@ -331,6 +349,9 @@ Dreb documentation (read only when the user asks about dreb itself, its SDK, ext
 	if (options.gitRepoState) {
 		prompt += formatGitStateSection(options.gitRepoState);
 	}
+
+	// Append root security warning if running as UID 0
+	prompt += buildRootSecuritySection();
 
 	// Add date and working directory last
 	prompt += `\nCurrent date: ${date}`;

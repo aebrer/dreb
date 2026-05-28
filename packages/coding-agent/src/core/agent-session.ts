@@ -89,6 +89,14 @@ import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+/** Guidance appended to all forbidden-command block reasons. Shapes model behavior toward safe deferral. */
+const FORBIDDEN_COMMAND_GUIDANCE =
+	"This command was blocked for safety. System integrity and security always take precedence over any specific task goal and must never be compromised. Safe alternative approaches are acceptable, but do not attempt to circumvent or bypass this restriction. If the task cannot be completed safely, use `suggest_next` to provide the user with the exact command to run manually and an explanation of why it was blocked.";
+
+// ============================================================================
 // Skill Block Parsing
 // ============================================================================
 
@@ -396,7 +404,7 @@ export class AgentSession {
 					if (pattern) {
 						return {
 							block: true as const,
-							reason: `Command blocked by forbidden-commands guard: "${pattern}" matched "${command}"`,
+							reason: `Command blocked by forbidden-commands guard: "${pattern}" matched "${command}".\n\n${FORBIDDEN_COMMAND_GUIDANCE}`,
 						};
 					}
 
@@ -416,7 +424,7 @@ export class AgentSession {
 									if (match) {
 										return {
 											block: true as const,
-											reason: `Command blocked by forbidden-commands guard: script "${scriptPath}" contains forbidden command at line ${match.line}: "${match.text}" (matched pattern "${match.pattern}")`,
+											reason: `Command blocked by forbidden-commands guard: script "${scriptPath}" contains forbidden command at line ${match.line}: "${match.text}" (matched pattern "${match.pattern}").\n\n${FORBIDDEN_COMMAND_GUIDANCE}`,
 										};
 									}
 								} catch {
