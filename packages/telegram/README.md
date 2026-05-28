@@ -98,7 +98,8 @@ systemctl --user enable --now dreb-telegram
 ## Features
 
 - **Per-user message queue** — one prompt at a time, incoming messages queued
-- **Live tool display** — ephemeral status message shows tools, task lists, subagents
+- **Live tool display** — ephemeral status message shows tools, task lists, subagents, and key parameters
+- **Visible tool results** — permanent messages show user-facing results from tools such as `suggest_next`, `search`, and `wait`
 - **Rate-limited status updates** — debounced to avoid Telegram 429 errors
 - **File upload** — documents, photos, voice, audio, video with 3s batching
 - **File download** — `[[telegram:send:/path]]` markers in assistant text
