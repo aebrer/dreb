@@ -34,6 +34,9 @@ const TOOL_EMOJI: Record<string, string> = {
 	ls: "📂",
 	web_search: "🌐",
 	web_fetch: "🌐",
+	search: "🔍",
+	suggest_next: "💡",
+	wait: "⏳",
 	subagent: "🤖",
 	tasks_update: "📋",
 	skill: "⚡",
@@ -41,6 +44,73 @@ const TOOL_EMOJI: Record<string, string> = {
 
 function toolEmoji(name: string): string {
 	return TOOL_EMOJI[name] || "🔧";
+}
+
+function formatOptionalToolParams(params: Array<[string, unknown]>): string {
+	return params
+		.filter(([, value]) => value !== undefined && value !== null && value !== false && value !== "")
+		.map(([label, value]) => `${label}: ${String(value).slice(0, 120)}`)
+		.join(", ");
+}
+
+function firstTextBlock(result: any): string | undefined {
+	const content = result?.content;
+	if (!Array.isArray(content)) return undefined;
+	for (const block of content) {
+		if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
+			return block.text.trim();
+		}
+	}
+	return undefined;
+}
+
+function formatVisibleToolResult(toolName: string, result: any): string | undefined {
+	const details = result?.details;
+	const text = firstTextBlock(result);
+
+	switch (toolName) {
+		case "suggest_next": {
+			const suggestion = typeof details?.suggestion === "string" ? details.suggestion.trim() : undefined;
+			const summary = typeof details?.summary === "string" ? details.summary.trim() : undefined;
+			if (summary && suggestion) return `${summary}\n\n→ ${suggestion}`;
+			if (suggestion) return `→ ${suggestion}`;
+			return text;
+		}
+		case "search": {
+			if (!text) return undefined;
+			const resultCount = typeof details?.resultCount === "number" ? details.resultCount : undefined;
+			const header = resultCount === undefined ? "🔍 *Search results*" : `🔍 *Search results (${resultCount})*`;
+			const stats = details?.indexStats;
+			const footer =
+				stats && typeof stats.files === "number" && typeof stats.chunks === "number"
+					? `\n\n_Index: ${stats.files} files, ${stats.chunks} chunks_`
+					: "";
+			return `${header}\n${text}${footer}`;
+		}
+		case "wait": {
+			const reason =
+				typeof details?.reason === "string" && details.reason.trim() ? details.reason.trim() : undefined;
+			const agents = Array.isArray(details?.runningAgents) ? details.runningAgents : [];
+			const lines = [`⏳ ${reason ? `Waiting: ${reason}` : text || "Waiting…"}`];
+			if (agents.length > 0) {
+				lines.push(
+					"Waiting on:",
+					...agents.map((agent: any) => {
+						const id = typeof agent.agentId === "string" ? agent.agentId.slice(0, 12) : "unknown";
+						const type = typeof agent.agentType === "string" ? agent.agentType : "agent";
+						const task =
+							typeof agent.taskSummary === "string" && agent.taskSummary.trim()
+								? ` — ${agent.taskSummary.trim()}`
+								: "";
+						return `- ${id} ${type}${task}`;
+					}),
+				);
+			}
+			return lines.join("\n");
+		}
+		default:
+			return undefined;
+	}
 }
 
 /** Format a tool call for display */
@@ -67,6 +137,20 @@ function formatTool(name: string, args: Record<string, any>): string {
 			return `${emoji} *web\\_search*: ${args.query || "?"}`;
 		case "web_fetch":
 			return `${emoji} *web\\_fetch*: ${(args.url || "?").slice(0, 80)}`;
+		case "search": {
+			const query = args.query || "?";
+			const options = formatOptionalToolParams([
+				["limit", args.limit],
+				["in", args.restrictToDir],
+				["project", args.searchDir],
+				["rebuild", args.rebuild ? "true" : undefined],
+			]);
+			return `${emoji} *search*: ${String(query).slice(0, 200)}${options ? ` (${options})` : ""}`;
+		}
+		case "suggest_next":
+			return `${emoji} *suggest\\_next*: ${args.command || "?"}`;
+		case "wait":
+			return args.reason ? `${emoji} *wait*: ${String(args.reason).slice(0, 200)}` : `${emoji} *wait*`;
 		case "subagent":
 			return `${emoji} *subagent* (${args.agent || "?"}): ${(args.task || args.tasks?.[0]?.task || "?").slice(0, 200)}`;
 		case "skill":
@@ -101,6 +185,8 @@ export interface EventDisplayState {
 	toolCount: number;
 	/** All text blocks received */
 	textBlocks: string[];
+	/** User-visible tool results sent during the current run/cycle */
+	visibleToolResultCount: number;
 	/** Current task list */
 	tasks: Array<{ id: string; title: string; status: string }>;
 	/** Background agents */
@@ -146,6 +232,7 @@ export function createEventDisplay(
 		toolsSinceText: [],
 		toolCount: 0,
 		textBlocks: [],
+		visibleToolResultCount: 0,
 		tasks: [],
 		backgroundAgents: new Map(),
 		done: false,
@@ -185,6 +272,17 @@ export async function handleAgentEvent(
 		case "tool_execution_end": {
 			// Feed event to buddy controller for context capture + error reactions
 			state.buddyController?.handleEvent(event);
+
+			const output = formatVisibleToolResult(event.toolName, event.result);
+			if (output) {
+				if (state.toolsSinceText.length > 0) {
+					const summary = `📋 *${state.toolsSinceText.length} tools*:\n${state.toolsSinceText.join("\n")}`;
+					send(summary, true);
+					state.toolsSinceText = [];
+				}
+				send(output, true);
+				state.visibleToolResultCount++;
+			}
 			break;
 		}
 
@@ -376,8 +474,12 @@ export async function handleAgentEvent(
 							: "";
 					send(`❌ ${prefix}${errorMsg.errorMessage}${hint}`, true);
 				}
-			} else if (state.textBlocks.length === 0 && state.backgroundAgents.size === 0) {
-				// Only show "(No response)" when truly done — not between agent cycles
+			} else if (
+				state.textBlocks.length === 0 &&
+				state.visibleToolResultCount === 0 &&
+				state.backgroundAgents.size === 0
+			) {
+				// Only show "(No response)" when truly done — not between agent cycles or after visible end-turn tools
 				if (!state.retryInProgress && !errorIsRetryable) {
 					send("(No response)");
 				}
@@ -396,6 +498,7 @@ export async function handleAgentEvent(
 				if (errorIsRetryable) state.pendingRetry = true;
 				// Reset per-cycle state for the next agent loop
 				state.textBlocks = [];
+				state.visibleToolResultCount = 0;
 				state.toolCount = 0;
 				break;
 			}
@@ -404,6 +507,7 @@ export async function handleAgentEvent(
 			// and reset per-cycle state for the next agent loop
 			if (state.backgroundAgents.size > 0) {
 				state.textBlocks = [];
+				state.visibleToolResultCount = 0;
 				state.toolCount = 0;
 				break;
 			}
