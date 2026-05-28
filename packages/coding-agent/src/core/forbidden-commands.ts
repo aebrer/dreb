@@ -215,6 +215,41 @@ function splitCommandSegments(command: string): string[] {
 }
 
 /**
+ * Strip shell prefix commands that pass through to the underlying command.
+ * These are common bypass vectors for start-anchored patterns:
+ * - `env sudo ...` (env runs a command with modified environment)
+ * - `exec sudo ...` (exec replaces the shell process)
+ * - `command sudo ...` (command bypasses shell functions/aliases)
+ * - `builtin` (run a shell builtin directly)
+ * - `\sudo ...` (backslash escapes aliases but still runs the command)
+ *
+ * Strips iteratively to handle stacking (e.g., `env command sudo`).
+ */
+function stripShellPrefixes(segment: string): string {
+	let result = segment;
+
+	// Strip leading backslash (alias escape)
+	if (result.startsWith("\\")) {
+		result = result.slice(1);
+	}
+
+	// Iteratively strip known pass-through prefixes
+	const prefixes = /^(?:env|exec|command|builtin)\s+/;
+	let prev = "";
+	while (prev !== result) {
+		prev = result;
+		result = result.replace(prefixes, "");
+	}
+
+	// Strip leading backslash again (in case it's after a prefix: `env \sudo`)
+	if (result.startsWith("\\")) {
+		result = result.slice(1);
+	}
+
+	return result.trim();
+}
+
+/**
  * Strip leading subshell/command-substitution wrappers from a segment
  * so that $(cmd), (cmd), and `cmd` are checked against patterns too.
  *
@@ -288,8 +323,13 @@ export function isForbiddenCommand(command: string, extraPatterns?: string[]): s
 		: QUOTED_CONTENT_PATTERNS;
 
 	for (const segment of segments) {
-		// Check both the raw segment and the subshell-unwrapped version
-		const toCheck = [segment, stripSubshellWrapper(segment)];
+		// Check the segment after various normalizations:
+		// - Raw segment (e.g., "sudo apt install")
+		// - Subshell-unwrapped (e.g., "$(sudo ...)" → "sudo ...")
+		// - Shell-prefix-stripped (e.g., "env sudo ..." → "sudo ...")
+		// - Both combined (e.g., "$(env sudo ...)" → "sudo ...")
+		const unwrapped = stripSubshellWrapper(segment);
+		const toCheck = new Set([segment, unwrapped, stripShellPrefixes(segment), stripShellPrefixes(unwrapped)]);
 		for (const text of toCheck) {
 			for (const pattern of allPatterns) {
 				try {

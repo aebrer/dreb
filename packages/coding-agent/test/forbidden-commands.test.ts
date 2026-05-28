@@ -157,6 +157,51 @@ describe("isForbiddenCommand", () => {
 		it("blocks doas inside subshell", () => {
 			expect(isForbiddenCommand("$(doas cat /etc/shadow)")).toBe(DOAS_PATTERN);
 		});
+
+		// Shell prefix bypass prevention
+		it("blocks env sudo (env prefix bypass)", () => {
+			expect(isForbiddenCommand("env sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks exec sudo (exec prefix bypass)", () => {
+			expect(isForbiddenCommand("exec sudo bash")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks command sudo (command prefix bypass)", () => {
+			expect(isForbiddenCommand("command sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks backslash-escaped sudo (alias bypass)", () => {
+			expect(isForbiddenCommand("\\sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env doas (env prefix bypass)", () => {
+			expect(isForbiddenCommand("env doas apt install pkg")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks stacked prefixes (env command sudo)", () => {
+			expect(isForbiddenCommand("env command sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env backslash sudo", () => {
+			expect(isForbiddenCommand("env \\sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks prefix bypass inside subshell", () => {
+			expect(isForbiddenCommand("$(env sudo cat /etc/shadow)")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks prefix bypass after shell operator", () => {
+			expect(isForbiddenCommand("echo hello && env sudo rm -rf /")).toBe(SUDO_PATTERN);
+		});
+
+		it("allows env with non-forbidden commands", () => {
+			expect(isForbiddenCommand("env NODE_ENV=production node app.js")).toBeUndefined();
+		});
+
+		it("allows command with non-forbidden commands", () => {
+			expect(isForbiddenCommand("command ls -la")).toBeUndefined();
+		});
 	});
 
 	describe("HUSKY=0 (bypass pre-commit hooks)", () => {

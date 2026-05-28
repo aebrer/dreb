@@ -160,12 +160,10 @@ export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
 		return true;
 	}
 
-	if (
-		model.id.includes("opus-4-6") ||
-		model.id.includes("opus-4.6") ||
-		model.id.includes("opus-4-7") ||
-		model.id.includes("opus-4.7")
-	) {
+	// Opus 4.6+ supports xhigh (adaptive effort "max").
+	// Match any opus-4-N or opus-4.N where N >= 6.
+	const opusMatch = model.id.match(/opus-4[.-](\d+)/);
+	if (opusMatch && Number.parseInt(opusMatch[1], 10) >= 6) {
 		return true;
 	}
 

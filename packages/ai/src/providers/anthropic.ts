@@ -444,14 +444,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
  * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+)
  */
 function supportsAdaptiveThinking(modelId: string): boolean {
-	return (
-		modelId.includes("opus-4-6") ||
-		modelId.includes("opus-4.6") ||
-		modelId.includes("opus-4-7") ||
-		modelId.includes("opus-4.7") ||
-		modelId.includes("sonnet-4-6") ||
-		modelId.includes("sonnet-4.6")
-	);
+	return isModelVersionAtLeast(modelId, "opus", 6) || isModelVersionAtLeast(modelId, "sonnet", 6);
+}
+
+/** Check if a modelId contains `{family}-4-N` or `{family}-4.N` where N >= minVersion */
+function isModelVersionAtLeast(modelId: string, family: string, minVersion: number): boolean {
+	const re = new RegExp(`${family}-4[.-](\\d+)`);
+	const match = modelId.match(re);
+	return match != null && Number.parseInt(match[1], 10) >= minVersion;
 }
 
 /**
@@ -469,12 +469,7 @@ function mapThinkingLevelToEffort(level: SimpleStreamOptions["reasoning"], model
 		case "high":
 			return "high";
 		case "xhigh": {
-			const isOpus =
-				modelId.includes("opus-4-6") ||
-				modelId.includes("opus-4.6") ||
-				modelId.includes("opus-4-7") ||
-				modelId.includes("opus-4.7");
-			return isOpus ? "max" : "high";
+			return isModelVersionAtLeast(modelId, "opus", 6) ? "max" : "high";
 		}
 		default:
 			return "high";
