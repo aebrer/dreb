@@ -17,6 +17,7 @@ import { parseAgentFrontmatter, resolveModelForSubagentSpawn } from "../../core/
 
 const DEFAULT_TRIGGER_AFTER = 3;
 const MAX_TITLE_LENGTH = 30;
+const TITLE_GENERATION_TIMEOUT_MS = 60_000;
 
 const TITLE_PROMPT =
 	"Summarize this session's task in ≤30 characters for a terminal tab title. " +
@@ -95,6 +96,7 @@ export class TabTitleGenerator {
 		const response = await completeSimple(model, context, {
 			apiKey,
 			maxRetryDelayMs: 0,
+			signal: AbortSignal.timeout(TITLE_GENERATION_TIMEOUT_MS),
 		});
 
 		const title = this.sanitizeTitle(response);

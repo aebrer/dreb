@@ -982,8 +982,4 @@ export class SettingsManager {
 	getTabTitleSettings(): TabTitleSettings | undefined {
 		return this.settings.tabTitle;
 	}
-
-	getTabTitleEnabled(): boolean {
-		return this.settings.tabTitle?.enabled !== false;
-	}
 }

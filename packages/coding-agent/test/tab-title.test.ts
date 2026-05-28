@@ -210,10 +210,10 @@ describe("TabTitleGenerator", () => {
 			// Should not throw
 			gen.onToolEnd();
 
-			// Wait a tick for the async error to be swallowed
-			await new Promise((r) => setTimeout(r, 50));
-
-			expect(gen.hasFired).toBe(true);
+			// Flush microtask queue to let the rejected promise chain settle
+			await vi.waitFor(() => {
+				expect(gen.hasFired).toBe(true);
+			});
 			expect(deps.setTitle).not.toHaveBeenCalled();
 		});
 
@@ -223,9 +223,9 @@ describe("TabTitleGenerator", () => {
 
 			gen.onToolEnd();
 
-			await new Promise((r) => setTimeout(r, 50));
-
-			expect(gen.hasFired).toBe(true);
+			await vi.waitFor(() => {
+				expect(gen.hasFired).toBe(true);
+			});
 			expect(deps.setTitle).not.toHaveBeenCalled();
 		});
 
@@ -235,9 +235,9 @@ describe("TabTitleGenerator", () => {
 
 			gen.onToolEnd();
 
-			await new Promise((r) => setTimeout(r, 50));
-
-			expect(gen.hasFired).toBe(true);
+			await vi.waitFor(() => {
+				expect(gen.hasFired).toBe(true);
+			});
 			expect(deps.setTitle).not.toHaveBeenCalled();
 		});
 	});
@@ -325,8 +325,21 @@ describe("TabTitleGenerator", () => {
 			expect(titleContent.length).toBeLessThanOrEqual(30);
 		});
 
-		it("strips surrounding quotes from LLM response", async () => {
+		it("strips surrounding double quotes from LLM response", async () => {
 			mockCompleteSimple.mockResolvedValue(makeAssistantResponse('"Fix auth bug"') as any);
+
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(deps.setTitle).toHaveBeenCalledWith("dreb - Fix auth bug");
+			});
+		});
+
+		it("strips surrounding single quotes from LLM response", async () => {
+			mockCompleteSimple.mockResolvedValue(makeAssistantResponse("'Fix auth bug'") as any);
 
 			const deps = createMockDeps();
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
@@ -359,8 +372,9 @@ describe("TabTitleGenerator", () => {
 
 			gen.onToolEnd();
 
-			await new Promise((r) => setTimeout(r, 50));
-
+			await vi.waitFor(() => {
+				expect(gen.hasFired).toBe(true);
+			});
 			expect(deps.setTitle).not.toHaveBeenCalled();
 		});
 	});
