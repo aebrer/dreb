@@ -7,10 +7,11 @@
  */
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Api, Context, Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
-import { getPackageDir } from "../../config.js";
+import { CONFIG_DIR_NAME, getPackageDir } from "../../config.js";
 import type { ModelRegistry } from "../../core/model-registry.js";
 import type { TabTitleSettings } from "../../core/settings-manager.js";
 import { parseAgentFrontmatter, resolveModelForSubagentSpawn } from "../../core/tools/subagent.js";
@@ -122,6 +123,7 @@ export class TabTitleGenerator {
 				registry,
 				parentModel?.id,
 				signal,
+				"[tab-title]",
 			);
 			if (resolution.ok) {
 				// Find the resolved model in registry
@@ -136,15 +138,22 @@ export class TabTitleGenerator {
 	}
 
 	private getExploreAgentModels(): string | string[] | undefined {
-		try {
-			const agentFile = join(getPackageDir(), "agents", "explore.md");
-			const content = readFileSync(agentFile, "utf-8");
-			const parsed = parseAgentFrontmatter(content);
-			if (parsed.ok && parsed.config.model) {
-				return parsed.config.model;
-			}
-		} catch {
-			// Fall through to parent model
+		// Resolution order mirrors discoverAgentTypes: user override > project > package.
+		// First match with a valid model wins.
+		const candidates = [
+			join(homedir(), CONFIG_DIR_NAME, "agents", "explore.md"),
+			join(process.cwd(), ".dreb", "agents", "explore.md"),
+			join(getPackageDir(), "agents", "explore.md"),
+		];
+
+		for (const agentFile of candidates) {
+			try {
+				const content = readFileSync(agentFile, "utf-8");
+				const parsed = parseAgentFrontmatter(content);
+				if (parsed.ok && parsed.config.model) {
+					return parsed.config.model;
+				}
+			} catch {}
 		}
 		return undefined;
 	}

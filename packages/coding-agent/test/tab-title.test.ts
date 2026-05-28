@@ -10,9 +10,15 @@ vi.mock("@dreb/ai", () => ({
 // Mock config to avoid filesystem access
 vi.mock("../../coding-agent/src/config.js", () => ({
 	getPackageDir: () => "/mock/package",
+	CONFIG_DIR_NAME: ".dreb",
 }));
 
-// Mock fs.readFileSync for agent file reading
+// Mock fs.readFileSync for agent file reading.
+// getExploreAgentModels() checks user (~/.dreb/agents/), project (.dreb/agents/),
+// and package dirs in priority order. The mock readFileSync returns content for the
+// package path; real reads of other paths succeed or throw ENOENT naturally.
+// parseAgentFrontmatter is separately mocked, so real file reads still go through
+// the mock parser which returns { ok: false } by default (blocking user overrides).
 vi.mock("node:fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:fs")>();
 	return {
@@ -408,6 +414,7 @@ describe("TabTitleGenerator", () => {
 					expect.anything(),
 					"test-model",
 					expect.any(AbortSignal),
+					"[tab-title]",
 				);
 			});
 		});
