@@ -59,9 +59,9 @@ describe("isForbiddenCommand", () => {
 	});
 
 	describe("privilege escalation (sudo, doas, su)", () => {
-		const SUDO_PATTERN = "^sudo\\b";
-		const DOAS_PATTERN = "^doas\\b";
-		const SU_PATTERN = "^su\\b";
+		const SUDO_PATTERN = "^(?:/\\S+/)?sudo\\b";
+		const DOAS_PATTERN = "^(?:/\\S+/)?doas\\b";
+		const SU_PATTERN = "^(?:/\\S+/)?su\\b";
 
 		// sudo
 		it("blocks sudo at start of command", () => {
@@ -261,6 +261,39 @@ describe("isForbiddenCommand", () => {
 
 		it("allows command with non-forbidden commands", () => {
 			expect(isForbiddenCommand("command ls -la")).toBeUndefined();
+		});
+
+		// Absolute path bypass prevention
+		it("blocks /usr/bin/sudo (absolute path)", () => {
+			expect(isForbiddenCommand("/usr/bin/sudo apt-get install python3")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks /bin/su (absolute path)", () => {
+			expect(isForbiddenCommand("/bin/su -")).toBe(SU_PATTERN);
+		});
+
+		it("blocks /usr/bin/doas (absolute path)", () => {
+			expect(isForbiddenCommand("/usr/bin/doas reboot")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks /usr/local/bin/sudo (deep absolute path)", () => {
+			expect(isForbiddenCommand("/usr/local/bin/sudo rm -rf /tmp/test")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks /usr/bin/env sudo (absolute path env bypass)", () => {
+			expect(isForbiddenCommand("/usr/bin/env sudo bash")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks /usr/bin/env with flags before sudo (absolute path env args bypass)", () => {
+			expect(isForbiddenCommand("/usr/bin/env -i sudo rm -rf /")).toBe(SUDO_PATTERN);
+		});
+
+		it("allows /usr/bin/sum (absolute path, word boundary)", () => {
+			expect(isForbiddenCommand("/usr/bin/sum file.txt")).toBeUndefined();
+		});
+
+		it("allows /usr/bin/env with non-forbidden command (absolute path)", () => {
+			expect(isForbiddenCommand("/usr/bin/env NODE_ENV=production node app.js")).toBeUndefined();
 		});
 	});
 

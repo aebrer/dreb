@@ -447,9 +447,9 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 	return isModelVersionAtLeast(modelId, "opus", 6) || isModelVersionAtLeast(modelId, "sonnet", 6);
 }
 
-/** Check if a modelId contains `{family}-4-N` or `{family}-4.N` where N >= minVersion */
+/** Check if a modelId contains `{family}-4-N` or `{family}-4.N` where N >= minVersion (1-2 digit minor version only, not date suffixes) */
 function isModelVersionAtLeast(modelId: string, family: string, minVersion: number): boolean {
-	const re = new RegExp(`${family}-4[.-](\\d+)`);
+	const re = new RegExp(`${family}-4[.-](\\d{1,2})(?!\\d)`);
 	const match = modelId.match(re);
 	return match != null && Number.parseInt(match[1], 10) >= minVersion;
 }

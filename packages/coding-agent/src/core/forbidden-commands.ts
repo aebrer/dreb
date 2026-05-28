@@ -19,9 +19,9 @@
 
 /** Hardcoded patterns that are always active. Always anchored with ^. */
 const DEFAULT_FORBIDDEN_PATTERNS: string[] = [
-	"^sudo\\b", // privilege escalation — sudo
-	"^doas\\b", // privilege escalation — doas (OpenBSD/Linux alternative to sudo)
-	"^su\\b", // privilege escalation — switch user
+	"^(?:/\\S+/)?sudo\\b", // privilege escalation — sudo (bare or absolute path)
+	"^(?:/\\S+/)?doas\\b", // privilege escalation — doas (bare or absolute path)
+	"^(?:/\\S+/)?su\\b", // privilege escalation — switch user (bare or absolute path)
 	"^gh pr merge.*--admin", // bypass branch protection
 	"^git push.*(-f\\b|--force)", // force push (includes --force-with-lease)
 	"^gh api.*bypass", // API calls with bypass flag
@@ -68,9 +68,9 @@ const FULL_COMMAND_PATTERNS: string[] = [
  * it also needs to be caught when quoted (e.g., `echo ":(){ :|:& };:"`).
  */
 const QUOTED_CONTENT_PATTERNS: string[] = [
-	"^sudo\\b", // privilege escalation
-	"^doas\\b", // privilege escalation
-	"^su\\b", // privilege escalation
+	"^(?:/\\S+/)?sudo\\b", // privilege escalation
+	"^(?:/\\S+/)?doas\\b", // privilege escalation
+	"^(?:/\\S+/)?su\\b", // privilege escalation
 	"^rm\\s+.*--no-preserve-root",
 	"^rm\\s+.*\\s/(\\*|[\\w.-]+/?)?(\\s|$)",
 	"^dd\\s+.*of=/dev/(sd|hd|vd|nvme|xvd|loop|mmcblk|disk)",
@@ -237,7 +237,10 @@ function stripShellPrefixes(segment: string): string {
 		result = result.slice(1);
 	}
 
-	// Iteratively strip known pass-through prefixes
+	// Strip leading absolute path prefix (e.g., /usr/bin/sudo → sudo)
+	result = result.replace(/^\/\S+\//, "");
+
+	// Iteratively strip known pass-through prefixes (bare or with remaining path fragments)
 	const prefixes = /^(?:env|exec|command|builtin)\s+/;
 	let prev = "";
 	while (prev !== result) {

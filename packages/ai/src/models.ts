@@ -161,8 +161,8 @@ export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
 	}
 
 	// Opus 4.6+ supports xhigh (adaptive effort "max").
-	// Match any opus-4-N or opus-4.N where N >= 6.
-	const opusMatch = model.id.match(/opus-4[.-](\d+)/);
+	// Match any opus-4-N or opus-4.N where N >= 6 (1-2 digit minor version, not date suffixes).
+	const opusMatch = model.id.match(/opus-4[.-](\d{1,2})(?!\d)/);
 	if (opusMatch && Number.parseInt(opusMatch[1], 10) >= 6) {
 		return true;
 	}
