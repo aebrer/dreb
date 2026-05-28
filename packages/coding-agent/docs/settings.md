@@ -47,6 +47,24 @@ Edit directly or use `/settings` for common options.
 | `autocompleteMaxVisible` | number | `5` | Max visible items in autocomplete dropdown (3-20) |
 | `showHardwareCursor` | boolean | `false` | Show terminal cursor |
 
+### Tab Title
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `tabTitle.enabled` | boolean | `true` | Auto-generate terminal tab title from session task |
+| `tabTitle.triggerAfter` | number | `3` | Number of tool calls before generating title |
+
+After the configured number of tool calls, dreb fires a single background LLM call to summarize the session's task into a short (≤30 character) terminal tab title, then sets it via OSC 0. Only fires once per session. If the LLM call fails, the default title remains.
+
+```json
+{
+  "tabTitle": {
+    "enabled": true,
+    "triggerAfter": 3
+  }
+}
+```
+
 ### Compaction
 
 | Setting | Type | Default | Description |
