@@ -218,10 +218,14 @@ function splitCommandSegments(command: string): string[] {
  * Strip shell prefix commands that pass through to the underlying command.
  * These are common bypass vectors for start-anchored patterns:
  * - `env sudo ...` (env runs a command with modified environment)
+ * - `env -i VAR=value sudo ...` (env with flags/assignments before the command)
  * - `exec sudo ...` (exec replaces the shell process)
  * - `command sudo ...` (command bypasses shell functions/aliases)
  * - `builtin` (run a shell builtin directly)
  * - `\sudo ...` (backslash escapes aliases but still runs the command)
+ *
+ * After stripping `env`, also consumes env-style arguments (flags like `-i`
+ * and variable assignments like `VAR=value`) that precede the actual command.
  *
  * Strips iteratively to handle stacking (e.g., `env command sudo`).
  */
@@ -239,6 +243,21 @@ function stripShellPrefixes(segment: string): string {
 	while (prev !== result) {
 		prev = result;
 		result = result.replace(prefixes, "");
+	}
+
+	// After stripping env prefix, consume env-style arguments:
+	// - Flags starting with `-` (e.g., -i, -u, -0, --)
+	// - Variable assignments matching IDENTIFIER=... (e.g., VAR=value, PATH=/usr/bin)
+	// - Bare uppercase identifiers (e.g., PATH as argument to -u flag)
+	const envFlag = /^-\S*\s+/;
+	const envAssignment = /^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/;
+	const envBareVar = /^[A-Z_][A-Z0-9_]*\s+/;
+	let envPrev = "";
+	while (envPrev !== result) {
+		envPrev = result;
+		result = result.replace(envFlag, "");
+		result = result.replace(envAssignment, "");
+		result = result.replace(envBareVar, "");
 	}
 
 	// Strip leading backslash again (in case it's after a prefix: `env \sudo`)

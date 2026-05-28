@@ -136,6 +136,10 @@ describe("isForbiddenCommand", () => {
 			expect(isForbiddenCommand("doasomething --flag")).toBeUndefined();
 		});
 
+		it("allows commands starting with 'su' prefix (superior)", () => {
+			expect(isForbiddenCommand("superior --flag")).toBeUndefined();
+		});
+
 		// Quoted content — evasion prevention
 		it("blocks sudo in quoted content (echo evasion)", () => {
 			expect(isForbiddenCommand('echo "sudo rm -rf /" | bash')).toBe(SUDO_PATTERN);
@@ -193,6 +197,62 @@ describe("isForbiddenCommand", () => {
 
 		it("blocks prefix bypass after shell operator", () => {
 			expect(isForbiddenCommand("echo hello && env sudo rm -rf /")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env with flags before sudo (env -i sudo)", () => {
+			expect(isForbiddenCommand("env -i sudo rm -rf /")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env with variable assignment before sudo", () => {
+			expect(isForbiddenCommand("env VAR=value sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env with multiple assignments before sudo", () => {
+			expect(isForbiddenCommand("env TERM=dumb PATH=/usr/bin sudo bash")).toBe(SUDO_PATTERN);
+		});
+
+		it("blocks env with flag and assignment before doas", () => {
+			expect(isForbiddenCommand("env -i TERM=dumb doas apt install pkg")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks env with -u flag before su", () => {
+			expect(isForbiddenCommand("env -u PATH su -c 'whoami'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks builtin sudo (builtin prefix bypass)", () => {
+			expect(isForbiddenCommand("builtin sudo apt install pkg")).toBe(SUDO_PATTERN);
+		});
+
+		it("allows builtin with non-forbidden commands", () => {
+			expect(isForbiddenCommand("builtin echo hello")).toBeUndefined();
+		});
+
+		it("blocks exec doas (exec prefix bypass)", () => {
+			expect(isForbiddenCommand("exec doas cat /etc/shadow")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks command doas (command prefix bypass)", () => {
+			expect(isForbiddenCommand("command doas apt install pkg")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks backslash-escaped doas (alias bypass)", () => {
+			expect(isForbiddenCommand("\\doas apt install pkg")).toBe(DOAS_PATTERN);
+		});
+
+		it("blocks env su (env prefix bypass)", () => {
+			expect(isForbiddenCommand("env su -c 'whoami'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks exec su (exec prefix bypass)", () => {
+			expect(isForbiddenCommand("exec su -")).toBe(SU_PATTERN);
+		});
+
+		it("blocks backslash-escaped su (alias bypass)", () => {
+			expect(isForbiddenCommand("\\su -c 'cat /etc/shadow'")).toBe(SU_PATTERN);
+		});
+
+		it("blocks su inside subshell", () => {
+			expect(isForbiddenCommand("$(su -c 'whoami')")).toBe(SU_PATTERN);
 		});
 
 		it("allows env with non-forbidden commands", () => {
