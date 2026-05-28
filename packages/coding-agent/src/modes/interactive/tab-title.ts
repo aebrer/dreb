@@ -79,7 +79,10 @@ export class TabTitleGenerator {
 	}
 
 	private async generateTitle(): Promise<void> {
-		const model = await this.resolveModel();
+		// Single timeout bounds the entire pipeline (model probing + API key + LLM call)
+		const signal = AbortSignal.timeout(TITLE_GENERATION_TIMEOUT_MS);
+
+		const model = await this.resolveModel(signal);
 		if (!model) return;
 
 		const registry = this.deps.getModelRegistry();
@@ -96,7 +99,7 @@ export class TabTitleGenerator {
 		const response = await completeSimple(model, context, {
 			apiKey,
 			maxRetryDelayMs: 0,
-			signal: AbortSignal.timeout(TITLE_GENERATION_TIMEOUT_MS),
+			signal,
 		});
 
 		const title = this.sanitizeTitle(response);
@@ -105,7 +108,7 @@ export class TabTitleGenerator {
 		}
 	}
 
-	private async resolveModel(): Promise<Model<Api> | undefined> {
+	private async resolveModel(signal?: AbortSignal): Promise<Model<Api> | undefined> {
 		// Try to get the Explore agent's model fallback list
 		const exploreModels = this.getExploreAgentModels();
 		const parentModel = this.deps.getModel();
@@ -118,6 +121,7 @@ export class TabTitleGenerator {
 				parentProvider,
 				registry,
 				parentModel?.id,
+				signal,
 			);
 			if (resolution.ok) {
 				// Find the resolved model in registry

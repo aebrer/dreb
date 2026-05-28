@@ -23,6 +23,7 @@ What you get in exchange: a skill system, an extension API, custom agent definit
 - [Sessions](#sessions)
   - [Branching](#branching)
   - [Compaction](#compaction)
+  - [Tab Title](#tab-title)
 - [Settings](#settings)
 - [Context Files](#context-files)
 - [Memory](#memory)
@@ -244,6 +245,16 @@ Long sessions can exhaust context windows. Compaction summarizes older messages 
 **Automatic:** Enabled by default. Triggers on context overflow (recovers and retries) or when approaching the limit (proactive). Configure via `/settings` or `settings.json`.
 
 Compaction is lossy. The full history remains in the JSONL file; use `/tree` to revisit. Customize compaction behavior via [extensions](#extensions). See [docs/compaction.md](docs/compaction.md) for internals.
+
+### Tab Title
+
+After a few tool calls, dreb auto-generates a short terminal tab title describing the session's task. Useful when multiple tabs are open. Fires once per session via a background LLM call; failures are silent.
+
+Disable or adjust the trigger threshold in [settings](docs/settings.md):
+
+```json
+{ "tabTitle": { "enabled": false } }
+```
 
 ---
 

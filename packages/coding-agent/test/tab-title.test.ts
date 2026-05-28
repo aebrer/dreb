@@ -407,6 +407,7 @@ describe("TabTitleGenerator", () => {
 					"test-provider",
 					expect.anything(),
 					"test-model",
+					expect.any(AbortSignal),
 				);
 			});
 		});
