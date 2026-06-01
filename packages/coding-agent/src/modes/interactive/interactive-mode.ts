@@ -2538,11 +2538,15 @@ export class InteractiveMode {
 			}
 
 			case "agent_end":
+				if (this.retryLoader) {
+					this.retryLoader.stop();
+					this.retryLoader = undefined;
+				}
 				if (this.loadingAnimation) {
 					this.loadingAnimation.stop();
 					this.loadingAnimation = undefined;
-					this.statusContainer.clear();
 				}
+				this.statusContainer.clear();
 				if (this.streamingComponent) {
 					this.chatContainer.removeChild(this.streamingComponent);
 					this.streamingComponent = undefined;

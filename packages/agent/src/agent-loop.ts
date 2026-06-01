@@ -266,7 +266,11 @@ async function runLoop(
 function isStreamDropError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	const msg = error.message;
-	return msg.includes("Stream ended without") || msg.includes("connection likely dropped");
+	return (
+		msg.includes("Stream ended without") ||
+		msg.includes("connection likely dropped") ||
+		msg.includes("WebSocket stream closed before")
+	);
 }
 
 /**
@@ -373,9 +377,6 @@ async function streamAssistantResponse(
 			});
 		} catch (error) {
 			if (isStreamDropError(error) && attempt < maxRetries && !signal?.aborted) {
-				if (addedPartial && partialMessage) {
-					await emit({ type: "message_end", message: { ...(partialMessage as AssistantMessage) } });
-				}
 				await emit({
 					type: "stream_retry",
 					attempt: attempt + 1,
@@ -475,9 +476,6 @@ async function streamAssistantResponse(
 		}
 
 		if (shouldRetry) {
-			if (addedPartial && partialMessage) {
-				await emit({ type: "message_end", message: { ...partialMessage } });
-			}
 			await emit({
 				type: "stream_retry",
 				attempt: attempt + 1,
