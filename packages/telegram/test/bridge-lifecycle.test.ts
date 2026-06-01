@@ -65,7 +65,8 @@ describe("ensureBridge", () => {
 	it("creates a new bridge when none exists, using config.workingDir", async () => {
 		const userState = createUserState();
 		const mockBridge = createMockBridge();
-		MockAgentBridge.mockImplementation((cfg: Config) => {
+		// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+		MockAgentBridge.mockImplementation(function (cfg: Config) {
 			mockBridge._config = cfg;
 			return mockBridge;
 		});
@@ -83,7 +84,8 @@ describe("ensureBridge", () => {
 		const deadBridge = createMockBridge({ isAlive: false });
 		const userState = createUserState({ bridge: deadBridge as any });
 		const freshBridge = createMockBridge();
-		MockAgentBridge.mockImplementation((cfg: Config) => {
+		// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+		MockAgentBridge.mockImplementation(function (cfg: Config) {
 			freshBridge._config = cfg;
 			return freshBridge;
 		});
@@ -110,7 +112,8 @@ describe("ensureBridge", () => {
 	it("overrides config.workingDir with effectiveCwd when set and different", async () => {
 		const userState = createUserState({ effectiveCwd: "/custom/dir" });
 		const mockBridge = createMockBridge();
-		MockAgentBridge.mockImplementation((cfg: Config) => {
+		// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+		MockAgentBridge.mockImplementation(function (cfg: Config) {
 			mockBridge._config = cfg;
 			return mockBridge;
 		});
@@ -123,7 +126,8 @@ describe("ensureBridge", () => {
 	it("uses config.workingDir when effectiveCwd matches it", async () => {
 		const userState = createUserState({ effectiveCwd: "/default/dir" });
 		const mockBridge = createMockBridge();
-		MockAgentBridge.mockImplementation((cfg: Config) => {
+		// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+		MockAgentBridge.mockImplementation(function (cfg: Config) {
 			mockBridge._config = cfg;
 			return mockBridge;
 		});
@@ -137,7 +141,10 @@ describe("ensureBridge", () => {
 	it("wires up background_agent_start event handler", async () => {
 		const userState = createUserState();
 		const mockBridge = createMockBridge();
-		MockAgentBridge.mockReturnValue(mockBridge);
+		// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+		MockAgentBridge.mockImplementation(function () {
+			return mockBridge;
+		});
 
 		await ensureBridge(config, userState);
 
@@ -158,7 +165,10 @@ describe("ensureBridge", () => {
 	it("wires up background_agent_end event handler", async () => {
 		const userState = createUserState();
 		const mockBridge = createMockBridge();
-		MockAgentBridge.mockReturnValue(mockBridge);
+		// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+		MockAgentBridge.mockImplementation(function () {
+			return mockBridge;
+		});
 
 		await ensureBridge(config, userState);
 
@@ -175,7 +185,10 @@ describe("ensureBridge", () => {
 	it("ignores unrelated event types", async () => {
 		const userState = createUserState();
 		const mockBridge = createMockBridge();
-		MockAgentBridge.mockReturnValue(mockBridge);
+		// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+		MockAgentBridge.mockImplementation(function () {
+			return mockBridge;
+		});
 
 		await ensureBridge(config, userState);
 
@@ -205,7 +218,8 @@ describe("ensureBridgeWithSession", () => {
 				effectiveCwd: "/old/dir",
 			});
 
-			MockAgentBridge.mockImplementation((cfg: Config) => {
+			// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+			MockAgentBridge.mockImplementation(function (cfg: Config) {
 				newBridge._config = cfg;
 				return newBridge;
 			});
@@ -236,7 +250,8 @@ describe("ensureBridgeWithSession", () => {
 				effectiveCwd: "/prev/dir",
 			});
 
-			MockAgentBridge.mockImplementation((cfg: Config) => {
+			// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+			MockAgentBridge.mockImplementation(function (cfg: Config) {
 				newBridge._config = cfg;
 				return newBridge;
 			});
@@ -263,7 +278,8 @@ describe("ensureBridgeWithSession", () => {
 				effectiveCwd: null,
 			});
 
-			MockAgentBridge.mockImplementation((cfg: Config) => {
+			// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+			MockAgentBridge.mockImplementation(function (cfg: Config) {
 				newBridge._config = cfg;
 				return newBridge;
 			});
@@ -282,7 +298,8 @@ describe("ensureBridgeWithSession", () => {
 			const mockBridge = createMockBridge({ sessionId: undefined });
 			const userState = createUserState();
 
-			MockAgentBridge.mockImplementation((cfg: Config) => {
+			// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+			MockAgentBridge.mockImplementation(function (cfg: Config) {
 				mockBridge._config = cfg;
 				return mockBridge;
 			});
@@ -338,7 +355,10 @@ describe("ensureBridgeWithSession", () => {
 				newSessionCwd: "/custom/path",
 			});
 
-			MockAgentBridge.mockReturnValue(newBridge);
+			// biome-ignore lint/complexity/useArrowFunction: vitest v4 requires function keyword for constructor mocks
+			MockAgentBridge.mockImplementation(function () {
+				return newBridge;
+			});
 
 			await ensureBridgeWithSession(config, userState);
 

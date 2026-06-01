@@ -52,6 +52,7 @@ import {
 	type SessionBeforeSwitchResult,
 	type SessionBeforeTreeResult,
 	type ShutdownHandler,
+	type StreamRetryEvent,
 	type ToolDefinition,
 	type ToolExecutionEndEvent,
 	type ToolExecutionStartEvent,
@@ -989,6 +990,15 @@ export class AgentSession {
 			const extensionEvent: MessageEndEvent = {
 				type: "message_end",
 				message: event.message,
+			};
+			await this._extensionRunner.emit(extensionEvent);
+		} else if (event.type === "stream_retry") {
+			const extensionEvent: StreamRetryEvent = {
+				type: "stream_retry",
+				attempt: event.attempt,
+				maxAttempts: event.maxAttempts,
+				error: event.error,
+				discardedPartial: event.discardedPartial,
 			};
 			await this._extensionRunner.emit(extensionEvent);
 		} else if (event.type === "tool_execution_start") {

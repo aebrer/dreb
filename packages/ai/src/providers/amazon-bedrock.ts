@@ -167,6 +167,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			const command = new ConverseStreamCommand(commandInput);
 
 			const response = await client.send(command, { abortSignal: options.signal });
+			let receivedMessageStop = false;
 
 			for await (const item of response.stream!) {
 				if (item.messageStart) {
@@ -181,6 +182,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 				} else if (item.contentBlockStop) {
 					handleContentBlockStop(item.contentBlockStop, blocks, output, stream, options?.onWarning);
 				} else if (item.messageStop) {
+					receivedMessageStop = true;
 					output.stopReason = mapStopReason(item.messageStop.stopReason);
 				} else if (item.metadata) {
 					handleMetadata(item.metadata, model, output);
@@ -199,6 +201,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 
 			if (options.signal?.aborted) {
 				throw new Error("Request was aborted");
+			}
+
+			if (!receivedMessageStop) {
+				throw new Error("Stream ended without messageStop — connection likely dropped");
 			}
 
 			if (output.stopReason === "error" || output.stopReason === "aborted") {

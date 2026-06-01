@@ -85,6 +85,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 			let currentBlock: TextContent | ThinkingContent | null = null;
 			const blocks = output.content;
 			const blockIndex = () => blocks.length - 1;
+			let receivedFinishReason = false;
 			for await (const chunk of googleStream) {
 				// @google/genai documents GenerateContentResponse.responseId as an output-only field
 				// used to identify each response. Keep the first non-empty one from the stream.
@@ -203,6 +204,7 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 				}
 
 				if (candidate?.finishReason) {
+					receivedFinishReason = true;
 					output.stopReason = mapStopReason(candidate.finishReason);
 					if (output.content.some((b) => b.type === "toolCall")) {
 						output.stopReason = "toolUse";
@@ -250,6 +252,10 @@ export const streamGoogle: StreamFunction<"google-generative-ai", GoogleOptions>
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
+			}
+
+			if (!receivedFinishReason) {
+				throw new Error("Stream ended without finishReason — connection likely dropped");
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {

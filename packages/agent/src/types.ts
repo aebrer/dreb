@@ -202,6 +202,23 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	shouldContinue?: () => boolean;
 
 	/**
+	 * Maximum number of times to retry when a stream drops mid-response.
+	 * Retries only trigger on detected stream-drop errors (connection dropped before
+	 * the provider sent its terminal completion event). Other errors are not retried.
+	 *
+	 * Default: 3
+	 */
+	streamRetries?: number;
+
+	/**
+	 * Base delay in milliseconds for exponential backoff between stream retries.
+	 * Actual delay is `baseDelay * 2^attempt` (e.g., 1000, 2000, 4000).
+	 *
+	 * Default: 1000
+	 */
+	streamRetryBaseDelayMs?: number;
+
+	/**
 	 * Called before a tool is executed, after arguments have been validated.
 	 *
 	 * Return `{ block: true }` to prevent execution. The loop emits an error tool result instead.
@@ -325,4 +342,13 @@ export type AgentEvent =
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean };
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean }
+	// Stream reliability
+	| {
+			type: "stream_retry";
+			attempt: number;
+			maxAttempts: number;
+			error: string;
+			/** Partial assistant message discarded before retry, for debugging/instrumentation only. */
+			discardedPartial?: AssistantMessage;
+	  };

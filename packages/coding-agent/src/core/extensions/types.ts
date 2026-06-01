@@ -584,6 +584,16 @@ export interface MessageEndEvent {
 	message: AgentMessage;
 }
 
+/** Fired when a dropped stream is discarded and retried. */
+export interface StreamRetryEvent {
+	type: "stream_retry";
+	attempt: number;
+	maxAttempts: number;
+	error: string;
+	/** Partial assistant message discarded before retry, for debugging/instrumentation only. */
+	discardedPartial?: AgentMessage;
+}
+
 /** Fired when a tool starts executing */
 export interface ToolExecutionStartEvent {
 	type: "tool_execution_start";
@@ -854,6 +864,7 @@ export type ExtensionEvent =
 	| MessageStartEvent
 	| MessageUpdateEvent
 	| MessageEndEvent
+	| StreamRetryEvent
 	| ToolExecutionStartEvent
 	| ToolExecutionUpdateEvent
 	| ToolExecutionEndEvent
@@ -1013,6 +1024,7 @@ export interface ExtensionAPI {
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;
 	on(event: "message_update", handler: ExtensionHandler<MessageUpdateEvent>): void;
 	on(event: "message_end", handler: ExtensionHandler<MessageEndEvent>): void;
+	on(event: "stream_retry", handler: ExtensionHandler<StreamRetryEvent>): void;
 	on(event: "tool_execution_start", handler: ExtensionHandler<ToolExecutionStartEvent>): void;
 	on(event: "tool_execution_update", handler: ExtensionHandler<ToolExecutionUpdateEvent>): void;
 	on(event: "tool_execution_end", handler: ExtensionHandler<ToolExecutionEndEvent>): void;

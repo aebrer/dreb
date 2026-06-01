@@ -827,7 +827,8 @@ async function* parseWebSocket(
 			return;
 		}
 		if (!failed) {
-			failed = extractWebSocketCloseError(event);
+			const closeError = extractWebSocketCloseError(event);
+			failed = new Error(`WebSocket stream closed before response.completed (${closeError.message})`);
 		}
 		done = true;
 		wake();

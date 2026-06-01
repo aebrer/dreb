@@ -100,6 +100,7 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 			let currentBlock: TextContent | ThinkingContent | null = null;
 			const blocks = output.content;
 			const blockIndex = () => blocks.length - 1;
+			let receivedFinishReason = false;
 			for await (const chunk of googleStream) {
 				// Vertex uses the same @google/genai GenerateContentResponse type as Gemini.
 				// responseId is documented there as an output-only identifier for each response.
@@ -217,6 +218,7 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 				}
 
 				if (candidate?.finishReason) {
+					receivedFinishReason = true;
 					output.stopReason = mapStopReason(candidate.finishReason);
 					if (output.content.some((b) => b.type === "toolCall")) {
 						output.stopReason = "toolUse";
@@ -264,6 +266,10 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
+			}
+
+			if (!receivedFinishReason) {
+				throw new Error("Stream ended without finishReason — connection likely dropped");
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {

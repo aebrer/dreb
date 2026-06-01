@@ -258,6 +258,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			}
 			const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: options?.signal });
 			stream.push({ type: "start", partial: output });
+			let receivedMessageDelta = false;
 
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
 			const blocks = output.content as Block[];
@@ -394,6 +395,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 						}
 					}
 				} else if (event.type === "message_delta") {
+					receivedMessageDelta = true;
 					if (event.delta.stop_reason) {
 						output.stopReason = mapStopReason(event.delta.stop_reason);
 					}
@@ -420,6 +422,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
+			}
+
+			if (!receivedMessageDelta) {
+				throw new Error("Stream ended without message_delta — connection likely dropped");
 			}
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {

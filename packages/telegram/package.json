@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/telegram",
-	"version": "2.21.1",
+	"version": "2.22.0",
 	"description": "Telegram bot frontend for dreb coding agent",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -36,7 +36,7 @@
 	"devDependencies": {
 		"@types/node": "^24.3.0",
 		"typescript": "^5.9.2",
-		"vitest": "^3.2.4"
+		"vitest": "^4.1.8"
 	},
 	"engines": {
 		"node": ">=20.0.0"
