@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added stream drop detection and retry across all providers. When a provider stream ends without its terminal event (e.g. `message_delta`, `finishReason`, `response.completed`), the agent loop retries up to `streamRetries` times with exponential backoff. Configurable via `AgentOptions.streamRetries` (default: 3) and `AgentOptions.streamRetryBaseDelayMs` (default: 1000ms).
+- Added `stream_retry` event type emitted before each retry attempt, carrying `attempt`, `maxAttempts`, `error`, and `discardedPartial`.
 - Added `onWarning` option to `AgentOptions` — forwarded to providers via `StreamOptions.onWarning` for non-fatal streaming warnings ([#115](https://github.com/aebrer/dreb/issues/115))
 
 ## [0.62.0] - 2026-03-23

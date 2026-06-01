@@ -130,6 +130,7 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 | `message_start` | Any message begins (user, assistant, toolResult) |
 | `message_update` | **Assistant only.** Includes `assistantMessageEvent` with delta |
 | `message_end` | Message completes |
+| `stream_retry` | Provider stream dropped; retrying after discarding partial response |
 | `tool_execution_start` | Tool begins |
 | `tool_execution_update` | Tool streams progress |
 | `tool_execution_end` | Tool completes |
@@ -187,6 +188,13 @@ const agent = new Agent({
 
   // Forward non-fatal provider warnings (e.g. malformed SSE/JSON) to the caller
   onWarning: (code, message) => console.warn(`[${code}] ${message}`),
+
+  // Stream drop retry: number of retries when a provider stream ends without
+  // its terminal event (default: 3). Set to 0 to disable.
+  streamRetries: 3,
+
+  // Base delay for exponential backoff between stream retries in ms (default: 1000)
+  streamRetryBaseDelayMs: 1000,
 
   // Custom thinking budgets for token-based providers
   thinkingBudgets: {
