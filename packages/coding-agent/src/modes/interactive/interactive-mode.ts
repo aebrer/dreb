@@ -2400,6 +2400,12 @@ export class InteractiveMode {
 					this.updatePendingMessagesDisplay();
 					this.ui.requestRender();
 				} else if (event.message.role === "assistant") {
+					// Defensive: remove stale streaming component if one exists (e.g. missed stream_retry)
+					if (this.streamingComponent) {
+						this.chatContainer.removeChild(this.streamingComponent);
+						this.streamingComponent = undefined;
+						this.streamingMessage = undefined;
+					}
 					this.streamingComponent = new AssistantMessageComponent(
 						undefined,
 						this.hideThinkingBlock,
@@ -2647,6 +2653,35 @@ export class InteractiveMode {
 				if (!event.success) {
 					this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
 				}
+				this.ui.requestRender();
+				break;
+			}
+
+			case "stream_retry": {
+				// Remove the ghost streaming component left from the dropped stream
+				if (this.streamingComponent) {
+					this.chatContainer.removeChild(this.streamingComponent);
+					this.streamingComponent = undefined;
+					this.streamingMessage = undefined;
+				}
+				// Clear any pending tool components from the failed partial
+				for (const [, component] of this.pendingTools.entries()) {
+					this.chatContainer.removeChild(component);
+				}
+				this.pendingTools.clear();
+				// Show retry status
+				this.statusContainer.clear();
+				if (this.loadingAnimation) {
+					this.loadingAnimation.stop();
+					this.loadingAnimation = undefined;
+				}
+				this.retryLoader = new Loader(
+					this.ui,
+					(spinner) => theme.fg("warning", spinner),
+					(text) => theme.fg("muted", text),
+					`Stream dropped, retrying (${event.attempt}/${event.maxAttempts})... (${keyText("app.interrupt")} to cancel)`,
+				);
+				this.statusContainer.addChild(this.retryLoader);
 				this.ui.requestRender();
 				break;
 			}

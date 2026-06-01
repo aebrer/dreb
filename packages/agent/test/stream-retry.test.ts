@@ -1,13 +1,7 @@
-import {
-	type AssistantMessage,
-	type AssistantMessageEvent,
-	EventStream,
-	type Message,
-	type Model,
-} from "@dreb/ai";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, type Message, type Model } from "@dreb/ai";
 import { describe, expect, it } from "vitest";
 import { agentLoop } from "../src/agent-loop.js";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage } from "../src/types.js";
+import type { AgentEvent, AgentLoopConfig, AgentMessage } from "../src/types.js";
 
 class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	constructor() {
@@ -127,11 +121,7 @@ function createNonRetryableStreamFn() {
 	return () => {
 		const stream = new MockAssistantStream();
 		setTimeout(() => {
-			const errorMsg = createAssistantMessage(
-				[],
-				"error",
-				"401 Unauthorized — invalid API key",
-			);
+			const errorMsg = createAssistantMessage([], "error", "401 Unauthorized — invalid API key");
 			stream.push({ type: "error", reason: "error", error: errorMsg });
 			stream.end();
 		}, 0);
@@ -158,10 +148,13 @@ describe("stream retry on dropped connections", () => {
 	it("retries on stream drop and succeeds on second attempt", async () => {
 		const successMsg = createAssistantMessage([{ type: "text", text: "Hello!" }]);
 		const streamFn = createFailingStreamFn(1, successMsg);
-		const events = await collectEvents(streamFn, createConfig({
-			streamRetries: 3,
-			streamRetryBaseDelayMs: 10,
-		}));
+		const events = await collectEvents(
+			streamFn,
+			createConfig({
+				streamRetries: 3,
+				streamRetryBaseDelayMs: 10,
+			}),
+		);
 
 		// Should have a stream_retry event
 		const retryEvents = events.filter((e) => e.type === "stream_retry");
@@ -190,10 +183,13 @@ describe("stream retry on dropped connections", () => {
 	it("retries multiple times and eventually succeeds", async () => {
 		const successMsg = createAssistantMessage([{ type: "text", text: "Finally!" }]);
 		const streamFn = createFailingStreamFn(3, successMsg);
-		const events = await collectEvents(streamFn, createConfig({
-			streamRetries: 3,
-			streamRetryBaseDelayMs: 10,
-		}));
+		const events = await collectEvents(
+			streamFn,
+			createConfig({
+				streamRetries: 3,
+				streamRetryBaseDelayMs: 10,
+			}),
+		);
 
 		const retryEvents = events.filter((e) => e.type === "stream_retry");
 		expect(retryEvents).toHaveLength(3);
@@ -211,10 +207,13 @@ describe("stream retry on dropped connections", () => {
 	it("fails after exhausting all retries", async () => {
 		const successMsg = createAssistantMessage([{ type: "text", text: "never reached" }]);
 		const streamFn = createFailingStreamFn(4, successMsg);
-		const events = await collectEvents(streamFn, createConfig({
-			streamRetries: 3,
-			streamRetryBaseDelayMs: 10,
-		}));
+		const events = await collectEvents(
+			streamFn,
+			createConfig({
+				streamRetries: 3,
+				streamRetryBaseDelayMs: 10,
+			}),
+		);
 
 		// 3 retries, then the 4th failure is not retried
 		const retryEvents = events.filter((e) => e.type === "stream_retry");
@@ -226,16 +225,19 @@ describe("stream retry on dropped connections", () => {
 		if (lastMsgEnd.type === "message_end") {
 			const msg = lastMsgEnd.message as AssistantMessage;
 			expect(msg.stopReason).toBe("error");
-			expect(msg.errorMessage).toContain("connection likely dropped");
+			expect(msg.errorMessage).toContain("Stream dropped repeatedly");
 		}
 	});
 
 	it("does NOT retry non-stream-drop errors", async () => {
 		const streamFn = createNonRetryableStreamFn();
-		const events = await collectEvents(streamFn, createConfig({
-			streamRetries: 3,
-			streamRetryBaseDelayMs: 10,
-		}));
+		const events = await collectEvents(
+			streamFn,
+			createConfig({
+				streamRetries: 3,
+				streamRetryBaseDelayMs: 10,
+			}),
+		);
 
 		// No retry events
 		const retryEvents = events.filter((e) => e.type === "stream_retry");
@@ -254,10 +256,13 @@ describe("stream retry on dropped connections", () => {
 	it("respects streamRetries: 0 to disable retries", async () => {
 		const successMsg = createAssistantMessage([{ type: "text", text: "never reached" }]);
 		const streamFn = createFailingStreamFn(1, successMsg);
-		const events = await collectEvents(streamFn, createConfig({
-			streamRetries: 0,
-			streamRetryBaseDelayMs: 10,
-		}));
+		const events = await collectEvents(
+			streamFn,
+			createConfig({
+				streamRetries: 0,
+				streamRetryBaseDelayMs: 10,
+			}),
+		);
 
 		// No retry events
 		const retryEvents = events.filter((e) => e.type === "stream_retry");

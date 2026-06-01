@@ -266,10 +266,7 @@ async function runLoop(
 function isStreamDropError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	const msg = error.message;
-	return (
-		msg.includes("Stream ended without") ||
-		msg.includes("connection likely dropped")
-	);
+	return msg.includes("Stream ended without") || msg.includes("connection likely dropped");
 }
 
 /**
@@ -376,6 +373,9 @@ async function streamAssistantResponse(
 			});
 		} catch (error) {
 			if (isStreamDropError(error) && attempt < maxRetries && !signal?.aborted) {
+				if (addedPartial && partialMessage) {
+					await emit({ type: "message_end", message: { ...(partialMessage as AssistantMessage) } });
+				}
 				await emit({
 					type: "stream_retry",
 					attempt: attempt + 1,
@@ -390,7 +390,12 @@ async function streamAssistantResponse(
 				partialMessage = null;
 				continue;
 			}
-			return finalizeMessage(createErrorMessage(error));
+			const surfacedError = isStreamDropError(error)
+				? new Error("Stream dropped repeatedly — connection likely unstable")
+				: error instanceof Error
+					? error
+					: new Error(String(error));
+			return finalizeMessage(createErrorMessage(surfacedError));
 		}
 
 		let shouldRetry = false;
@@ -438,6 +443,15 @@ async function streamAssistantResponse(
 						) {
 							shouldRetry = true;
 							retryError = result.errorMessage;
+						} else if (
+							result.stopReason === "error" &&
+							result.errorMessage &&
+							isStreamDropError(new Error(result.errorMessage))
+						) {
+							// Final attempt exhausted — surface friendly message
+							return finalizeMessage(
+								createErrorMessage(new Error("Stream dropped repeatedly — connection likely unstable")),
+							);
 						} else {
 							return finalizeMessage(result);
 						}
@@ -451,11 +465,19 @@ async function streamAssistantResponse(
 				shouldRetry = true;
 				retryError = error instanceof Error ? error.message : String(error);
 			} else {
-				return finalizeMessage(createErrorMessage(error));
+				const surfacedError = isStreamDropError(error)
+					? new Error("Stream dropped repeatedly — connection likely unstable")
+					: error instanceof Error
+						? error
+						: new Error(String(error));
+				return finalizeMessage(createErrorMessage(surfacedError));
 			}
 		}
 
 		if (shouldRetry) {
+			if (addedPartial && partialMessage) {
+				await emit({ type: "message_end", message: { ...partialMessage } });
+			}
 			await emit({
 				type: "stream_retry",
 				attempt: attempt + 1,
@@ -475,9 +497,7 @@ async function streamAssistantResponse(
 	}
 
 	// All retries exhausted — surface the error
-	return finalizeMessage(
-		createErrorMessage(new Error("Stream dropped repeatedly — connection likely unstable")),
-	);
+	return finalizeMessage(createErrorMessage(new Error("Stream dropped repeatedly — connection likely unstable")));
 }
 
 interface ToolExecutionResult {
