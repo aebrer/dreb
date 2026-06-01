@@ -52,7 +52,7 @@
 		"shx": "^0.4.0",
 		"tree-sitter-gdscript": "^6.1.0",
 		"typescript": "^5.9.2",
-		"vitest": "^3.2.4"
+		"vitest": "^4.1.8"
 	},
 	"keywords": [
 		"semantic-search",
