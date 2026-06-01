@@ -264,8 +264,7 @@ async function runLoop(
  * Only these errors trigger automatic retry — all other errors propagate as-is.
  */
 function isStreamDropError(error: unknown): boolean {
-	if (!(error instanceof Error)) return false;
-	const msg = error.message;
+	const msg = error instanceof Error ? error.message : typeof error === "string" ? error : "";
 	return (
 		msg.includes("Stream ended without") ||
 		msg.includes("connection likely dropped") ||
@@ -366,6 +365,14 @@ async function streamAssistantResponse(
 
 	const maxRetries = config.streamRetries ?? 3;
 	const retryBaseDelay = config.streamRetryBaseDelayMs ?? 1000;
+	const clonePartialForDebug = (): AssistantMessage | undefined => {
+		if (!partialMessage) return undefined;
+		return {
+			...partialMessage,
+			content: partialMessage.content.map((block) => ({ ...block })),
+			usage: { ...partialMessage.usage, cost: { ...partialMessage.usage.cost } },
+		};
+	};
 
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
 		let response: Awaited<ReturnType<StreamFn>>;
@@ -382,6 +389,7 @@ async function streamAssistantResponse(
 					attempt: attempt + 1,
 					maxAttempts: maxRetries,
 					error: error instanceof Error ? error.message : String(error),
+					discardedPartial: clonePartialForDebug(),
 				});
 				await sleep(retryBaseDelay * 2 ** attempt, signal);
 				if (addedPartial) {
@@ -435,20 +443,12 @@ async function streamAssistantResponse(
 					case "error": {
 						const result = await response.result();
 						// Check if this is a stream-drop error that should be retried
-						if (
-							result.stopReason === "error" &&
-							result.errorMessage &&
-							isStreamDropError(new Error(result.errorMessage)) &&
-							attempt < maxRetries &&
-							!signal?.aborted
-						) {
+						const isDrop = result.stopReason === "error" && isStreamDropError(result.errorMessage);
+						if (isDrop && attempt < maxRetries && !signal?.aborted) {
 							shouldRetry = true;
-							retryError = result.errorMessage;
-						} else if (
-							result.stopReason === "error" &&
-							result.errorMessage &&
-							isStreamDropError(new Error(result.errorMessage))
-						) {
+							retryError =
+								result.errorMessage ?? "Stream ended without terminal event — connection likely dropped";
+						} else if (isDrop) {
 							// Final attempt exhausted — surface friendly message
 							return finalizeMessage(
 								createErrorMessage(new Error("Stream dropped repeatedly — connection likely unstable")),
@@ -481,6 +481,7 @@ async function streamAssistantResponse(
 				attempt: attempt + 1,
 				maxAttempts: maxRetries,
 				error: retryError,
+				discardedPartial: clonePartialForDebug(),
 			});
 			await sleep(retryBaseDelay * 2 ** attempt, signal);
 			if (addedPartial) {
@@ -494,7 +495,6 @@ async function streamAssistantResponse(
 		return finalizeMessage(await response.result());
 	}
 
-	// All retries exhausted — surface the error
 	return finalizeMessage(createErrorMessage(new Error("Stream dropped repeatedly — connection likely unstable")));
 }
 

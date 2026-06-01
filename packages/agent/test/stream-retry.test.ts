@@ -1,5 +1,6 @@
 import { type AssistantMessage, type AssistantMessageEvent, EventStream, type Message, type Model } from "@dreb/ai";
 import { describe, expect, it } from "vitest";
+import { Agent } from "../src/agent.js";
 import { agentLoop } from "../src/agent-loop.js";
 import type { AgentEvent, AgentLoopConfig, AgentMessage } from "../src/types.js";
 
@@ -129,13 +130,17 @@ function createNonRetryableStreamFn() {
 	};
 }
 
-async function collectEvents(streamFn: () => MockAssistantStream, config: AgentLoopConfig): Promise<AgentEvent[]> {
+async function collectEvents(
+	streamFn: () => MockAssistantStream,
+	config: AgentLoopConfig,
+	signal?: AbortSignal,
+): Promise<AgentEvent[]> {
 	const events: AgentEvent[] = [];
 	const loop = agentLoop(
 		[createPrompt("test")],
 		{ systemPrompt: "", messages: [], tools: [] },
 		config,
-		undefined,
+		signal,
 		streamFn as any,
 	);
 	for await (const event of loop) {
@@ -163,6 +168,10 @@ describe("stream retry on dropped connections", () => {
 			type: "stream_retry",
 			attempt: 1,
 			maxAttempts: 3,
+			error: "Stream ended without message_delta — connection likely dropped",
+			discardedPartial: {
+				content: [{ type: "thinking", thinking: "partial thinking..." }],
+			},
 		});
 
 		// Should have successfully completed (not errored)
@@ -273,6 +282,85 @@ describe("stream retry on dropped connections", () => {
 		const lastMsgEnd = msgEndEvents[msgEndEvents.length - 1];
 		if (lastMsgEnd.type === "message_end") {
 			expect((lastMsgEnd.message as AssistantMessage).stopReason).toBe("error");
+		}
+	});
+
+	it("forwards Agent stream retry options into the loop", async () => {
+		let attempts = 0;
+		const streamFn = () => {
+			attempts++;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const errorMsg = createAssistantMessage(
+					[{ type: "text", text: `partial ${attempts}` }],
+					"error",
+					"Stream ended without message_delta — connection likely dropped",
+				);
+				stream.push({ type: "start", partial: errorMsg });
+				stream.push({ type: "error", reason: "error", error: errorMsg });
+			});
+			return stream;
+		};
+		const agent = new Agent({
+			initialState: { model: createModel(), systemPrompt: "", tools: [] },
+			streamFn: streamFn as any,
+			streamRetries: 1,
+			streamRetryBaseDelayMs: 10,
+		});
+		const events: AgentEvent[] = [];
+		agent.subscribe((event) => events.push(event));
+
+		await agent.prompt("test");
+
+		expect(attempts).toBe(2);
+		expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(1);
+		const messageEnd = events.findLast((e) => e.type === "message_end");
+		expect(messageEnd?.type).toBe("message_end");
+		if (messageEnd?.type === "message_end") {
+			expect((messageEnd.message as AssistantMessage).errorMessage).toContain("Stream dropped repeatedly");
+		}
+	});
+
+	it("aborts promptly during retry backoff", async () => {
+		const controller = new AbortController();
+		let attempts = 0;
+		const streamFn = (_model: Model<any>, _context: unknown, options?: { signal?: AbortSignal }) => {
+			attempts++;
+			if (options?.signal?.aborted) {
+				throw new Error("Request was aborted");
+			}
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const errorMsg = createAssistantMessage(
+					[{ type: "text", text: "partial before abort" }],
+					"error",
+					"Stream ended without message_delta — connection likely dropped",
+				);
+				stream.push({ type: "start", partial: errorMsg });
+				stream.push({ type: "error", reason: "error", error: errorMsg });
+			});
+			return stream;
+		};
+		setTimeout(() => controller.abort(), 20);
+
+		const events = await Promise.race([
+			collectEvents(
+				streamFn as any,
+				createConfig({
+					streamRetries: 3,
+					streamRetryBaseDelayMs: 5000,
+				}),
+				controller.signal,
+			),
+			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timed out waiting for abort")), 1000)),
+		]);
+
+		expect(attempts).toBe(2);
+		expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(1);
+		const messageEnd = events.findLast((e) => e.type === "message_end");
+		expect(messageEnd?.type).toBe("message_end");
+		if (messageEnd?.type === "message_end") {
+			expect((messageEnd.message as AssistantMessage).stopReason).toBe("aborted");
 		}
 	});
 });

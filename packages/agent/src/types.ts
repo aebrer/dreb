@@ -344,4 +344,11 @@ export type AgentEvent =
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: any; partialResult: any }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: any; isError: boolean }
 	// Stream reliability
-	| { type: "stream_retry"; attempt: number; maxAttempts: number; error: string };
+	| {
+			type: "stream_retry";
+			attempt: number;
+			maxAttempts: number;
+			error: string;
+			/** Partial assistant message discarded before retry, for debugging/instrumentation only. */
+			discardedPartial?: AssistantMessage;
+	  };

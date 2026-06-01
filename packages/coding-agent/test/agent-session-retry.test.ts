@@ -48,6 +48,11 @@ function createAssistantMessage(text: string, overrides?: Partial<AssistantMessa
 
 type SessionWithExtensionEmitHook = {
 	_emitExtensionEvent: (event: AgentEvent) => Promise<void>;
+	_extensionRunner?: {
+		hasHandlers: (eventType: string) => boolean;
+		emit: (event: { type: string; [key: string]: unknown }) => Promise<void>;
+		emitBeforeAgentStart: () => Promise<undefined>;
+	};
 };
 
 describe("AgentSession retry", () => {
@@ -197,6 +202,84 @@ describe("AgentSession retry", () => {
 		expect(callCount).toBe(2);
 		expect(events).toEqual(["start:1", "end:success=true"]);
 		expect(session.isRetrying).toBe(false);
+	});
+
+	it("forwards stream_retry events to extensions with the discarded partial", async () => {
+		let callCount = 0;
+		const model = findModel("anthropic", "sonnet")!;
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: "Test", tools: [] },
+			streamRetries: 1,
+			streamRetryBaseDelayMs: 1,
+			streamFn: () => {
+				callCount++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callCount === 1) {
+						const msg = createAssistantMessage("partial", {
+							stopReason: "error",
+							errorMessage: "Stream ended without message_delta — connection likely dropped",
+						});
+						stream.push({ type: "start", partial: msg });
+						stream.push({ type: "error", reason: "error", error: msg });
+						return;
+					}
+					const msg = createAssistantMessage("Success");
+					stream.push({ type: "start", partial: msg });
+					stream.push({ type: "done", reason: "stop", message: msg });
+				});
+				return stream;
+			},
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settingsManager = SettingsManager.create(tempDir, tempDir);
+		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settingsManager,
+			cwd: tempDir,
+			modelRegistry,
+			resourceLoader: createTestResourceLoader(),
+		});
+
+		const extensionEvents: Array<{ type: string; [key: string]: unknown }> = [];
+		const sessionWithRunner = session as unknown as SessionWithExtensionEmitHook;
+		sessionWithRunner._extensionRunner = {
+			hasHandlers: () => false,
+			emit: async (event) => {
+				extensionEvents.push(event);
+			},
+			emitBeforeAgentStart: async () => undefined,
+		};
+
+		await session.prompt("Test");
+
+		expect(callCount).toBe(2);
+		expect(extensionEvents.map((event) => event.type)).toEqual([
+			"agent_start",
+			"turn_start",
+			"message_start",
+			"message_end",
+			"message_start",
+			"stream_retry",
+			"message_start",
+			"message_end",
+			"turn_end",
+			"agent_end",
+		]);
+		const streamRetry = extensionEvents.find((event) => event.type === "stream_retry");
+		expect(streamRetry).toMatchObject({
+			type: "stream_retry",
+			attempt: 1,
+			maxAttempts: 1,
+			error: "Stream ended without message_delta — connection likely dropped",
+			discardedPartial: { content: [{ type: "text", text: "partial" }] },
+		});
 	});
 
 	it("exhausts max retries and emits failure", async () => {

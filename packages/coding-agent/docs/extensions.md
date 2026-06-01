@@ -482,6 +482,17 @@ dreb.on("message_end", async (event, ctx) => {
 });
 ```
 
+#### stream_retry
+
+Fired when a provider stream drops before its terminal event and dreb discards the partial assistant response before retrying.
+
+```typescript
+dreb.on("stream_retry", async (event, ctx) => {
+  // event.attempt, event.maxAttempts, event.error
+  // event.discardedPartial - partial assistant message discarded before retry (debug/instrumentation only)
+});
+```
+
 #### tool_execution_start / tool_execution_update / tool_execution_end
 
 Fired for tool execution lifecycle updates.

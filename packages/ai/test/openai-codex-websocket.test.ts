@@ -192,6 +192,60 @@ describe("openai-codex WebSocket streaming", () => {
 		expect(onWarning).toHaveBeenCalledWith("ws_parse_error", expect.stringContaining("Malformed WebSocket message"));
 	});
 
+	it("reports pre-completion WebSocket closes with a retryable stream-drop message", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-ws-"));
+		process.env.DREB_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+		let mockSocket: MockWebSocket | undefined;
+
+		(globalThis as { WebSocket?: unknown }).WebSocket = class extends MockWebSocket {
+			constructor(url: string, opts?: unknown) {
+				super(url, opts);
+				mockSocket = this;
+			}
+		};
+
+		global.fetch = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context: Context = {
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const streamResult = streamOpenAICodexResponses(model, context, { apiKey: token, transport: "websocket" });
+		await vi.waitFor(() => {
+			if (!mockSocket) throw new Error("WebSocket not yet created");
+		});
+		await new Promise((r) => setTimeout(r, 10));
+		mockSocket!.emit("close", { code: 1006, reason: "network dropped" });
+
+		const result = await streamResult.result();
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("WebSocket stream closed before response.completed");
+		expect(result.errorMessage).toContain("WebSocket closed 1006 network dropped");
+	});
+
 	it("uses delta context (previous_response_id) on follow-up WebSocket requests with the same sessionId", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-ws-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;

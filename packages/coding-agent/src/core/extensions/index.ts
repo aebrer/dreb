@@ -130,6 +130,7 @@ export type {
 	SetLabelHandler,
 	SetModelHandler,
 	SetThinkingLevelHandler,
+	StreamRetryEvent,
 	TerminalInputHandler,
 	// Events - Tool
 	ToolCallEvent,

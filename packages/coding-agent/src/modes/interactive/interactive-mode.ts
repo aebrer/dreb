@@ -2679,6 +2679,10 @@ export class InteractiveMode {
 					this.loadingAnimation.stop();
 					this.loadingAnimation = undefined;
 				}
+				if (this.retryLoader) {
+					this.retryLoader.stop();
+					this.retryLoader = undefined;
+				}
 				this.retryLoader = new Loader(
 					this.ui,
 					(spinner) => theme.fg("warning", spinner),
