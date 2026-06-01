@@ -302,6 +302,7 @@ export async function processResponsesStream<TApi extends Api>(
 	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
+	let receivedResponseCompleted = false;
 
 	for await (const event of openaiStream) {
 		if (event.type === "response.created") {
@@ -467,6 +468,7 @@ export async function processResponsesStream<TApi extends Api>(
 				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 			}
 		} else if (event.type === "response.completed") {
+			receivedResponseCompleted = true;
 			const response = event.response;
 			if (response?.id) {
 				output.responseId = response.id;
@@ -508,6 +510,10 @@ export async function processResponsesStream<TApi extends Api>(
 					: "Unknown error (no error details in response)";
 			throw new Error(msg);
 		}
+	}
+
+	if (!receivedResponseCompleted) {
+		throw new Error("Stream ended without response.completed — connection likely dropped");
 	}
 }
 

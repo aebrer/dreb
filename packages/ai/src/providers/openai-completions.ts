@@ -126,6 +126,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				}
 			};
 
+			let receivedFinishReason = false;
 			for await (const chunk of openaiStream) {
 				if (!chunk || typeof chunk !== "object") continue;
 
@@ -146,6 +147,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				}
 
 				if (choice.finish_reason) {
+					receivedFinishReason = true;
 					const finishReasonResult = mapStopReason(choice.finish_reason);
 					output.stopReason = finishReasonResult.stopReason;
 					if (finishReasonResult.errorMessage) {
@@ -277,6 +279,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			finishCurrentBlock(currentBlock);
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
+			}
+
+			if (!receivedFinishReason) {
+				throw new Error("Stream ended without finish_reason — connection likely dropped");
 			}
 
 			if (output.stopReason === "aborted") {

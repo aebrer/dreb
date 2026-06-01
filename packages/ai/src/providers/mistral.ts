@@ -285,6 +285,7 @@ async function consumeChatStream(
 		}
 	};
 
+	let receivedFinishReason = false;
 	for await (const event of mistralStream) {
 		const chunk = event.data;
 		// Mistral's streamed CompletionChunk carries an id field. Keep the first non-empty one,
@@ -304,6 +305,7 @@ async function consumeChatStream(
 		if (!choice) continue;
 
 		if (choice.finishReason) {
+			receivedFinishReason = true;
 			output.stopReason = mapChatStopReason(choice.finishReason);
 		}
 
@@ -418,6 +420,10 @@ async function consumeChatStream(
 				partial: output,
 			});
 		}
+	}
+
+	if (!receivedFinishReason) {
+		throw new Error("Stream ended without finishReason — connection likely dropped");
 	}
 
 	finishCurrentBlock(currentBlock);

@@ -504,6 +504,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 				}
 
 				let hasContent = false;
+				let receivedFinishReason = false;
 				let chunkParseErrors = 0;
 				let currentBlock: TextContent | ThinkingContent | null = null;
 				const blocks = output.content;
@@ -685,6 +686,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 							}
 
 							if (candidate?.finishReason) {
+								receivedFinishReason = true;
 								output.stopReason = mapStopReasonString(candidate.finishReason);
 								if (output.content.some((b) => b.type === "toolCall")) {
 									output.stopReason = "toolUse";
@@ -742,6 +744,10 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli", GoogleGe
 							partial: output,
 						});
 					}
+				}
+
+				if (hasContent && !receivedFinishReason) {
+					throw new Error("Stream ended without finishReason — connection likely dropped");
 				}
 
 				return hasContent;

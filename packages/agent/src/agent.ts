@@ -106,6 +106,18 @@ export interface AgentOptions {
 	/** Tool execution mode. Default: "parallel" */
 	toolExecution?: ToolExecutionMode;
 
+	/**
+	 * Maximum number of times to retry when a stream drops mid-response.
+	 * Default: 3
+	 */
+	streamRetries?: number;
+
+	/**
+	 * Base delay in milliseconds for exponential backoff between stream retries.
+	 * Default: 1000
+	 */
+	streamRetryBaseDelayMs?: number;
+
 	/** Called before a tool is executed, after arguments have been validated. */
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 
@@ -155,6 +167,8 @@ export class Agent {
 	private _thinkingBudgets?: ThinkingBudgets;
 	private _transport: Transport;
 	private _maxRetryDelayMs?: number;
+	private _streamRetries?: number;
+	private _streamRetryBaseDelayMs?: number;
 	private _toolExecution: ToolExecutionMode;
 	private _beforeToolCall?: (
 		context: BeforeToolCallContext,
@@ -180,6 +194,8 @@ export class Agent {
 		this._thinkingBudgets = opts.thinkingBudgets;
 		this._transport = opts.transport ?? "sse";
 		this._maxRetryDelayMs = opts.maxRetryDelayMs;
+		this._streamRetries = opts.streamRetries;
+		this._streamRetryBaseDelayMs = opts.streamRetryBaseDelayMs;
 		this._toolExecution = opts.toolExecution ?? "parallel";
 		this._beforeToolCall = opts.beforeToolCall;
 		this._shouldContinue = opts.shouldContinue;
@@ -556,6 +572,8 @@ export class Agent {
 			transport: this._transport,
 			thinkingBudgets: this._thinkingBudgets,
 			maxRetryDelayMs: this._maxRetryDelayMs,
+			streamRetries: this._streamRetries,
+			streamRetryBaseDelayMs: this._streamRetryBaseDelayMs,
 			onWarning: this._onWarning,
 			toolExecution: this._toolExecution,
 			beforeToolCall: this._beforeToolCall,

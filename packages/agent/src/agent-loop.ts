@@ -260,6 +260,41 @@ async function runLoop(
 }
 
 /**
+ * Check if an error is a stream-drop error (connection dropped before terminal event).
+ * Only these errors trigger automatic retry — all other errors propagate as-is.
+ */
+function isStreamDropError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	const msg = error.message;
+	return (
+		msg.includes("Stream ended without") ||
+		msg.includes("connection likely dropped") ||
+		msg.includes("WebSocket stream closed before")
+	);
+}
+
+/**
+ * Sleep for a duration, aborting early if the signal fires.
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		if (signal?.aborted) {
+			resolve();
+			return;
+		}
+		const timer = setTimeout(resolve, ms);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			{ once: true },
+		);
+	});
+}
+
+/**
  * Stream an assistant response from the LLM.
  * This is where AgentMessage[] gets transformed to Message[] for the LLM.
  */
@@ -329,57 +364,138 @@ async function streamAssistantResponse(
 		timestamp: partialMessage?.timestamp ?? Date.now(),
 	});
 
-	let response: Awaited<ReturnType<StreamFn>>;
-	try {
-		response = await streamFunction(config.model, llmContext, {
-			...config,
-			apiKey: resolvedApiKey,
-			signal,
-		});
-	} catch (error) {
-		return finalizeMessage(createErrorMessage(error));
-	}
+	const maxRetries = config.streamRetries ?? 3;
+	const retryBaseDelay = config.streamRetryBaseDelayMs ?? 1000;
 
-	try {
-		for await (const event of response) {
-			switch (event.type) {
-				case "start":
-					partialMessage = event.partial;
-					context.messages.push(partialMessage);
-					addedPartial = true;
-					await emit({ type: "message_start", message: { ...partialMessage } });
-					break;
+	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		let response: Awaited<ReturnType<StreamFn>>;
+		try {
+			response = await streamFunction(config.model, llmContext, {
+				...config,
+				apiKey: resolvedApiKey,
+				signal,
+			});
+		} catch (error) {
+			if (isStreamDropError(error) && attempt < maxRetries && !signal?.aborted) {
+				await emit({
+					type: "stream_retry",
+					attempt: attempt + 1,
+					maxAttempts: maxRetries,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				await sleep(retryBaseDelay * 2 ** attempt, signal);
+				if (addedPartial) {
+					context.messages.pop();
+					addedPartial = false;
+				}
+				partialMessage = null;
+				continue;
+			}
+			const surfacedError = isStreamDropError(error)
+				? new Error("Stream dropped repeatedly — connection likely unstable")
+				: error instanceof Error
+					? error
+					: new Error(String(error));
+			return finalizeMessage(createErrorMessage(surfacedError));
+		}
 
-				case "text_start":
-				case "text_delta":
-				case "text_end":
-				case "thinking_start":
-				case "thinking_delta":
-				case "thinking_end":
-				case "toolcall_start":
-				case "toolcall_delta":
-				case "toolcall_end":
-					if (partialMessage) {
+		let shouldRetry = false;
+		let retryError = "";
+		try {
+			for await (const event of response) {
+				switch (event.type) {
+					case "start":
 						partialMessage = event.partial;
-						context.messages[context.messages.length - 1] = partialMessage;
-						await emit({
-							type: "message_update",
-							assistantMessageEvent: event,
-							message: { ...partialMessage },
-						});
-					}
-					break;
+						context.messages.push(partialMessage);
+						addedPartial = true;
+						await emit({ type: "message_start", message: { ...partialMessage } });
+						break;
 
-				case "done":
-				case "error":
-					return finalizeMessage(await response.result());
+					case "text_start":
+					case "text_delta":
+					case "text_end":
+					case "thinking_start":
+					case "thinking_delta":
+					case "thinking_end":
+					case "toolcall_start":
+					case "toolcall_delta":
+					case "toolcall_end":
+						if (partialMessage) {
+							partialMessage = event.partial;
+							context.messages[context.messages.length - 1] = partialMessage;
+							await emit({
+								type: "message_update",
+								assistantMessageEvent: event,
+								message: { ...partialMessage },
+							});
+						}
+						break;
+
+					case "done":
+					case "error": {
+						const result = await response.result();
+						// Check if this is a stream-drop error that should be retried
+						if (
+							result.stopReason === "error" &&
+							result.errorMessage &&
+							isStreamDropError(new Error(result.errorMessage)) &&
+							attempt < maxRetries &&
+							!signal?.aborted
+						) {
+							shouldRetry = true;
+							retryError = result.errorMessage;
+						} else if (
+							result.stopReason === "error" &&
+							result.errorMessage &&
+							isStreamDropError(new Error(result.errorMessage))
+						) {
+							// Final attempt exhausted — surface friendly message
+							return finalizeMessage(
+								createErrorMessage(new Error("Stream dropped repeatedly — connection likely unstable")),
+							);
+						} else {
+							return finalizeMessage(result);
+						}
+						break;
+					}
+				}
+				if (shouldRetry) break;
+			}
+		} catch (error) {
+			if (isStreamDropError(error) && attempt < maxRetries && !signal?.aborted) {
+				shouldRetry = true;
+				retryError = error instanceof Error ? error.message : String(error);
+			} else {
+				const surfacedError = isStreamDropError(error)
+					? new Error("Stream dropped repeatedly — connection likely unstable")
+					: error instanceof Error
+						? error
+						: new Error(String(error));
+				return finalizeMessage(createErrorMessage(surfacedError));
 			}
 		}
-	} catch (error) {
-		return finalizeMessage(createErrorMessage(error));
+
+		if (shouldRetry) {
+			await emit({
+				type: "stream_retry",
+				attempt: attempt + 1,
+				maxAttempts: maxRetries,
+				error: retryError,
+			});
+			await sleep(retryBaseDelay * 2 ** attempt, signal);
+			if (addedPartial) {
+				context.messages.pop();
+				addedPartial = false;
+			}
+			partialMessage = null;
+			continue;
+		}
+
+		return finalizeMessage(await response.result());
 	}
 
-	return finalizeMessage(await response.result());
+	// All retries exhausted — surface the error
+	return finalizeMessage(createErrorMessage(new Error("Stream dropped repeatedly — connection likely unstable")));
 }
 
 interface ToolExecutionResult {
