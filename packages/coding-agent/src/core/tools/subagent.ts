@@ -793,14 +793,15 @@ function bgRelease(): void {
 }
 
 /**
- * Resolve a per-task cwd relative to the parent cwd.
- * Rejects absolute paths and relative paths that escape the parent directory.
+ * Resolve a per-task cwd.
+ * Accepts absolute paths as-is. Resolves relative paths against the parent cwd,
+ * rejecting any that escape outside it.
  * Returns a result object with ok=false and an error string on rejection, so callers can surface it to the model.
  */
 function clampCwd(defaultCwd: string, itemCwd?: string): { ok: true; cwd: string } | { ok: false; error: string } {
 	if (!itemCwd) return { ok: true, cwd: defaultCwd };
 	if (itemCwd.startsWith("/")) {
-		return { ok: false, error: `Rejected absolute cwd "${itemCwd}" — must be relative to parent cwd` };
+		return { ok: true, cwd: itemCwd };
 	}
 	const resolved = resolve(defaultCwd, itemCwd);
 	if (resolved !== defaultCwd && !resolved.startsWith(`${defaultCwd}/`)) {
@@ -1043,7 +1044,12 @@ export interface SubagentToolOptions {
 const taskItemSchema = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'Explore')" })),
 	task: Type.String({ description: "The task prompt for this subagent" }),
-	cwd: Type.Optional(Type.String({ description: "Working directory (defaults to parent's cwd)" })),
+	cwd: Type.Optional(
+		Type.String({
+			description:
+				"Working directory (defaults to parent's cwd). Accepts absolute paths or relative paths within parent's cwd.",
+		}),
+	),
 	model: Type.Optional(
 		Type.String({
 			description:

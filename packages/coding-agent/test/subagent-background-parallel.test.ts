@@ -3,10 +3,10 @@ import type { ExtensionContext } from "../src/core/extensions/types.js";
 import { createSubagentToolDefinition, getBackgroundAgents } from "../src/core/tools/subagent.js";
 
 /**
- * Tests for background parallel mode — specifically the skipped-task path
- * when tasks have invalid cwd values that fail clampCwd validation.
+ * Tests for background parallel mode — covering skipped-task paths (invalid relative
+ * escape cwd) and the acceptance of absolute cwd values.
  */
-describe("subagent background parallel — skipped tasks", () => {
+describe("subagent background parallel — cwd handling", () => {
 	const cwd = process.cwd();
 	const dummyCtx = {} as ExtensionContext;
 
@@ -17,15 +17,15 @@ describe("subagent background parallel — skipped tasks", () => {
 		});
 	}
 
-	it("should report skipped tasks when all tasks have invalid absolute cwd", async () => {
+	it("should accept absolute cwd values and launch tasks", async () => {
 		const tool = createTool();
 		const result = await tool.execute(
 			"call-1",
 			{
 				background: true,
 				tasks: [
-					{ task: "task one", cwd: "/tmp/evil" },
-					{ task: "task two", cwd: "/absolute/path" },
+					{ task: "task one", cwd: "/tmp" },
+					{ task: "task two", cwd: cwd }, // absolute path equal to parent cwd
 				],
 			},
 			undefined,
@@ -35,30 +35,42 @@ describe("subagent background parallel — skipped tasks", () => {
 
 		const text = result.content[0].type === "text" ? result.content[0].text : "";
 
-		// Should report 0 launched
-		expect(text).toContain("0 background agents started");
-		// Should report both tasks as failed to launch
-		expect(text).toContain("2 task(s) failed to launch");
-		expect(text).toContain("SKIPPED");
-		expect(text).toContain("task one");
-		expect(text).toContain("task two");
-		// Should NOT say "Each will notify" when nothing was launched
-		expect(text).not.toContain("Each will notify independently");
-		// Should say no agents launched
-		expect(text).toContain("No agents were launched");
-		// agentCount should be 0
-		expect(result.details).toEqual({ mode: "parallel", agentCount: 0 });
+		// Both tasks should launch — no skipped tasks
+		expect(text).toContain("2 background agents started");
+		expect(text).not.toContain("failed to launch");
+		expect(text).not.toContain("SKIPPED");
+		expect(result.details).toEqual({ mode: "parallel", agentCount: 2 });
 	});
 
-	it("should report mix of launched and skipped tasks", async () => {
+	it("should accept an absolute cwd pointing to a different project directory", async () => {
 		const tool = createTool();
 		const result = await tool.execute(
 			"call-2",
 			{
 				background: true,
+				tasks: [{ task: "investigate this project", cwd: "/tmp" }],
+			},
+			undefined,
+			undefined,
+			dummyCtx,
+		);
+
+		const text = result.content[0].type === "text" ? result.content[0].text : "";
+
+		expect(text).toContain("1 background agents started");
+		expect(text).not.toContain("SKIPPED");
+		expect(result.details).toEqual({ mode: "parallel", agentCount: 1 });
+	});
+
+	it("should report mix of launched and skipped tasks (relative escape is still rejected)", async () => {
+		const tool = createTool();
+		const result = await tool.execute(
+			"call-3",
+			{
+				background: true,
 				tasks: [
 					{ task: "valid task" }, // no cwd override, uses default — should succeed
-					{ task: "invalid task", cwd: "/absolute/path" }, // should be skipped
+					{ task: "invalid task", cwd: "../../../../../../etc" }, // relative escape — should be skipped
 				],
 			},
 			undefined,
@@ -81,7 +93,7 @@ describe("subagent background parallel — skipped tasks", () => {
 	it("should report escape-cwd tasks as skipped", async () => {
 		const tool = createTool();
 		const result = await tool.execute(
-			"call-3",
+			"call-4",
 			{
 				background: true,
 				tasks: [{ task: "escape attempt", cwd: "../../../../../../etc" }],
@@ -103,7 +115,7 @@ describe("subagent background parallel — skipped tasks", () => {
 	it("should register inherited agent type in background agent registry", async () => {
 		const tool = createTool();
 		const result = await tool.execute(
-			"call-4",
+			"call-5",
 			{
 				agent: "feature-dev",
 				tasks: [{ task: "valid task with inherited agent" }],
@@ -126,7 +138,7 @@ describe("subagent background parallel — skipped tasks", () => {
 	it("should show inherited agent type in launch listing", async () => {
 		const tool = createTool();
 		const result = await tool.execute(
-			"call-5",
+			"call-6",
 			{
 				agent: "feature-dev",
 				tasks: [{ task: "task one" }, { task: "task two" }],
