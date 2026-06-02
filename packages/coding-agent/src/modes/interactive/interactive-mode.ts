@@ -4402,12 +4402,12 @@ export class InteractiveMode {
 
 					const combined = selectedTexts.join("\n\n---\n\n");
 
-					try {
-						await copyToClipboard(combined);
-						const count = selectedTexts.length;
+					const result = await copyToClipboard(combined);
+					const count = selectedTexts.length;
+					if (result.method === "osc52") {
+						this.showStatus(`Sent ${count} message${count === 1 ? "" : "s"} to terminal clipboard (OSC 52)`);
+					} else {
 						this.showStatus(`Copied ${count} message${count === 1 ? "" : "s"} to clipboard`);
-					} catch (error) {
-						this.showError(error instanceof Error ? error.message : String(error));
 					}
 				},
 				() => {

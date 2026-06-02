@@ -249,12 +249,15 @@ describe("CopySelectorComponent", () => {
 
 	test("empty items: auto-cancels", async () => {
 		vi.useFakeTimers();
-		const onCopy = vi.fn();
-		const onCancel = vi.fn();
-		new CopySelectorComponent([], onCopy, onCancel);
+		try {
+			const onCopy = vi.fn();
+			const onCancel = vi.fn();
+			new CopySelectorComponent([], onCopy, onCancel);
 
-		vi.advanceTimersByTime(200);
-		expect(onCancel).toHaveBeenCalled();
-		vi.useRealTimers();
+			vi.advanceTimersByTime(200);
+			expect(onCancel).toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

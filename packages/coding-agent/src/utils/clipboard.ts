@@ -18,7 +18,9 @@ function copyToX11Clipboard(options: NativeClipboardExecOptions): void {
 	}
 }
 
-export async function copyToClipboard(text: string): Promise<void> {
+export type ClipboardResult = { method: "native" | "platform" | "osc52" };
+
+export async function copyToClipboard(text: string): Promise<ClipboardResult> {
 	// Always emit OSC 52 - works over SSH/mosh, harmless locally
 	const encoded = Buffer.from(text).toString("base64");
 	process.stdout.write(`\x1b]52;c;${encoded}\x07`);
@@ -26,7 +28,7 @@ export async function copyToClipboard(text: string): Promise<void> {
 	try {
 		if (clipboard) {
 			await clipboard.setText(text);
-			return;
+			return { method: "native" };
 		}
 	} catch {
 		/* Native clipboard module threw — fall through to platform-specific tools */
@@ -39,14 +41,16 @@ export async function copyToClipboard(text: string): Promise<void> {
 	try {
 		if (p === "darwin") {
 			execSync("pbcopy", options);
+			return { method: "platform" };
 		} else if (p === "win32") {
 			execSync("clip", options);
+			return { method: "platform" };
 		} else {
 			// Linux. Try Termux, Wayland, or X11 clipboard tools.
 			if (process.env.TERMUX_VERSION) {
 				try {
 					execSync("termux-clipboard-set", options);
-					return;
+					return { method: "platform" };
 				} catch {
 					/* termux-clipboard-set unavailable — fall back to Wayland or X11 tools */
 				}
@@ -67,17 +71,22 @@ export async function copyToClipboard(text: string): Promise<void> {
 					proc.stdin.write(text);
 					proc.stdin.end();
 					proc.unref();
+					return { method: "platform" };
 				} catch {
 					/* wl-copy unavailable or failed — fall back to X11 if available */
 					if (hasX11Display) {
 						copyToX11Clipboard(options);
+						return { method: "platform" };
 					}
 				}
 			} else if (hasX11Display) {
 				copyToX11Clipboard(options);
+				return { method: "platform" };
 			}
 		}
 	} catch {
 		/* Platform clipboard tools failed — OSC 52 already emitted above as fallback */
 	}
+
+	return { method: "osc52" };
 }
