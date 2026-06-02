@@ -7,7 +7,7 @@ import { bashTool, createBashTool, createLocalBashOperations } from "../src/core
 import { editTool } from "../src/core/tools/edit.js";
 import { createFindTool, findTool } from "../src/core/tools/find.js";
 import { createGrepTool, type GrepOperations, grepTool } from "../src/core/tools/grep.js";
-import { allToolDefinitions, allTools } from "../src/core/tools/index.js";
+import { allToolDefinitions, allTools, createAllToolDefinitions, createAllTools } from "../src/core/tools/index.js";
 import { lsTool } from "../src/core/tools/ls.js";
 import { readTool } from "../src/core/tools/read.js";
 import { writeTool } from "../src/core/tools/write.js";
@@ -937,5 +937,15 @@ describe("allTools / allToolDefinitions", () => {
 		const tool = allTools.search;
 		expect(typeof tool.execute).toBe("function");
 		expect(tool.name).toBe("search");
+	});
+
+	it("createAllToolDefinitions includes search unconditionally", () => {
+		const tools = createAllToolDefinitions("/tmp");
+		expect(tools.search).toBeDefined();
+	});
+
+	it("createAllTools includes search unconditionally", () => {
+		const tools = createAllTools("/tmp");
+		expect(tools.search).toBeDefined();
 	});
 });
