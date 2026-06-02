@@ -4383,7 +4383,8 @@ export class InteractiveMode {
 					done();
 					// Restore buddy
 					if (hadBuddy) this.renderWidgets();
-					this.ui.requestRender();
+					// Force full redraw — content shrinks dramatically when selector closes
+					this.ui.requestRender(true);
 
 					if (selectedIndices.length === 0) {
 						this.showWarning("No messages selected");
@@ -4414,7 +4415,8 @@ export class InteractiveMode {
 					done();
 					// Restore buddy
 					if (hadBuddy) this.renderWidgets();
-					this.ui.requestRender();
+					// Force full redraw — content shrinks dramatically when selector closes
+					this.ui.requestRender(true);
 				},
 				maxVisible,
 			);
