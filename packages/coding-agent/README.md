@@ -598,10 +598,9 @@ cat README.md | dreb -p "Summarize this text"
 | `--tools <list>` | Comma-separated list of tools to enable (default: all) |
 | `--no-tools` | Disable all built-in tools (extension tools still work) |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`
+Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `search`
 
-Four additional tools are always active but don't appear in `--tools`:
-- `search` — [semantic codebase search](#semantic-search) using natural language queries
+Three additional tools are always active but don't appear in `--tools`:
 - `skill` — invokes [skills](#skills) programmatically
 - `tasks_update` — session [task tracking](#task-tracking) with TUI panel
 - `suggest_next` — suggests a next command shown as ghost text (Tab to accept)
