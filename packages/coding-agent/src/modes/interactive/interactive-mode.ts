@@ -78,6 +78,7 @@ import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/cha
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
 import { parseGitUrl } from "../../utils/git.js";
+import { extractCopyableText, getMessagePreview, getMessageRoleLabel } from "../../utils/message-text.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { ArminComponent } from "./components/armin.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
@@ -86,6 +87,7 @@ import { BorderedLoader } from "./components/bordered-loader.js";
 import { BranchSummaryMessageComponent } from "./components/branch-summary-message.js";
 import { BuddyComponent } from "./components/buddy-component.js";
 import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.js";
+import { type CopyMessageItem, CopySelectorComponent } from "./components/copy-selector.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { CustomMessageComponent } from "./components/custom-message.js";
 import { DaxnutsComponent } from "./components/daxnuts.js";
@@ -2114,6 +2116,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.clipboard.copyMessages", () => this.showCopySelector());
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -4342,18 +4345,61 @@ export class InteractiveMode {
 	}
 
 	private async handleCopyCommand(): Promise<void> {
-		const text = this.session.getLastAssistantText();
-		if (!text) {
-			this.showError("No agent messages to copy yet.");
+		this.showCopySelector();
+	}
+
+	private showCopySelector(): void {
+		const messages = this.session.messages;
+
+		if (messages.length === 0) {
+			this.showStatus("No messages to copy");
 			return;
 		}
 
-		try {
-			await copyToClipboard(text);
-			this.showStatus("Copied last agent message to clipboard");
-		} catch (error) {
-			this.showError(error instanceof Error ? error.message : String(error));
-		}
+		// Build items from session messages
+		const items: CopyMessageItem[] = messages.map((msg, index) => ({
+			index,
+			roleLabel: getMessageRoleLabel(msg),
+			preview: getMessagePreview(msg),
+		}));
+
+		this.showSelector((done) => {
+			const selector = new CopySelectorComponent(
+				items,
+				async (selectedIndices) => {
+					done();
+					if (selectedIndices.length === 0) {
+						this.showWarning("No messages selected");
+						return;
+					}
+
+					// Extract text from selected messages in chronological order
+					const selectedTexts = selectedIndices
+						.map((i) => extractCopyableText(messages[i]))
+						.filter((text) => text.length > 0);
+
+					if (selectedTexts.length === 0) {
+						this.showWarning("Selected messages have no copyable text");
+						return;
+					}
+
+					const combined = selectedTexts.join("\n\n---\n\n");
+
+					try {
+						await copyToClipboard(combined);
+						const count = selectedTexts.length;
+						this.showStatus(`Copied ${count} message${count === 1 ? "" : "s"} to clipboard`);
+					} catch (error) {
+						this.showError(error instanceof Error ? error.message : String(error));
+					}
+				},
+				() => {
+					done();
+					this.ui.requestRender();
+				},
+			);
+			return { component: selector, focus: selector.getMessageList() };
+		});
 	}
 
 	private handleNameCommand(text: string): void {
