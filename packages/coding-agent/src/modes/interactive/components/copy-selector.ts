@@ -17,7 +17,7 @@ class CopyMessageList implements Component {
 	private selected: Set<number>; // set of selected item array positions
 	private maxVisible: number;
 
-	public onCopy?: (selectedIndices: number[]) => void;
+	public onCopy?: (selectedIndices: number[]) => void | Promise<void>;
 	public onCancel?: () => void;
 
 	constructor(items: CopyMessageItem[], maxVisible: number = 15) {
@@ -129,7 +129,12 @@ class CopyMessageList implements Component {
 				const selectedIndices = Array.from(this.selected)
 					.map((i) => this.items[i].index)
 					.sort((a, b) => a - b);
-				this.onCopy(selectedIndices);
+				const result = this.onCopy(selectedIndices);
+				if (result instanceof Promise) {
+					result.catch(() => {
+						// Errors from the async copy callback are handled by the caller
+					});
+				}
 			}
 		}
 		// Escape/Ctrl+C - cancel
@@ -149,7 +154,7 @@ export class CopySelectorComponent extends Container {
 
 	constructor(
 		items: CopyMessageItem[],
-		onCopy: (selectedIndices: number[]) => void,
+		onCopy: (selectedIndices: number[]) => void | Promise<void>,
 		onCancel: () => void,
 		maxVisible?: number,
 	) {
