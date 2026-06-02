@@ -4363,11 +4363,28 @@ export class InteractiveMode {
 			preview: getMessagePreview(msg),
 		}));
 
+		// Hide buddy while selector is open to free vertical space
+		const hadBuddy = this.buddyComponent !== null;
+		if (hadBuddy) {
+			this.widgetContainerBelow.clear();
+			this.ui.requestRender();
+		}
+
+		// Calculate max visible items based on terminal height
+		// Reserve lines for: header(4) + borders(2) + spacers(2) + scroll indicator(1) + footer(1) + padding(2) = ~12 lines overhead
+		const terminalRows = this.ui.terminal.rows;
+		const overhead = 12;
+		const maxVisible = Math.max(3, Math.min(15, terminalRows - overhead));
+
 		this.showSelector((done) => {
 			const selector = new CopySelectorComponent(
 				items,
 				async (selectedIndices) => {
 					done();
+					// Restore buddy
+					if (hadBuddy) this.renderWidgets();
+					this.ui.requestRender();
+
 					if (selectedIndices.length === 0) {
 						this.showWarning("No messages selected");
 						return;
@@ -4395,8 +4412,11 @@ export class InteractiveMode {
 				},
 				() => {
 					done();
+					// Restore buddy
+					if (hadBuddy) this.renderWidgets();
 					this.ui.requestRender();
 				},
+				maxVisible,
 			);
 			return { component: selector, focus: selector.getMessageList() };
 		});

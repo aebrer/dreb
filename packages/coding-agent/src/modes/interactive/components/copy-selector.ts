@@ -15,13 +15,14 @@ class CopyMessageList implements Component {
 	private items: CopyMessageItem[];
 	private selectedIndex: number; // cursor position
 	private selected: Set<number>; // set of selected item array positions
-	private maxVisible: number = 15;
+	private maxVisible: number;
 
 	public onCopy?: (selectedIndices: number[]) => void;
 	public onCancel?: () => void;
 
-	constructor(items: CopyMessageItem[]) {
+	constructor(items: CopyMessageItem[], maxVisible: number = 15) {
 		this.items = items;
+		this.maxVisible = maxVisible;
 		// Bottom-anchored: start at the last (most recent) item
 		this.selectedIndex = Math.max(0, items.length - 1);
 		this.selected = new Set();
@@ -142,7 +143,12 @@ class CopyMessageList implements Component {
 export class CopySelectorComponent extends Container {
 	private messageList: CopyMessageList;
 
-	constructor(items: CopyMessageItem[], onCopy: (selectedIndices: number[]) => void, onCancel: () => void) {
+	constructor(
+		items: CopyMessageItem[],
+		onCopy: (selectedIndices: number[]) => void,
+		onCancel: () => void,
+		maxVisible?: number,
+	) {
 		super();
 
 		// Add header
@@ -156,7 +162,7 @@ export class CopySelectorComponent extends Container {
 		this.addChild(new Spacer(1));
 
 		// Create message list
-		this.messageList = new CopyMessageList(items);
+		this.messageList = new CopyMessageList(items, maxVisible);
 		this.messageList.onCopy = onCopy;
 		this.messageList.onCancel = onCancel;
 		this.addChild(this.messageList);
