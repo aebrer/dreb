@@ -254,3 +254,7 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 export function createSearchTool(cwd: string): AgentTool<typeof searchSchema> {
 	return wrapToolDefinition(createSearchToolDefinition(cwd));
 }
+
+/** Default search tool using process.cwd() for backwards compatibility. */
+export const searchToolDefinition = createSearchToolDefinition(process.cwd());
+export const searchTool = createSearchTool(process.cwd());

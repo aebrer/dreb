@@ -68,6 +68,8 @@ export {
 	isSearchAvailable,
 	type SearchToolDetails,
 	type SearchToolInput,
+	searchTool,
+	searchToolDefinition,
 } from "./search.js";
 export {
 	createSkillTool,
@@ -172,7 +174,7 @@ import {
 	readTool,
 	readToolDefinition,
 } from "./read.js";
-import { createSearchTool, createSearchToolDefinition, isSearchAvailable } from "./search.js";
+import { createSearchTool, createSearchToolDefinition, searchTool, searchToolDefinition } from "./search.js";
 import { createSkillTool, createSkillToolDefinition, type SkillToolOptions } from "./skill.js";
 import {
 	createSubagentTool,
@@ -222,6 +224,7 @@ export const allTools = {
 	subagent: subagentTool,
 	tmp_read: tmpReadTool,
 	wait: waitTool,
+	search: searchTool,
 };
 
 export const allToolDefinitions = {
@@ -237,6 +240,7 @@ export const allToolDefinitions = {
 	subagent: subagentToolDefinition,
 	tmp_read: tmpReadToolDefinition,
 	wait: waitToolDefinition,
+	search: searchToolDefinition,
 };
 
 export type ToolName = keyof typeof allTools;
@@ -282,10 +286,8 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		subagent: createSubagentToolDefinition(cwd, options?.subagent),
 		tmp_read: createTmpReadToolDefinition(options?.read),
 		wait: createWaitToolDefinition({ getRunningAgents: getRunningBackgroundAgents }),
+		search: createSearchToolDefinition(cwd),
 	};
-	if (isSearchAvailable()) {
-		tools.search = createSearchToolDefinition(cwd);
-	}
 	if (options?.skill) {
 		tools.skill = createSkillToolDefinition(cwd, options.skill);
 	}
@@ -325,10 +327,8 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		subagent: createSubagentTool(cwd, options?.subagent),
 		tmp_read: wrapToolDefinition(createTmpReadToolDefinition(options?.read)),
 		wait: wrapToolDefinition(createWaitToolDefinition({ getRunningAgents: getRunningBackgroundAgents })),
+		search: createSearchTool(cwd),
 	};
-	if (isSearchAvailable()) {
-		tools.search = createSearchTool(cwd);
-	}
 	if (options?.skill) {
 		tools.skill = createSkillTool(cwd, options.skill);
 	}

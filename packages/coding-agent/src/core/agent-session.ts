@@ -620,7 +620,7 @@ export class AgentSession {
 		if (cancelled) {
 			parts.push("This agent was cancelled by the user.");
 		}
-		if (result.exitCode !== 0) {
+		if (!cancelled && result.exitCode !== 0) {
 			parts.push(`Error: ${result.errorMessage || "unknown"}`);
 		}
 		if (result.output) {
