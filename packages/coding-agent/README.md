@@ -165,7 +165,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/tree` | Jump to any point in the session and continue from there |
 | `/fork` | Create a new session from the current branch |
 | `/compact [prompt]` | Manually compact context, optional custom instructions |
-| `/copy` | Copy last assistant message to clipboard |
+| `/copy` | Open multi-select message picker to copy any messages to clipboard |
 | `/dream` | Consolidate and prune memories — backs up, merges duplicates, scans sessions for patterns |
 | `/export [file]` | Export session to HTML file |
 | `/buddy` | Terminal companion — hatch, pet, reroll, set model, or hide. See [docs/buddy.md](docs/buddy.md) |

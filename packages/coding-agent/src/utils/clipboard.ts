@@ -65,13 +65,17 @@ export async function copyToClipboard(text: string): Promise<ClipboardResult> {
 					execSync("which wl-copy", { stdio: "ignore" });
 					// wl-copy with execSync hangs due to fork behavior; use spawn instead
 					const proc = spawn("wl-copy", [], { stdio: ["pipe", "ignore", "ignore"] });
+					proc.on("error", () => {
+						// Spawn failed after which check (TOCTOU, permissions, etc.)
+					});
 					proc.stdin.on("error", () => {
 						// Ignore EPIPE errors if wl-copy exits early
 					});
 					proc.stdin.write(text);
 					proc.stdin.end();
 					proc.unref();
-					return { method: "platform" };
+					// Can't confirm wl-copy succeeded before unref — report osc52 (already emitted above)
+					return { method: "osc52" };
 				} catch {
 					/* wl-copy unavailable or failed — fall back to X11 if available */
 					if (hasX11Display) {

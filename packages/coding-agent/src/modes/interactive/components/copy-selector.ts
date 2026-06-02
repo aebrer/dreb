@@ -28,6 +28,10 @@ class CopyMessageList implements Component {
 		this.selected = new Set();
 	}
 
+	getMaxVisible(): number {
+		return this.maxVisible;
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
