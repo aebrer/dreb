@@ -1150,22 +1150,15 @@ export class TUI extends Container {
 		}
 
 		// Track where cursor ended up after rendering
-		let finalCursorRow = renderEnd;
+		const finalCursorRow = renderEnd;
 
-		// If we had more lines before, clear them and move cursor back
+		// If we had more lines before, clear ghost lines below new content.
+		// Use a full redraw (clear screen) to avoid ghost whitespace from terminals
+		// that don't properly collapse cleared lines below the cursor.
 		if (this.previousLines.length > newLines.length) {
-			// Move to end of new content first if we stopped before it
-			if (renderEnd < newLines.length - 1) {
-				const moveDown = newLines.length - 1 - renderEnd;
-				buffer += `\x1b[${moveDown}B`;
-				finalCursorRow = newLines.length - 1;
-			}
-			const extraLines = this.previousLines.length - newLines.length;
-			for (let i = newLines.length; i < this.previousLines.length; i++) {
-				buffer += "\r\n\x1b[2K";
-			}
-			// Move cursor back to end of new content
-			buffer += `\x1b[${extraLines}A`;
+			logRedraw(`content shrank (${this.previousLines.length} -> ${newLines.length})`);
+			fullRender(true, false);
+			return;
 		}
 
 		buffer += "\x1b[?2026l"; // End synchronized output
