@@ -7,6 +7,7 @@ import { bashTool, createBashTool, createLocalBashOperations } from "../src/core
 import { editTool } from "../src/core/tools/edit.js";
 import { createFindTool, findTool } from "../src/core/tools/find.js";
 import { createGrepTool, type GrepOperations, grepTool } from "../src/core/tools/grep.js";
+import { allToolDefinitions, allTools } from "../src/core/tools/index.js";
 import { lsTool } from "../src/core/tools/ls.js";
 import { readTool } from "../src/core/tools/read.js";
 import { writeTool } from "../src/core/tools/write.js";
@@ -918,5 +919,23 @@ describe("edit tool CRLF handling", () => {
 
 		const content = readFileSync(testFile, "utf-8");
 		expect(content).toBe("\uFEFFfirst\r\nREPLACED\r\nthird\r\n");
+	});
+});
+
+describe("allTools / allToolDefinitions", () => {
+	it("includes search in allTools", () => {
+		expect("search" in allTools).toBe(true);
+		expect(allTools.search).toBeDefined();
+	});
+
+	it("includes search in allToolDefinitions", () => {
+		expect("search" in allToolDefinitions).toBe(true);
+		expect(allToolDefinitions.search).toBeDefined();
+	});
+
+	it("allTools.search has expected tool shape", () => {
+		const tool = allTools.search;
+		expect(typeof tool.execute).toBe("function");
+		expect(tool.name).toBe("search");
 	});
 });

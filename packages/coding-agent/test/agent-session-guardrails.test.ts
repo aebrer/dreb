@@ -490,6 +490,59 @@ describe("AgentSession background agent guardrails", () => {
 
 			promptSpy.mockRestore();
 		});
+
+		it("does not include error message when agent is cancelled by user (even with exitCode !== 0)", () => {
+			const sessionAny = session as any;
+			const appendSpy = vi.spyOn(agent, "appendMessage");
+
+			sessionAny._handleBackgroundComplete(
+				"bg-aborted",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 1,
+					output: "",
+					stderr: "Warning: Unknown tool search.",
+					errorMessage: "Warning: Unknown tool search.",
+				},
+				true, // cancelled = true (user pressed ESC)
+			);
+
+			expect(appendSpy).toHaveBeenCalledTimes(1);
+			const msg = appendSpy.mock.calls[0][0] as any;
+			const text = msg.content[0].text;
+			expect(text).toContain("cancelled by the user");
+			expect(text).not.toContain("Error:");
+			expect(text).not.toContain("Unknown tool search");
+
+			appendSpy.mockRestore();
+		});
+
+		it("still shows error message for non-cancelled agents that fail", () => {
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+
+			sessionAny._handleBackgroundComplete(
+				"bg-failed",
+				{
+					agent: "test",
+					task: "test task",
+					exitCode: 1,
+					output: "",
+					stderr: "some real error",
+					errorMessage: "some real error",
+				},
+				false, // NOT cancelled — genuine failure
+			);
+
+			expect(promptSpy).toHaveBeenCalledTimes(1);
+			const promptMsg = promptSpy.mock.calls[0][0] as any;
+			const text = promptMsg.content[0].text;
+			expect(text).toContain("Error: some real error");
+			expect(text).not.toContain("cancelled by the user");
+
+			promptSpy.mockRestore();
+		});
 	});
 
 	describe("Guardrail cleanup on dispose", () => {
