@@ -30,11 +30,15 @@
 - Added process-safe rate-limited queue for `web_search` tool — throttles rapid successive searches (including from parallel subagents) using `proper-lockfile` + timestamp file for cross-process coordination. Default minimum spacing is 10 seconds. Configurable via `DREB_WEB_SEARCH_RATE_LIMIT_MS` env var or `search.rate_limit_ms` in config file. Explore agents now have access to `web_search` and `web_fetch`. ([#180](https://github.com/aebrer/dreb/issues/180))
 
 - Subagent `cwd` parameter now accepts absolute paths in addition to relative paths. Relative paths are still resolved under the parent working directory and escaped via `../` guard. ([#228](https://github.com/aebrer/dreb/issues/228))
+
+- `/copy` now opens a multi-select message picker instead of copying only the last assistant message. All message types are listed (user, assistant, tool results, bash executions, branch/compaction summaries, custom). Navigate with arrow keys, toggle selection with Space, select-all with Ctrl+A, confirm with Enter. Copies source text without wrap-induced line breaks. Status message distinguishes between native clipboard and OSC 52 (SSH/mosh) delivery. New `app.clipboard.copyMessages` keybinding (Ctrl+Shift+C) opens the picker directly. ([#217](https://github.com/aebrer/dreb/issues/217))
 - Added TUI handling for `stream_retry` events: stale streaming components are removed, a retry spinner with attempt count is shown, and `agent_end` unconditionally clears retry state. ([#230](https://github.com/aebrer/dreb/issues/230))
 - Added `stream_retry` to the extension event surface so extensions can observe and react to provider stream retries. ([#230](https://github.com/aebrer/dreb/issues/230))
 - Added `/dream` memory consolidation command — backs up all memory directories, merges duplicates, scans session history for unrecorded patterns, prunes stale entries, and validates links. Uses tar.gz archives with retention policy (keep last 10), lockfile-based concurrency protection, and a 10-step LLM pipeline with explicit backup verification. Configurable archive path via `dream.archivePath` setting. ([#99](https://github.com/aebrer/dreb/issues/99))
 
 ### Fixed
+
+- Fixed ghost whitespace appearing after the TUI content shrinks (e.g., closing the copy selector, filtering slash-command autocomplete, editor line deletion). The differential renderer now triggers a full screen redraw when content shrinks instead of clearing extra lines individually, which some terminals would not collapse. ([#217](https://github.com/aebrer/dreb/issues/217))
 
 - Added missing `ajv` direct dependency; previously relied on transitive install via `@mariozechner/pi-ai` which broke standalone installs ([#2252](https://github.com/badlogic/pi-mono/issues/2252))
 - Fixed `/export` HTML backgrounds to honor `theme.export.pageBg`, `cardBg`, and `infoBg` instead of always deriving them from `userMessageBg` ([#2565](https://github.com/badlogic/pi-mono/issues/2565))
