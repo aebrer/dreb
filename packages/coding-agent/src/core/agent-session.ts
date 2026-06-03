@@ -44,6 +44,7 @@ import {
 	ExtensionRunner,
 	type ExtensionUIContext,
 	type InputSource,
+	type LengthRetryEvent,
 	type MessageEndEvent,
 	type MessageStartEvent,
 	type MessageUpdateEvent,
@@ -620,7 +621,7 @@ export class AgentSession {
 		if (cancelled) {
 			parts.push("This agent was cancelled by the user.");
 		}
-		if (!cancelled && result.exitCode !== 0) {
+		if (!cancelled && (result.exitCode !== 0 || result.errorMessage)) {
 			parts.push(`Error: ${result.errorMessage || "unknown"}`);
 		}
 		if (result.output) {
@@ -998,6 +999,16 @@ export class AgentSession {
 				attempt: event.attempt,
 				maxAttempts: event.maxAttempts,
 				error: event.error,
+				discardedPartial: event.discardedPartial,
+			};
+			await this._extensionRunner.emit(extensionEvent);
+		} else if (event.type === "length_retry") {
+			const extensionEvent: LengthRetryEvent = {
+				type: "length_retry",
+				attempt: event.attempt,
+				maxAttempts: event.maxAttempts,
+				previousMaxTokens: event.previousMaxTokens,
+				nextMaxTokens: event.nextMaxTokens,
 				discardedPartial: event.discardedPartial,
 			};
 			await this._extensionRunner.emit(extensionEvent);

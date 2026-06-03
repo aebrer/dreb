@@ -652,10 +652,19 @@ function buildParams(
 	options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
 	const { cacheControl } = getCacheControl(model.baseUrl, options?.cacheRetention);
+	// Default to the model's full output ceiling when the caller doesn't pass an
+	// explicit limit. This previously defaulted to model.maxTokens / 3, which —
+	// combined with extended thinking — could let the thinking budget consume the
+	// entire allowance before any visible text was produced, truncating the
+	// response (StopReason "length") with a thinking block but no answer. Using
+	// the full maxTokens (the model's max OUTPUT tokens) leaves clear headroom for
+	// text alongside a large thinking budget. The thinking-budget guard below
+	// ensures budget_tokens stays strictly below max_tokens.
+	const maxTokens = options?.maxTokens || model.maxTokens;
 	const params: MessageCreateParamsStreaming = {
 		model: model.id,
 		messages: convertMessages(context.messages, model, isOAuthToken, cacheControl),
-		max_tokens: options?.maxTokens || (model.maxTokens / 3) | 0,
+		max_tokens: maxTokens,
 		stream: true,
 	};
 
@@ -706,10 +715,26 @@ function buildParams(
 					params.output_config = { effort: options.effort };
 				}
 			} else {
-				// Budget-based thinking for older models
+				// Budget-based thinking for older models.
+				//
+				// The Anthropic API requires max_tokens > budget_tokens (max_tokens
+				// must accommodate BOTH thinking and visible output). Now that
+				// max_tokens defaults to the model's full ceiling, we additionally
+				// reserve headroom so the model can always produce text alongside a
+				// large thinking budget. Without this guard, a caller-supplied
+				// thinkingBudgetTokens at or above max_tokens would either be rejected
+				// by the API or consume the entire allowance and truncate the answer to
+				// an empty/thinking-only reply.
+				//
+				// Cap the thinking budget so at least 1/4 of max_tokens (with a fixed
+				// floor of 4096 tokens) remains for output, while never dropping below
+				// the API's 1024-token minimum thinking budget.
+				const requestedBudget = options.thinkingBudgetTokens || 1024;
+				const textHeadroom = Math.max(4096, Math.floor(maxTokens / 4));
+				const budgetCeiling = Math.max(1024, maxTokens - textHeadroom);
 				params.thinking = {
 					type: "enabled",
-					budget_tokens: options.thinkingBudgetTokens || 1024,
+					budget_tokens: Math.min(requestedBudget, budgetCeiling),
 				};
 			}
 		} else if (options?.thinkingEnabled === false) {

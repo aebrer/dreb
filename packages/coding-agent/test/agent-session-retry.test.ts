@@ -282,6 +282,71 @@ describe("AgentSession retry", () => {
 		});
 	});
 
+	it("forwards length_retry events to extensions with the discarded partial and budget fields", async () => {
+		let callCount = 0;
+		const model = findModel("anthropic", "sonnet")!;
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: "Test", tools: [] },
+			lengthRetries: 2,
+			streamFn: () => {
+				callCount++;
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					if (callCount === 1) {
+						// First attempt is truncated at the token limit.
+						const msg = createAssistantMessage("partial", { stopReason: "length" });
+						stream.push({ type: "start", partial: msg });
+						stream.push({ type: "done", reason: "length", message: msg });
+						return;
+					}
+					const msg = createAssistantMessage("Success");
+					stream.push({ type: "start", partial: msg });
+					stream.push({ type: "done", reason: "stop", message: msg });
+				});
+				return stream;
+			},
+		});
+
+		const sessionManager = SessionManager.inMemory();
+		const settingsManager = SettingsManager.create(tempDir, tempDir);
+		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
+		const modelRegistry = new ModelRegistry(authStorage, tempDir);
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		session = new AgentSession({
+			agent,
+			sessionManager,
+			settingsManager,
+			cwd: tempDir,
+			modelRegistry,
+			resourceLoader: createTestResourceLoader(),
+		});
+
+		const extensionEvents: Array<{ type: string; [key: string]: unknown }> = [];
+		const sessionWithRunner = session as unknown as SessionWithExtensionEmitHook;
+		sessionWithRunner._extensionRunner = {
+			hasHandlers: () => false,
+			emit: async (event) => {
+				extensionEvents.push(event);
+			},
+			emitBeforeAgentStart: async () => undefined,
+		};
+
+		await session.prompt("Test");
+
+		expect(callCount).toBe(2);
+		const lengthRetry = extensionEvents.find((event) => event.type === "length_retry");
+		expect(lengthRetry).toBeDefined();
+		expect(lengthRetry).toMatchObject({
+			type: "length_retry",
+			attempt: 1,
+			maxAttempts: 2,
+			discardedPartial: { content: [{ type: "text", text: "partial" }] },
+		});
+		expect(typeof (lengthRetry as { previousMaxTokens?: number }).previousMaxTokens).toBe("number");
+		expect(typeof (lengthRetry as { nextMaxTokens?: number }).nextMaxTokens).toBe("number");
+	});
+
 	it("exhausts max retries and emits failure", async () => {
 		const created = createSession({ failCount: 99, maxRetries: 2 });
 		const events: string[] = [];

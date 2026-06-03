@@ -614,9 +614,28 @@ function makeAgents(model: string | string[]): Map<string, AgentTypeConfig> {
 }
 
 function mockSpawnSubagentResult(
-	options: { model?: string; output?: string; exitCode?: number; stderr?: string } = {},
+	options: {
+		model?: string;
+		output?: string;
+		exitCode?: number;
+		stderr?: string;
+		/** stopReason to include on the final assistant message_end event. */
+		stopReason?: string;
+		/** errorMessage to include on the final assistant message_end event. */
+		messageErrorMessage?: string;
+		/** Emit a message_end event even when output is empty (to carry stopReason). */
+		emitEmptyMessage?: boolean;
+	} = {},
 ) {
-	const { model = "fallback-model", output = "child output", exitCode = 0, stderr = "" } = options;
+	const {
+		model = "fallback-model",
+		output = "child output",
+		exitCode = 0,
+		stderr = "",
+		stopReason,
+		messageErrorMessage,
+		emitEmptyMessage = false,
+	} = options;
 	vi.mocked(spawn).mockImplementationOnce((() => {
 		const stdout = new PassThrough();
 		const stderrStream = new PassThrough();
@@ -636,11 +655,17 @@ function mockSpawnSubagentResult(
 		process.nextTick(() => {
 			if (stderr) stderrStream.write(stderr);
 			stdout.write(`${JSON.stringify({ type: "agent_start", model: { id: model } })}\n`);
-			if (output) {
+			if (output || emitEmptyMessage) {
+				const message: Record<string, unknown> = {
+					role: "assistant",
+					content: output ? [{ type: "text", text: output }] : [],
+				};
+				if (stopReason !== undefined) message.stopReason = stopReason;
+				if (messageErrorMessage !== undefined) message.errorMessage = messageErrorMessage;
 				stdout.write(
 					`${JSON.stringify({
 						type: "message_end",
-						message: { role: "assistant", content: [{ type: "text", text: output }] },
+						message,
 					})}\n`,
 				);
 			}
@@ -1108,6 +1133,117 @@ describe("probe uses streamSimple path (issue 215 regression)", () => {
 		const callOptions = vi.mocked(completeSimple).mock.calls[0][2];
 		expect(callOptions).not.toHaveProperty("maxTokens");
 		expect(callOptions).toHaveProperty("reasoning", "xhigh");
+	});
+});
+
+describe("subagent truncation (stopReason length) surfacing", () => {
+	test("clean exit with stopReason length and no output surfaces a truncation error", async () => {
+		mockSpawnSubagentResult({
+			model: "parent-model",
+			output: "",
+			emitEmptyMessage: true,
+			stopReason: "length",
+		});
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"parent-model",
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("");
+		expect(result.errorMessage).not.toBeNull();
+		expect(result.errorMessage).toContain("truncated");
+	});
+
+	test("clean exit with stopReason error surfaces the message errorMessage", async () => {
+		mockSpawnSubagentResult({
+			model: "parent-model",
+			output: "",
+			emitEmptyMessage: true,
+			stopReason: "error",
+			messageErrorMessage: "Response truncated at token limit after 3 attempts",
+		});
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"parent-model",
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.errorMessage).toContain("Response truncated at token limit after 3 attempts");
+	});
+
+	test("clean exit with stopReason length WITH text keeps output and warns of truncation", async () => {
+		mockSpawnSubagentResult({
+			model: "parent-model",
+			output: "partial answer",
+			stopReason: "length",
+		});
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"parent-model",
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("partial answer");
+		expect(result.errorMessage).not.toBeNull();
+		expect(result.errorMessage).toContain("truncated");
+		expect(result.errorMessage).toContain("incomplete");
+	});
+
+	test("regression: clean exit with normal text and stopReason stop leaves errorMessage null", async () => {
+		mockSpawnSubagentResult({
+			model: "parent-model",
+			output: "complete answer",
+			stopReason: "stop",
+		});
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"parent-model",
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("complete answer");
+		expect(result.errorMessage).toBeNull();
 	});
 });
 

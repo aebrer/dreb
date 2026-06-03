@@ -380,6 +380,13 @@ async function spawnSubagent(
 			}
 			const output = outputParts.join("\n\n");
 
+			// Inspect the final assistant message's stopReason to detect truncation
+			// ("length") or a loud truncation failure ("error") from the core agent loop.
+			// stopReason is present at runtime even though collectedMessages is loosely typed.
+			const lastMsg = collectedMessages.length > 0 ? collectedMessages[collectedMessages.length - 1] : undefined;
+			const lastStopReason = lastMsg ? (lastMsg as any).stopReason : undefined;
+			const lastErrorMessage = lastMsg ? (lastMsg as any).errorMessage : undefined;
+
 			// Build error message from best available source: stderr, plain stdout lines, or generic
 			let errorMessage: string | null = null;
 			if (exitCode !== 0) {
@@ -387,6 +394,18 @@ async function spawnSubagent(
 				const plainOutput = plainStdoutLines.join("\n").trim();
 				errorMessage =
 					stderrTrimmed.slice(0, 500) || plainOutput.slice(0, 500) || `Subagent exited with code ${exitCode}`;
+			} else if (output.trim() === "") {
+				// Clean exit but no output — surface why instead of returning a silent empty result.
+				if (lastStopReason === "length") {
+					errorMessage = "Subagent response was truncated at the model's token limit before producing any output.";
+				} else if (lastStopReason === "error" && lastErrorMessage) {
+					errorMessage = String(lastErrorMessage).slice(0, 500);
+				} else {
+					errorMessage = "Subagent completed with no output.";
+				}
+			} else if (lastStopReason === "length") {
+				// Clean exit with partial output — keep the output but make the truncation loud.
+				errorMessage = "Subagent response was truncated at the model's token limit; output may be incomplete.";
 			}
 
 			// Discover the session file written by the child process
@@ -1178,10 +1197,13 @@ function formatSingleResult(result: SubagentResult): string {
 		if (result.stderr) {
 			text += `\nStderr:\n${result.stderr}\n`;
 		}
+	} else if (result.errorMessage) {
+		// Clean exit but an error was surfaced (e.g. truncation at the token limit).
+		text += `**Error**: ${result.errorMessage}\n`;
 	}
 	if (result.output) {
 		text += `\n${result.output}`;
-	} else if (result.exitCode === 0) {
+	} else if (result.exitCode === 0 && !result.errorMessage) {
 		text += "\n(No output)";
 	}
 	if (result.sessionFile) {

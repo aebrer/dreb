@@ -6,6 +6,8 @@
 
 - Added stream drop detection and retry across all providers. When a provider stream ends without its terminal event (e.g. `message_delta`, `finishReason`, `response.completed`), the agent loop retries up to `streamRetries` times with exponential backoff. Configurable via `AgentOptions.streamRetries` (default: 3) and `AgentOptions.streamRetryBaseDelayMs` (default: 1000ms).
 - Added `stream_retry` event type emitted before each retry attempt, carrying `attempt`, `maxAttempts`, `error`, and `discardedPartial`.
+- Added graceful handling of `stopReason: "length"`. When a turn ends because the model exhausted its output token budget mid-response, the agent loop discards the truncated partial and retries up to `lengthRetries` times with an escalated token budget (`maxTokens` multiplied by `lengthRetryBudgetMultiplier`, clamped to the model's ceiling). Once retries are exhausted or the budget hits the ceiling, the turn fails loudly with a clear "Response truncated at token limit" error instead of silently appearing complete. Configurable via `AgentOptions.lengthRetries` (default: 2) and `AgentOptions.lengthRetryBudgetMultiplier` (default: 2). This is separate from the stream-drop retry mechanism.
+- Added `length_retry` event type emitted before each length retry attempt, carrying `attempt`, `maxAttempts`, `previousMaxTokens`, `nextMaxTokens`, and `discardedPartial`.
 - Added `onWarning` option to `AgentOptions` — forwarded to providers via `StreamOptions.onWarning` for non-fatal streaming warnings ([#115](https://github.com/aebrer/dreb/issues/115))
 
 ## [0.62.0] - 2026-03-23

@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Raised the Anthropic provider's default `max_tokens` from `model.maxTokens / 3` to the model's full output ceiling (`model.maxTokens`) when no explicit `maxTokens` is supplied. The previous one-third default, combined with extended thinking, could let the thinking budget consume the entire allowance before any visible text was produced — truncating responses (`StopReason "length"`) to a thinking block with no answer. The budget-based thinking path now also caps `budget_tokens` so it stays strictly below `max_tokens` with reserved text headroom (at least 1/4 of `max_tokens`, floor 4096 tokens), guaranteeing room for the actual answer alongside a large thinking budget.
 - Changed direct `minimax` and `minimax-cn` model catalogs to keep only `MiniMax-M2.7` and `MiniMax-M2.7-highspeed`, and updated MiniMax and abort coverage to current provider model IDs and usage behavior ([#2596](https://github.com/badlogic/pi-mono/pull/2596) by [@liyuan97](https://github.com/liyuan97))
 
 ### Fixed

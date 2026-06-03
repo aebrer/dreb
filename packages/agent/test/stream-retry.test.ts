@@ -262,6 +262,32 @@ describe("stream retry on dropped connections", () => {
 		}
 	});
 
+	it("does NOT treat a length result as a stream drop", async () => {
+		// A turn ending with stopReason "length" must not fire stream_retry —
+		// length retries are a separate mechanism.
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage([{ type: "text", text: "truncated" }], "length");
+				stream.push({ type: "start", partial: message });
+				stream.push({ type: "done", reason: "length", message });
+			});
+			return stream;
+		};
+		const events = await collectEvents(
+			streamFn,
+			createConfig({
+				streamRetries: 3,
+				streamRetryBaseDelayMs: 10,
+				// Disable length retries so the turn fails loudly after the first length result.
+				lengthRetries: 0,
+			}),
+		);
+
+		// No stream_retry events for a length result.
+		expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(0);
+	});
+
 	it("respects streamRetries: 0 to disable retries", async () => {
 		const successMsg = createAssistantMessage([{ type: "text", text: "never reached" }]);
 		const streamFn = createFailingStreamFn(1, successMsg);

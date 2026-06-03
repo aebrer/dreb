@@ -2697,6 +2697,39 @@ export class InteractiveMode {
 				break;
 			}
 
+			case "length_retry": {
+				// Remove the ghost streaming component left from the truncated stream
+				if (this.streamingComponent) {
+					this.chatContainer.removeChild(this.streamingComponent);
+					this.streamingComponent = undefined;
+					this.streamingMessage = undefined;
+				}
+				// Clear any pending tool components from the truncated partial
+				for (const [, component] of this.pendingTools.entries()) {
+					this.chatContainer.removeChild(component);
+				}
+				this.pendingTools.clear();
+				// Show retry status
+				this.statusContainer.clear();
+				if (this.loadingAnimation) {
+					this.loadingAnimation.stop();
+					this.loadingAnimation = undefined;
+				}
+				if (this.retryLoader) {
+					this.retryLoader.stop();
+					this.retryLoader = undefined;
+				}
+				this.retryLoader = new Loader(
+					this.ui,
+					(spinner) => theme.fg("warning", spinner),
+					(text) => theme.fg("muted", text),
+					`Response truncated, retrying with larger token budget (${event.attempt}/${event.maxAttempts})... (${keyText("app.interrupt")} to cancel)`,
+				);
+				this.statusContainer.addChild(this.retryLoader);
+				this.ui.requestRender();
+				break;
+			}
+
 			case "background_agent_start":
 			case "background_agent_end": {
 				this.updateBackgroundAgentStatus();

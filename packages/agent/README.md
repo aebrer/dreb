@@ -131,6 +131,7 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 | `message_update` | **Assistant only.** Includes `assistantMessageEvent` with delta |
 | `message_end` | Message completes |
 | `stream_retry` | Provider stream dropped; retrying after discarding partial response |
+| `length_retry` | Response truncated at the token limit; retrying with a larger token budget |
 | `tool_execution_start` | Tool begins |
 | `tool_execution_update` | Tool streams progress |
 | `tool_execution_end` | Tool completes |
@@ -195,6 +196,15 @@ const agent = new Agent({
 
   // Base delay for exponential backoff between stream retries in ms (default: 1000)
   streamRetryBaseDelayMs: 1000,
+
+  // Length retry: number of retries when a turn ends with stopReason "length"
+  // (model exhausted its output token budget). Each retry escalates maxTokens.
+  // Separate from streamRetries (default: 2). Set to 0 to disable.
+  lengthRetries: 2,
+
+  // Factor by which to multiply maxTokens on each length retry, clamped to the
+  // model's output ceiling (default: 2)
+  lengthRetryBudgetMultiplier: 2,
 
   // Custom thinking budgets for token-based providers
   thinkingBudgets: {
