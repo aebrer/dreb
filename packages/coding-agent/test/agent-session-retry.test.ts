@@ -282,7 +282,11 @@ describe("AgentSession retry", () => {
 		});
 	});
 
-	it("forwards length_retry events to extensions with the discarded partial and budget fields", async () => {
+	it("fails loudly without a length_retry when no explicit maxTokens is set (request already at ceiling)", async () => {
+		// The Agent API does not expose a maxTokens option, so the loop's
+		// requestMaxTokens is undefined. The provider already defaults that to the
+		// model's output ceiling, so a "length" truncation is treated as already at
+		// the ceiling: it fails loudly immediately with no wasteful no-op retry.
 		let callCount = 0;
 		const model = findModel("anthropic", "sonnet")!;
 		const agent = new Agent({
@@ -293,16 +297,10 @@ describe("AgentSession retry", () => {
 				callCount++;
 				const stream = new MockAssistantStream();
 				queueMicrotask(() => {
-					if (callCount === 1) {
-						// First attempt is truncated at the token limit.
-						const msg = createAssistantMessage("partial", { stopReason: "length" });
-						stream.push({ type: "start", partial: msg });
-						stream.push({ type: "done", reason: "length", message: msg });
-						return;
-					}
-					const msg = createAssistantMessage("Success");
+					// The model truncates at the token limit on every attempt.
+					const msg = createAssistantMessage("partial", { stopReason: "length" });
 					stream.push({ type: "start", partial: msg });
-					stream.push({ type: "done", reason: "stop", message: msg });
+					stream.push({ type: "done", reason: "length", message: msg });
 				});
 				return stream;
 			},
@@ -313,6 +311,8 @@ describe("AgentSession retry", () => {
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		const modelRegistry = new ModelRegistry(authStorage, tempDir);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		// Disable session-level auto-retry so the truncation surfaces directly.
+		settingsManager.applyOverrides({ retry: { enabled: false } });
 		session = new AgentSession({
 			agent,
 			sessionManager,
@@ -334,17 +334,18 @@ describe("AgentSession retry", () => {
 
 		await session.prompt("Test");
 
-		expect(callCount).toBe(2);
-		const lengthRetry = extensionEvents.find((event) => event.type === "length_retry");
-		expect(lengthRetry).toBeDefined();
-		expect(lengthRetry).toMatchObject({
-			type: "length_retry",
-			attempt: 1,
-			maxAttempts: 2,
-			discardedPartial: { content: [{ type: "text", text: "partial" }] },
-		});
-		expect(typeof (lengthRetry as { previousMaxTokens?: number }).previousMaxTokens).toBe("number");
-		expect(typeof (lengthRetry as { nextMaxTokens?: number }).nextMaxTokens).toBe("number");
+		// No retry: a single LLM call, and no length_retry event was emitted.
+		expect(callCount).toBe(1);
+		expect(extensionEvents.find((event) => event.type === "length_retry")).toBeUndefined();
+
+		// The turn fails loudly with a truncation error.
+		const messageEnd = extensionEvents.findLast((event) => event.type === "message_end") as
+			| { message: AssistantMessage }
+			| undefined;
+		expect(messageEnd).toBeDefined();
+		const assistant = messageEnd?.message as AssistantMessage;
+		expect(assistant.stopReason).toBe("error");
+		expect(assistant.errorMessage).toMatch(/truncated|token limit/);
 	});
 
 	it("exhausts max retries and emits failure", async () => {
