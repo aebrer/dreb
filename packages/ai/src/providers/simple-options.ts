@@ -1,9 +1,18 @@
 import type { Api, Model, SimpleStreamOptions, StreamOptions, ThinkingBudgets, ThinkingLevel } from "../types.js";
 
+/**
+ * Default cap on output tokens when no explicit maxTokens is requested. The
+ * provider sends `Math.min(model.maxTokens, DEFAULT_MAX_OUTPUT_TOKENS)` rather
+ * than the full model ceiling. Consumers (e.g. the agent loop's length-retry
+ * guard) must reference this constant to reason correctly about the real
+ * budget a default request uses.
+ */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 32000;
+
 export function buildBaseOptions(model: Model<Api>, options?: SimpleStreamOptions, apiKey?: string): StreamOptions {
 	return {
 		temperature: options?.temperature,
-		maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32000),
+		maxTokens: options?.maxTokens || Math.min(model.maxTokens, DEFAULT_MAX_OUTPUT_TOKENS),
 		signal: options?.signal,
 		apiKey: apiKey || options?.apiKey,
 		cacheRetention: options?.cacheRetention,

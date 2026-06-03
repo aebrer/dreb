@@ -7,6 +7,7 @@
 - Claude Opus 4.7 support: `supportsXhigh()` recognizes `opus-4-7` model IDs, and the Anthropic and Amazon Bedrock providers detect Opus 4.7 for adaptive thinking and `xhigh` → `max` effort mapping. ([#167](https://github.com/aebrer/dreb/issues/167))
 
 - Added `onWarning` callback to `StreamOptions` for non-fatal warnings during streaming (e.g., malformed JSON chunks, SSE parse errors). All providers now forward `onWarning` to `parseStreamingJson` so callers can handle parse failures instead of silently swallowing them. ([#115](https://github.com/aebrer/dreb/issues/115))
+- Exported `DEFAULT_MAX_OUTPUT_TOKENS` (32000) — the default output-token cap `buildBaseOptions` applies when no explicit `maxTokens` is requested (`Math.min(model.maxTokens, DEFAULT_MAX_OUTPUT_TOKENS)`). Previously the magic number was hard-coded inline; consumers (e.g. `@dreb/agent`'s length-retry guard) now import this constant to reason correctly about the real budget a default request uses, instead of re-hard-coding it.
 - Added `onWarning` callback parameter to `parseStreamingJson()` — called when both `JSON.parse` and `partial-json` fail on input
 
 ### Changed

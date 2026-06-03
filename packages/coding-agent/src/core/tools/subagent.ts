@@ -1196,7 +1196,7 @@ function formatSubagentResult(
 	return text;
 }
 
-function formatSingleResult(result: SubagentResult): string {
+export function formatSingleResult(result: SubagentResult): string {
 	let text = `## Agent: ${result.agent}${result.model ? ` (model: ${result.model})` : ""}\n`;
 	if (result.exitCode !== 0) {
 		text += `**Error** (exit ${result.exitCode}): ${result.errorMessage || "Unknown error"}\n`;

@@ -6,6 +6,7 @@
 import {
 	type AssistantMessage,
 	type Context,
+	DEFAULT_MAX_OUTPUT_TOKENS,
 	EventStream,
 	streamSimple,
 	type ToolResultMessage,
@@ -499,11 +500,13 @@ async function streamAssistantResponse(
 							// and we have not been aborted. Otherwise, fail loudly below.
 							//
 							// When no explicit maxTokens was set, the request used the provider
-							// default, which for the model's effective budget is the ceiling — so
-							// treat an unset budget as already at the ceiling. This avoids a
-							// wasteful no-op retry that requests the same budget the truncated
-							// response already used.
-							const effectiveMaxTokens = requestMaxTokens ?? config.model.maxTokens;
+							// default budget — Math.min(model.maxTokens, DEFAULT_MAX_OUTPUT_TOKENS),
+							// NOT the full model ceiling. Resolving the effective budget to the
+							// real default lets escalation request strictly more, and lets the
+							// ceiling guard correctly distinguish a default request (which can
+							// still grow) from one already at the model ceiling.
+							const effectiveMaxTokens =
+								requestMaxTokens ?? Math.min(config.model.maxTokens, DEFAULT_MAX_OUTPUT_TOKENS);
 							const atCeiling = effectiveMaxTokens >= config.model.maxTokens;
 							if (lengthAttempts < lengthRetries && !atCeiling && !signal?.aborted) {
 								lengthRetry = {

@@ -9,6 +9,7 @@ import {
 	DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS,
 	executeSingle,
 	formatModelFallbackSummary,
+	formatSingleResult,
 	isRuntimeUnavailableError,
 	parseAgentFrontmatter,
 	prependModelFallbackSummary,
@@ -1277,6 +1278,62 @@ describe("subagent truncation (stopReason length) surfacing", () => {
 		expect(result.output).toBe("complete answer");
 		expect(result.errorMessage).toBeNull();
 	});
+
+	test("clean exit with empty output and stopReason stop surfaces a no-output error", async () => {
+		mockSpawnSubagentResult({
+			model: "parent-model",
+			output: "",
+			emitEmptyMessage: true,
+			stopReason: "stop",
+		});
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"parent-model",
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("");
+		expect(result.errorMessage).toBe("Subagent completed with no output.");
+	});
+
+	test("clean exit with empty output and no final message surfaces a no-output error", async () => {
+		// No message_end event at all → lastStopReason is undefined. A clean exit
+		// with empty output must still surface the no-output error rather than
+		// returning a silent empty result.
+		mockSpawnSubagentResult({
+			model: "parent-model",
+			output: "",
+			emitEmptyMessage: false,
+		});
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"parent-model",
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("");
+		expect(result.errorMessage).toBe("Subagent completed with no output.");
+	});
 });
 
 describe("subagent promptGuidelines", () => {
@@ -1300,5 +1357,55 @@ describe("subagent promptGuidelines", () => {
 		expect(waitingGuideline).toBeDefined();
 		expect(waitingGuideline).toContain("Do not call `sleep`");
 		expect(waitingGuideline).toContain("do not launch filler work");
+	});
+});
+
+/**
+ * Tests for formatSingleResult (chain-mode rendering, issue 240 / PR 241).
+ *
+ * Covers the truncation branch added in PR 241: a clean exit (exitCode 0) that
+ * still surfaces an errorMessage (e.g. truncation at the token limit) renders an
+ * `**Error**:` prefix and does not fall back to `(No output)`.
+ */
+describe("formatSingleResult", () => {
+	const base = {
+		agent: "explore",
+		task: "do something",
+		stderr: "",
+		exitCode: 0,
+	};
+
+	test("clean exit with errorMessage renders Error prefix and partial output", () => {
+		const text = formatSingleResult({
+			...base,
+			errorMessage: "Response truncated at token limit.",
+			output: "partial text",
+		});
+		expect(text).toContain("**Error**: Response truncated at token limit.\n");
+		expect(text).toContain("partial text");
+		expect(text).not.toContain("(No output)");
+		// Should NOT use the exit-code error format reserved for non-zero exits.
+		expect(text).not.toContain("**Error** (exit");
+	});
+
+	test("clean exit with no errorMessage and empty output renders (No output)", () => {
+		const text = formatSingleResult({
+			...base,
+			errorMessage: null,
+			output: "",
+		});
+		expect(text).toContain("\n(No output)");
+		expect(text).not.toContain("**Error**");
+	});
+
+	test("clean exit with normal output renders output without Error prefix", () => {
+		const text = formatSingleResult({
+			...base,
+			errorMessage: null,
+			output: "hello",
+		});
+		expect(text).toContain("\nhello");
+		expect(text).not.toContain("**Error**");
+		expect(text).not.toContain("(No output)");
 	});
 });
