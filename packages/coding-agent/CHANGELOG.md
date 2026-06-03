@@ -40,7 +40,7 @@
 
 ### Fixed
 
-- Fixed subagents silently returning empty results when a child's final response was truncated at the model's token limit. The subagent spawn handler now inspects the last assistant message's `stopReason`: a clean exit with no output now surfaces a descriptive error (truncation, loud truncation failure, or "completed with no output") instead of a silent empty string, and a clean exit with partial output now flags the truncation via `errorMessage` while preserving the partial text. The parent renders these errors even on a clean (exit code 0) exit. ([#240](https://github.com/aebrer/dreb/issues/240))
+- Fixed subagents silently returning empty results when a child's final response was truncated at the model's token limit. The subagent spawn handler now inspects the last assistant message's `stopReason`: a clean exit with no output now surfaces a descriptive error (truncation, loud truncation failure, or "completed with no output") instead of a silent empty string, and a clean exit with partial output now flags the truncation via `errorMessage` while preserving the partial text — covering both raw `length` truncation and the loud `error` stopReason produced when the core agent loop exhausts its length retries. The parent renders these errors even on a clean (exit code 0) exit. ([#240](https://github.com/aebrer/dreb/issues/240))
 
 - Fixed ghost whitespace appearing after the TUI content shrinks (e.g., closing the copy selector, filtering slash-command autocomplete, editor line deletion). The differential renderer now triggers a full screen redraw when content shrinks instead of clearing extra lines individually, which some terminals would not collapse. ([#217](https://github.com/aebrer/dreb/issues/217))
 

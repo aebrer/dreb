@@ -732,9 +732,18 @@ function buildParams(
 				const requestedBudget = options.thinkingBudgetTokens || 1024;
 				const textHeadroom = Math.max(4096, Math.floor(maxTokens / 4));
 				const budgetCeiling = Math.max(1024, maxTokens - textHeadroom);
+				// Final guard for the strict invariant budget_tokens < max_tokens. When
+				// max_tokens <= 1024 (e.g. a caller passing a tiny explicit maxTokens with
+				// thinking enabled), the 1024 floor above would otherwise produce
+				// budget_tokens == max_tokens, which the API rejects. Clamp to
+				// max_tokens - 1 so the request is always structurally valid; such a tiny
+				// budget still can't yield a useful response, but the failure mode becomes
+				// a clear "thinking budget below minimum" rather than an opaque
+				// budget_tokens >= max_tokens rejection.
+				const budget = Math.min(requestedBudget, budgetCeiling, maxTokens - 1);
 				params.thinking = {
 					type: "enabled",
-					budget_tokens: Math.min(requestedBudget, budgetCeiling),
+					budget_tokens: budget,
 				};
 			}
 		} else if (options?.thinkingEnabled === false) {

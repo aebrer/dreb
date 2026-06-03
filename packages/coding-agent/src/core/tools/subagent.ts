@@ -406,6 +406,12 @@ async function spawnSubagent(
 			} else if (lastStopReason === "length") {
 				// Clean exit with partial output — keep the output but make the truncation loud.
 				errorMessage = "Subagent response was truncated at the model's token limit; output may be incomplete.";
+			} else if (lastStopReason === "error" && lastErrorMessage) {
+				// Clean exit with partial output but a loud failure (e.g. length retries
+				// exhausted → the core agent loop converts the truncation to stopReason
+				// "error" while preserving the partial text). Surface the error instead of
+				// letting the partial output masquerade as a clean success.
+				errorMessage = String(lastErrorMessage).slice(0, 500);
 			}
 
 			// Discover the session file written by the child process

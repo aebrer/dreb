@@ -1220,6 +1220,38 @@ describe("subagent truncation (stopReason length) surfacing", () => {
 		expect(result.errorMessage).toContain("incomplete");
 	});
 
+	test("clean exit with stopReason error WITH partial text surfaces the error (length retries exhausted)", async () => {
+		// When the core agent loop exhausts its length retries it converts the
+		// truncation to stopReason "error" while PRESERVING the partial text. A clean
+		// JSON-mode exit (always code 0) with non-empty output must still surface the
+		// error instead of letting the partial output masquerade as a clean success.
+		mockSpawnSubagentResult({
+			model: "parent-model",
+			output: "partial answer that got cut off",
+			stopReason: "error",
+			messageErrorMessage: "Response truncated at token limit after 3 attempts",
+		});
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"parent-model",
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain("partial answer that got cut off");
+		expect(result.errorMessage).not.toBeNull();
+		expect(result.errorMessage).toContain("Response truncated at token limit after 3 attempts");
+	});
+
 	test("regression: clean exit with normal text and stopReason stop leaves errorMessage null", async () => {
 		mockSpawnSubagentResult({
 			model: "parent-model",

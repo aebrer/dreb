@@ -100,4 +100,24 @@ describe("Anthropic max_tokens default", () => {
 		expect(params.thinking?.budget_tokens).toBe(8192);
 		expect(params.thinking?.budget_tokens).toBeLessThan(params.max_tokens);
 	});
+
+	it("keeps budget_tokens strictly below max_tokens even when maxTokens <= 1024", async () => {
+		// Edge case: a caller passes a tiny explicit maxTokens with thinking enabled.
+		// The 1024-token thinking floor would otherwise produce budget_tokens ==
+		// max_tokens (== 1024), which the Anthropic API rejects (it requires the
+		// strict inequality budget_tokens < max_tokens). The final clamp must keep
+		// the request structurally valid.
+		const model = findModel("anthropic", "haiku")! as Model<"anthropic-messages">;
+
+		const params = await captureParams(model, {
+			maxTokens: 1024,
+			thinkingEnabled: true,
+			thinkingBudgetTokens: 1024,
+		});
+
+		expect(params.max_tokens).toBe(1024);
+		expect(params.thinking?.type).toBe("enabled");
+		// The strict API invariant must hold regardless of the tiny budget.
+		expect(params.thinking?.budget_tokens ?? 0).toBeLessThan(params.max_tokens);
+	});
 });
