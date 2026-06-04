@@ -1053,6 +1053,128 @@ describe("spawn-time model availability probing", () => {
 	});
 });
 
+/**
+ * Tests for the mach6 settings-based model override precedence in the REAL
+ * executeSingle (issue 219 / PR 220). The precedence under test is:
+ *
+ *   modelOverride  >  agentModels (settings)  >  agent definition config.model
+ *
+ * These tests exercise the actual `const modelSpec = modelOverride || (agentModels...)
+ * || config.model;` line in executeSingle — a typo swapping the operands would fail
+ * here. The spawned model is verified via the CLI args passed to the mocked spawn.
+ */
+describe("executeSingle agentModels precedence (issue 219)", () => {
+	test("agentModels overrides the agent definition model when no modelOverride is given", async () => {
+		// Agent definition prefers "parent-model"; settings override to ["primary-model"].
+		// agentModels is a non-empty array, so the probe path runs — succeed on first probe.
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+		mockSpawnSubagentResult({ model: "primary-model", output: "agent-models output" });
+
+		const result = await executeSingle(
+			makeAgents("parent-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined, // no modelOverride
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"parent-model",
+			["primary-model"], // agentModels (settings)
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain("primary-model");
+		expect(spawnArgs).not.toContain("parent-model");
+		// agentModels is an array → the spawn-time probe path was exercised.
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+	});
+
+	test("modelOverride wins over agentModels", async () => {
+		// modelOverride is a single string → no probe runs at all.
+		mockSpawnSubagentResult({ model: "primary-model", output: "override output" });
+
+		const result = await executeSingle(
+			makeAgents("parent-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"primary-model", // modelOverride (per-invocation)
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"parent-model",
+			["fallback-model"], // agentModels — should be ignored
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain("primary-model");
+		expect(spawnArgs).not.toContain("fallback-model");
+		expect(spawnArgs).not.toContain("parent-model");
+		// Single override string skips probing entirely.
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
+
+	test("empty agentModels array falls through to the agent definition model", async () => {
+		mockSpawnSubagentResult({ model: "parent-model", output: "config output" });
+
+		const result = await executeSingle(
+			makeAgents("parent-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined, // no modelOverride
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+			[], // empty agentModels — must fall through
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain("parent-model");
+		// config.model is a single string → no probe runs.
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
+
+	test("undefined agentModels falls through to the agent definition model", async () => {
+		mockSpawnSubagentResult({ model: "parent-model", output: "config output" });
+
+		const result = await executeSingle(
+			makeAgents("parent-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined, // no modelOverride
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"primary-model",
+			undefined, // no agentModels
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain("parent-model");
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
+});
+
 describe("probe uses streamSimple path (issue 215 regression)", () => {
 	test("probe does NOT use low-level complete() — uses completeSimple (streamSimple path)", async () => {
 		// The old implementation used complete() which calls provider.stream() directly.

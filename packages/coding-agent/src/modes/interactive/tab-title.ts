@@ -35,6 +35,11 @@ export interface TabTitleDeps {
 	getModelRegistry: () => ModelRegistry;
 	/** Get the parent provider name. */
 	getProvider: () => string | undefined;
+	/**
+	 * Get the user's agentModels settings override for a given agent name, if any.
+	 * Returns a non-empty fallback list when the user has configured an override.
+	 */
+	getAgentModelsOverride?: (agentName: string) => string[] | undefined;
 }
 
 export class TabTitleGenerator {
@@ -138,6 +143,13 @@ export class TabTitleGenerator {
 	}
 
 	private getExploreAgentModels(): string | string[] | undefined {
+		// Honor the user's agentModels settings override first. The settings key must
+		// match the agent name exactly ("Explore", as declared in explore.md frontmatter).
+		const override = this.deps.getAgentModelsOverride?.("Explore");
+		if (override && override.length > 0) {
+			return override;
+		}
+
 		// Resolution order mirrors discoverAgentTypes: user override > project > package.
 		// First match with a valid model wins.
 		const candidates = [

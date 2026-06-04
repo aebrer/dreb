@@ -359,6 +359,8 @@ The `subagent` tool delegates tasks to independent child agent processes. Each s
 
 **Model availability probes:** When an agent definition specifies a fallback list (comma-separated models), each model is verified with a lightweight API call via the same `streamSimple` path the agent loop uses before the subagent is spawned. The probe uses normal coding-agent thinking defaults and does not pass a synthetic `maxTokens` override, which keeps the request shape representative for reasoning models as well as non-reasoning models. Models that fail the probe (rate limit, quota exhaustion, auth failure, timeout) are skipped with a loud log line, and the next fallback is tried. If all configured models fail, the parent session's model is used as a last resort. Per-invocation model overrides and single-model configs skip probing entirely.
 
+**Per-agent model overrides:** The model used by each agent type can be overridden via the `agentModels.models` setting (a map of agent name → ordered fallback list) without copying or editing the agent definition `.md` files. Configure it in `settings.json` or via `/settings` → **Agent Models**. Resolution order: per-invocation `model` override → `agentModels` setting → agent definition `model` → parent session model. See [docs/agent-models.md](docs/agent-models.md).
+
 **Session metadata:** Each child process records its agent type in the session JSONL header (`agentType` field), providing an audit trail of which agent definition executed the work.
 
 ---

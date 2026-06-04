@@ -141,6 +141,8 @@ Agents run as [subagents](../README.md#subagents) — `code-reviewer`, `error-au
 - **Safe git** — Never `git add -A`, never stage secrets, stage files by name.
 - **Overridable** — Both skills and review agents can be overridden by placing files with the same name in `~/.dreb/agent/skills/` or `~/.dreb/agents/` (user-level) or `.dreb/skills/` or `.dreb/agents/` (project-level).
 
+> The models used by mach6 subagents (e.g. `feature-dev`, the review agents) can be configured via the `agentModels` setting without editing agent definition files. See [Agent Model Settings](agent-models.md).
+
 ## Requirements
 
 mach6 uses the [GitHub CLI](https://cli.github.com/) (`gh`) for all GitHub operations. Make sure it's installed and authenticated:

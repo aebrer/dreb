@@ -662,6 +662,7 @@ export class InteractiveMode {
 			getModel: () => this.session.model,
 			getModelRegistry: () => this.session.modelRegistry,
 			getProvider: () => this.session.model?.provider,
+			getAgentModelsOverride: (name) => this.settingsManager.getAgentModelsForAgent(name),
 		});
 	}
 

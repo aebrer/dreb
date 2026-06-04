@@ -419,6 +419,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Surface any resource diagnostics from initial load
 	session.warnResourceDiagnostics(resourceLoader);
 
+	// Surface a loud warning for agentModels settings keys that reference
+	// agents which no longer exist (typo or renamed/removed upstream agent),
+	// since such overrides are otherwise silently ignored at resolution time.
+	session.warnStaleAgentModelKeys();
+
 	return {
 		session,
 		extensionsResult,

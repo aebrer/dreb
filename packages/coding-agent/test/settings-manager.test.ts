@@ -309,4 +309,93 @@ describe("SettingsManager", () => {
 			expect(manager.getSessionDir()).toBe("./sessions");
 		});
 	});
+
+	describe("agentModels", () => {
+		it("should roundtrip set then getAgentModelsForAgent", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAgentModelsForAgent("Explore", ["model-a", "model-b"]);
+			expect(manager.getAgentModelsForAgent("Explore")).toEqual(["model-a", "model-b"]);
+		});
+
+		it("should return undefined after set then remove", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAgentModelsForAgent("Explore", ["model-a"]);
+			manager.removeAgentModelsForAgent("Explore");
+			expect(manager.getAgentModelsForAgent("Explore")).toBeUndefined();
+		});
+
+		it("should be a safe no-op when removing a non-existent key (no write)", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			// Removing a key that was never set should not throw and should not write
+			expect(() => manager.removeAgentModelsForAgent("Nonexistent")).not.toThrow();
+			await manager.flush();
+
+			// The settings file should be unchanged (no agentModels key written)
+			const savedSettings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(savedSettings.agentModels).toBeUndefined();
+			expect(savedSettings.theme).toBe("dark");
+		});
+
+		it("should return a deep copy from getAgentModels (mutation does not leak)", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAgentModelsForAgent("Explore", ["model-a"]);
+
+			const first = manager.getAgentModels();
+			first.Explore.push("mutated");
+
+			const second = manager.getAgentModels();
+			expect(second.Explore).toEqual(["model-a"]);
+		});
+
+		it("should treat empty array as no override (returns undefined)", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAgentModelsForAgent("Explore", []);
+			expect(manager.getAgentModelsForAgent("Explore")).toBeUndefined();
+		});
+
+		it("should merge global and project agentModels at the per-agent level (finding 1)", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ agentModels: { models: { Sandbox: ["global-model"] } } }),
+			);
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ agentModels: { models: { Explore: ["project-model"] } } }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			const merged = manager.getAgentModels();
+
+			// Both agents must be present — neither should clobber the other
+			expect(merged.Sandbox).toEqual(["global-model"]);
+			expect(merged.Explore).toEqual(["project-model"]);
+			expect(manager.getAgentModelsForAgent("Sandbox")).toEqual(["global-model"]);
+			expect(manager.getAgentModelsForAgent("Explore")).toEqual(["project-model"]);
+		});
+
+		it("should let project override global for the same agent key", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ agentModels: { models: { Explore: ["global-model"] } } }),
+			);
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ agentModels: { models: { Explore: ["project-model"] } } }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getAgentModelsForAgent("Explore")).toEqual(["project-model"]);
+		});
+
+		it("should persist agentModels.models structure after set + flush", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAgentModelsForAgent("Explore", ["model-a", "model-b"]);
+			await manager.flush();
+
+			const savedSettings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(savedSettings.agentModels).toEqual({ models: { Explore: ["model-a", "model-b"] } });
+		});
+	});
 });

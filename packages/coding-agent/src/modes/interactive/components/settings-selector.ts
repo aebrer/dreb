@@ -155,7 +155,6 @@ class SelectSubmenu extends Container {
 
 function getRankedListTheme(): RankedListTheme {
 	return {
-		selectedPrefix: (t: string) => theme.fg("accent", t),
 		selectedText: (t: string) => theme.bold(t),
 		rank: (t: string) => theme.fg("muted", t),
 		description: (t: string) => theme.fg("dim", t),

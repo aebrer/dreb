@@ -419,6 +419,77 @@ describe("TabTitleGenerator", () => {
 			});
 		});
 
+		it("uses agentModels settings override for Explore over .md frontmatter", async () => {
+			// .md frontmatter would resolve to a different list; the override must win.
+			mockParseAgent.mockReturnValue({
+				ok: true,
+				config: {
+					name: "Explore",
+					description: "test",
+					model: ["frontmatter/model"],
+					systemPrompt: "",
+				},
+			});
+			mockResolveModel.mockResolvedValue({
+				ok: true,
+				modelId: "test-model",
+				skippedModels: [],
+			});
+
+			const getAgentModelsOverride = vi.fn((name: string) =>
+				name === "Explore" ? ["override/model-a", "override/model-b"] : undefined,
+			);
+			const deps = createMockDeps({ getAgentModelsOverride });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockResolveModel).toHaveBeenCalledWith(
+					["override/model-a", "override/model-b"],
+					"test-provider",
+					expect.anything(),
+					"test-model",
+					expect.any(AbortSignal),
+					"[tab-title]",
+				);
+			});
+			expect(getAgentModelsOverride).toHaveBeenCalledWith("Explore");
+		});
+
+		it("falls back to .md frontmatter when agentModels override is empty", async () => {
+			mockParseAgent.mockReturnValue({
+				ok: true,
+				config: {
+					name: "Explore",
+					description: "test",
+					model: ["frontmatter/model"],
+					systemPrompt: "",
+				},
+			});
+			mockResolveModel.mockResolvedValue({
+				ok: true,
+				modelId: "test-model",
+				skippedModels: [],
+			});
+
+			const deps = createMockDeps({ getAgentModelsOverride: () => [] });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockResolveModel).toHaveBeenCalledWith(
+					["frontmatter/model"],
+					"test-provider",
+					expect.anything(),
+					"test-model",
+					expect.any(AbortSignal),
+					"[tab-title]",
+				);
+			});
+		});
+
 		it("falls back to parent model when Explore resolution fails", async () => {
 			mockParseAgent.mockReturnValue({ ok: false, error: "not found" });
 

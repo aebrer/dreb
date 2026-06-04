@@ -9,7 +9,6 @@ export interface RankedItem {
 }
 
 export interface RankedListTheme {
-	selectedPrefix: (text: string) => string;
 	selectedText: (text: string) => string;
 	rank: (text: string) => string;
 	description: (text: string) => string;
@@ -40,7 +39,7 @@ export class RankedList implements Component {
 
 	setItems(items: RankedItem[]): void {
 		this.items = [...items];
-		this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, items.length - 1));
+		this.selectedIndex = Math.max(0, Math.min(this.selectedIndex, this.items.length - 1));
 	}
 
 	invalidate(): void {}
@@ -104,8 +103,10 @@ export class RankedList implements Component {
 
 		// Regular navigation
 		if (kb.matches(keyData, "tui.select.up")) {
-			this.selectedIndex = this.selectedIndex === 0 ? this.items.length - 1 : this.selectedIndex - 1;
+			if (this.items.length === 0) return;
+			this.selectedIndex = this.selectedIndex <= 0 ? this.items.length - 1 : this.selectedIndex - 1;
 		} else if (kb.matches(keyData, "tui.select.down")) {
+			if (this.items.length === 0) return;
 			this.selectedIndex = this.selectedIndex === this.items.length - 1 ? 0 : this.selectedIndex + 1;
 		} else if (kb.matches(keyData, "tui.select.confirm")) {
 			this.onSelect?.();

@@ -83,6 +83,7 @@ import { buildSystemPrompt } from "./system-prompt.js";
 import type { BashOperations } from "./tools/bash.js";
 import {
 	createAllToolDefinitions,
+	discoverAgentTypes,
 	getRunningBackgroundAgents,
 	type SessionTask,
 	type SubagentResult,
@@ -759,6 +760,30 @@ export class AgentSession {
 			...extErrors.map((e) => `- [error] Extension: ${e.path}: ${e.error}`),
 		];
 		this.warnInSession(`Resource loading issues:\n${lines.join("\n")}`);
+	}
+
+	/**
+	 * Detect agentModels settings keys that reference agents which no longer exist
+	 * (e.g. an upstream agent was renamed or removed) and surface a LOUD warning.
+	 *
+	 * Such keys are silently ignored during resolution — getAgentModelsForAgent
+	 * never matches them — so without this check a stale override would vanish
+	 * with no signal to the user. The agent-name keys must match exactly how
+	 * discoverAgentTypes keys agents (case-sensitive, e.g. "Explore"), which is
+	 * the same lookup getAgentModelsForAgent uses.
+	 */
+	warnStaleAgentModelKeys(): void {
+		const configured = Object.keys(this.settingsManager?.getAgentModels() ?? {});
+		if (configured.length === 0) return;
+
+		const discovered = discoverAgentTypes(this._cwd);
+		const staleKeys = configured.filter((key) => !discovered.has(key));
+		if (staleKeys.length === 0) return;
+
+		this.warnInSession(
+			`agentModels settings reference unknown agent(s): ${staleKeys.join(", ")}. ` +
+				"These overrides will be ignored. Check for typos or renamed/removed agents.",
+		);
 	}
 
 	/**

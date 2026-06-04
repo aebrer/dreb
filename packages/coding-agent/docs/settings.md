@@ -20,6 +20,24 @@ Edit directly or use `/settings` for common options.
 | `defaultThinkingLevel` | string | - | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level |
+| `agentModels.models` | object | - | Per-agent model fallback lists for subagents (map of agent name → ordered model IDs). See [agent-models.md](agent-models.md) |
+
+#### agentModels.models
+
+Override the model used by each subagent type without editing agent definition files. Each key is an agent type name; the value is an ordered fallback list of `provider/model` IDs (first available is used).
+
+```json
+{
+  "agentModels": {
+    "models": {
+      "Explore": ["openai/gpt-4o", "anthropic/claude-sonnet-4-20250514"],
+      "Sandbox": ["anthropic/claude-haiku-3-20250422"]
+    }
+  }
+}
+```
+
+Configurable in the TUI via `/settings` → **Agent Models**. See [agent-models.md](agent-models.md) for the full resolution order and details.
 
 #### thinkingBudgets
 

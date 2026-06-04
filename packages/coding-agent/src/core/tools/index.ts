@@ -83,6 +83,7 @@ export {
 	type BackgroundAgentInfo,
 	createSubagentTool,
 	createSubagentToolDefinition,
+	discoverAgentTypes,
 	filterSubagentTools,
 	getBackgroundAgents,
 	getRunningBackgroundAgents,

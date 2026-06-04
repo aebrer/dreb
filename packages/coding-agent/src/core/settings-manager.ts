@@ -985,12 +985,20 @@ export class SettingsManager {
 	}
 
 	getAgentModels(): Record<string, string[]> {
-		return this.settings.agentModels?.models ? { ...this.settings.agentModels.models } : {};
+		// Merge global + project at the per-agent-name level, with project winning per-key.
+		// Reading directly from globalSettings/projectSettings avoids the wholesale
+		// replacement that deepMergeSettings would do for the shared `models` sub-key.
+		const merged: Record<string, string[]> = {
+			...this.globalSettings.agentModels?.models,
+			...this.projectSettings.agentModels?.models,
+		};
+		// Deep-copy inner arrays so callers can't mutate stored state.
+		return Object.fromEntries(Object.entries(merged).map(([k, v]) => [k, [...v]]));
 	}
 
 	getAgentModelsForAgent(agentName: string): string[] | undefined {
-		const models = this.settings.agentModels?.models?.[agentName];
-		return models && models.length > 0 ? [...models] : undefined;
+		const models = this.getAgentModels()[agentName];
+		return models && models.length > 0 ? models : undefined;
 	}
 
 	setAgentModelsForAgent(agentName: string, models: string[]): void {
@@ -1006,7 +1014,7 @@ export class SettingsManager {
 	}
 
 	removeAgentModelsForAgent(agentName: string): void {
-		if (this.globalSettings.agentModels?.models) {
+		if (this.globalSettings.agentModels?.models?.[agentName] !== undefined) {
 			delete this.globalSettings.agentModels.models[agentName];
 			this.markModified("agentModels", "models");
 			this.save();

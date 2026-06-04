@@ -3,7 +3,6 @@ import { describe, it } from "node:test";
 import { RankedList, type RankedListTheme } from "../src/components/ranked-list.js";
 
 const testTheme: RankedListTheme = {
-	selectedPrefix: (t) => t,
 	selectedText: (t) => t,
 	rank: (t) => t,
 	description: (t) => t,
@@ -131,6 +130,74 @@ describe("RankedList", () => {
 		};
 		list.handleInput("\x1b[1;2A"); // Shift+Up at index 0
 		assert.equal(reordered, undefined);
+	});
+
+	it("does not move last item down", () => {
+		let reordered: any[] | undefined;
+		const list = new RankedList(
+			[
+				{ value: "a", label: "Alpha" },
+				{ value: "b", label: "Beta" },
+			],
+			10,
+			testTheme,
+		);
+		list.onReorder = (items) => {
+			reordered = items;
+		};
+		list.handleInput("\x1b[B"); // down arrow -> navigate to last item
+		list.handleInput("]"); // reorder down at last index
+		assert.equal(reordered, undefined);
+		// Order unchanged
+		const items = list.getItems();
+		assert.equal(items[0].value, "a");
+		assert.equal(items[1].value, "b");
+	});
+
+	it("setItems clamps selectedIndex when list shrinks", () => {
+		const list = new RankedList(
+			[
+				{ value: "a", label: "Alpha" },
+				{ value: "b", label: "Beta" },
+				{ value: "c", label: "Gamma" },
+				{ value: "d", label: "Delta" },
+			],
+			10,
+			testTheme,
+		);
+		// Navigate to index 3 (last)
+		list.handleInput("\x1b[B");
+		list.handleInput("\x1b[B");
+		list.handleInput("\x1b[B");
+		// Shrink to 2 items
+		list.setItems([
+			{ value: "a", label: "Alpha" },
+			{ value: "b", label: "Beta" },
+		]);
+		let lines: string[] = [];
+		assert.doesNotThrow(() => {
+			lines = list.render(80);
+		});
+		// Selected item should be within bounds (Beta, the new last item)
+		assert.ok(lines.some((l) => l.includes("→") && l.includes("Beta")));
+	});
+
+	it("navigation on empty list does not produce negative index", () => {
+		let removed: any | undefined;
+		let remaining: any[] | undefined;
+		const list = new RankedList([], 10, testTheme);
+		list.onRemove = (item, items) => {
+			removed = item;
+			remaining = items;
+		};
+		// UP on empty list must not set a negative index
+		list.handleInput("\x1b[A");
+		// Add a single item
+		list.setItems([{ value: "a", label: "Alpha" }]);
+		// Delete should remove the single item (not splice the wrong index)
+		list.handleInput("\x1b[3~");
+		assert.equal(removed?.value, "a");
+		assert.equal(remaining?.length, 0);
 	});
 
 	it("removes selected item with Delete", () => {
