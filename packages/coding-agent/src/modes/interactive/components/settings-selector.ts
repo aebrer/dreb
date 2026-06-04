@@ -174,6 +174,9 @@ export class AgentModelsSubmenu implements Component {
 	private rankedList: RankedList | null = null;
 	private addList: SelectList | null = null;
 	private addListSearchQuery = "";
+	// Transient notice shown in the ranked view when an add was attempted but no
+	// models are available to add. Cleared on the next ranked-view input.
+	private rankedNotice: string | null = null;
 	private activeView: "agents" | "ranked" | "add" = "agents";
 	private currentAgentName: string | null = null;
 	private agentNames: string[];
@@ -261,7 +264,14 @@ export class AgentModelsSubmenu implements Component {
 			.filter((m) => !existingValues.has(m))
 			.map((m) => ({ value: m, label: m }));
 
-		if (allOptions.length === 0) return;
+		if (allOptions.length === 0) {
+			// Don't silently swallow the "add" intent — tell the user why nothing happened.
+			this.rankedNotice =
+				this.availableModelIds.length === 0
+					? "No models available to add (no authenticated providers)"
+					: "All available models are already in the list";
+			return;
+		}
 
 		this.addList = new SelectList(
 			allOptions,
@@ -322,6 +332,10 @@ export class AgentModelsSubmenu implements Component {
 			lines.push(theme.fg("muted", "Configure model fallback priority (first = preferred)"));
 			lines.push("");
 			lines.push(...this.rankedList.render(width));
+			if (this.rankedNotice) {
+				lines.push("");
+				lines.push(theme.fg("warning", `  ${this.rankedNotice}`));
+			}
 			return lines;
 		}
 
@@ -356,6 +370,9 @@ export class AgentModelsSubmenu implements Component {
 				this.addList.setFilter(this.addListSearchQuery);
 			}
 		} else if (this.activeView === "ranked" && this.rankedList) {
+			// Clear any stale "nothing to add" notice; openAddModelPicker re-sets it
+			// if this input is another failed add attempt.
+			this.rankedNotice = null;
 			this.rankedList.handleInput(data);
 		} else {
 			this.agentList.handleInput(data);

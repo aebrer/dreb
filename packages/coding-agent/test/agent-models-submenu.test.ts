@@ -133,7 +133,7 @@ describe("AgentModelsSubmenu — add model picker", () => {
 		expect(output).toContain("model-c");
 	});
 
-	test("when all available models are already added, it stays on the ranked view (no-op)", () => {
+	test("when all available models are already added, it stays on the ranked view with a notice", () => {
 		const { submenu } = makeSubmenu({ explore: [...AVAILABLE_MODELS] });
 
 		submenu.handleInput(ENTER); // open explore (ranked view)
@@ -143,6 +143,26 @@ describe("AgentModelsSubmenu — add model picker", () => {
 		// Still on ranked view, not the add view.
 		expect(output).toContain("Agent Models › explore");
 		expect(output).not.toContain("Add Model");
+		// ...and the user is told why nothing happened (no silent no-op).
+		expect(output).toContain("All available models are already in the list");
+	});
+
+	test("notice is shown when no models exist to add and cleared on the next input", () => {
+		// No authenticated models available at all.
+		const onModelsChange = vi.fn();
+		const onCancel = vi.fn();
+		const submenu = new AgentModelsSubmenu(AGENT_NAMES, {}, [], onModelsChange, onCancel);
+
+		submenu.handleInput(ENTER); // open explore (empty ranked view)
+		submenu.handleInput(ENTER); // attempt to add — nothing available
+
+		let output = submenu.render(80).join("\n");
+		expect(output).toContain("No models available to add");
+
+		// The notice is transient — the next ranked-view input clears it.
+		submenu.handleInput(DOWN);
+		output = submenu.render(80).join("\n");
+		expect(output).not.toContain("No models available to add");
 	});
 
 	test("typing filters the add list and backspace trims the query", () => {
@@ -166,6 +186,25 @@ describe("AgentModelsSubmenu — add model picker", () => {
 		output = submenu.render(80).join("\n");
 		expect(output).toContain("Search: model-");
 		expect(output).toContain("model-a");
+	});
+
+	test("Escape from the add view returns to the ranked view, not the agent list", () => {
+		const { submenu, onModelsChange } = makeSubmenu({ explore: ["model-a", "model-b"] });
+
+		submenu.handleInput(ENTER); // open explore (ranked view)
+		submenu.handleInput(ENTER); // open add picker (only model-c remains)
+		// Confirm we're on the add view first.
+		expect(submenu.render(80).join("\n")).toContain("Add Model");
+
+		submenu.handleInput(ESC); // cancel the add picker
+
+		const output = submenu.render(80).join("\n");
+		// Back on the per-agent ranked view, NOT the top-level agent list.
+		expect(output).toContain("Agent Models › explore");
+		expect(output).not.toContain("Add Model");
+		expect(output).not.toContain("Select an agent to configure");
+		// Cancelling the add picker must not mutate the model list.
+		expect(onModelsChange).not.toHaveBeenCalled();
 	});
 
 	test("selecting a model in the add view adds it and fires onModelsChange", () => {

@@ -397,5 +397,39 @@ describe("SettingsManager", () => {
 			const savedSettings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
 			expect(savedSettings.agentModels).toEqual({ models: { Explore: ["model-a", "model-b"] } });
 		});
+
+		describe("hasProjectAgentModelOverride", () => {
+			it("returns true when a project-level entry exists for the agent", () => {
+				writeFileSync(
+					join(projectDir, ".dreb", "settings.json"),
+					JSON.stringify({ agentModels: { models: { Explore: ["project-model"] } } }),
+				);
+				const manager = SettingsManager.create(projectDir, agentDir);
+				expect(manager.hasProjectAgentModelOverride("Explore")).toBe(true);
+			});
+
+			it("returns false when only a global entry exists for the agent", () => {
+				writeFileSync(
+					join(agentDir, "settings.json"),
+					JSON.stringify({ agentModels: { models: { Explore: ["global-model"] } } }),
+				);
+				const manager = SettingsManager.create(projectDir, agentDir);
+				expect(manager.hasProjectAgentModelOverride("Explore")).toBe(false);
+			});
+
+			it("returns false when no agentModels are configured at all", () => {
+				const manager = SettingsManager.create(projectDir, agentDir);
+				expect(manager.hasProjectAgentModelOverride("Explore")).toBe(false);
+			});
+
+			it("returns false for an agent absent from a populated project entry", () => {
+				writeFileSync(
+					join(projectDir, ".dreb", "settings.json"),
+					JSON.stringify({ agentModels: { models: { Explore: ["project-model"] } } }),
+				);
+				const manager = SettingsManager.create(projectDir, agentDir);
+				expect(manager.hasProjectAgentModelOverride("Sandbox")).toBe(false);
+			});
+		});
 	});
 });
