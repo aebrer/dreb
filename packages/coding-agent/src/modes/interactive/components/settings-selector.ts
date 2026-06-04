@@ -169,7 +169,7 @@ function getRankedListTheme(): RankedListTheme {
  *
  * Navigation: Agent list → RankedList → (optional) Add Model picker
  */
-class AgentModelsSubmenu implements Component {
+export class AgentModelsSubmenu implements Component {
 	private agentList: SelectList;
 	private rankedList: RankedList | null = null;
 	private addList: SelectList | null = null;

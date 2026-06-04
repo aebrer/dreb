@@ -256,4 +256,78 @@ describe("RankedList", () => {
 		// The selected item (Beta, index 1) should have the → prefix
 		assert.ok(lines.some((l) => l.includes("→") && l.includes("Beta")));
 	});
+
+	// Eight distinct, non-overlapping labels so substring assertions are unambiguous.
+	const scrollItems = [
+		{ value: "a", label: "Alpha" },
+		{ value: "b", label: "Bravo" },
+		{ value: "c", label: "Charlie" },
+		{ value: "d", label: "Delta" },
+		{ value: "e", label: "Echo" },
+		{ value: "f", label: "Foxtrot" },
+		{ value: "g", label: "Golf" },
+		{ value: "h", label: "Hotel" },
+	];
+
+	it("shows position indicator at top with window clamped to start", () => {
+		const list = new RankedList(scrollItems, 3, testTheme);
+		const lines = list.render(80);
+		// selectedIndex 0: window is items 0..2 (Alpha, Bravo, Charlie)
+		assert.ok(lines.some((l) => l.includes("(1/8)")));
+		assert.ok(lines.some((l) => l.includes("Alpha")));
+		assert.ok(lines.some((l) => l.includes("Bravo")));
+		assert.ok(lines.some((l) => l.includes("Charlie")));
+		// Items outside the window must not be rendered
+		assert.ok(!lines.some((l) => l.includes("Delta")));
+		assert.ok(!lines.some((l) => l.includes("Hotel")));
+	});
+
+	it("scrolls the window to the middle and shows position indicator", () => {
+		const list = new RankedList(scrollItems, 3, testTheme);
+		// Navigate down to selectedIndex 3 (Delta)
+		list.handleInput("\x1b[B");
+		list.handleInput("\x1b[B");
+		list.handleInput("\x1b[B");
+		const lines = list.render(80);
+		// startIndex = clamp(3 - 1) = 2, window is items 2..4 (Charlie, Delta, Echo)
+		assert.ok(lines.some((l) => l.includes("(4/8)")));
+		assert.ok(lines.some((l) => l.includes("Charlie")));
+		assert.ok(lines.some((l) => l.includes("→") && l.includes("Delta")));
+		assert.ok(lines.some((l) => l.includes("Echo")));
+		// Items before and after the window must not be rendered
+		assert.ok(!lines.some((l) => l.includes("Alpha")));
+		assert.ok(!lines.some((l) => l.includes("Bravo")));
+		assert.ok(!lines.some((l) => l.includes("Foxtrot")));
+		assert.ok(!lines.some((l) => l.includes("Golf")));
+		assert.ok(!lines.some((l) => l.includes("Hotel")));
+	});
+
+	it("clamps window at the bottom of the list", () => {
+		const list = new RankedList(scrollItems, 3, testTheme);
+		// Navigate to the last item (index 7, Hotel)
+		for (let i = 0; i < 7; i++) {
+			list.handleInput("\x1b[B");
+		}
+		const lines = list.render(80);
+		// startIndex clamps to items.length - maxVisible = 5, window is items 5..7
+		assert.ok(lines.some((l) => l.includes("(8/8)")));
+		assert.ok(lines.some((l) => l.includes("Foxtrot")));
+		assert.ok(lines.some((l) => l.includes("Golf")));
+		assert.ok(lines.some((l) => l.includes("→") && l.includes("Hotel")));
+		// Earlier items are scrolled out of view
+		assert.ok(!lines.some((l) => l.includes("Alpha")));
+		assert.ok(!lines.some((l) => l.includes("Echo")));
+		// Window stays within bounds: exactly maxVisible items rendered
+		const itemLines = lines.filter((l) => /\d+\.\s/.test(l));
+		assert.equal(itemLines.length, 3);
+	});
+
+	it("omits position indicator when all items fit in the window", () => {
+		const list = new RankedList(scrollItems.slice(0, 3), 3, testTheme);
+		const lines = list.render(80);
+		// No scrolling needed: startIndex 0, endIndex === items.length
+		assert.ok(!lines.some((l) => l.includes("(1/3)")));
+		assert.ok(lines.some((l) => l.includes("Alpha")));
+		assert.ok(lines.some((l) => l.includes("Charlie")));
+	});
 });

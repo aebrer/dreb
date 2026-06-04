@@ -3557,7 +3557,7 @@ export class InteractiveMode {
 			const agentTypes = discoverAgentTypes(process.cwd());
 			const agentNames = Array.from(agentTypes.keys()).sort();
 			const availableModels = this.session.modelRegistry.getAvailable();
-			const availableModelIds = availableModels.map((m: any) => `${m.provider}/${m.id}`);
+			const availableModelIds = availableModels.map((m) => `${m.provider}/${m.id}`);
 
 			const selector = new SettingsSelectorComponent(
 				{
@@ -3680,10 +3680,18 @@ export class InteractiveMode {
 						}
 					},
 					onAgentModelsChange: (agentName, models) => {
+						const shadowedByProject = this.settingsManager.hasProjectAgentModelOverride(agentName);
 						if (models.length > 0) {
 							this.settingsManager.setAgentModelsForAgent(agentName, models);
 						} else {
 							this.settingsManager.removeAgentModelsForAgent(agentName);
+						}
+						if (shadowedByProject) {
+							this.showWarning(
+								`A project-level agentModels override for "${agentName}" (.dreb/settings.json) ` +
+									"takes precedence — this change to global settings will have no effect. " +
+									"Edit the project settings file to change it.",
+							);
 						}
 					},
 					onCancel: () => {

@@ -1001,6 +1001,15 @@ export class SettingsManager {
 		return models && models.length > 0 ? models : undefined;
 	}
 
+	/**
+	 * Whether a project-level (`.dreb/settings.json`) agentModels entry exists for this agent.
+	 * Project entries win over global ones in {@link getAgentModels}, so a global write/remove
+	 * via the TUI has no effect when this returns true — callers should surface this loudly.
+	 */
+	hasProjectAgentModelOverride(agentName: string): boolean {
+		return this.projectSettings.agentModels?.models?.[agentName] !== undefined;
+	}
+
 	setAgentModelsForAgent(agentName: string, models: string[]): void {
 		if (!this.globalSettings.agentModels) {
 			this.globalSettings.agentModels = {};
