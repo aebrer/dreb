@@ -273,9 +273,9 @@ describe("Context overflow error handling", () => {
 
 	describe("OpenAI Codex (OAuth)", () => {
 		it.skipIf(!openaiCodexToken)(
-			"gpt-5.3-codex - should detect overflow via isContextOverflow",
+			"gpt-5.4 - should detect overflow via isContextOverflow",
 			async () => {
-				const model = getModel("openai-codex", "gpt-5.3-codex");
+				const model = getModel("openai-codex", "gpt-5.4");
 				const result = await testContextOverflow(model, openaiCodexToken!);
 				logResult(result);
 

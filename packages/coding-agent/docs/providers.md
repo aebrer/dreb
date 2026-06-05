@@ -40,6 +40,13 @@ Use `/logout` to clear credentials. Tokens are stored in `~/.dreb/agent/auth.jso
 - Requires ChatGPT Plus or Pro subscription
 - Personal use only; for production, use the OpenAI Platform API
 
+### Kimi For Coding
+
+- `/login` uses the Kimi Code OAuth subscription endpoint at `https://api.kimi.com/coding/v1`.
+- `KIMI_API_KEY` uses Kimi For Coding's Anthropic-compatible API at `https://api.kimi.com/coding`.
+- The OAuth coding endpoint has been verified to accept OpenAI-style multimodal content arrays with base64 `image_url` data URLs for `kimi-for-coding`.
+- Moonshot Open Platform vision docs use a different base URL (`https://api.moonshot.ai/v1`), and the first-party Kimi CLI may have its own media handling; don't assume all Kimi routes expose identical media behavior.
+
 ## API Keys
 
 ### Environment Variables or Auth File

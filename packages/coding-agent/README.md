@@ -117,7 +117,7 @@ For each built-in provider, dreb maintains a list of tool-capable models, update
 - MiniMax
 - MiniMax (China)
 
-See [docs/providers.md](docs/providers.md) for detailed setup instructions.
+See [docs/providers.md](docs/providers.md) for detailed setup instructions, including Kimi For Coding notes that distinguish OAuth, API-key, first-party CLI, and Moonshot Open Platform vision support.
 
 **Custom providers & models:** Add providers via `~/.dreb/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
 

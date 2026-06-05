@@ -1436,6 +1436,8 @@ async function generateModels() {
 	}
 
 	// Kimi For Coding OAuth models (OpenAI Completions API at api.kimi.com/coding/v1)
+	// Verified against the OAuth coding endpoint: it accepts OpenAI-style
+	// base64 data URL image_url content arrays for kimi-for-coding.
 	const KIMI_CODING_OAUTH_BASE_URL = "https://api.kimi.com/coding/v1";
 	const kimiCodingOAuthModels: Model<"openai-completions">[] = [
 		{
@@ -1445,7 +1447,7 @@ async function generateModels() {
 			provider: "kimi-coding-oauth",
 			baseUrl: KIMI_CODING_OAUTH_BASE_URL,
 			reasoning: true,
-			input: ["text"],
+			input: ["text", "image"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 262144,
 			maxTokens: 32768,

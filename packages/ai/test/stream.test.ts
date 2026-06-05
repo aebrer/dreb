@@ -855,8 +855,8 @@ describe("Generate E2E Tests", () => {
 	// Tokens are resolved at module level (see oauthTokens above)
 	// =========================================================================
 
-	describe("GitHub Copilot Provider (gpt-5.3-codex via OpenAI Completions)", () => {
-		const llm = getModel("github-copilot", "gpt-5.3-codex");
+	describe("GitHub Copilot Provider (gpt-5.4 via OpenAI Completions)", () => {
+		const llm = getModel("github-copilot", "gpt-5.4");
 
 		it.skipIf(!githubCopilotToken)("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm, { apiKey: githubCopilotToken });
@@ -1031,8 +1031,8 @@ describe("Generate E2E Tests", () => {
 		});
 	});
 
-	describe("OpenAI Codex Provider (gpt-5.3-codex)", () => {
-		const llm = getModel("openai-codex", "gpt-5.3-codex");
+	describe("OpenAI Codex Provider (gpt-5.4)", () => {
+		const llm = getModel("openai-codex", "gpt-5.4");
 
 		it.skipIf(!openaiCodexToken)("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm, { apiKey: openaiCodexToken });
@@ -1059,8 +1059,8 @@ describe("Generate E2E Tests", () => {
 		});
 	});
 
-	describe("OpenAI Codex Provider (gpt-5.3-codex)", () => {
-		const llm = getModel("openai-codex", "gpt-5.3-codex");
+	describe("OpenAI Codex Provider (gpt-5.4)", () => {
+		const llm = getModel("openai-codex", "gpt-5.4");
 
 		it.skipIf(!openaiCodexToken)("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm, { apiKey: openaiCodexToken });
@@ -1087,8 +1087,8 @@ describe("Generate E2E Tests", () => {
 		});
 	});
 
-	describe("OpenAI Codex Provider (gpt-5.3-codex via WebSocket)", () => {
-		const llm = getModel("openai-codex", "gpt-5.3-codex");
+	describe("OpenAI Codex Provider (gpt-5.4 via WebSocket)", () => {
+		const llm = getModel("openai-codex", "gpt-5.4");
 		const wsOptions = { apiKey: openaiCodexToken, transport: "websocket" as const };
 
 		it.skipIf(!openaiCodexToken)("should complete basic text generation", { retry: 3 }, async () => {

@@ -1133,6 +1133,8 @@ const response = await complete(model, {
 
 **Google Gemini CLI / Antigravity**: These use Google Cloud OAuth. The `apiKey` returned by `getOAuthApiKey()` is a JSON string containing both the token and project ID, which the library handles automatically.
 
+**Kimi For Coding**: API-key models use Kimi's Anthropic-compatible coding API. OAuth models use the Kimi Code subscription endpoint and `kimi-for-coding` accepts OpenAI-style multimodal content arrays with base64 `image_url` data URLs. Moonshot Open Platform vision examples use a different base URL, and first-party Kimi CLI media handling may differ.
+
 ## Development
 
 ### Adding a New Provider

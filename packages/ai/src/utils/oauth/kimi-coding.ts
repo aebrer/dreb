@@ -528,6 +528,9 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 
 			const updated = {
 				...m,
+				// The OAuth coding endpoint accepts OpenAI-style image_url data URLs for
+				// kimi-for-coding; keep this capability even if static metadata is stale.
+				input: Array.from(new Set([...m.input, "image" as const])),
 				headers: { ...headers, ...(m.headers || {}) },
 			};
 

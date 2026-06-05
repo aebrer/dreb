@@ -273,10 +273,10 @@ describe("Token Statistics on Abort", () => {
 
 	describe("OpenAI Codex Provider", () => {
 		it.skipIf(!openaiCodexToken)(
-			"gpt-5.3-codex - should include token stats when aborted mid-stream",
+			"gpt-5.4 - should include token stats when aborted mid-stream",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("openai-codex", "gpt-5.3-codex");
+				const llm = getModel("openai-codex", "gpt-5.4");
 				await testTokensOnAbort(llm, { apiKey: openaiCodexToken });
 			},
 		);
