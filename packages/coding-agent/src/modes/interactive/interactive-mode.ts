@@ -612,9 +612,11 @@ export class InteractiveMode {
 		// Subscribe to agent events
 		this.subscribeToAgent();
 
-		// Auto-load buddy if one exists
+		// Auto-load buddy if one exists. Skip visual mount when the buddy was
+		// hidden via /buddy off — start() still loads it (disabled) so context
+		// wiring works, but we must not re-mount it on screen.
 		const existingBuddy = this.buddyController.start();
-		if (existingBuddy) {
+		if (existingBuddy && !existingBuddy.hidden) {
 			this.mountBuddy(existingBuddy);
 		}
 
