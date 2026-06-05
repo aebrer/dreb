@@ -13,6 +13,13 @@ describe("getGitHubFetchGuidance", () => {
 		expect(g).toContain("gh api");
 	});
 
+	it("returns guidance for github.com /raw/ URLs (clone/api hint)", () => {
+		const g = getGitHubFetchGuidance(new URL("https://github.com/owner/repo/raw/main/src/file.ts"));
+		expect(g).toBeTruthy();
+		expect(g).toContain("clone");
+		expect(g).toContain("gh api");
+	});
+
 	it("returns guidance for raw.githubusercontent.com (clone/api hint)", () => {
 		const g = getGitHubFetchGuidance(new URL("https://raw.githubusercontent.com/owner/repo/main/file.ts"));
 		expect(g).toBeTruthy();
