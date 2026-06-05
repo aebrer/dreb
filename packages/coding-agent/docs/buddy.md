@@ -27,13 +27,13 @@ The buddy won't react until a model is configured. The choice is persisted acros
 
 | Command | Description |
 |---|---|
-| `/buddy` | Hatch a new buddy (or show existing one) |
+| `/buddy` | Hatch a new buddy (or show an existing one — also brings back a buddy hidden via `/buddy off`) |
 | `/buddy model` | Show current Ollama model and available models |
 | `/buddy model <name>` | Set the Ollama model for buddy reactions |
 | `/buddy pet` | Pet your buddy |
 | `/buddy reroll` | Reroll for a new buddy (new species, name, personality) |
 | `/buddy stats` | Show buddy stats panel |
-| `/buddy off` | Hide the buddy |
+| `/buddy off` | Hide the buddy (persists across sessions — it stays hidden on restart until you run `/buddy`) |
 
 ## How It Works
 
