@@ -76,6 +76,7 @@ function writeStoredBuddy(
 		backstory: string;
 		rerollCount: number;
 		ollamaModel: string;
+		hidden: boolean;
 	}>,
 ) {
 	const stored = {
@@ -277,13 +278,8 @@ describe("enabled flag", () => {
 	});
 
 	it("should start with enabled=false when stored buddy has hidden=true", () => {
-		writeStoredBuddy();
+		writeStoredBuddy({ hidden: true });
 		const { controller } = createTestController();
-
-		// Manually set hidden
-		const stored = JSON.parse(readFileSync(join(TEST_DIR, "buddy.json"), "utf-8"));
-		stored.hidden = true;
-		writeFileSync(join(TEST_DIR, "buddy.json"), JSON.stringify(stored));
 
 		const state = controller.start();
 		expect(state).not.toBeNull(); // buddy loaded from disk
@@ -294,12 +290,8 @@ describe("enabled flag", () => {
 	// startup site gates the visual mount on the `hidden` flag returned by
 	// start(), so start() must faithfully surface `hidden` on the loaded state.
 	it("should return hidden=true from start() so the frontend skips mounting", () => {
-		writeStoredBuddy();
+		writeStoredBuddy({ hidden: true });
 		const { controller } = createTestController();
-
-		const stored = JSON.parse(readFileSync(join(TEST_DIR, "buddy.json"), "utf-8"));
-		stored.hidden = true;
-		writeFileSync(join(TEST_DIR, "buddy.json"), JSON.stringify(stored));
 
 		const state = controller.start();
 		expect(state).not.toBeNull();
