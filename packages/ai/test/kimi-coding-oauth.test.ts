@@ -860,6 +860,65 @@ describe("Kimi For Coding OAuth", () => {
 			expect(result[1].headers).toBeUndefined();
 		});
 
+		it("preserves image input capability when modifying models", () => {
+			const creds: OAuthCredentials & {
+				modelId?: string;
+				contextLength?: number;
+			} = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+				modelId: "kimi-for-coding",
+				contextLength: 262144,
+			};
+
+			const models = [
+				{
+					id: "kimi-default",
+					name: "Kimi",
+					api: "openai-completions" as const,
+					provider: "kimi-coding-oauth",
+					baseUrl: "https://api.kimi.com/coding/v1",
+					reasoning: true,
+					input: ["text", "image"] as ("text" | "image")[],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 32768,
+					maxTokens: 4096,
+				},
+			];
+
+			const result = kimiCodingOAuthProvider.modifyModels!(models, creds);
+
+			expect(result[0].input).toEqual(["text", "image"]);
+		});
+
+		it("adds image input capability if static Kimi OAuth metadata is stale", () => {
+			const creds: OAuthCredentials = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+			};
+
+			const models = [
+				{
+					id: "kimi-default",
+					name: "Kimi",
+					api: "openai-completions" as const,
+					provider: "kimi-coding-oauth",
+					baseUrl: "https://api.kimi.com/coding/v1",
+					reasoning: true,
+					input: ["text"] as ("text" | "image")[],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 32768,
+					maxTokens: 4096,
+				},
+			];
+
+			const result = kimiCodingOAuthProvider.modifyModels!(models, creds);
+
+			expect(result[0].input).toEqual(["text", "image"]);
+		});
+
 		it("does not modify model id when credentials lack modelId", () => {
 			const creds: OAuthCredentials = {
 				refresh: "r",

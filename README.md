@@ -75,6 +75,8 @@ dreb supports both subscription and API-key providers, with model metadata updat
 
 Custom model configuration can override built-in provider base URLs, merge custom models into built-in providers, set compatibility flags for OpenAI-compatible servers, resolve API keys from shell commands or environment variables, and register providers dynamically from extensions.
 
+Provider-specific docs include Kimi vision notes that distinguish the Kimi Code OAuth endpoint, the Kimi API-key coding provider, first-party Kimi CLI media handling, and Moonshot Open Platform vision support.
+
 ### Workflows and customization
 
 Skills provide progressively loaded instructions for specialized tasks. They can be invoked by users as `/skill:name` or by the model through the `skill` tool, support argument substitution, and can live globally, per-project, in packages, or on the CLI.

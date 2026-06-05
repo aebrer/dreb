@@ -542,6 +542,7 @@ export function convertMessages(
 	}
 
 	let lastRole: string | null = null;
+	const supportsImages = model.input.includes("image");
 
 	for (let i = 0; i < transformedMessages.length; i++) {
 		const msg = transformedMessages[i];
@@ -576,9 +577,17 @@ export function convertMessages(
 						} satisfies ChatCompletionContentPartImage;
 					}
 				});
-				const filteredContent = !model.input.includes("image")
-					? content.filter((c) => c.type !== "image_url")
-					: content;
+				let filteredContent = content;
+				if (!supportsImages) {
+					const hadImages = content.some((c) => c.type === "image_url");
+					filteredContent = content.filter((c) => c.type !== "image_url");
+					if (hadImages) {
+						filteredContent.push({
+							type: "text",
+							text: "[image omitted: model does not support images]",
+						});
+					}
+				}
 				if (filteredContent.length === 0) continue;
 				params.push({
 					role: "user",
@@ -681,10 +690,16 @@ export function convertMessages(
 
 				// Always send tool result with text (or placeholder if only images)
 				const hasText = textResult.length > 0;
+				let toolResultContent = hasText ? textResult : "(see attached image)";
+				if (hasImages && !supportsImages) {
+					toolResultContent = hasText
+						? `${textResult}\n[tool image omitted: model does not support images]`
+						: "(image omitted: model does not support images)";
+				}
 				// Some providers require the 'name' field in tool results
 				const toolResultMsg: ChatCompletionToolMessageParam = {
 					role: "tool",
-					content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+					content: sanitizeSurrogates(toolResultContent),
 					tool_call_id: toolMsg.toolCallId,
 				};
 				if (compat.requiresToolResultName && toolMsg.toolName) {
@@ -692,7 +707,7 @@ export function convertMessages(
 				}
 				params.push(toolResultMsg);
 
-				if (hasImages && model.input.includes("image")) {
+				if (hasImages && supportsImages) {
 					for (const block of toolMsg.content) {
 						if (block.type === "image") {
 							imageBlocks.push({
