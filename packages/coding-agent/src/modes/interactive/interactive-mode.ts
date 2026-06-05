@@ -612,11 +612,8 @@ export class InteractiveMode {
 		// Subscribe to agent events
 		this.subscribeToAgent();
 
-		// Auto-load buddy if one exists
-		const existingBuddy = this.buddyController.start();
-		if (existingBuddy) {
-			this.mountBuddy(existingBuddy);
-		}
+		// Auto-load buddy if one exists (skips visual mount when hidden via /buddy off).
+		this.mountExistingBuddyIfVisible();
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -5162,6 +5159,20 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 		this.mountBuddy(state);
 		this.showBuddyStatsPanel(state);
 		await this.checkAndWarnOllama();
+	}
+
+	/**
+	 * Load the persisted buddy at startup and mount it only if it is visible.
+	 * A buddy hidden via `/buddy off` is still loaded by start() (disabled) so
+	 * context/idle wiring stays intact, but it must not be re-mounted on screen
+	 * in a new session — that is the regression fixed for #243. Extracted into a
+	 * standalone method so the mount-gate decision is directly unit-testable.
+	 */
+	private mountExistingBuddyIfVisible(): void {
+		const existingBuddy = this.buddyController.start();
+		if (existingBuddy && !existingBuddy.hidden) {
+			this.mountBuddy(existingBuddy);
+		}
 	}
 
 	private mountBuddy(state: import("../../core/buddy/buddy-types.js").BuddyState): void {
