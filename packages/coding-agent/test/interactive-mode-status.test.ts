@@ -191,3 +191,45 @@ describe("InteractiveMode.showLoadedResources", () => {
 		expect(output).not.toContain("[Skills]");
 	});
 });
+
+// Regression for #243: /buddy off must persist across sessions. The startup
+// site loads the buddy via start() but must NOT visually mount it when hidden.
+// These tests exercise the actual mount-gate (mountExistingBuddyIfVisible) — if
+// the `!hidden` guard regresses, they fail (the controller-contract tests in
+// buddy-controller.test.ts would not catch a revert of the gate itself).
+describe("InteractiveMode.mountExistingBuddyIfVisible", () => {
+	function createFakeThis(startReturn: { hidden?: boolean } | null) {
+		const mountBuddy = vi.fn();
+		const fakeThis: any = {
+			buddyController: { start: vi.fn(() => startReturn) },
+			mountBuddy,
+		};
+		return { fakeThis, mountBuddy };
+	}
+
+	test("does not mount a hidden buddy at startup", () => {
+		const { fakeThis, mountBuddy } = createFakeThis({ hidden: true });
+		(InteractiveMode as any).prototype.mountExistingBuddyIfVisible.call(fakeThis);
+		expect(mountBuddy).not.toHaveBeenCalled();
+	});
+
+	test("mounts a visible buddy at startup", () => {
+		const visibleBuddy = { hidden: false };
+		const { fakeThis, mountBuddy } = createFakeThis(visibleBuddy);
+		(InteractiveMode as any).prototype.mountExistingBuddyIfVisible.call(fakeThis);
+		expect(mountBuddy).toHaveBeenCalledWith(visibleBuddy);
+	});
+
+	test("mounts a buddy with no hidden flag (undefined) at startup", () => {
+		const buddy = {}; // hidden never persisted
+		const { fakeThis, mountBuddy } = createFakeThis(buddy);
+		(InteractiveMode as any).prototype.mountExistingBuddyIfVisible.call(fakeThis);
+		expect(mountBuddy).toHaveBeenCalledWith(buddy);
+	});
+
+	test("does nothing when no buddy is stored", () => {
+		const { fakeThis, mountBuddy } = createFakeThis(null);
+		(InteractiveMode as any).prototype.mountExistingBuddyIfVisible.call(fakeThis);
+		expect(mountBuddy).not.toHaveBeenCalled();
+	});
+});

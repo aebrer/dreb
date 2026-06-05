@@ -76,6 +76,7 @@ function writeStoredBuddy(
 		backstory: string;
 		rerollCount: number;
 		ollamaModel: string;
+		hidden: boolean;
 	}>,
 ) {
 	const stored = {
@@ -277,17 +278,37 @@ describe("enabled flag", () => {
 	});
 
 	it("should start with enabled=false when stored buddy has hidden=true", () => {
-		writeStoredBuddy();
+		writeStoredBuddy({ hidden: true });
 		const { controller } = createTestController();
-
-		// Manually set hidden
-		const stored = JSON.parse(readFileSync(join(TEST_DIR, "buddy.json"), "utf-8"));
-		stored.hidden = true;
-		writeFileSync(join(TEST_DIR, "buddy.json"), JSON.stringify(stored));
 
 		const state = controller.start();
 		expect(state).not.toBeNull(); // buddy loaded from disk
 		expect(controller.enabled).toBe(false); // but disabled
+	});
+
+	// Regression for #243: /buddy off must persist across sessions. The TUI
+	// startup site gates the visual mount on the `hidden` flag returned by
+	// start(), so start() must faithfully surface `hidden` on the loaded state.
+	it("should return hidden=true from start() so the frontend skips mounting", () => {
+		writeStoredBuddy({ hidden: true });
+		const { controller } = createTestController();
+
+		const state = controller.start();
+		expect(state).not.toBeNull();
+		// The startup gate mounts only when `!state.hidden`; a hidden buddy
+		// must report hidden so it is not re-shown on a new session.
+		expect(state!.hidden).toBe(true);
+		expect(controller.enabled).toBe(false);
+	});
+
+	it("should return hidden falsy from start() for a visible buddy so it mounts", () => {
+		writeStoredBuddy(); // no hidden flag set
+		const { controller } = createTestController();
+
+		const state = controller.start();
+		expect(state).not.toBeNull();
+		expect(state!.hidden).toBeFalsy(); // startup gate will mount it
+		expect(controller.enabled).toBe(true);
 	});
 
 	it("should keep buddy disabled after reset() when /buddy off was called", async () => {
