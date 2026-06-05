@@ -534,13 +534,57 @@ function formatFetchResult(
 	return text;
 }
 
+/**
+ * Detect GitHub URLs and return guidance to use the `gh` CLI or a local clone
+ * instead of fetching. Fetching GitHub web pages is unreliable: `/blob/` URLs
+ * return rendered HTML chrome instead of file content, private repos 404 (no
+ * auth), and `api.github.com` needs a specific Accept header. The `gh` CLI is
+ * authenticated and purpose-built; cloning to /tmp gives direct file access.
+ *
+ * Returns guidance text for GitHub hosts, or `null` for any other host.
+ */
+export function getGitHubFetchGuidance(parsed: URL): string | null {
+	const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+	const isGitHubHost =
+		host === "github.com" ||
+		host === "gist.github.com" ||
+		host === "api.github.com" ||
+		host === "raw.githubusercontent.com" ||
+		host.endsWith(".githubusercontent.com");
+	if (!isGitHubHost) {
+		return null;
+	}
+
+	const path = parsed.pathname;
+	let hint: string;
+	if (host === "api.github.com") {
+		hint = `Use the \`gh api\` command instead, e.g. \`gh api ${path.replace(/^\//, "")}\`.`;
+	} else if (
+		host === "raw.githubusercontent.com" ||
+		host.endsWith(".githubusercontent.com") ||
+		/\/(blob|raw)\//.test(path)
+	) {
+		hint =
+			"To read file contents, clone the repo to /tmp (`git clone <repo> /tmp/<name>`) and read the file locally, or use `gh api` to fetch the raw content.";
+	} else if (/\/pull\//.test(path)) {
+		hint = "Use `gh pr view <number>` (add `--comments`) or `gh pr diff <number>` instead.";
+	} else if (/\/issues\//.test(path)) {
+		hint = "Use `gh issue view <number>` (add `--comments`) instead.";
+	} else {
+		hint =
+			"Use the `gh` CLI (e.g. `gh repo view`, `gh api`, `gh pr view`, `gh issue view`) or clone the repo to /tmp and read files locally.";
+	}
+
+	return `web_fetch does not work reliably on GitHub URLs (private repos 404, /blob/ pages return HTML chrome, not file content). ${hint}`;
+}
+
 export function createWebFetchToolDefinition(
 	_cwd: string,
 ): ToolDefinition<typeof webFetchSchema, WebFetchToolDetails | undefined> {
 	return {
 		name: "web_fetch",
 		label: "web_fetch",
-		description: `Fetch a URL and return its text content. Extracts readable text from HTML pages. Supports PDF text extraction. Content truncated to ~${Math.round(MAX_CONTENT_LENGTH / 1024)}KB. Results cached for 15 minutes.`,
+		description: `Fetch a URL and return its text content. Extracts readable text from HTML pages. Supports PDF text extraction. Content truncated to ~${Math.round(MAX_CONTENT_LENGTH / 1024)}KB. Results cached for 15 minutes. GitHub URLs are redirected to guidance for the \`gh\` CLI or a local clone instead of being fetched.`,
 		promptSnippet: "Fetch a URL and extract its text content",
 		parameters: webFetchSchema,
 		async execute(_toolCallId, { url }: { url: string }) {
@@ -559,6 +603,15 @@ export function createWebFetchToolDefinition(
 			if (!parsed.protocol.startsWith("http")) {
 				return {
 					content: [{ type: "text", text: `Unsupported protocol: ${parsed.protocol}` }],
+					details: undefined,
+				};
+			}
+
+			// Redirect GitHub URLs to gh/clone guidance — fetching them is unreliable
+			const githubGuidance = getGitHubFetchGuidance(parsed);
+			if (githubGuidance) {
+				return {
+					content: [{ type: "text", text: githubGuidance }],
 					details: undefined,
 				};
 			}
