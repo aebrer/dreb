@@ -52,6 +52,8 @@
 - Fixed RPC `get_session_stats` to expose `contextUsage`, so headless clients can read actual current context-window usage instead of deriving it from token totals ([#2550](https://github.com/badlogic/pi-mono/issues/2550))
 - Fixed `pi update` for git packages to fetch only the tracked target branch with `--no-tags`, reducing unrelated branch and tag noise while preserving force-push-safe updates ([#2548](https://github.com/badlogic/pi-mono/issues/2548))
 - Fixed print and JSON modes to emit `session_shutdown` before exit, so extensions can release long-lived resources and non-interactive runs terminate cleanly ([#2576](https://github.com/badlogic/pi-mono/issues/2576))
+- Fixed Kimi For Coding OAuth provider to accept OpenAI-style multimodal content arrays with base64 `image_url` data URLs for `kimi-for-coding`, and ensured `modifyModels()` preserves image capability even when static metadata is stale. ([#245](https://github.com/aebrer/dreb/issues/245))
+- Fixed silent image dropping in the `openai-completions` provider — text-only models now receive explicit placeholder text (`[image omitted: model does not support images]`) instead of silently stripping image content from user messages and tool results. ([#245](https://github.com/aebrer/dreb/issues/245))
 
 ## [0.62.0] - 2026-03-23
 
