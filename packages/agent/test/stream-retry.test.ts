@@ -389,4 +389,29 @@ describe("stream retry on dropped connections", () => {
 			expect((messageEnd.message as AssistantMessage).stopReason).toBe("aborted");
 		}
 	});
+
+	it("forwards thinkingDisplay from the Agent into the stream config", async () => {
+		let capturedOptions: any;
+		const successMsg = createAssistantMessage([{ type: "text", text: "ok" }]);
+		const streamFn = (_model: Model<any>, _context: unknown, options?: unknown) => {
+			capturedOptions = options;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({ type: "start", partial: successMsg });
+				stream.push({ type: "done", reason: "stop", message: successMsg });
+				stream.end();
+			});
+			return stream;
+		};
+		const agent = new Agent({
+			initialState: { model: createModel(), systemPrompt: "", tools: [] },
+			streamFn: streamFn as any,
+			thinkingDisplay: "summarized",
+		});
+		expect(agent.thinkingDisplay).toBe("summarized");
+
+		await agent.prompt("test");
+
+		expect(capturedOptions?.thinkingDisplay).toBe("summarized");
+	});
 });

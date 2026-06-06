@@ -176,6 +176,12 @@ export interface AnthropicOptions extends StreamOptions {
 	 * Ignored for older models.
 	 */
 	effort?: AnthropicEffort;
+	/**
+	 * Controls whether thinking text is returned for adaptive-thinking models (Opus 4.6+,
+	 * Sonnet 4.6+). "summarized" returns visible thinking; "omitted" returns only an
+	 * encrypted signature. When unset, the API default applies (Opus 4.7+ default to "omitted").
+	 */
+	thinkingDisplay?: "summarized" | "omitted";
 	interleavedThinking?: boolean;
 	toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
 	/**
@@ -505,6 +511,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 			...base,
 			thinkingEnabled: true,
 			effort,
+			thinkingDisplay: options.thinkingDisplay,
 		} satisfies AnthropicOptions);
 	}
 
@@ -710,7 +717,14 @@ function buildParams(
 		if (options?.thinkingEnabled) {
 			if (supportsAdaptiveThinking(model.id)) {
 				// Adaptive thinking: Claude decides when and how much to think
-				params.thinking = { type: "adaptive" };
+				// The `display` field controls whether thinking text is returned. The pinned
+				// Anthropic SDK (0.73.0) doesn't yet type it on ThinkingConfigAdaptive, so we
+				// attach it via a cast. The API accepts and honors it. Opus 4.7+ default to
+				// "omitted"; we send "summarized" when requested so thinking is visible again.
+				params.thinking = { type: "adaptive" } as Anthropic.Messages.ThinkingConfigAdaptive;
+				if (options.thinkingDisplay) {
+					(params.thinking as { display?: string }).display = options.thinkingDisplay;
+				}
 				if (options.effort) {
 					params.output_config = { effort: options.effort };
 				}

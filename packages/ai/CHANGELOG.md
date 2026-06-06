@@ -4,6 +4,7 @@
 
 ### Added
 
+- `thinkingDisplay` option (`"summarized" | "omitted"`) on `SimpleStreamOptions`, wired into the Anthropic and Amazon Bedrock providers' adaptive-thinking path as the `thinking.display` field. Anthropic defaults Opus 4.7+ to `"omitted"` (empty thinking blocks); passing `"summarized"` restores visible thinking summaries. Only emitted on adaptive-thinking Claude models; ignored elsewhere and on budget-based/disabled thinking. Added exported `supportsAdaptiveThinking(model)` helper for gating. ([#250](https://github.com/aebrer/dreb/issues/250))
 - Claude Opus 4.7 support: `supportsXhigh()` recognizes `opus-4-7` model IDs, and the Anthropic and Amazon Bedrock providers detect Opus 4.7 for adaptive thinking and `xhigh` → `max` effort mapping. ([#167](https://github.com/aebrer/dreb/issues/167))
 
 - Added `onWarning` callback to `StreamOptions` for non-fatal warnings during streaming (e.g., malformed JSON chunks, SSE parse errors). All providers now forward `onWarning` to `parseStreamingJson` so callers can handle parse failures instead of silently swallowing them. ([#115](https://github.com/aebrer/dreb/issues/115))

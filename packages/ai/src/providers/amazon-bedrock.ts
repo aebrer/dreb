@@ -53,6 +53,11 @@ export interface BedrockOptions extends StreamOptions {
 	reasoning?: ThinkingLevel;
 	/* Custom token budgets per thinking level. Overrides default budgets. */
 	thinkingBudgets?: ThinkingBudgets;
+	/* Controls whether thinking text is returned for adaptive-thinking Claude models.
+	 * "summarized" returns visible thinking; "omitted" returns only an encrypted signature.
+	 * When unset, the API default applies (Opus 4.7+ default to "omitted"). Ignored by
+	 * budget-based models. */
+	thinkingDisplay?: "summarized" | "omitted";
 	/* Only supported by Claude 4.x models, see https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html#claude-messages-extended-thinking-tool-use-interleaved */
 	interleavedThinking?: boolean;
 	/** Key-value pairs attached to the inference request for cost allocation tagging.
@@ -244,6 +249,7 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
 				...base,
 				reasoning: options.reasoning,
 				thinkingBudgets: options.thinkingBudgets,
+				thinkingDisplay: options.thinkingDisplay,
 			} satisfies BedrockOptions);
 		}
 
@@ -722,10 +728,18 @@ function buildAdditionalModelRequestFields(
 
 	if (model.id.includes("anthropic.claude") || model.id.includes("anthropic/claude")) {
 		const result: Record<string, any> = supportsAdaptiveThinking(model.id)
-			? {
-					thinking: { type: "adaptive" },
-					output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id) },
-				}
+			? (() => {
+					// Adaptive thinking: the `display` field controls whether thinking text is
+					// returned. Opus 4.7+ default to "omitted"; send "summarized" to make it visible.
+					const thinking: Record<string, any> = { type: "adaptive" };
+					if (options.thinkingDisplay) {
+						thinking.display = options.thinkingDisplay;
+					}
+					return {
+						thinking,
+						output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id) },
+					};
+				})()
 			: (() => {
 					const defaultBudgets: Record<ThinkingLevel, number> = {
 						minimal: 1024,

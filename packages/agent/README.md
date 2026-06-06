@@ -213,6 +213,12 @@ const agent = new Agent({
     medium: 1024,
     high: 2048,
   },
+
+  // Thinking display for adaptive-thinking Anthropic/Bedrock Claude models.
+  // "summarized" returns thinking text; "omitted" returns only an encrypted
+  // signature (lower latency). Ignored by other models. Opus 4.7+ default to
+  // "omitted" at the API, so pass "summarized" to keep thinking visible.
+  thinkingDisplay: "summarized",
 });
 ```
 

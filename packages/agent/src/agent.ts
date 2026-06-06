@@ -90,6 +90,9 @@ export interface AgentOptions {
 	 */
 	thinkingBudgets?: ThinkingBudgets;
 
+	/** Controls thinking display ("summarized"/"omitted") for providers that honor it. */
+	thinkingDisplay?: "summarized" | "omitted";
+
 	/**
 	 * Preferred transport for providers that support multiple transports.
 	 */
@@ -178,6 +181,7 @@ export class Agent {
 	private runningPrompt?: Promise<void>;
 	private resolveRunningPrompt?: () => void;
 	private _thinkingBudgets?: ThinkingBudgets;
+	private _thinkingDisplay?: "summarized" | "omitted";
 	private _transport: Transport;
 	private _maxRetryDelayMs?: number;
 	private _streamRetries?: number;
@@ -207,6 +211,7 @@ export class Agent {
 		this.getApiKey = opts.getApiKey;
 		this._onPayload = opts.onPayload;
 		this._thinkingBudgets = opts.thinkingBudgets;
+		this._thinkingDisplay = opts.thinkingDisplay;
 		this._transport = opts.transport ?? "sse";
 		this._maxRetryDelayMs = opts.maxRetryDelayMs;
 		this._streamRetries = opts.streamRetries;
@@ -247,6 +252,20 @@ export class Agent {
 	 */
 	set thinkingBudgets(value: ThinkingBudgets | undefined) {
 		this._thinkingBudgets = value;
+	}
+
+	/**
+	 * Get the current thinking display setting.
+	 */
+	get thinkingDisplay(): "summarized" | "omitted" | undefined {
+		return this._thinkingDisplay;
+	}
+
+	/**
+	 * Set thinking display for providers that honor it.
+	 */
+	set thinkingDisplay(value: "summarized" | "omitted" | undefined) {
+		this._thinkingDisplay = value;
 	}
 
 	/**
@@ -588,6 +607,7 @@ export class Agent {
 			onPayload: this._onPayload,
 			transport: this._transport,
 			thinkingBudgets: this._thinkingBudgets,
+			thinkingDisplay: this._thinkingDisplay,
 			maxRetryDelayMs: this._maxRetryDelayMs,
 			streamRetries: this._streamRetries,
 			streamRetryBaseDelayMs: this._streamRetryBaseDelayMs,

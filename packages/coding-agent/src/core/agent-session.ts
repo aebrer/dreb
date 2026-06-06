@@ -80,6 +80,7 @@ import type { SettingsManager } from "./settings-manager.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
+import { resolveThinkingDisplay } from "./thinking.js";
 import type { BashOperations } from "./tools/bash.js";
 import {
 	createAllToolDefinitions,
@@ -1871,6 +1872,7 @@ export class AgentSession {
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.setModel(model);
+		this._refreshThinkingDisplay(model);
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
 
@@ -1878,6 +1880,19 @@ export class AgentSession {
 		this.setThinkingLevel(thinkingLevel);
 
 		await this._emitModelSelect(model, previousModel, "set");
+	}
+
+	/**
+	 * Refresh the live agent's thinkingDisplay for a (possibly) new model. The default
+	 * depends on the model (adaptive-thinking models default to "summarized"), so this
+	 * must run on every model switch. Keyed by model id from shared settings, so it
+	 * resolves identically to how createAgentSession seeds it at startup.
+	 */
+	private _refreshThinkingDisplay(model: Model<any>): void {
+		this.agent.thinkingDisplay = resolveThinkingDisplay(
+			model,
+			this.settingsManager.getModelThinkingDisplay(model.id),
+		);
 	}
 
 	/**
@@ -1930,6 +1945,7 @@ export class AgentSession {
 
 		// Apply model
 		this.agent.setModel(next.model);
+		this._refreshThinkingDisplay(next.model);
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
 
@@ -1963,6 +1979,7 @@ export class AgentSession {
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.setModel(nextModel);
+		this._refreshThinkingDisplay(nextModel);
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
 
@@ -2574,6 +2591,7 @@ export class AgentSession {
 		}
 
 		this.agent.setModel(refreshedModel);
+		this._refreshThinkingDisplay(refreshedModel);
 	}
 
 	private _bindExtensionCore(runner: ExtensionRunner): void {
@@ -3214,6 +3232,7 @@ export class AgentSession {
 			);
 			if (match) {
 				this.agent.setModel(match);
+				this._refreshThinkingDisplay(match);
 				await this._emitModelSelect(match, previousModel, "restore");
 			}
 		}

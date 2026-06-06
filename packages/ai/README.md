@@ -509,6 +509,31 @@ for await (const event of s) {
 }
 ```
 
+### Controlling Thinking Display (Anthropic adaptive models)
+
+Adaptive-thinking Claude models (Opus 4.6+, Sonnet 4.6+) support a `thinkingDisplay`
+option on `streamSimple`/`completeSimple`:
+
+```typescript
+const s = streamSimple(model, context, {
+  reasoning: 'high',
+  thinkingDisplay: 'summarized', // 'summarized' | 'omitted'
+});
+```
+
+- `'summarized'` — the provider returns summarized thinking text (visible via
+  `thinking_delta` events and `thinking` blocks).
+- `'omitted'` — the provider returns thinking blocks with an empty `thinking` field
+  and only an encrypted signature. Lower time-to-first-text latency, nothing to display.
+
+This maps to Anthropic's `thinking.display` field. **Opus 4.7+ default to `'omitted'`
+at the API**, so set `thinkingDisplay: 'summarized'` to make thinking visible again.
+The option is only honored by adaptive-thinking Anthropic and Bedrock Claude models;
+it is silently ignored by other models and budget-based thinking. When unset, the
+provider default applies.
+
+Use `supportsAdaptiveThinking(model)` to check whether a model honors this option.
+
 ## Stop Reasons
 
 Every `AssistantMessage` includes a `stopReason` field that indicates how the generation ended:

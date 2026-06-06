@@ -14,7 +14,7 @@ import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
-import { resolveEffectiveThinkingLevel } from "./thinking.js";
+import { resolveEffectiveThinkingLevel, resolveThinkingDisplay } from "./thinking.js";
 import { time } from "./timings.js";
 import {
 	allTools,
@@ -254,6 +254,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// Clamp to model capabilities
 	thinkingLevel = resolveEffectiveThinkingLevel(model, thinkingLevel);
+	const thinkingDisplay = resolveThinkingDisplay(
+		model,
+		model ? settingsManager.getModelThinkingDisplay(model.id) : undefined,
+	);
 
 	// Tools that are always active when available (created by factory, not in allTools singleton).
 	// suggest_next is only auto-activated when tools aren't explicitly specified — subagent
@@ -345,6 +349,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		followUpMode: settingsManager.getFollowUpMode(),
 		transport: settingsManager.getTransport(),
 		thinkingBudgets: settingsManager.getThinkingBudgets(),
+		thinkingDisplay,
 		maxRetryDelayMs: settingsManager.getRetrySettings().maxDelayMs,
 		onWarning: (code: string, message: string) => {
 			// Wire provider-level warnings to the session for user/agent visibility

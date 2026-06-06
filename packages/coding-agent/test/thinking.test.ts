@@ -1,7 +1,11 @@
 import type { ThinkingLevel as AgentThinkingLevel } from "@dreb/agent-core";
 import type { ThinkingLevel as AiThinkingLevel, Model } from "@dreb/ai";
 import { describe, expect, test } from "vitest";
-import { resolveEffectiveThinkingLevel, thinkingLevelToReasoning } from "../src/core/thinking.js";
+import {
+	resolveEffectiveThinkingLevel,
+	resolveThinkingDisplay,
+	thinkingLevelToReasoning,
+} from "../src/core/thinking.js";
 
 const reasoningModel: Model<"anthropic-messages"> = {
 	id: "reasoning-model",
@@ -55,4 +59,30 @@ describe("thinkingLevelToReasoning", () => {
 			expect(thinkingLevelToReasoning(thinkingLevel)).toBe(thinkingLevel);
 		},
 	);
+});
+
+describe("resolveThinkingDisplay", () => {
+	// supportsAdaptiveThinking only inspects model.id (opus/sonnet 4.6+).
+	const adaptiveModel = { id: "claude-opus-4-8", reasoning: true } as unknown as Model<any>;
+	const nonAdaptiveModel = { id: "claude-sonnet-4-5", reasoning: true } as unknown as Model<any>;
+
+	test("adaptive model with no override defaults to 'summarized' (default-on)", () => {
+		expect(resolveThinkingDisplay(adaptiveModel, undefined)).toBe("summarized");
+	});
+
+	test("adaptive model honors a stored override", () => {
+		expect(resolveThinkingDisplay(adaptiveModel, "omitted")).toBe("omitted");
+		expect(resolveThinkingDisplay(adaptiveModel, "summarized")).toBe("summarized");
+	});
+
+	test("non-adaptive model returns undefined regardless of override", () => {
+		expect(resolveThinkingDisplay(nonAdaptiveModel, undefined)).toBeUndefined();
+		expect(resolveThinkingDisplay(nonAdaptiveModel, "summarized")).toBeUndefined();
+		expect(resolveThinkingDisplay(nonAdaptiveModel, "omitted")).toBeUndefined();
+	});
+
+	test("undefined model returns undefined", () => {
+		expect(resolveThinkingDisplay(undefined, "summarized")).toBeUndefined();
+		expect(resolveThinkingDisplay(undefined, undefined)).toBeUndefined();
+	});
 });

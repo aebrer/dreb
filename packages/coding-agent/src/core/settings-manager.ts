@@ -48,6 +48,11 @@ export interface AgentModelsSettings {
 	models?: Record<string, string[]>;
 }
 
+export interface ModelSpecificSettings {
+	/** Thinking display preference for this model: "summarized" shows thinking text, "omitted" hides it (lower latency). */
+	thinkingDisplay?: "summarized" | "omitted";
+}
+
 export type TransportSetting = Transport;
 
 /**
@@ -104,6 +109,8 @@ export interface Settings {
 	sensitiveFilePaths?: string[]; // Additional glob patterns for sensitive file paths blocked by the read/bash guard
 	secretOutputPatterns?: { name: string; pattern: string }[]; // Additional regex patterns for secret scrubbing in tool output
 	agentModels?: AgentModelsSettings;
+	// Per-model overrides keyed by model id (e.g. thinking display). Read identically by main sessions and subagents.
+	modelSettings?: Record<string, ModelSpecificSettings>;
 	dream?: {
 		archivePath?: string; // Custom archive location for dream backups (default: ~/.dreb/memory-archive/)
 	};
@@ -1028,6 +1035,49 @@ export class SettingsManager {
 			this.markModified("agentModels", "models");
 			this.save();
 		}
+	}
+
+	/**
+	 * Per-model settings merged global + project at the per-model-id level, with project
+	 * winning per key. Reading directly from globalSettings/projectSettings avoids the
+	 * wholesale replacement that deepMergeSettings would do for the shared `modelSettings` key.
+	 */
+	getModelSettings(modelId: string): ModelSpecificSettings | undefined {
+		const global = this.globalSettings.modelSettings?.[modelId];
+		const project = this.projectSettings.modelSettings?.[modelId];
+		if (!global && !project) {
+			return undefined;
+		}
+		return { ...global, ...project };
+	}
+
+	getModelThinkingDisplay(modelId: string): "summarized" | "omitted" | undefined {
+		return this.getModelSettings(modelId)?.thinkingDisplay;
+	}
+
+	setModelThinkingDisplay(modelId: string, value: "summarized" | "omitted" | undefined): void {
+		if (value === undefined) {
+			const existing = this.globalSettings.modelSettings?.[modelId];
+			if (existing?.thinkingDisplay === undefined) {
+				return;
+			}
+			delete existing.thinkingDisplay;
+			if (Object.keys(existing).length === 0) {
+				delete this.globalSettings.modelSettings![modelId];
+			}
+			this.markModified("modelSettings", modelId);
+			this.save();
+			return;
+		}
+		if (!this.globalSettings.modelSettings) {
+			this.globalSettings.modelSettings = {};
+		}
+		if (!this.globalSettings.modelSettings[modelId]) {
+			this.globalSettings.modelSettings[modelId] = {};
+		}
+		this.globalSettings.modelSettings[modelId].thinkingDisplay = value;
+		this.markModified("modelSettings", modelId);
+		this.save();
 	}
 
 	getTabTitleSettings(): TabTitleSettings | undefined {

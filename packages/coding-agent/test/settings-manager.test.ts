@@ -432,4 +432,90 @@ describe("SettingsManager", () => {
 			});
 		});
 	});
+
+	describe("modelSettings (per-model thinking display)", () => {
+		it("should roundtrip set then getModelThinkingDisplay", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setModelThinkingDisplay("claude-opus-4-8", "omitted");
+			expect(manager.getModelThinkingDisplay("claude-opus-4-8")).toBe("omitted");
+		});
+
+		it("should return undefined for a model with no stored setting", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getModelThinkingDisplay("claude-opus-4-8")).toBeUndefined();
+			expect(manager.getModelSettings("claude-opus-4-8")).toBeUndefined();
+		});
+
+		it("should delete the setting when set to undefined", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setModelThinkingDisplay("claude-opus-4-8", "omitted");
+			manager.setModelThinkingDisplay("claude-opus-4-8", undefined);
+			expect(manager.getModelThinkingDisplay("claude-opus-4-8")).toBeUndefined();
+		});
+
+		it("should be a safe no-op when deleting a non-existent setting (no write)", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(() => manager.setModelThinkingDisplay("claude-opus-4-8", undefined)).not.toThrow();
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.modelSettings).toBeUndefined();
+			expect(saved.theme).toBe("dark");
+		});
+
+		it("should let project override global per model id", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ modelSettings: { "claude-opus-4-8": { thinkingDisplay: "summarized" } } }),
+			);
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ modelSettings: { "claude-opus-4-8": { thinkingDisplay: "omitted" } } }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getModelThinkingDisplay("claude-opus-4-8")).toBe("omitted");
+		});
+
+		it("should merge global and project at the per-model level (no clobber)", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ modelSettings: { "claude-opus-4-8": { thinkingDisplay: "summarized" } } }),
+			);
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ modelSettings: { "claude-sonnet-4-6": { thinkingDisplay: "omitted" } } }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getModelThinkingDisplay("claude-opus-4-8")).toBe("summarized");
+			expect(manager.getModelThinkingDisplay("claude-sonnet-4-6")).toBe("omitted");
+		});
+
+		it("should persist only the touched model key (two-level markModified)", async () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ modelSettings: { "claude-sonnet-4-6": { thinkingDisplay: "summarized" } } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setModelThinkingDisplay("claude-opus-4-8", "omitted");
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			// The untouched model key must survive, and the new key must be added.
+			expect(saved.modelSettings["claude-sonnet-4-6"]).toEqual({ thinkingDisplay: "summarized" });
+			expect(saved.modelSettings["claude-opus-4-8"]).toEqual({ thinkingDisplay: "omitted" });
+		});
+
+		it("should write thinking display to global scope", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setModelThinkingDisplay("claude-opus-4-8", "omitted");
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.modelSettings).toEqual({ "claude-opus-4-8": { thinkingDisplay: "omitted" } });
+		});
+	});
 });

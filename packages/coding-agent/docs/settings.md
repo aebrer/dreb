@@ -21,6 +21,7 @@ Edit directly or use `/settings` for common options.
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level |
 | `agentModels.models` | object | - | Per-agent model fallback lists for subagents (map of agent name → ordered model IDs). See [agent-models.md](agent-models.md) |
+| `modelSettings` | object | - | Per-model overrides keyed by model ID (e.g. thinking display). See [modelSettings](#modelsettings) |
 
 #### agentModels.models
 
@@ -51,6 +52,32 @@ Configurable in the TUI via `/settings` → **Agent Models**. See [agent-models.
   }
 }
 ```
+
+#### modelSettings
+
+Per-model overrides keyed by model ID. Currently supports `thinkingDisplay`, which controls
+whether adaptive-thinking Claude models (Opus 4.6+, Sonnet 4.6+) return thinking summaries.
+
+```json
+{
+  "modelSettings": {
+    "claude-opus-4-8": { "thinkingDisplay": "summarized" }
+  }
+}
+```
+
+- `"summarized"` — show thinking summaries (default for adaptive models).
+- `"omitted"` — hide thinking text for faster time-to-first-token; only an encrypted
+  signature is returned.
+
+Anthropic's API defaults Opus 4.7+ to `"omitted"`, so dreb sends `"summarized"` by default
+on adaptive models to keep thinking visible. Set `"omitted"` here to opt into the
+lower-latency behavior. The setting is **keyed by model ID**, so it is honored identically
+by the main session and by any subagent that uses the same model. Non-adaptive models
+ignore the setting.
+
+Configurable in the TUI via `/settings` → **Show thinking summaries** (shown only when the
+current model supports adaptive thinking).
 
 ### UI & Display
 
