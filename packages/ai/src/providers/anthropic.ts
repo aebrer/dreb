@@ -5,7 +5,7 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost } from "../models.js";
+import { calculateCost, supportsAdaptiveThinking } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -452,13 +452,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 	return stream;
 };
 
-/**
- * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+)
- */
-function supportsAdaptiveThinking(modelId: string): boolean {
-	return isModelVersionAtLeast(modelId, "opus", 6) || isModelVersionAtLeast(modelId, "sonnet", 6);
-}
-
 /** Check if a modelId contains `{family}-4-N` or `{family}-4.N` where N >= minVersion (1-2 digit minor version only, not date suffixes) */
 function isModelVersionAtLeast(modelId: string, family: string, minVersion: number): boolean {
 	const re = new RegExp(`${family}-4[.-](\\d{1,2})(?!\\d)`);
@@ -505,7 +498,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 
 	// For Opus 4.6+, Sonnet 4.6+: use adaptive thinking with effort level
 	// For older models: use budget-based thinking
-	if (supportsAdaptiveThinking(model.id)) {
+	if (supportsAdaptiveThinking(model)) {
 		const effort = mapThinkingLevelToEffort(options.reasoning, model.id);
 		return streamAnthropic(model, context, {
 			...base,
@@ -558,7 +551,7 @@ function createClient(
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive thinking models (Opus 4.6+, Sonnet 4.6+) have interleaved thinking built-in.
 	// The beta header is deprecated on these models, so skip it.
-	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model.id);
+	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model);
 	const firstParty = isFirstPartyAnthropic(model.baseUrl);
 
 	// Copilot: Bearer auth, selective betas (no fine-grained-tool-streaming)
@@ -715,7 +708,7 @@ function buildParams(
 	// budget-based (older models), or explicitly disabled.
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
-			if (supportsAdaptiveThinking(model.id)) {
+			if (supportsAdaptiveThinking(model)) {
 				// Adaptive thinking: Claude decides when and how much to think
 				// The `display` field controls whether thinking text is returned. The pinned
 				// Anthropic SDK (0.73.0) doesn't yet type it on ThinkingConfigAdaptive, so we

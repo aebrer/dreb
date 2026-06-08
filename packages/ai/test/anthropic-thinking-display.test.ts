@@ -82,7 +82,6 @@ describe("Anthropic thinking display payload", () => {
 	});
 });
 
-// Bedrock's buildAdditionalModelRequestFields is not exported, so it cannot be
-// unit-tested in isolation here. The Bedrock thinkingDisplay path is exercised by
-// the credential-gated E2E suites; the per-provider logic mirrors the Anthropic
-// adaptive branch tested above.
+// Bedrock's adaptive thinking display logic is unit-tested directly in
+// bedrock-thinking-display.test.ts, which exercises the exported
+// buildAdditionalModelRequestFields function.

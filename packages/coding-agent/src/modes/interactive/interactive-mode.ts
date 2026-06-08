@@ -3662,10 +3662,20 @@ export class InteractiveMode {
 						if (!model) return;
 						this.settingsManager.setModelThinkingDisplay(model.id, display);
 						// Refresh the live agent so the change takes effect this session.
-						this.session.agent.thinkingDisplay = resolveThinkingDisplay(
+						const effective = resolveThinkingDisplay(
 							model,
 							this.settingsManager.getModelThinkingDisplay(model.id),
 						);
+						this.session.agent.thinkingDisplay = effective;
+						// The toggle writes to GLOBAL settings, but getModelThinkingDisplay
+						// resolves project-over-global. If a project-level modelSettings
+						// override exists in .dreb/settings.json, it shadows the toggle and
+						// the change silently has no effect. Fail loudly instead.
+						if (display !== undefined && supportsAdaptiveThinking(model) && effective !== display) {
+							this.showWarning(
+								`Thinking display for "${model.id}" was not changed: a project-level "modelSettings" override in .dreb/settings.json takes precedence (effective: "${effective}"). Remove or edit that override to use this toggle.`,
+							);
+						}
 					},
 					onCollapseChangelogChange: (collapsed) => {
 						this.settingsManager.setCollapseChangelog(collapsed);
