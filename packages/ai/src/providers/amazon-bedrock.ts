@@ -20,7 +20,7 @@ import {
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 
-import { calculateCost } from "../models.js";
+import { calculateCost, supportsAdaptiveThinking } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -53,6 +53,11 @@ export interface BedrockOptions extends StreamOptions {
 	reasoning?: ThinkingLevel;
 	/* Custom token budgets per thinking level. Overrides default budgets. */
 	thinkingBudgets?: ThinkingBudgets;
+	/* Controls whether thinking text is returned for adaptive-thinking Claude models.
+	 * "summarized" returns visible thinking; "omitted" returns only an encrypted signature.
+	 * When unset, the API default applies (Opus 4.7+ default to "omitted"). Ignored by
+	 * budget-based models. */
+	thinkingDisplay?: "summarized" | "omitted";
 	/* Only supported by Claude 4.x models, see https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-extended-thinking.html#claude-messages-extended-thinking-tool-use-interleaved */
 	interleavedThinking?: boolean;
 	/** Key-value pairs attached to the inference request for cost allocation tagging.
@@ -239,11 +244,12 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
 	}
 
 	if (model.id.includes("anthropic.claude") || model.id.includes("anthropic/claude")) {
-		if (supportsAdaptiveThinking(model.id)) {
+		if (supportsAdaptiveThinking(model)) {
 			return streamBedrock(model, context, {
 				...base,
 				reasoning: options.reasoning,
 				thinkingBudgets: options.thinkingBudgets,
+				thinkingDisplay: options.thinkingDisplay,
 			} satisfies BedrockOptions);
 		}
 
@@ -394,13 +400,6 @@ function handleContentBlockStop(
 			stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
 			break;
 	}
-}
-
-/**
- * Check if the model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+).
- */
-function supportsAdaptiveThinking(modelId: string): boolean {
-	return isModelVersionAtLeast(modelId, "opus", 6) || isModelVersionAtLeast(modelId, "sonnet", 6);
 }
 
 /** Check if a modelId contains `{family}-4-N` or `{family}-4.N` where N >= minVersion (1-2 digit minor version only, not date suffixes) */
@@ -712,7 +711,7 @@ function mapStopReason(reason: string | undefined): StopReason {
 	}
 }
 
-function buildAdditionalModelRequestFields(
+export function buildAdditionalModelRequestFields(
 	model: Model<"bedrock-converse-stream">,
 	options: BedrockOptions,
 ): Record<string, any> | undefined {
@@ -721,11 +720,19 @@ function buildAdditionalModelRequestFields(
 	}
 
 	if (model.id.includes("anthropic.claude") || model.id.includes("anthropic/claude")) {
-		const result: Record<string, any> = supportsAdaptiveThinking(model.id)
-			? {
-					thinking: { type: "adaptive" },
-					output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id) },
-				}
+		const result: Record<string, any> = supportsAdaptiveThinking(model)
+			? (() => {
+					// Adaptive thinking: the `display` field controls whether thinking text is
+					// returned. Opus 4.7+ default to "omitted"; send "summarized" to make it visible.
+					const thinking: Record<string, any> = { type: "adaptive" };
+					if (options.thinkingDisplay) {
+						thinking.display = options.thinkingDisplay;
+					}
+					return {
+						thinking,
+						output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id) },
+					};
+				})()
 			: (() => {
 					const defaultBudgets: Record<ThinkingLevel, number> = {
 						minimal: 1024,
@@ -747,7 +754,7 @@ function buildAdditionalModelRequestFields(
 					};
 				})();
 
-		if (!supportsAdaptiveThinking(model.id) && (options.interleavedThinking ?? true)) {
+		if (!supportsAdaptiveThinking(model) && (options.interleavedThinking ?? true)) {
 			result.anthropic_beta = ["interleaved-thinking-2025-05-14"];
 		}
 

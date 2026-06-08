@@ -9,6 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, OAuthProviderId } from "@dreb/ai";
+import { supportsAdaptiveThinking } from "@dreb/ai";
 import type {
 	AutocompleteItem,
 	EditorComponent,
@@ -71,6 +72,7 @@ import { type SessionContext, SessionManager } from "../../core/session-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import { restoreStderr, type StderrCallback, takeOverStderr } from "../../core/stderr-guard.js";
+import { resolveThinkingDisplay } from "../../core/thinking.js";
 import { resolveToCwd } from "../../core/tools/path-utils.js";
 import { abortBackgroundAgents, discoverAgentTypes, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
@@ -3556,6 +3558,13 @@ export class InteractiveMode {
 			const availableModels = this.session.modelRegistry.getAvailable();
 			const availableModelIds = availableModels.map((m) => `${m.provider}/${m.id}`);
 
+			const currentModel = this.session.model;
+			const thinkingDisplaySupported = currentModel ? supportsAdaptiveThinking(currentModel) : false;
+			const thinkingDisplay = currentModel
+				? (resolveThinkingDisplay(currentModel, this.settingsManager.getModelThinkingDisplay(currentModel.id)) ??
+					"summarized")
+				: "summarized";
+
 			const selector = new SettingsSelectorComponent(
 				{
 					autoCompact: this.session.autoCompactionEnabled,
@@ -3571,6 +3580,8 @@ export class InteractiveMode {
 					currentTheme: this.settingsManager.getTheme() || "dark",
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
+					thinkingDisplaySupported,
+					thinkingDisplay,
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
@@ -3645,6 +3656,26 @@ export class InteractiveMode {
 						}
 						this.chatContainer.clear();
 						this.rebuildChatFromMessages();
+					},
+					onThinkingDisplayChange: (display) => {
+						const model = this.session.model;
+						if (!model) return;
+						this.settingsManager.setModelThinkingDisplay(model.id, display);
+						// Refresh the live agent so the change takes effect this session.
+						const effective = resolveThinkingDisplay(
+							model,
+							this.settingsManager.getModelThinkingDisplay(model.id),
+						);
+						this.session.agent.thinkingDisplay = effective;
+						// The toggle writes to GLOBAL settings, but getModelThinkingDisplay
+						// resolves project-over-global. If a project-level modelSettings
+						// override exists in .dreb/settings.json, it shadows the toggle and
+						// the change silently has no effect. Fail loudly instead.
+						if (supportsAdaptiveThinking(model) && effective !== display) {
+							this.showWarning(
+								`Thinking display for "${model.id}" was not changed: a project-level "modelSettings" override in .dreb/settings.json takes precedence (effective: "${effective}"). Remove or edit that override to use this toggle.`,
+							);
+						}
 					},
 					onCollapseChangelogChange: (collapsed) => {
 						this.settingsManager.setCollapseChangelog(collapsed);

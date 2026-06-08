@@ -47,6 +47,10 @@ export interface SettingsConfig {
 	currentTheme: string;
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
+	/** Whether the current model supports adaptive thinking (gates the thinking-display toggle). */
+	thinkingDisplaySupported: boolean;
+	/** Effective thinking-display value for the current model ("summarized" shown as on). */
+	thinkingDisplay: "summarized" | "omitted";
 	collapseChangelog: boolean;
 	doubleEscapeAction: "fork" | "tree" | "none";
 	treeFilterMode: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
@@ -75,6 +79,7 @@ export interface SettingsCallbacks {
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
+	onThinkingDisplayChange: (display: "summarized" | "omitted") => void;
 	onCollapseChangelogChange: (collapsed: boolean) => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
@@ -510,6 +515,20 @@ export class SettingsSelectorComponent extends Container {
 			},
 		];
 
+		// Thinking-display toggle for the current model. Only adaptive-thinking models
+		// (Opus/Sonnet 4.6+) honor this field, so the entry is gated to those models.
+		// Shown as on ("summarized") by default; off ("omitted") hides thinking for lower latency.
+		if (config.thinkingDisplaySupported) {
+			const hideThinkingIndex = items.findIndex((item) => item.id === "hide-thinking");
+			items.splice(hideThinkingIndex + 1, 0, {
+				id: "thinking-display",
+				label: "Show thinking summary",
+				description: "Show summarized thinking for this model (off hides it for lower latency)",
+				currentValue: config.thinkingDisplay === "summarized" ? "true" : "false",
+				values: ["true", "false"],
+			});
+		}
+
 		// Single "Agent Models" entry that opens the agent picker submenu
 		if (config.agentNames.length > 0) {
 			items.push({
@@ -636,6 +655,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");
+						break;
+					case "thinking-display":
+						callbacks.onThinkingDisplayChange(newValue === "true" ? "summarized" : "omitted");
 						break;
 					case "collapse-changelog":
 						callbacks.onCollapseChangelogChange(newValue === "true");

@@ -118,6 +118,14 @@ export interface SimpleStreamOptions extends StreamOptions {
 	reasoning?: ThinkingLevel;
 	/** Custom token budgets for thinking levels (token-based providers only) */
 	thinkingBudgets?: ThinkingBudgets;
+	/**
+	 * Controls how thinking content is returned by providers that support it.
+	 * "summarized": return summarized thinking text. "omitted": return empty thinking
+	 * with only an encrypted signature (lower latency, nothing to display).
+	 * Only honored by adaptive-thinking Anthropic/Bedrock Claude models; ignored elsewhere.
+	 * When unset, the provider default applies (Opus 4.7+ default to "omitted").
+	 */
+	thinkingDisplay?: "summarized" | "omitted";
 }
 
 // Generic StreamFunction with typed options.

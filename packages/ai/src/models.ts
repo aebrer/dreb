@@ -171,6 +171,15 @@ export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
 }
 
 /**
+ * Check if a model uses adaptive thinking (Opus 4.6+, Sonnet 4.6+), where the
+ * `thinkingDisplay` option is honored. Mirrors the per-provider internal checks.
+ */
+export function supportsAdaptiveThinking<TApi extends Api>(model: Model<TApi>): boolean {
+	const m = model.id.match(/(opus|sonnet)-4[.-](\d{1,2})(?!\d)/);
+	return m != null && Number.parseInt(m[2], 10) >= 6;
+}
+
+/**
  * Check if two models are equal by comparing both their id and provider.
  * Returns false if either model is null or undefined.
  */
