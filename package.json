@@ -33,7 +33,7 @@
 	"author": "Drew Brereton",
 	"homepage": "https://entropist.ca",
 	"engines": {
-		"node": ">=20.0.0"
+		"node": ">=22.0.0"
 	},
 	"version": "2.25.4",
 	"dependencies": {

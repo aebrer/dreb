@@ -4,12 +4,19 @@ dreb supports subscription-based providers via OAuth and API key providers via e
 
 ## Table of Contents
 
+- [Node Version and Streaming](#node-version-and-streaming)
 - [Subscriptions](#subscriptions)
 - [API Keys](#api-keys)
 - [Auth File](#auth-file)
 - [Cloud Providers](#cloud-providers)
 - [Custom Providers](#custom-providers)
 - [Resolution Order](#resolution-order)
+
+## Node Version and Streaming
+
+**Use Node.js 22 LTS.** dreb's providers rely on stable SSE streaming, and Node 22 LTS is the supported runtime. Node 24 and Node 26 are known to break streaming: Node 26 changed ReadableStream buffering to "read one buffer at a time instead of reading ahead", which breaks the SSE stream parsers in the Anthropic SDK (v0.73.0) and OpenAI SDK (v6.26.0) that dreb uses.
+
+If every provider fails with **"request ended without sending any chunks"**, check your Node version and switch to Node.js 22 LTS.
 
 ## Subscriptions
 

@@ -20,6 +20,22 @@ Use dreb if you want a coding agent that can run against direct APIs, coding sub
 
 ## Quick Start
 
+> **Node.js 22 LTS is required.** dreb relies on SSE streaming behavior that is stable in Node 22 LTS. Node 24 and Node 26 are known to break provider streaming due to changes in ReadableStream buffering, which causes every provider to fail with **"request ended without sending any chunks"**. If you see that error, switch to Node 22 LTS.
+
+### Building from source (recommended)
+
+```bash
+git clone https://github.com/aebrer/dreb.git
+cd dreb
+npm install
+npm run build
+npm link -w packages/coding-agent
+```
+
+See the full coding-agent docs in [packages/coding-agent](packages/coding-agent/).
+
+### Installing from npm
+
 ```bash
 npm install -g @dreb/coding-agent
 ```
@@ -49,17 +65,9 @@ bun pm cache rm
 bunx --force dreb
 ```
 
-### Building from source
+### Troubleshooting
 
-```bash
-git clone https://github.com/aebrer/dreb.git
-cd dreb
-npm install
-npm run build
-npm link -w packages/coding-agent
-```
-
-See the full coding-agent docs in [packages/coding-agent](packages/coding-agent/).
+- **"request ended without sending any chunks" on every provider** — Your Node version is likely too new. Switch to **Node.js 22 LTS**. Node 26 in particular changed ReadableStream buffering in a way that breaks the Anthropic and OpenAI SDK stream parsers dreb uses.
 
 ## Core capabilities
 
