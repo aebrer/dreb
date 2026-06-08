@@ -4,7 +4,7 @@ See [AGENTS.md](../../../AGENTS.md) for build requirements, release protocol, an
 
 ## Prerequisites
 
-- **Node.js** 22 LTS or later (CI runs on Node 22)
+- **Node.js** 22 LTS (CI runs on Node 22)
 - **npm** (comes with Node)
 
 ## Setup
