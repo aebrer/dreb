@@ -14,16 +14,19 @@
 		"sync-version": "bash scripts/sync-version.sh",
 		"build": "bash scripts/sync-version.sh && cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../semantic-search && npm run build && cd ../coding-agent && npm run build && cd ../telegram && npm run build",
 		"dev": "concurrently --names \"ai,agent,coding-agent,tui\" --prefix-colors \"cyan,yellow,red,magenta\" \"cd packages/ai && npm run dev\" \"cd packages/agent && npm run dev\" \"cd packages/coding-agent && npm run dev\" \"cd packages/tui && npm run dev\"",
-		"check": "npm run verify-git-hooks && biome check --write --error-on-warnings . && tsgo --noEmit",
+		"check": "npm run verify-git-hooks && npm run verify-engines && biome check --write --error-on-warnings . && tsgo --noEmit",
 		"verify-git-hooks": "node scripts/verify-git-hooks.js",
 		"verify-workspace-links": "node scripts/verify-workspace-links.js",
+		"verify-engines": "node scripts/verify-engines.js",
 		"test": "npm run test --workspaces --if-present",
+		"coverage": "vitest --config vitest.workspace.ts --run --coverage --coverage.reporter=json-summary --coverage.reporter=text-summary",
 		"prepare": "husky"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",
 		"@types/node": "^22.10.5",
 		"@typescript/native-preview": "7.0.0-dev.20260120.1",
+		"@vitest/coverage-v8": "^4.1.8",
 		"concurrently": "^9.2.1",
 		"husky": "^9.1.7",
 		"tsx": "^4.20.3",
@@ -33,9 +36,9 @@
 	"author": "Drew Brereton",
 	"homepage": "https://entropist.ca",
 	"engines": {
-		"node": ">=20.0.0"
+		"node": "^22.0.0"
 	},
-	"version": "2.25.4",
+	"version": "2.25.5",
 	"dependencies": {
 		"@mariozechner/jiti": "^2.6.5",
 		"@dreb/coding-agent": "*",
