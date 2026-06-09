@@ -26,14 +26,22 @@ for (const pkgDir of packageDirs) {
 	let pkg;
 	try {
 		pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-	} catch {
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+			continue;
+		}
+
+		const message = error instanceof Error ? error.message : String(error);
+		console.error(`ERROR: failed to read or parse ${pkgPath}: ${message}`);
+		foundMismatch = true;
 		continue;
 	}
 
 	const pkgEngine = pkg.engines?.node;
-	if (pkgEngine && pkgEngine !== rootEngine) {
+	if (pkgEngine !== rootEngine) {
+		const actual = pkgEngine === undefined ? "missing" : `"${pkgEngine}"`;
 		console.error(
-			`MISMATCH: packages/${pkgDir}/package.json engines.node is "${pkgEngine}", expected "${rootEngine}"`,
+			`MISMATCH: packages/${pkgDir}/package.json engines.node is ${actual}, expected "${rootEngine}"`,
 		);
 		foundMismatch = true;
 	}
