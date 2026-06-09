@@ -568,7 +568,10 @@ describe("TUI scrollback preservation", () => {
 			terminal.resize(40, 15);
 			await terminal.flush();
 
-			assert.ok(terminal.getWrites().includes("\x1b[2J"), "Height change should clear screen");
+			// In-place clear is home + erase-below (\x1b[H\x1b[J), not \x1b[2J,
+			// which detaches the viewport on VTE-family terminals (issue 239).
+			assert.ok(terminal.getWrites().includes("\x1b[H\x1b[J"), "Height change should clear screen in place");
+			assert.ok(!terminal.getWrites().includes("\x1b[2J"), "Height change should not use \\x1b[2J");
 			assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Height change should not clear scrollback");
 			tui.stop();
 		});
@@ -733,6 +736,66 @@ describe("TUI spinner lifecycle", () => {
 		assert.ok(viewport[2]?.includes("Line 2"), "Line 2 preserved");
 		assert.strictEqual(viewport[3]?.trim(), "", "Line 3 cleared");
 		assert.strictEqual(viewport[4]?.trim(), "", "Line 4 cleared");
+
+		tui.stop();
+	});
+});
+
+describe("TUI viewport anchoring on full redraw (issue 239)", () => {
+	it("uses in-place clear (home + erase-below), never bare \\x1b[2J, on shrink", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		// Tall content (more than one viewport) so prior frames push into scrollback.
+		component.lines = Array.from({ length: 12 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await terminal.flush();
+
+		const initialRedraws = tui.fullRedraws;
+		terminal.clearWrites();
+
+		// Shrink to fewer lines → triggers a full redraw.
+		component.lines = Array.from({ length: 3 }, (_, i) => `Line ${i}`);
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(tui.fullRedraws > initialRedraws, "Shrink should trigger a full redraw");
+		const writes = terminal.getWrites();
+		assert.ok(writes.includes("\x1b[H\x1b[J"), "Full redraw should clear in place via home + erase-below");
+		assert.ok(!writes.includes("\x1b[2J"), "Full redraw must not emit \\x1b[2J (detaches viewport on VTE terminals)");
+		assert.ok(!writes.includes("\x1b[3J"), "Shrink redraw must not clear scrollback");
+
+		tui.stop();
+	});
+
+	it("leaves the viewport on the live render (cursor at content) after a shrink redraw", async () => {
+		const terminal = new VirtualTerminal(40, 5);
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		tui.addChild(component);
+
+		// Grow well past the viewport so the terminal accumulates scrollback.
+		component.lines = Array.from({ length: 20 }, (_, i) => `Line ${i}`);
+		tui.start();
+		await terminal.flush();
+
+		// Shrink to content shorter than the viewport — the case that stranded the
+		// viewport over a stale frame in issue 239.
+		component.lines = ["Alpha", "Beta"];
+		tui.requestRender();
+		await terminal.flush();
+
+		// The live render must be what's visible, with no ghost whitespace below.
+		const viewport = terminal.getViewport();
+		assert.ok(viewport[0]?.includes("Alpha"), `Viewport should show live render, got: ${JSON.stringify(viewport)}`);
+		assert.ok(viewport[1]?.includes("Beta"), `Viewport should show live render, got: ${JSON.stringify(viewport)}`);
+		assert.strictEqual(viewport[2]?.trim(), "", "No ghost content below live render");
+
+		// Hardware cursor should rest on the live content, not above it on a stale row.
+		const { y } = terminal.getCursorPosition();
+		assert.ok(y <= 1, `Cursor should be on the live render rows, got row ${y}`);
 
 		tui.stop();
 	});

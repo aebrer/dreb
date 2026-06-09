@@ -350,7 +350,9 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	clearScreen(): void {
-		process.stdout.write("\x1b[2J\x1b[H"); // Clear screen and move to home (1,1)
+		// Home, then erase-below (in-place clear). Avoids the VTE-family behavior
+		// where bare \x1b[2J scrolls the screen into scrollback (see issue 239).
+		process.stdout.write("\x1b[H\x1b[J");
 	}
 
 	setTitle(title: string): void {

@@ -912,7 +912,12 @@ export class TUI extends Container {
 			this.fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			if (clear) {
-				buffer += "\x1b[2J\x1b[H"; // Clear screen, home
+				// Home, then erase-below (in-place clear). Portable across terminals:
+				// bare \x1b[2J makes VTE-family terminals scroll the screen into
+				// scrollback and detach the viewport, leaving a stale frame visible
+				// until the next keypress (issue 239). Homing first then erasing to
+				// end of display clears in place everywhere without that side effect.
+				buffer += "\x1b[H\x1b[J";
 				if (clearScrollback) buffer += "\x1b[3J"; // Clear scrollback (only for width changes)
 			}
 			for (let i = 0; i < newLines.length; i++) {
