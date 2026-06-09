@@ -21,12 +21,16 @@ function createTempProject(rootPackage: PackageJson): string {
 	const dir = mkdtempSync(join(tmpdir(), "verify-engines-"));
 	tempDirs.push(dir);
 	mkdirSync(join(dir, "packages"), { recursive: true });
-	writeJson(join(dir, "package.json"), rootPackage);
+	writeJson(join(dir, "package.json"), { workspaces: ["packages/*"], ...rootPackage });
 	return dir;
 }
 
 function writeWorkspacePackage(projectDir: string, packageName: string, packageJson: PackageJson): void {
-	const packageDir = join(projectDir, "packages", packageName);
+	writePackage(projectDir, join("packages", packageName), packageJson);
+}
+
+function writePackage(projectDir: string, packagePath: string, packageJson: PackageJson): void {
+	const packageDir = join(projectDir, packagePath);
 	mkdirSync(packageDir, { recursive: true });
 	writeJson(join(packageDir, "package.json"), packageJson);
 }
@@ -80,6 +84,24 @@ describe("verify-engines script", () => {
 		);
 	});
 
+	it("detects mismatched engines.node in explicit nested workspace packages", () => {
+		const projectDir = createTempProject({
+			engines: { node: "^22.0.0" },
+			workspaces: ["packages/*", "packages/coding-agent/examples/extensions/with-deps"],
+		});
+		writeWorkspacePackage(projectDir, "ai", { engines: { node: "^22.0.0" } });
+		writePackage(projectDir, "packages/coding-agent/examples/extensions/with-deps", {
+			engines: { node: "^20.0.0" },
+		});
+
+		const result = runVerifyEngines(projectDir);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			'MISMATCH: packages/coding-agent/examples/extensions/with-deps/package.json engines.node is "^20.0.0", expected "^22.0.0"',
+		);
+	});
+
 	it("exits 1 with a diagnostic when a workspace package is missing engines.node", () => {
 		const projectDir = createTempProject({ engines: { node: "^22.0.0" } });
 		writeWorkspacePackage(projectDir, "ai", { name: "@dreb/ai" });
@@ -112,7 +134,8 @@ describe("verify-engines script", () => {
 
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain("ERROR: failed to read or parse packages/broken/package.json");
-		expect(result.stderr).toContain(
+		expect(result.stderr).toContain("Fix: correct the invalid JSON syntax in the reported file(s).");
+		expect(result.stderr).not.toContain(
 			"Fix: update all workspace package.json engines.node fields to match the root package.json",
 		);
 	});

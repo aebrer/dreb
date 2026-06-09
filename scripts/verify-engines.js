@@ -16,39 +16,75 @@ if (!rootEngine) {
 	process.exit(1);
 }
 
-const packagesDir = "packages";
-const packageDirs = readdirSync(packagesDir);
+const workspaceEntries = Array.isArray(rootPkg.workspaces) ? rootPkg.workspaces : [];
 
 let foundMismatch = false;
+let foundReadOrParseError = false;
 
-for (const pkgDir of packageDirs) {
-	const pkgPath = join(packagesDir, pkgDir, "package.json");
+function isEnoent(error) {
+	return error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+}
+
+function packageJsonPathsForWorkspace(workspaceEntry) {
+	if (workspaceEntry.endsWith("/*")) {
+		const workspaceRoot = workspaceEntry.slice(0, -2);
+		let packageDirs;
+		try {
+			packageDirs = readdirSync(workspaceRoot);
+		} catch (error) {
+			if (isEnoent(error)) {
+				return [];
+			}
+
+			const message = error instanceof Error ? error.message : String(error);
+			console.error(`ERROR: failed to read workspace directory ${workspaceRoot}: ${message}`);
+			foundReadOrParseError = true;
+			return [];
+		}
+
+		return packageDirs.map((pkgDir) => join(workspaceRoot, pkgDir, "package.json"));
+	}
+
+	return [join(workspaceEntry, "package.json")];
+}
+
+function checkPackage(pkgPath) {
 	let pkg;
 	try {
 		pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
 	} catch (error) {
-		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-			continue;
+		if (isEnoent(error)) {
+			return;
 		}
 
 		const message = error instanceof Error ? error.message : String(error);
 		console.error(`ERROR: failed to read or parse ${pkgPath}: ${message}`);
-		foundMismatch = true;
-		continue;
+		foundReadOrParseError = true;
+		return;
 	}
 
 	const pkgEngine = pkg.engines?.node;
 	if (pkgEngine !== rootEngine) {
 		const actual = pkgEngine === undefined ? "missing" : `"${pkgEngine}"`;
-		console.error(
-			`MISMATCH: packages/${pkgDir}/package.json engines.node is ${actual}, expected "${rootEngine}"`,
-		);
+		console.error(`MISMATCH: ${pkgPath} engines.node is ${actual}, expected "${rootEngine}"`);
 		foundMismatch = true;
 	}
 }
 
-if (foundMismatch) {
-	console.error("\nFix: update all workspace package.json engines.node fields to match the root package.json");
+for (const workspaceEntry of workspaceEntries) {
+	for (const pkgPath of packageJsonPathsForWorkspace(workspaceEntry)) {
+		checkPackage(pkgPath);
+	}
+}
+
+if (foundReadOrParseError || foundMismatch) {
+	console.error("");
+	if (foundReadOrParseError) {
+		console.error("Fix: correct the invalid JSON syntax in the reported file(s).");
+	}
+	if (foundMismatch) {
+		console.error("Fix: update all workspace package.json engines.node fields to match the root package.json.");
+	}
 	process.exit(1);
 }
 

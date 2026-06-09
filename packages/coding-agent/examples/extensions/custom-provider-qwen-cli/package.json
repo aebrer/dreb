@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.12.0",
   "type": "module",
+  "engines": {
+    "node": "^22.0.0"
+  },
   "scripts": {
     "clean": "echo 'nothing to clean'",
     "build": "echo 'nothing to build'",

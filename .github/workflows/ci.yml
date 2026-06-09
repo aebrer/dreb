@@ -109,7 +109,7 @@ jobs:
               `[View full coverage run](${runUrl})`,
             ].join("\n");
 
-            const { data: comments } = await github.rest.issues.listComments({
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner,
               repo,
               issue_number: context.issue.number,
