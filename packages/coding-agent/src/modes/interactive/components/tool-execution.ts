@@ -35,7 +35,11 @@ export class ToolExecutionComponent extends Container {
 		details?: any;
 	};
 	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
+	private pendingConversionCount = 0;
 	private hideComponent = false;
+
+	/** Callback fired when all pending Kitty image conversions settle. */
+	public onConversionComplete?: () => void;
 
 	constructor(
 		toolName: string,
@@ -180,14 +184,29 @@ export class ToolExecutionComponent extends Container {
 			if (this.convertedImages.has(i)) continue;
 
 			const index = i;
+			this.pendingConversionCount++;
 			convertToPng(img.data, img.mimeType).then((converted) => {
+				this.pendingConversionCount--;
 				if (converted) {
 					this.convertedImages.set(index, converted);
 					this.updateDisplay();
 					this.ui.requestRender();
 				}
+				if (this.pendingConversionCount === 0) {
+					this.onConversionComplete?.();
+				}
 			});
 		}
+	}
+
+	/** Whether this component has pending Kitty PNG conversions that haven't settled yet. */
+	hasPendingConversions(): boolean {
+		return this.pendingConversionCount > 0;
+	}
+
+	/** Get the tool call ID for this component. */
+	getToolCallId(): string {
+		return this.toolCallId;
 	}
 
 	setExpanded(expanded: boolean): void {

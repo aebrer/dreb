@@ -163,6 +163,7 @@ export interface InteractiveModeOptions {
 export class InteractiveMode {
 	private session: AgentSession;
 	private ui: TUI;
+	private committedChatContainer: Container;
 	private chatContainer: Container;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -305,6 +306,7 @@ export class InteractiveMode {
 		});
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.headerContainer = new Container();
+		this.committedChatContainer = new Container();
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
@@ -577,6 +579,7 @@ export class InteractiveMode {
 			}
 		}
 
+		this.ui.addChild(this.committedChatContainer);
 		this.ui.addChild(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
@@ -587,6 +590,10 @@ export class InteractiveMode {
 		this.ui.addChild(this.widgetContainerBelow);
 		this.ui.addChild(this.footer);
 		this.ui.setFocus(this.editor);
+
+		// Mark header + committedChatContainer as committed to scrollback.
+		// The differential renderer will only manage children after this boundary.
+		this.ui.setCommittedChildCount(2);
 
 		this.setupKeyHandlers();
 		this.setupEditorSubmitHandler();
@@ -604,6 +611,7 @@ export class InteractiveMode {
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
+		this.tryCommitPrefix();
 
 		// Set terminal title
 		this.updateTerminalTitle();
@@ -621,7 +629,8 @@ export class InteractiveMode {
 		onThemeChange(() => {
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
-			this.ui.requestRender();
+			// Theme affects committed content — full re-commit to repaint
+			this.ui.recommitAll();
 		});
 
 		// Set up git branch watcher (uses provider instead of footer)
@@ -1288,6 +1297,7 @@ export class InteractiveMode {
 
 					// Clear UI state
 					this.editor.setGhostText?.(null);
+					this.committedChatContainer.clear();
 					this.chatContainer.clear();
 					this.pendingMessagesContainer.clear();
 					this.compactionQueuedMessages = [];
@@ -1297,7 +1307,8 @@ export class InteractiveMode {
 
 					// Render any messages added via setup, or show empty session
 					this.renderInitialMessages();
-					this.ui.requestRender();
+					this.tryCommitPrefix();
+					this.ui.recommitAll();
 
 					return { cancelled: false };
 				},
@@ -1307,8 +1318,11 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
+					this.committedChatContainer.clear();
 					this.chatContainer.clear();
 					this.renderInitialMessages();
+					this.tryCommitPrefix();
+					this.ui.recommitAll();
 					this.editor.setText(result.selectedText);
 					this.showStatus("Forked to new session");
 
@@ -1325,8 +1339,11 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
+					this.committedChatContainer.clear();
 					this.chatContainer.clear();
 					this.renderInitialMessages();
+					this.tryCommitPrefix();
+					this.ui.recommitAll();
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.editor.setText(result.editorText);
 					}
@@ -2492,6 +2509,8 @@ export class InteractiveMode {
 				}
 				// Capture assistant response for buddy context
 				this.buddyController.handleEvent(event);
+				// Try to commit finalized components to scrollback
+				this.tryCommitPrefix();
 				this.ui.requestRender();
 				break;
 
@@ -2531,6 +2550,13 @@ export class InteractiveMode {
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
 					this.pendingTools.delete(event.toolCallId);
+					// Wire up Kitty conversion callback for deferred commit
+					component.onConversionComplete = () => {
+						this.tryCommitPrefix();
+						this.ui.requestRender();
+					};
+					// Try to commit finalized components to scrollback
+					this.tryCommitPrefix();
 					this.ui.requestRender();
 				}
 				// Buddy context + reaction for tool execution
@@ -2556,6 +2582,8 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+				// Final commit sweep — all remaining finalized components move to scrollback
+				this.tryCommitPrefix();
 
 				await this.checkShutdownRequested();
 
@@ -2604,8 +2632,11 @@ export class InteractiveMode {
 					this.showStatus("Auto-compaction cancelled");
 				} else if (event.result) {
 					// Rebuild chat to show compacted state
+					this.committedChatContainer.clear();
 					this.chatContainer.clear();
 					this.rebuildChatFromMessages();
+					this.tryCommitPrefix();
+					this.ui.recommitAll();
 					// Add compaction component at bottom so user sees it without scrolling
 					this.addMessageToChat({
 						role: "compactionSummary",
@@ -3003,6 +3034,10 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
+		// Clear both containers (committed content will be re-committed after rebuild).
+		// Callers that use this for global actions should also call
+		// tryCommitPrefix() + ui.recommitAll() after.
+		this.committedChatContainer.clear();
 		this.chatContainer.clear();
 		const context = this.sessionManager.buildSessionContext();
 		this.renderSessionContext(context);
@@ -3184,25 +3219,70 @@ export class InteractiveMode {
 		this.showStatus(`Tasks panel: ${this.tasksPanel.visible ? "visible" : "hidden"}`);
 	}
 
+	/**
+	 * Scan the live chatContainer for the longest contiguous prefix of fully-finalized
+	 * components, move them to committedChatContainer, and advance the TUI's committed
+	 * boundary. This prevents the differential renderer from replaying history.
+	 *
+	 * A component is "finalized" if:
+	 * - AssistantMessageComponent: not the active streamingComponent
+	 * - ToolExecutionComponent: not in pendingTools AND no pending Kitty conversions
+	 * - Any other component (Spacer, Text, etc.): always finalized
+	 */
+	private tryCommitPrefix(): void {
+		let commitCount = 0;
+		for (const child of this.chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) {
+				if (child === this.streamingComponent) break; // still streaming
+				commitCount++;
+			} else if (child instanceof ToolExecutionComponent) {
+				if (this.pendingTools.has(child.getToolCallId())) break; // still executing
+				if (child.hasPendingConversions()) break; // Kitty conversion pending
+				commitCount++;
+			} else {
+				commitCount++; // Spacer, Text, etc. — always safe
+			}
+		}
+
+		if (commitCount === 0) return;
+
+		// Move the finalized prefix from chatContainer to committedChatContainer
+		const toCommit = this.chatContainer.children.splice(0, commitCount);
+		for (const c of toCommit) {
+			this.committedChatContainer.addChild(c);
+		}
+
+		// Update the TUI's committed line tracking
+		this.ui.commit();
+	}
+
 	private toggleToolOutputExpansion(): void {
 		this.setToolsExpanded(!this.toolOutputExpanded);
 	}
 
 	private setToolsExpanded(expanded: boolean): void {
 		this.toolOutputExpanded = expanded;
+		// Expand/collapse in both committed and live containers
+		for (const child of this.committedChatContainer.children) {
+			if (isExpandable(child)) {
+				child.setExpanded(expanded);
+			}
+		}
 		for (const child of this.chatContainer.children) {
 			if (isExpandable(child)) {
 				child.setExpanded(expanded);
 			}
 		}
-		this.ui.requestRender();
+		// Committed content changed — full re-commit to repaint
+		this.ui.recommitAll();
 	}
 
 	private toggleThinkingBlockVisibility(): void {
 		this.hideThinkingBlock = !this.hideThinkingBlock;
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 
-		// Rebuild chat from session messages
+		// Full rebuild: clear both committed and live chat, rebuild, re-commit
+		this.committedChatContainer.clear();
 		this.chatContainer.clear();
 		this.rebuildChatFromMessages();
 
@@ -3212,6 +3292,10 @@ export class InteractiveMode {
 			this.streamingComponent.updateContent(this.streamingMessage);
 			this.chatContainer.addChild(this.streamingComponent);
 		}
+
+		// Committed content rebuilt — full re-commit to repaint
+		this.tryCommitPrefix();
+		this.ui.recommitAll();
 
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
 	}
@@ -3600,11 +3684,18 @@ export class InteractiveMode {
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
+						for (const child of this.committedChatContainer.children) {
+							if (child instanceof ToolExecutionComponent) {
+								child.setShowImages(enabled);
+							}
+						}
 						for (const child of this.chatContainer.children) {
 							if (child instanceof ToolExecutionComponent) {
 								child.setShowImages(enabled);
 							}
 						}
+						// Committed content changed — full re-commit to repaint
+						this.ui.recommitAll();
 					},
 					onAutoResizeImagesChange: (enabled) => {
 						this.settingsManager.setImageAutoResize(enabled);
@@ -3649,13 +3740,12 @@ export class InteractiveMode {
 					onHideThinkingBlockChange: (hidden) => {
 						this.hideThinkingBlock = hidden;
 						this.settingsManager.setHideThinkingBlock(hidden);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setHideThinkingBlock(hidden);
-							}
-						}
+						// Full rebuild: clear both committed and live chat
+						this.committedChatContainer.clear();
 						this.chatContainer.clear();
 						this.rebuildChatFromMessages();
+						this.tryCommitPrefix();
+						this.ui.recommitAll();
 					},
 					onThinkingDisplayChange: (display) => {
 						const model = this.session.model;
@@ -3950,8 +4040,11 @@ export class InteractiveMode {
 						return;
 					}
 
+					this.committedChatContainer.clear();
 					this.chatContainer.clear();
 					this.renderInitialMessages();
+					this.tryCommitPrefix();
+					this.ui.recommitAll();
 					this.editor.setText(result.selectedText);
 					done();
 					this.showStatus("Branched to new session");
@@ -4062,8 +4155,11 @@ export class InteractiveMode {
 						}
 
 						// Update UI
+						this.committedChatContainer.clear();
 						this.chatContainer.clear();
 						this.renderInitialMessages();
+						this.tryCommitPrefix();
+						this.ui.recommitAll();
 						if (result.editorText && !this.editor.getText().trim()) {
 							this.editor.setText(result.editorText);
 						}
@@ -4149,8 +4245,11 @@ export class InteractiveMode {
 		await this.footerDataProvider.refreshDailyCost();
 
 		// Clear and re-render the chat
+		this.committedChatContainer.clear();
 		this.chatContainer.clear();
 		this.renderInitialMessages();
+		this.tryCommitPrefix();
+		this.ui.recommitAll();
 		this.showStatus("Resumed session");
 	}
 
@@ -4353,6 +4452,8 @@ export class InteractiveMode {
 				this.setupExtensionShortcuts(runner);
 			}
 			this.rebuildChatFromMessages();
+			this.tryCommitPrefix();
+			this.ui.recommitAll();
 			dismissLoader(this.editor as Component);
 			this.showLoadedResources({
 				force: false,
@@ -4422,8 +4523,11 @@ export class InteractiveMode {
 			}
 
 			// Clear and re-render the chat
+			this.committedChatContainer.clear();
 			this.chatContainer.clear();
 			this.renderInitialMessages();
+			this.tryCommitPrefix();
+			this.ui.recommitAll();
 			this.showStatus(`Session imported from: ${inputPath}`);
 		} catch (error: unknown) {
 			this.showError(`Failed to import session: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -4745,6 +4849,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 		// Clear UI state
 		this.headerContainer.clear();
+		this.committedChatContainer.clear();
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
@@ -4754,7 +4859,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
-		this.ui.requestRender();
+		this.ui.recommitAll();
 	}
 
 	private handleDebugCommand(): void {
@@ -5090,6 +5195,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 			// Rebuild UI
 			this.rebuildChatFromMessages();
+			this.tryCommitPrefix();
 
 			// Add compaction component at bottom so user sees it without scrolling
 			const msg = createCompactionSummaryMessage(result.summary, result.tokensBefore, new Date().toISOString());

@@ -95,7 +95,10 @@ describe("TUI resize handling", () => {
 		});
 	});
 
-	it("skips full re-render on height changes in Termux", async () => {
+	it("height changes in Termux only re-render live region (no transcript replay)", async () => {
+		// With committed-scrollback model, height changes only re-render the
+		// live region. This is cheap and safe even on Termux — no Termux
+		// special-case is needed since the live region is small.
 		await withEnv({ TERMUX_VERSION: "1" }, async () => {
 			const terminal = new LoggingVirtualTerminal(40, 10);
 			const tui = new TUI(terminal);
@@ -113,8 +116,8 @@ describe("TUI resize handling", () => {
 				await terminal.flush();
 			}
 
-			assert.strictEqual(tui.fullRedraws, initialRedraws, "Height change should not trigger full redraw");
-			assert.ok(!terminal.getWrites().includes("\x1b[2J"), "Height change should not clear the screen");
+			// Height changes trigger live-region redraws (cheap, no scrollback clear)
+			assert.ok(tui.fullRedraws > initialRedraws, "Height change should trigger live-region redraw");
 			assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Height change should not clear scrollback");
 
 			const viewport = terminal.getViewport();
@@ -564,11 +567,12 @@ describe("TUI scrollback preservation", () => {
 			await terminal.flush();
 			terminal.clearWrites();
 
-			// Height change should clear screen but NOT scrollback
+			// Height change clears only the live region (not scrollback).
+			// Uses \x1b[J (clear from cursor to end) instead of \x1b[2J (clear entire screen).
 			terminal.resize(40, 15);
 			await terminal.flush();
 
-			assert.ok(terminal.getWrites().includes("\x1b[2J"), "Height change should clear screen");
+			assert.ok(terminal.getWrites().includes("\x1b[J"), "Height change should clear live region");
 			assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Height change should not clear scrollback");
 			tui.stop();
 		});
