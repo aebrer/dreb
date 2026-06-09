@@ -199,6 +199,9 @@ export class InteractiveMode {
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
+	// Deferred commit: set to true when components finalize, commit runs after next render
+	private commitNeeded = false;
+
 	// Tool output expansion state
 	private toolOutputExpanded = false;
 
@@ -595,6 +598,18 @@ export class InteractiveMode {
 		// The differential renderer will only manage children after this boundary.
 		this.ui.setCommittedChildCount(2);
 
+		// Wire up deferred commit: after each render cycle, commit any finalized
+		// components that were painted with their final state. This ensures
+		// components are committed to scrollback only AFTER their final content
+		// has been rendered to the terminal (not before, which would freeze
+		// stale/intermediate content in scrollback).
+		this.ui.onPostRender = () => {
+			if (this.commitNeeded) {
+				this.commitNeeded = false;
+				this.tryCommitPrefix();
+			}
+		};
+
 		this.setupKeyHandlers();
 		this.setupEditorSubmitHandler();
 
@@ -609,9 +624,10 @@ export class InteractiveMode {
 		// Initialize extensions first so resources are shown before messages
 		await this.initExtensions();
 
-		// Render initial messages AFTER showing loaded resources
-		this.renderInitialMessages();
-		this.tryCommitPrefix();
+		// Render initial messages AFTER showing loaded resources.
+		// resetChatDisplay clears containers, renders session messages,
+		// commits the finalized prefix, and paints everything via recommitAll.
+		this.resetChatDisplay();
 
 		// Set terminal title
 		this.updateTerminalTitle();
@@ -1297,18 +1313,14 @@ export class InteractiveMode {
 
 					// Clear UI state
 					this.editor.setGhostText?.(null);
-					this.committedChatContainer.clear();
-					this.chatContainer.clear();
 					this.pendingMessagesContainer.clear();
 					this.compactionQueuedMessages = [];
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 					this.pendingTools.clear();
 
-					// Render any messages added via setup, or show empty session
-					this.renderInitialMessages();
-					this.tryCommitPrefix();
-					this.ui.recommitAll();
+					// Re-render from new session state
+					this.resetChatDisplay();
 
 					return { cancelled: false };
 				},
@@ -1318,11 +1330,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.committedChatContainer.clear();
-					this.chatContainer.clear();
-					this.renderInitialMessages();
-					this.tryCommitPrefix();
-					this.ui.recommitAll();
+					this.resetChatDisplay();
 					this.editor.setText(result.selectedText);
 					this.showStatus("Forked to new session");
 
@@ -1339,11 +1347,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.committedChatContainer.clear();
-					this.chatContainer.clear();
-					this.renderInitialMessages();
-					this.tryCommitPrefix();
-					this.ui.recommitAll();
+					this.resetChatDisplay();
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.editor.setText(result.editorText);
 					}
@@ -2509,8 +2513,8 @@ export class InteractiveMode {
 				}
 				// Capture assistant response for buddy context
 				this.buddyController.handleEvent(event);
-				// Try to commit finalized components to scrollback
-				this.tryCommitPrefix();
+				// Defer commit until after the next render paints the final state
+				this.commitNeeded = true;
 				this.ui.requestRender();
 				break;
 
@@ -2552,11 +2556,11 @@ export class InteractiveMode {
 					this.pendingTools.delete(event.toolCallId);
 					// Wire up Kitty conversion callback for deferred commit
 					component.onConversionComplete = () => {
-						this.tryCommitPrefix();
+						this.commitNeeded = true;
 						this.ui.requestRender();
 					};
-					// Try to commit finalized components to scrollback
-					this.tryCommitPrefix();
+					// Defer commit until after the next render paints the final state
+					this.commitNeeded = true;
 					this.ui.requestRender();
 				}
 				// Buddy context + reaction for tool execution
@@ -2582,8 +2586,9 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
-				// Final commit sweep — all remaining finalized components move to scrollback
-				this.tryCommitPrefix();
+				// Defer final commit sweep — all remaining finalized components will
+				// move to scrollback after the next render paints their final state
+				this.commitNeeded = true;
 
 				await this.checkShutdownRequested();
 
@@ -2632,8 +2637,6 @@ export class InteractiveMode {
 					this.showStatus("Auto-compaction cancelled");
 				} else if (event.result) {
 					// Rebuild chat to show compacted state
-					this.committedChatContainer.clear();
-					this.chatContainer.clear();
 					this.rebuildChatFromMessages();
 					this.tryCommitPrefix();
 					this.ui.recommitAll();
@@ -3229,6 +3232,21 @@ export class InteractiveMode {
 	 * - ToolExecutionComponent: not in pendingTools AND no pending Kitty conversions
 	 * - Any other component (Spacer, Text, etc.): always finalized
 	 */
+
+	/**
+	 * Clear committed and live chat, re-render from session state, commit the
+	 * finalized prefix, and repaint everything. Used after session switches,
+	 * imports, resumes, and navigation — any operation that replaces the
+	 * displayed transcript with a different session's content.
+	 */
+	private resetChatDisplay(): void {
+		this.committedChatContainer.clear();
+		this.chatContainer.clear();
+		this.renderInitialMessages();
+		this.tryCommitPrefix();
+		this.ui.recommitAll();
+	}
+
 	private tryCommitPrefix(): void {
 		let commitCount = 0;
 		for (const child of this.chatContainer.children) {
@@ -3281,9 +3299,7 @@ export class InteractiveMode {
 		this.hideThinkingBlock = !this.hideThinkingBlock;
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 
-		// Full rebuild: clear both committed and live chat, rebuild, re-commit
-		this.committedChatContainer.clear();
-		this.chatContainer.clear();
+		// Full rebuild: rebuildChatFromMessages() clears both containers internally
 		this.rebuildChatFromMessages();
 
 		// If streaming, re-add the streaming component with updated visibility and re-render
@@ -3740,9 +3756,7 @@ export class InteractiveMode {
 					onHideThinkingBlockChange: (hidden) => {
 						this.hideThinkingBlock = hidden;
 						this.settingsManager.setHideThinkingBlock(hidden);
-						// Full rebuild: clear both committed and live chat
-						this.committedChatContainer.clear();
-						this.chatContainer.clear();
+						// Full rebuild: rebuildChatFromMessages() clears both containers
 						this.rebuildChatFromMessages();
 						this.tryCommitPrefix();
 						this.ui.recommitAll();
@@ -4040,11 +4054,7 @@ export class InteractiveMode {
 						return;
 					}
 
-					this.committedChatContainer.clear();
-					this.chatContainer.clear();
-					this.renderInitialMessages();
-					this.tryCommitPrefix();
-					this.ui.recommitAll();
+					this.resetChatDisplay();
 					this.editor.setText(result.selectedText);
 					done();
 					this.showStatus("Branched to new session");
@@ -4155,11 +4165,7 @@ export class InteractiveMode {
 						}
 
 						// Update UI
-						this.committedChatContainer.clear();
-						this.chatContainer.clear();
-						this.renderInitialMessages();
-						this.tryCommitPrefix();
-						this.ui.recommitAll();
+						this.resetChatDisplay();
 						if (result.editorText && !this.editor.getText().trim()) {
 							this.editor.setText(result.editorText);
 						}
@@ -4245,11 +4251,7 @@ export class InteractiveMode {
 		await this.footerDataProvider.refreshDailyCost();
 
 		// Clear and re-render the chat
-		this.committedChatContainer.clear();
-		this.chatContainer.clear();
-		this.renderInitialMessages();
-		this.tryCommitPrefix();
-		this.ui.recommitAll();
+		this.resetChatDisplay();
 		this.showStatus("Resumed session");
 	}
 
@@ -4523,11 +4525,7 @@ export class InteractiveMode {
 			}
 
 			// Clear and re-render the chat
-			this.committedChatContainer.clear();
-			this.chatContainer.clear();
-			this.renderInitialMessages();
-			this.tryCommitPrefix();
-			this.ui.recommitAll();
+			this.resetChatDisplay();
 			this.showStatus(`Session imported from: ${inputPath}`);
 		} catch (error: unknown) {
 			this.showError(`Failed to import session: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -5196,6 +5194,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 			// Rebuild UI
 			this.rebuildChatFromMessages();
 			this.tryCommitPrefix();
+			this.ui.recommitAll();
 
 			// Add compaction component at bottom so user sees it without scrolling
 			const msg = createCompactionSummaryMessage(result.summary, result.tokensBefore, new Date().toISOString());

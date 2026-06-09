@@ -349,4 +349,213 @@ describe("TUI committed-scrollback region", () => {
 		tui.setCommittedChildCount(1);
 		assert.strictEqual(tui.getCommittedChildCount(), 1);
 	});
+
+	it("onPostRender fires after fullRender path", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+		tui.setCommittedChildCount(1);
+
+		const msg = new TestComponent();
+		msg.lines = ["Committed"];
+		committed.addChild(msg);
+
+		const editor = new TestComponent();
+		editor.lines = ["Editor"];
+		live.addChild(editor);
+
+		let postRenderCount = 0;
+		tui.onPostRender = () => {
+			postRenderCount++;
+		};
+
+		tui.start();
+		await terminal.flush();
+
+		assert.ok(postRenderCount > 0, "onPostRender should fire after first render");
+
+		const before = postRenderCount;
+
+		// Trigger content shrink → fullRender path
+		editor.lines = [];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(postRenderCount > before, "onPostRender should fire after fullRender (content shrink)");
+
+		tui.stop();
+	});
+
+	it("onPostRender fires after recommitAll", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+		tui.setCommittedChildCount(1);
+
+		const msg = new TestComponent();
+		msg.lines = ["Msg"];
+		committed.addChild(msg);
+
+		tui.start();
+		await terminal.flush();
+
+		let postRenderCount = 0;
+		tui.onPostRender = () => {
+			postRenderCount++;
+		};
+
+		tui.recommitAll();
+		assert.strictEqual(postRenderCount, 1, "onPostRender should fire after recommitAll");
+
+		tui.stop();
+	});
+
+	it("onPostRender fires after differential render path", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const live = new Container();
+		tui.addChild(live);
+
+		const editor = new TestComponent();
+		editor.lines = ["Line 1", "Line 2"];
+		live.addChild(editor);
+
+		tui.start();
+		await terminal.flush();
+
+		let postRenderCount = 0;
+		tui.onPostRender = () => {
+			postRenderCount++;
+		};
+
+		// Change only one line → differential path (no fullRender)
+		editor.lines = ["Line 1", "Line UPDATED"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.strictEqual(postRenderCount, 1, "onPostRender should fire after differential render");
+
+		tui.stop();
+	});
+
+	it("deferred commit via onPostRender paints final state before committing", async () => {
+		// This is the key regression test for Finding 2: components must be
+		// rendered with their final state BEFORE being committed to scrollback.
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+		tui.setCommittedChildCount(1);
+
+		// Simulate a tool in "streaming" state
+		const tool = new TestComponent();
+		tool.lines = ["Working..."];
+		live.addChild(tool);
+
+		const spinner = new TestComponent();
+		spinner.lines = ["Spinner"];
+		live.addChild(spinner);
+
+		tui.start();
+		await terminal.flush();
+
+		// Simulate tool_execution_end: update to final state, then defer commit
+		tool.lines = ["Tool result: success", "Output line 2", "Output line 3"];
+
+		// Wire up deferred commit (like interactive-mode does)
+		let commitNeeded = false;
+		tui.onPostRender = () => {
+			if (commitNeeded) {
+				commitNeeded = false;
+				// Move tool from live to committed (like tryCommitPrefix)
+				live.removeChild(tool);
+				committed.addChild(tool);
+				tui.commit();
+			}
+		};
+
+		// Mark for deferred commit and trigger render
+		commitNeeded = true;
+		terminal.clearWrites();
+		tui.requestRender();
+		await terminal.flush();
+
+		// The render should have painted the FINAL tool state before committing
+		const writes = terminal.getWrites();
+		assert.ok(
+			writes.includes("Tool result: success"),
+			"Final tool state should be painted to terminal before commit",
+		);
+		assert.ok(writes.includes("Output line 3"), "All lines of final tool state should be visible");
+
+		// After the post-render callback, tool is in committed container
+		assert.strictEqual(committed.children.length, 1, "Tool should be in committed container");
+		assert.strictEqual(live.children.length, 1, "Only spinner should remain in live");
+
+		// A subsequent render should NOT re-emit the committed tool content
+		terminal.clearWrites();
+		spinner.lines = ["Done"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(
+			!terminal.getWrites().includes("Tool result"),
+			"Committed tool content should not be re-emitted on subsequent render",
+		);
+
+		tui.stop();
+	});
+
+	it("commit() is idempotent when called twice without new content", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+		tui.setCommittedChildCount(1);
+
+		const msg = new TestComponent();
+		msg.lines = ["Msg 1", "Msg 2"];
+		committed.addChild(msg);
+
+		const editor = new TestComponent();
+		editor.lines = ["Editor"];
+		live.addChild(editor);
+
+		tui.start();
+		await terminal.flush();
+
+		tui.commit();
+		const afterFirst = tui.getCommittedChildCount();
+
+		// Second commit with no new content
+		tui.commit();
+		const afterSecond = tui.getCommittedChildCount();
+
+		assert.strictEqual(afterFirst, afterSecond, "Idempotent commit should not change state");
+
+		// Rendering should still work
+		terminal.clearWrites();
+		editor.lines = ["Updated"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(terminal.getWrites().includes("Updated"), "Rendering should work after idempotent commit");
+
+		tui.stop();
+	});
 });

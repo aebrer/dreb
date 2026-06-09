@@ -234,6 +234,8 @@ export class TUI extends Container {
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
+	/** Callback fired after every render completes (doRender differential path, fullRender, or recommitAll). */
+	public onPostRender?: () => void;
 	private renderTimer: ReturnType<typeof setTimeout> | null = null;
 	private lastRenderAt = 0;
 	private cursorRow = 0; // Logical cursor row within live region (end of live content)
@@ -593,6 +595,8 @@ export class TUI extends Container {
 		} else {
 			this.positionHardwareCursor(null, liveLines.length);
 		}
+
+		this.onPostRender?.();
 	}
 
 	/**
@@ -1078,6 +1082,7 @@ export class TUI extends Container {
 			this.previousLines = newLines;
 			this.previousWidth = width;
 			this.previousHeight = height;
+			this.onPostRender?.();
 		};
 
 		const debugRedraw = process.env.DREB_DEBUG_REDRAW === "1";
@@ -1142,6 +1147,7 @@ export class TUI extends Container {
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousViewportTop = prevViewportTop;
 			this.previousHeight = height;
+			this.onPostRender?.();
 			return;
 		}
 
@@ -1197,6 +1203,7 @@ export class TUI extends Container {
 			this.previousWidth = width;
 			this.previousHeight = height;
 			this.previousViewportTop = prevViewportTop;
+			this.onPostRender?.();
 			return;
 		}
 
@@ -1359,6 +1366,8 @@ export class TUI extends Container {
 		this.previousLines = newLines;
 		this.previousWidth = width;
 		this.previousHeight = height;
+
+		this.onPostRender?.();
 	}
 
 	/**
