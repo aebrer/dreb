@@ -3223,17 +3223,6 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Scan the live chatContainer for the longest contiguous prefix of fully-finalized
-	 * components, move them to committedChatContainer, and advance the TUI's committed
-	 * boundary. This prevents the differential renderer from replaying history.
-	 *
-	 * A component is "finalized" if:
-	 * - AssistantMessageComponent: not the active streamingComponent
-	 * - ToolExecutionComponent: not in pendingTools AND no pending Kitty conversions
-	 * - Any other component (Spacer, Text, etc.): always finalized
-	 */
-
-	/**
 	 * Clear committed and live chat, re-render from session state, commit the
 	 * finalized prefix, and repaint everything. Used after session switches,
 	 * imports, resumes, and navigation — any operation that replaces the
@@ -3247,6 +3236,16 @@ export class InteractiveMode {
 		this.ui.recommitAll();
 	}
 
+	/**
+	 * Scan the live chatContainer for the longest contiguous prefix of fully-finalized
+	 * components, move them to committedChatContainer, and advance the TUI's committed
+	 * boundary. This prevents the differential renderer from replaying history.
+	 *
+	 * A component is "finalized" if:
+	 * - AssistantMessageComponent: not the active streamingComponent
+	 * - ToolExecutionComponent: not in pendingTools AND no pending Kitty conversions
+	 * - Any other component (Spacer, Text, etc.): always finalized
+	 */
 	private tryCommitPrefix(): void {
 		let commitCount = 0;
 		for (const child of this.chatContainer.children) {

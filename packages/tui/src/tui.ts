@@ -1308,6 +1308,17 @@ export class TUI extends Container {
 		// Use a full redraw (clear screen) to avoid ghost whitespace from terminals
 		// that don't properly collapse cleared lines below the cursor.
 		if (this.previousLines.length > newLines.length) {
+			if (this.previousLines.length > height) {
+				// Previous live content exceeded the terminal viewport — overlay padding
+				// or long streaming content caused scrolling. A live-region-only clear
+				// can't restore the viewport (CUU can't reach past viewport top into
+				// scrollback), so do a full recommit to repaint everything cleanly.
+				logRedraw(
+					`content shrank past viewport (${this.previousLines.length} -> ${newLines.length}, height=${height})`,
+				);
+				this.recommitAll();
+				return;
+			}
 			logRedraw(`content shrank (${this.previousLines.length} -> ${newLines.length})`);
 			fullRender(true);
 			return;
