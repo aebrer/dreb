@@ -552,6 +552,7 @@ export class TUI extends Container {
 	 * repaint finalized content (theme change, width resize, expand-all, etc.).
 	 */
 	recommitAll(): void {
+		if (this.stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 

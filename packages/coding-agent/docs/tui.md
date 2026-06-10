@@ -469,6 +469,15 @@ The TUI uses a two-zone rendering architecture:
 
 Because scrollback is append-only, components must commit in display order. If tool 3 finishes before tool 2, tool 3 cannot be committed until tool 2 finishes and commits first. Only the leading contiguous run of fully-finalized components may advance into scrollback.
 
+### Transient inline UI (autocomplete menu)
+
+Inline UI that expands and collapses inside the live region — such as the editor's autocomplete/slash-command menu — needs special handling, because terminals can only scroll content *up* into scrollback, never pull it back *down*. When such a menu opens it grows the live region and pushes committed content up into scrollback; a later shrink (filtering to fewer matches, or dismissing) cannot restore that committed content with a relative redraw, leaving ghost whitespace below the prompt.
+
+Two complementary measures prevent this:
+
+1. **Stable height while open** — the menu block is padded to a per-session high-water mark, so filtering to fewer matches never shrinks the live region. Filtering only repaints in place.
+2. **`recommitAll()` on close** — dismissing or accepting the menu repaints the whole transcript with position-independent sequences, restoring the committed content that scrolled off. This is safe because such menus only appear while the user is typing at the bottom with no agent streaming.
+
 ### Environment variables
 
 | Variable | Purpose |

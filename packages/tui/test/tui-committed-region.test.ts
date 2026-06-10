@@ -1,6 +1,9 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
+import type { AutocompleteProvider } from "../src/autocomplete.js";
+import { Editor } from "../src/components/editor.js";
 import { type Component, Container, TUI } from "../src/tui.js";
+import { defaultEditorTheme } from "./test-themes.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
 class TestComponent implements Component {
@@ -555,6 +558,188 @@ describe("TUI committed-scrollback region", () => {
 		await terminal.flush();
 
 		assert.ok(terminal.getWrites().includes("Updated"), "Rendering should work after idempotent commit");
+
+		tui.stop();
+	});
+});
+
+describe("autocomplete + committed scrollback (ghost whitespace)", () => {
+	function applyCompletion(
+		lines: string[],
+		cursorLine: number,
+		cursorCol: number,
+		item: { value: string },
+		prefix: string,
+	) {
+		const line = lines[cursorLine] || "";
+		const before = line.slice(0, cursorCol - prefix.length);
+		const after = line.slice(cursorCol);
+		const newLines = [...lines];
+		newLines[cursorLine] = before + item.value + after;
+		return { lines: newLines, cursorLine, cursorCol: cursorCol - prefix.length + item.value.length };
+	}
+
+	async function flushAutocomplete(): Promise<void> {
+		await Promise.resolve();
+		await new Promise((resolve) => setImmediate(resolve));
+	}
+
+	function slashProvider(): AutocompleteProvider {
+		const all = [
+			{ value: "/help", label: "/help" },
+			{ value: "/model", label: "/model" },
+			{ value: "/settings", label: "/settings" },
+			{ value: "/compact", label: "/compact" },
+			{ value: "/clear", label: "/clear" },
+		];
+		return {
+			getSuggestions: async (lines, _cl, cursorCol) => {
+				const text = lines[0] || "";
+				const prefix = text.slice(0, cursorCol);
+				if (!prefix.startsWith("/")) return null;
+				const items = all.filter((i) => i.value.startsWith(prefix));
+				return items.length ? { items, prefix } : null;
+			},
+			applyCompletion,
+		};
+	}
+
+	function setup(height: number) {
+		const terminal = new VirtualTerminal(40, height);
+		const tui = new TUI(terminal);
+		const committed = new Container();
+		const transcript = new TestComponent();
+		transcript.lines = Array.from({ length: 30 }, (_, i) => `Line ${i}`);
+		committed.addChild(transcript);
+		const editor = new Editor(tui, defaultEditorTheme);
+		const footer = new TestComponent();
+		footer.lines = ["[footer]"];
+		tui.addChild(committed);
+		tui.addChild(editor);
+		tui.addChild(footer);
+		editor.setAutocompleteProvider(slashProvider());
+		return { terminal, tui, editor };
+	}
+
+	it("dismissing the menu restores committed content (no ghost whitespace)", async () => {
+		const { terminal, tui, editor } = setup(10);
+		tui.start();
+		tui.setFocus(editor);
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		await terminal.flush();
+
+		editor.handleInput("/");
+		tui.requestRender();
+		await flushAutocomplete();
+		await terminal.flush();
+		assert.strictEqual(editor.isShowingAutocomplete(), true, "menu open after /");
+
+		// Dismiss with Escape
+		editor.handleInput("\x1b");
+		tui.requestRender();
+		await terminal.flush();
+
+		const viewport = terminal.getViewport();
+		const lastNonBlank = viewport.map((l) => l.trim()).reduce((acc, l, i) => (l !== "" ? i : acc), -1);
+		const blankBelow = viewport.length - 1 - lastNonBlank;
+		assert.ok(blankBelow <= 1, `Expected no ghost whitespace below prompt, got ${blankBelow} blank rows`);
+		// Committed content scrolled off by the menu should be back in view.
+		assert.ok(
+			viewport.some((l) => l.includes("[footer]")),
+			"footer should be visible at the bottom after dismiss",
+		);
+
+		tui.stop();
+	});
+
+	it("filtering the menu shorter keeps the live region height stable", async () => {
+		const { terminal, tui, editor } = setup(12);
+		tui.start();
+		tui.setFocus(editor);
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		await terminal.flush();
+
+		editor.handleInput("/");
+		tui.requestRender();
+		await flushAutocomplete();
+		await terminal.flush();
+		const footerRowOpen = terminal.getViewport().findIndex((l) => l.includes("[footer]"));
+
+		// Filter from 5 matches down to 1 ("/s" -> /settings)
+		editor.handleInput("s");
+		tui.requestRender();
+		await flushAutocomplete();
+		await terminal.flush();
+		const footerRowFiltered = terminal.getViewport().findIndex((l) => l.includes("[footer]"));
+
+		assert.strictEqual(
+			footerRowFiltered,
+			footerRowOpen,
+			"footer row must not move up when the list narrows (no live-region shrink)",
+		);
+
+		tui.stop();
+	});
+
+	it("closing a tall inline modal via recommitAll leaves no ghost whitespace", async () => {
+		// Mirrors the interactive-mode pattern: an inline modal (settings/extension
+		// selector) is swapped into the editor slot, growing the live region and
+		// scrolling committed content off; closing it must recommitAll() to restore
+		// the committed content rather than leaving blank rows below the prompt.
+		const height = 10;
+		const terminal = new VirtualTerminal(40, height);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const transcript = new TestComponent();
+		transcript.lines = Array.from({ length: 30 }, (_, i) => `Line ${i}`);
+		committed.addChild(transcript);
+
+		// editorSlot holds either the small editor or a tall modal
+		const editorSlot = new Container();
+		const editor = new TestComponent();
+		editor.lines = ["> "];
+		editorSlot.addChild(editor);
+		const footer = new TestComponent();
+		footer.lines = ["[footer]"];
+
+		tui.addChild(committed);
+		tui.addChild(editorSlot);
+		tui.addChild(footer);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		await terminal.flush();
+
+		// Open a tall modal in the editor slot (taller than what fits below committed)
+		const modal = new TestComponent();
+		modal.lines = Array.from({ length: 6 }, (_, i) => `Setting ${i}`);
+		editorSlot.clear();
+		editorSlot.addChild(modal);
+		tui.requestRender();
+		await terminal.flush();
+
+		// Close: swap the editor back and recommitAll (what restoreEditorComponent does)
+		editorSlot.clear();
+		editorSlot.addChild(editor);
+		tui.recommitAll();
+		await terminal.flush();
+
+		const viewport = terminal.getViewport();
+		const lastNonBlank = viewport.map((l) => l.trim()).reduce((acc, l, i) => (l !== "" ? i : acc), -1);
+		const blankBelow = viewport.length - 1 - lastNonBlank;
+		assert.ok(blankBelow <= 1, `Expected no ghost whitespace after modal close, got ${blankBelow} blank rows`);
+		assert.ok(
+			viewport.some((l) => l.includes("[footer]")),
+			"footer should be visible at the bottom after modal close",
+		);
+		assert.ok(!viewport.some((l) => l.includes("Setting ")), "modal content should be gone after close");
 
 		tui.stop();
 	});

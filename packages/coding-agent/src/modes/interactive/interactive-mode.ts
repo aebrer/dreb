@@ -1781,11 +1781,8 @@ export class InteractiveMode {
 	 */
 	private hideExtensionSelector(): void {
 		this.extensionSelector?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
 		this.extensionSelector = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
+		this.restoreEditorComponent();
 	}
 
 	/**
@@ -1848,11 +1845,8 @@ export class InteractiveMode {
 	 */
 	private hideExtensionInput(): void {
 		this.extensionInput?.dispose();
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
 		this.extensionInput = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
+		this.restoreEditorComponent();
 	}
 
 	/**
@@ -1886,11 +1880,8 @@ export class InteractiveMode {
 	 * Hide the extension editor.
 	 */
 	private hideExtensionEditor(): void {
-		this.editorContainer.clear();
-		this.editorContainer.addChild(this.editor);
 		this.extensionEditor = undefined;
-		this.ui.setFocus(this.editor);
-		this.ui.requestRender();
+		this.restoreEditorComponent();
 	}
 
 	/**
@@ -1994,11 +1985,8 @@ export class InteractiveMode {
 		const isOverlay = options?.overlay ?? false;
 
 		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
 			this.editor.setText(savedText);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
+			this.restoreEditorComponent();
 		};
 
 		return new Promise((resolve, reject) => {
@@ -3636,14 +3624,31 @@ export class InteractiveMode {
 	// =========================================================================
 
 	/**
+	 * Restore an editor component into the editor container after an inline modal
+	 * (selector, dialog, input, loader) was shown in its place, and repaint.
+	 *
+	 * Uses recommitAll() rather than requestRender(): an inline modal can grow the
+	 * live region tall enough to push committed content up into terminal scrollback.
+	 * Closing it shrinks the live region, and a differential redraw can't pull that
+	 * committed content back down — leaving ghost whitespace below the prompt.
+	 * recommitAll() repaints the whole transcript with position-independent sequences.
+	 * Safe here: these modals are interactive and the user is at the bottom with no
+	 * agent streaming.
+	 */
+	private restoreEditorComponent(editor: Component = this.editor): void {
+		this.editorContainer.clear();
+		this.editorContainer.addChild(editor);
+		this.ui.setFocus(editor);
+		this.ui.recommitAll();
+	}
+
+	/**
 	 * Shows a selector component in place of the editor.
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
 	 */
 	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
 		const done = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
+			this.restoreEditorComponent();
 		};
 		const { component, focus } = create(done);
 		this.editorContainer.clear();
@@ -4332,10 +4337,7 @@ export class InteractiveMode {
 
 		// Restore editor helper
 		const restoreEditor = () => {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.editor);
-			this.ui.setFocus(this.editor);
-			this.ui.requestRender();
+			this.restoreEditorComponent();
 		};
 
 		try {
@@ -4425,10 +4427,7 @@ export class InteractiveMode {
 
 		const dismissLoader = (editor: Component) => {
 			loader.dispose();
-			this.editorContainer.clear();
-			this.editorContainer.addChild(editor);
-			this.ui.setFocus(editor);
-			this.ui.requestRender();
+			this.restoreEditorComponent(editor);
 		};
 
 		try {
@@ -4457,7 +4456,8 @@ export class InteractiveMode {
 			}
 			this.rebuildChatFromMessages();
 			this.tryCommitPrefix();
-			this.ui.recommitAll();
+			// dismissLoader() restores the editor and calls recommitAll(), which
+			// repaints the rebuilt committed content — no separate recommit needed.
 			dismissLoader(this.editor as Component);
 			this.showLoadedResources({
 				force: false,
