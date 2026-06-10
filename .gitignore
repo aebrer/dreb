@@ -3,6 +3,7 @@ analysis/parsed_sessions.json
 analysis/plots/
 node_modules/
 dist/
+coverage/
 *.tsbuildinfo
 packages/ai/src/models.generated.ts
 

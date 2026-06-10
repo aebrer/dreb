@@ -27,11 +27,11 @@
     "@types/node": "^22.10.5",
     "@typescript/native-preview": "7.0.0-dev.20260120.1",
     "@vitest/coverage-v8": "^4.1.8",
-    "concurrently": "^9.2.1",
+    "concurrently": "^10.0.3",
     "husky": "^9.1.7",
+    "shx": "^0.4.0",
     "tsx": "^4.20.3",
-    "typescript": "^5.9.2",
-    "shx": "^0.4.0"
+    "typescript": "^5.9.2"
   },
   "author": "Drew Brereton",
   "homepage": "https://entropist.ca",
@@ -40,8 +40,8 @@
   },
   "version": "2.27.1",
   "dependencies": {
-    "@mariozechner/jiti": "^2.6.5",
     "@dreb/coding-agent": "*",
+    "@mariozechner/jiti": "^2.6.5",
     "get-east-asian-width": "^1.4.0"
   },
   "overrides": {
