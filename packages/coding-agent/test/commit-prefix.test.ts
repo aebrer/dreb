@@ -3,8 +3,8 @@
  * Tests tryCommitPrefix(), onPostRender deferred commit, and Kitty hold-back.
  */
 import type { AssistantMessage } from "@dreb/ai";
-import { Container, type TUI } from "@dreb/tui";
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { Container, resetCapabilitiesCache, type TUI } from "@dreb/tui";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
@@ -32,6 +32,36 @@ function createAssistantMessage(overrides: Partial<AssistantMessage> = {}): Assi
 
 beforeAll(() => {
 	initTheme("dark");
+});
+
+const terminalCapabilityEnvKeys = [
+	"KITTY_WINDOW_ID",
+	"TERM_PROGRAM",
+	"GHOSTTY_RESOURCES_DIR",
+	"WEZTERM_PANE",
+	"ITERM_SESSION_ID",
+] as const;
+let savedTerminalCapabilityEnv: Partial<Record<(typeof terminalCapabilityEnvKeys)[number], string>> = {};
+
+beforeEach(() => {
+	savedTerminalCapabilityEnv = {};
+	for (const key of terminalCapabilityEnvKeys) {
+		savedTerminalCapabilityEnv[key] = process.env[key];
+		delete process.env[key];
+	}
+	resetCapabilitiesCache();
+});
+
+afterEach(() => {
+	for (const key of terminalCapabilityEnvKeys) {
+		const value = savedTerminalCapabilityEnv[key];
+		if (value === undefined) {
+			delete process.env[key];
+		} else {
+			process.env[key] = value;
+		}
+	}
+	resetCapabilitiesCache();
 });
 
 function createFakeTui(): TUI {
