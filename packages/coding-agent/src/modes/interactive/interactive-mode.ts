@@ -2704,24 +2704,9 @@ export class InteractiveMode {
 					this.chatContainer.removeChild(component);
 				}
 				this.pendingTools.clear();
-				// Show retry status
-				this.statusContainer.clear();
-				if (this.loadingAnimation) {
-					this.loadingAnimation.stop();
-					this.loadingAnimation = undefined;
-				}
-				if (this.retryLoader) {
-					this.retryLoader.stop();
-					this.retryLoader = undefined;
-				}
-				this.retryLoader = new Loader(
-					this.ui,
-					(spinner) => theme.fg("warning", spinner),
-					(text) => theme.fg("muted", text),
-					`Stream dropped, retrying (${event.attempt}/${event.maxAttempts})... (${keyText("app.interrupt")} to cancel)`,
-				);
-				this.statusContainer.addChild(this.retryLoader);
-				this.ui.requestRender();
+				// Warn in the chat scrollback — keep the working spinner running so ESC
+				// aborts via the normal loadingAnimation path (same AbortController).
+				this.showWarning(`Stream dropped, retrying (${event.attempt}/${event.maxAttempts})…`);
 				break;
 			}
 
@@ -2737,24 +2722,11 @@ export class InteractiveMode {
 					this.chatContainer.removeChild(component);
 				}
 				this.pendingTools.clear();
-				// Show retry status
-				this.statusContainer.clear();
-				if (this.loadingAnimation) {
-					this.loadingAnimation.stop();
-					this.loadingAnimation = undefined;
-				}
-				if (this.retryLoader) {
-					this.retryLoader.stop();
-					this.retryLoader = undefined;
-				}
-				this.retryLoader = new Loader(
-					this.ui,
-					(spinner) => theme.fg("warning", spinner),
-					(text) => theme.fg("muted", text),
-					`Response truncated, retrying with larger token budget (${event.attempt}/${event.maxAttempts})... (${keyText("app.interrupt")} to cancel)`,
+				// Warn in the chat scrollback — keep the working spinner running so ESC
+				// aborts via the normal loadingAnimation path (same AbortController).
+				this.showWarning(
+					`Response truncated, retrying with larger token budget (${event.attempt}/${event.maxAttempts})…`,
 				);
-				this.statusContainer.addChild(this.retryLoader);
-				this.ui.requestRender();
 				break;
 			}
 
