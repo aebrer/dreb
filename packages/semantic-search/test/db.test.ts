@@ -4,13 +4,15 @@ import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isSqliteAvailable, SearchDatabase } from "../src/db.js";
 
+const nodeVersion = Number.parseInt(process.versions.node.split(".")[0], 10);
+
 describe("isSqliteAvailable", () => {
-	it("returns true on Node 22+", () => {
+	it.skipIf(nodeVersion < 22)("returns true on Node 22+", () => {
 		expect(isSqliteAvailable()).toBe(true);
 	});
 });
 
-describe("SearchDatabase", () => {
+describe.skipIf(nodeVersion < 22)("SearchDatabase", () => {
 	let db: SearchDatabase;
 	let tmpDir: string;
 

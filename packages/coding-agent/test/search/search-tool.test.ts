@@ -74,9 +74,11 @@ function createFixtureProject(dir: string): void {
 // Availability
 // ============================================================================
 
+const nodeVersion = Number.parseInt(process.versions.node.split(".")[0], 10);
+
 describe("isSearchAvailable", () => {
-	it("returns true on Node 22+", () => {
-		// We're running on Node 22, so node:sqlite should be available
+	it.skipIf(nodeVersion < 22)("returns true on Node 22+", () => {
+		// We're running on Node 22+, so node:sqlite should be available
 		expect(isSearchAvailable()).toBe(true);
 	});
 });
@@ -305,7 +307,7 @@ describe("createSearchToolDefinition", () => {
 	// Execute — empty query
 	// ============================================================================
 
-	describe("execute", () => {
+	describe.skipIf(nodeVersion < 22)("execute", () => {
 		it('returns "cannot be empty" message for empty query', async () => {
 			const result = await tool.execute("test-1", { query: "" }, undefined, undefined, undefined as any);
 			const text = result.content[0];

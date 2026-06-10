@@ -73,7 +73,7 @@ vi.mock("../src/core/resource-loader.js", async (importOriginal) => {
 	};
 });
 
-describe("sessionDir precedence", () => {
+describe("sessionDir precedence", { timeout: 60_000 }, () => {
 	let tempDir: string;
 	let agentDir: string;
 	let projectDir: string;

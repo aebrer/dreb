@@ -303,11 +303,18 @@ describe("matchesKey", () => {
 
 		it("should treat raw 0x08 as ctrl+backspace in Windows Terminal", () => {
 			setKittyProtocolActive(false);
-			withEnv("WT_SESSION", "test-session", () => {
-				assert.strictEqual(matchesKey("\x08", "ctrl+backspace"), true);
-				assert.strictEqual(matchesKey("\x08", "backspace"), false);
-				assert.strictEqual(parseKey("\x08"), "ctrl+backspace");
-				assert.strictEqual(matchesKey("\x08", "ctrl+h"), true);
+			// Clear SSH env vars so isWindowsTerminalSession() returns true
+			withEnv("SSH_CONNECTION", undefined, () => {
+				withEnv("SSH_CLIENT", undefined, () => {
+					withEnv("SSH_TTY", undefined, () => {
+						withEnv("WT_SESSION", "test-session", () => {
+							assert.strictEqual(matchesKey("\x08", "ctrl+backspace"), true);
+							assert.strictEqual(matchesKey("\x08", "backspace"), false);
+							assert.strictEqual(parseKey("\x08"), "ctrl+backspace");
+							assert.strictEqual(matchesKey("\x08", "ctrl+h"), true);
+						});
+					});
+				});
 			});
 		});
 

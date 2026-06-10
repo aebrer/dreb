@@ -252,7 +252,9 @@ describe("computeGitRecencyScores", () => {
 // computeImportGraphScores
 // ============================================================================
 
-describe("computeImportGraphScores", () => {
+const nodeVersion = Number.parseInt(process.versions.node.split(".")[0], 10);
+
+describe.skipIf(nodeVersion < 22)("computeImportGraphScores", () => {
 	let db: SearchDatabase;
 	let tmpDir: string;
 
@@ -416,7 +418,7 @@ describe("computeImportGraphScores", () => {
 // computeBm25Scores
 // ============================================================================
 
-describe("computeBm25Scores", () => {
+describe.skipIf(nodeVersion < 22)("computeBm25Scores", () => {
 	let db: SearchDatabase;
 	let tmpDir: string;
 

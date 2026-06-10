@@ -110,7 +110,9 @@ function createFixtureProject(dir: string): void {
 // Tests
 // ============================================================================
 
-describe("SearchEngine.search()", () => {
+const nodeVersion = Number.parseInt(process.versions.node.split(".")[0], 10);
+
+describe.skipIf(nodeVersion < 22)("SearchEngine.search()", () => {
 	let tmpDir: string;
 	let engine: SearchEngine;
 
@@ -481,7 +483,7 @@ describe("SearchEngine.search()", () => {
 // SearchEngineOptions
 // ============================================================================
 
-describe("SearchEngineOptions", () => {
+describe.skipIf(nodeVersion < 22)("SearchEngineOptions", () => {
 	// ================================================================
 	// indexDir — custom index location
 	// ================================================================

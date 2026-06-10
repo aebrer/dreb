@@ -38,7 +38,9 @@ function setMtime(filePath: string, date: Date): void {
 // Tests
 // ============================================================================
 
-describe("IndexManager", () => {
+const nodeVersion = Number.parseInt(process.versions.node.split(".")[0], 10);
+
+describe.skipIf(nodeVersion < 22)("IndexManager", () => {
 	let tmpDir: string;
 	let projectDir: string;
 	let indexDir: string;

@@ -100,7 +100,7 @@ describe("WebSearchQueue", () => {
 
 	it("error during search still updates timestamp", async () => {
 		const queue = new WebSearchQueue({
-			rateLimitMs: 100,
+			rateLimitMs: 500,
 			lockFilePath,
 			timeFilePath,
 		});
@@ -118,12 +118,13 @@ describe("WebSearchQueue", () => {
 		expect(typeof data.lastSearchTime).toBe("number");
 		expect(data.lastSearchTime).toBeGreaterThan(0);
 
-		// Second call should be delayed (proving timestamp was written by the failed call)
+		// Second call should be delayed (proving timestamp was written by the failed call).
+		// Use 500ms rate limit to avoid flakiness under heavy parallel test load,
+		// where overhead between calls can exceed smaller thresholds.
 		const start = performance.now();
 		await queue.enqueue(async () => "ok");
 		const elapsed = performance.now() - start;
-		// Should have waited ~100ms minus whatever already elapsed
-		expect(elapsed).toBeGreaterThanOrEqual(80);
+		expect(elapsed).toBeGreaterThanOrEqual(200);
 	});
 
 	it("uses custom lock and time file paths", async () => {
