@@ -2,6 +2,7 @@
 	"name": "@dreb/telegram",
 	"version": "2.25.5",
 	"description": "Telegram bot frontend for dreb coding agent",
+	"license": "MIT",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
