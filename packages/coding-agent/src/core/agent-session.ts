@@ -1337,6 +1337,7 @@ export class AgentSession {
 			promptGuidelines,
 			uiType: this._uiType,
 			gitRepoState: this._gitRepoState,
+			currentModel: this.model ? { provider: this.model.provider, id: this.model.id } : undefined,
 		});
 	}
 
@@ -1875,6 +1876,8 @@ export class AgentSession {
 		this._refreshThinkingDisplay(model);
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.setSystemPrompt(this._baseSystemPrompt);
 
 		// Re-clamp thinking level for new model's capabilities
 		this.setThinkingLevel(thinkingLevel);
@@ -1948,6 +1951,8 @@ export class AgentSession {
 		this._refreshThinkingDisplay(next.model);
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.setSystemPrompt(this._baseSystemPrompt);
 
 		// Apply thinking level.
 		// - Explicit scoped model thinking level overrides current session level
@@ -1982,6 +1987,8 @@ export class AgentSession {
 		this._refreshThinkingDisplay(nextModel);
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.setSystemPrompt(this._baseSystemPrompt);
 
 		// Re-clamp thinking level for new model's capabilities
 		this.setThinkingLevel(thinkingLevel);

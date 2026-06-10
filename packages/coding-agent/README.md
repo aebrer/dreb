@@ -369,6 +369,8 @@ The `subagent` tool delegates tasks to independent child agent processes. Each s
 
 **Per-agent model overrides:** The model used by each agent type can be overridden via the `agentModels.models` setting (a map of agent name → ordered fallback list) without copying or editing the agent definition `.md` files. Configure it in `settings.json` or via `/settings` → **Agent Models**. Resolution order: per-invocation `model` override → `agentModels` setting → agent definition `model` → parent session model. See [docs/agent-models.md](docs/agent-models.md).
 
+**Model identity in system prompt:** The parent session's running model is exposed in its own system prompt as `You are running on: provider/id`. This lets the model make self-aware routing decisions (e.g. delegate vision tasks to a multimodal subagent, or use a differently-architected model as a critic). The line updates automatically on mid-session model switches.
+
 **Session metadata:** Each child process records its agent type in the session JSONL header (`agentType` field), providing an audit trail of which agent definition executed the work.
 
 ---

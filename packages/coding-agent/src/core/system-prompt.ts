@@ -31,6 +31,8 @@ export interface BuildSystemPromptOptions {
 	skills?: Skill[];
 	/** Git repo state snapshot (branch, dirty count, recent commits, tags, open PRs). */
 	gitRepoState?: GitRepoState;
+	/** Identity of the currently active model (provider and model ID). */
+	currentModel?: { provider: string; id: string };
 }
 
 function formatMemoryScope(sources: readonly import("./resource-loader.js").MemorySource[], heading: string): string {
@@ -233,6 +235,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		if (options.uiType) {
 			prompt += formatUiSection(options.uiType);
 		}
+		if (options.currentModel) {
+			prompt += `\nYou are running on: ${options.currentModel.provider}/${options.currentModel.id}`;
+		}
 
 		return prompt;
 	}
@@ -358,6 +363,9 @@ Dreb documentation (read only when the user asks about dreb itself, its SDK, ext
 	prompt += `\nCurrent working directory: ${promptCwd}`;
 	if (options.uiType) {
 		prompt += formatUiSection(options.uiType);
+	}
+	if (options.currentModel) {
+		prompt += `\nYou are running on: ${options.currentModel.provider}/${options.currentModel.id}`;
 	}
 
 	return prompt;
