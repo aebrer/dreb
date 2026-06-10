@@ -40,6 +40,7 @@ const terminalCapabilityEnvKeys = [
 	"GHOSTTY_RESOURCES_DIR",
 	"WEZTERM_PANE",
 	"ITERM_SESSION_ID",
+	"TERM",
 ] as const;
 let savedTerminalCapabilityEnv: Partial<Record<(typeof terminalCapabilityEnvKeys)[number], string>> = {};
 
