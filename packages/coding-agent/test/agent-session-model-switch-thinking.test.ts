@@ -265,3 +265,38 @@ describe("AgentSession switchSession — thinkingDisplay", () => {
 		}
 	});
 });
+
+describe("AgentSession model switching — system prompt identity", () => {
+	it("updates the active system prompt to reflect the new model after setModel()", async () => {
+		const { session } = createSession();
+
+		try {
+			await session.setModel(nonReasoningModel);
+
+			expect(session.systemPrompt).toContain(
+				`You are running on: ${nonReasoningModel.provider}/${nonReasoningModel.id}`,
+			);
+			expect(session.systemPrompt).not.toContain(reasoningModel.id);
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("updates the active system prompt to reflect the new model after cycleModel()", async () => {
+		const { session } = createSession({
+			scopedModels: [{ model: reasoningModel }, { model: nonReasoningModel }],
+		});
+
+		try {
+			await session.cycleModel();
+
+			expect(session.model?.id).toBe(nonReasoningModel.id);
+			expect(session.systemPrompt).toContain(
+				`You are running on: ${nonReasoningModel.provider}/${nonReasoningModel.id}`,
+			);
+			expect(session.systemPrompt).not.toContain(reasoningModel.id);
+		} finally {
+			session.dispose();
+		}
+	});
+});
