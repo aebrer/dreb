@@ -625,9 +625,13 @@ export class InteractiveMode {
 		await this.initExtensions();
 
 		// Render initial messages AFTER showing loaded resources.
-		// resetChatDisplay clears containers, renders session messages,
-		// commits the finalized prefix, and paints everything via recommitAll.
-		this.resetChatDisplay();
+		// Do NOT call resetChatDisplay() here — initExtensions() already populated
+		// chatContainer with Context/Memory/Skills via showLoadedResources().
+		// Clearing would erase that content. Just append session messages, commit,
+		// and repaint.
+		this.renderInitialMessages();
+		this.tryCommitPrefix();
+		this.ui.recommitAll();
 
 		// Set terminal title
 		this.updateTerminalTitle();
@@ -1652,7 +1656,9 @@ export class InteractiveMode {
 			}
 		}
 
-		this.ui.requestRender();
+		// Header is committed content (child 0 of the TUI, before committedChildCount);
+		// requestRender() only re-renders the live region and would silently drop this change.
+		this.ui.recommitAll();
 	}
 
 	private addExtensionTerminalInputListener(

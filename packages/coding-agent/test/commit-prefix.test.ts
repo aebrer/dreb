@@ -188,7 +188,7 @@ describe("tryCommitPrefix logic", () => {
 });
 
 describe("Kitty hold-back", () => {
-	test("hasPendingConversions blocks commit", () => {
+	test("hasPendingConversions() returns false when no Kitty support is active", () => {
 		const ui = createFakeTui();
 		const chatContainer = new Container();
 
@@ -204,6 +204,58 @@ describe("Kitty hold-back", () => {
 
 		// hasPendingConversions is false by default (no kitty support active)
 		expect(tool.hasPendingConversions()).toBe(false);
+	});
+
+	test("hasPendingConversions() blocks commit when Kitty conversions are pending", () => {
+		const ui = createFakeTui();
+		const chatContainer = new Container();
+		const committedChatContainer = new Container();
+
+		// Finalized message before the tool
+		const msg = new AssistantMessageComponent(createAssistantMessage());
+		chatContainer.addChild(msg);
+
+		// Tool with a result — mock hasPendingConversions to simulate active Kitty conversion
+		const tool = new ToolExecutionComponent("bash", "tool-1", { command: "ls" }, {}, undefined as any, ui);
+		tool.updateResult({
+			content: [
+				{ type: "text", text: "result" },
+				{ type: "image", data: "base64data", mimeType: "image/jpeg" },
+			],
+			isError: false,
+		});
+		vi.spyOn(tool, "hasPendingConversions").mockReturnValue(true);
+		chatContainer.addChild(tool);
+
+		// Another finalized message after the tool
+		const msg2 = new AssistantMessageComponent(createAssistantMessage());
+		chatContainer.addChild(msg2);
+
+		const streamingComponent: AssistantMessageComponent | undefined = undefined;
+		const pendingTools = new Map<string, ToolExecutionComponent>();
+		let commitCount = 0;
+
+		for (const child of chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) {
+				if (child === streamingComponent) break;
+				commitCount++;
+			} else if (child instanceof ToolExecutionComponent) {
+				if (pendingTools.has(child.getToolCallId())) break;
+				if (child.hasPendingConversions()) break; // blocks here
+				commitCount++;
+			} else {
+				commitCount++;
+			}
+		}
+
+		// Only the message before the pending-conversion tool is committed
+		expect(commitCount).toBe(1);
+
+		const toCommit = chatContainer.children.splice(0, commitCount);
+		for (const c of toCommit) committedChatContainer.addChild(c);
+
+		expect(committedChatContainer.children.length).toBe(1);
+		expect(chatContainer.children.length).toBe(2); // tool + msg2 remain
 	});
 
 	test("getToolCallId returns the correct ID", () => {
