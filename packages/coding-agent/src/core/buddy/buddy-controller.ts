@@ -119,7 +119,7 @@ export class BuddyController {
 		if (this.contextBuffer.length === 0) {
 			return "No recent activity.";
 		}
-		return this.contextBuffer.join("\n").slice(0, 8000);
+		return this.contextBuffer.join("\n").slice(-8000);
 	}
 
 	// =========================================================================

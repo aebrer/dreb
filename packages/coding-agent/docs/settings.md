@@ -97,7 +97,7 @@ current model supports adaptive thinking).
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `tabTitle.enabled` | boolean | `true` | Auto-generate terminal tab title from session task |
-| `tabTitle.triggerAfter` | number | `12` | Number of tool calls before generating title |
+| `tabTitle.triggerAfter` | number | `9` | Number of tool calls before generating title |
 
 After the configured number of tool calls, dreb fires a single background LLM call to summarize the session's task into a short (≤30 character) terminal tab title, then sets it via OSC 0. Only fires once per session. If the LLM call fails, the default title remains.
 
@@ -105,7 +105,7 @@ After the configured number of tool calls, dreb fires a single background LLM ca
 {
   "tabTitle": {
     "enabled": true,
-    "triggerAfter": 12
+    "triggerAfter": 9
   }
 }
 ```
