@@ -333,7 +333,10 @@ export class TUI extends Container {
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
 					if (this.overlayStack.length === 0) this.terminal.hideCursor();
-					this.requestRender();
+					// Overlay dismissed — user was at the bottom of the TUI by definition,
+					// so a full recommit is safe and ensures no ghost whitespace from
+					// overlay padding lines.
+					this.recommitAll();
 				}
 			},
 			setHidden: (hidden: boolean) => {
@@ -384,7 +387,8 @@ export class TUI extends Container {
 			this.setFocus(topVisible?.component ?? overlay.preFocus);
 		}
 		if (this.overlayStack.length === 0) this.terminal.hideCursor();
-		this.requestRender();
+		// Overlay dismissed — full recommit clears any ghost padding lines.
+		this.recommitAll();
 	}
 
 	/** Check if there are any visible overlays */

@@ -3120,7 +3120,9 @@ export class InteractiveMode {
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
 			this.activateStderrGuard();
-			this.ui.requestRender(true);
+			// stop() moved the cursor, so hardwareCursorRow is stale. recommitAll()
+			// uses position-independent sequences (2J/H/3J) — safe after terminal takeover.
+			this.ui.recommitAll();
 		});
 
 		try {
@@ -3360,8 +3362,9 @@ export class InteractiveMode {
 			// Restart TUI and re-intercept stderr
 			this.ui.start();
 			this.activateStderrGuard();
-			// Force full re-render since external editor uses alternate screen
-			this.ui.requestRender(true);
+			// stop() moved the cursor, so hardwareCursorRow is stale. recommitAll()
+			// uses position-independent sequences (2J/H/3J) — safe after terminal takeover.
+			this.ui.recommitAll();
 		}
 	}
 
