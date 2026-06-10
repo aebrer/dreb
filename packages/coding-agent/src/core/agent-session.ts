@@ -91,7 +91,7 @@ import {
 } from "./tools/index.js";
 import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
-import { isWorktreeConflictCommand } from "./worktree-guard.js";
+import { clearWorktreeCache, isWorktreeConflictCommand } from "./worktree-guard.js";
 
 // ============================================================================
 // Constants
@@ -2924,12 +2924,26 @@ export class AgentSession {
 	 * to use the new cwd. Called by the `chdir` tool via the `onChdir` callback.
 	 */
 	private _changeCwd(newCwd: string): void {
+		const oldCwd = this._cwd;
+		const oldGitRepoState = this._gitRepoState;
+
 		this._cwd = newCwd;
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
-		this._buildRuntime({
-			activeToolNames: this.getActiveToolNames(),
-			includeAllExtensionTools: true,
-		});
+
+		// Invalidate worktree cache — the new cwd may have different worktrees
+		clearWorktreeCache();
+
+		try {
+			this._buildRuntime({
+				activeToolNames: this.getActiveToolNames(),
+				includeAllExtensionTools: true,
+			});
+		} catch (err) {
+			// Rollback state on failure to prevent split state
+			this._cwd = oldCwd;
+			this._gitRepoState = oldGitRepoState;
+			throw err;
+		}
 		// The system prompt and footer will reflect the new cwd after _buildRuntime completes.
 		// No explicit event needed — the rebuilt system prompt is set on the agent immediately.
 	}

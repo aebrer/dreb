@@ -170,6 +170,13 @@ function formatGitStateSection(state: GitRepoState): string {
 		}
 	}
 
+	if (state.worktrees && state.worktrees.length > 0) {
+		section += "- Active worktrees:\n";
+		for (const wt of state.worktrees) {
+			section += `  - \`${wt.branch}\` → ${wt.path}\n`;
+		}
+	}
+
 	return section;
 }
 

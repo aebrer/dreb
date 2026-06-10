@@ -1,15 +1,6 @@
 import { execSync } from "node:child_process";
+import { gitEnv } from "./git-env.js";
 import { findGitRoot } from "./git-root.js";
-
-/**
- * Create a clean environment for git commands.
- * Removes GIT_DIR, GIT_INDEX_FILE, and GIT_WORK_TREE to prevent inherited
- * env vars (e.g. from git hooks) from causing git to use the wrong repo.
- */
-function gitEnv(): NodeJS.ProcessEnv {
-	const { GIT_DIR: _, GIT_INDEX_FILE: __, GIT_WORK_TREE: ___, ...env } = process.env;
-	return env;
-}
 
 export interface WorktreeConflictResult {
 	blocked: boolean;
@@ -35,15 +26,28 @@ function getWorktreeBranches(cwd: string): Map<string, string> | undefined {
 	}
 
 	try {
-		const output = execSync("git worktree list --porcelain", { cwd: gitRoot, encoding: "utf-8", env: gitEnv() });
+		const output = execSync("git worktree list --porcelain", {
+			cwd: gitRoot,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+			env: gitEnv(),
+		});
 		const worktrees = new Map<string, string>(); // branch -> path
 		let currentPath = "";
+		let isFirst = true; // Skip the first entry (primary working copy)
 		for (const line of output.split("\n")) {
 			if (line.startsWith("worktree ")) {
 				currentPath = line.slice(9);
 			} else if (line.startsWith("branch refs/heads/")) {
-				const branch = line.slice(18);
-				worktrees.set(branch, currentPath);
+				if (isFirst) {
+					isFirst = false;
+				} else {
+					const branch = line.slice(18);
+					worktrees.set(branch, currentPath);
+				}
+			} else if (line === "" && currentPath) {
+				// End of block — mark first entry as consumed
+				if (isFirst) isFirst = false;
 			}
 		}
 		worktreeCache.set(gitRoot, { worktrees, timestamp: now });
@@ -51,6 +55,18 @@ function getWorktreeBranches(cwd: string): Map<string, string> | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Strip heredoc content from a bash command so that text inside heredoc bodies
+ * doesn't trigger false-positive pattern matches.
+ *
+ * Handles both quoted delimiters (<<'EOF', <<"EOF") and unquoted (<<EOF).
+ */
+function stripHeredocs(command: string): string {
+	// Match heredoc start: << [-]? ['"]?DELIMITER['"]?
+	// Then remove everything up to and including the delimiter line
+	return command.replace(/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\1\b[^\n]*/g, "");
 }
 
 /**
@@ -63,20 +79,21 @@ function extractBranchTarget(command: string): string | undefined {
 	// Match: gh pr checkout <number> — we can't easily resolve PR number to branch,
 	//   so we return a special marker
 
-	const trimmed = command.trim();
+	// Strip heredoc bodies to avoid false positives from PR comment content
+	const trimmed = stripHeredocs(command).trim();
 
 	// git checkout -- <file> → not a branch checkout
 	if (/\bgit\s+checkout\s+--\s/.test(trimmed)) return undefined;
 	// git checkout -b → creating new branch (allowed)
 	if (/\bgit\s+checkout\s+-[bB]\s/.test(trimmed)) return undefined;
 	// git checkout <branch>
-	const checkoutMatch = trimmed.match(/\bgit\s+checkout\s+([\w\-./]+)\s*$/);
+	const checkoutMatch = trimmed.match(/\bgit\s+checkout\s+([\w\-./]+)/);
 	if (checkoutMatch) return checkoutMatch[1];
 
 	// git switch -c → creating new branch (allowed)
 	if (/\bgit\s+switch\s+-[cC]\s/.test(trimmed)) return undefined;
 	// git switch <branch>
-	const switchMatch = trimmed.match(/\bgit\s+switch\s+([\w\-./]+)\s*$/);
+	const switchMatch = trimmed.match(/\bgit\s+switch\s+([\w\-./]+)/);
 	if (switchMatch) return switchMatch[1];
 
 	// gh pr checkout <N> — can't resolve to branch name without API call
@@ -126,4 +143,4 @@ export function clearWorktreeCache(): void {
 }
 
 // Export for testing
-export { extractBranchTarget as _extractBranchTarget };
+export { extractBranchTarget as _extractBranchTarget, stripHeredocs as _stripHeredocs };

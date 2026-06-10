@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { gitEnv } from "./git-env.js";
 import { findGitRoot } from "./git-root.js";
 
 export interface GitRepoState {
@@ -7,6 +8,7 @@ export interface GitRepoState {
 	recentCommits: Array<{ hash: string; subject: string }>;
 	recentTags: Array<{ name: string; date: string }>;
 	openPRs: Array<{ number: number; title: string; url: string }>;
+	worktrees: Array<{ path: string; branch: string }>;
 }
 
 const SPAWN_OPTS: { encoding: "utf8"; timeout: number; stdio: ["ignore", "pipe", "ignore"] } = {
@@ -96,5 +98,32 @@ export function getGitRepoState(cwd: string): GitRepoState | null {
 		}
 	}
 
-	return { branch, dirtyCount, recentCommits, recentTags, openPRs };
+	// Worktrees (only non-main worktrees — skip the primary working copy)
+	const worktrees: Array<{ path: string; branch: string }> = [];
+	const wtResult = spawnSync("git", ["worktree", "list", "--porcelain"], { ...SPAWN_OPTS, cwd, env: gitEnv() });
+	if (wtResult.status === 0 && wtResult.stdout) {
+		let currentPath = "";
+		let isFirst = true;
+		for (const line of wtResult.stdout.split("\n")) {
+			if (line.startsWith("worktree ")) {
+				if (!isFirst && currentPath) {
+					// Flush previous entry (it had no branch — skip detached)
+				}
+				currentPath = line.slice("worktree ".length);
+				isFirst = false;
+			} else if (line.startsWith("branch refs/heads/") && currentPath) {
+				const wtBranch = line.slice("branch refs/heads/".length);
+				worktrees.push({ path: currentPath, branch: wtBranch });
+				currentPath = "";
+			} else if (line === "") {
+				currentPath = "";
+			}
+		}
+	}
+	// Remove the first entry (main worktree = the repo itself)
+	if (worktrees.length > 0) {
+		worktrees.shift();
+	}
+
+	return { branch, dirtyCount, recentCommits, recentTags, openPRs, worktrees };
 }

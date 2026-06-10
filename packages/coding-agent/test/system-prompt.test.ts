@@ -131,6 +131,7 @@ describe("buildSystemPrompt", () => {
 				{ name: "v1.2.2", date: "3 weeks ago" },
 			],
 			openPRs: [{ number: 42, title: "Add feature X", url: "https://github.com/org/repo/pull/42" }],
+			worktrees: [{ path: "/home/user/repo-worktrees/issue-42", branch: "feature/issue-42-add-feature-x" }],
 		};
 
 		test("full state renders correctly", () => {
@@ -197,6 +198,7 @@ describe("buildSystemPrompt", () => {
 					recentCommits: [{ hash: "aaa1111", subject: "fix bug" }],
 					recentTags: [],
 					openPRs: [],
+					worktrees: [],
 				},
 			});
 

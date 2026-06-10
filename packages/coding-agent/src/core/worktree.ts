@@ -1,15 +1,6 @@
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
-
-/**
- * Create a clean environment for git commands.
- * Removes GIT_DIR, GIT_INDEX_FILE, and GIT_WORK_TREE to prevent inherited
- * env vars (e.g. from git hooks) from causing git to use the wrong repo.
- */
-function gitEnv(): NodeJS.ProcessEnv {
-	const { GIT_DIR: _, GIT_INDEX_FILE: __, GIT_WORK_TREE: ___, ...env } = process.env;
-	return env;
-}
+import { gitEnv } from "./git-env.js";
 
 export interface WorktreeInfo {
 	path: string;
@@ -117,21 +108,28 @@ export function createWorktree(cwd: string, branch: string, issueNumber: number)
 	const existing = findWorktreeForBranch(cwd, branch);
 	if (existing) return existing;
 
-	const repoRoot = execSync("git rev-parse --show-toplevel", {
+	const repoRootResult = spawnSync("git", ["rev-parse", "--show-toplevel"], {
 		cwd,
 		encoding: "utf-8",
-		stdio: ["ignore", "pipe", "ignore"],
+		stdio: ["ignore", "pipe", "pipe"],
 		env: gitEnv(),
-	}).trim();
+	});
+	if (repoRootResult.status !== 0) {
+		throw new Error(`Failed to find git root: ${repoRootResult.stderr?.trim() || "unknown error"}`);
+	}
+	const repoRoot = repoRootResult.stdout.trim();
 
 	const target = getWorktreePath(repoRoot, issueNumber);
 
-	execSync(`git worktree add ${JSON.stringify(target)} ${JSON.stringify(branch)}`, {
+	const addResult = spawnSync("git", ["worktree", "add", target, branch], {
 		cwd,
 		encoding: "utf-8",
-		stdio: ["ignore", "pipe", "ignore"],
+		stdio: ["ignore", "pipe", "pipe"],
 		env: gitEnv(),
 	});
+	if (addResult.status !== 0) {
+		throw new Error(`Failed to create worktree: ${addResult.stderr?.trim() || "unknown error"}`);
+	}
 
 	return target;
 }

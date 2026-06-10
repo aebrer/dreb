@@ -93,6 +93,11 @@ Use a git worktree to isolate the PR's work from the current directory. This kee
 # Derive branch name from issue
 # Format: feature/issue-<N>-<slug> (slug = 3-5 words from title, lowercase, hyphens)
 
+# Check if a worktree already exists for this branch
+git worktree list
+# If a worktree exists for the branch, reuse it (skip branch + worktree creation).
+# If not, create the branch and worktree:
+
 # Create the branch (without switching to it)
 git branch feature/issue-<N>-<slug>
 

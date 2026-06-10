@@ -61,9 +61,7 @@ export function createChdirToolDefinition(
 
 			// Invoke callback to trigger session cwd change
 			const oldCwd = cwd;
-			if (options?.onChdir) {
-				options.onChdir(resolvedPath);
-			}
+			options?.onChdir?.(resolvedPath);
 
 			return {
 				content: [
