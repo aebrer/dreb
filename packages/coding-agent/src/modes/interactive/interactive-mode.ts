@@ -691,6 +691,9 @@ export class InteractiveMode {
 			getModelRegistry: () => this.session.modelRegistry,
 			getProvider: () => this.session.model?.provider,
 			getAgentModelsOverride: (name) => this.settingsManager.getAgentModelsForAgent(name),
+			getBranch: () => this.footerDataProvider.getGitBranch(),
+			getRepo: () => path.basename(process.cwd()),
+			getCwd: () => process.cwd(),
 		});
 	}
 
@@ -2507,6 +2510,8 @@ export class InteractiveMode {
 				}
 				// Capture assistant response for buddy context
 				this.buddyController.handleEvent(event);
+				// Capture context for tab title generation
+				this.tabTitleGenerator?.onMessageEnd(event.message);
 				// Defer commit until after the next render paints the final state
 				this.commitNeeded = true;
 				this.ui.requestRender();
@@ -2560,7 +2565,7 @@ export class InteractiveMode {
 				// Buddy context + reaction for tool execution
 				this.buddyController.handleEvent(event);
 				// Tab title auto-generation
-				this.tabTitleGenerator?.onToolEnd();
+				this.tabTitleGenerator?.onToolEnd(event);
 				break;
 			}
 

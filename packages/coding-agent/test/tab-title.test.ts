@@ -76,6 +76,8 @@ function createMockDeps(overrides: Partial<TabTitleDeps> = {}): TabTitleDeps {
 				getAvailable: () => [MOCK_MODEL],
 			}) as any,
 		getProvider: () => "test-provider",
+		getBranch: () => "main",
+		getRepo: () => "test-repo",
 		...overrides,
 	};
 }
@@ -115,21 +117,18 @@ describe("TabTitleGenerator", () => {
 			const deps = createMockDeps();
 			const gen = new TabTitleGenerator(undefined, deps);
 
-			gen.onToolEnd();
-			gen.onToolEnd();
+			for (let i = 0; i < 4; i++) gen.onToolEnd();
 
 			expect(deps.setTitle).not.toHaveBeenCalled();
 			expect(gen.hasFired).toBe(false);
-			expect(gen.currentCount).toBe(2);
+			expect(gen.currentCount).toBe(4);
 		});
 
-		it("fires exactly at the default threshold (3)", async () => {
+		it("fires exactly at the default threshold (5)", async () => {
 			const deps = createMockDeps();
 			const gen = new TabTitleGenerator(undefined, deps);
 
-			gen.onToolEnd();
-			gen.onToolEnd();
-			gen.onToolEnd();
+			for (let i = 0; i < 5; i++) gen.onToolEnd();
 
 			// Wait for async generation
 			await vi.waitFor(() => {
@@ -235,8 +234,14 @@ describe("TabTitleGenerator", () => {
 			expect(deps.setTitle).not.toHaveBeenCalled();
 		});
 
-		it("handles empty messages gracefully", async () => {
-			const deps = createMockDeps({ getMessages: () => [] });
+		it("handles empty context gracefully", async () => {
+			// No metadata deps and no events sent → buildContext returns undefined
+			const deps = createMockDeps({
+				getMessages: () => [],
+				getBranch: () => null,
+				getRepo: () => undefined,
+				getCwd: () => undefined,
+			});
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
 
 			gen.onToolEnd();
@@ -249,11 +254,24 @@ describe("TabTitleGenerator", () => {
 	});
 
 	describe("prompt construction", () => {
-		it("includes first user message in context", async () => {
-			const deps = createMockDeps();
+		it("includes buffer content in context payload", async () => {
+			const deps = createMockDeps({
+				getBranch: () => "feature/fix-auth",
+				getRepo: () => "my-project",
+			});
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
 
-			gen.onToolEnd();
+			// Feed an assistant message into the buffer
+			gen.onMessageEnd({
+				role: "assistant",
+				content: [{ type: "text", text: "I'll look into that." }],
+			});
+
+			gen.onToolEnd({
+				toolName: "bash",
+				isError: false,
+				result: { output: "ls output" },
+			});
 
 			await vi.waitFor(() => {
 				expect(mockCompleteSimple).toHaveBeenCalled();
@@ -261,20 +279,18 @@ describe("TabTitleGenerator", () => {
 
 			const callArgs = mockCompleteSimple.mock.calls[0];
 			const context = callArgs[1] as any;
-			expect(context.messages[0].content).toContain("Fix the authentication bug in login.ts");
+			const content = context.messages[0].content;
+			expect(content).toContain("Branch: feature/fix-auth");
+			expect(content).toContain("Repo: my-project");
+			expect(content).toContain("Assistant: I'll look into that.");
+			expect(content).toContain("Tool bash completed: ls output");
 		});
 
-		it("handles array content in user messages", async () => {
+		it("includes only metadata when no events have been sent", async () => {
 			const deps = createMockDeps({
-				getMessages: () => [
-					{
-						role: "user",
-						content: [
-							{ type: "text", text: "Refactor the parser" },
-							{ type: "image", source: { data: "abc" } },
-						],
-					},
-				],
+				getBranch: () => "main",
+				getRepo: () => "dreb",
+				getCwd: () => "/home/user/dreb",
 			});
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
 
@@ -286,27 +302,10 @@ describe("TabTitleGenerator", () => {
 
 			const callArgs = mockCompleteSimple.mock.calls[0];
 			const context = callArgs[1] as any;
-			expect(context.messages[0].content).toContain("Refactor the parser");
-		});
-
-		it("truncates very long user messages", async () => {
-			const longMessage = "x".repeat(1000);
-			const deps = createMockDeps({
-				getMessages: () => [{ role: "user", content: longMessage }],
-			});
-			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
-
-			gen.onToolEnd();
-
-			await vi.waitFor(() => {
-				expect(mockCompleteSimple).toHaveBeenCalled();
-			});
-
-			const callArgs = mockCompleteSimple.mock.calls[0];
-			const context = callArgs[1] as any;
-			// Should be truncated to 500 + "..."
-			expect(context.messages[0].content.length).toBeLessThan(600);
-			expect(context.messages[0].content).toContain("...");
+			const content = context.messages[0].content;
+			expect(content).toContain("Branch: main");
+			expect(content).toContain("Repo: dreb");
+			expect(content).toContain("Cwd: /home/user/dreb");
 		});
 	});
 
@@ -381,6 +380,151 @@ describe("TabTitleGenerator", () => {
 			await vi.waitFor(() => {
 				expect(gen.hasFired).toBe(true);
 			});
+			expect(deps.setTitle).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("rolling context buffer", () => {
+		it("onMessageEnd with assistant text → LLM payload includes labeled entry", async () => {
+			const deps = createMockDeps({
+				getBranch: () => "main",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onMessageEnd({
+				role: "assistant",
+				content: [{ type: "text", text: "Looking at the code now." }],
+			});
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			expect(context.messages[0].content).toContain("Assistant: Looking at the code now.");
+		});
+
+		it("onMessageEnd with user message → no entry (filtered out)", async () => {
+			const deps = createMockDeps({
+				getBranch: () => "main",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onMessageEnd({
+				role: "user",
+				content: [{ type: "text", text: "Please fix the bug" }],
+			});
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			expect(context.messages[0].content).not.toContain("User:");
+			expect(context.messages[0].content).not.toContain("Please fix the bug");
+		});
+
+		it("onToolEnd(event) → LLM payload includes tool result", async () => {
+			const deps = createMockDeps({
+				getBranch: () => "main",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd({
+				toolName: "bash",
+				isError: false,
+				result: { output: "file.ts" },
+			});
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			expect(context.messages[0].content).toContain("Tool bash completed: file.ts");
+		});
+
+		it("combines onMessageEnd + onToolEnd accumulating multiple entries", async () => {
+			const deps = createMockDeps({
+				getBranch: () => "feature/test",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 2 }, deps);
+
+			gen.onMessageEnd({
+				role: "assistant",
+				content: [{ type: "text", text: "Starting fix" }],
+			});
+
+			gen.onToolEnd({
+				toolName: "read",
+				isError: false,
+				result: { output: "file content" },
+			});
+
+			gen.onMessageEnd({
+				role: "assistant",
+				content: [{ type: "text", text: "Now editing" }],
+			});
+
+			gen.onToolEnd({
+				toolName: "edit",
+				isError: false,
+				result: { output: "done" },
+			});
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			const content = context.messages[0].content;
+			expect(content).toContain("Assistant: Starting fix");
+			expect(content).toContain("Tool read completed: file content");
+			expect(content).toContain("Assistant: Now editing");
+			expect(content).toContain("Tool edit completed: done");
+			expect(content).toContain("Branch: feature/test");
+		});
+
+		it("buildContext includes branch/repo/cwd metadata", async () => {
+			const deps = createMockDeps({
+				getBranch: () => "feature/cool-thing",
+				getRepo: () => "my-repo",
+				getCwd: () => "/home/user/my-repo",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			const content = context.messages[0].content;
+			expect(content).toContain("Branch: feature/cool-thing");
+			expect(content).toContain("Repo: my-repo");
+			expect(content).toContain("Cwd: /home/user/my-repo");
+		});
+
+		it("buildContext returns undefined when buffer is empty and no metadata", async () => {
+			// Explicitly nullify all metadata getters and send no events
+			const deps = createMockDeps({
+				getBranch: () => null,
+				getRepo: () => undefined,
+				getCwd: () => undefined,
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(gen.hasFired).toBe(true);
+			});
+			// buildContext() returned undefined → generateTitle bails out
 			expect(deps.setTitle).not.toHaveBeenCalled();
 		});
 	});

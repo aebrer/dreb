@@ -12,17 +12,27 @@ import { join } from "node:path";
 import type { Api, Context, Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
 import { CONFIG_DIR_NAME, getPackageDir } from "../../config.js";
+import { labelMessageEnd, labelToolEnd, RollingContextBuffer } from "../../core/context-buffer.js";
 import type { ModelRegistry } from "../../core/model-registry.js";
 import type { TabTitleSettings } from "../../core/settings-manager.js";
 import { parseAgentFrontmatter, resolveModelForSubagentSpawn } from "../../core/tools/subagent.js";
 
-const DEFAULT_TRIGGER_AFTER = 3;
+const DEFAULT_TRIGGER_AFTER = 5;
 const MAX_TITLE_LENGTH = 30;
 const TITLE_GENERATION_TIMEOUT_MS = 60_000;
 
 const TITLE_PROMPT =
-	"Summarize this session's task in ≤30 characters for a terminal tab title. " +
-	"Output ONLY the title text, nothing else. No quotes, no explanation.";
+	"You are a headless terminal-tab title generator. You are NOT the assistant in the session — " +
+	"you will never speak to the user. Your only job is to output a single short title string, nothing else. " +
+	"No quotes, no explanation, no preamble. " +
+	"The title disambiguates terminal windows for a human at a glance. " +
+	"Describe what is being DONE (e.g. 'Fix auth bug', 'Plan subagent refactor', 'Review modal'), " +
+	"not just label the invocation. " +
+	"If a branch name is present, abbreviate it to its semantic slug " +
+	"(e.g. feature/issue-217-copy-selector-modal → copy-selector) and combine with the action. " +
+	"Avoid reference-only formats like '#N' or 'mach6-X #N'. " +
+	"Do not include 'dreb' — the caller already adds it. " +
+	"Output ONLY the title text, ≤30 characters.";
 
 export interface TabTitleDeps {
 	/** Set the terminal tab title (OSC 0). */
@@ -40,18 +50,26 @@ export interface TabTitleDeps {
 	 * Returns a non-empty fallback list when the user has configured an override.
 	 */
 	getAgentModelsOverride?: (agentName: string) => string[] | undefined;
+	/** Current git branch name, or null/undefined if unavailable. */
+	getBranch?: () => string | null | undefined;
+	/** Repository name (e.g., dirname of cwd), or undefined. */
+	getRepo?: () => string | undefined;
+	/** Current working directory, or undefined. */
+	getCwd?: () => string | undefined;
 }
 
 export class TabTitleGenerator {
 	private toolCallCount = 0;
 	private fired = false;
 	private readonly threshold: number;
+	private readonly contextBuffer: RollingContextBuffer;
 
 	constructor(
 		private readonly settings: TabTitleSettings | undefined,
 		private readonly deps: TabTitleDeps,
 	) {
 		this.threshold = settings?.triggerAfter ?? DEFAULT_TRIGGER_AFTER;
+		this.contextBuffer = new RollingContextBuffer({ maxEntries: 30, maxChars: 6000 });
 	}
 
 	/** Whether this generator is enabled. */
@@ -60,10 +78,14 @@ export class TabTitleGenerator {
 	}
 
 	/**
-	 * Called on each tool_execution_end event. Increments the counter and fires
-	 * the title generation when threshold is reached.
+	 * Called on each tool_execution_end event. Captures context from the event,
+	 * increments the counter, and fires title generation when threshold is reached.
 	 */
-	onToolEnd(): void {
+	onToolEnd(event?: { toolName?: string; isError?: boolean; result?: unknown }): void {
+		if (event?.toolName) {
+			this.contextBuffer.append(labelToolEnd(event as { toolName: string; isError?: boolean; result?: unknown }));
+		}
+
 		if (this.fired || !this.enabled) return;
 
 		this.toolCallCount++;
@@ -71,6 +93,14 @@ export class TabTitleGenerator {
 			this.fired = true;
 			// Fire-and-forget — never surfaces errors to the user
 			this.generateTitle().catch(() => {});
+		}
+	}
+
+	/** Called on message_end events — captures labeled context. */
+	onMessageEnd(message: { role: string; content?: unknown }): void {
+		if (this.fired) return; // no need to accumulate after fired
+		for (const entry of labelMessageEnd(message)) {
+			this.contextBuffer.append(entry);
 		}
 	}
 
@@ -171,28 +201,22 @@ export class TabTitleGenerator {
 	}
 
 	private buildContext(): string | undefined {
-		const messages = this.deps.getMessages();
-		if (messages.length === 0) return undefined;
+		const lines: string[] = [];
 
-		// Extract the first user message for context
-		const firstUser = messages.find((m) => m.role === "user");
-		if (!firstUser) return undefined;
+		// Metadata block
+		const branch = this.deps.getBranch?.();
+		const repo = this.deps.getRepo?.();
+		const cwd = this.deps.getCwd?.();
+		if (branch) lines.push(`Branch: ${branch}`);
+		if (repo) lines.push(`Repo: ${repo}`);
+		if (cwd) lines.push(`Cwd: ${cwd}`);
 
-		const content =
-			typeof firstUser.content === "string"
-				? firstUser.content
-				: Array.isArray(firstUser.content)
-					? firstUser.content
-							.filter((c: any) => c.type === "text")
-							.map((c: any) => c.text)
-							.join("\n")
-					: "";
+		// Rolling buffer
+		const bufferContent = this.contextBuffer.build();
+		if (bufferContent) lines.push(bufferContent);
 
-		if (!content) return undefined;
-
-		// Truncate long messages — the LLM only needs a summary
-		const truncated = content.length > 500 ? `${content.slice(0, 500)}...` : content;
-		return `Session task:\n${truncated}`;
+		if (lines.length === 0) return undefined;
+		return lines.join("\n");
 	}
 
 	/** Clean up LLM response to a usable tab title. */

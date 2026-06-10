@@ -13,6 +13,7 @@
  * and Telegram (activity gating + reaction budget) can use different strategies.
  */
 
+import { labelMessageEnd, labelToolEnd } from "../context-buffer.js";
 import { log } from "../logger.js";
 import { type BuddyManager, checkOllama } from "./buddy-manager.js";
 import type { BuddyState } from "./buddy-types.js";
@@ -285,17 +286,8 @@ export class BuddyController {
 		switch (event.type) {
 			case "message_end": {
 				if (event.message?.role === "assistant") {
-					const textParts = event.message.content
-						?.filter((c: any) => c.type === "text")
-						?.map((c: any) => c.text)
-						?.join("");
-					if (textParts) {
-						this.appendContext(`Assistant: ${textParts}`);
-					}
-					const toolCalls = event.message.content?.filter((c: any) => c.type === "toolCall") ?? [];
-					if (toolCalls.length > 0) {
-						const tools = toolCalls.map((c: any) => c.name).join(", ");
-						this.appendContext(`Called tools: ${tools}`);
+					for (const entry of labelMessageEnd(event.message)) {
+						this.appendContext(entry);
 					}
 				}
 				break;
@@ -303,18 +295,9 @@ export class BuddyController {
 
 			case "tool_execution_end": {
 				// Context capture (always)
-				const status = event.isError ? "failed" : "completed";
-				const output = event.result?.output || event.result?.content;
-				const outputText =
-					typeof output === "string"
-						? output
-						: Array.isArray(output)
-							? output
-									.filter((c: any) => c.type === "text")
-									.map((c: any) => c.text)
-									.join("")
-							: "";
-				this.appendContext(`Tool ${event.toolName} ${status}${outputText ? `: ${outputText}` : ""}`);
+				this.appendContext(
+					labelToolEnd({ toolName: event.toolName, isError: event.isError, result: event.result }),
+				);
 
 				// Reaction on error (gated by enabled)
 				if (event.isError && this.enabled) {

@@ -119,7 +119,7 @@ export interface Settings {
 
 export interface TabTitleSettings {
 	enabled?: boolean; // default: true — auto-generate terminal tab title from session task
-	triggerAfter?: number; // default: 3 — number of tool calls before generating title
+	triggerAfter?: number; // default: 5 — number of tool calls before generating title
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
