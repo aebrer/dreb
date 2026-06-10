@@ -30,8 +30,27 @@ tasks_update([
 
 ## Step 2: Pre-merge checks
 
+Instead of switching branches in the current directory, use a git worktree:
+
 ```bash
-gh pr checkout <pr-number>
+# Get the PR's branch name
+PR_BRANCH=$(gh pr view <pr-number> --json headRefName --jq '.headRefName')
+REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
+
+# Check if a worktree already exists for this branch
+git worktree list
+# If a worktree exists for the PR branch, reuse it.
+# If not, create one:
+git worktree add "../${REPO_NAME}-worktrees/issue-<N>" "$PR_BRANCH"
+```
+
+Switch the agent's working directory to the worktree using the `chdir` tool:
+```
+chdir { path: "<worktree-path>" }
+```
+
+Then pull and check status:
+```bash
 git pull
 gh pr view <pr-number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,comments,body
 gh pr checks <pr-number>
@@ -141,14 +160,19 @@ gh pr merge <pr-number> --squash --delete-branch
 
 Use `--squash` by default. If the user prefers a different merge strategy, they can specify.
 
-Then update local:
+Then switch back to the main checkout and clean up the worktree:
 ```bash
+# Switch back to the original (main) checkout
+chdir { path: "<original-repo-path>" }
+
+# Pull latest on default branch
 git checkout $(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
 git pull
-```
 
-Clean up local feature branch if it still exists:
-```bash
+# Remove the worktree (the branch was already deleted by --delete-branch)
+git worktree remove "../<repo-name>-worktrees/issue-<N>" --force 2>/dev/null
+
+# Clean up local feature branch if it still exists
 git branch -d <branch-name> 2>/dev/null
 ```
 

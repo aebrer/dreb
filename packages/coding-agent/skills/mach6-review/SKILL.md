@@ -39,8 +39,27 @@ Extract:
 
 ## Step 3: Prepare
 
+Instead of switching branches in the current directory, use a git worktree:
+
 ```bash
-gh pr checkout <pr-number>
+# Get the PR's branch name
+PR_BRANCH=$(gh pr view <pr-number> --json headRefName --jq '.headRefName')
+REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
+
+# Check if a worktree already exists for this branch
+git worktree list
+# If a worktree exists for the PR branch, reuse it.
+# If not, create one:
+git worktree add "../${REPO_NAME}-worktrees/issue-<N>" "$PR_BRANCH"
+```
+
+Switch the agent's working directory to the worktree using the `chdir` tool:
+```
+chdir { path: "<worktree-path>" }
+```
+
+Then pull latest and mark ready:
+```bash
 git pull
 ```
 

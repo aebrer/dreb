@@ -87,12 +87,29 @@ Update task: plan → completed, branch → in_progress.
 
 ## Step 6: Create branch and draft PR
 
+Use a git worktree to isolate the PR's work from the current directory. This keeps the user's working tree untouched.
+
 ```bash
 # Derive branch name from issue
 # Format: feature/issue-<N>-<slug> (slug = 3-5 words from title, lowercase, hyphens)
-git checkout -b feature/issue-<N>-<slug>
 
-# Create an empty commit so the PR can be opened
+# Create the branch (without switching to it)
+git branch feature/issue-<N>-<slug>
+
+# Determine repo name for worktree path convention
+REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
+
+# Create a worktree for the new branch
+git worktree add "../${REPO_NAME}-worktrees/issue-<N>" feature/issue-<N>-<slug>
+```
+
+Switch the agent's working directory to the worktree using the `chdir` tool:
+```
+chdir { path: "../<repo-name>-worktrees/issue-<N>" }
+```
+
+Now operating in the worktree — create the empty commit and push:
+```bash
 git commit --allow-empty -m "chore: open PR for issue <N>"
 
 git push -u origin feature/issue-<N>-<slug>
