@@ -107,9 +107,9 @@ function parseSizeValue(value: SizeValue | undefined, referenceSize: number): nu
 	return undefined;
 }
 
-function isTermuxSession(): boolean {
-	return Boolean(process.env.TERMUX_VERSION);
-}
+// isTermuxSession guard removed: with the committed-scrollback model, height
+// changes only re-render the small live region (no transcript replay), so the
+// Termux special-case is no longer needed.
 
 /**
  * Options for overlay positioning and sizing.
@@ -210,11 +210,23 @@ export class Container implements Component {
 const RENDER_THROTTLE_MS = 16; // ~60fps
 
 /**
- * TUI - Main class for managing terminal UI with differential rendering
+ * TUI - Main class for managing terminal UI with differential rendering.
+ *
+ * Supports a committed-scrollback + live-region rendering model:
+ * - **Committed region**: the first `committedChildCount` children. Their output
+ *   is written to terminal scrollback once and never re-rendered by the
+ *   differential renderer.
+ * - **Live region**: children after the committed boundary. This is the only
+ *   content the differential renderer manages — keeps full redraws cheap and
+ *   prevents transcript replay into scrollback.
+ *
+ * Use `setCommittedChildCount()` + `commit()` to advance the boundary.
+ * Use `recommitAll()` for global actions that need to repaint everything
+ * (theme change, width resize, expand-all, etc.).
  */
 export class TUI extends Container {
 	public terminal: Terminal;
-	private previousLines: string[] = [];
+	private previousLines: string[] = []; // Live-region lines only (after committed boundary)
 	private previousWidth = 0;
 	private previousHeight = 0;
 	private focusedComponent: Component | null = null;
@@ -222,17 +234,23 @@ export class TUI extends Container {
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
+	/** Callback fired after every render completes (doRender differential path, fullRender, or recommitAll). */
+	public onPostRender?: () => void;
 	private renderTimer: ReturnType<typeof setTimeout> | null = null;
 	private lastRenderAt = 0;
-	private cursorRow = 0; // Logical cursor row (end of rendered content)
-	private hardwareCursorRow = 0; // Actual terminal cursor row (may differ due to IME positioning)
+	private cursorRow = 0; // Logical cursor row within live region (end of live content)
+	private hardwareCursorRow = 0; // Actual cursor row within live region (may differ due to IME)
 	private inputBuffer = ""; // Buffer for parsing terminal responses
 	private cellSizeQueryPending = false;
 	private showHardwareCursor = process.env.DREB_HARDWARE_CURSOR === "1";
-	private maxLinesRendered = 0; // Track terminal's working area (max lines ever rendered)
-	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
+	private maxLinesRendered = 0; // High-water mark of live-region lines rendered
+	private previousViewportTop = 0; // Previous viewport top within live region
 	private fullRedrawCount = 0;
 	private stopped = false;
+
+	// Committed-scrollback state
+	private committedChildCount = 0; // children[0..n) are committed to scrollback
+	private committedLineCount = 0; // total lines written to scrollback from committed children
 
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
@@ -315,7 +333,10 @@ export class TUI extends Container {
 						this.setFocus(topVisible?.component ?? entry.preFocus);
 					}
 					if (this.overlayStack.length === 0) this.terminal.hideCursor();
-					this.requestRender();
+					// Overlay dismissed — user was at the bottom of the TUI by definition,
+					// so a full recommit is safe and ensures no ghost whitespace from
+					// overlay padding lines.
+					this.recommitAll();
 				}
 			},
 			setHidden: (hidden: boolean) => {
@@ -366,7 +387,8 @@ export class TUI extends Container {
 			this.setFocus(topVisible?.component ?? overlay.preFocus);
 		}
 		if (this.overlayStack.length === 0) this.terminal.hideCursor();
-		this.requestRender();
+		// Overlay dismissed — full recommit clears any ghost padding lines.
+		this.recommitAll();
 	}
 
 	/** Check if there are any visible overlays */
@@ -457,14 +479,140 @@ export class TUI extends Container {
 	requestRender(force = false): void {
 		if (force) {
 			this.previousLines = [];
-			this.previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
-			this.previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
+			// Don't set previousWidth/Height to -1 — that would trigger recommitAll
+			// (scrollback clear) on the next doRender. Force should only re-render
+			// the live region cleanly, not wipe committed scrollback.
+			this.previousWidth = 0;
+			this.previousHeight = 0;
+			// Keep hardwareCursorRow intact — it tracks the physical cursor position,
+			// which hasn't moved. fullRender needs it to calculate movement to
+			// live-region start. cursorRow can be reset since it's the logical end.
 			this.cursorRow = 0;
-			this.hardwareCursorRow = 0;
 			this.maxLinesRendered = 0;
 			this.previousViewportTop = 0;
 		}
 		this.scheduleRender();
+	}
+
+	/**
+	 * Get the number of committed children.
+	 */
+	getCommittedChildCount(): number {
+		return this.committedChildCount;
+	}
+
+	/**
+	 * Set how many leading children are committed (their output is in scrollback).
+	 * Must be followed by `commit()` to update line tracking.
+	 */
+	setCommittedChildCount(count: number): void {
+		this.committedChildCount = count;
+	}
+
+	/**
+	 * Update committed line tracking after components were added to committed containers.
+	 * Re-renders committed children to count their current lines, then trims
+	 * `previousLines` and adjusts cursor state so the differential renderer
+	 * only operates on the live region.
+	 */
+	commit(): void {
+		const width = this.terminal.columns;
+
+		// Count lines from committed children
+		let newCommittedLineCount = 0;
+		for (let i = 0; i < this.committedChildCount && i < this.children.length; i++) {
+			const childLines = this.children[i].render(width);
+			newCommittedLineCount += childLines.length;
+		}
+
+		const delta = newCommittedLineCount - this.committedLineCount;
+		if (delta <= 0) return; // nothing new to commit
+
+		// Trim previousLines: remove the leading committed lines
+		if (this.previousLines.length >= delta) {
+			this.previousLines = this.previousLines.slice(delta);
+		} else {
+			this.previousLines = [];
+		}
+
+		// Adjust cursor positions (now relative to smaller live region)
+		this.hardwareCursorRow = Math.max(0, this.hardwareCursorRow - delta);
+		this.cursorRow = Math.max(0, this.cursorRow - delta);
+
+		this.committedLineCount = newCommittedLineCount;
+
+		// Reset live-region tracking
+		this.maxLinesRendered = this.previousLines.length;
+		this.previousViewportTop = Math.max(0, this.previousLines.length - this.terminal.rows);
+	}
+
+	/**
+	 * Clear screen + scrollback, re-render the entire transcript (committed + live),
+	 * and re-establish the committed boundary. Used for global actions that need to
+	 * repaint finalized content (theme change, width resize, expand-all, etc.).
+	 */
+	recommitAll(): void {
+		if (this.stopped) return;
+		const width = this.terminal.columns;
+		const height = this.terminal.rows;
+
+		// Render ALL children (committed + live)
+		const allLines: string[] = [];
+		let newCommittedLineCount = 0;
+		for (let i = 0; i < this.children.length; i++) {
+			const childLines = this.children[i].render(width);
+			for (const line of childLines) allLines.push(line);
+			if (i < this.committedChildCount) {
+				newCommittedLineCount += childLines.length;
+			}
+		}
+
+		// Extract cursor position before applying resets
+		const cursorPos = this.extractCursorPosition(allLines, height);
+
+		this.applyLineResets(allLines);
+
+		// Clear screen + scrollback, write everything
+		this.fullRedrawCount += 1;
+		let buffer = "\x1b[?2026h\x1b[2J\x1b[H\x1b[3J";
+		for (let i = 0; i < allLines.length; i++) {
+			if (i > 0) buffer += "\r\n";
+			buffer += allLines[i];
+		}
+		buffer += "\x1b[?2026l";
+		this.terminal.write(buffer);
+
+		// Update state: previousLines holds only live portion
+		const liveLines = allLines.slice(newCommittedLineCount);
+		this.committedLineCount = newCommittedLineCount;
+		this.previousLines = liveLines;
+		this.cursorRow = Math.max(0, liveLines.length - 1);
+		this.hardwareCursorRow = this.cursorRow;
+		this.maxLinesRendered = liveLines.length;
+		this.previousViewportTop = Math.max(0, liveLines.length - height);
+		this.previousWidth = width;
+		this.previousHeight = height;
+
+		// Position hardware cursor (cursorPos is absolute, adjust to live-relative)
+		if (cursorPos && cursorPos.row >= newCommittedLineCount) {
+			const liveCursorPos = { row: cursorPos.row - newCommittedLineCount, col: cursorPos.col };
+			this.positionHardwareCursor(liveCursorPos, liveLines.length);
+		} else {
+			this.positionHardwareCursor(null, liveLines.length);
+		}
+
+		this.onPostRender?.();
+	}
+
+	/**
+	 * Render only the live-region children (after the committed boundary).
+	 */
+	private renderLive(width: number): string[] {
+		const lines: string[] = [];
+		for (let i = this.committedChildCount; i < this.children.length; i++) {
+			for (const line of this.children[i].render(width)) lines.push(line);
+		}
+		return lines;
 	}
 
 	private scheduleRender(): void {
@@ -894,8 +1042,8 @@ export class TUI extends Container {
 			return targetScreenRow - currentScreenRow;
 		};
 
-		// Render all components to get new lines
-		let newLines = this.render(width);
+		// Render only live-region children (after committed boundary)
+		let newLines = this.renderLive(width);
 
 		// Composite overlays into the rendered lines (before differential compare)
 		if (this.overlayStack.length > 0) {
@@ -907,13 +1055,17 @@ export class TUI extends Container {
 
 		newLines = this.applyLineResets(newLines);
 
-		// Helper to clear scrollback and viewport and render all new lines
-		const fullRender = (clear: boolean, clearScrollback = false): void => {
+		// Helper to clear the live region and re-render live-region lines.
+		// Only clears from the live-region start to the end of the screen —
+		// committed scrollback above is never touched.
+		const fullRender = (clear: boolean): void => {
 			this.fullRedrawCount += 1;
 			let buffer = "\x1b[?2026h"; // Begin synchronized output
 			if (clear) {
-				buffer += "\x1b[2J\x1b[H"; // Clear screen, home
-				if (clearScrollback) buffer += "\x1b[3J"; // Clear scrollback (only for width changes)
+				// Move cursor to start of live region (row 0 in live-relative coords)
+				const moveUp = hardwareCursorRow; // Use local (captured from this.hardwareCursorRow)
+				if (moveUp > 0) buffer += `\x1b[${moveUp}A`;
+				buffer += "\r\x1b[J"; // Carriage return + clear from cursor to end of screen
 			}
 			for (let i = 0; i < newLines.length; i++) {
 				if (i > 0) buffer += "\r\n";
@@ -935,6 +1087,7 @@ export class TUI extends Container {
 			this.previousLines = newLines;
 			this.previousWidth = width;
 			this.previousHeight = height;
+			this.onPostRender?.();
 		};
 
 		const debugRedraw = process.env.DREB_DEBUG_REDRAW === "1";
@@ -945,26 +1098,28 @@ export class TUI extends Container {
 			fs.appendFileSync(logPath, msg);
 		};
 
-		// First render - just output everything without clearing (assumes clean screen)
+		// First render or force re-render — clear live region and write
 		if (this.previousLines.length === 0 && !widthChanged && !heightChanged) {
 			logRedraw("first render");
-			fullRender(false);
+			fullRender(true);
 			return;
 		}
 
-		// Width changes always need a full re-render because wrapping changes.
+		// Width changes need a full re-render of everything (including committed
+		// content, since wrapping changes). Use recommitAll to clear screen +
+		// scrollback and re-render the entire transcript at the new width.
 		if (widthChanged) {
 			logRedraw(`terminal width changed (${this.previousWidth} -> ${width})`);
-			fullRender(true, true);
+			this.recommitAll();
 			return;
 		}
 
-		// Height changes normally need a full re-render to keep the visible viewport aligned,
-		// but Termux changes height when the software keyboard shows or hides.
-		// In that environment, a full redraw causes the entire history to replay on every toggle.
-		if (heightChanged && !isTermuxSession()) {
+		// Height changes need a full re-render to keep the visible viewport aligned.
+		// With the committed-scrollback model, only the live region is re-rendered,
+		// so this is cheap and safe even on Termux (no transcript replay).
+		if (heightChanged) {
 			logRedraw(`terminal height changed (${this.previousHeight} -> ${height})`);
-			fullRender(true, false);
+			fullRender(true);
 			return;
 		}
 
@@ -997,6 +1152,7 @@ export class TUI extends Container {
 			this.positionHardwareCursor(cursorPos, newLines.length);
 			this.previousViewportTop = prevViewportTop;
 			this.previousHeight = height;
+			this.onPostRender?.();
 			return;
 		}
 
@@ -1008,7 +1164,7 @@ export class TUI extends Container {
 				const targetRow = Math.max(0, newLines.length - 1);
 				if (targetRow < prevViewportTop) {
 					logRedraw(`deleted lines moved viewport up (${targetRow} < ${prevViewportTop})`);
-					fullRender(true, false);
+					fullRender(true);
 					return;
 				}
 				const lineDiff = computeLineDiff(targetRow);
@@ -1023,7 +1179,7 @@ export class TUI extends Container {
 				const extraLines = this.previousLines.length - newLines.length;
 				if (extraLines > height) {
 					logRedraw(`extraLines > height (${extraLines} > ${height})`);
-					fullRender(true, false);
+					fullRender(true);
 					return;
 				}
 				if (extraLines > 0) {
@@ -1052,6 +1208,7 @@ export class TUI extends Container {
 			this.previousWidth = width;
 			this.previousHeight = height;
 			this.previousViewportTop = prevViewportTop;
+			this.onPostRender?.();
 			return;
 		}
 
@@ -1077,7 +1234,7 @@ export class TUI extends Container {
 			} else {
 				// Viewport needs to shift — full redraw without scrollback clear
 				logRedraw(`firstChanged < viewportTop with viewport shift (${firstChanged} < ${prevViewportTop})`);
-				fullRender(true, false);
+				fullRender(true);
 				return;
 			}
 		}
@@ -1156,8 +1313,19 @@ export class TUI extends Container {
 		// Use a full redraw (clear screen) to avoid ghost whitespace from terminals
 		// that don't properly collapse cleared lines below the cursor.
 		if (this.previousLines.length > newLines.length) {
+			if (this.previousLines.length > height) {
+				// Previous live content exceeded the terminal viewport — overlay padding
+				// or long streaming content caused scrolling. A live-region-only clear
+				// can't restore the viewport (CUU can't reach past viewport top into
+				// scrollback), so do a full recommit to repaint everything cleanly.
+				logRedraw(
+					`content shrank past viewport (${this.previousLines.length} -> ${newLines.length}, height=${height})`,
+				);
+				this.recommitAll();
+				return;
+			}
 			logRedraw(`content shrank (${this.previousLines.length} -> ${newLines.length})`);
-			fullRender(true, false);
+			fullRender(true);
 			return;
 		}
 
@@ -1214,6 +1382,8 @@ export class TUI extends Container {
 		this.previousLines = newLines;
 		this.previousWidth = width;
 		this.previousHeight = height;
+
+		this.onPostRender?.();
 	}
 
 	/**

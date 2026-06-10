@@ -244,6 +244,12 @@ export class Editor implements Component, Focusable {
 	private autocompleteState: "regular" | "force" | null = null;
 	private autocompletePrefix: string = "";
 	private autocompleteMaxVisible: number = 5;
+	// High-water mark of autocomplete-list rows rendered during the current open
+	// session. The block is padded to this height so filtering to fewer matches
+	// never shrinks the live region — a shrink would strand committed content in
+	// scrollback (ghost whitespace), since terminals can't scroll scrollback down.
+	// Reset to 0 when the menu closes (clearAutocompleteUi).
+	private autocompleteRenderHighWater: number = 0;
 	private autocompleteAbort?: AbortController;
 	private autocompleteDebounceTimer?: ReturnType<typeof setTimeout>;
 	private autocompleteRequestTask: Promise<void> = Promise.resolve();
@@ -539,10 +545,18 @@ export class Editor implements Component, Focusable {
 			result.push(horizontal.repeat(width));
 		}
 
-		// Add autocomplete list if active
+		// Add autocomplete list if active.
+		// The block is padded to a per-session high-water mark so that filtering the
+		// list to fewer matches never shrinks the live region. A shrink would force
+		// committed content (already in terminal scrollback) to scroll back down to
+		// fill the freed rows — which terminals cannot do — leaving ghost whitespace.
+		// Keeping the height stable means filtering only repaints in place; the menu
+		// is fully cleared on close via recommitAll() (see cancelAutocomplete).
 		if (this.autocompleteState && this.autocompleteList) {
 			const autocompleteResult = this.autocompleteList.render(contentWidth);
-			for (const line of autocompleteResult) {
+			this.autocompleteRenderHighWater = Math.max(this.autocompleteRenderHighWater, autocompleteResult.length);
+			for (let i = 0; i < this.autocompleteRenderHighWater; i++) {
+				const line = autocompleteResult[i] ?? "";
 				const lineWidth = visibleWidth(line);
 				const linePadding = " ".repeat(Math.max(0, contentWidth - lineWidth));
 				result.push(`${leftPadding}${line}${linePadding}${rightPadding}`);
@@ -2256,11 +2270,20 @@ export class Editor implements Component, Focusable {
 		this.autocompleteState = null;
 		this.autocompleteList = undefined;
 		this.autocompletePrefix = "";
+		this.autocompleteRenderHighWater = 0;
 	}
 
 	private cancelAutocomplete(): void {
+		const wasActive = this.autocompleteState !== null;
 		this.cancelAutocompleteRequest();
 		this.clearAutocompleteUi();
+		// Closing the menu shrinks the live region. While the menu was open it pushed
+		// committed content up into terminal scrollback; a live-region-only redraw
+		// can't pull that content back, so a relative clear would leave ghost
+		// whitespace below the prompt. recommitAll() repaints the whole transcript
+		// with position-independent sequences. Safe here: autocomplete only happens
+		// while the user is typing at the bottom with no agent streaming.
+		if (wasActive) this.tui.recommitAll();
 	}
 
 	public isShowingAutocomplete(): boolean {

@@ -443,6 +443,48 @@ interface MyTheme {
 }
 ```
 
+## Committed-scrollback + live-region model
+
+The TUI uses a two-zone rendering architecture:
+
+- **Committed region** — the first N children of the TUI root (set via `setCommittedChildCount()`). Their output is written to terminal scrollback once and **never re-rendered** by the differential renderer. This prevents the "transcript replay" problem where every turn-end would re-emit the entire session into scrollback.
+- **Live region** — all children after the committed boundary. This is the only content the differential renderer manages. Full redraws are cheap because they only clear and rewrite the small live region (streaming message + spinner + editor + footer).
+
+### Key methods
+
+| Method | Purpose |
+|--------|---------|
+| `setCommittedChildCount(n)` | Mark the first N children as committed |
+| `commit()` | Update line tracking after components move into committed containers |
+| `recommitAll()` | Clear screen + scrollback, re-render everything, re-establish boundary. Used for global actions (theme change, width resize, expand-all, show-images, hide-thinking, session switch) |
+
+### How it works
+
+1. `interactive-mode.ts` maintains a `committedChatContainer` (finalized messages/tools) and a live `chatContainer` (streaming + pending)
+2. When a message or tool finalizes, it moves from live → committed container, and `commit()` advances the boundary
+3. The differential renderer (`doRender`) only renders live children, so the "content shrank" full-redraw path (triggered by spinner removal) only replays the live region — not the whole transcript
+4. Terminal width changes and other global mutations call `recommitAll()` for one deliberate repaint
+
+### Prefix-commit ordering rule
+
+Because scrollback is append-only, components must commit in display order. If tool 3 finishes before tool 2, tool 3 cannot be committed until tool 2 finishes and commits first. Only the leading contiguous run of fully-finalized components may advance into scrollback.
+
+### Transient inline UI (autocomplete menu)
+
+Inline UI that expands and collapses inside the live region — such as the editor's autocomplete/slash-command menu — needs special handling, because terminals can only scroll content *up* into scrollback, never pull it back *down*. When such a menu opens it grows the live region and pushes committed content up into scrollback; a later shrink (filtering to fewer matches, or dismissing) cannot restore that committed content with a relative redraw, leaving ghost whitespace below the prompt.
+
+Two complementary measures prevent this:
+
+1. **Stable height while open** — the menu block is padded to a per-session high-water mark, so filtering to fewer matches never shrinks the live region. Filtering only repaints in place.
+2. **`recommitAll()` on close** — dismissing or accepting the menu repaints the whole transcript with position-independent sequences, restoring the committed content that scrolled off. This is safe because such menus only appear while the user is typing at the bottom with no agent streaming.
+
+### Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `DREB_DEBUG_REDRAW=1` | Log every full-redraw trigger to `~/.dreb/agent/dreb-debug.log` |
+| `DREB_TUI_DEBUG=1` | Write full render state to `/tmp/tui/` on each differential render |
+
 ## Debug logging
 
 Set `DREB_TUI_WRITE_LOG` to capture the raw ANSI stream written to stdout.

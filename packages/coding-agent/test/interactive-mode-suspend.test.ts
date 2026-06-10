@@ -5,6 +5,7 @@ type FakeUi = {
 	start: () => void;
 	stop: () => void;
 	requestRender: (force?: boolean) => void;
+	recommitAll: () => void;
 };
 
 type HandleCtrlZThis = {
@@ -34,6 +35,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			start: vi.fn(),
 			stop: vi.fn(),
 			requestRender: vi.fn(),
+			recommitAll: vi.fn(),
 		};
 		const context: HandleCtrlZThis = { ui, activateStderrGuard: vi.fn() };
 		const keepAliveHandle = setTimeout(() => undefined, 0);
@@ -76,7 +78,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 		expect(clearIntervalSpy).toHaveBeenCalledWith(keepAliveHandle);
 		expect(removeListenerSpy).toHaveBeenCalledWith("SIGINT", sigintHandler);
 		expect(ui.start).toHaveBeenCalledTimes(1);
-		expect(ui.requestRender).toHaveBeenCalledWith(true);
+		expect(ui.recommitAll).toHaveBeenCalledTimes(1);
 	});
 
 	test("cleans up the temporary handlers if suspension fails", () => {
@@ -84,6 +86,7 @@ describe("InteractiveMode.handleCtrlZ", () => {
 			start: vi.fn(),
 			stop: vi.fn(),
 			requestRender: vi.fn(),
+			recommitAll: vi.fn(),
 		};
 		const context: HandleCtrlZThis = { ui, activateStderrGuard: vi.fn() };
 		const keepAliveHandle = setTimeout(() => undefined, 0);
@@ -111,6 +114,6 @@ describe("InteractiveMode.handleCtrlZ", () => {
 		expect(clearIntervalSpy).toHaveBeenCalledWith(keepAliveHandle);
 		expect(removeListenerSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
 		expect(ui.start).not.toHaveBeenCalled();
-		expect(ui.requestRender).not.toHaveBeenCalled();
+		expect(ui.recommitAll).not.toHaveBeenCalled();
 	});
 });
