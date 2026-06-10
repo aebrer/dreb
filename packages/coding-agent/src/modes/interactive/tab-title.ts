@@ -17,7 +17,7 @@ import type { ModelRegistry } from "../../core/model-registry.js";
 import type { TabTitleSettings } from "../../core/settings-manager.js";
 import { parseAgentFrontmatter, resolveModelForSubagentSpawn } from "../../core/tools/subagent.js";
 
-const DEFAULT_TRIGGER_AFTER = 5;
+const DEFAULT_TRIGGER_AFTER = 12;
 const MAX_TITLE_LENGTH = 30;
 const TITLE_GENERATION_TIMEOUT_MS = 60_000;
 

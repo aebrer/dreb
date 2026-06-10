@@ -117,18 +117,18 @@ describe("TabTitleGenerator", () => {
 			const deps = createMockDeps();
 			const gen = new TabTitleGenerator(undefined, deps);
 
-			for (let i = 0; i < 4; i++) gen.onToolEnd();
+			for (let i = 0; i < 11; i++) gen.onToolEnd();
 
 			expect(deps.setTitle).not.toHaveBeenCalled();
 			expect(gen.hasFired).toBe(false);
-			expect(gen.currentCount).toBe(4);
+			expect(gen.currentCount).toBe(11);
 		});
 
-		it("fires exactly at the default threshold (5)", async () => {
+		it("fires exactly at the default threshold (12)", async () => {
 			const deps = createMockDeps();
 			const gen = new TabTitleGenerator(undefined, deps);
 
-			for (let i = 0; i < 5; i++) gen.onToolEnd();
+			for (let i = 0; i < 12; i++) gen.onToolEnd();
 
 			// Wait for async generation
 			await vi.waitFor(() => {
