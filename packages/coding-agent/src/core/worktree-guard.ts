@@ -1,6 +1,5 @@
-import { execSync } from "node:child_process";
-import { gitEnv } from "./git-env.js";
 import { findGitRoot } from "./git-root.js";
+import { listWorktrees } from "./worktree.js";
 
 export interface WorktreeConflictResult {
 	blocked: boolean;
@@ -25,36 +24,18 @@ function getWorktreeBranches(cwd: string): Map<string, string> | undefined {
 		return cached.worktrees;
 	}
 
-	try {
-		const output = execSync("git worktree list --porcelain", {
-			cwd: gitRoot,
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "ignore"],
-			env: gitEnv(),
-		});
-		const worktrees = new Map<string, string>(); // branch -> path
-		let currentPath = "";
-		let isFirst = true; // Skip the first entry (primary working copy)
-		for (const line of output.split("\n")) {
-			if (line.startsWith("worktree ")) {
-				currentPath = line.slice(9);
-			} else if (line.startsWith("branch refs/heads/")) {
-				if (isFirst) {
-					isFirst = false;
-				} else {
-					const branch = line.slice(18);
-					worktrees.set(branch, currentPath);
-				}
-			} else if (line === "" && currentPath) {
-				// End of block — mark first entry as consumed
-				if (isFirst) isFirst = false;
-			}
+	const allWorktrees = listWorktrees(gitRoot);
+	if (allWorktrees.length === 0) return undefined;
+
+	// Skip the first entry (primary working copy) and build branch→path map
+	const worktrees = new Map<string, string>();
+	for (const wt of allWorktrees.slice(1)) {
+		if (wt.branch) {
+			worktrees.set(wt.branch, wt.path);
 		}
-		worktreeCache.set(gitRoot, { worktrees, timestamp: now });
-		return worktrees;
-	} catch {
-		return undefined;
 	}
+	worktreeCache.set(gitRoot, { worktrees, timestamp: now });
+	return worktrees;
 }
 
 /**
@@ -66,7 +47,7 @@ function getWorktreeBranches(cwd: string): Map<string, string> | undefined {
 function stripHeredocs(command: string): string {
 	// Match heredoc start: << [-]? ['"]?DELIMITER['"]?
 	// Then remove everything up to and including the delimiter line
-	return command.replace(/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\1\b[^\n]*/g, "");
+	return command.replace(/<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\t*\1\b[^\n]*/g, "");
 }
 
 /**

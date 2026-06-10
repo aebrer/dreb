@@ -59,6 +59,17 @@ describe("worktree utilities", () => {
 			expect(feature?.head).toMatch(/^[0-9a-f]{40}$/);
 		});
 
+		it("handles detached HEAD worktrees with branch undefined", () => {
+			const wtPath = join(tempDir, "wt-detached");
+			git(repoDir, `worktree add --detach ${JSON.stringify(wtPath)}`);
+
+			const worktrees = listWorktrees(repoDir);
+			const detached = worktrees.find((w) => w.path === wtPath);
+			expect(detached).toBeDefined();
+			expect(detached?.branch).toBeUndefined();
+			expect(detached?.head).toMatch(/^[0-9a-f]{40}$/);
+		});
+
 		it("returns an empty array when not in a git repo", () => {
 			const nonRepo = join(tempDir, "not-a-repo");
 			execSync(`mkdir -p ${JSON.stringify(nonRepo)}`);

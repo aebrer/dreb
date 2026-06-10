@@ -124,6 +124,12 @@ describe("_stripHeredocs", () => {
 		expect(_stripHeredocs(cmd)).not.toContain("gh pr checkout 99");
 	});
 
+	it("strips <<- heredoc with tab-indented closing delimiter", () => {
+		const cmd = "cat <<-EOF\n\tgit checkout main\n\tEOF\necho done";
+		expect(_stripHeredocs(cmd)).toContain("echo done");
+		expect(_stripHeredocs(cmd)).not.toContain("git checkout main");
+	});
+
 	it("preserves commands without heredocs", () => {
 		const cmd = "git checkout main && echo done";
 		expect(_stripHeredocs(cmd)).toBe(cmd);

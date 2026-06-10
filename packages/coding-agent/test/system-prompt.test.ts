@@ -153,6 +153,19 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("  - `v1.2.2` (3 weeks ago)");
 			expect(prompt).toContain("- Open PRs on this branch:");
 			expect(prompt).toContain("  - PR 42 — Add feature X (https://github.com/org/repo/pull/42)");
+			expect(prompt).toContain("- Active worktrees:");
+			expect(prompt).toContain("  - `feature/issue-42-add-feature-x` → /home/user/repo-worktrees/issue-42");
+		});
+
+		test("empty worktrees does not render section", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+				gitRepoState: { ...fullState, worktrees: [] },
+			});
+
+			expect(prompt).not.toContain("Active worktrees:");
 		});
 
 		test("clean status", () => {

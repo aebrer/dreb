@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { gitEnv } from "./git-env.js";
 import { findGitRoot } from "./git-root.js";
+import { listWorktrees } from "./worktree.js";
 
 export interface GitRepoState {
 	branch: string;
@@ -11,10 +12,11 @@ export interface GitRepoState {
 	worktrees: Array<{ path: string; branch: string }>;
 }
 
-const SPAWN_OPTS: { encoding: "utf8"; timeout: number; stdio: ["ignore", "pipe", "ignore"] } = {
+const SPAWN_OPTS: { encoding: "utf8"; timeout: number; stdio: ["ignore", "pipe", "ignore"]; env: NodeJS.ProcessEnv } = {
 	encoding: "utf8",
 	timeout: 5000,
 	stdio: ["ignore", "pipe", "ignore"],
+	env: gitEnv(),
 };
 
 export function getGitRepoState(cwd: string): GitRepoState | null {
@@ -98,32 +100,11 @@ export function getGitRepoState(cwd: string): GitRepoState | null {
 		}
 	}
 
-	// Worktrees (only non-main worktrees — skip the primary working copy)
-	const worktrees: Array<{ path: string; branch: string }> = [];
-	const wtResult = spawnSync("git", ["worktree", "list", "--porcelain"], { ...SPAWN_OPTS, cwd, env: gitEnv() });
-	if (wtResult.status === 0 && wtResult.stdout) {
-		let currentPath = "";
-		let isFirst = true;
-		for (const line of wtResult.stdout.split("\n")) {
-			if (line.startsWith("worktree ")) {
-				if (!isFirst && currentPath) {
-					// Flush previous entry (it had no branch — skip detached)
-				}
-				currentPath = line.slice("worktree ".length);
-				isFirst = false;
-			} else if (line.startsWith("branch refs/heads/") && currentPath) {
-				const wtBranch = line.slice("branch refs/heads/".length);
-				worktrees.push({ path: currentPath, branch: wtBranch });
-				currentPath = "";
-			} else if (line === "") {
-				currentPath = "";
-			}
-		}
-	}
-	// Remove the first entry (main worktree = the repo itself)
-	if (worktrees.length > 0) {
-		worktrees.shift();
-	}
+	// Worktrees — skip the primary working copy (first entry) and detached/bare entries
+	const worktrees = listWorktrees(cwd)
+		.slice(1) // skip primary working copy
+		.filter((wt): wt is typeof wt & { branch: string } => !!wt.branch && !wt.bare)
+		.map((wt) => ({ path: wt.path, branch: wt.branch }));
 
 	return { branch, dirtyCount, recentCommits, recentTags, openPRs, worktrees };
 }
