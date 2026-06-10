@@ -33,9 +33,10 @@ export class RollingContextBuffer {
 		this.entries = [];
 	}
 
-	/** Join all entries with newlines, capped to maxChars total. */
+	/** Join all entries with newlines, capped to maxChars total. Newest entries are preferred. */
 	build(): string {
-		return this.entries.join("\n").slice(0, this.maxChars);
+		const joined = this.entries.join("\n");
+		return joined.length <= this.maxChars ? joined : joined.slice(-this.maxChars);
 	}
 
 	/** Current number of entries in the buffer. */

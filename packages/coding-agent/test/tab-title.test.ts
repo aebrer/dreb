@@ -65,6 +65,7 @@ const MOCK_MODEL = {
 function createMockDeps(overrides: Partial<TabTitleDeps> = {}): TabTitleDeps {
 	return {
 		setTitle: vi.fn(),
+		setSessionName: vi.fn(),
 		getMessages: () => [
 			{ role: "user", content: "Fix the authentication bug in login.ts" },
 			{ role: "assistant", content: [{ type: "text", text: "I'll look into that." }] },
@@ -649,6 +650,56 @@ describe("TabTitleGenerator", () => {
 			// Should still have been called with the parent model
 			const callArgs = mockCompleteSimple.mock.calls[0];
 			expect((callArgs[0] as any).id).toBe("test-model");
+		});
+	});
+
+	describe("session name persistence", () => {
+		it("calls setSessionName with the raw title (no prefix) on success", async () => {
+			mockCompleteSimple.mockResolvedValue(makeAssistantResponse("Fix auth bug") as any);
+
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(deps.setTitle).toHaveBeenCalled();
+			});
+
+			expect(deps.setTitle).toHaveBeenCalledWith("dreb - Fix auth bug");
+			expect(deps.setSessionName).toHaveBeenCalledWith("Fix auth bug");
+		});
+
+		it("does not throw when setSessionName is not provided (undefined)", async () => {
+			mockCompleteSimple.mockResolvedValue(makeAssistantResponse("Fix auth bug") as any);
+
+			const deps = createMockDeps({ setSessionName: undefined });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(deps.setTitle).toHaveBeenCalled();
+			});
+
+			// setTitle still works, and no error was thrown
+			expect(deps.setTitle).toHaveBeenCalledWith("dreb - Fix auth bug");
+		});
+
+		it("does not call setSessionName when title generation fails", async () => {
+			mockCompleteSimple.mockResolvedValue(makeAssistantResponse("") as any);
+
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(gen.hasFired).toBe(true);
+			});
+
+			expect(deps.setTitle).not.toHaveBeenCalled();
+			expect(deps.setSessionName).not.toHaveBeenCalled();
 		});
 	});
 });

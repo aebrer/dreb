@@ -37,6 +37,8 @@ const TITLE_PROMPT =
 export interface TabTitleDeps {
 	/** Set the terminal tab title (OSC 0). */
 	setTitle: (title: string) => void;
+	/** Persist the generated title as the session name. Called with the raw title (without "dreb - " prefix). */
+	setSessionName?: (name: string) => void;
 	/** Get the current session messages (for context). */
 	getMessages: () => Array<{ role: string; content?: unknown }>;
 	/** Get the current model (parent session model — used as fallback). */
@@ -141,6 +143,7 @@ export class TabTitleGenerator {
 		const title = this.sanitizeTitle(response);
 		if (title) {
 			this.deps.setTitle(`dreb - ${title}`);
+			this.deps.setSessionName?.(title);
 		}
 	}
 

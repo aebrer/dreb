@@ -686,6 +686,9 @@ export class InteractiveMode {
 
 		this.tabTitleGenerator = new TabTitleGenerator(settings, {
 			setTitle: (title) => this.ui.terminal.setTitle(title),
+			setSessionName: (name) => {
+				this.sessionManager.appendSessionInfo(name);
+			},
 			getMessages: () => this.session.state.messages,
 			getModel: () => this.session.model,
 			getModelRegistry: () => this.session.modelRegistry,

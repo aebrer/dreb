@@ -36,7 +36,7 @@ export async function cmdSessions(ctx: Context, userState: UserState, config: Co
 			" " +
 			date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
 		const sid = s.id.slice(0, 8);
-		const preview = s.firstMessage.slice(0, 60);
+		const preview = s.name ? s.name : s.firstMessage.slice(0, 60);
 		lines.push(`\`${sid}\` (${ts})\n  ${preview}`);
 	}
 

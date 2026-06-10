@@ -44,12 +44,15 @@ describe("RollingContextBuffer", () => {
 		expect(buf.build()).toBe("b\nc\nd");
 	});
 
-	it("build() caps total output to maxChars", () => {
+	it("build() caps total output to maxChars, preferring newest entries", () => {
 		const buf = new RollingContextBuffer({ maxChars: 50 });
-		buf.append("a".repeat(30));
-		buf.append("b".repeat(30));
+		buf.append("a".repeat(30)); // oldest
+		buf.append("b".repeat(30)); // newest
 		const result = buf.build();
 		expect(result.length).toBe(50);
+		// newest entry ("b"s) must be present; oldest ("a"s) are partially/fully dropped
+		expect(result).toContain("b");
+		expect(result.endsWith("b".repeat(30))).toBe(true);
 	});
 
 	it("individual entries are capped to 2000 chars", () => {
