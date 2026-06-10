@@ -36,6 +36,16 @@ When a subagent is launched, its model is resolved in this priority:
 
 If the `agentModels.models` list is empty or undefined for a given agent, resolution falls through to the agent definition's model, then to the parent session model.
 
+## Parent Model Identity in System Prompt
+
+The **parent session's** running model is exposed in its own system prompt as:
+
+```
+You are running on: provider/id
+```
+
+This lets the parent model make self-aware routing decisions — e.g. delegating vision tasks if it's on a text-only model, or explicitly requesting a differently-architected model as a critic when diverse perspectives improve reliability. The identity line updates automatically whenever the user switches models mid-session.
+
 ## TUI Usage
 
 Open `/settings` and select the **Agent Models** submenu. Each discovered agent type gets its own entry where you can:

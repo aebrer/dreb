@@ -323,4 +323,54 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("Security: Running as Root");
 		});
 	});
+
+	describe("current model identity", () => {
+		test("no identity line when currentModel is absent", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+			});
+
+			expect(prompt).not.toContain("You are running on:");
+		});
+
+		test("identity line present in default prompt when currentModel is set", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+				currentModel: { provider: "anthropic", id: "claude-opus-4-5" },
+			});
+
+			expect(prompt).toContain("You are running on: anthropic/claude-opus-4-5");
+		});
+
+		test("identity line present with customPrompt", () => {
+			const prompt = buildSystemPrompt({
+				customPrompt: "Custom system prompt.",
+				contextFiles: [],
+				skills: [],
+				currentModel: { provider: "openrouter", id: "google/gemini-2.5-pro" },
+			});
+
+			expect(prompt).toContain("Custom system prompt.");
+			expect(prompt).toContain("You are running on: openrouter/google/gemini-2.5-pro");
+		});
+
+		test("identity line appears after date line", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: [],
+				contextFiles: [],
+				skills: [],
+				currentModel: { provider: "anthropic", id: "claude-opus-4-5" },
+			});
+
+			const dateIdx = prompt.indexOf("Current date:");
+			const modelIdx = prompt.indexOf("You are running on:");
+			expect(dateIdx).toBeGreaterThan(-1);
+			expect(modelIdx).toBeGreaterThan(-1);
+			expect(modelIdx).toBeGreaterThan(dateIdx);
+		});
+	});
 });
