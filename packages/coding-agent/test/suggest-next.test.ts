@@ -33,14 +33,14 @@ describe("suggest_next tool", () => {
 		expect(result.content[0]).toEqual({ type: "text", text: "Suggestion registered: /skill:mach6-push" });
 	});
 
-	it("rejects commands that don't start with /", async () => {
+	it("accepts plain shell commands", async () => {
 		const { execute, onSuggest } = createTool();
 
 		const result = await execute("call-2", { command: "npm run build" });
 
-		expect(onSuggest).not.toHaveBeenCalled();
-		expect(result.details).toBeUndefined();
-		expect(result.content[0]?.text).toContain("Error");
+		expect(onSuggest).toHaveBeenCalledWith("npm run build");
+		expect(result.details).toEqual({ suggestion: "npm run build" });
+		expect(result.content[0]).toEqual({ type: "text", text: "Suggestion registered: npm run build" });
 	});
 
 	it("rejects empty command", async () => {
@@ -63,6 +63,9 @@ describe("suggest_next tool", () => {
 
 		await execute("call-6", { command: "/skill:mach6-plan 201" });
 		expect(onSuggest).toHaveBeenCalledWith("/skill:mach6-plan 201");
+
+		await execute("call-6b", { command: "git push" });
+		expect(onSuggest).toHaveBeenCalledWith("git push");
 	});
 
 	describe("endTurn behavior", () => {
@@ -74,20 +77,20 @@ describe("suggest_next tool", () => {
 			expect(result.endTurn).toBe(true);
 		});
 
-		it("does not set endTurn on error (invalid command)", async () => {
+		it("sets endTurn: true on successful execution of plain shell command", async () => {
 			const { execute } = createTool();
 
 			const result = await execute("call-et-2", { command: "npm run build" });
 
-			expect(result.endTurn).toBeUndefined();
+			expect(result.endTurn).toBe(true);
 		});
 
-		it("does not set endTurn on error (empty command)", async () => {
+		it("sets endTurn: true on error (empty command)", async () => {
 			const { execute } = createTool();
 
 			const result = await execute("call-et-3", { command: "" });
 
-			expect(result.endTurn).toBeUndefined();
+			expect(result.endTurn).toBe(true);
 		});
 	});
 
@@ -209,6 +212,7 @@ describe("suggest_next tool", () => {
 
 			expect(onSuggest).not.toHaveBeenCalled();
 			expect(result.details).toBeUndefined();
+			expect(result.endTurn).toBe(true);
 		});
 
 		it("strips tabs and other control chars from middle of command", async () => {
@@ -249,7 +253,7 @@ describe("suggest_next tool", () => {
 		it("renders error message when no details present", () => {
 			const tool = createSuggestNextToolDefinition(() => {});
 			const result = {
-				content: [{ type: "text" as const, text: "Error: command must start with /" }],
+				content: [{ type: "text" as const, text: "Error: command is empty" }],
 				details: undefined,
 				isError: true,
 			};
@@ -258,7 +262,7 @@ describe("suggest_next tool", () => {
 
 			expect(component).toBeInstanceOf(Text);
 			const rendered = stripAnsi(component.render(120).join("\n"));
-			expect(rendered).toContain("Error: command must start with /");
+			expect(rendered).toContain("Error: command is empty");
 		});
 
 		it("renders arrow with suggestion when details present but no summary", () => {
