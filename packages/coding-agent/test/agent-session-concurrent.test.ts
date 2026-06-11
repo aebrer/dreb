@@ -475,7 +475,15 @@ describe("AgentSession concurrent prompt guard", () => {
 
 		await session.prompt("hi");
 		await session.agent.waitForIdle();
-		await new Promise((resolve) => setTimeout(resolve, 100));
+
+		// Wait deterministically for all four messages to persist rather than a fixed
+		// delay: the final assistant message_end runs through a deliberately slow (40ms)
+		// extension handler, and a fixed sleep is flaky under full-suite load.
+		const deadline = Date.now() + 2000;
+		const countMessageEntries = () => sessionManager.getEntries().filter((entry) => entry.type === "message").length;
+		while (countMessageEntries() < 4 && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
 
 		const messageEntries = sessionManager.getEntries().filter((entry) => entry.type === "message");
 		expect(messageEntries.map((entry) => entry.message.role)).toEqual([
