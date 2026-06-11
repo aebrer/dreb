@@ -52,6 +52,19 @@ describe("suggest_next tool", () => {
 		expect(result.details).toBeUndefined();
 	});
 
+	it("rejects whitespace-only command", async () => {
+		const { execute, onSuggest } = createTool();
+
+		// Spaces survive the control-char strip (\x20 is outside [\x00-\x1f\x7f]) but
+		// trim() reduces them to "", so this hits the empty-command reject path.
+		const result = await execute("call-3b", { command: "   " });
+
+		expect(onSuggest).not.toHaveBeenCalled();
+		expect(result.details).toBeUndefined();
+		expect(result.endTurn).toBe(true);
+		expect(result.content[0]).toEqual({ type: "text", text: "Error: command is empty" });
+	});
+
 	it("accepts various command formats", async () => {
 		const { execute, onSuggest } = createTool();
 
