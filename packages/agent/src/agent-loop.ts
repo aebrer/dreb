@@ -633,6 +633,12 @@ async function executeToolCallsSequential(
 				),
 			);
 		}
+
+		// Refresh tools from live state after each call — allows tools like chdir
+		// to rebuild tool bindings mid-turn so subsequent calls use the updated cwd.
+		if (config.getLatestTools) {
+			currentContext.tools = config.getLatestTools();
+		}
 	}
 
 	return { results, endTurn };

@@ -348,8 +348,8 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 
 	describe.skipIf(!process.env.CEREBRAS_API_KEY)("Cerebras", () => {
-		it("llama3.1-8b - should detect overflow via isContextOverflow", async () => {
-			const model = getModel("cerebras", "llama3.1-8b");
+		it("gpt-oss-120b - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("cerebras", "gpt-oss-120b");
 			const result = await testContextOverflow(model, process.env.CEREBRAS_API_KEY!);
 			logResult(result);
 
@@ -624,7 +624,7 @@ describe("Context overflow error handling", () => {
 
 	let llamaCppRunning = false;
 	try {
-		execSync("curl -s --max-time 1 http://localhost:8081/health > /dev/null", { stdio: "ignore" });
+		execSync("curl -s --max-time 2 http://localhost:8081/v1/models | grep -q '\"id\"'", { stdio: "ignore" });
 		llamaCppRunning = true;
 	} catch {
 		llamaCppRunning = false;

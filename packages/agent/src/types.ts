@@ -257,6 +257,13 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * The hook receives the agent abort signal and is responsible for honoring it.
 	 */
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
+
+	/**
+	 * Called after each tool execution in sequential mode to get the current live tool list.
+	 * Allows tools like `chdir` to rebuild the tool set mid-turn so that subsequent tool
+	 * calls in the same model response use updated bindings (e.g. new bash cwd).
+	 */
+	getLatestTools?: () => AgentTool<any>[];
 }
 
 /**

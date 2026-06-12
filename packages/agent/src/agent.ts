@@ -629,6 +629,7 @@ export class Agent {
 				return this.dequeueSteeringMessages();
 			},
 			getFollowUpMessages: async () => this.dequeueFollowUpMessages(),
+			getLatestTools: () => this._state.tools,
 		};
 
 		try {
