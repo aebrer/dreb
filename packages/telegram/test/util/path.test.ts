@@ -59,6 +59,11 @@ describe("resolveNewPath", () => {
 			expect(resolve('"a b c" d')).toBe("/home/testuser/a b c/d");
 		});
 
+		it("preserves leading and trailing spaces inside quoted segments", () => {
+			expect(resolve('" foo "')).toBe("/home/testuser/ foo ");
+			expect(resolve('" foo " bar')).toBe("/home/testuser/ foo /bar");
+		});
+
 		it("throws on unclosed quotes", () => {
 			expect(() => resolve('"My Projects')).toThrow("missing closing quote");
 		});

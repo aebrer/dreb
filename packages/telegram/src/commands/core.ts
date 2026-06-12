@@ -3,7 +3,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { type Stats, statSync } from "node:fs";
 import type { Api, Context } from "grammy";
 import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
@@ -86,11 +86,20 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 			return;
 		}
 
-		if (!existsSync(resolved)) {
+		let stats: Stats | undefined;
+		try {
+			stats = statSync(resolved, { throwIfNoEntry: false });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			await safeSend(ctx.api, ctx.chat!.id, `❌ Cannot access directory: \`${resolved}\` (${message})`);
+			return;
+		}
+
+		if (!stats) {
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Directory not found: \`${resolved}\``);
 			return;
 		}
-		if (!statSync(resolved).isDirectory()) {
+		if (!stats.isDirectory()) {
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Not a directory: \`${resolved}\``);
 			return;
 		}

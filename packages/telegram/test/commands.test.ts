@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../src/config.js";
 import type { UserState } from "../src/types.js";
@@ -14,11 +15,19 @@ vi.mock("../src/util/telegram.js", () => ({
 
 // Mock fs operations for path validation
 vi.mock("node:fs", () => ({
-	existsSync: vi.fn(),
 	statSync: vi.fn(),
 }));
 
-import { existsSync, statSync } from "node:fs";
+vi.mock("node:os", async () => {
+	const actual = await vi.importActual<typeof import("node:os")>("node:os");
+	return {
+		...actual,
+		homedir: vi.fn(() => "/home/testuser"),
+	};
+});
+
+import { statSync } from "node:fs";
+import { homedir } from "node:os";
 import { cmdStats } from "../src/commands/agent.js";
 // Import after mock setup
 import { cmdNew } from "../src/commands/core.js";
@@ -67,11 +76,11 @@ describe("cmdNew", () => {
 	beforeEach(() => {
 		ctx = createMockContext();
 		vi.clearAllMocks();
+		vi.mocked(statSync).mockReset();
 	});
 
 	describe("with path argument", () => {
 		it("sets flag and resolved CWD, replies with path", async () => {
-			vi.mocked(existsSync).mockReturnValue(true);
 			vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as any);
 
 			const userState = createUserState();
@@ -83,7 +92,7 @@ describe("cmdNew", () => {
 		});
 
 		it("rejects nonexistent path without setting flag", async () => {
-			vi.mocked(existsSync).mockReturnValue(false);
+			vi.mocked(statSync).mockReturnValue(undefined as any);
 
 			const userState = createUserState();
 			await cmdNew(ctx, userState, "/nonexistent");
@@ -93,8 +102,36 @@ describe("cmdNew", () => {
 			expect(mockSafeSend).toHaveBeenCalledWith(expect.anything(), 100, expect.stringContaining("not found"));
 		});
 
+		it("reports statSync errors without setting flag", async () => {
+			vi.mocked(statSync).mockImplementation(() => {
+				throw new Error("EACCES: permission denied");
+			});
+
+			const userState = createUserState();
+			await cmdNew(ctx, userState, "/forbidden");
+
+			expect(userState.newSessionFlag).toBe(false);
+			expect(userState.newSessionCwd).toBeNull();
+			const sent = mockSafeSend.mock.calls[0][2] as string;
+			expect(sent).toContain("Cannot access directory");
+			expect(sent).toContain("EACCES");
+		});
+
+		it("rejects file path (not a directory) from shorthand without setting flag", async () => {
+			vi.mocked(statSync).mockReturnValue({ isDirectory: () => false } as any);
+
+			const expectedPath = join(homedir(), "projects", "file.txt");
+			const userState = createUserState();
+			await cmdNew(ctx, userState, "projects file.txt");
+
+			expect(userState.newSessionFlag).toBe(false);
+			expect(userState.newSessionCwd).toBeNull();
+			const sent = mockSafeSend.mock.calls[0][2] as string;
+			expect(sent).toContain("Not a directory");
+			expect(sent).toContain(expectedPath);
+		});
+
 		it("rejects file path (not a directory) without setting flag", async () => {
-			vi.mocked(existsSync).mockReturnValue(true);
 			vi.mocked(statSync).mockReturnValue({ isDirectory: () => false } as any);
 
 			const userState = createUserState();
@@ -106,7 +143,6 @@ describe("cmdNew", () => {
 		});
 
 		it("expands ~ to home directory", async () => {
-			vi.mocked(existsSync).mockReturnValue(true);
 			vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as any);
 
 			const userState = createUserState();
@@ -120,27 +156,27 @@ describe("cmdNew", () => {
 		});
 
 		it("expands mobile shorthand tokens to a home-relative path", async () => {
-			vi.mocked(existsSync).mockReturnValue(true);
 			vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as any);
 
+			const expectedPath = join(homedir(), "projects", "dreb");
 			const userState = createUserState();
 			await cmdNew(ctx, userState, "projects dreb");
 
 			expect(userState.newSessionFlag).toBe(true);
-			expect(userState.newSessionCwd).toMatch(/^\//);
-			expect(userState.newSessionCwd).toMatch(/projects\/dreb$/);
-			expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("projects/dreb"));
+			expect(userState.newSessionCwd).toBe(expectedPath);
+			expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining(expectedPath));
 		});
 
 		it("respects quoted spans in shorthand", async () => {
-			vi.mocked(existsSync).mockReturnValue(true);
 			vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as any);
 
+			const expectedPath = join(homedir(), "My Projects", "dreb");
 			const userState = createUserState();
 			await cmdNew(ctx, userState, '"My Projects" dreb');
 
 			expect(userState.newSessionFlag).toBe(true);
-			expect(userState.newSessionCwd).toMatch(/My Projects\/dreb$/);
+			expect(userState.newSessionCwd).toBe(expectedPath);
+			expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining(expectedPath));
 		});
 
 		it("reports invalid shorthand without setting flag", async () => {
@@ -149,7 +185,7 @@ describe("cmdNew", () => {
 
 			expect(userState.newSessionFlag).toBe(false);
 			expect(userState.newSessionCwd).toBeNull();
-			expect(existsSync).not.toHaveBeenCalled();
+			expect(statSync).not.toHaveBeenCalled();
 			expect(mockSafeSend).toHaveBeenCalledWith(
 				expect.anything(),
 				100,
@@ -158,7 +194,7 @@ describe("cmdNew", () => {
 		});
 
 		it("reports the resolved candidate when shorthand path does not exist", async () => {
-			vi.mocked(existsSync).mockReturnValue(false);
+			vi.mocked(statSync).mockReturnValue(undefined as any);
 
 			const userState = createUserState();
 			await cmdNew(ctx, userState, "projects missing");
@@ -168,6 +204,20 @@ describe("cmdNew", () => {
 			const sent = mockSafeSend.mock.calls[0][2] as string;
 			expect(sent).toContain("not found");
 			expect(sent).toContain("projects/missing");
+		});
+
+		it("reports the resolved candidate when quoted shorthand path does not exist", async () => {
+			vi.mocked(statSync).mockReturnValue(undefined as any);
+
+			const expectedPath = join(homedir(), "My Projects", "missing");
+			const userState = createUserState();
+			await cmdNew(ctx, userState, '"My Projects" missing');
+
+			expect(userState.newSessionFlag).toBe(false);
+			expect(userState.newSessionCwd).toBeNull();
+			const sent = mockSafeSend.mock.calls[0][2] as string;
+			expect(sent).toContain("not found");
+			expect(sent).toContain(expectedPath);
 		});
 	});
 
