@@ -38,7 +38,7 @@
 	"engines": {
 		"node": "^22.0.0"
 	},
-	"version": "2.27.2",
+	"version": "2.27.3",
 	"dependencies": {
 		"@dreb/coding-agent": "*",
 		"@mariozechner/jiti": "^2.6.5",

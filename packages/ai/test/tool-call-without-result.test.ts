@@ -9,7 +9,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { ZAI_GLM_47_FLASH } from "./fixtures/zai-models.js";
-import { resolveApiKey } from "./oauth.js";
+import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
@@ -233,7 +233,7 @@ describe("Tool Call Without Result Tests", () => {
 			"gpt-4.1 - should filter out tool calls without corresponding tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const model = getModel("github-copilot", "gpt-4.1");
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-4.1"), githubCopilotToken);
 				await testToolCallWithoutResult(model, { apiKey: githubCopilotToken });
 			},
 		);
@@ -242,7 +242,7 @@ describe("Tool Call Without Result Tests", () => {
 			"claude-sonnet-4 - should filter out tool calls without corresponding tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const model = getModel("github-copilot", "claude-sonnet-4.5");
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-sonnet-4.5"), githubCopilotToken);
 				await testToolCallWithoutResult(model, { apiKey: githubCopilotToken });
 			},
 		);

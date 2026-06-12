@@ -20,7 +20,7 @@ import { isContextOverflow } from "../src/utils/overflow.js";
 import { hasAzureOpenAICredentials } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { ZAI_GLM_47_FLASH } from "./fixtures/zai-models.js";
-import { resolveApiKey } from "./oauth.js";
+import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
 const oauthTokens = await Promise.all([
@@ -121,7 +121,7 @@ describe("Context overflow error handling", () => {
 		it.skipIf(!githubCopilotToken)(
 			"gpt-4.1 - should detect overflow via isContextOverflow",
 			async () => {
-				const model = getModel("github-copilot", "gpt-4.1");
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-4.1"), githubCopilotToken);
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 
@@ -136,7 +136,7 @@ describe("Context overflow error handling", () => {
 		it.skipIf(!githubCopilotToken)(
 			"claude-sonnet-4 - should detect overflow via isContextOverflow",
 			async () => {
-				const model = getModel("github-copilot", "claude-sonnet-4.5");
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-sonnet-4.5"), githubCopilotToken);
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 

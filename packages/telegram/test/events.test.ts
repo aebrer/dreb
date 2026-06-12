@@ -327,12 +327,12 @@ describe("tool_execution_end", () => {
 			toolName: "suggest_next",
 			isError: true,
 			result: {
-				content: [{ type: "text", text: "Error: command must start with /" }],
+				content: [{ type: "text", text: "Error: command is empty" }],
 				details: undefined,
 			},
 		});
 
-		expect(send).toHaveBeenCalledWith("Error: command must start with /", true);
+		expect(send).toHaveBeenCalledWith("Error: command is empty", true);
 		expect(state.visibleToolResultCount).toBe(1);
 	});
 

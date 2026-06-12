@@ -14,7 +14,7 @@ import { StringEnum } from "../src/utils/typebox-helpers.js";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
 import { ZAI_GLM_5_EXTENDED } from "./fixtures/zai-models.js";
-import { resolveApiKey } from "./oauth.js";
+import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -856,7 +856,7 @@ describe("Generate E2E Tests", () => {
 	// =========================================================================
 
 	describe("GitHub Copilot Provider (gpt-5.4 via OpenAI Completions)", () => {
-		const llm = getModel("github-copilot", "gpt-5.4");
+		const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
 
 		it.skipIf(!githubCopilotToken)("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm, { apiKey: githubCopilotToken });
@@ -870,15 +870,17 @@ describe("Generate E2E Tests", () => {
 			await handleStreaming(llm, { apiKey: githubCopilotToken });
 		});
 
-		it.skipIf(!githubCopilotToken)("should handle thinking", { retry: 2 }, async () => {
-			const thinkingModel = getModel("github-copilot", "gpt-5-mini");
-			await handleThinking(thinkingModel, { apiKey: githubCopilotToken, reasoningEffort: "high" });
+		it.skipIf(!githubCopilotToken)("should handle thinking", { retry: 2, timeout: 60000 }, async () => {
+			await handleThinking(llm, { apiKey: githubCopilotToken, reasoningEffort: "high" });
 		});
 
-		it.skipIf(!githubCopilotToken)("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
-			const thinkingModel = getModel("github-copilot", "gpt-5-mini");
-			await multiTurn(thinkingModel, { apiKey: githubCopilotToken, reasoningEffort: "high" });
-		});
+		it.skipIf(!githubCopilotToken)(
+			"should handle multi-turn with thinking and tools",
+			{ retry: 3, timeout: 60000 },
+			async () => {
+				await multiTurn(llm, { apiKey: githubCopilotToken, reasoningEffort: "high" });
+			},
+		);
 
 		it.skipIf(!githubCopilotToken)("should handle image input", { retry: 3 }, async () => {
 			await handleImage(llm, { apiKey: githubCopilotToken });
@@ -886,7 +888,7 @@ describe("Generate E2E Tests", () => {
 	});
 
 	describe("GitHub Copilot Provider (claude-sonnet-4 via Anthropic Messages)", () => {
-		const llm = getModel("github-copilot", "claude-sonnet-4.5");
+		const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-sonnet-4.5"), githubCopilotToken);
 
 		it.skipIf(!githubCopilotToken)("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm, { apiKey: githubCopilotToken });
@@ -900,13 +902,17 @@ describe("Generate E2E Tests", () => {
 			await handleStreaming(llm, { apiKey: githubCopilotToken });
 		});
 
-		it.skipIf(!githubCopilotToken)("should handle thinking", { retry: 2 }, async () => {
+		it.skipIf(!githubCopilotToken)("should handle thinking", { retry: 2, timeout: 60000 }, async () => {
 			await handleThinking(llm, { apiKey: githubCopilotToken, thinkingEnabled: true });
 		});
 
-		it.skipIf(!githubCopilotToken)("should handle multi-turn with thinking and tools", { retry: 3 }, async () => {
-			await multiTurn(llm, { apiKey: githubCopilotToken, thinkingEnabled: true });
-		});
+		it.skipIf(!githubCopilotToken)(
+			"should handle multi-turn with thinking and tools",
+			{ retry: 3, timeout: 60000 },
+			async () => {
+				await multiTurn(llm, { apiKey: githubCopilotToken, thinkingEnabled: true });
+			},
+		);
 
 		it.skipIf(!githubCopilotToken)("should handle image input", { retry: 3 }, async () => {
 			await handleImage(llm, { apiKey: githubCopilotToken });

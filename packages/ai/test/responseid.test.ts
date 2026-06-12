@@ -3,7 +3,7 @@ import { findModel, getModel } from "../src/models.js";
 import { complete } from "../src/stream.js";
 import type { Api, Context, Model, StreamOptions } from "../src/types.js";
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
-import { resolveApiKey } from "./oauth.js";
+import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
 type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
@@ -103,7 +103,7 @@ describe("responseId E2E Tests", () => {
 
 	describe("GitHub Copilot Provider", () => {
 		it.skipIf(!githubCopilotToken)("OpenAI path should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			const llm = getModel("github-copilot", "gpt-5.4");
+			const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
 			await expectResponseId(llm, { apiKey: githubCopilotToken });
 		});
 
@@ -111,7 +111,7 @@ describe("responseId E2E Tests", () => {
 			"Anthropic path should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("github-copilot", "claude-sonnet-4.5");
+				const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-sonnet-4.5"), githubCopilotToken);
 				await expectResponseId(llm, { apiKey: githubCopilotToken });
 			},
 		);

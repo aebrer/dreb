@@ -25,7 +25,7 @@ export type SuggestNextCallback = (suggestion: string) => void;
 
 const suggestNextSchema = Type.Object({
 	command: Type.String({
-		description: "The suggested command for the user to run next (e.g. /skill:mach6-push, /compact)",
+		description: "The suggested command for the user to run next (e.g. /skill:mach6-push, /compact, npm run build)",
 	}),
 	summary: Type.Optional(
 		Type.String({
@@ -63,7 +63,7 @@ export function createSuggestNextToolDefinition(
 
 		promptGuidelines: [
 			"Call suggest_next at the end of your turn when there's a clear next action the user might want",
-			"Use full command syntax: /skill:name args, /compact, etc.",
+			"Suggest a command the user can run: /skill:name args, /compact, npm run build, etc.",
 			"Only suggest one command — pick the most likely next step",
 			"Don't suggest if the conversation is open-ended with no obvious next action",
 			"Include a brief summary of work done in the `summary` parameter — this is your last chance to communicate before the turn ends",
@@ -73,10 +73,11 @@ export function createSuggestNextToolDefinition(
 		async execute(_toolCallId, { command: rawCommand, summary }: SuggestNextInput, _signal?, _onUpdate?, _ctx?) {
 			// Strip control characters (newlines, tabs, etc.) that would corrupt TUI rendering
 			const command = rawCommand?.replace(/[\x00-\x1f\x7f]/g, "").trim();
-			if (!command || !command.startsWith("/")) {
+			if (!command) {
 				return {
-					content: [{ type: "text" as const, text: "Error: command must start with /" }],
+					content: [{ type: "text" as const, text: "Error: command is empty" }],
 					details: undefined,
+					endTurn: true,
 				};
 			}
 

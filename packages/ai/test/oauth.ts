@@ -8,8 +8,29 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
-import { getOAuthApiKey } from "../src/utils/oauth/index.js";
+import { getGitHubCopilotBaseUrl, getOAuthApiKey } from "../src/utils/oauth/index.js";
 import type { OAuthCredentials, OAuthProvider } from "../src/utils/oauth/types.js";
+
+/**
+ * Override a github-copilot model's `baseUrl` with the API endpoint derived
+ * from the resolved OAuth token's `proxy-ep`.
+ *
+ * This mirrors the production `modifyModels` hook in `github-copilot.ts`, which
+ * rewrites the hardcoded `api.individual.githubcopilot.com` base URL to the
+ * correct proxy for the account type (individual / business / enterprise).
+ * Without this, business/enterprise tokens are routed to the individual
+ * endpoint and the API responds with `421 Misdirected Request`.
+ *
+ * No-ops for non-copilot models or when the token is unavailable (the matching
+ * E2E tests skip themselves when the token is absent).
+ */
+export function applyCopilotBaseUrl<T extends { provider: string; baseUrl: string }>(
+	model: T,
+	token: string | undefined,
+): T {
+	if (model.provider !== "github-copilot" || !token) return model;
+	return { ...model, baseUrl: getGitHubCopilotBaseUrl(token) };
+}
 
 const AUTH_PATH = join(homedir(), ".dreb", "agent", "auth.json");
 
