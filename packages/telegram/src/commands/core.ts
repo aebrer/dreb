@@ -3,12 +3,11 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { type Stats, statSync } from "node:fs";
 import type { Api, Context } from "grammy";
 import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
+import { resolveNewPath } from "../util/path.js";
 import { log, safeSend } from "../util/telegram.js";
 
 export async function cmdStart(ctx: Context): Promise<void> {
@@ -18,6 +17,7 @@ export async function cmdStart(ctx: Context): Promise<void> {
 			"*Session:*\n" +
 			"/new — Start a fresh session (keeps current directory)\n" +
 			"/new <path> — Start a fresh session in a different directory\n" +
+			"/new <segment> ... — Mobile shorthand: `projects dreb` -> `~/projects/dreb`\n" +
 			"/sessions — List recent sessions\n" +
 			"/resume <id> — Resume a session\n" +
 			"/recent \\[N\\] — Resend last N messages\n\n" +
@@ -76,30 +76,63 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 	const pathArg = args.trim();
 
 	if (pathArg) {
-		// Resolve path (expand ~ and make absolute)
-		const expanded = pathArg.startsWith("~") ? pathArg.replace("~", homedir()) : pathArg;
-		const resolved = resolve(expanded);
+		// Resolve explicit paths or shorthand tokens to an absolute candidate.
+		let resolved: string;
+		try {
+			resolved = resolveNewPath(pathArg);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			await safeSend(ctx.api, ctx.chat!.id, `❌ ${message}`);
+			return;
+		}
 
-		if (!existsSync(resolved)) {
+		let stats: Stats | undefined;
+		try {
+			stats = statSync(resolved, { throwIfNoEntry: false });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			await safeSend(ctx.api, ctx.chat!.id, `❌ Cannot access directory: \`${resolved}\` (${message})`);
+			return;
+		}
+
+		if (!stats) {
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Directory not found: \`${resolved}\``);
 			return;
 		}
-		if (!statSync(resolved).isDirectory()) {
+		if (!stats.isDirectory()) {
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Not a directory: \`${resolved}\``);
+			return;
+		}
+
+		const messageId = await safeSend(
+			ctx.api,
+			ctx.chat!.id,
+			`🆕 Next message will start a fresh session in \`${resolved}\``,
+		);
+		if (messageId === 0) {
+			log(`[WARN] /new confirmation failed for \`${resolved}\`; leaving session state unchanged`);
 			return;
 		}
 
 		userState.newSessionFlag = true;
 		userState.newSessionCwd = resolved;
-		await ctx.reply(`🆕 Next message will start a fresh session in \`${resolved}\``);
 	} else {
 		// Eagerly resolve CWD — never store null as a sentinel.
 		// After /restart, effectiveCwd is null (in-memory state is lost),
 		// so this falls back to config.workingDir deterministically.
 		const cwd = userState.effectiveCwd ?? userState.config.workingDir;
+		const messageId = await safeSend(
+			ctx.api,
+			ctx.chat!.id,
+			`🆕 Next message will start a fresh session in \`${cwd}\``,
+		);
+		if (messageId === 0) {
+			log(`[WARN] /new confirmation failed for \`${cwd}\`; leaving session state unchanged`);
+			return;
+		}
+
 		userState.newSessionFlag = true;
 		userState.newSessionCwd = cwd;
-		await ctx.reply(`🆕 Next message will start a fresh session in \`${cwd}\``);
 	}
 }
 
