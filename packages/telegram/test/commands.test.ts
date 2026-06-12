@@ -143,6 +143,20 @@ describe("cmdNew", () => {
 			expect(userState.newSessionCwd).toMatch(/My Projects\/dreb$/);
 		});
 
+		it("reports invalid shorthand without setting flag", async () => {
+			const userState = createUserState();
+			await cmdNew(ctx, userState, "..");
+
+			expect(userState.newSessionFlag).toBe(false);
+			expect(userState.newSessionCwd).toBeNull();
+			expect(existsSync).not.toHaveBeenCalled();
+			expect(mockSafeSend).toHaveBeenCalledWith(
+				expect.anything(),
+				100,
+				expect.stringContaining("Invalid /new shorthand"),
+			);
+		});
+
 		it("reports the resolved candidate when shorthand path does not exist", async () => {
 			vi.mocked(existsSync).mockReturnValue(false);
 

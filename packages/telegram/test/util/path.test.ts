@@ -51,16 +51,21 @@ describe("resolveNewPath", () => {
 			expect(resolve("projects   dreb")).toBe("/home/testuser/projects/dreb");
 		});
 
+		it("treats tabs and newlines as shorthand separators", () => {
+			expect(resolve("projects\tdreb\ntelegram")).toBe("/home/testuser/projects/dreb/telegram");
+		});
+
 		it("keeps inner spaces inside a quoted segment", () => {
 			expect(resolve('"a b c" d')).toBe("/home/testuser/a b c/d");
 		});
 
-		it("preserves unclosed quotes as literal text", () => {
-			expect(resolve('"My Projects')).toBe("/home/testuser/My Projects");
+		it("throws on unclosed quotes", () => {
+			expect(() => resolve('"My Projects')).toThrow("missing closing quote");
 		});
 
-		it("ignores empty quoted segments", () => {
+		it("ignores empty quoted segments when other segments are present", () => {
 			expect(resolve('"" projects')).toBe("/home/testuser/projects");
+			expect(resolve('" " projects')).toBe("/home/testuser/projects");
 		});
 	});
 
@@ -71,6 +76,18 @@ describe("resolveNewPath", () => {
 
 		it("throws on empty input", () => {
 			expect(() => resolve("")).toThrow();
+		});
+
+		it("throws on empty or quote-only shorthand", () => {
+			expect(() => resolve('""')).toThrow("no path segments");
+			expect(() => resolve('" "')).toThrow("no path segments");
+			expect(() => resolve('"')).toThrow("missing closing quote");
+		});
+
+		it("throws on current-directory or parent-directory shorthand segments", () => {
+			expect(() => resolve(".")).toThrow("cannot be '.' or '..'");
+			expect(() => resolve("..")).toThrow("cannot be '.' or '..'");
+			expect(() => resolve("projects ..")).toThrow("cannot be '.' or '..'");
 		});
 	});
 });

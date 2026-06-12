@@ -77,7 +77,14 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 
 	if (pathArg) {
 		// Resolve explicit paths or shorthand tokens to an absolute candidate.
-		const resolved = resolveNewPath(pathArg);
+		let resolved: string;
+		try {
+			resolved = resolveNewPath(pathArg);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			await safeSend(ctx.api, ctx.chat!.id, `❌ ${message}`);
+			return;
+		}
 
 		if (!existsSync(resolved)) {
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Directory not found: \`${resolved}\``);

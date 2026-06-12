@@ -28,6 +28,13 @@ export function resolveNewPath(pathArg: string, getHome = homedir): string {
 
 	// Shorthand form: tokens under the home directory.
 	const segments = parseShorthandTokens(trimmed);
+	if (segments.length === 0) {
+		throw new Error("Invalid /new shorthand: no path segments were provided");
+	}
+	if (segments.some((segment) => segment === "." || segment === "..")) {
+		throw new Error("Invalid /new shorthand: path segments cannot be '.' or '..'");
+	}
+
 	const homeRelative = ["~", ...segments].join("/");
 	return resolve(homeRelative.replace("~", getHome()));
 }
@@ -43,17 +50,21 @@ function parseShorthandTokens(input: string): string[] {
 	for (const char of input) {
 		if (char === '"') {
 			inQuote = !inQuote;
-		} else if (char === " " && !inQuote) {
-			if (current.length > 0) {
+		} else if (/\s/.test(char) && !inQuote) {
+			if (current.trim().length > 0) {
 				tokens.push(current);
-				current = "";
 			}
+			current = "";
 		} else {
 			current += char;
 		}
 	}
 
-	if (current.length > 0) {
+	if (inQuote) {
+		throw new Error("Invalid /new shorthand: missing closing quote");
+	}
+
+	if (current.trim().length > 0) {
 		tokens.push(current);
 	}
 
