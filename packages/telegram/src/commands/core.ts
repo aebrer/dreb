@@ -4,11 +4,10 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
 import type { Api, Context } from "grammy";
 import type { Config } from "../config.js";
 import type { UserState } from "../types.js";
+import { resolveNewPath } from "../util/path.js";
 import { log, safeSend } from "../util/telegram.js";
 
 export async function cmdStart(ctx: Context): Promise<void> {
@@ -18,6 +17,7 @@ export async function cmdStart(ctx: Context): Promise<void> {
 			"*Session:*\n" +
 			"/new — Start a fresh session (keeps current directory)\n" +
 			"/new <path> — Start a fresh session in a different directory\n" +
+			"/new <segment> ... — Mobile shorthand: `projects dreb` -> `~/projects/dreb`\n" +
 			"/sessions — List recent sessions\n" +
 			"/resume <id> — Resume a session\n" +
 			"/recent \\[N\\] — Resend last N messages\n\n" +
@@ -76,9 +76,8 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 	const pathArg = args.trim();
 
 	if (pathArg) {
-		// Resolve path (expand ~ and make absolute)
-		const expanded = pathArg.startsWith("~") ? pathArg.replace("~", homedir()) : pathArg;
-		const resolved = resolve(expanded);
+		// Resolve explicit paths or shorthand tokens to an absolute candidate.
+		const resolved = resolveNewPath(pathArg);
 
 		if (!existsSync(resolved)) {
 			await safeSend(ctx.api, ctx.chat!.id, `❌ Directory not found: \`${resolved}\``);

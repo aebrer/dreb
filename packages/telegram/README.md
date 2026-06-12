@@ -78,6 +78,7 @@ systemctl --user enable --now dreb-telegram
 - `/start` — Help & command list
 - `/new` — Start fresh session (preserves current working directory)
 - `/new <path>` — Start fresh session in the specified directory
+- `/new <segment> ...` — Mobile shorthand for home-relative paths, e.g. `/new projects dreb` resolves to `~/projects/dreb`; quoted spans work for segments containing spaces, e.g. `/new "My Projects" dreb`
 - `/sessions` — List recent sessions
 - `/resume <id>` — Resume by session ID prefix
 - `/recent [N]` — Resend last N assistant messages

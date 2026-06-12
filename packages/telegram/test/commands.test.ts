@@ -118,6 +118,43 @@ describe("cmdNew", () => {
 			// Should be an absolute path containing the home dir
 			expect(userState.newSessionCwd).toMatch(/^\//);
 		});
+
+		it("expands mobile shorthand tokens to a home-relative path", async () => {
+			vi.mocked(existsSync).mockReturnValue(true);
+			vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as any);
+
+			const userState = createUserState();
+			await cmdNew(ctx, userState, "projects dreb");
+
+			expect(userState.newSessionFlag).toBe(true);
+			expect(userState.newSessionCwd).toMatch(/^\//);
+			expect(userState.newSessionCwd).toMatch(/projects\/dreb$/);
+			expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("projects/dreb"));
+		});
+
+		it("respects quoted spans in shorthand", async () => {
+			vi.mocked(existsSync).mockReturnValue(true);
+			vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as any);
+
+			const userState = createUserState();
+			await cmdNew(ctx, userState, '"My Projects" dreb');
+
+			expect(userState.newSessionFlag).toBe(true);
+			expect(userState.newSessionCwd).toMatch(/My Projects\/dreb$/);
+		});
+
+		it("reports the resolved candidate when shorthand path does not exist", async () => {
+			vi.mocked(existsSync).mockReturnValue(false);
+
+			const userState = createUserState();
+			await cmdNew(ctx, userState, "projects missing");
+
+			expect(userState.newSessionFlag).toBe(false);
+			expect(userState.newSessionCwd).toBeNull();
+			const sent = mockSafeSend.mock.calls[0][2] as string;
+			expect(sent).toContain("not found");
+			expect(sent).toContain("projects/missing");
+		});
 	});
 
 	describe("bare /new (no path argument)", () => {
