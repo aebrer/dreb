@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveNewPath } from "../../src/util/path.js";
 
@@ -18,15 +19,15 @@ describe("resolveNewPath", () => {
 		});
 
 		it("resolves relative paths containing a slash", () => {
-			expect(resolve("./relative")).toMatch(/\/relative$/);
+			expect(resolve("./relative")).toBe(path.resolve("./relative"));
 		});
 
 		it("resolves slash-separated paths as a single path", () => {
-			expect(resolve("projects/dreb")).toMatch(/\/projects\/dreb$/);
+			expect(resolve("projects/dreb")).toBe(path.resolve("projects/dreb"));
 		});
 
 		it("does not apply shorthand when the argument contains a slash", () => {
-			expect(resolve("foo/bar baz")).toMatch(/\/foo\/bar baz$/);
+			expect(resolve("foo/bar baz")).toBe(path.resolve("foo/bar baz"));
 		});
 	});
 

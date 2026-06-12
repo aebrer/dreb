@@ -88,7 +88,27 @@ describe("cmdNew", () => {
 
 			expect(userState.newSessionFlag).toBe(true);
 			expect(userState.newSessionCwd).toBe("/some/path");
-			expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("/some/path"));
+			expect(mockSafeSend).toHaveBeenCalledWith(
+				ctx.api,
+				100,
+				"🆕 Next message will start a fresh session in `/some/path`",
+			);
+		});
+
+		it("preserves state when success confirmation cannot be delivered", async () => {
+			vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as any);
+			mockSafeSend.mockResolvedValueOnce(0);
+
+			const userState = createUserState({ newSessionFlag: true, newSessionCwd: "/previous/path" });
+			await cmdNew(ctx, userState, "/some/path");
+
+			expect(userState.newSessionFlag).toBe(true);
+			expect(userState.newSessionCwd).toBe("/previous/path");
+			expect(mockSafeSend).toHaveBeenCalledWith(
+				ctx.api,
+				100,
+				"🆕 Next message will start a fresh session in `/some/path`",
+			);
 		});
 
 		it("rejects nonexistent path without setting flag", async () => {
@@ -149,10 +169,7 @@ describe("cmdNew", () => {
 			await cmdNew(ctx, userState, "~/projects");
 
 			expect(userState.newSessionFlag).toBe(true);
-			// Should not start with ~
-			expect(userState.newSessionCwd).not.toMatch(/^~/);
-			// Should be an absolute path containing the home dir
-			expect(userState.newSessionCwd).toMatch(/^\//);
+			expect(userState.newSessionCwd).toBe("/home/testuser/projects");
 		});
 
 		it("expands mobile shorthand tokens to a home-relative path", async () => {
@@ -164,7 +181,11 @@ describe("cmdNew", () => {
 
 			expect(userState.newSessionFlag).toBe(true);
 			expect(userState.newSessionCwd).toBe(expectedPath);
-			expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining(expectedPath));
+			expect(mockSafeSend).toHaveBeenCalledWith(
+				ctx.api,
+				100,
+				`🆕 Next message will start a fresh session in \`${expectedPath}\``,
+			);
 		});
 
 		it("respects quoted spans in shorthand", async () => {
@@ -176,7 +197,11 @@ describe("cmdNew", () => {
 
 			expect(userState.newSessionFlag).toBe(true);
 			expect(userState.newSessionCwd).toBe(expectedPath);
-			expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining(expectedPath));
+			expect(mockSafeSend).toHaveBeenCalledWith(
+				ctx.api,
+				100,
+				`🆕 Next message will start a fresh session in \`${expectedPath}\``,
+			);
 		});
 
 		it("reports invalid shorthand without setting flag", async () => {
@@ -228,7 +253,11 @@ describe("cmdNew", () => {
 
 			expect(userState.newSessionFlag).toBe(true);
 			expect(userState.newSessionCwd).toBe("/current/project");
-			expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("/current/project"));
+			expect(mockSafeSend).toHaveBeenCalledWith(
+				ctx.api,
+				100,
+				"🆕 Next message will start a fresh session in `/current/project`",
+			);
 		});
 
 		it("falls back to config.workingDir when effectiveCwd is null", async () => {
@@ -237,7 +266,30 @@ describe("cmdNew", () => {
 
 			expect(userState.newSessionFlag).toBe(true);
 			expect(userState.newSessionCwd).toBe("/default/dir");
-			expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining("/default/dir"));
+			expect(mockSafeSend).toHaveBeenCalledWith(
+				ctx.api,
+				100,
+				"🆕 Next message will start a fresh session in `/default/dir`",
+			);
+		});
+
+		it("preserves state when success confirmation cannot be delivered", async () => {
+			mockSafeSend.mockResolvedValueOnce(0);
+
+			const userState = createUserState({
+				effectiveCwd: "/current/project",
+				newSessionFlag: true,
+				newSessionCwd: "/previous/path",
+			});
+			await cmdNew(ctx, userState, "");
+
+			expect(userState.newSessionFlag).toBe(true);
+			expect(userState.newSessionCwd).toBe("/previous/path");
+			expect(mockSafeSend).toHaveBeenCalledWith(
+				ctx.api,
+				100,
+				"🆕 Next message will start a fresh session in `/current/project`",
+			);
 		});
 
 		it("never sets newSessionCwd to null", async () => {
@@ -251,7 +303,7 @@ describe("cmdNew", () => {
 			const userState = createUserState({ effectiveCwd: "/my/project" });
 			await cmdNew(ctx, userState, "");
 
-			const reply = ctx.reply.mock.calls[0][0] as string;
+			const reply = mockSafeSend.mock.calls[0][2] as string;
 			expect(reply).toContain("/my/project");
 			// Should NOT be the generic "fresh session" message without a path
 			expect(reply).not.toBe("🆕 Next message will start a fresh session.");

@@ -104,17 +104,35 @@ export async function cmdNew(ctx: Context, userState: UserState, args: string): 
 			return;
 		}
 
+		const messageId = await safeSend(
+			ctx.api,
+			ctx.chat!.id,
+			`🆕 Next message will start a fresh session in \`${resolved}\``,
+		);
+		if (messageId === 0) {
+			log(`[WARN] /new confirmation failed for \`${resolved}\`; leaving session state unchanged`);
+			return;
+		}
+
 		userState.newSessionFlag = true;
 		userState.newSessionCwd = resolved;
-		await ctx.reply(`🆕 Next message will start a fresh session in \`${resolved}\``);
 	} else {
 		// Eagerly resolve CWD — never store null as a sentinel.
 		// After /restart, effectiveCwd is null (in-memory state is lost),
 		// so this falls back to config.workingDir deterministically.
 		const cwd = userState.effectiveCwd ?? userState.config.workingDir;
+		const messageId = await safeSend(
+			ctx.api,
+			ctx.chat!.id,
+			`🆕 Next message will start a fresh session in \`${cwd}\``,
+		);
+		if (messageId === 0) {
+			log(`[WARN] /new confirmation failed for \`${cwd}\`; leaving session state unchanged`);
+			return;
+		}
+
 		userState.newSessionFlag = true;
 		userState.newSessionCwd = cwd;
-		await ctx.reply(`🆕 Next message will start a fresh session in \`${cwd}\``);
 	}
 }
 
