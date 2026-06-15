@@ -561,6 +561,121 @@ describe("TUI committed-scrollback region", () => {
 
 		tui.stop();
 	});
+
+	// Regression for issue 277: when the live region grows taller than the viewport
+	// (big tool output, long streaming message, overlay padding) the terminal scrolls
+	// committed history into scrollback. When the live region later shrinks, the
+	// renderer must re-anchor the editor at the BOTTOM of the viewport. The old code
+	// took a live-region-only fullRender() path that could not restore committed
+	// history from scrollback, stranding the editor at the TOP of an empty viewport
+	// ("jump to the top").
+	it("live-region shrink past viewport re-anchors editor at the bottom (issue 277)", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		// Committed history taller than the 10-row viewport.
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 20 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+
+		const liveComp = new TestComponent();
+		liveComp.lines = [];
+		live.addChild(liveComp);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		await terminal.flush();
+
+		// 1. Live region grows taller than the viewport (e.g. a big tool output above
+		//    the editor). This scrolls committed history out of the viewport.
+		liveComp.lines = [...Array.from({ length: 11 }, (_, i) => `LIVE-BIG ${i}`), "EDITOR >", "footer"];
+		tui.requestRender();
+		await terminal.flush();
+
+		const redrawsBefore = tui.fullRedraws;
+		terminal.clearWrites();
+
+		// 2. Live region shrinks back to just the editor (deferred post-turn render:
+		//    big output commits / spinner removed / pending content clears).
+		liveComp.lines = ["EDITOR >", "footer"];
+		tui.requestRender();
+		await terminal.flush();
+
+		const viewport = terminal.getViewport();
+		const editorRow = viewport.findIndex((l) => l.includes("EDITOR >"));
+
+		assert.ok(editorRow !== -1, "editor must be visible after the shrink");
+		// The bug anchored the editor at the very top (row 0) of an otherwise empty
+		// viewport. After the fix it sits near the bottom with committed history above.
+		assert.ok(
+			editorRow >= viewport.length - 3,
+			`editor should be anchored at the bottom of the viewport, was at row ${editorRow} of ${viewport.length}`,
+		);
+		assert.ok(
+			viewport.slice(0, editorRow).some((l) => l.includes("HIST")),
+			"committed history must be restored above the editor (not stranded in scrollback)",
+		);
+		// The fix re-anchors via recommitAll(), which clears scrollback and repaints.
+		assert.ok(
+			terminal.getWrites().includes("\x1b[3J"),
+			"exceeded-viewport shrink should re-anchor via recommitAll (scrollback clear)",
+		);
+		assert.ok(tui.fullRedraws > redrawsBefore, "exceeded-viewport shrink should perform a full redraw");
+
+		tui.stop();
+	});
+
+	// Companion guard: when the live region fit within the viewport, a shrink must NOT
+	// escalate to a full transcript replay — it stays on the cheap live-region-only
+	// path, preserving the committed-scrollback optimization from the original refactor.
+	it("live-region shrink within viewport stays on the cheap path (no scrollback clear)", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 20 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+
+		const liveComp = new TestComponent();
+		liveComp.lines = ["line a", "line b", "EDITOR >"];
+		live.addChild(liveComp);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		await terminal.flush();
+
+		terminal.clearWrites();
+
+		// Shrink a small (fits-in-viewport) live region — should not clear scrollback.
+		liveComp.lines = ["EDITOR >"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(
+			!terminal.getWrites().includes("\x1b[3J"),
+			"within-viewport shrink must not clear scrollback (no transcript replay)",
+		);
+		assert.ok(
+			!terminal.getWrites().includes("HIST"),
+			"within-viewport shrink must not re-emit committed history (stays on live-region-only path)",
+		);
+
+		tui.stop();
+	});
 });
 
 describe("autocomplete + committed scrollback (ghost whitespace)", () => {

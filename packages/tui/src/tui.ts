@@ -1090,6 +1090,32 @@ export class TUI extends Container {
 			this.onPostRender?.();
 		};
 
+		// Choose the correct full-redraw strategy for shrink/viewport-shift paths.
+		//
+		// `fullRender(true)` clears and repaints ONLY the live region (cursor-up +
+		// `\r\x1b[J`). That is correct as long as the live region fit within the
+		// viewport (`prevViewportTop === 0`), because the live-region start is still
+		// on screen and reachable.
+		//
+		// But when the live region had grown taller than the viewport
+		// (`prevViewportTop > 0`), the terminal scrolled and pushed committed history
+		// — and the top of the live region — above the viewport into scrollback.
+		// Cursor-up cannot reach past the viewport top, so `fullRender(true)` would
+		// paint the (now smaller) live region anchored at the TOP of an otherwise
+		// empty viewport, with committed history stranded in scrollback. That is the
+		// "jump to the top" reported in issue 277.
+		//
+		// `recommitAll()` re-emits the committed tail + live region and re-anchors the
+		// editor at the BOTTOM of the viewport, matching the steady-state the
+		// differential renderer leaves on every keystroke.
+		const clearAndRedraw = (): void => {
+			if (prevViewportTop > 0) {
+				this.recommitAll();
+			} else {
+				fullRender(true);
+			}
+		};
+
 		const debugRedraw = process.env.DREB_DEBUG_REDRAW === "1";
 		const logRedraw = (reason: string): void => {
 			if (!debugRedraw) return;
@@ -1164,7 +1190,7 @@ export class TUI extends Container {
 				const targetRow = Math.max(0, newLines.length - 1);
 				if (targetRow < prevViewportTop) {
 					logRedraw(`deleted lines moved viewport up (${targetRow} < ${prevViewportTop})`);
-					fullRender(true);
+					clearAndRedraw();
 					return;
 				}
 				const lineDiff = computeLineDiff(targetRow);
@@ -1179,7 +1205,7 @@ export class TUI extends Container {
 				const extraLines = this.previousLines.length - newLines.length;
 				if (extraLines > height) {
 					logRedraw(`extraLines > height (${extraLines} > ${height})`);
-					fullRender(true);
+					clearAndRedraw();
 					return;
 				}
 				if (extraLines > 0) {
@@ -1234,7 +1260,7 @@ export class TUI extends Container {
 			} else {
 				// Viewport needs to shift — full redraw without scrollback clear
 				logRedraw(`firstChanged < viewportTop with viewport shift (${firstChanged} < ${prevViewportTop})`);
-				fullRender(true);
+				clearAndRedraw();
 				return;
 			}
 		}
