@@ -462,7 +462,7 @@ The TUI uses a two-zone rendering architecture:
 
 1. `interactive-mode.ts` maintains a `committedChatContainer` (finalized messages/tools) and a live `chatContainer` (streaming + pending)
 2. When a message or tool finalizes, it moves from live → committed container, and `commit()` advances the boundary
-3. The differential renderer (`doRender`) only renders live children, so the "content shrank" full-redraw path (triggered by spinner removal) only replays the live region — not the whole transcript
+3. The differential renderer (`doRender`) only renders live children, so the "content shrank" full-redraw path (triggered by spinner removal) replays only the live region — not the whole transcript — **as long as the live region fit within the viewport**. If the live region had grown taller than the viewport (a big tool output, a long streaming message, overlay padding), the committed history and the live-region top were scrolled into unreachable scrollback; a relative redraw cannot pull them back, so the shrink/viewport-shift paths route through `recommitAll()` instead, restoring the committed tail and re-anchoring the editor at the bottom (see issue 277). The predicate is `prevViewportTop > 0`.
 4. Terminal width changes and other global mutations call `recommitAll()` for one deliberate repaint
 
 ### Prefix-commit ordering rule
