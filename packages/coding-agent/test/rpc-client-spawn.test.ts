@@ -127,4 +127,37 @@ describe("RpcClient spawn failure handling", () => {
 
 		await expect(pending).rejects.toThrow(/failed to spawn/i);
 	});
+
+	test("a spawn 'error' after start() resolves surfaces loudly on the next call", async () => {
+		// The race in start() resolves once the grace window elapses with the child
+		// alive. A spawn/runtime 'error' that arrives later must still fail loudly:
+		// the client is marked dead and the next request rejects with the real
+		// cause rather than hanging or silently running.
+		const child = makeFakeChild();
+		vi.mocked(spawn).mockReturnValue(child);
+
+		const client = new RpcClient({ cliPath: "dist/cli.js", uid: 1234 });
+		await client.start();
+
+		child.emit("error", new Error("EACCES: setuid not permitted"));
+
+		// Subsequent calls reject loudly and carry the captured cause.
+		await expect(client.getState()).rejects.toThrow(/not running.*setuid not permitted/i);
+	});
+
+	test("in-flight requests reject when the child emits 'exit'", async () => {
+		// Sibling path to the 'error' case: a process that crashes mid-request must
+		// reject the pending call with the exit reason, not leave it hanging.
+		const child = makeFakeChild();
+		vi.mocked(spawn).mockReturnValue(child);
+
+		const client = new RpcClient({ cliPath: "dist/cli.js" });
+		await client.start();
+
+		const pending = client.getState();
+		child.exitCode = 1;
+		child.emit("exit", 1, "SIGKILL");
+
+		await expect(pending).rejects.toThrow(/exited with code 1/i);
+	});
 });

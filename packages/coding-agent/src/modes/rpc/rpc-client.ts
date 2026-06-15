@@ -17,6 +17,12 @@ import type { RpcCommand, RpcResponse, RpcSessionInfo, RpcSessionState, RpcSlash
 // Types
 // ============================================================================
 
+/**
+ * Grace period (ms) start() waits for the child to initialize before treating
+ * it as alive. An 'error'/'exit' event during this window rejects start() early.
+ */
+const INIT_GRACE_MS = 100;
+
 /** Distributive Omit that works with union types */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 
@@ -115,34 +121,28 @@ export class RpcClient {
 			this.stderr += data.toString();
 		});
 
-		// Detect process exit — reject pending requests so callers don't hang.
-		// Capture the process reference so stale handlers from a previous process
-		// don't clobber state after a stop()/start() cycle.
+		// Detect process exit and spawn failures for the whole session lifecycle —
+		// reject pending requests so callers don't hang. Capture the process
+		// reference so stale handlers from a previous process don't clobber state
+		// after a stop()/start() cycle.
 		const procRef = this.process;
 		procRef.on("exit", (code, signal) => {
 			// Guard: skip if this handler belongs to an old, already-stopped process
 			if (this.process !== procRef) return;
-			this._dead = true;
-			for (const pending of this.pendingRequests.values()) {
-				pending.reject(new Error(`RPC process exited with code ${code}, signal ${signal}`));
-			}
-			this.pendingRequests.clear();
+			this.failPendingRequests(`RPC process exited with code ${code}, signal ${signal}`);
 		});
 
-		// Detect spawn failures — these surface asynchronously as an 'error' event
-		// rather than a thrown exception (e.g. EPERM when dropping to a uid/gid the
-		// parent lacks CAP_SETUID/CAP_SETGID for, or unsupported on Windows). Without
-		// a listener an 'error' event would crash the process; capture it so start()
-		// can fail loudly and pending requests reject instead of hanging.
+		// Spawn failures surface asynchronously as an 'error' event rather than a
+		// thrown exception (e.g. EPERM when dropping to a uid/gid the parent lacks
+		// CAP_SETUID/CAP_SETGID for, or unsupported on Windows). Without a listener
+		// an 'error' event would crash the process; record the cause so start() can
+		// fail loudly and a later send() can report the real reason instead of a
+		// generic "not running".
 		procRef.on("error", (err) => {
 			// Guard: skip if this handler belongs to an old, already-stopped process
 			if (this.process !== procRef) return;
-			this._dead = true;
 			this.spawnError = err;
-			for (const pending of this.pendingRequests.values()) {
-				pending.reject(new Error(`RPC process failed to spawn: ${err.message}`));
-			}
-			this.pendingRequests.clear();
+			this.failPendingRequests(`RPC process failed to spawn: ${err.message}`);
 		});
 
 		// Set up strict JSONL reader for stdout.
@@ -150,15 +150,40 @@ export class RpcClient {
 			this.handleLine(line);
 		});
 
-		// Wait a moment for process to initialize
-		await new Promise((resolve) => setTimeout(resolve, 100));
+		// Give the process a moment to initialize, but settle as soon as an
+		// 'error' or 'exit' event arrives. Racing the grace period against those
+		// events (instead of a blind fixed sleep) guarantees that a failed
+		// privilege drop (uid/gid EPERM) rejects start() loudly no matter when
+		// libuv delivers the event — a fixed sleep could expire first and let
+		// start() resolve despite the child never running.
+		await new Promise<void>((resolve, reject) => {
+			const onError = (err: Error) => {
+				cleanup();
+				reject(new Error(`Agent process failed to spawn: ${err.message}. Stderr: ${this.stderr}`));
+			};
+			const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+				cleanup();
+				reject(
+					new Error(
+						`Agent process exited immediately with code ${code}, signal ${signal}. Stderr: ${this.stderr}`,
+					),
+				);
+			};
+			const timer = setTimeout(() => {
+				cleanup();
+				resolve();
+			}, INIT_GRACE_MS);
+			const cleanup = () => {
+				clearTimeout(timer);
+				procRef.off("error", onError);
+				procRef.off("exit", onExit);
+			};
+			procRef.once("error", onError);
+			procRef.once("exit", onExit);
+		});
 
-		// Surface async spawn failures (e.g. uid/gid privilege drop denied) loudly.
-		const spawnError = this.takeSpawnError();
-		if (spawnError) {
-			throw new Error(`Agent process failed to spawn: ${spawnError.message}. Stderr: ${this.stderr}`);
-		}
-
+		// Belt-and-suspenders: a process that exited exactly as the grace timer
+		// fired (so the race resolved instead of rejecting) still surfaces loudly.
 		if (this.process.exitCode !== null) {
 			throw new Error(`Agent process exited immediately with code ${this.process.exitCode}. Stderr: ${this.stderr}`);
 		}
@@ -554,14 +579,16 @@ export class RpcClient {
 	// =========================================================================
 
 	/**
-	 * Read and clear any captured spawn error. Accessed through a method boundary
-	 * so it isn't narrowed away by control-flow analysis (the field is only ever
-	 * assigned a non-null value inside the async 'error' handler).
+	 * Mark the client dead and reject every in-flight request with `message`.
+	 * Shared by the 'exit' and 'error' handlers so both failure paths surface
+	 * loudly and consistently instead of leaving callers hanging.
 	 */
-	private takeSpawnError(): Error | null {
-		const err = this.spawnError;
-		this.spawnError = null;
-		return err;
+	private failPendingRequests(message: string): void {
+		this._dead = true;
+		for (const pending of this.pendingRequests.values()) {
+			pending.reject(new Error(message));
+		}
+		this.pendingRequests.clear();
 	}
 
 	private handleLine(line: string): void {
@@ -587,7 +614,11 @@ export class RpcClient {
 
 	private async send(command: RpcCommandBody): Promise<RpcResponse> {
 		if (this._dead || !this.process?.stdin) {
-			throw new Error("RPC process not running");
+			// Surface the real spawn cause (e.g. uid/gid EPERM) if one was captured,
+			// rather than a generic message that hides why the process is gone.
+			throw new Error(
+				this.spawnError ? `RPC process not running: ${this.spawnError.message}` : "RPC process not running",
+			);
 		}
 
 		const id = `req_${++this.requestId}`;
