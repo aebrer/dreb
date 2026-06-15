@@ -4,6 +4,21 @@ RPC mode enables headless operation of the coding agent via a JSON protocol over
 
 **Note for Node.js/TypeScript users**: If you're building a Node.js application, consider using `AgentSession` directly from `@dreb/coding-agent` instead of spawning a subprocess. See [`src/core/agent-session.ts`](../src/core/agent-session.ts) for the API. For a subprocess-based TypeScript client, see [`src/modes/rpc/rpc-client.ts`](../src/modes/rpc/rpc-client.ts).
 
+### Running the agent child as a specific OS user
+
+When using the `RpcClient` from `@dreb/coding-agent`, `RpcClientOptions` accepts optional `uid` and `gid` fields. When set, they are forwarded directly to `child_process.spawn`, so the agent child (and every subprocess it spawns, including `bash`) runs under that OS user/group. When unset they are omitted entirely, leaving spawn behavior unchanged.
+
+```ts
+import { RpcClient } from "@dreb/coding-agent";
+
+// Parent must hold CAP_SETUID / CAP_SETGID (e.g. run as root) for this to succeed.
+const client = new RpcClient({ cwd: "/srv/users/alice", uid: 4001, gid: 4001 });
+await client.start();
+```
+
+This enables per-user filesystem isolation by plain Unix DAC: give each authenticated user a dedicated UID and a working directory owned by that UID at mode `0700`. If the parent lacks the required capability (or the platform doesn't support `uid`/`gid`, e.g. Windows), the spawn fails and `start()` rejects rather than silently running as the parent user.
+
+
 ## Starting RPC Mode
 
 ```bash

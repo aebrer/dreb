@@ -36,6 +36,20 @@ export interface RpcClientOptions {
 	model?: string;
 	/** Additional CLI arguments */
 	args?: string[];
+	/**
+	 * Run the agent child process under this OS user id.
+	 * Forwarded directly to `child_process.spawn`. The parent process must hold
+	 * `CAP_SETUID` (typically by running as root) for this to succeed; otherwise
+	 * the spawn fails and `start()` rejects. Omitted when unset (default behavior).
+	 */
+	uid?: number;
+	/**
+	 * Run the agent child process under this OS group id.
+	 * Forwarded directly to `child_process.spawn`. The parent process must hold
+	 * `CAP_SETGID` (typically by running as root) for this to succeed; otherwise
+	 * the spawn fails and `start()` rejects. Omitted when unset (default behavior).
+	 */
+	gid?: number;
 }
 
 export interface ModelInfo {
@@ -60,6 +74,7 @@ export class RpcClient {
 	private requestId = 0;
 	private stderr = "";
 	private _dead = false;
+	private spawnError: Error | null = null;
 
 	constructor(private options: RpcClientOptions = {}) {}
 
@@ -88,9 +103,12 @@ export class RpcClient {
 			cwd: this.options.cwd,
 			env: { ...process.env, ...this.options.env },
 			stdio: ["pipe", "pipe", "pipe"],
+			...(this.options.uid != null ? { uid: this.options.uid } : {}),
+			...(this.options.gid != null ? { gid: this.options.gid } : {}),
 		});
 
 		this._dead = false;
+		this.spawnError = null;
 
 		// Collect stderr for debugging
 		this.process.stderr?.on("data", (data) => {
@@ -111,6 +129,22 @@ export class RpcClient {
 			this.pendingRequests.clear();
 		});
 
+		// Detect spawn failures — these surface asynchronously as an 'error' event
+		// rather than a thrown exception (e.g. EPERM when dropping to a uid/gid the
+		// parent lacks CAP_SETUID/CAP_SETGID for, or unsupported on Windows). Without
+		// a listener an 'error' event would crash the process; capture it so start()
+		// can fail loudly and pending requests reject instead of hanging.
+		procRef.on("error", (err) => {
+			// Guard: skip if this handler belongs to an old, already-stopped process
+			if (this.process !== procRef) return;
+			this._dead = true;
+			this.spawnError = err;
+			for (const pending of this.pendingRequests.values()) {
+				pending.reject(new Error(`RPC process failed to spawn: ${err.message}`));
+			}
+			this.pendingRequests.clear();
+		});
+
 		// Set up strict JSONL reader for stdout.
 		this.stopReadingStdout = attachJsonlLineReader(this.process.stdout!, (line) => {
 			this.handleLine(line);
@@ -118,6 +152,12 @@ export class RpcClient {
 
 		// Wait a moment for process to initialize
 		await new Promise((resolve) => setTimeout(resolve, 100));
+
+		// Surface async spawn failures (e.g. uid/gid privilege drop denied) loudly.
+		const spawnError = this.takeSpawnError();
+		if (spawnError) {
+			throw new Error(`Agent process failed to spawn: ${spawnError.message}. Stderr: ${this.stderr}`);
+		}
 
 		if (this.process.exitCode !== null) {
 			throw new Error(`Agent process exited immediately with code ${this.process.exitCode}. Stderr: ${this.stderr}`);
@@ -512,6 +552,17 @@ export class RpcClient {
 	// =========================================================================
 	// Internal
 	// =========================================================================
+
+	/**
+	 * Read and clear any captured spawn error. Accessed through a method boundary
+	 * so it isn't narrowed away by control-flow analysis (the field is only ever
+	 * assigned a non-null value inside the async 'error' handler).
+	 */
+	private takeSpawnError(): Error | null {
+		const err = this.spawnError;
+		this.spawnError = null;
+		return err;
+	}
 
 	private handleLine(line: string): void {
 		try {
