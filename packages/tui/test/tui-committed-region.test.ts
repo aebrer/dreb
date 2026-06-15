@@ -667,14 +667,19 @@ describe("TUI committed-scrollback region", () => {
 
 		const viewport = terminal.getViewport();
 		const editorRow = viewport.findIndex((l) => l.includes("EDITOR >"));
+		const footerRow = viewport.findIndex((l) => l.includes("footer"));
 
 		assert.ok(editorRow !== -1, "editor must be visible after the shrink");
 		// The bug anchored the editor at the very top (row 0) of an otherwise empty
-		// viewport. After the fix it sits near the bottom with committed history above.
-		assert.ok(
-			editorRow >= viewport.length - 3,
-			`editor should be anchored at the bottom of the viewport, was at row ${editorRow} of ${viewport.length}`,
+		// viewport. After the fix it sits exactly second-from-bottom (the editor) with
+		// the footer bottom-anchored and committed history above — matching the exact
+		// invariant asserted by the sibling recommit tests.
+		assert.strictEqual(
+			editorRow,
+			viewport.length - 2,
+			`editor should be second-from-bottom after recommit, was at row ${editorRow} of ${viewport.length}`,
 		);
+		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after recommit");
 		assert.ok(
 			viewport.slice(0, editorRow).some((l) => l.includes("HIST")),
 			"committed history must be restored above the editor (not stranded in scrollback)",
