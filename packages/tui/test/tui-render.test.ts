@@ -95,17 +95,18 @@ describe("TUI resize handling", () => {
 		});
 	});
 
-	it("height changes in Termux only re-render live region (no transcript replay)", async () => {
-		// With committed-scrollback model, height changes only re-render the
-		// live region. This is cheap and safe even on Termux — no Termux
-		// special-case is needed since the live region is small.
+	it("height changes in Termux only re-render live region when the live-region start is visible", async () => {
+		// With the committed-scrollback model, height changes keep the cheap
+		// live-region redraw path only when the live-region start is still reachable
+		// (prevViewportTop === 0). Termux still avoids transcript replay for that
+		// common small-live-region case.
 		await withEnv({ TERMUX_VERSION: "1" }, async () => {
 			const terminal = new LoggingVirtualTerminal(40, 10);
 			const tui = new TUI(terminal);
 			const component = new TestComponent();
 			tui.addChild(component);
 
-			component.lines = Array.from({ length: 20 }, (_, i) => `Line ${i}`);
+			component.lines = Array.from({ length: 5 }, (_, i) => `Line ${i}`);
 			tui.start();
 			await terminal.flush();
 			terminal.clearWrites();
@@ -121,7 +122,7 @@ describe("TUI resize handling", () => {
 			assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Height change should not clear scrollback");
 
 			const viewport = terminal.getViewport();
-			assert.ok(viewport.join("\n").includes("Line 19"), "Latest content remains visible after resize");
+			assert.ok(viewport.join("\n").includes("Line 4"), "Latest content remains visible after resize");
 
 			tui.stop();
 		});

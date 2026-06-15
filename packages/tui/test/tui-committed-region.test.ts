@@ -253,7 +253,7 @@ describe("TUI committed-scrollback region", () => {
 		tui.stop();
 	});
 
-	it("height change only re-renders live region (no scrollback clear)", async () => {
+	it("height change only re-renders live region when live-region start is visible", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
 
@@ -278,13 +278,70 @@ describe("TUI committed-scrollback region", () => {
 
 		terminal.clearWrites();
 
-		// Height change should NOT clear scrollback
+		// prevViewportTop is 0, so clearAndRedraw() keeps the cheap live-region-only
+		// fullRender path and does not replay committed scrollback.
 		terminal.resize(40, 15);
 		await terminal.flush();
 
 		assert.ok(!terminal.getWrites().includes("\x1b[3J"), "Height change should not clear scrollback");
 		// Committed content should NOT be re-emitted
 		assert.ok(!terminal.getWrites().includes("Msg 0"), "Height change should not re-emit committed content");
+
+		tui.stop();
+	});
+
+	it("height shrink after a scrolled live region recommits and bottom-anchors", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 20 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+
+		const liveComp = new TestComponent();
+		liveComp.lines = ["EDITOR >", "footer"];
+		live.addChild(liveComp);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		await terminal.flush();
+
+		// Grow the live region beyond the 10-row viewport, then coalesce a live-region
+		// shrink with a terminal height shrink. The heightChanged branch recomputes
+		// prevViewportTop from the previous live-region height, sees that the old
+		// live region had scrolled, and must recommit rather than live-region-only redraw.
+		liveComp.lines = [...Array.from({ length: 11 }, (_, i) => `TALL ${i}`), "EDITOR >", "footer"];
+		tui.requestRender();
+		await terminal.flush();
+
+		const redrawsBefore = tui.fullRedraws;
+		terminal.clearWrites();
+
+		liveComp.lines = ["EDITOR >", "footer"];
+		terminal.resize(40, 8);
+		await terminal.flush();
+
+		const writes = terminal.getWrites();
+		const viewport = terminal.getViewport();
+		const editorRow = viewport.findIndex((l) => l.includes("EDITOR >"));
+		const footerRow = viewport.findIndex((l) => l.includes("footer"));
+
+		assert.ok(writes.includes("\x1b[3J"), "height shrink after scrolled live region should clear scrollback");
+		assert.ok(writes.includes("HIST 0"), "height shrink recommit should re-emit committed history");
+		assert.strictEqual(editorRow, viewport.length - 2, "editor should be second-from-bottom after recommit");
+		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after recommit");
+		assert.ok(
+			viewport.slice(0, editorRow).some((l) => l.includes("HIST")),
+			"committed history must be restored above the editor after height shrink",
+		);
+		assert.ok(tui.fullRedraws > redrawsBefore, "height shrink after scrolled live region should full-redraw");
 
 		tui.stop();
 	});
@@ -632,10 +689,126 @@ describe("TUI committed-scrollback region", () => {
 		tui.stop();
 	});
 
-	// Companion guard: when the live region fit within the viewport, a shrink must NOT
-	// escalate to a full transcript replay — it stays on the cheap live-region-only
-	// path, preserving the committed-scrollback optimization from the original refactor.
-	it("live-region shrink within viewport stays on the cheap path (no scrollback clear)", async () => {
+	it("pure trailing deletion that moves the viewport up recommits and bottom-anchors", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 20 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+
+		const liveComp = new TestComponent();
+		liveComp.lines = ["EDITOR >", "footer"];
+		live.addChild(liveComp);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		await terminal.flush();
+
+		// Grow by appending trailing rows after an unchanged editor/footer prefix. When
+		// this later shrinks back to the prefix, firstChanged >= newLines.length and
+		// targetRow (1) is above the previous viewport top (3), so doRender takes the
+		// "deleted lines moved viewport up" clearAndRedraw() branch.
+		liveComp.lines = ["EDITOR >", "footer", ...Array.from({ length: 11 }, (_, i) => `TRAILING ${i}`)];
+		tui.requestRender();
+		await terminal.flush();
+
+		const redrawsBefore = tui.fullRedraws;
+		terminal.clearWrites();
+
+		liveComp.lines = ["EDITOR >", "footer"];
+		tui.requestRender();
+		await terminal.flush();
+
+		const writes = terminal.getWrites();
+		const viewport = terminal.getViewport();
+		const editorRow = viewport.findIndex((l) => l.includes("EDITOR >"));
+		const footerRow = viewport.findIndex((l) => l.includes("footer"));
+
+		assert.ok(writes.includes("\x1b[3J"), "viewport-up trailing deletion should recommit and clear scrollback");
+		assert.ok(writes.includes("HIST 0"), "recommit should re-emit committed history");
+		assert.strictEqual(editorRow, viewport.length - 2, "editor should be second-from-bottom after recommit");
+		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after recommit");
+		assert.ok(
+			viewport.slice(0, editorRow).some((l) => l.includes("HIST")),
+			"committed history must be restored above the editor",
+		);
+		assert.ok(tui.fullRedraws > redrawsBefore, "viewport-up trailing deletion should perform a full redraw");
+
+		tui.stop();
+	});
+
+	it("oversized trailing deletion recommits from the extraLines > height branch", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 20 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+
+		const liveComp = new TestComponent();
+		liveComp.lines = ["EDITOR >", "footer"];
+		live.addChild(liveComp);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		await terminal.flush();
+
+		liveComp.lines = ["EDITOR >", "footer", ...Array.from({ length: 13 }, (_, i) => `TRAILING ${i}`)];
+		tui.requestRender();
+		await terminal.flush();
+
+		// Under the normal bottom-anchored invariant, deleting more than one viewport
+		// of trailing rows also moves targetRow above prevViewportTop and is handled by
+		// the earlier "deleted lines moved viewport up" guard. Lower prevViewportTop to
+		// model a defensive/stale viewport-tracking state and exercise the sibling
+		// extraLines > height clearAndRedraw() route directly.
+		(tui as unknown as { previousViewportTop: number }).previousViewportTop = 1;
+
+		const redrawsBefore = tui.fullRedraws;
+		terminal.clearWrites();
+
+		liveComp.lines = ["EDITOR >", "footer"];
+		tui.requestRender();
+		await terminal.flush();
+
+		const writes = terminal.getWrites();
+		const viewport = terminal.getViewport();
+		const editorRow = viewport.findIndex((l) => l.includes("EDITOR >"));
+		const footerRow = viewport.findIndex((l) => l.includes("footer"));
+
+		assert.ok(writes.includes("\x1b[3J"), "oversized trailing deletion should recommit and clear scrollback");
+		assert.ok(writes.includes("HIST 0"), "recommit should re-emit committed history");
+		assert.strictEqual(editorRow, viewport.length - 2, "editor should be second-from-bottom after recommit");
+		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after recommit");
+		assert.ok(
+			viewport.slice(0, editorRow).some((l) => l.includes("HIST")),
+			"committed history must be restored above the editor",
+		);
+		assert.ok(tui.fullRedraws > redrawsBefore, "oversized trailing deletion should perform a full redraw");
+
+		tui.stop();
+	});
+
+	// This small shrink intentionally does not cover clearAndRedraw(): with
+	// prevViewportTop === 0 and firstChanged === 0, it falls through to the older
+	// live-region-only content-shrank path. The clearAndRedraw() fullRender arm is
+	// guarded by the height-change-with-prevViewportTop-0 test above.
+	it("small live-region content shrink stays live-region-only (no scrollback clear)", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
 

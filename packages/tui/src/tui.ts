@@ -1032,8 +1032,10 @@ export class TUI extends Container {
 		const height = this.terminal.rows;
 		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
 		const heightChanged = this.previousHeight !== 0 && this.previousHeight !== height;
-		const previousBufferLength = this.previousHeight > 0 ? this.previousViewportTop + this.previousHeight : height;
-		let prevViewportTop = heightChanged ? Math.max(0, previousBufferLength - height) : this.previousViewportTop;
+		// On resize, derive the prior live-region viewport from live content height,
+		// not the old terminal row count. Blank space in a taller viewport must not be
+		// mistaken for scrolled live content that needs a transcript recommit.
+		let prevViewportTop = heightChanged ? Math.max(0, this.previousLines.length - height) : this.previousViewportTop;
 		let viewportTop = prevViewportTop;
 		let hardwareCursorRow = this.hardwareCursorRow;
 		const computeLineDiff = (targetRow: number): number => {
@@ -1141,11 +1143,13 @@ export class TUI extends Container {
 		}
 
 		// Height changes need a full re-render to keep the visible viewport aligned.
-		// With the committed-scrollback model, only the live region is re-rendered,
-		// so this is cheap and safe even on Termux (no transcript replay).
+		// Keep the cheap live-region-only redraw when the live-region start is still
+		// reachable (`prevViewportTop === 0`). If the prior live region exceeded the
+		// viewport, recommit the transcript tail so committed history is restored and
+		// the editor is anchored at the bottom instead of stranded at the top.
 		if (heightChanged) {
 			logRedraw(`terminal height changed (${this.previousHeight} -> ${height})`);
-			fullRender(true);
+			clearAndRedraw();
 			return;
 		}
 
