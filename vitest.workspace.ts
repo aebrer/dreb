@@ -8,16 +8,10 @@
  * Running vitest against its test files produces "No test suite found in file"
  * failures (see issue #89).
  */
-import { defineConfig } from "vitest/config";
-
-export default defineConfig({
-	test: {
-		projects: [
-			"packages/ai",
-			"packages/agent",
-			"packages/coding-agent",
-			"packages/semantic-search",
-			"packages/telegram",
-		],
-	},
-});
+export default [
+	"packages/ai",
+	"packages/agent",
+	"packages/coding-agent",
+	"packages/semantic-search",
+	"packages/telegram",
+];

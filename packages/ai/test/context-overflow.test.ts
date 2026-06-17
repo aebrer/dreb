@@ -141,7 +141,7 @@ describe("Context overflow error handling", () => {
 				logResult(result);
 
 				expect(result.stopReason).toBe("error");
-				expect(result.errorMessage).toMatch(/exceeds the limit of \d+|input is too long/i);
+				expect(result.errorMessage).toMatch(/exceeds the limit of \d+|input is too long|prompt is too long/i);
 				expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
 			},
 			120000,
@@ -430,8 +430,8 @@ describe("Context overflow error handling", () => {
 	// =============================================================================
 
 	describe.skipIf(!process.env.MINIMAX_API_KEY)("MiniMax", () => {
-		it("MiniMax-M2.7 - should detect overflow via isContextOverflow", async () => {
-			const model = getModel("minimax", "MiniMax-M2.7");
+		it("MiniMax-M3 - should detect overflow via isContextOverflow", async () => {
+			const model = getModel("minimax", "MiniMax-M3");
 			const result = await testContextOverflow(model, process.env.MINIMAX_API_KEY!);
 			logResult(result);
 

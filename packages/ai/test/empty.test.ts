@@ -369,7 +369,7 @@ describe("AI Providers Empty Message Tests", () => {
 	});
 
 	describe.skipIf(!process.env.MINIMAX_API_KEY)("MiniMax Provider Empty Messages", () => {
-		const llm = getModel("minimax", "MiniMax-M2.7");
+		const llm = getModel("minimax", "MiniMax-M3");
 
 		it("should handle empty content array", { retry: 3, timeout: 30000 }, async () => {
 			await testEmptyMessage(llm);
