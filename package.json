@@ -19,7 +19,7 @@
 		"verify-workspace-links": "node scripts/verify-workspace-links.js",
 		"verify-engines": "node scripts/verify-engines.js",
 		"test": "npm run test --workspaces --if-present",
-		"coverage": "vitest --workspace vitest.workspace.ts --run --coverage --coverage.reporter=json-summary --coverage.reporter=text-summary",
+		"coverage": "vitest --config vitest.config.ts --run --coverage --coverage.reporter=json-summary --coverage.reporter=text-summary",
 		"prepare": "husky"
 	},
 	"devDependencies": {
