@@ -147,6 +147,38 @@ describe("copyToClipboard — native module ordering (issue 286)", () => {
 		expect(result).toEqual({ method: "native" });
 	});
 
+	test("on Linux with no CLI tool and no native module, degrades to osc52", async () => {
+		// No Wayland/X11/Termux tooling AND native module unavailable.
+		state.clipboard = null;
+		state.wayland = false;
+		delete process.env.WAYLAND_DISPLAY;
+		delete process.env.DISPLAY;
+
+		const result = await copyToClipboard("nowhere to go");
+
+		// Nothing to spawn/exec; the last-resort native branch finds no module and
+		// the function falls through to the always-emitted OSC 52.
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(execSyncMock).not.toHaveBeenCalled();
+		expect(result).toEqual({ method: "osc52" });
+	});
+
+	test("on Linux with no CLI tool and a throwing native module, degrades to osc52", async () => {
+		// Native present as last resort but setText rejects — must not escape; the
+		// swallowed failure falls through to OSC 52 rather than throwing.
+		const setText = vi.fn().mockRejectedValue(new Error("native clipboard unavailable"));
+		state.clipboard = { setText };
+		state.wayland = false;
+		delete process.env.WAYLAND_DISPLAY;
+		delete process.env.DISPLAY;
+
+		const result = await copyToClipboard("native throws");
+
+		expect(spawnMock).not.toHaveBeenCalled();
+		expect(setText).toHaveBeenCalledWith("native throws");
+		expect(result).toEqual({ method: "osc52" });
+	});
+
 	test("on macOS, the native module is preferred (no serving-thread leak there)", async () => {
 		const setText = vi.fn().mockResolvedValue(undefined);
 		state.clipboard = { setText };
