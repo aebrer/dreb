@@ -101,6 +101,8 @@ Sessions are persistent JSONL files with a tree structure. You can resume recent
 
 Memory is just files. Global and project memory indexes are loaded into the system prompt at startup, and entries can store user preferences, good practices, project context, or navigation pointers. `/dream` backs up memory, merges duplicates, scans recent sessions for unrecorded patterns, prunes stale entries, and validates links.
 
+Project context files (`AGENTS.md`/`CLAUDE.md`) are loaded at startup by walking up from the working directory. Nested context in subdirectories — or in a different repo a subagent visits — is auto-loaded on demand the first time a tool operates there (`context.autoLoadNested`, on by default), so per-package conventions are not silently missed. See [Context Files](packages/coding-agent/README.md#context-files).
+
 ### Interfaces and embedding
 
 The same agent runtime powers multiple surfaces:

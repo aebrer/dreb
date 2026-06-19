@@ -3688,6 +3688,7 @@ export class InteractiveMode {
 					editorPaddingX: this.settingsManager.getEditorPaddingX(),
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
+					autoLoadNestedContext: this.settingsManager.getAutoLoadNestedContext(),
 					agentModels: this.settingsManager.getAgentModels(),
 					agentNames: agentNames,
 					availableModelIds,
@@ -3696,6 +3697,9 @@ export class InteractiveMode {
 					onAutoCompactChange: (enabled) => {
 						this.session.setAutoCompactionEnabled(enabled);
 						this.footer.setAutoCompactEnabled(enabled);
+					},
+					onAutoLoadNestedContextChange: (enabled) => {
+						this.settingsManager.setAutoLoadNestedContext(enabled);
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);

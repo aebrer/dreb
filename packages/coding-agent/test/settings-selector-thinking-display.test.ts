@@ -43,6 +43,7 @@ function makeConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
 		editorPaddingX: 1,
 		autocompleteMaxVisible: 7,
 		quietStartup: false,
+		autoLoadNestedContext: true,
 		agentModels: {},
 		agentNames: [],
 		availableModelIds: [],
@@ -53,6 +54,7 @@ function makeConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
 function makeCallbacks(): SettingsCallbacks {
 	return {
 		onAutoCompactChange: vi.fn(),
+		onAutoLoadNestedContextChange: vi.fn(),
 		onShowImagesChange: vi.fn(),
 		onAutoResizeImagesChange: vi.fn(),
 		onBlockImagesChange: vi.fn(),

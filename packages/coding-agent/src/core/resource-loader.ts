@@ -85,7 +85,7 @@ function stripHtmlComments(content: string): string {
 	return content.replace(/<!--[\s\S]*?-->/g, "");
 }
 
-function loadContextFilesFromDir(
+export function loadContextFilesFromDir(
 	dir: string,
 	diagnostics?: ResourceDiagnostic[],
 ): Array<{ path: string; content: string }> {
