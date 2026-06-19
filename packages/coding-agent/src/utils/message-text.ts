@@ -127,10 +127,7 @@ function extractUserText(message: UserMessage): string {
 function extractAssistantText(message: AssistantMessage): string {
 	// Only visible text blocks. Thinking is excluded by default and surfaced
 	// separately via extractThinkingText (see issue 285).
-	return message.content
-		.filter((block): block is TextContent => block.type === "text")
-		.map((block) => block.text)
-		.join("\n");
+	return extractTextBlocks(message.content);
 }
 
 function extractToolResultText(message: ToolResultMessage): string {
