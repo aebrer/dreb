@@ -1,7 +1,7 @@
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	collectNestedContext,
 	computeNestedContextBlock,
@@ -10,6 +10,10 @@ import {
 	parseLeadingCd,
 	resolveTargetDir,
 } from "../src/core/nested-context.js";
+
+const itIfFilePermissionsApply =
+	process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0) ? it.skip : it;
+const itIfSymlinksApply = canCreateSymlink() ? it : it.skip;
 
 describe("parseLeadingCd", () => {
 	it("extracts an absolute path target", () => {
@@ -106,6 +110,14 @@ describe("resolveTargetDir", () => {
 		expect(dir).toBe(join(cwd, "sub"));
 	});
 
+	it("expands tilde in bash cd targets and path-tool arguments", () => {
+		expect(resolveTargetDir("bash", { command: "cd ~ && pwd" }, cwd)).toBe(homedir());
+		expect(resolveTargetDir("ls", { path: "~" }, cwd)).toBe(homedir());
+
+		const missingHomeChild = `__dreb_missing_nested_context_test_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+		expect(resolveTargetDir("bash", { command: `cd ~/${missingHomeChild} && pwd` }, cwd)).toBe(homedir());
+	});
+
 	it("returns null for bash without a leading cd", () => {
 		expect(resolveTargetDir("bash", { command: "ls -la" }, cwd)).toBeNull();
 	});
@@ -145,7 +157,7 @@ describe("collectNestedContext", () => {
 		const loaded = new Set<string>([realpathSync(join(cwd, "CLAUDE.md"))]);
 		const result = collectNestedContext(b, cwd, loaded);
 
-		const paths = result.map((r) => r.path);
+		const paths = result.files.map((r) => r.path);
 		expect(paths).toEqual([join(a, "CLAUDE.md"), join(b, "AGENTS.md")]);
 		// Root file was already loaded → not re-injected.
 		expect(paths).not.toContain(join(cwd, "CLAUDE.md"));
@@ -159,7 +171,7 @@ describe("collectNestedContext", () => {
 		mkContext(sub, "CLAUDE.md", "# sub");
 
 		const result = collectNestedContext(sub, cwd, new Set());
-		const paths = result.map((r) => r.path);
+		const paths = result.files.map((r) => r.path);
 		expect(paths).toContain(join(sub, "CLAUDE.md"));
 		expect(paths).not.toContain(join(outer, "CLAUDE.md"));
 	});
@@ -178,10 +190,31 @@ describe("collectNestedContext", () => {
 		mkdirSync(deep, { recursive: true });
 
 		const result = collectNestedContext(deep, cwd, new Set());
-		const paths = result.map((r) => r.path);
+		const paths = result.files.map((r) => r.path);
 		expect(paths).toContain(join(repo, "CLAUDE.md"));
 		expect(paths).toContain(join(subA, "AGENTS.md"));
 		expect(paths).not.toContain(join(tempDir, "other", "CLAUDE.md"));
+	});
+
+	it("uses the outermost git repo root as the outside-cwd ceiling when git roots are nested", () => {
+		const cwd = join(tempDir, "session");
+		mkdirSync(cwd, { recursive: true });
+
+		const workspace = join(tempDir, "workspace");
+		const outerRepo = join(workspace, "outer-repo");
+		const innerRepo = join(outerRepo, "packages", "inner-repo");
+		const target = join(innerRepo, "src", "deep");
+		mkdirSync(join(outerRepo, ".git"), { recursive: true });
+		mkdirSync(join(innerRepo, ".git"), { recursive: true });
+		mkContext(workspace, "CLAUDE.md", "# above outer repo (must not load)");
+		mkContext(outerRepo, "CLAUDE.md", "# outer repo");
+		mkContext(innerRepo, "AGENTS.md", "# inner repo");
+		mkContext(target, "CLAUDE.md", "# target dir");
+
+		const result = collectNestedContext(target, cwd, new Set());
+		const paths = result.files.map((r) => r.path);
+		expect(paths).toEqual([join(outerRepo, "CLAUDE.md"), join(innerRepo, "AGENTS.md"), join(target, "CLAUDE.md")]);
+		expect(paths).not.toContain(join(workspace, "CLAUDE.md"));
 	});
 
 	it("stops at the outermost context file when no git root exists (outside cwd)", () => {
@@ -196,7 +229,7 @@ describe("collectNestedContext", () => {
 		mkdirSync(leaf, { recursive: true });
 
 		const result = collectNestedContext(leaf, cwd, new Set());
-		const paths = result.map((r) => r.path);
+		const paths = result.files.map((r) => r.path);
 		expect(paths).toContain(join(top, "CLAUDE.md"));
 		expect(paths).toContain(join(leaf, "CLAUDE.md"));
 		// `mid` has no context file — fine; nothing above `top` should be visited.
@@ -210,11 +243,30 @@ describe("collectNestedContext", () => {
 
 		const loaded = new Set<string>();
 		const first = collectNestedContext(sub, cwd, loaded);
-		expect(first.map((r) => r.path)).toContain(join(sub, "CLAUDE.md"));
+		expect(first.files.map((r) => r.path)).toContain(join(sub, "CLAUDE.md"));
 
 		// Same set, second call: everything already loaded → empty.
 		const second = collectNestedContext(sub, cwd, loaded);
-		expect(second).toEqual([]);
+		expect(second.files).toEqual([]);
+		expect(second.hadReadError).toBe(false);
+	});
+
+	itIfSymlinksApply("dedupes the same context file reached through real and symlinked paths", () => {
+		const cwd = join(tempDir, "project");
+		const realSub = join(cwd, "real-sub");
+		const linkedSub = join(cwd, "linked-sub");
+		mkContext(realSub, "CLAUDE.md", "# symlinked context");
+		symlinkSync(realSub, linkedSub, "dir");
+
+		const loaded = new Set<string>();
+		const viaSymlink = collectNestedContext(linkedSub, cwd, loaded);
+		const viaRealPath = collectNestedContext(realSub, cwd, loaded);
+
+		expect(viaSymlink.files).toHaveLength(1);
+		expect(viaSymlink.files[0].path).toBe(join(linkedSub, "CLAUDE.md"));
+		expect(realpathSync(viaSymlink.files[0].path)).toBe(realpathSync(join(realSub, "CLAUDE.md")));
+		expect(viaRealPath.files).toEqual([]);
+		expect(loaded.has(realpathSync(join(realSub, "CLAUDE.md")))).toBe(true);
 	});
 
 	it("strips HTML comments from loaded content", () => {
@@ -222,15 +274,15 @@ describe("collectNestedContext", () => {
 		const sub = join(cwd, "sub");
 		mkContext(sub, "CLAUDE.md", "# title\n<!-- secret comment -->\nvisible");
 		const result = collectNestedContext(sub, cwd, new Set());
-		expect(result[0].content).not.toContain("secret comment");
-		expect(result[0].content).toContain("visible");
+		expect(result.files[0].content).not.toContain("secret comment");
+		expect(result.files[0].content).toContain("visible");
 	});
 
 	it("returns empty when the directory has no context files", () => {
 		const cwd = join(tempDir, "project");
 		const sub = join(cwd, "sub");
 		mkdirSync(sub, { recursive: true });
-		expect(collectNestedContext(sub, cwd, new Set())).toEqual([]);
+		expect(collectNestedContext(sub, cwd, new Set())).toEqual({ files: [], hadReadError: false });
 	});
 });
 
@@ -288,6 +340,46 @@ describe("computeNestedContextBlock (orchestration)", () => {
 		expect(second).toBeNull();
 	});
 
+	itIfFilePermissionsApply("does not negatively cache a directory when an existing context file fails to read", () => {
+		const contextPath = join(sub, "CLAUDE.md");
+		const state = freshState();
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		try {
+			chmodSync(contextPath, 0o000);
+			const first = computeNestedContextBlock("read", { path: join(sub, "file.py") }, state);
+			expect(first).toBeNull();
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("could not be read"));
+			expect(state.scannedDirs.has(realpathSync(sub))).toBe(false);
+
+			chmodSync(contextPath, 0o644);
+			writeFileSync(contextPath, "# retried context");
+			const second = computeNestedContextBlock("read", { path: join(sub, "file.py") }, state);
+			expect(second).toContain("# retried context");
+			expect(state.scannedDirs.has(realpathSync(sub))).toBe(true);
+		} finally {
+			try {
+				chmodSync(contextPath, 0o644);
+			} catch {
+				// Best-effort cleanup; the temp dir removal below is also forceful.
+			}
+			warnSpy.mockRestore();
+		}
+	});
+
+	it("negatively caches a genuinely empty directory", () => {
+		rmSync(join(sub, "CLAUDE.md"), { force: true });
+		const state = freshState();
+
+		const first = computeNestedContextBlock("read", { path: join(sub, "file.py") }, state);
+		expect(first).toBeNull();
+		expect(state.scannedDirs.has(realpathSync(sub))).toBe(true);
+
+		writeFileSync(join(sub, "CLAUDE.md"), "# too late");
+		const second = computeNestedContextBlock("read", { path: join(sub, "file.py") }, state);
+		expect(second).toBeNull();
+	});
+
 	it("does not re-inject a file already loaded at session start", () => {
 		const state = freshState();
 		// Seed as if the sub/CLAUDE.md was already loaded at session start.
@@ -301,6 +393,21 @@ describe("computeNestedContextBlock (orchestration)", () => {
 		expect(computeNestedContextBlock("tasks_update", { tasks: [] }, freshState())).toBeNull();
 	});
 });
+
+function canCreateSymlink(): boolean {
+	const dir = join(tmpdir(), `nested-ctx-symlink-check-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	try {
+		const target = join(dir, "target");
+		const link = join(dir, "link");
+		mkdirSync(target, { recursive: true });
+		symlinkSync(target, link, "dir");
+		return true;
+	} catch {
+		return false;
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
 
 function mkdtemp(): string {
 	const dir = join(tmpdir(), `nested-ctx-${Date.now()}-${Math.random().toString(36).slice(2)}`);

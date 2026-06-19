@@ -27,6 +27,13 @@ export interface LoadedContextFile {
 	content: string;
 }
 
+export interface NestedContextCollection {
+	/** Context files newly loaded during this collection pass. */
+	files: LoadedContextFile[];
+	/** Whether any existing context file failed to read and should be retried later. */
+	hadReadError: boolean;
+}
+
 /**
  * Extract the target of a leading `cd <dir>` from a bash command.
  *
@@ -221,16 +228,24 @@ function dirHasContextFile(dir: string): boolean {
  * Collect nested context files for `targetDir`, walking up to the ceiling described in
  * {@link resolveWalkDirs}. Files whose realpath is already in `alreadyLoaded` are skipped
  * (and not re-reported). Newly collected realpaths are added to `alreadyLoaded` so the
- * caller's per-session set stays authoritative and each file loads at most once.
+ * caller's per-session set stays authoritative and each file loads at most once. Also
+ * reports whether an existing context file failed to read so callers can retry later
+ * instead of negatively caching a transient failure.
  */
-export function collectNestedContext(targetDir: string, cwd: string, alreadyLoaded: Set<string>): LoadedContextFile[] {
+export function collectNestedContext(
+	targetDir: string,
+	cwd: string,
+	alreadyLoaded: Set<string>,
+): NestedContextCollection {
 	const dirs = resolveWalkDirs(targetDir, cwd);
 	const collected: LoadedContextFile[] = [];
+	let hadReadError = false;
 	for (const dir of dirs) {
 		const diagnostics: ResourceDiagnostic[] = [];
 		const files = loadContextFilesFromDir(dir, diagnostics);
 		for (const diagnostic of diagnostics) {
 			if (diagnostic.type !== "warning") continue;
+			hadReadError = true;
 			console.warn(
 				`[nested-context] Nested context file existed but could not be read: ${diagnostic.path ?? dir} — ${diagnostic.message}`,
 			);
@@ -242,7 +257,7 @@ export function collectNestedContext(targetDir: string, cwd: string, alreadyLoad
 			collected.push(file);
 		}
 	}
-	return collected;
+	return { files: collected, hadReadError };
 }
 
 /**
@@ -296,9 +311,11 @@ export function computeNestedContextBlock(
 
 	const realTarget = safeRealpath(targetDir);
 	if (state.scannedDirs.has(realTarget)) return null;
-	state.scannedDirs.add(realTarget);
 
 	const collected = collectNestedContext(targetDir, state.cwd, state.loaded);
-	if (collected.length === 0) return null;
-	return formatNestedContextBlock(targetDir, collected);
+	if (!collected.hadReadError) {
+		state.scannedDirs.add(realTarget);
+	}
+	if (collected.files.length === 0) return null;
+	return formatNestedContextBlock(targetDir, collected.files);
 }

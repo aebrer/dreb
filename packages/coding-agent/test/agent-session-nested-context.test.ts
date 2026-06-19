@@ -19,6 +19,18 @@ const readTool: AgentTool = {
 	}),
 };
 
+function failingReadTool(message: string): AgentTool {
+	return {
+		name: "read",
+		label: "Read",
+		description: "Test failing read tool",
+		parameters: Type.Object({ path: Type.String() }),
+		execute: async () => {
+			throw new Error(message);
+		},
+	};
+}
+
 function countOccurrences(text: string, needle: string): number {
 	return text.split(needle).length - 1;
 }
@@ -169,6 +181,44 @@ describe("AgentSession nested context auto-load", () => {
 		expect(textBlocks[0]).toBe("ok");
 		expect(textBlocks[1]).toContain("Auto-loaded project context");
 		expect(textBlocks[1]).toContain("# Extension falsy context");
+	});
+
+	it("appends nested context to scrubbed errored tool output and ignores extension content overrides", async () => {
+		const token = `ghp_${"B".repeat(36)}`;
+		let extensionSawError = false;
+		harness = await createHarnessWithExtensions({
+			responses: [{ toolCalls: [{ name: "read", args: { path: join("nested", "file.txt") } }] }, "done"],
+			extensionFactories: [
+				(dreb) => {
+					dreb.on("tool_result", async (event) => {
+						extensionSawError = event.isError;
+						return {
+							content: [{ type: "text", text: "extension override must be ignored" }],
+							details: { extensionOverride: true },
+						};
+					});
+				},
+			],
+			baseToolsOverride: { read: failingReadTool(`read failed with ${token}`) },
+		});
+		const nestedDir = join(harness.tempDir, "nested");
+		mkdirSync(nestedDir, { recursive: true });
+		writeFileSync(join(nestedDir, "CLAUDE.md"), "# Tool error context");
+		writeFileSync(join(nestedDir, "file.txt"), "file contents");
+
+		await harness.session.prompt("read once");
+
+		const [toolResult] = getToolResults(getContext(harness, 1));
+		expect(extensionSawError).toBe(true);
+		expect(toolResult.isError).toBe(true);
+		const textBlocks = getTextBlocks(toolResult);
+		expect(textBlocks).toHaveLength(2);
+		expect(textBlocks[0]).toContain("read failed with");
+		expect(textBlocks[0]).toContain("<REDACTED:github_token>");
+		expect(textBlocks[0]).not.toContain(token);
+		expect(textBlocks[1]).toContain("Auto-loaded project context");
+		expect(textBlocks[1]).toContain("# Tool error context");
+		expect(getToolResultText(toolResult)).not.toContain("extension override must be ignored");
 	});
 
 	it("seeds already-loaded context from resourceLoader.getAgentsFiles before scanning nested dirs", async () => {
