@@ -80,7 +80,13 @@ import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/cha
 import { copyToClipboard } from "../../utils/clipboard.js";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.js";
 import { parseGitUrl } from "../../utils/git.js";
-import { extractCopyableText, getMessagePreview, getMessageRoleLabel } from "../../utils/message-text.js";
+import {
+	extractCopyableText,
+	extractThinkingText,
+	getMessagePreview,
+	getMessageRoleLabel,
+	toSingleLinePreview,
+} from "../../utils/message-text.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { ArminComponent } from "./components/armin.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
@@ -4532,12 +4538,26 @@ export class InteractiveMode {
 			return;
 		}
 
-		// Build items from session messages
-		const items: CopyMessageItem[] = messages.map((msg, index) => ({
-			index,
-			roleLabel: getMessageRoleLabel(msg),
-			preview: getMessagePreview(msg),
-		}));
+		// Build items from session messages. Each assistant message that carries
+		// thinking gets an extra "Thinking" row listed directly ABOVE its message
+		// (matching the TUI's thinking-above-answer presentation), so when both are
+		// selected the reasoning lands at the top of the combined copy.
+		const items: CopyMessageItem[] = [];
+		for (const msg of messages) {
+			const thinking = extractThinkingText(msg);
+			if (thinking) {
+				items.push({
+					roleLabel: "Thinking",
+					preview: toSingleLinePreview(thinking),
+					text: thinking,
+				});
+			}
+			items.push({
+				roleLabel: getMessageRoleLabel(msg),
+				preview: getMessagePreview(msg),
+				text: extractCopyableText(msg),
+			});
+		}
 
 		// Hide buddy while selector is open to free vertical space
 		const hadBuddy = this.buddyComponent !== null;
@@ -4555,21 +4575,19 @@ export class InteractiveMode {
 		this.showSelector((done) => {
 			const selector = new CopySelectorComponent(
 				items,
-				async (selectedIndices) => {
+				async (selectedPositions) => {
 					done();
 					// Restore buddy
 					if (hadBuddy) this.renderWidgets();
 					this.ui.requestRender();
 
-					if (selectedIndices.length === 0) {
+					if (selectedPositions.length === 0) {
 						this.showWarning("No messages selected");
 						return;
 					}
 
-					// Extract text from selected messages in chronological order
-					const selectedTexts = selectedIndices
-						.map((i) => extractCopyableText(messages[i]))
-						.filter((text) => text.length > 0);
+					// Extract pre-built text from selected rows in chronological (list) order
+					const selectedTexts = selectedPositions.map((pos) => items[pos].text).filter((text) => text.length > 0);
 
 					if (selectedTexts.length === 0) {
 						this.showWarning("Selected messages have no copyable text");

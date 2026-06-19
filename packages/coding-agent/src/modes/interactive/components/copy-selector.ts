@@ -3,9 +3,9 @@ import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 
 export interface CopyMessageItem {
-	index: number; // Original index in messages array (for chronological ordering on copy)
-	roleLabel: string; // e.g. "You", "Assistant", "Tool: read", "Bash"
+	roleLabel: string; // e.g. "You", "Assistant", "Thinking", "Tool: read", "Bash"
 	preview: string; // Single-line preview text (no ANSI)
+	text: string; // Pre-extracted copyable text for this row (joined on copy in item order)
 }
 
 /**
@@ -17,7 +17,7 @@ class CopyMessageList implements Component {
 	private selected: Set<number>; // set of selected item array positions
 	private maxVisible: number;
 
-	public onCopy?: (selectedIndices: number[]) => void | Promise<void>;
+	public onCopy?: (selectedPositions: number[]) => void | Promise<void>;
 	public onCancel?: () => void;
 
 	constructor(items: CopyMessageItem[], maxVisible: number = 15) {
@@ -125,11 +125,10 @@ class CopyMessageList implements Component {
 		// Enter - confirm copy
 		else if (kb.matches(keyData, "tui.select.confirm")) {
 			if (this.onCopy) {
-				// Return original indices sorted chronologically
-				const selectedIndices = Array.from(this.selected)
-					.map((i) => this.items[i].index)
-					.sort((a, b) => a - b);
-				const result = this.onCopy(selectedIndices);
+				// Return selected item positions in chronological (list) order.
+				// Items are built in chronological order, so position order is correct.
+				const selectedPositions = Array.from(this.selected).sort((a, b) => a - b);
+				const result = this.onCopy(selectedPositions);
 				if (result instanceof Promise) {
 					result.catch(() => {
 						// Errors from the async copy callback are handled by the caller
@@ -154,7 +153,7 @@ export class CopySelectorComponent extends Container {
 
 	constructor(
 		items: CopyMessageItem[],
-		onCopy: (selectedIndices: number[]) => void | Promise<void>,
+		onCopy: (selectedPositions: number[]) => void | Promise<void>,
 		onCancel: () => void,
 		maxVisible?: number,
 	) {

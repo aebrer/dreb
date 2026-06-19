@@ -6,7 +6,13 @@ import type {
 	CompactionSummaryMessage,
 	CustomMessage,
 } from "../src/core/messages.js";
-import { extractCopyableText, getMessagePreview, getMessageRoleLabel } from "../src/utils/message-text.js";
+import {
+	extractCopyableText,
+	extractThinkingText,
+	getMessagePreview,
+	getMessageRoleLabel,
+	toSingleLinePreview,
+} from "../src/utils/message-text.js";
 
 // --- Helpers for creating test messages ---
 
@@ -115,21 +121,26 @@ describe("extractCopyableText", () => {
 			expect(extractCopyableText(msg)).toBe("First response\nSecond response");
 		});
 
-		test("thinking blocks included with header", () => {
+		test("thinking blocks are excluded from copyable text", () => {
 			const msg = makeAssistantMessage([
 				{ type: "text", text: "Visible reply" },
 				{ type: "thinking", thinking: "Internal reasoning here" },
 			]);
-			expect(extractCopyableText(msg)).toBe("Visible reply\n[thinking]\nInternal reasoning here");
+			expect(extractCopyableText(msg)).toBe("Visible reply");
 		});
 
-		test("multiple thinking blocks each get header", () => {
+		test("multiple thinking blocks are excluded, only text remains", () => {
 			const msg = makeAssistantMessage([
 				{ type: "thinking", thinking: "Step 1" },
 				{ type: "text", text: "Answer" },
 				{ type: "thinking", thinking: "Step 2" },
 			]);
-			expect(extractCopyableText(msg)).toBe("Answer\n[thinking]\nStep 1\n[thinking]\nStep 2");
+			expect(extractCopyableText(msg)).toBe("Answer");
+		});
+
+		test("thinking-only message has empty copyable text", () => {
+			const msg = makeAssistantMessage([{ type: "thinking", thinking: "Only reasoning, no answer" }]);
+			expect(extractCopyableText(msg)).toBe("");
 		});
 
 		test("toolCall blocks are skipped", () => {
@@ -283,5 +294,57 @@ describe("getMessagePreview", () => {
 	test("trims leading/trailing whitespace", () => {
 		const msg = makeUserMessage("  padded content  ");
 		expect(getMessagePreview(msg)).toBe("padded content");
+	});
+});
+
+// --- extractThinkingText tests ---
+
+describe("extractThinkingText", () => {
+	test("single thinking block returns labeled block", () => {
+		const msg = makeAssistantMessage([
+			{ type: "text", text: "Visible reply" },
+			{ type: "thinking", thinking: "Internal reasoning here" },
+		]);
+		expect(extractThinkingText(msg)).toBe("[thinking]\nInternal reasoning here");
+	});
+
+	test("multiple thinking blocks are joined under a single header", () => {
+		const msg = makeAssistantMessage([
+			{ type: "thinking", thinking: "Step 1" },
+			{ type: "text", text: "Answer" },
+			{ type: "thinking", thinking: "Step 2" },
+		]);
+		expect(extractThinkingText(msg)).toBe("[thinking]\nStep 1\n\nStep 2");
+	});
+
+	test("assistant message with no thinking returns empty string", () => {
+		const msg = makeAssistantMessage([{ type: "text", text: "Just an answer" }]);
+		expect(extractThinkingText(msg)).toBe("");
+	});
+
+	test("non-assistant messages return empty string", () => {
+		expect(extractThinkingText(makeUserMessage("hello"))).toBe("");
+		expect(extractThinkingText(makeToolResult("read", [{ type: "text", text: "x" }]))).toBe("");
+		expect(extractThinkingText(makeBashExecution("ls", "out"))).toBe("");
+	});
+});
+
+// --- toSingleLinePreview tests ---
+
+describe("toSingleLinePreview", () => {
+	test("empty string returns '[no text content]'", () => {
+		expect(toSingleLinePreview("")).toBe("[no text content]");
+	});
+
+	test("collapses newlines and whitespace", () => {
+		expect(toSingleLinePreview("hello   world\n\n\ntest")).toBe("hello world test");
+	});
+
+	test("truncates to 200 chars", () => {
+		expect(toSingleLinePreview("x".repeat(300)).length).toBe(200);
+	});
+
+	test("trims leading/trailing whitespace", () => {
+		expect(toSingleLinePreview("  padded  ")).toBe("padded");
 	});
 });

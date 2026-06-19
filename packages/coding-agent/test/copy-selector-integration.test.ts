@@ -52,6 +52,29 @@ function makeAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
+function makeAssistantWithThinking(text: string, thinking: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [
+			{ type: "thinking", thinking },
+			{ type: "text", text },
+		],
+		api: "anthropic",
+		provider: "anthropic",
+		model: "test-model",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
+
 function makeImageOnlyMessage(): UserMessage {
 	return {
 		role: "user",
@@ -297,5 +320,46 @@ describe("InteractiveMode.showCopySelector", () => {
 		expect(getDone()).toHaveBeenCalledTimes(1);
 		expect(mockCopyToClipboard).toHaveBeenCalledWith("Text message\n\n---\n\nReply");
 		expect(statusMessages).toContain("Copied 2 messages to clipboard");
+	});
+
+	test("assistant thinking is a separate row; message row excludes thinking", async () => {
+		// Rows built: [0]=user, [1]=Thinking, [2]=Assistant answer
+		const messages = [makeUserMessage("Hi"), makeAssistantWithThinking("Answer", "Reasoning")];
+		const { fakeThis, captured, statusMessages, getDone } = createFakeContext(messages);
+		mockCopyToClipboard.mockResolvedValue({ method: "native" });
+
+		(InteractiveMode as any).prototype.showCopySelector.call(fakeThis);
+		// Select only the assistant answer row — no thinking
+		await captured.onCopy!([2]);
+
+		expect(getDone()).toHaveBeenCalledTimes(1);
+		expect(mockCopyToClipboard).toHaveBeenCalledWith("Answer");
+		expect(statusMessages).toContain("Copied 1 message to clipboard");
+	});
+
+	test("thinking row copies only the labeled thinking block", async () => {
+		const messages = [makeAssistantWithThinking("Answer", "Reasoning")];
+		const { fakeThis, captured, getDone } = createFakeContext(messages);
+		mockCopyToClipboard.mockResolvedValue({ method: "native" });
+
+		(InteractiveMode as any).prototype.showCopySelector.call(fakeThis);
+		// Rows: [0]=Thinking, [1]=Assistant answer. Select the thinking row.
+		await captured.onCopy!([0]);
+
+		expect(getDone()).toHaveBeenCalledTimes(1);
+		expect(mockCopyToClipboard).toHaveBeenCalledWith("[thinking]\nReasoning");
+	});
+
+	test("selecting both rows places thinking at the top of the combined copy", async () => {
+		const messages = [makeAssistantWithThinking("Answer", "Reasoning")];
+		const { fakeThis, captured, getDone } = createFakeContext(messages);
+		mockCopyToClipboard.mockResolvedValue({ method: "native" });
+
+		(InteractiveMode as any).prototype.showCopySelector.call(fakeThis);
+		// Rows: [0]=Thinking, [1]=Assistant answer. Select both.
+		await captured.onCopy!([0, 1]);
+
+		expect(getDone()).toHaveBeenCalledTimes(1);
+		expect(mockCopyToClipboard).toHaveBeenCalledWith("[thinking]\nReasoning\n\n---\n\nAnswer");
 	});
 });

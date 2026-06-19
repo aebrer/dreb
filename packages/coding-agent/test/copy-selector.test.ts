@@ -26,9 +26,9 @@ function makeItems(count: number): CopyMessageItem[] {
 	const items: CopyMessageItem[] = [];
 	for (let i = 0; i < count; i++) {
 		items.push({
-			index: i,
 			roleLabel: i % 2 === 0 ? "You" : "Assistant",
 			preview: `Message ${i} content here`,
+			text: `Message ${i} full text`,
 		});
 	}
 	return items;
@@ -133,7 +133,7 @@ describe("CopyMessageList", () => {
 		expect(deselectedCount).toBe(0);
 	});
 
-	test("confirm: Enter calls onCopy with sorted selected indices", () => {
+	test("confirm: Enter calls onCopy with sorted selected item positions", () => {
 		const items = makeItems(5);
 		const onCopy = vi.fn();
 		const onCancel = vi.fn();

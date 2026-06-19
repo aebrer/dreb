@@ -63,8 +63,13 @@ export async function copyToClipboard(text: string): Promise<ClipboardResult> {
 				try {
 					// Verify wl-copy exists (spawn errors are async and won't be caught)
 					execSync("which wl-copy", { stdio: "ignore" });
-					// wl-copy with execSync hangs due to fork behavior; use spawn instead
-					const proc = spawn("wl-copy", [], { stdio: ["pipe", "ignore", "ignore"] });
+					// wl-copy with execSync hangs due to fork behavior; use spawn instead.
+					// detached: true puts wl-copy in its own session (setsid) with no
+					// controlling terminal, so its "Somebody else owns the clipboard now"
+					// message cannot leak into the TUI even if it bypasses the ignored
+					// stderr by writing to /dev/tty (see issue 286). As a session leader it
+					// also keeps serving the clipboard after we exit.
+					const proc = spawn("wl-copy", [], { stdio: ["pipe", "ignore", "ignore"], detached: true });
 					proc.on("error", () => {
 						// Spawn failed after which check (TOCTOU, permissions, etc.)
 					});

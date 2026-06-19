@@ -63,11 +63,32 @@ export function getMessageRoleLabel(message: AgentMessage): string {
 }
 
 /**
- * Get a single-line preview of a message's content (for display in selector).
- * Returns plain text, no ANSI, truncated to ~200 chars. Caller handles width truncation.
+ * Extract the thinking/reasoning text from a message, if any.
+ * Only assistant messages carry thinking blocks. Returns a single labeled block
+ * (`[thinking]\n<reasoning>`) suitable for copying, or an empty string when there
+ * is no thinking content (non-assistant role, or assistant with no thinking blocks).
  */
-export function getMessagePreview(message: AgentMessage): string {
-	const text = extractCopyableText(message);
+export function extractThinkingText(message: AgentMessage): string {
+	if (message.role !== "assistant") {
+		return "";
+	}
+	const thinkingParts = (message as AssistantMessage).content
+		.filter(
+			(block): block is { type: "thinking"; thinking: string } => block.type === "thinking" && "thinking" in block,
+		)
+		.map((block) => block.thinking);
+
+	if (thinkingParts.length === 0) {
+		return "";
+	}
+	return `[thinking]\n${thinkingParts.join("\n\n")}`;
+}
+
+/**
+ * Normalize text to a single-line preview: collapse whitespace, trim, truncate to ~200 chars.
+ * Caller handles further width truncation for display. Returns "[no text content]" for empty input.
+ */
+export function toSingleLinePreview(text: string): string {
 	if (!text) {
 		return "[no text content]";
 	}
@@ -77,6 +98,14 @@ export function getMessagePreview(message: AgentMessage): string {
 		return singleLine;
 	}
 	return singleLine.slice(0, 200);
+}
+
+/**
+ * Get a single-line preview of a message's content (for display in selector).
+ * Returns plain text, no ANSI, truncated to ~200 chars. Caller handles width truncation.
+ */
+export function getMessagePreview(message: AgentMessage): string {
+	return toSingleLinePreview(extractCopyableText(message));
 }
 
 // --- Internal helpers ---
@@ -96,25 +125,12 @@ function extractUserText(message: UserMessage): string {
 }
 
 function extractAssistantText(message: AssistantMessage): string {
-	const parts: string[] = [];
-
-	// Collect text blocks
-	const textParts = message.content
+	// Only visible text blocks. Thinking is excluded by default and surfaced
+	// separately via extractThinkingText (see issue 285).
+	return message.content
 		.filter((block): block is TextContent => block.type === "text")
-		.map((block) => block.text);
-
-	if (textParts.length > 0) {
-		parts.push(textParts.join("\n"));
-	}
-
-	// Collect thinking blocks with header
-	for (const block of message.content) {
-		if (block.type === "thinking" && "thinking" in block) {
-			parts.push(`[thinking]\n${block.thinking}`);
-		}
-	}
-
-	return parts.join("\n");
+		.map((block) => block.text)
+		.join("\n");
 }
 
 function extractToolResultText(message: ToolResultMessage): string {
