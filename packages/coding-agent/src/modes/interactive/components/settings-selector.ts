@@ -58,6 +58,8 @@ export interface SettingsConfig {
 	editorPaddingX: number;
 	autocompleteMaxVisible: number;
 	quietStartup: boolean;
+	/** Whether nested AGENTS.md/CLAUDE.md auto-loading is enabled. */
+	autoLoadNestedContext: boolean;
 	/** Per-agent model overrides from agentModels settings */
 	agentModels: Record<string, string[]>;
 	/** Known agent names for the mach6 models submenu */
@@ -87,6 +89,7 @@ export interface SettingsCallbacks {
 	onEditorPaddingXChange: (padding: number) => void;
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
+	onAutoLoadNestedContextChange: (enabled: boolean) => void;
 	onAgentModelsChange: (agentName: string, models: string[]) => void;
 	onCancel: () => void;
 }
@@ -405,6 +408,13 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "auto-load-nested-context",
+				label: "Auto-load nested context",
+				description: "Load a directory's AGENTS.md/CLAUDE.md automatically the first time a tool operates there",
+				currentValue: config.autoLoadNestedContext ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "steering-mode",
 				label: "Steering mode",
 				description:
@@ -631,6 +641,9 @@ export class SettingsSelectorComponent extends Container {
 				switch (id) {
 					case "autocompact":
 						callbacks.onAutoCompactChange(newValue === "true");
+						break;
+					case "auto-load-nested-context":
+						callbacks.onAutoLoadNestedContextChange(newValue === "true");
 						break;
 					case "show-images":
 						callbacks.onShowImagesChange(newValue === "true");

@@ -12,6 +12,14 @@ export interface CompactionSettings {
 	keepRecentTokens?: number; // default: 20000
 }
 
+export interface ContextSettings {
+	/**
+	 * Auto-load nested AGENTS.md/CLAUDE.md when a tool first operates in a directory
+	 * whose project context has not yet been loaded. default: true
+	 */
+	autoLoadNested?: boolean;
+}
+
 export interface BranchSummarySettings {
 	reserveTokens?: number; // default: 16384 (tokens reserved for prompt + LLM response)
 	skipPrompt?: boolean; // default: false - when true, skips "Summarize branch?" prompt and defaults to no summary
@@ -80,6 +88,7 @@ export interface Settings {
 	followUpMode?: "all" | "one-at-a-time";
 	theme?: string;
 	compaction?: CompactionSettings;
+	context?: ContextSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
@@ -648,6 +657,19 @@ export class SettingsManager {
 		}
 		this.globalSettings.compaction.enabled = enabled;
 		this.markModified("compaction", "enabled");
+		this.save();
+	}
+
+	getAutoLoadNestedContext(): boolean {
+		return this.settings.context?.autoLoadNested ?? true;
+	}
+
+	setAutoLoadNestedContext(enabled: boolean): void {
+		if (!this.globalSettings.context) {
+			this.globalSettings.context = {};
+		}
+		this.globalSettings.context.autoLoadNested = enabled;
+		this.markModified("context", "autoLoadNested");
 		this.save();
 	}
 

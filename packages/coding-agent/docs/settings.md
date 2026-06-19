@@ -110,6 +110,24 @@ After the configured number of tool calls, dreb fires a single background LLM ca
 }
 ```
 
+### Context
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `context.autoLoadNested` | boolean | `true` | Auto-load a directory's `AGENTS.md`/`CLAUDE.md` the first time a tool operates there |
+
+When enabled, dreb loads nested context files that the startup upward-walk misses (e.g. a `CLAUDE.md` in a monorepo subpackage, or context in a different repo a subagent visits). The first tool to touch a directory triggers a walk up to a sensible ceiling — the session cwd for in-tree targets, otherwise the outermost git repo root, otherwise the outermost directory containing a context file — and the collected files are appended to that tool's result. Each file loads at most once per session. See [Context Files](../README.md#context-files).
+
+**Security caution:** when working across untrusted or third-party repositories, their `AGENTS.md`/`CLAUDE.md` files may be auto-injected into the agent's context, which is a prompt-injection consideration. Set `context.autoLoadNested` to `false` to disable this behavior. Auto-loaded content is secret-scrubbed before injection, but extension `tool_result` transforms do not see it because nested context is injected after those transforms for cache safety.
+
+```json
+{
+  "context": {
+    "autoLoadNested": true
+  }
+}
+```
+
 ### Compaction
 
 | Setting | Type | Default | Description |

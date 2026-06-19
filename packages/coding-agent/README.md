@@ -288,6 +288,17 @@ dreb loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
 
 Use for project instructions, conventions, common commands. All matching files are concatenated.
 
+### Nested context auto-load
+
+The startup scan only walks **upward** from cwd, so an `AGENTS.md`/`CLAUDE.md` that lives in a **subdirectory** (e.g. a monorepo subpackage) is not loaded until the agent actually works there. When `context.autoLoadNested` is enabled (default), the first time any tool operates in a directory, dreb loads that directory's context files and appends them to the tool result — explaining why the load happened and headering each file with its source path.
+
+- Triggers on path-bearing tools (`read`, `edit`, `write`, `grep`, `find`, `ls`) and on `bash` commands that begin with `cd <dir>`.
+- Walks up from the target directory to a sensible ceiling: the session cwd (for in-tree targets), otherwise the outermost git repo root, otherwise the outermost directory containing a context file.
+- Each file is injected at most once per session, and files already loaded at startup are never repeated. Applies to subagents too — including subagents that work in a different repo than the parent.
+- Disable with `context.autoLoadNested: false` in settings, or toggle "Auto-load nested context" in `/settings`.
+
+**Security caution:** when working across untrusted or third-party repositories, their `AGENTS.md`/`CLAUDE.md` files may be auto-injected into the agent's context, which is a prompt-injection consideration. Auto-loaded content is secret-scrubbed before injection, but extension `tool_result` transforms do not see it because nested context is injected after those transforms for cache safety.
+
 ### System Prompt
 
 Replace the default system prompt with `.dreb/SYSTEM.md` (project) or `~/.dreb/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.

@@ -13,7 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@dreb/agent-core";
@@ -69,6 +69,7 @@ import { type GitRepoState, getGitRepoState } from "./git-repo-state.js";
 import { log } from "./logger.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
+import { computeNestedContextBlock, type NestedContextState } from "./nested-context.js";
 import { PerformanceTracker } from "./performance-tracker.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
@@ -294,6 +295,14 @@ export class AgentSession {
 	private _customTools: ToolDefinition[];
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
 	private _cwd: string;
+	/**
+	 * Per-session realpaths of context files already loaded (seeded lazily from the
+	 * session-start context set). Ensures each nested AGENTS.md/CLAUDE.md is injected
+	 * at most once. `undefined` until first use.
+	 */
+	private _nestedContextLoaded: Set<string> | undefined;
+	/** Negative cache of target directories already scanned for nested context. */
+	private _nestedContextScannedDirs: Set<string> = new Set();
 	private _extensionRunnerRef?: { current?: ExtensionRunner };
 	private _initialActiveToolNames?: string[];
 	private _baseToolsOverride?: Record<string, AgentTool>;
@@ -513,8 +522,18 @@ export class AgentSession {
 				scrubOverride = { content: scrubbedContent };
 			}
 
+			// Nested-context auto-load: cache-safe injection that rides on the tool result
+			// (does not rebuild the system prompt). Computed once per tool call.
+			const nestedBlock = this._computeNestedContextBlock(toolCall.name, args as Record<string, unknown>);
+			const scrubbedNestedBlock = nestedBlock ? scrubSecrets(nestedBlock, compiledExtras).scrubbed : null;
+			const withNested = (base: typeof scrubbedContent): typeof scrubbedContent =>
+				scrubbedNestedBlock ? [...base, { type: "text" as const, text: scrubbedNestedBlock }] : base;
+
 			const runner = this._extensionRunner;
 			if (!runner?.hasHandlers("tool_result")) {
+				if (nestedBlock) {
+					return { content: withNested(scrubbedContent), details: scrubOverride?.details };
+				}
 				return scrubOverride;
 			}
 
@@ -529,14 +548,54 @@ export class AgentSession {
 			});
 
 			if (!hookResult || isError) {
+				if (nestedBlock) {
+					return { content: withNested(scrubbedContent), details: scrubOverride?.details };
+				}
 				return scrubOverride;
 			}
 
+			const finalContent = hookResult.content ?? scrubOverride?.content;
+			if (nestedBlock) {
+				return { content: withNested(finalContent ?? scrubbedContent), details: hookResult.details };
+			}
 			return {
-				content: hookResult.content ?? scrubOverride?.content,
+				content: finalContent,
 				details: hookResult.details,
 			};
 		});
+	}
+
+	/**
+	 * Compute a nested-context injection block for a tool call, or `null` when nothing
+	 * should be injected. Resolves the directory the tool operates in, walks up to a
+	 * sensible ceiling collecting not-yet-loaded AGENTS.md/CLAUDE.md files, and formats
+	 * them. Each directory is scanned at most once (negative cache) and each file is
+	 * injected at most once per session (realpath dedup). Gated by `context.autoLoadNested`.
+	 */
+	private _computeNestedContextBlock(toolName: string, args: Record<string, unknown>): string | null {
+		const enabled = this.settingsManager?.getAutoLoadNestedContext() ?? true;
+		if (!enabled) return null;
+
+		// Seed the per-session loaded set from the context files loaded at session start so
+		// ancestor files are never re-injected.
+		if (!this._nestedContextLoaded) {
+			this._nestedContextLoaded = new Set<string>();
+			for (const file of this._resourceLoader.getAgentsFiles().agentsFiles) {
+				try {
+					this._nestedContextLoaded.add(realpathSync(file.path));
+				} catch {
+					this._nestedContextLoaded.add(file.path);
+				}
+			}
+		}
+
+		const state: NestedContextState = {
+			enabled,
+			cwd: this._cwd,
+			loaded: this._nestedContextLoaded,
+			scannedDirs: this._nestedContextScannedDirs,
+		};
+		return computeNestedContextBlock(toolName, args, state);
 	}
 
 	/**

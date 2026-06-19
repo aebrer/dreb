@@ -256,6 +256,36 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("autoLoadNestedContext", () => {
+		it("defaults to true when unset", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getAutoLoadNestedContext()).toBe(true);
+		});
+
+		it("loads false from settings", () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: false } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getAutoLoadNestedContext()).toBe(false);
+		});
+
+		it("persists the setting and preserves unrelated settings", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			manager.setAutoLoadNestedContext(false);
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			expect(saved.context.autoLoadNested).toBe(false);
+			expect(saved.theme).toBe("dark");
+
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.getAutoLoadNestedContext()).toBe(false);
+		});
+	});
+
 	describe("shellCommandPrefix", () => {
 		it("should load shellCommandPrefix from settings", () => {
 			const settingsPath = join(agentDir, "settings.json");
