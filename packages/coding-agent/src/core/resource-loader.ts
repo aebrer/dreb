@@ -85,23 +85,24 @@ function stripHtmlComments(content: string): string {
 	return content.replace(/<!--[\s\S]*?-->/g, "");
 }
 
+export const CONTEXT_FILE_CANDIDATES = [
+	"AGENTS.md",
+	"AGENTS.MD",
+	"CLAUDE.md",
+	"CLAUDE.MD",
+	join(".claude", "CLAUDE.md"),
+	join(".claude", "CLAUDE.MD"),
+	join(".dreb", "CONTEXT.md"),
+	join(".dreb", "CONTEXT.MD"),
+] as const;
+
 export function loadContextFilesFromDir(
 	dir: string,
 	diagnostics?: ResourceDiagnostic[],
 ): Array<{ path: string; content: string }> {
-	const candidates = [
-		"AGENTS.md",
-		"AGENTS.MD",
-		"CLAUDE.md",
-		"CLAUDE.MD",
-		join(".claude", "CLAUDE.md"),
-		join(".claude", "CLAUDE.MD"),
-		join(".dreb", "CONTEXT.md"),
-		join(".dreb", "CONTEXT.MD"),
-	];
 	const results: Array<{ path: string; content: string }> = [];
 	const seenRealPaths = new Set<string>();
-	for (const filename of candidates) {
+	for (const filename of CONTEXT_FILE_CANDIDATES) {
 		const filePath = join(dir, filename);
 		if (existsSync(filePath)) {
 			// Deduplicate by realpath to avoid loading the same file twice on

@@ -297,6 +297,8 @@ The startup scan only walks **upward** from cwd, so an `AGENTS.md`/`CLAUDE.md` t
 - Each file is injected at most once per session, and files already loaded at startup are never repeated. Applies to subagents too — including subagents that work in a different repo than the parent.
 - Disable with `context.autoLoadNested: false` in settings, or toggle "Auto-load nested context" in `/settings`.
 
+**Security caution:** when working across untrusted or third-party repositories, their `AGENTS.md`/`CLAUDE.md` files may be auto-injected into the agent's context, which is a prompt-injection consideration. Auto-loaded content is secret-scrubbed before injection, but extension `tool_result` transforms do not see it because nested context is injected after those transforms for cache safety.
+
 ### System Prompt
 
 Replace the default system prompt with `.dreb/SYSTEM.md` (project) or `~/.dreb/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.

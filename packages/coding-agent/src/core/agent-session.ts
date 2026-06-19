@@ -525,8 +525,9 @@ export class AgentSession {
 			// Nested-context auto-load: cache-safe injection that rides on the tool result
 			// (does not rebuild the system prompt). Computed once per tool call.
 			const nestedBlock = this._computeNestedContextBlock(toolCall.name, args as Record<string, unknown>);
+			const scrubbedNestedBlock = nestedBlock ? scrubSecrets(nestedBlock, compiledExtras).scrubbed : null;
 			const withNested = (base: typeof scrubbedContent): typeof scrubbedContent =>
-				nestedBlock ? [...base, { type: "text" as const, text: nestedBlock }] : base;
+				scrubbedNestedBlock ? [...base, { type: "text" as const, text: scrubbedNestedBlock }] : base;
 
 			const runner = this._extensionRunner;
 			if (!runner?.hasHandlers("tool_result")) {

@@ -53,6 +53,14 @@ describe("parseLeadingCd", () => {
 		expect(parseLeadingCd("cd -")).toBeNull();
 	});
 
+	it("skips cd option flags before extracting the target", () => {
+		expect(parseLeadingCd("cd -P /repo/sub")).toBe("/repo/sub");
+		expect(parseLeadingCd("cd -L /repo/sub")).toBe("/repo/sub");
+		expect(parseLeadingCd("cd -- /repo/sub")).toBe("/repo/sub");
+		expect(parseLeadingCd("cd -- -weirddir")).toBe("-weirddir");
+		expect(parseLeadingCd("cd -")).toBeNull();
+	});
+
 	it("returns null for non-string input", () => {
 		expect(parseLeadingCd(undefined as unknown as string)).toBeNull();
 	});

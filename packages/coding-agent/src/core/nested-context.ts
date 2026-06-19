@@ -1,7 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { loadContextFilesFromDir } from "./resource-loader.js";
+import { CONTEXT_FILE_CANDIDATES, loadContextFilesFromDir, type ResourceDiagnostic } from "./resource-loader.js";
 
 /**
  * Auto-load of nested AGENTS.md/CLAUDE.md context files.
@@ -37,15 +37,42 @@ export interface LoadedContextFile {
  */
 export function parseLeadingCd(command: string): string | null {
 	if (typeof command !== "string") return null;
-	// Match a leading `cd` followed by either a quoted path or an unquoted token that
-	// stops at the first shell separator (&&, ;, |, newline) or whitespace.
-	const match = command.match(/^\s*cd\s+(?:"([^"]+)"|'([^']+)'|([^\s&;|<>]+))/);
-	if (!match) return null;
-	const target = (match[1] ?? match[2] ?? match[3] ?? "").trim();
-	if (!target || target === "-") return null;
-	// Skip variable-based targets we cannot resolve cheaply.
-	if (target.startsWith("$")) return null;
-	return target;
+
+	const leadingCd = command.match(/^\s*cd\s+/);
+	if (!leadingCd) return null;
+
+	let rest = command.slice(leadingCd[0].length);
+	while (true) {
+		// Match either a quoted path or an unquoted token that stops at the first shell
+		// separator (&&, ;, |, newline) or whitespace.
+		const match = rest.match(/^\s*(?:"([^"]+)"|'([^']+)'|([^\s&;|<>]+))/);
+		if (!match) return null;
+
+		const target = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+		if (!target) return null;
+
+		// `cd -` means "previous directory" and cannot be resolved cheaply.
+		if (target === "-") return null;
+
+		// Skip leading options (`cd -P /x`, `cd -L /x`). After `--`, the next token is
+		// the path even if it begins with `-`.
+		if (target === "--") {
+			rest = rest.slice(match[0].length);
+			const pathMatch = rest.match(/^\s*(?:"([^"]+)"|'([^']+)'|([^\s&;|<>]+))/);
+			if (!pathMatch) return null;
+			const pathTarget = (pathMatch[1] ?? pathMatch[2] ?? pathMatch[3] ?? "").trim();
+			if (!pathTarget || pathTarget.startsWith("$")) return null;
+			return pathTarget;
+		}
+		if (target.startsWith("-")) {
+			rest = rest.slice(match[0].length);
+			continue;
+		}
+
+		// Skip variable-based targets we cannot resolve cheaply.
+		if (target.startsWith("$")) return null;
+		return target;
+	}
 }
 
 /**
@@ -180,17 +207,7 @@ function resolveWalkDirs(targetDir: string, cwd: string): string[] {
 
 /** Cheap check: does this directory hold any candidate context file? */
 function dirHasContextFile(dir: string): boolean {
-	const candidates = [
-		"AGENTS.md",
-		"AGENTS.MD",
-		"CLAUDE.md",
-		"CLAUDE.MD",
-		join(".claude", "CLAUDE.md"),
-		join(".claude", "CLAUDE.MD"),
-		join(".dreb", "CONTEXT.md"),
-		join(".dreb", "CONTEXT.MD"),
-	];
-	for (const c of candidates) {
+	for (const c of CONTEXT_FILE_CANDIDATES) {
 		try {
 			if (existsSync(join(dir, c))) return true;
 		} catch {
@@ -210,7 +227,14 @@ export function collectNestedContext(targetDir: string, cwd: string, alreadyLoad
 	const dirs = resolveWalkDirs(targetDir, cwd);
 	const collected: LoadedContextFile[] = [];
 	for (const dir of dirs) {
-		const files = loadContextFilesFromDir(dir);
+		const diagnostics: ResourceDiagnostic[] = [];
+		const files = loadContextFilesFromDir(dir, diagnostics);
+		for (const diagnostic of diagnostics) {
+			if (diagnostic.type !== "warning") continue;
+			console.warn(
+				`[nested-context] Nested context file existed but could not be read: ${diagnostic.path ?? dir} — ${diagnostic.message}`,
+			);
+		}
 		for (const file of files) {
 			const real = safeRealpath(file.path);
 			if (alreadyLoaded.has(real)) continue;
