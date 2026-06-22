@@ -12,6 +12,7 @@ import {
 	resolveSelfReadFile,
 	resolveTargetDir,
 } from "../src/core/nested-context.js";
+import { DEFAULT_MAX_LINES } from "../src/core/tools/truncate.js";
 
 const itIfFilePermissionsApply =
 	process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0) ? it.skip : it;
@@ -610,6 +611,52 @@ describe("computeNestedContextBlock (orchestration)", () => {
 		);
 	});
 
+	it("still injects when a cat renders past the byte budget via tab expansion", () => {
+		// The bash tool delivers truncateTail(renderTerminalOutput(...)), which expands tabs
+		// to 8-column stops. A tab-dense file ~7KB on disk renders to ~56KB, so `cat` delivers
+		// it truncated even though the raw file is well under budget — measuring the raw file
+		// would falsely suppress it (silent drop). `read` delivers the raw content unchanged,
+		// so the same file IS fully delivered by read and is correctly suppressed there.
+		writeFileSync(join(sub, "CLAUDE.md"), `# sub context\n${"\t".repeat(7000)}X`);
+		const bashState = freshState();
+		expect(computeNestedContextBlock("bash", { command: `cd ${sub} && cat CLAUDE.md` }, bashState)).toContain(
+			"# sub context",
+		);
+		// read path: raw content is within budget, so it is delivered in full → suppressed.
+		const readState = freshState();
+		expect(computeNestedContextBlock("read", { path: join(sub, "CLAUDE.md") }, readState)).toBeNull();
+		expect(readState.loaded.has(realpathSync(join(sub, "CLAUDE.md")))).toBe(true);
+	});
+
+	it("suppresses at exactly the line limit but injects one line over it", () => {
+		// Pin the deliveredInFull line-count boundary: a file whose split("\n") length is
+		// exactly DEFAULT_MAX_LINES is delivered in full (suppress); one line more is
+		// truncated by the tool (inject). Guards against a future off-by-one regression.
+		// `"line\n".repeat(n)` splits into n + 1 elements (trailing empty), so use n - 1 / n.
+		const atLimit = `${"line\n".repeat(DEFAULT_MAX_LINES - 1)}`;
+		writeFileSync(join(sub, "CLAUDE.md"), atLimit);
+		const atState = freshState();
+		expect(computeNestedContextBlock("read", { path: join(sub, "CLAUDE.md") }, atState)).toBeNull();
+		expect(atState.loaded.has(realpathSync(join(sub, "CLAUDE.md")))).toBe(true);
+
+		const overLimit = `${"line\n".repeat(DEFAULT_MAX_LINES)}`;
+		writeFileSync(join(sub, "CLAUDE.md"), overLimit);
+		const overState = freshState();
+		const block = computeNestedContextBlock("read", { path: join(sub, "CLAUDE.md") }, overState);
+		expect(block).not.toBeNull();
+		expect(block).toContain("line");
+	});
+
+	it("still injects when a context file is dumped by an uppercase (non-existent) command", () => {
+		// `CAT`/`Bat` are command-not-found on Linux (case-sensitive PATH lookup) and emit
+		// nothing to stdout, so they must not suppress — the result never contained the file.
+		for (const verb of ["CAT", "Cat", "BAT", "Bat"]) {
+			const state = freshState();
+			const block = computeNestedContextBlock("bash", { command: `cd ${sub} && ${verb} CLAUDE.md` }, state);
+			expect(block, verb).toContain("# sub context");
+		}
+	});
+
 	it("still injects when a bash dump is followed by other output (tail truncation hazard)", () => {
 		// `cat CLAUDE.md && npm test` can push the dumped file out of the tail-truncated
 		// window, so it must not be suppressed — only a sole single-file dump qualifies.
@@ -767,6 +814,22 @@ describe("resolveBashDeliveredFiles", () => {
 
 	it("collects a cat that follows a leading cd segment", () => {
 		expect(resolveBashDeliveredFiles("cd /proj/sub && cat CLAUDE.md", "/proj/sub")).toEqual(["/proj/sub/CLAUDE.md"]);
+	});
+
+	it("does not treat an uppercase command as a full dump (case-sensitive verb match)", () => {
+		// Shell PATH lookup is case-sensitive on Linux: `CAT`/`Bat` are command-not-found and
+		// emit nothing, so they must not be treated as delivering the file.
+		expect(resolveBashDeliveredFiles("CAT CLAUDE.md", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("Cat CLAUDE.md", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("BAT CLAUDE.md", "/proj")).toEqual([]);
+	});
+
+	it("returns nothing for a full-dump command with no file operand", () => {
+		// `cat` / `cat -n` reading stdin (or a flag-only invocation) names no file, so there
+		// is nothing to suppress — the operand-count guard must keep it the safe direction.
+		expect(resolveBashDeliveredFiles("cat", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("cat -n", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("bat --plain", "/proj")).toEqual([]);
 	});
 
 	it("returns an empty list for an empty command", () => {

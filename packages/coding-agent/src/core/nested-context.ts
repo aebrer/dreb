@@ -2,6 +2,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { CONTEXT_FILE_CANDIDATES, loadContextFilesFromDir, type ResourceDiagnostic } from "./resource-loader.js";
+import { renderTerminalOutput } from "./tools/terminal-render.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./tools/truncate.js";
 
 /**
@@ -417,7 +418,11 @@ export function resolveBashDeliveredFiles(command: string, workingDir: string): 
 	if (segment.includes("|") || segment.includes(">") || segment.includes("<")) return [];
 	const tokens = segment.trim().split(/\s+/).filter(Boolean);
 	if (tokens.length === 0) return [];
-	const cmd = tokens[0].toLowerCase();
+	// Match the command verb case-sensitively: shell PATH lookup is case-sensitive on
+	// Linux, so `CAT`/`Bat` are command-not-found and emit nothing to stdout. Lowercasing
+	// would let them match the allowlist and falsely suppress a file they never printed —
+	// a silent context drop. Exact matching keeps the failure mode a harmless double-load.
+	const cmd = tokens[0];
 	if (!FULL_DUMP_COMMANDS.has(cmd)) return [];
 	// `bat -r 10:20` / `bat -r10:20` / `bat --line-range=10:20` shows only a range — not a full dump.
 	if (cmd === "bat" && tokens.slice(1).some(isBatRangeFlag)) return [];
@@ -452,13 +457,27 @@ export interface NestedContextState {
  * bytes, while {@link formatNestedContextBlock} is uncapped. If the file exceeds either limit
  * it is delivered truncated, so suppressing (and permanently marking loaded) would silently
  * drop the remainder. Any stat/read failure also returns `false` — the safe double-load.
+ *
+ * `rendered` selects which delivery the measure must mirror:
+ *  - `read` delivers the file's raw content unchanged (`truncateHead` with no transform), so
+ *    the raw byte/line count is exact.
+ *  - `bash` delivers `truncateTail(renderTerminalOutput(...))`, and terminal rendering expands
+ *    tabs to 8-column stops and resolves cursor/ANSI sequences — the rendered output can be
+ *    *larger* than the file on disk. A tab-dense file just under the budget on disk can render
+ *    past it and be tail-truncated (its head dropped) while the raw measure still reports a
+ *    full delivery. Measuring the rendered output keeps the failure mode a harmless double-load
+ *    rather than a silent context drop.
  */
-function deliveredInFull(realPath: string): boolean {
+function deliveredInFull(realPath: string, rendered: boolean): boolean {
 	try {
+		// Cheap early-out: the raw on-disk size is a lower bound on the delivered size
+		// (terminal rendering only ever grows the byte count), so a file already over the
+		// byte budget on disk is certainly delivered truncated.
 		if (statSync(realPath).size > DEFAULT_MAX_BYTES) return false;
-		// Size is within budget (<= 50KB), so reading to count lines is cheap.
-		const lineCount = readFileSync(realPath, "utf8").split("\n").length;
-		return lineCount <= DEFAULT_MAX_LINES;
+		const raw = readFileSync(realPath, "utf8");
+		const delivered = rendered ? renderTerminalOutput(raw) : raw;
+		if (Buffer.byteLength(delivered, "utf-8") > DEFAULT_MAX_BYTES) return false;
+		return delivered.split("\n").length <= DEFAULT_MAX_LINES;
 	} catch {
 		return false;
 	}
@@ -498,10 +517,14 @@ export function computeNestedContextBlock(
 		: null;
 	const suppress: SuppressPredicate = (file) => {
 		const realFile = safeRealpath(file.path);
-		const matched = realFile === realSelfReadFile || (bashDelivered?.has(realFile) ?? false);
 		// Only suppress when the file was delivered *in full*: a truncated delivery (oversized
 		// file) would drop the remainder if we marked it fully loaded and skipped injection.
-		return matched && deliveredInFull(realFile);
+		// `read` delivers the file's raw content unchanged; `bash` delivers it through terminal
+		// rendering (tab/ANSI expansion can grow it past the truncation budget), so each path
+		// measures fullness against what it actually emits.
+		if (realFile === realSelfReadFile) return deliveredInFull(realFile, false);
+		if (bashDelivered?.has(realFile)) return deliveredInFull(realFile, true);
+		return false;
 	};
 
 	const collected = collectNestedContext(targetDir, state.cwd, state.loaded, suppress);
