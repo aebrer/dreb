@@ -555,6 +555,77 @@ describe("computeNestedContextBlock (orchestration)", () => {
 		expect(block).toBeNull();
 		expect(state.loaded.has(realpathSync(join(realSub, "CLAUDE.md")))).toBe(true);
 	});
+
+	it("still injects when a read is sliced via offset/limit (partial delivery)", () => {
+		// A sliced read delivers only a fragment, so the full context file must still inject.
+		const state = freshState();
+		const block = computeNestedContextBlock("read", { path: join(sub, "CLAUDE.md"), offset: 1, limit: 1 }, state);
+		expect(block).toContain("# sub context");
+	});
+
+	it("still injects when bat shows only a partial range", () => {
+		const state = freshState();
+		const block = computeNestedContextBlock("bash", { command: `cd ${sub} && bat -r 1:2 CLAUDE.md` }, state);
+		expect(block).toContain("# sub context");
+	});
+
+	it("still injects when a here-doc merely mentions a context filename", () => {
+		// `cat <<EOF ... CLAUDE.md ... EOF` outputs literal text, not the file.
+		const state = freshState();
+		const block = computeNestedContextBlock("bash", { command: `cd ${sub} && cat <<EOF\nsee CLAUDE.md\nEOF` }, state);
+		expect(block).toContain("# sub context");
+	});
+
+	it("still injects when the command chains multiple cds (ambiguous cwd)", () => {
+		// The cat runs in the final cwd, not the first; resolving against the first would
+		// suppress the wrong same-named file, so suppression is skipped entirely.
+		writeFileSync(join(cwd, "CLAUDE.md"), "# root context");
+		const state = freshState();
+		const block = computeNestedContextBlock("bash", { command: `cd ${cwd} && cd sub && cat CLAUDE.md` }, state);
+		// targetDir is cwd; cwd/CLAUDE.md must not be suppressed by the ambiguous chained cd.
+		expect(block).toContain("# root context");
+	});
+
+	it("still injects an oversized context file the tool can only deliver truncated", () => {
+		// Beyond the tool's truncation limit the delivered content is incomplete, while the
+		// injected block is uncapped — suppressing would silently drop the remainder.
+		writeFileSync(join(sub, "CLAUDE.md"), `# sub context\n${"x\n".repeat(2100)}`);
+		const readState = freshState();
+		expect(computeNestedContextBlock("read", { path: join(sub, "CLAUDE.md") }, readState)).toContain("# sub context");
+		const bashState = freshState();
+		expect(computeNestedContextBlock("bash", { command: `cd ${sub} && cat CLAUDE.md` }, bashState)).toContain(
+			"# sub context",
+		);
+	});
+
+	it("does not suppress a sibling .claude/CLAUDE.md when a top-level CLAUDE.md is dumped", () => {
+		// `.claude/CLAUDE.md`'s basename collapses to CLAUDE.md, but it is a different file
+		// than `sub/CLAUDE.md`; full-path matching must keep them distinct.
+		mkdirSync(join(sub, ".claude"), { recursive: true });
+		writeFileSync(join(sub, ".claude", "CLAUDE.md"), "# claude-dir context");
+		const state = freshState();
+		const block = computeNestedContextBlock("bash", { command: `cd ${sub} && cat CLAUDE.md` }, state);
+		expect(block).toContain("# claude-dir context");
+		expect(block).not.toContain("# sub context");
+	});
+
+	it("does not re-inject a suppressed context file when a deeper dir is later touched", () => {
+		// Exercises the permanent-loaded invariant across a later, deeper-dir call (the
+		// negative cache only short-circuits the *same* dir, not a child).
+		const deeper = join(sub, "deeper");
+		mkdirSync(deeper, { recursive: true });
+		writeFileSync(join(deeper, "AGENTS.md"), "# deeper context");
+		writeFileSync(join(deeper, "file.py"), "y = 2\n");
+		const state = freshState();
+		// First: read sub/CLAUDE.md → suppressed (delivered) + marked loaded, sub scanned.
+		expect(computeNestedContextBlock("read", { path: join(sub, "CLAUDE.md") }, state)).toBeNull();
+		expect(state.loaded.has(realpathSync(join(sub, "CLAUDE.md")))).toBe(true);
+		// Later: operate in sub/deeper (not yet scanned). The walk re-passes through sub but
+		// must not resurface the already-loaded sub/CLAUDE.md; only deeper's context is new.
+		const block = computeNestedContextBlock("read", { path: join(deeper, "file.py") }, state);
+		expect(block).toContain("# deeper context");
+		expect(block).not.toContain("# sub context");
+	});
 });
 
 describe("resolveSelfReadFile", () => {
@@ -579,6 +650,12 @@ describe("resolveSelfReadFile", () => {
 	it("returns null when path is missing or empty", () => {
 		expect(resolveSelfReadFile("read", {}, "/proj")).toBeNull();
 		expect(resolveSelfReadFile("read", { path: "   " }, "/proj")).toBeNull();
+	});
+
+	it("returns null for a sliced read (offset/limit delivers only a fragment)", () => {
+		expect(resolveSelfReadFile("read", { path: "CLAUDE.md", offset: 10 }, "/proj")).toBeNull();
+		expect(resolveSelfReadFile("read", { path: "CLAUDE.md", limit: 5 }, "/proj")).toBeNull();
+		expect(resolveSelfReadFile("read", { path: "CLAUDE.md", offset: 1, limit: 5 }, "/proj")).toBeNull();
 	});
 });
 
@@ -627,6 +704,26 @@ describe("resolveBashDeliveredFiles", () => {
 	it("skips a dump whose output is piped or redirected away", () => {
 		expect(resolveBashDeliveredFiles("cat CLAUDE.md | grep x", "/proj")).toEqual([]);
 		expect(resolveBashDeliveredFiles("cat CLAUDE.md > out.txt", "/proj")).toEqual([]);
+	});
+
+	it("skips a segment using a here-doc / here-string / input redirection", () => {
+		// Tokens after `<<`/`<<<`/`<` are stdin body words, not dumped files — a heredoc that
+		// merely mentions a context filename must not suppress it.
+		expect(resolveBashDeliveredFiles("cat <<EOF\nsee CLAUDE.md\nEOF", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("cat <<< CLAUDE.md", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("cat < CLAUDE.md", "/proj")).toEqual([]);
+	});
+
+	it("returns nothing when the command chains more than one cd (ambiguous cwd)", () => {
+		// Only the first `cd` is resolved into `workingDir`; a second `cd` makes operand
+		// resolution wrong, so bail to the safe double-load.
+		expect(resolveBashDeliveredFiles("cd /proj && cd sub && cat CLAUDE.md", "/proj")).toEqual([]);
+	});
+
+	it("does not treat bat's partial-range flag as a full dump", () => {
+		expect(resolveBashDeliveredFiles("bat -r 10:20 CLAUDE.md", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("bat --line-range 10:20 CLAUDE.md", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("bat --line-range=10:20 CLAUDE.md", "/proj")).toEqual([]);
 	});
 
 	it("collects a cat that follows a leading cd segment", () => {

@@ -1,7 +1,8 @@
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { CONTEXT_FILE_CANDIDATES, loadContextFilesFromDir, type ResourceDiagnostic } from "./resource-loader.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./tools/truncate.js";
 
 /**
  * Auto-load of nested AGENTS.md/CLAUDE.md context files.
@@ -317,6 +318,11 @@ export function resolveSelfReadFile(
 	cwd: string,
 ): string | null {
 	if (!args || toolName !== "read") return null;
+	// A sliced read (`offset`/`limit`) delivers only a fragment of the file — the same
+	// hazard for which bash partial viewers (`head`/`tail`) are excluded. Treating it as a
+	// full delivery would suppress (and permanently mark loaded) a file the result only
+	// partially contains, silently dropping the rest. Fall back to the safe double-load.
+	if (args.offset !== undefined || args.limit !== undefined) return null;
 	const p = args.path;
 	if (typeof p !== "string" || p.trim() === "") return null;
 	return expandToAbsolute(p, cwd);
@@ -328,8 +334,15 @@ export function resolveSelfReadFile(
  * interactive pagers (`less`/`more`) are excluded — they may show only a fragment, so
  * treating them as "delivered" could silently drop the rest of a context file. The safe
  * failure mode is a harmless double-load (we still inject), never a silent context drop.
+ *
+ * `bat` is included but is *not* unconditionally a full dump: its `-r`/`--line-range` flag
+ * emits only a range (same hazard as `head`/`tail`). Segments carrying that flag are
+ * disqualified in {@link resolveBashDeliveredFiles}.
  */
 const FULL_DUMP_COMMANDS = new Set(["cat", "bat"]);
+
+/** `bat` flags that limit output to a partial range — disqualify the segment if present. */
+const BAT_RANGE_FLAGS = ["-r", "--line-range"];
 
 /** Strip a single layer of matching surrounding quotes from a shell token. */
 function unquoteToken(token: string): string {
@@ -348,23 +361,41 @@ function unquoteToken(token: string): string {
  * full-dump command (`cat`/`bat`). Path arguments are resolved against `workingDir` (the
  * command's effective cwd — e.g. a leading `cd` target). Conservative on purpose:
  *
- *  - Segments are split on `&&`, `||`, `;`. A segment containing a pipe (`|`) or output
- *    redirection (`>`) is skipped — its output is filtered or redirected, so the raw file
- *    is not what lands in the result.
+ *  - Segments are split on `&&`, `||`, `;`. A segment containing a pipe (`|`), output
+ *    redirection (`>`), or input redirection / here-doc / here-string (`<`, `<<`, `<<<`)
+ *    is skipped — its output is filtered/redirected, or its operands are stdin body words
+ *    rather than dumped files.
  *  - Only a segment whose first token is `cat`/`bat` contributes; flags (`-…`) are ignored.
+ *  - A `bat` segment carrying a partial-range flag (`-r`/`--line-range`) is skipped — it
+ *    emits only a fragment, like `head`/`tail`.
+ *  - If the command chains more than one `cd`, the effective cwd is ambiguous (we only
+ *    resolved the *first* `cd`), so operands cannot be resolved reliably — return nothing.
  *
  * Anything we cannot confidently classify as a full delivery is omitted, so the worst case
  * is a double-load rather than a silently dropped context file.
  */
 export function resolveBashDeliveredFiles(command: string, workingDir: string): string[] {
 	if (typeof command !== "string" || command.trim() === "") return [];
+	const segments = command.split(/&&|\|\||;/);
+
+	// More than one `cd` means the effective cwd differs from the first `cd` target we
+	// resolved as `workingDir`; resolving operands against it would suppress the wrong
+	// (same-named) file. Bail to the safe double-load.
+	const cdCount = segments.filter((s) => /^\s*cd(\s|$)/.test(s)).length;
+	if (cdCount > 1) return [];
+
 	const files: string[] = [];
-	for (const segment of command.split(/&&|\|\||;/)) {
-		// Output piped into another command or redirected to a file is not the raw file.
-		if (segment.includes("|") || segment.includes(">")) continue;
+	for (const segment of segments) {
+		// Output piped/redirected, or operands fed via input redirection / here-doc, are
+		// not raw file dumps to stdout.
+		if (segment.includes("|") || segment.includes(">") || segment.includes("<")) continue;
 		const tokens = segment.trim().split(/\s+/).filter(Boolean);
 		if (tokens.length === 0) continue;
-		if (!FULL_DUMP_COMMANDS.has(tokens[0].toLowerCase())) continue;
+		const cmd = tokens[0].toLowerCase();
+		if (!FULL_DUMP_COMMANDS.has(cmd)) continue;
+		// `bat -r 10:20` / `bat --line-range=10:20` shows only a range — not a full dump.
+		if (cmd === "bat" && tokens.slice(1).some((t) => BAT_RANGE_FLAGS.some((f) => t === f || t.startsWith(`${f}=`))))
+			continue;
 		for (const token of tokens.slice(1)) {
 			if (token.startsWith("-")) continue; // flag, not a file argument
 			const arg = unquoteToken(token);
@@ -384,6 +415,24 @@ export interface NestedContextState {
 	loaded: Set<string>;
 	/** Realpaths of directories already scanned (negative cache). Mutated. */
 	scannedDirs: Set<string>;
+}
+
+/**
+ * Whether a tool that delivers `realPath` actually delivers its *full* content. Both `read`
+ * and `bash` truncate their output at {@link DEFAULT_MAX_LINES} lines / {@link DEFAULT_MAX_BYTES}
+ * bytes, while {@link formatNestedContextBlock} is uncapped. If the file exceeds either limit
+ * it is delivered truncated, so suppressing (and permanently marking loaded) would silently
+ * drop the remainder. Any stat/read failure also returns `false` — the safe double-load.
+ */
+function deliveredInFull(realPath: string): boolean {
+	try {
+		if (statSync(realPath).size > DEFAULT_MAX_BYTES) return false;
+		// Size is within budget (<= 50KB), so reading to count lines is cheap.
+		const lineCount = readFileSync(realPath, "utf8").split("\n").length;
+		return lineCount <= DEFAULT_MAX_LINES;
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -420,9 +469,10 @@ export function computeNestedContextBlock(
 		: null;
 	const suppress: SuppressPredicate = (file) => {
 		const realFile = safeRealpath(file.path);
-		if (realSelfReadFile && realFile === realSelfReadFile) return true;
-		if (bashDelivered?.has(realFile)) return true;
-		return false;
+		const matched = realFile === realSelfReadFile || (bashDelivered?.has(realFile) ?? false);
+		// Only suppress when the file was delivered *in full*: a truncated delivery (oversized
+		// file) would drop the remainder if we marked it fully loaded and skipped injection.
+		return matched && deliveredInFull(realFile);
 	};
 
 	const collected = collectNestedContext(targetDir, state.cwd, state.loaded, suppress);
