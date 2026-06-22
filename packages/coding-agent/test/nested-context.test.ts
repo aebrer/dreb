@@ -3,11 +3,13 @@ import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	bashReferencesFilename,
 	collectNestedContext,
 	computeNestedContextBlock,
 	formatNestedContextBlock,
 	type NestedContextState,
 	parseLeadingCd,
+	resolveSelfReadFile,
 	resolveTargetDir,
 } from "../src/core/nested-context.js";
 
@@ -391,6 +393,124 @@ describe("computeNestedContextBlock (orchestration)", () => {
 	it("returns null for tool calls that do not resolve to a directory", () => {
 		expect(computeNestedContextBlock("bash", { command: "ls -la" }, freshState())).toBeNull();
 		expect(computeNestedContextBlock("tasks_update", { tasks: [] }, freshState())).toBeNull();
+	});
+
+	it("does not duplicate a context file the read tool itself delivers", () => {
+		const state = freshState();
+		// The first action in `sub` is to read its own CLAUDE.md — the read result already
+		// contains it, so the injected block must not duplicate it.
+		const block = computeNestedContextBlock("read", { path: join(sub, "CLAUDE.md") }, state);
+		expect(block).toBeNull();
+		// Still marked loaded (never re-injected) and the dir is still negatively cached.
+		expect(state.loaded.has(realpathSync(join(sub, "CLAUDE.md")))).toBe(true);
+		expect(state.scannedDirs.has(realpathSync(sub))).toBe(true);
+	});
+
+	it("still injects an ancestor context file when reading a nested context file", () => {
+		// Ancestor (cwd) also has an unloaded context file.
+		writeFileSync(join(cwd, "AGENTS.md"), "# root context");
+		const state = freshState();
+		const block = computeNestedContextBlock("read", { path: join(sub, "CLAUDE.md") }, state);
+		// sub/CLAUDE.md is suppressed (read delivers it) but the ancestor is still injected.
+		expect(block).not.toBeNull();
+		expect(block).toContain("# root context");
+		expect(block).not.toContain("# sub context");
+		// Both files end up marked loaded.
+		expect(state.loaded.has(realpathSync(join(sub, "CLAUDE.md")))).toBe(true);
+		expect(state.loaded.has(realpathSync(join(cwd, "AGENTS.md")))).toBe(true);
+	});
+
+	it("does not duplicate a context file a bash command prints", () => {
+		const state = freshState();
+		const block = computeNestedContextBlock("bash", { command: `cd ${sub} && cat CLAUDE.md` }, state);
+		expect(block).toBeNull();
+		expect(state.loaded.has(realpathSync(join(sub, "CLAUDE.md")))).toBe(true);
+		expect(state.scannedDirs.has(realpathSync(sub))).toBe(true);
+	});
+
+	it("only suppresses the context file a bash command names, injecting siblings", () => {
+		writeFileSync(join(sub, "AGENTS.md"), "# sub agents");
+		const state = freshState();
+		// Command prints AGENTS.md only — CLAUDE.md must still be injected.
+		const block = computeNestedContextBlock("bash", { command: `cd ${sub} && head AGENTS.md` }, state);
+		expect(block).not.toBeNull();
+		expect(block).toContain("# sub context");
+		expect(block).not.toContain("# sub agents");
+		expect(state.loaded.has(realpathSync(join(sub, "AGENTS.md")))).toBe(true);
+		expect(state.loaded.has(realpathSync(join(sub, "CLAUDE.md")))).toBe(true);
+	});
+
+	it("still injects when a bash command only cds without printing the context file", () => {
+		const state = freshState();
+		const block = computeNestedContextBlock("bash", { command: `cd ${sub} && ls -la` }, state);
+		expect(block).toContain("# sub context");
+	});
+
+	it("still injects when the read tool targets a non-context file", () => {
+		const state = freshState();
+		const block = computeNestedContextBlock("read", { path: join(sub, "file.py") }, state);
+		expect(block).toContain("# sub context");
+	});
+
+	itIfSymlinksApply("suppresses a context file read through a symlinked path", () => {
+		const realSub = join(cwd, "real-ctx");
+		const linkedSub = join(cwd, "linked-ctx");
+		mkdirSync(realSub, { recursive: true });
+		writeFileSync(join(realSub, "CLAUDE.md"), "# linked context");
+		symlinkSync(realSub, linkedSub, "dir");
+
+		const state = freshState();
+		const block = computeNestedContextBlock("read", { path: join(linkedSub, "CLAUDE.md") }, state);
+		expect(block).toBeNull();
+		expect(state.loaded.has(realpathSync(join(realSub, "CLAUDE.md")))).toBe(true);
+	});
+});
+
+describe("resolveSelfReadFile", () => {
+	it("resolves a relative read path against cwd", () => {
+		expect(resolveSelfReadFile("read", { path: "sub/CLAUDE.md" }, "/proj")).toBe("/proj/sub/CLAUDE.md");
+	});
+
+	it("returns an absolute read path unchanged", () => {
+		expect(resolveSelfReadFile("read", { path: "/a/AGENTS.md" }, "/proj")).toBe("/a/AGENTS.md");
+	});
+
+	it("expands a leading ~", () => {
+		expect(resolveSelfReadFile("read", { path: "~/x/CLAUDE.md" }, "/proj")).toBe(join(homedir(), "x/CLAUDE.md"));
+	});
+
+	it("returns null for non-read tools (they do not echo the full file)", () => {
+		expect(resolveSelfReadFile("grep", { path: "/a/CLAUDE.md" }, "/proj")).toBeNull();
+		expect(resolveSelfReadFile("ls", { path: "/a" }, "/proj")).toBeNull();
+		expect(resolveSelfReadFile("bash", { command: "cat x" }, "/proj")).toBeNull();
+	});
+
+	it("returns null when path is missing or empty", () => {
+		expect(resolveSelfReadFile("read", {}, "/proj")).toBeNull();
+		expect(resolveSelfReadFile("read", { path: "   " }, "/proj")).toBeNull();
+	});
+});
+
+describe("bashReferencesFilename", () => {
+	it("matches a filename printed by cat", () => {
+		expect(bashReferencesFilename("cd /x && cat CLAUDE.md", "CLAUDE.md")).toBe(true);
+	});
+
+	it("matches case-insensitively", () => {
+		expect(bashReferencesFilename("cat claude.md", "CLAUDE.md")).toBe(true);
+	});
+
+	it("matches a path-qualified reference", () => {
+		expect(bashReferencesFilename("head ./sub/AGENTS.md", "AGENTS.md")).toBe(true);
+	});
+
+	it("does not match an incidental longer token", () => {
+		expect(bashReferencesFilename("cat my-claude.md-notes.txt", "CLAUDE.md")).toBe(false);
+	});
+
+	it("returns false for an empty command or basename", () => {
+		expect(bashReferencesFilename("", "CLAUDE.md")).toBe(false);
+		expect(bashReferencesFilename("cat x", "")).toBe(false);
 	});
 });
 

@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { CONTEXT_FILE_CANDIDATES, loadContextFilesFromDir, type ResourceDiagnostic } from "./resource-loader.js";
 
 /**
@@ -225,17 +225,31 @@ function dirHasContextFile(dir: string): boolean {
 }
 
 /**
+ * Predicate deciding whether a collected context file should be *suppressed* from the
+ * injected block because the triggering tool call already delivers its content (e.g. a
+ * `read` of the file itself, or a `bash` command that prints it). Suppressed files are
+ * still marked as loaded so they are never injected later — they are simply not
+ * duplicated into the result that already contains them.
+ */
+export type SuppressPredicate = (file: LoadedContextFile) => boolean;
+
+/**
  * Collect nested context files for `targetDir`, walking up to the ceiling described in
  * {@link resolveWalkDirs}. Files whose realpath is already in `alreadyLoaded` are skipped
  * (and not re-reported). Newly collected realpaths are added to `alreadyLoaded` so the
  * caller's per-session set stays authoritative and each file loads at most once. Also
  * reports whether an existing context file failed to read so callers can retry later
  * instead of negatively caching a transient failure.
+ *
+ * When `suppress` matches a newly-seen file, that file is marked loaded but excluded from
+ * the returned `files` — the triggering tool result already contains it, so re-injecting
+ * would duplicate the content and waste tokens.
  */
 export function collectNestedContext(
 	targetDir: string,
 	cwd: string,
 	alreadyLoaded: Set<string>,
+	suppress?: SuppressPredicate,
 ): NestedContextCollection {
 	const dirs = resolveWalkDirs(targetDir, cwd);
 	const collected: LoadedContextFile[] = [];
@@ -254,6 +268,8 @@ export function collectNestedContext(
 			const real = safeRealpath(file.path);
 			if (alreadyLoaded.has(real)) continue;
 			alreadyLoaded.add(real);
+			// Mark loaded but do not inject: the triggering tool already delivers this file.
+			if (suppress?.(file)) continue;
 			collected.push(file);
 		}
 	}
@@ -281,7 +297,51 @@ export function formatNestedContextBlock(targetDir: string, files: LoadedContext
 	return `${header}\n\n${sections.join("\n\n")}`;
 }
 
-/** Mutable per-session state threaded through {@link computeNestedContextBlock}. */
+/**
+ * Resolve the absolute file path a `read` tool call delivers, or `null` when the tool is
+ * not `read` or has no usable `path`. Only `read` returns the *full* file content, so it
+ * is the only path-tool whose result fully duplicates an injected context file. (`grep`
+ * returns matched lines, `ls`/`edit`/`write` do not echo the whole file — those still
+ * benefit from injection.)
+ */
+export function resolveSelfReadFile(
+	toolName: string,
+	args: Record<string, unknown> | undefined,
+	cwd: string,
+): string | null {
+	if (!args || toolName !== "read") return null;
+	const p = args.path;
+	if (typeof p !== "string" || p.trim() === "") return null;
+	let rawPath: string = p;
+
+	// Expand a leading `~` to the home directory.
+	if (rawPath === "~") {
+		rawPath = homedir();
+	} else if (rawPath.startsWith(`~${sep}`) || rawPath.startsWith("~/")) {
+		rawPath = join(homedir(), rawPath.slice(2));
+	}
+
+	return isAbsolute(rawPath) ? rawPath : resolve(cwd, rawPath);
+}
+
+/** Escape a string for safe use inside a `RegExp`. */
+function escapeRegExp(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Whether a `bash` command appears to print/reference a file with the given basename.
+ * Matched case-insensitively with conservative boundaries so an incidental substring
+ * (e.g. `my-agents.md-notes`) does not trigger a false suppression. Callers only ever
+ * test this against basenames of context files that genuinely exist in the walk, so the
+ * blast radius is bounded.
+ */
+export function bashReferencesFilename(command: string, basename: string): boolean {
+	if (typeof command !== "string" || !basename) return false;
+	const re = new RegExp(`(^|[^\\w.\\-])${escapeRegExp(basename)}([^\\w\\-]|$)`, "i");
+	return re.test(command);
+}
+
 export interface NestedContextState {
 	/** Whether auto-loading is enabled (the `context.autoLoadNested` setting). */
 	enabled: boolean;
@@ -312,7 +372,19 @@ export function computeNestedContextBlock(
 	const realTarget = safeRealpath(targetDir);
 	if (state.scannedDirs.has(realTarget)) return null;
 
-	const collected = collectNestedContext(targetDir, state.cwd, state.loaded);
+	// A context file the triggering tool already delivers should be marked loaded but not
+	// re-injected (the result already contains it). Two cases: a `read` of the file itself,
+	// or a `bash` command that prints it (`cat`/`head`/etc.).
+	const selfReadFile = resolveSelfReadFile(toolName, args, state.cwd);
+	const realSelfReadFile = selfReadFile ? safeRealpath(selfReadFile) : null;
+	const bashCommand = toolName === "bash" && typeof args?.command === "string" ? args.command : null;
+	const suppress: SuppressPredicate = (file) => {
+		if (realSelfReadFile && safeRealpath(file.path) === realSelfReadFile) return true;
+		if (bashCommand && bashReferencesFilename(bashCommand, basename(file.path))) return true;
+		return false;
+	};
+
+	const collected = collectNestedContext(targetDir, state.cwd, state.loaded, suppress);
 	if (!collected.hadReadError) {
 		state.scannedDirs.add(realTarget);
 	}
