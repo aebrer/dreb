@@ -344,6 +344,18 @@ const FULL_DUMP_COMMANDS = new Set(["cat", "bat"]);
 /** `bat` flags that limit output to a partial range — disqualify the segment if present. */
 const BAT_RANGE_FLAGS = ["-r", "--line-range"];
 
+/**
+ * Whether a `bat` token requests a partial line range. Matches the space-separated form
+ * (`-r`, `--line-range`), the `=`-attached long form (`--line-range=10:20`), and the
+ * attached short form (`-r10:20`) — clap accepts an attached value on a short flag, so a
+ * bare `startsWith` check on each known range flag covers every spelling. A partial range
+ * is the same hazard as `head`/`tail`: only a fragment is emitted, so the segment must not
+ * be treated as a full dump.
+ */
+function isBatRangeFlag(token: string): boolean {
+	return BAT_RANGE_FLAGS.some((flag) => token.startsWith(flag));
+}
+
 /** Strip a single layer of matching surrounding quotes from a shell token. */
 function unquoteToken(token: string): string {
 	if (token.length >= 2) {
@@ -361,13 +373,22 @@ function unquoteToken(token: string): string {
  * full-dump command (`cat`/`bat`). Path arguments are resolved against `workingDir` (the
  * command's effective cwd — e.g. a leading `cd` target). Conservative on purpose:
  *
- *  - Segments are split on `&&`, `||`, `;`. A segment containing a pipe (`|`), output
- *    redirection (`>`), or input redirection / here-doc / here-string (`<`, `<<`, `<<<`)
- *    is skipped — its output is filtered/redirected, or its operands are stdin body words
- *    rather than dumped files.
- *  - Only a segment whose first token is `cat`/`bat` contributes; flags (`-…`) are ignored.
- *  - A `bat` segment carrying a partial-range flag (`-r`/`--line-range`) is skipped — it
- *    emits only a fragment, like `head`/`tail`.
+ *  - Segments are split on `&&`, `||`, `;`. Segments that are *only* a `cd` produce no
+ *    stdout and are ignored, but there must be **exactly one** remaining output-producing
+ *    segment. The bash tool truncates its *combined* command output from the **tail**
+ *    (keeping the last {@link DEFAULT_MAX_LINES} lines / {@link DEFAULT_MAX_BYTES} bytes and
+ *    dropping the head), so any *additional* output-producing segment could evict the dumped
+ *    file from the visible window while {@link deliveredInFull} — which measures the file
+ *    alone — still reports a full delivery. Bail to the safe double-load in that case.
+ *  - That sole segment must not contain a pipe (`|`), output redirection (`>`), or input
+ *    redirection / here-doc / here-string (`<`, `<<`, `<<<`) — its output is filtered /
+ *    redirected, or its operands are stdin body words rather than dumped files.
+ *  - Its first token must be `cat`/`bat`; flags (`-…`) are ignored.
+ *  - A `bat` segment carrying a partial-range flag (`-r`/`--line-range`, any spelling) is
+ *    skipped — it emits only a fragment, like `head`/`tail`.
+ *  - It must have **exactly one** file operand. A multi-file dump (`cat A.md B.md`)
+ *    concatenates several files; under tail truncation an earlier operand can be evicted
+ *    while still appearing fully sized on disk, so it is not a provable full delivery.
  *  - If the command chains more than one `cd`, the effective cwd is ambiguous (we only
  *    resolved the *first* `cd`), so operands cannot be resolved reliably — return nothing.
  *
@@ -377,33 +398,41 @@ function unquoteToken(token: string): string {
 export function resolveBashDeliveredFiles(command: string, workingDir: string): string[] {
 	if (typeof command !== "string" || command.trim() === "") return [];
 	const segments = command.split(/&&|\|\||;/);
+	const isCdSegment = (s: string) => /^\s*cd(\s|$)/.test(s);
 
 	// More than one `cd` means the effective cwd differs from the first `cd` target we
 	// resolved as `workingDir`; resolving operands against it would suppress the wrong
 	// (same-named) file. Bail to the safe double-load.
-	const cdCount = segments.filter((s) => /^\s*cd(\s|$)/.test(s)).length;
-	if (cdCount > 1) return [];
+	if (segments.filter(isCdSegment).length > 1) return [];
 
-	const files: string[] = [];
-	for (const segment of segments) {
-		// Output piped/redirected, or operands fed via input redirection / here-doc, are
-		// not raw file dumps to stdout.
-		if (segment.includes("|") || segment.includes(">") || segment.includes("<")) continue;
-		const tokens = segment.trim().split(/\s+/).filter(Boolean);
-		if (tokens.length === 0) continue;
-		const cmd = tokens[0].toLowerCase();
-		if (!FULL_DUMP_COMMANDS.has(cmd)) continue;
-		// `bat -r 10:20` / `bat --line-range=10:20` shows only a range — not a full dump.
-		if (cmd === "bat" && tokens.slice(1).some((t) => BAT_RANGE_FLAGS.some((f) => t === f || t.startsWith(`${f}=`))))
-			continue;
-		for (const token of tokens.slice(1)) {
-			if (token.startsWith("-")) continue; // flag, not a file argument
-			const arg = unquoteToken(token);
-			if (arg === "") continue;
-			files.push(expandToAbsolute(arg, workingDir));
-		}
+	// Segments that are only a `cd` emit no stdout. Everything else produces output, and
+	// because the bash tool tail-truncates the *combined* output, a context file is only
+	// provably delivered in full when it is the command's *sole* output-producing segment.
+	const outputSegments = segments.filter((s) => s.trim() !== "" && !isCdSegment(s));
+	if (outputSegments.length !== 1) return [];
+
+	const segment = outputSegments[0];
+	// Output piped/redirected, or operands fed via input redirection / here-doc, are not raw
+	// file dumps to stdout.
+	if (segment.includes("|") || segment.includes(">") || segment.includes("<")) return [];
+	const tokens = segment.trim().split(/\s+/).filter(Boolean);
+	if (tokens.length === 0) return [];
+	const cmd = tokens[0].toLowerCase();
+	if (!FULL_DUMP_COMMANDS.has(cmd)) return [];
+	// `bat -r 10:20` / `bat -r10:20` / `bat --line-range=10:20` shows only a range — not a full dump.
+	if (cmd === "bat" && tokens.slice(1).some(isBatRangeFlag)) return [];
+
+	const operands: string[] = [];
+	for (const token of tokens.slice(1)) {
+		if (token.startsWith("-")) continue; // flag, not a file argument
+		const arg = unquoteToken(token);
+		if (arg === "") continue;
+		operands.push(arg);
 	}
-	return files;
+	// A single operand is the only provable full delivery: multi-file dumps concatenate,
+	// and tail truncation can evict an earlier file while it still looks fully sized.
+	if (operands.length !== 1) return [];
+	return [expandToAbsolute(operands[0], workingDir)];
 }
 
 export interface NestedContextState {

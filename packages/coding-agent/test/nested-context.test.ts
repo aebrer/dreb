@@ -598,6 +598,33 @@ describe("computeNestedContextBlock (orchestration)", () => {
 		);
 	});
 
+	it("still injects a context file that is over the byte budget but under the line limit", () => {
+		// A few-line file larger than 50KB (one very long line) is delivered truncated by
+		// both `read` and `cat`, so the byte-size guard in deliveredInFull must still inject.
+		writeFileSync(join(sub, "CLAUDE.md"), `# sub context\n${"x".repeat(60_000)}`);
+		const readState = freshState();
+		expect(computeNestedContextBlock("read", { path: join(sub, "CLAUDE.md") }, readState)).toContain("# sub context");
+		const bashState = freshState();
+		expect(computeNestedContextBlock("bash", { command: `cd ${sub} && cat CLAUDE.md` }, bashState)).toContain(
+			"# sub context",
+		);
+	});
+
+	it("still injects when a bash dump is followed by other output (tail truncation hazard)", () => {
+		// `cat CLAUDE.md && npm test` can push the dumped file out of the tail-truncated
+		// window, so it must not be suppressed — only a sole single-file dump qualifies.
+		const state = freshState();
+		const block = computeNestedContextBlock("bash", { command: `cd ${sub} && cat CLAUDE.md && echo done` }, state);
+		expect(block).toContain("# sub context");
+	});
+
+	it("still injects when bat shows only a partial range via an attached short flag", () => {
+		// `bat -r10:20` (attached value) emits only a range, like `head`/`tail`.
+		const state = freshState();
+		const block = computeNestedContextBlock("bash", { command: `cd ${sub} && bat -r10:20 CLAUDE.md` }, state);
+		expect(block).toContain("# sub context");
+	});
+
 	it("does not suppress a sibling .claude/CLAUDE.md when a top-level CLAUDE.md is dumped", () => {
 		// `.claude/CLAUDE.md`'s basename collapses to CLAUDE.md, but it is a different file
 		// than `sub/CLAUDE.md`; full-path matching must keep them distinct.
@@ -664,8 +691,18 @@ describe("resolveBashDeliveredFiles", () => {
 		expect(resolveBashDeliveredFiles("cat CLAUDE.md", "/proj/sub")).toEqual(["/proj/sub/CLAUDE.md"]);
 	});
 
-	it("resolves multiple files dumped by one command", () => {
-		expect(resolveBashDeliveredFiles("cat A.md B.md", "/proj")).toEqual(["/proj/A.md", "/proj/B.md"]);
+	it("does not treat a multi-file dump as a full delivery (tail truncation can evict an earlier file)", () => {
+		// The bash tool tail-truncates the *combined* output, so `cat A.md B.md` cannot
+		// guarantee A.md survived. Only a single-operand dump is a provable full delivery.
+		expect(resolveBashDeliveredFiles("cat A.md B.md", "/proj")).toEqual([]);
+	});
+
+	it("does not treat a dump followed by other output as a full delivery", () => {
+		// `cat CLAUDE.md && npm test` floods the tail with test output; the dumped file can
+		// be truncated away from the visible window, so it must not be suppressed.
+		expect(resolveBashDeliveredFiles("cat CLAUDE.md && npm test", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("cat CLAUDE.md && echo done", "/proj")).toEqual([]);
+		expect(resolveBashDeliveredFiles("echo start && cat CLAUDE.md", "/proj")).toEqual([]);
 	});
 
 	it("returns an absolute argument unchanged", () => {
@@ -724,6 +761,8 @@ describe("resolveBashDeliveredFiles", () => {
 		expect(resolveBashDeliveredFiles("bat -r 10:20 CLAUDE.md", "/proj")).toEqual([]);
 		expect(resolveBashDeliveredFiles("bat --line-range 10:20 CLAUDE.md", "/proj")).toEqual([]);
 		expect(resolveBashDeliveredFiles("bat --line-range=10:20 CLAUDE.md", "/proj")).toEqual([]);
+		// Attached short-flag form (`-r10:20`) — clap accepts an attached value.
+		expect(resolveBashDeliveredFiles("bat -r10:20 CLAUDE.md", "/proj")).toEqual([]);
 	});
 
 	it("collects a cat that follows a leading cd segment", () => {
