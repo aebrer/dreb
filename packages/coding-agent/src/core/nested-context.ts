@@ -1,6 +1,6 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { CONTEXT_FILE_CANDIDATES, loadContextFilesFromDir, type ResourceDiagnostic } from "./resource-loader.js";
 
 /**
@@ -83,6 +83,20 @@ export function parseLeadingCd(command: string): string | null {
 }
 
 /**
+ * Expand a leading `~` to the home directory and resolve a raw path string to an absolute
+ * path against `baseDir`. Shared by every place that turns a user-supplied path token into
+ * an absolute path (`resolveTargetDir`, `resolveSelfReadFile`, bash argument resolution).
+ */
+function expandToAbsolute(rawPath: string, baseDir: string): string {
+	if (rawPath === "~") {
+		rawPath = homedir();
+	} else if (rawPath.startsWith(`~${sep}`) || rawPath.startsWith("~/")) {
+		rawPath = join(homedir(), rawPath.slice(2));
+	}
+	return isAbsolute(rawPath) ? rawPath : resolve(baseDir, rawPath);
+}
+
+/**
  * Resolve the absolute directory a tool call is about to operate in, or `null` when the
  * tool/argument shape does not identify a directory we should react to.
  */
@@ -106,14 +120,7 @@ export function resolveTargetDir(
 
 	if (!rawPath) return null;
 
-	// Expand a leading `~` to the home directory.
-	if (rawPath === "~") {
-		rawPath = homedir();
-	} else if (rawPath.startsWith(`~${sep}`) || rawPath.startsWith("~/")) {
-		rawPath = join(homedir(), rawPath.slice(2));
-	}
-
-	const absolute = isAbsolute(rawPath) ? rawPath : resolve(cwd, rawPath);
+	const absolute = expandToAbsolute(rawPath, cwd);
 
 	// For path-bearing tools the argument is usually a file; for bash `cd` it is a
 	// directory. Resolve to a directory: existing dirs are used as-is, everything else
@@ -312,34 +319,60 @@ export function resolveSelfReadFile(
 	if (!args || toolName !== "read") return null;
 	const p = args.path;
 	if (typeof p !== "string" || p.trim() === "") return null;
-	let rawPath: string = p;
-
-	// Expand a leading `~` to the home directory.
-	if (rawPath === "~") {
-		rawPath = homedir();
-	} else if (rawPath.startsWith(`~${sep}`) || rawPath.startsWith("~/")) {
-		rawPath = join(homedir(), rawPath.slice(2));
-	}
-
-	return isAbsolute(rawPath) ? rawPath : resolve(cwd, rawPath);
-}
-
-/** Escape a string for safe use inside a `RegExp`. */
-function escapeRegExp(s: string): string {
-	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return expandToAbsolute(p, cwd);
 }
 
 /**
- * Whether a `bash` command appears to print/reference a file with the given basename.
- * Matched case-insensitively with conservative boundaries so an incidental substring
- * (e.g. `my-agents.md-notes`) does not trigger a false suppression. Callers only ever
- * test this against basenames of context files that genuinely exist in the walk, so the
- * blast radius is bounded.
+ * Bash commands that dump a file's *full* contents to stdout. Deliberately narrow: only
+ * commands that emit the whole file qualify. Partial viewers (`head`/`tail`) and
+ * interactive pagers (`less`/`more`) are excluded — they may show only a fragment, so
+ * treating them as "delivered" could silently drop the rest of a context file. The safe
+ * failure mode is a harmless double-load (we still inject), never a silent context drop.
  */
-export function bashReferencesFilename(command: string, basename: string): boolean {
-	if (typeof command !== "string" || !basename) return false;
-	const re = new RegExp(`(^|[^\\w.\\-])${escapeRegExp(basename)}([^\\w\\-]|$)`, "i");
-	return re.test(command);
+const FULL_DUMP_COMMANDS = new Set(["cat", "bat"]);
+
+/** Strip a single layer of matching surrounding quotes from a shell token. */
+function unquoteToken(token: string): string {
+	if (token.length >= 2) {
+		const first = token[0];
+		const last = token[token.length - 1];
+		if ((first === '"' || first === "'") && first === last) {
+			return token.slice(1, -1);
+		}
+	}
+	return token;
+}
+
+/**
+ * Resolve the absolute paths of files a bash command fully delivers to stdout via a
+ * full-dump command (`cat`/`bat`). Path arguments are resolved against `workingDir` (the
+ * command's effective cwd — e.g. a leading `cd` target). Conservative on purpose:
+ *
+ *  - Segments are split on `&&`, `||`, `;`. A segment containing a pipe (`|`) or output
+ *    redirection (`>`) is skipped — its output is filtered or redirected, so the raw file
+ *    is not what lands in the result.
+ *  - Only a segment whose first token is `cat`/`bat` contributes; flags (`-…`) are ignored.
+ *
+ * Anything we cannot confidently classify as a full delivery is omitted, so the worst case
+ * is a double-load rather than a silently dropped context file.
+ */
+export function resolveBashDeliveredFiles(command: string, workingDir: string): string[] {
+	if (typeof command !== "string" || command.trim() === "") return [];
+	const files: string[] = [];
+	for (const segment of command.split(/&&|\|\||;/)) {
+		// Output piped into another command or redirected to a file is not the raw file.
+		if (segment.includes("|") || segment.includes(">")) continue;
+		const tokens = segment.trim().split(/\s+/).filter(Boolean);
+		if (tokens.length === 0) continue;
+		if (!FULL_DUMP_COMMANDS.has(tokens[0].toLowerCase())) continue;
+		for (const token of tokens.slice(1)) {
+			if (token.startsWith("-")) continue; // flag, not a file argument
+			const arg = unquoteToken(token);
+			if (arg === "") continue;
+			files.push(expandToAbsolute(arg, workingDir));
+		}
+	}
+	return files;
 }
 
 export interface NestedContextState {
@@ -374,13 +407,21 @@ export function computeNestedContextBlock(
 
 	// A context file the triggering tool already delivers should be marked loaded but not
 	// re-injected (the result already contains it). Two cases: a `read` of the file itself,
-	// or a `bash` command that prints it (`cat`/`head`/etc.).
+	// or a `bash` command that dumps its full contents (`cat`/`bat`). Both are matched by
+	// full resolved realpath — never by basename — so printing one file never suppresses a
+	// same-named sibling/ancestor or a file in a different directory.
 	const selfReadFile = resolveSelfReadFile(toolName, args, state.cwd);
 	const realSelfReadFile = selfReadFile ? safeRealpath(selfReadFile) : null;
 	const bashCommand = toolName === "bash" && typeof args?.command === "string" ? args.command : null;
+	// Bash file arguments resolve against the command's effective cwd, which `resolveTargetDir`
+	// has already computed as `targetDir` (the leading `cd` destination).
+	const bashDelivered = bashCommand
+		? new Set(resolveBashDeliveredFiles(bashCommand, targetDir).map(safeRealpath))
+		: null;
 	const suppress: SuppressPredicate = (file) => {
-		if (realSelfReadFile && safeRealpath(file.path) === realSelfReadFile) return true;
-		if (bashCommand && bashReferencesFilename(bashCommand, basename(file.path))) return true;
+		const realFile = safeRealpath(file.path);
+		if (realSelfReadFile && realFile === realSelfReadFile) return true;
+		if (bashDelivered?.has(realFile)) return true;
 		return false;
 	};
 
