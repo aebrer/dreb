@@ -572,14 +572,16 @@ export class TUI extends Container {
 
 		this.applyLineResets(allLines);
 
-		// Clear screen + scrollback, write everything
+		// Clear screen, write everything, then clear scrollback. Clearing scrollback
+		// after the repaint forces terminals that were manually scrolled up to expose
+		// the freshly painted bottom viewport instead of pinning the view at row 0.
 		this.fullRedrawCount += 1;
-		let buffer = "\x1b[?2026h\x1b[2J\x1b[H\x1b[3J";
+		let buffer = "\x1b[?2026h\x1b[2J\x1b[H";
 		for (let i = 0; i < allLines.length; i++) {
 			if (i > 0) buffer += "\r\n";
 			buffer += allLines[i];
 		}
-		buffer += "\x1b[?2026l";
+		buffer += "\x1b[3J\x1b[?2026l";
 		this.terminal.write(buffer);
 
 		// Update state: previousLines holds only live portion
@@ -1118,17 +1120,8 @@ export class TUI extends Container {
 			}
 		};
 
-		const debugRedraw = process.env.DREB_DEBUG_REDRAW === "1";
-		const logRedraw = (reason: string): void => {
-			if (!debugRedraw) return;
-			const logPath = path.join(os.homedir(), ".dreb", "agent", "dreb-debug.log");
-			const msg = `[${new Date().toISOString()}] fullRender: ${reason} (prev=${this.previousLines.length}, new=${newLines.length}, height=${height})\n`;
-			fs.appendFileSync(logPath, msg);
-		};
-
 		// First render or force re-render — clear live region and write
 		if (this.previousLines.length === 0 && !widthChanged && !heightChanged) {
-			logRedraw("first render");
 			fullRender(true);
 			return;
 		}
@@ -1137,7 +1130,6 @@ export class TUI extends Container {
 		// content, since wrapping changes). Use recommitAll to clear screen +
 		// scrollback and re-render the entire transcript at the new width.
 		if (widthChanged) {
-			logRedraw(`terminal width changed (${this.previousWidth} -> ${width})`);
 			this.recommitAll();
 			return;
 		}
@@ -1148,7 +1140,6 @@ export class TUI extends Container {
 		// viewport, recommit the transcript tail so committed history is restored and
 		// the editor is anchored at the bottom instead of stranded at the top.
 		if (heightChanged) {
-			logRedraw(`terminal height changed (${this.previousHeight} -> ${height})`);
 			clearAndRedraw();
 			return;
 		}
@@ -1193,7 +1184,6 @@ export class TUI extends Container {
 				// Move to end of new content (clamp to 0 for empty content)
 				const targetRow = Math.max(0, newLines.length - 1);
 				if (targetRow < prevViewportTop) {
-					logRedraw(`deleted lines moved viewport up (${targetRow} < ${prevViewportTop})`);
 					clearAndRedraw();
 					return;
 				}
@@ -1208,7 +1198,6 @@ export class TUI extends Container {
 				// Clear extra lines without scrolling
 				const extraLines = this.previousLines.length - newLines.length;
 				if (extraLines > height) {
-					logRedraw(`extraLines > height (${extraLines} > ${height})`);
 					clearAndRedraw();
 					return;
 				}
@@ -1263,7 +1252,6 @@ export class TUI extends Container {
 				firstChanged = prevViewportTop;
 			} else {
 				// Viewport needs to shift — full redraw without scrollback clear
-				logRedraw(`firstChanged < viewportTop with viewport shift (${firstChanged} < ${prevViewportTop})`);
 				clearAndRedraw();
 				return;
 			}
@@ -1348,47 +1336,14 @@ export class TUI extends Container {
 				// or long streaming content caused scrolling. A live-region-only clear
 				// can't restore the viewport (CUU can't reach past viewport top into
 				// scrollback), so do a full recommit to repaint everything cleanly.
-				logRedraw(
-					`content shrank past viewport (${this.previousLines.length} -> ${newLines.length}, height=${height})`,
-				);
 				this.recommitAll();
 				return;
 			}
-			logRedraw(`content shrank (${this.previousLines.length} -> ${newLines.length})`);
 			fullRender(true);
 			return;
 		}
 
 		buffer += "\x1b[?2026l"; // End synchronized output
-
-		if (process.env.DREB_TUI_DEBUG === "1") {
-			const debugDir = "/tmp/tui";
-			fs.mkdirSync(debugDir, { recursive: true });
-			const debugPath = path.join(debugDir, `render-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
-			const debugData = [
-				`firstChanged: ${firstChanged}`,
-				`viewportTop: ${viewportTop}`,
-				`cursorRow: ${this.cursorRow}`,
-				`height: ${height}`,
-				`lineDiff: ${lineDiff}`,
-				`hardwareCursorRow: ${hardwareCursorRow}`,
-				`renderEnd: ${renderEnd}`,
-				`finalCursorRow: ${finalCursorRow}`,
-				`cursorPos: ${JSON.stringify(cursorPos)}`,
-				`newLines.length: ${newLines.length}`,
-				`previousLines.length: ${this.previousLines.length}`,
-				"",
-				"=== newLines ===",
-				JSON.stringify(newLines, null, 2),
-				"",
-				"=== previousLines ===",
-				JSON.stringify(this.previousLines, null, 2),
-				"",
-				"=== buffer ===",
-				JSON.stringify(buffer),
-			].join("\n");
-			fs.writeFileSync(debugPath, debugData);
-		}
 
 		// Write entire buffer at once
 		this.terminal.write(buffer);

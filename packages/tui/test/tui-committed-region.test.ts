@@ -253,6 +253,95 @@ describe("TUI committed-scrollback region", () => {
 		tui.stop();
 	});
 
+	it("width recommit while manually scrolled up bottom-anchors the viewport", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 18 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+
+		const editor = new TestComponent();
+		editor.lines = ["EDITOR >", "footer"];
+		live.addChild(editor);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+
+		terminal.scrollLines(-3);
+		await terminal.flush();
+		assert.ok(
+			terminal.getViewportTop() < terminal.getBufferLength() - terminal.rows,
+			"test should start scrolled up",
+		);
+		terminal.clearWrites();
+
+		terminal.resize(50, 8);
+		await terminal.flush();
+
+		const viewport = terminal.getViewport();
+		assert.ok(terminal.getWrites().includes("\x1b[3J"), "width change should still recommit");
+		assert.strictEqual(
+			terminal.getViewportTop(),
+			terminal.getBufferLength() - terminal.rows,
+			"recommit should force viewport to bottom even when the user was scrolled up",
+		);
+		assert.ok(viewport.at(-2)?.includes("EDITOR >"), "editor should be bottom-anchored after width recommit");
+		assert.ok(viewport.at(-1)?.includes("footer"), "footer should be bottom-anchored after width recommit");
+
+		tui.stop();
+	});
+
+	it("same-height live working indicator update while scrolled up does not replay committed content", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 18 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+
+		const editor = new TestComponent();
+		editor.lines = ["EDITOR > Working", "footer"];
+		live.addChild(editor);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+
+		terminal.scrollLines(-3);
+		await terminal.flush();
+		const viewportTopBefore = terminal.getViewportTop();
+		terminal.clearWrites();
+
+		editor.lines = ["EDITOR >", "footer"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(!terminal.getWrites().includes("\x1b[2J"), "same-height live update must not clear screen");
+		assert.ok(!terminal.getWrites().includes("\x1b[3J"), "same-height live update must not clear scrollback");
+		assert.ok(!terminal.getWrites().includes("HIST 0"), "same-height live update must not replay committed content");
+		assert.strictEqual(
+			terminal.getViewportTop(),
+			viewportTopBefore,
+			"same-height live update must not yank viewport",
+		);
+
+		tui.stop();
+	});
+
 	it("height change only re-renders live region when live-region start is visible", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);

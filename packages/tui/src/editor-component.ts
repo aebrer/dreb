@@ -70,6 +70,16 @@ export interface EditorComponent extends Component {
 	getGhostText?(): string | null;
 
 	// =========================================================================
+	// Inline status (optional)
+	// =========================================================================
+
+	/** Set decoration rendered inside the existing input line without changing editor height. */
+	setInlineStatus?(text: string | null): void;
+
+	/** Get current inline status decoration. */
+	getInlineStatus?(): string | null;
+
+	// =========================================================================
 	// Appearance (optional)
 	// =========================================================================
 

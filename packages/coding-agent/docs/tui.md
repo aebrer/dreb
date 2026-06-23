@@ -448,7 +448,7 @@ interface MyTheme {
 The TUI uses a two-zone rendering architecture:
 
 - **Committed region** — the first N children of the TUI root (set via `setCommittedChildCount()`). Their output is written to terminal scrollback once and **never re-rendered** by the differential renderer. This prevents the "transcript replay" problem where every turn-end would re-emit the entire session into scrollback.
-- **Live region** — all children after the committed boundary. This is the only content the differential renderer manages. Full redraws are cheap because they only clear and rewrite the small live region (streaming message + spinner + editor + footer).
+- **Live region** — all children after the committed boundary. This is the only content the differential renderer manages. Full redraws are cheap because they only clear and rewrite the small live region (streaming message + editor inline status + footer).
 
 ### Key methods
 
@@ -462,7 +462,7 @@ The TUI uses a two-zone rendering architecture:
 
 1. `interactive-mode.ts` maintains a `committedChatContainer` (finalized messages/tools) and a live `chatContainer` (streaming + pending)
 2. When a message or tool finalizes, it moves from live → committed container, and `commit()` advances the boundary
-3. The differential renderer (`doRender`) only renders live children, so the "content shrank" full-redraw path (triggered by spinner removal) replays only the live region — not the whole transcript — **as long as the live region fit within the viewport**. If the live region had grown taller than the viewport (a big tool output, a long streaming message, overlay padding), the committed history and the live-region top were scrolled into unreachable scrollback; a relative redraw cannot pull them back, so the shrink/viewport-shift paths route through `recommitAll()` instead, restoring the committed tail and re-anchoring the editor at the bottom (see issue 277). The predicate is `prevViewportTop > 0`.
+3. The differential renderer (`doRender`) only renders live children, so normal live updates repaint only the live region — not the whole transcript. The main working indicator is rendered inside the editor input line so turn start/end changes do not add or remove a live-region row. If the live region had grown taller than the viewport (a big tool output, a long streaming message, overlay padding), the committed history and the live-region top were scrolled into unreachable scrollback; a relative redraw cannot pull them back, so the shrink/viewport-shift paths route through `recommitAll()` instead, restoring the committed tail and re-anchoring the editor at the bottom (see issue 277). The predicate is `prevViewportTop > 0`.
 4. Terminal width changes and other global mutations call `recommitAll()` for one deliberate repaint
 
 ### Prefix-commit ordering rule
@@ -477,13 +477,6 @@ Two complementary measures prevent this:
 
 1. **Stable height while open** — the menu block is padded to a per-session high-water mark, so filtering to fewer matches never shrinks the live region. Filtering only repaints in place.
 2. **`recommitAll()` on close** — dismissing or accepting the menu repaints the whole transcript with position-independent sequences, restoring the committed content that scrolled off. This is safe because such menus only appear while the user is typing at the bottom with no agent streaming.
-
-### Environment variables
-
-| Variable | Purpose |
-|----------|---------|
-| `DREB_DEBUG_REDRAW=1` | Log every full-redraw trigger to `~/.dreb/agent/dreb-debug.log` |
-| `DREB_TUI_DEBUG=1` | Write full render state to `/tmp/tui/` on each differential render |
 
 ## Debug logging
 

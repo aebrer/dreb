@@ -60,6 +60,80 @@ describe("InteractiveMode.showStatus", () => {
 	});
 });
 
+describe("InteractiveMode working indicator", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	async function dispatchEvent(fakeThis: object, event: object): Promise<void> {
+		return (InteractiveMode as any).prototype.handleEvent.call(fakeThis, event);
+	}
+
+	function createWorkingFakeThis() {
+		const inlineStatuses: Array<string | null> = [];
+		const editor = {
+			setInlineStatus: vi.fn((text: string | null) => inlineStatuses.push(text)),
+			setGhostText: vi.fn(),
+		};
+		const fakeThis: any = {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			retryLoader: undefined,
+			statusContainer: new Container(),
+			defaultEditor: editor,
+			editor,
+			ui: { requestRender: vi.fn() },
+			defaultWorkingMessage: "Working...",
+			workingFrames: ["⠋", "⠙"],
+			workingFrame: 0,
+			workingInterval: undefined,
+			isAgentWorking: false,
+			currentWorkingMessage: "Working...",
+			pendingWorkingMessage: undefined,
+			streamingComponent: undefined,
+			streamingMessage: undefined,
+			pendingTools: new Map(),
+			commitNeeded: false,
+			checkShutdownRequested: vi.fn(async () => {}),
+			buddyController: { handleEvent: vi.fn() },
+			footerDataProvider: { refreshDailyCost: vi.fn(async () => {}) },
+		};
+		for (const method of [
+			"defaultInterruptWorkingMessage",
+			"setEditorInlineStatus",
+			"renderWorkingIndicator",
+			"startAgentWorking",
+			"stopAgentWorking",
+		]) {
+			fakeThis[method] = (...args: unknown[]) => (InteractiveMode as any).prototype[method].call(fakeThis, ...args);
+		}
+		return { fakeThis, inlineStatuses };
+	}
+
+	test("agent_start renders working state through editor inline status, not statusContainer", async () => {
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+
+		await dispatchEvent(fakeThis, { type: "agent_start" });
+
+		expect(fakeThis.statusContainer.children).toHaveLength(0);
+		expect(fakeThis.isAgentWorking).toBe(true);
+		expect(inlineStatuses.some((text) => text?.includes("Working"))).toBe(true);
+
+		(InteractiveMode as any).prototype.stopAgentWorking.call(fakeThis);
+	});
+
+	test("agent_end clears editor inline status without removing a status row", async () => {
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+
+		await dispatchEvent(fakeThis, { type: "agent_start" });
+		await dispatchEvent(fakeThis, { type: "agent_end" });
+
+		expect(fakeThis.statusContainer.children).toHaveLength(0);
+		expect(fakeThis.isAgentWorking).toBe(false);
+		expect(inlineStatuses.at(-1)).toBeNull();
+	});
+});
+
 describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 	test("persists theme changes to settings manager", () => {
 		initTheme("dark");

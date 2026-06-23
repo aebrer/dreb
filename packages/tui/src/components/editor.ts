@@ -278,6 +278,10 @@ export class Editor implements Component, Focusable {
 	// Ghost text suggestion (dim text shown after cursor, Tab to accept)
 	private ghostText: string | null = null;
 
+	// Inline status shown inside the existing input line (e.g. working indicator).
+	// This is decoration only: it must never affect text layout or rendered height.
+	private inlineStatusText: string | null = null;
+
 	// Preferred visual column for vertical cursor movement (sticky column)
 	private preferredVisualCol: number | null = null;
 
@@ -347,6 +351,18 @@ export class Editor implements Component, Focusable {
 
 	getGhostText(): string | null {
 		return this.ghostText;
+	}
+
+	/** Set inline status text rendered inside the existing input line without changing height. */
+	setInlineStatus(text: string | null): void {
+		if (this.inlineStatusText !== text) {
+			this.inlineStatusText = text;
+			this.tui.requestRender();
+		}
+	}
+
+	getInlineStatus(): string | null {
+		return this.inlineStatusText;
 	}
 
 	/**
@@ -512,16 +528,22 @@ export class Editor implements Component, Focusable {
 					if (lineVisibleWidth > contentWidth && paddingX > 0) {
 						cursorInPadding = true;
 					}
-					// Ghost text: show dim suggestion after cursor when editor is empty
-					if (this.ghostText && this.isEditorEmpty()) {
+					// Inline status and ghost text are decorations inside the existing input row.
+					// They must not feed back into layout/wrapping or change rendered height.
+					const inlineDecoration = this.inlineStatusText
+						? ` ${this.inlineStatusText}`
+						: this.ghostText && this.isEditorEmpty()
+							? this.ghostText
+							: null;
+					if (inlineDecoration) {
 						const availableWidth = contentWidth - lineVisibleWidth;
 						if (availableWidth > 0) {
-							const truncatedGhost = truncateToWidth(this.ghostText, availableWidth);
+							const truncatedDecoration = truncateToWidth(inlineDecoration, availableWidth);
 							const styled = this.theme.ghostText
-								? this.theme.ghostText(truncatedGhost)
-								: `\x1b[2m${truncatedGhost}\x1b[0m`;
+								? this.theme.ghostText(truncatedDecoration)
+								: `\x1b[2m${truncatedDecoration}\x1b[0m`;
 							displayText = displayText + styled;
-							lineVisibleWidth = lineVisibleWidth + visibleWidth(truncatedGhost);
+							lineVisibleWidth = lineVisibleWidth + visibleWidth(truncatedDecoration);
 						}
 					}
 				}

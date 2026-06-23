@@ -185,6 +185,25 @@ export class VirtualTerminal implements Terminal {
 		return lines;
 	}
 
+	/** Scroll the viewport by a signed line count; negative moves up into scrollback. */
+	scrollLines(amount: number): void {
+		this.xterm.scrollLines(amount);
+	}
+
+	/** Scroll the viewport to the terminal's current bottom. */
+	scrollToBottom(): void {
+		const buffer = this.xterm.buffer.active;
+		this.xterm.scrollLines(buffer.baseY - buffer.viewportY);
+	}
+
+	getViewportTop(): number {
+		return this.xterm.buffer.active.viewportY;
+	}
+
+	getBufferLength(): number {
+		return this.xterm.buffer.active.length;
+	}
+
 	/**
 	 * Clear the terminal viewport
 	 */

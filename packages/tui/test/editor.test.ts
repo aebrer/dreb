@@ -779,6 +779,35 @@ describe("Editor component", () => {
 			assert.strictEqual(lines.length, 3);
 		});
 
+		it("renders inline status without changing editor height", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 40;
+
+			editor.setText("");
+			const before = editor.render(width);
+			editor.setInlineStatus("Working... ESC to abort");
+			const during = editor.render(width);
+			editor.setInlineStatus(null);
+			const after = editor.render(width);
+
+			assert.strictEqual(during.length, before.length);
+			assert.strictEqual(after.length, before.length);
+			assert.match(stripVTControlCharacters(during[1]!), /Working/);
+		});
+
+		it("truncates inline status to the input row width", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 20;
+
+			editor.setInlineStatus("Working with a very long status message");
+			const lines = editor.render(width);
+
+			assert.strictEqual(lines.length, 3);
+			for (const line of lines) {
+				assert.ok(visibleWidth(line) <= width, `line exceeds width: ${visibleWidth(line)} > ${width}`);
+			}
+		});
+
 		it("handles single word that fits exactly", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 			const width = 10 + 1; // +1 col reserved for cursor
