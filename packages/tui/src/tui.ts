@@ -41,6 +41,7 @@ export interface Component {
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
+type RecommitReason = "global" | "live-viewport-restore";
 
 /**
  * Interface for components that can receive focus and display a hardware cursor.
@@ -550,8 +551,12 @@ export class TUI extends Container {
 	 * Clear screen + scrollback, re-render the entire transcript (committed + live),
 	 * and re-establish the committed boundary. Used for global actions that need to
 	 * repaint finalized content (theme change, width resize, expand-all, etc.).
+	 *
+	 * Live-region callers must pass an explicit reason so transcript replay cannot
+	 * be introduced accidentally as a generic redraw fallback.
 	 */
-	recommitAll(): void {
+	recommitAll(reason: RecommitReason = "global"): void {
+		void reason;
 		if (this.stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
@@ -572,16 +577,19 @@ export class TUI extends Container {
 
 		this.applyLineResets(allLines);
 
-		// Clear screen, write everything, then clear scrollback. Clearing scrollback
-		// after the repaint forces terminals that were manually scrolled up to expose
-		// the freshly painted bottom viewport instead of pinning the view at row 0.
+		// Reset/clear before repainting. RIS is intentionally used here because
+		// terminal emulators own the native scrollback viewport: after a user has
+		// manually scrolled up, a normal clear+home repaint can remain pinned to
+		// row 0. Resetting first drops the old scrollback and restores auto-follow;
+		// CSI 3 J runs before any transcript bytes so it cannot erase freshly
+		// repainted history. Re-enable input modes that RIS may reset.
 		this.fullRedrawCount += 1;
-		let buffer = "\x1b[?2026h\x1b[2J\x1b[H";
+		let buffer = `\x1bc\x1b[3J\x1b[?2004h${this.terminal.kittyProtocolActive ? "\x1b[>7u" : "\x1b[>4;2m"}\x1b[?2026h`;
 		for (let i = 0; i < allLines.length; i++) {
 			if (i > 0) buffer += "\r\n";
 			buffer += allLines[i];
 		}
-		buffer += "\x1b[3J\x1b[?2026l";
+		buffer += "\x1b[?2026l";
 		this.terminal.write(buffer);
 
 		// Update state: previousLines holds only live portion
@@ -1114,7 +1122,7 @@ export class TUI extends Container {
 		// differential renderer leaves on every keystroke.
 		const clearAndRedraw = (): void => {
 			if (prevViewportTop > 0) {
-				this.recommitAll();
+				this.recommitAll("live-viewport-restore");
 			} else {
 				fullRender(true);
 			}
@@ -1335,8 +1343,8 @@ export class TUI extends Container {
 				// Previous live content exceeded the terminal viewport — overlay padding
 				// or long streaming content caused scrolling. A live-region-only clear
 				// can't restore the viewport (CUU can't reach past viewport top into
-				// scrollback), so do a full recommit to repaint everything cleanly.
-				this.recommitAll();
+				// scrollback), so use the explicit live-viewport restoration path.
+				this.recommitAll("live-viewport-restore");
 				return;
 			}
 			fullRender(true);

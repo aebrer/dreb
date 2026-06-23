@@ -808,6 +808,33 @@ describe("Editor component", () => {
 			}
 		});
 
+		it("renders inline status after existing input without changing height", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 50;
+
+			editor.setText("hello");
+			const before = editor.render(width);
+			editor.setInlineStatus("Working");
+			const during = editor.render(width);
+
+			assert.strictEqual(during.length, before.length);
+			const inputRow = stripVTControlCharacters(during[1]!);
+			assert.match(inputRow, /hello/);
+			assert.match(inputRow, /Working/);
+		});
+
+		it("inline status takes precedence over ghost text", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 50;
+
+			editor.setGhostText("ghost suggestion");
+			editor.setInlineStatus("Working");
+			const line = stripVTControlCharacters(editor.render(width)[1]!);
+
+			assert.match(line, /Working/);
+			assert.doesNotMatch(line, /ghost suggestion/);
+		});
+
 		it("handles single word that fits exactly", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 			const width = 10 + 1; // +1 col reserved for cursor

@@ -87,6 +87,9 @@ describe("InteractiveMode working indicator", () => {
 			workingFrames: ["⠋", "⠙"],
 			workingFrame: 0,
 			workingInterval: undefined,
+			inlineStatusOwner: undefined,
+			inlineStatusSpinner: (spinner: string) => spinner,
+			warnedMissingInlineStatus: false,
 			isAgentWorking: false,
 			currentWorkingMessage: "Working...",
 			pendingWorkingMessage: undefined,
@@ -95,6 +98,7 @@ describe("InteractiveMode working indicator", () => {
 			pendingTools: new Map(),
 			commitNeeded: false,
 			checkShutdownRequested: vi.fn(async () => {}),
+			showWarning: vi.fn(),
 			buddyController: { handleEvent: vi.fn() },
 			footerDataProvider: { refreshDailyCost: vi.fn(async () => {}) },
 		};
@@ -102,8 +106,12 @@ describe("InteractiveMode working indicator", () => {
 			"defaultInterruptWorkingMessage",
 			"setEditorInlineStatus",
 			"renderWorkingIndicator",
+			"startInlineStatus",
+			"stopInlineStatus",
+			"startInlineLoader",
 			"startAgentWorking",
 			"stopAgentWorking",
+			"setWorkingMessage",
 		]) {
 			fakeThis[method] = (...args: unknown[]) => (InteractiveMode as any).prototype[method].call(fakeThis, ...args);
 		}
@@ -130,6 +138,53 @@ describe("InteractiveMode working indicator", () => {
 
 		expect(fakeThis.statusContainer.children).toHaveLength(0);
 		expect(fakeThis.isAgentWorking).toBe(false);
+		expect(inlineStatuses.at(-1)).toBeNull();
+	});
+
+	test("queued setWorkingMessage flushes on agent_start", async () => {
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+
+		(InteractiveMode as any).prototype.setWorkingMessage.call(fakeThis, "Custom extension status");
+		await dispatchEvent(fakeThis, { type: "agent_start" });
+
+		expect(fakeThis.pendingWorkingMessage).toBeUndefined();
+		expect(inlineStatuses.some((text) => text?.includes("Custom extension status"))).toBe(true);
+
+		(InteractiveMode as any).prototype.stopAgentWorking.call(fakeThis);
+	});
+
+	test("setWorkingMessage updates active inline status", async () => {
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+
+		await dispatchEvent(fakeThis, { type: "agent_start" });
+		(InteractiveMode as any).prototype.setWorkingMessage.call(fakeThis, "Updated status");
+
+		expect(inlineStatuses.at(-1)).toContain("Updated status");
+
+		(InteractiveMode as any).prototype.stopAgentWorking.call(fakeThis);
+	});
+
+	test("custom editor without inline status emits a warning", async () => {
+		const { fakeThis } = createWorkingFakeThis();
+		fakeThis.editor = { setGhostText: vi.fn() };
+
+		await dispatchEvent(fakeThis, { type: "agent_start" });
+
+		expect(fakeThis.showWarning).toHaveBeenCalledWith(expect.stringContaining("Custom editor component"));
+
+		(InteractiveMode as any).prototype.stopAgentWorking.call(fakeThis);
+	});
+
+	test("auto-retry loader uses inline status without adding a status row", async () => {
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+		fakeThis.session = { abortRetry: vi.fn() };
+
+		await dispatchEvent(fakeThis, { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1000 });
+
+		expect(fakeThis.statusContainer.children).toHaveLength(0);
+		expect(inlineStatuses.at(-1)).toContain("Retrying");
+
+		await dispatchEvent(fakeThis, { type: "auto_retry_end", success: true, attempt: 1 });
 		expect(inlineStatuses.at(-1)).toBeNull();
 	});
 });

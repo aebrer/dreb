@@ -26,7 +26,6 @@ import {
 	type Component,
 	Container,
 	fuzzyFilter,
-	Loader,
 	Markdown,
 	matchesKey,
 	ProcessTerminal,
@@ -166,6 +165,12 @@ export interface InteractiveModeOptions {
 	verbose?: boolean;
 }
 
+type InlineStatusOwner = "agent" | "autoCompaction" | "autoRetry" | "branchSummary" | "dream" | "compaction";
+type InlineStatusHandle = {
+	stop(): void;
+	setText(text: string): void;
+};
+
 export class InteractiveMode {
 	private session: AgentSession;
 	private ui: TUI;
@@ -191,6 +196,9 @@ export class InteractiveMode {
 	private readonly workingFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 	private workingFrame = 0;
 	private workingInterval: ReturnType<typeof setInterval> | undefined = undefined;
+	private inlineStatusOwner: InlineStatusOwner | undefined = undefined;
+	private inlineStatusSpinner: (spinner: string) => string = (spinner) => theme.fg("accent", spinner);
+	private warnedMissingInlineStatus = false;
 	private isAgentWorking = false;
 	private currentWorkingMessage = this.defaultWorkingMessage;
 
@@ -231,11 +239,11 @@ export class InteractiveMode {
 	private pendingBashComponents: BashExecutionComponent[] = [];
 
 	// Auto-compaction state
-	private autoCompactionLoader: Loader | undefined = undefined;
+	private autoCompactionLoader: InlineStatusHandle | undefined = undefined;
 	private autoCompactionEscapeHandler?: () => void;
 
 	// Auto-retry state
-	private retryLoader: Loader | undefined = undefined;
+	private retryLoader: InlineStatusHandle | undefined = undefined;
 	private retryEscapeHandler?: () => void;
 
 	// Messages queued while compaction is running
@@ -1700,38 +1708,78 @@ export class InteractiveMode {
 		this.defaultEditor.setInlineStatus?.(text);
 		if (this.editor !== this.defaultEditor) {
 			this.editor.setInlineStatus?.(text);
+			if (text && !this.editor.setInlineStatus && !this.warnedMissingInlineStatus) {
+				this.warnedMissingInlineStatus = true;
+				this.showWarning(
+					"Custom editor component does not support inline working status; progress and interrupt hints may be hidden.",
+				);
+			}
 		}
 	}
 
 	private renderWorkingIndicator(): void {
-		if (!this.isAgentWorking) return;
+		if (!this.inlineStatusOwner) return;
 		const frame = this.workingFrames[this.workingFrame] ?? this.workingFrames[0];
-		this.setEditorInlineStatus(`${theme.fg("accent", frame)} ${theme.fg("muted", this.currentWorkingMessage)}`);
+		this.setEditorInlineStatus(`${this.inlineStatusSpinner(frame)} ${theme.fg("muted", this.currentWorkingMessage)}`);
 	}
 
-	private startAgentWorking(message?: string): void {
-		this.stopAgentWorking();
-		this.isAgentWorking = true;
-		this.currentWorkingMessage = message || this.defaultInterruptWorkingMessage();
+	private startInlineStatus(
+		owner: InlineStatusOwner,
+		message: string,
+		spinner: (spinner: string) => string = (frame) => theme.fg("accent", frame),
+	): void {
+		this.stopInlineStatus();
+		this.inlineStatusOwner = owner;
+		this.inlineStatusSpinner = spinner;
+		this.currentWorkingMessage = message;
 		this.workingFrame = 0;
 		this.renderWorkingIndicator();
 		this.workingInterval = setInterval(() => {
 			this.workingFrame = (this.workingFrame + 1) % this.workingFrames.length;
 			this.renderWorkingIndicator();
 		}, 80);
-		this.ui.requestRender();
 	}
 
-	private stopAgentWorking(): void {
+	private stopInlineStatus(owner?: InlineStatusOwner): void {
+		if (owner && this.inlineStatusOwner !== owner) return;
 		if (this.workingInterval) {
 			clearInterval(this.workingInterval);
 			this.workingInterval = undefined;
 		}
+		if (this.inlineStatusOwner) {
+			this.inlineStatusOwner = undefined;
+			this.currentWorkingMessage = this.defaultWorkingMessage;
+			this.inlineStatusSpinner = (spinner) => theme.fg("accent", spinner);
+			this.setEditorInlineStatus(null);
+		}
+	}
+
+	private startInlineLoader(
+		owner: Exclude<InlineStatusOwner, "agent">,
+		message: string,
+		spinner: (spinner: string) => string = (frame) => theme.fg("accent", frame),
+	): InlineStatusHandle {
+		this.startInlineStatus(owner, message, spinner);
+		return {
+			stop: () => this.stopInlineStatus(owner),
+			setText: (text: string) => {
+				if (this.inlineStatusOwner !== owner) return;
+				this.currentWorkingMessage = text;
+				this.renderWorkingIndicator();
+			},
+		};
+	}
+
+	private startAgentWorking(message?: string): void {
+		this.stopAgentWorking();
+		this.isAgentWorking = true;
+		this.startInlineStatus("agent", message || this.defaultInterruptWorkingMessage());
+	}
+
+	private stopAgentWorking(): void {
 		if (this.isAgentWorking) {
 			this.isAgentWorking = false;
-			this.currentWorkingMessage = this.defaultWorkingMessage;
-			this.setEditorInlineStatus(null);
-			this.ui.requestRender();
+			this.stopInlineStatus("agent");
 		}
 	}
 
@@ -1740,7 +1788,6 @@ export class InteractiveMode {
 		if (this.isAgentWorking) {
 			this.currentWorkingMessage = nextMessage;
 			this.renderWorkingIndicator();
-			this.ui.requestRender();
 		} else {
 			// Queue message for when the next agent_start arrives.
 			this.pendingWorkingMessage = message;
@@ -2641,17 +2688,13 @@ export class InteractiveMode {
 				this.defaultEditor.onEscape = () => {
 					this.session.abortCompaction();
 				};
-				// Show compacting indicator with reason
+				// Show compacting indicator inside the editor line so start/end is constant-height.
 				this.statusContainer.clear();
 				const reasonText = event.reason === "overflow" ? "Context overflow detected, " : "";
-				this.autoCompactionLoader = new Loader(
-					this.ui,
-					(spinner) => theme.fg("accent", spinner),
-					(text) => theme.fg("muted", text),
+				this.autoCompactionLoader = this.startInlineLoader(
+					"autoCompaction",
 					`${reasonText}Auto-compacting... (${keyText("app.interrupt")} to cancel)`,
 				);
-				this.statusContainer.addChild(this.autoCompactionLoader);
-				this.ui.requestRender();
 				break;
 			}
 
@@ -2699,17 +2742,14 @@ export class InteractiveMode {
 				this.defaultEditor.onEscape = () => {
 					this.session.abortRetry();
 				};
-				// Show retry indicator
+				// Show retry indicator inside the editor line so start/end is constant-height.
 				this.statusContainer.clear();
 				const delaySeconds = Math.round(event.delayMs / 1000);
-				this.retryLoader = new Loader(
-					this.ui,
-					(spinner) => theme.fg("warning", spinner),
-					(text) => theme.fg("muted", text),
+				this.retryLoader = this.startInlineLoader(
+					"autoRetry",
 					`Retrying (${event.attempt}/${event.maxAttempts}) in ${delaySeconds}s... (${keyText("app.interrupt")} to cancel)`,
+					(spinner) => theme.fg("warning", spinner),
 				);
-				this.statusContainer.addChild(this.retryLoader);
-				this.ui.requestRender();
 				break;
 			}
 
@@ -4158,8 +4198,8 @@ export class InteractiveMode {
 						}
 					}
 
-					// Set up escape handler and loader if summarizing
-					let summaryLoader: Loader | undefined;
+					// Set up escape handler and inline loader if summarizing
+					let summaryLoader: InlineStatusHandle | undefined;
 					const originalOnEscape = this.defaultEditor.onEscape;
 
 					if (wantsSummary) {
@@ -4167,14 +4207,10 @@ export class InteractiveMode {
 							this.session.abortBranchSummary();
 						};
 						this.chatContainer.addChild(new Spacer(1));
-						summaryLoader = new Loader(
-							this.ui,
-							(spinner) => theme.fg("accent", spinner),
-							(text) => theme.fg("muted", text),
+						summaryLoader = this.startInlineLoader(
+							"branchSummary",
 							`Summarizing branch... (${keyText("app.interrupt")} to cancel)`,
 						);
-						this.statusContainer.addChild(summaryLoader);
-						this.ui.requestRender();
 					}
 
 					try {
@@ -5080,17 +5116,10 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 			this.session.abort();
 		};
 
-		// Show loading spinner
+		// Show loading spinner inside the editor line so start/end is constant-height.
 		this.chatContainer.addChild(new Spacer(1));
 		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
-		const dreamLoader = new Loader(
-			this.ui,
-			(spinner) => theme.fg("accent", spinner),
-			(text) => theme.fg("muted", text),
-			`Dreaming... ${cancelHint}`,
-		);
-		this.statusContainer.addChild(dreamLoader);
-		this.ui.requestRender();
+		const dreamLoader = this.startInlineLoader("dream", `Dreaming... ${cancelHint}`);
 
 		try {
 			// Acquire lock
@@ -5134,7 +5163,6 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 			// Update loader text
 			dreamLoader.setText(`Consolidating memories... ${cancelHint}`);
-			this.ui.requestRender();
 
 			// Build prompt and inject into session
 			const prompt = buildDreamPrompt(dreamContext, backupResult);
@@ -5195,18 +5223,11 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 			this.session.abortCompaction();
 		};
 
-		// Show compacting status
+		// Show compacting status inside the editor line so start/end is constant-height.
 		this.chatContainer.addChild(new Spacer(1));
 		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
 		const label = isAuto ? `Auto-compacting context... ${cancelHint}` : `Compacting context... ${cancelHint}`;
-		const compactingLoader = new Loader(
-			this.ui,
-			(spinner) => theme.fg("accent", spinner),
-			(text) => theme.fg("muted", text),
-			label,
-		);
-		this.statusContainer.addChild(compactingLoader);
-		this.ui.requestRender();
+		const compactingLoader = this.startInlineLoader("compaction", label);
 
 		let result: CompactionResult | undefined;
 

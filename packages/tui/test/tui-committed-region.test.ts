@@ -215,6 +215,44 @@ describe("TUI committed-scrollback region", () => {
 		tui.stop();
 	});
 
+	it("recommitAll preserves freshly repainted tall transcript in scrollback", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 18 }, (_, i) => `WELCOME ${i}`);
+		committed.addChild(history);
+
+		const editor = new TestComponent();
+		editor.lines = ["EDITOR >", "footer"];
+		live.addChild(editor);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		terminal.clearWrites();
+
+		tui.recommitAll();
+		await terminal.flush();
+
+		const scrollBuffer = terminal.getScrollBuffer().join("\n");
+		assert.match(scrollBuffer, /WELCOME 0/, "top of tall startup transcript must remain in scrollback");
+		assert.match(scrollBuffer, /WELCOME 17/, "bottom of committed transcript must remain in scrollback");
+		assert.strictEqual(
+			terminal.getViewportTop(),
+			terminal.getBufferLength() - terminal.rows,
+			"recommit should leave viewport at the bottom of the repainted transcript",
+		);
+
+		tui.stop();
+	});
+
 	it("width change triggers recommitAll (re-renders everything at new width)", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
