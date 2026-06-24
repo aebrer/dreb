@@ -8,7 +8,15 @@
 npm run build
 ```
 
-This builds all packages in dependency order: tui → ai → agent → coding-agent → telegram.
+This builds all packages in dependency order: tui → ai → agent → semantic-search → coding-agent → telegram.
+
+`npm run build` is a **pure compile step** — it does not bump versions or touch `package-lock.json`. Version syncing is a separate, explicit release operation (`npm run sync-version`); see Release Protocol below. CI enforces this: a build that mutates `package-lock.json` fails the lint/type-check job.
+
+## Node & npm Toolchain
+
+- **Node:** `22.x` (enforced via `engines.node` in every workspace `package.json`, plus `.nvmrc` / `.node-version`). The Node 22 line bundles npm 10.x — that's what local dev and the CI `check`/`test` jobs run, and what generated the committed `package-lock.json`.
+- **`packageManager` pin:** the root `package.json` pins `packageManager: npm@11.5.1`. This deliberately matches the version the **publish** workflow (`.github/workflows/publish.yml`) upgrades to, because npm trusted publishing (OIDC provenance) requires npm ≥ 11.5.1. Keep these two in lockstep: if you bump one, bump the other.
+- **Why the npm 10 (dev) vs npm 11.5.1 (publish) split is safe:** the publish job installs with `npm ci`, which is **read-only** on `package-lock.json` — it installs exactly what is committed and never re-resolves the dependency graph. So building or publishing under npm 11.5.1 cannot mutate or re-churn a lockfile generated under npm 10.x. Lockfile changes only ever come from an intentional `npm install`.
 
 ## Monorepo Structure
 
@@ -42,7 +50,7 @@ If it reports stale packages, remove the stale directories and re-establish work
 **The version bump happens on the feature branch, BEFORE merge.** The default branch (master) requires PRs for all changes — you cannot push commits directly to it.
 
 1. **Bump version**: Update `version` in the root `package.json` (on the feature branch)
-2. **Sync**: Run `npm run sync-version` (or let `npm run build` do it — the build script runs `sync-version.sh` automatically)
+2. **Sync**: Run `npm run sync-version`. This propagates the root version to all `packages/*/package.json`, plugin manifests, and the workspace `version` fields in `package-lock.json`. It does **not** re-resolve dependencies. (`npm run build` no longer does this for you — syncing is now an explicit step.)
 3. **Build**: Run `npm run build` to compile with the new version
 4. **Verify**: Launch the binary and confirm the TUI welcome message shows the correct version
 5. **Commit & push**: Commit **all** version-bumped files and push to the feature branch. The sync script prints the full list, but at minimum: `package.json`, `package-lock.json`, all `packages/*/package.json`, and any `packages/*/.claude-plugin/plugin.json`

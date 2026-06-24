@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/coding-agent",
-	"version": "2.32.0",
+	"version": "2.32.1",
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"drebConfig": {
@@ -120,6 +120,6 @@
 		"directory": "packages/coding-agent"
 	},
 	"engines": {
-		"node": "^22.0.0"
+		"node": "22.x"
 	}
 }
