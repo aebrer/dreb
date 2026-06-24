@@ -26,7 +26,6 @@ import {
 	type Component,
 	Container,
 	fuzzyFilter,
-	Loader,
 	Markdown,
 	matchesKey,
 	ProcessTerminal,
@@ -166,6 +165,12 @@ export interface InteractiveModeOptions {
 	verbose?: boolean;
 }
 
+type InlineStatusOwner = "agent" | "autoCompaction" | "autoRetry" | "branchSummary" | "dream" | "compaction";
+type InlineStatusHandle = {
+	stop(): void;
+	setText(text: string): void;
+};
+
 export class InteractiveMode {
 	private session: AgentSession;
 	private ui: TUI;
@@ -186,9 +191,16 @@ export class InteractiveMode {
 	private version: string;
 	private isInitialized = false;
 	private onInputCallback?: (text: string) => void;
-	private loadingAnimation: Loader | undefined = undefined;
 	private pendingWorkingMessage: string | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working...";
+	private readonly workingFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+	private workingFrame = 0;
+	private workingInterval: ReturnType<typeof setInterval> | undefined = undefined;
+	private inlineStatusOwner: InlineStatusOwner | undefined = undefined;
+	private inlineStatusSpinner: (spinner: string) => string = (spinner) => theme.fg("accent", spinner);
+	private warnedMissingInlineStatus = false;
+	private isAgentWorking = false;
+	private currentWorkingMessage = this.defaultWorkingMessage;
 
 	private lastSigintTime = 0;
 	private lastEscapeTime = 0;
@@ -227,11 +239,11 @@ export class InteractiveMode {
 	private pendingBashComponents: BashExecutionComponent[] = [];
 
 	// Auto-compaction state
-	private autoCompactionLoader: Loader | undefined = undefined;
+	private autoCompactionLoader: InlineStatusHandle | undefined = undefined;
 	private autoCompactionEscapeHandler?: () => void;
 
 	// Auto-retry state
-	private retryLoader: Loader | undefined = undefined;
+	private retryLoader: InlineStatusHandle | undefined = undefined;
 	private retryEscapeHandler?: () => void;
 
 	// Messages queued while compaction is running
@@ -1315,10 +1327,7 @@ export class InteractiveMode {
 			commandContextActions: {
 				waitForIdle: () => this.session.agent.waitForIdle(),
 				newSession: async (options) => {
-					if (this.loadingAnimation) {
-						this.loadingAnimation.stop();
-						this.loadingAnimation = undefined;
-					}
+					this.stopAllInlineStatus();
 					this.statusContainer.clear();
 
 					// Delegate to AgentSession (handles setup + agent state sync)
@@ -1554,8 +1563,8 @@ export class InteractiveMode {
 		this.setCustomEditorComponent(undefined);
 		this.defaultEditor.onExtensionShortcut = undefined;
 		this.updateTerminalTitle();
-		if (this.loadingAnimation) {
-			this.loadingAnimation.setMessage(`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`);
+		if (this.isAgentWorking) {
+			this.setWorkingMessage();
 		}
 
 		// Re-mount buddy so it survives reload
@@ -1691,6 +1700,116 @@ export class InteractiveMode {
 		this.extensionTerminalInputUnsubscribers.clear();
 	}
 
+	private defaultInterruptWorkingMessage(): string {
+		return `${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`;
+	}
+
+	private setEditorInlineStatus(text: string | null): void {
+		this.defaultEditor.setInlineStatus(text);
+		if (this.editor === this.defaultEditor) return;
+
+		this.editor.setInlineStatus?.(text);
+		if (!text || this.editor.setInlineStatus || this.warnedMissingInlineStatus) return;
+
+		this.warnedMissingInlineStatus = true;
+		this.showWarning(
+			"Custom editor component does not support inline working status; progress and interrupt hints may be hidden.",
+		);
+	}
+
+	private renderWorkingIndicator(): void {
+		if (!this.inlineStatusOwner) return;
+		const frame = this.workingFrames[this.workingFrame] ?? this.workingFrames[0];
+		this.setEditorInlineStatus(`${this.inlineStatusSpinner(frame)} ${theme.fg("muted", this.currentWorkingMessage)}`);
+	}
+
+	private startInlineStatus(
+		owner: InlineStatusOwner,
+		message: string,
+		spinner: (spinner: string) => string = (frame) => theme.fg("accent", frame),
+	): void {
+		this.stopInlineStatus();
+		this.inlineStatusOwner = owner;
+		this.inlineStatusSpinner = spinner;
+		this.currentWorkingMessage = message;
+		this.workingFrame = 0;
+		this.renderWorkingIndicator();
+		this.workingInterval = setInterval(() => {
+			this.workingFrame = (this.workingFrame + 1) % this.workingFrames.length;
+			this.renderWorkingIndicator();
+		}, 80);
+	}
+
+	private stopInlineStatus(owner?: InlineStatusOwner): void {
+		if (owner && this.inlineStatusOwner !== owner) return;
+		if (this.workingInterval) {
+			clearInterval(this.workingInterval);
+			this.workingInterval = undefined;
+		}
+		if (this.inlineStatusOwner) {
+			this.inlineStatusOwner = undefined;
+			this.currentWorkingMessage = this.defaultWorkingMessage;
+			this.inlineStatusSpinner = (spinner) => theme.fg("accent", spinner);
+			this.setEditorInlineStatus(null);
+		}
+	}
+
+	private startInlineLoader(
+		owner: Exclude<InlineStatusOwner, "agent">,
+		message: string,
+		spinner: (spinner: string) => string = (frame) => theme.fg("accent", frame),
+	): InlineStatusHandle {
+		this.startInlineStatus(owner, message, spinner);
+		return {
+			stop: () => this.stopInlineStatus(owner),
+			setText: (text: string) => {
+				if (this.inlineStatusOwner !== owner) return;
+				this.currentWorkingMessage = text;
+				this.renderWorkingIndicator();
+			},
+		};
+	}
+
+	private startAgentWorking(message?: string): void {
+		this.stopAgentWorking();
+		this.isAgentWorking = true;
+		this.startInlineStatus("agent", message || this.defaultInterruptWorkingMessage());
+	}
+
+	private stopAgentWorking(): void {
+		if (this.isAgentWorking) {
+			this.isAgentWorking = false;
+			this.stopInlineStatus("agent");
+		}
+	}
+
+	private stopAllInlineStatus(): void {
+		this.isAgentWorking = false;
+		this.pendingWorkingMessage = undefined;
+		this.stopInlineStatus();
+		this.autoCompactionLoader = undefined;
+		this.retryLoader = undefined;
+		if (this.autoCompactionEscapeHandler) {
+			this.defaultEditor.onEscape = this.autoCompactionEscapeHandler;
+			this.autoCompactionEscapeHandler = undefined;
+		}
+		if (this.retryEscapeHandler) {
+			this.defaultEditor.onEscape = this.retryEscapeHandler;
+			this.retryEscapeHandler = undefined;
+		}
+	}
+
+	private setWorkingMessage(message?: string): void {
+		const nextMessage = message || this.defaultInterruptWorkingMessage();
+		if (this.isAgentWorking) {
+			this.currentWorkingMessage = nextMessage;
+			this.renderWorkingIndicator();
+		} else {
+			// Queue message for when the next agent_start arrives.
+			this.pendingWorkingMessage = message;
+		}
+	}
+
 	/**
 	 * Create the ExtensionUIContext for extensions.
 	 */
@@ -1702,20 +1821,7 @@ export class InteractiveMode {
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
-			setWorkingMessage: (message) => {
-				if (this.loadingAnimation) {
-					if (message) {
-						this.loadingAnimation.setMessage(message);
-					} else {
-						this.loadingAnimation.setMessage(
-							`${this.defaultWorkingMessage} (${keyText("app.interrupt")} to interrupt)`,
-						);
-					}
-				} else {
-					// Queue message for when loadingAnimation is created (handles agent_start race)
-					this.pendingWorkingMessage = message;
-				}
-			},
+			setWorkingMessage: (message) => this.setWorkingMessage(message),
 			setWidget: (key, content, options) => this.setExtensionWidget(key, content, options),
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
@@ -1967,6 +2073,9 @@ export class InteractiveMode {
 			this.editor = this.defaultEditor;
 		}
 
+		if (this.isAgentWorking) {
+			this.renderWorkingIndicator();
+		}
 		this.editorContainer.addChild(this.editor as Component);
 		this.ui.setFocus(this.editor as Component);
 		this.ui.requestRender();
@@ -2092,7 +2201,7 @@ export class InteractiveMode {
 		this.defaultEditor.onEscape = () => {
 			// Always clear ghost text on Escape (CustomEditor intercepts before super.handleInput)
 			this.editor.setGhostText?.(null);
-			if (this.loadingAnimation) {
+			if (this.isAgentWorking) {
 				this.cancelBackgroundAgents();
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			} else if (getRunningBackgroundAgents().length > 0) {
@@ -2400,25 +2509,9 @@ export class InteractiveMode {
 					this.retryLoader.stop();
 					this.retryLoader = undefined;
 				}
-				if (this.loadingAnimation) {
-					this.loadingAnimation.stop();
-				}
 				this.statusContainer.clear();
-				this.loadingAnimation = new Loader(
-					this.ui,
-					(spinner) => theme.fg("accent", spinner),
-					(text) => theme.fg("muted", text),
-					this.defaultWorkingMessage,
-				);
-				this.statusContainer.addChild(this.loadingAnimation);
-				// Apply any pending working message queued before loader existed
-				if (this.pendingWorkingMessage !== undefined) {
-					if (this.pendingWorkingMessage) {
-						this.loadingAnimation.setMessage(this.pendingWorkingMessage);
-					}
-					this.pendingWorkingMessage = undefined;
-				}
-				this.ui.requestRender();
+				this.startAgentWorking(this.pendingWorkingMessage);
+				this.pendingWorkingMessage = undefined;
 				break;
 
 			case "message_start":
@@ -2583,10 +2676,7 @@ export class InteractiveMode {
 					this.retryLoader.stop();
 					this.retryLoader = undefined;
 				}
-				if (this.loadingAnimation) {
-					this.loadingAnimation.stop();
-					this.loadingAnimation = undefined;
-				}
+				this.stopAgentWorking();
 				this.statusContainer.clear();
 				if (this.streamingComponent) {
 					this.chatContainer.removeChild(this.streamingComponent);
@@ -2614,17 +2704,13 @@ export class InteractiveMode {
 				this.defaultEditor.onEscape = () => {
 					this.session.abortCompaction();
 				};
-				// Show compacting indicator with reason
+				// Show compacting indicator inside the editor line so start/end is constant-height.
 				this.statusContainer.clear();
 				const reasonText = event.reason === "overflow" ? "Context overflow detected, " : "";
-				this.autoCompactionLoader = new Loader(
-					this.ui,
-					(spinner) => theme.fg("accent", spinner),
-					(text) => theme.fg("muted", text),
+				this.autoCompactionLoader = this.startInlineLoader(
+					"autoCompaction",
 					`${reasonText}Auto-compacting... (${keyText("app.interrupt")} to cancel)`,
 				);
-				this.statusContainer.addChild(this.autoCompactionLoader);
-				this.ui.requestRender();
 				break;
 			}
 
@@ -2672,17 +2758,14 @@ export class InteractiveMode {
 				this.defaultEditor.onEscape = () => {
 					this.session.abortRetry();
 				};
-				// Show retry indicator
+				// Show retry indicator inside the editor line so start/end is constant-height.
 				this.statusContainer.clear();
 				const delaySeconds = Math.round(event.delayMs / 1000);
-				this.retryLoader = new Loader(
-					this.ui,
-					(spinner) => theme.fg("warning", spinner),
-					(text) => theme.fg("muted", text),
+				this.retryLoader = this.startInlineLoader(
+					"autoRetry",
 					`Retrying (${event.attempt}/${event.maxAttempts}) in ${delaySeconds}s... (${keyText("app.interrupt")} to cancel)`,
+					(spinner) => theme.fg("warning", spinner),
 				);
-				this.statusContainer.addChild(this.retryLoader);
-				this.ui.requestRender();
 				break;
 			}
 
@@ -2718,8 +2801,8 @@ export class InteractiveMode {
 					this.chatContainer.removeChild(component);
 				}
 				this.pendingTools.clear();
-				// Warn in the chat scrollback — keep the working spinner running so ESC
-				// aborts via the normal loadingAnimation path (same AbortController).
+				// Warn in the chat scrollback — keep the inline working indicator active so ESC
+				// aborts via the normal agent-working path (same AbortController).
 				this.showWarning(`Stream dropped, retrying (${event.attempt}/${event.maxAttempts})…`);
 				break;
 			}
@@ -2736,8 +2819,8 @@ export class InteractiveMode {
 					this.chatContainer.removeChild(component);
 				}
 				this.pendingTools.clear();
-				// Warn in the chat scrollback — keep the working spinner running so ESC
-				// aborts via the normal loadingAnimation path (same AbortController).
+				// Warn in the chat scrollback — keep the inline working indicator active so ESC
+				// aborts via the normal agent-working path (same AbortController).
 				this.showWarning(
 					`Response truncated, retrying with larger token budget (${event.attempt}/${event.maxAttempts})…`,
 				);
@@ -4131,8 +4214,8 @@ export class InteractiveMode {
 						}
 					}
 
-					// Set up escape handler and loader if summarizing
-					let summaryLoader: Loader | undefined;
+					// Set up escape handler and inline loader if summarizing
+					let summaryLoader: InlineStatusHandle | undefined;
 					const originalOnEscape = this.defaultEditor.onEscape;
 
 					if (wantsSummary) {
@@ -4140,14 +4223,10 @@ export class InteractiveMode {
 							this.session.abortBranchSummary();
 						};
 						this.chatContainer.addChild(new Spacer(1));
-						summaryLoader = new Loader(
-							this.ui,
-							(spinner) => theme.fg("accent", spinner),
-							(text) => theme.fg("muted", text),
+						summaryLoader = this.startInlineLoader(
+							"branchSummary",
 							`Summarizing branch... (${keyText("app.interrupt")} to cancel)`,
 						);
-						this.statusContainer.addChild(summaryLoader);
-						this.ui.requestRender();
 					}
 
 					try {
@@ -4234,11 +4313,8 @@ export class InteractiveMode {
 	}
 
 	private async handleResumeSession(sessionPath: string): Promise<void> {
-		// Stop loading animation
-		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-		}
+		// Stop inline working indicator/status loader
+		this.stopAllInlineStatus();
 		this.statusContainer.clear();
 
 		// Clear UI state
@@ -4502,11 +4578,8 @@ export class InteractiveMode {
 		}
 
 		try {
-			// Stop loading animation
-			if (this.loadingAnimation) {
-				this.loadingAnimation.stop();
-				this.loadingAnimation = undefined;
-			}
+			// Stop inline working indicator/status loader
+			this.stopAllInlineStatus();
 			this.statusContainer.clear();
 
 			// Clear UI state
@@ -4844,11 +4917,8 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 	}
 
 	private async handleClearCommand(): Promise<void> {
-		// Stop loading animation
-		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-		}
+		// Stop inline working indicator/status loader
+		this.stopAllInlineStatus();
 		this.statusContainer.clear();
 
 		// New session via session (emits extension session events)
@@ -5048,11 +5118,8 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 	}
 
 	private async executeDream(): Promise<void> {
-		// Stop any existing loading animation
-		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-		}
+		// Stop any existing inline working indicator/status loader
+		this.stopAllInlineStatus();
 		this.statusContainer.clear();
 
 		let releaseLock: (() => void) | undefined;
@@ -5065,17 +5132,10 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 			this.session.abort();
 		};
 
-		// Show loading spinner
+		// Show loading spinner inside the editor line so start/end is constant-height.
 		this.chatContainer.addChild(new Spacer(1));
 		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
-		const dreamLoader = new Loader(
-			this.ui,
-			(spinner) => theme.fg("accent", spinner),
-			(text) => theme.fg("muted", text),
-			`Dreaming... ${cancelHint}`,
-		);
-		this.statusContainer.addChild(dreamLoader);
-		this.ui.requestRender();
+		const dreamLoader = this.startInlineLoader("dream", `Dreaming... ${cancelHint}`);
 
 		try {
 			// Acquire lock
@@ -5119,7 +5179,6 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 			// Update loader text
 			dreamLoader.setText(`Consolidating memories... ${cancelHint}`);
-			this.ui.requestRender();
 
 			// Build prompt and inject into session
 			const prompt = buildDreamPrompt(dreamContext, backupResult);
@@ -5170,11 +5229,8 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 	}
 
 	private async executeCompaction(customInstructions?: string, isAuto = false): Promise<CompactionResult | undefined> {
-		// Stop loading animation
-		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-		}
+		// Stop inline working indicator/status loader
+		this.stopAllInlineStatus();
 		this.statusContainer.clear();
 
 		// Set up escape handler during compaction
@@ -5183,18 +5239,11 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 			this.session.abortCompaction();
 		};
 
-		// Show compacting status
+		// Show compacting status inside the editor line so start/end is constant-height.
 		this.chatContainer.addChild(new Spacer(1));
 		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
 		const label = isAuto ? `Auto-compacting context... ${cancelHint}` : `Compacting context... ${cancelHint}`;
-		const compactingLoader = new Loader(
-			this.ui,
-			(spinner) => theme.fg("accent", spinner),
-			(text) => theme.fg("muted", text),
-			label,
-		);
-		this.statusContainer.addChild(compactingLoader);
-		this.ui.requestRender();
+		const compactingLoader = this.startInlineLoader("compaction", label);
 
 		let result: CompactionResult | undefined;
 
@@ -5467,10 +5516,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 	stop(): void {
 		this.buddyController.stop();
-		if (this.loadingAnimation) {
-			this.loadingAnimation.stop();
-			this.loadingAnimation = undefined;
-		}
+		this.stopAllInlineStatus();
 		this.removeBuddy();
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();

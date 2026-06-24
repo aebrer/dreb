@@ -779,6 +779,116 @@ describe("Editor component", () => {
 			assert.strictEqual(lines.length, 3);
 		});
 
+		it("renders inline status without changing editor height", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 40;
+
+			editor.setText("");
+			const before = editor.render(width);
+			editor.setInlineStatus("Working... ESC to abort");
+			const during = editor.render(width);
+			editor.setInlineStatus(null);
+			const after = editor.render(width);
+
+			assert.strictEqual(during.length, before.length);
+			assert.strictEqual(after.length, before.length);
+			assert.match(stripVTControlCharacters(during[1]!), /Working/);
+		});
+
+		it("truncates inline status to the input row width", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 20;
+
+			editor.setInlineStatus("Working with a very long status message");
+			const lines = editor.render(width);
+
+			assert.strictEqual(lines.length, 3);
+			for (const line of lines) {
+				assert.ok(visibleWidth(line) <= width, `line exceeds width: ${visibleWidth(line)} > ${width}`);
+			}
+		});
+
+		it("renders inline status after existing input without changing height", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 50;
+
+			editor.setText("hello");
+			const before = editor.render(width);
+			editor.setInlineStatus("Working");
+			const during = editor.render(width);
+
+			assert.strictEqual(during.length, before.length);
+			const inputRow = stripVTControlCharacters(during[1]!);
+			assert.match(inputRow, /hello/);
+			assert.match(inputRow, /Working/);
+		});
+
+		it("renders inline status when cursor is in the middle of input", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 50;
+
+			editor.setText("hello world");
+			editor.handleInput("\x1b[D");
+			editor.handleInput("\x1b[D");
+			editor.setInlineStatus("Working");
+			const lines = editor.render(width);
+
+			assert.strictEqual(lines.length, 3);
+			const inputRow = stripVTControlCharacters(lines[1]!);
+			assert.match(inputRow, /hello world/);
+			assert.match(inputRow, /Working/);
+		});
+
+		it("renders inline status on a wrapped cursor line", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 24;
+
+			editor.setText("alpha beta gamma delta epsilon");
+			editor.handleInput("\x1b[D");
+			editor.handleInput("\x1b[D");
+			editor.setInlineStatus("Working");
+			const lines = editor.render(width);
+
+			assert.ok(lines.length > 3, "long input should wrap");
+			assert.ok(
+				lines.some((line) => /Working/.test(stripVTControlCharacters(line))),
+				"inline status should remain visible on the cursor's wrapped line",
+			);
+			for (const line of lines) {
+				assert.ok(visibleWidth(line) <= width, `line exceeds width: ${visibleWidth(line)} > ${width}`);
+			}
+		});
+
+		it("inline status takes precedence over ghost text", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 50;
+
+			editor.setGhostText("ghost suggestion");
+			editor.setInlineStatus("Working");
+			const line = stripVTControlCharacters(editor.render(width)[1]!);
+
+			assert.match(line, /Working/);
+			assert.doesNotMatch(line, /ghost suggestion/);
+		});
+
+		it("does not dim inline status while ghost text remains dimmed", () => {
+			const width = 50;
+
+			const statusEditor = new Editor(createTestTUI(), defaultEditorTheme);
+			statusEditor.setInlineStatus("\x1b[33mWorking\x1b[39m");
+			const statusLine = statusEditor.render(width)[1]!;
+
+			assert.ok(statusLine.includes("\x1b[33mWorking\x1b[39m"), "inline status should keep caller styling");
+			assert.ok(!statusLine.includes("\x1b[2m"), "inline status should not be wrapped in faint styling");
+
+			const ghostEditor = new Editor(createTestTUI(), defaultEditorTheme);
+			ghostEditor.setGhostText("ghost suggestion");
+			const ghostLine = ghostEditor.render(width)[1]!;
+
+			assert.ok(ghostLine.includes("ghost suggestion"), "ghost text should render");
+			assert.ok(ghostLine.includes("\x1b[2m"), "ghost text should retain faint fallback styling");
+		});
+
 		it("handles single word that fits exactly", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 			const width = 10 + 1; // +1 col reserved for cursor

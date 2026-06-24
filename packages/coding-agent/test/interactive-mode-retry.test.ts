@@ -5,10 +5,10 @@ import { initTheme } from "../src/modes/interactive/theme/theme.js";
 /**
  * Tests for the stream_retry and length_retry event handlers in InteractiveMode.
  *
- * The key invariant: neither handler should stop or null out `loadingAnimation`.
- * Keeping the working spinner alive means ESC hits the default `if (this.loadingAnimation)`
- * branch → `agent.abort()`, which fires the same AbortController threaded through the
- * retry backoff sleep in agent-loop.ts. ESC cancels cleanly with no special wiring.
+ * The key invariant: neither handler should clear the explicit agent-working state.
+ * Keeping that state alive means ESC hits the default agent-working branch → `agent.abort()`,
+ * which fires the same AbortController threaded through the retry backoff sleep in
+ * agent-loop.ts. ESC cancels cleanly with no special wiring.
  */
 
 async function dispatchEvent(fakeThis: object, event: object): Promise<void> {
@@ -22,7 +22,7 @@ function makeFakeThis(overrides: Record<string, unknown> = {}): Record<string, u
 		footer: { invalidate: vi.fn() },
 		// State accessed by stream_retry / length_retry cases
 		chatContainer: { removeChild: vi.fn(), addChild: vi.fn() },
-		loadingAnimation: { stop: vi.fn() },
+		isAgentWorking: true,
 		retryLoader: undefined,
 		streamingComponent: undefined,
 		streamingMessage: undefined,
@@ -38,9 +38,8 @@ describe("stream_retry handler", () => {
 		initTheme("dark");
 	});
 
-	test("does not stop or null out loadingAnimation", async () => {
+	test("does not clear the agent-working state", async () => {
 		const fakeThis = makeFakeThis();
-		const stopSpy = (fakeThis.loadingAnimation as any).stop;
 
 		await dispatchEvent(fakeThis, {
 			type: "stream_retry",
@@ -49,8 +48,7 @@ describe("stream_retry handler", () => {
 			error: "connection reset",
 		});
 
-		expect(stopSpy).not.toHaveBeenCalled();
-		expect(fakeThis.loadingAnimation).not.toBeUndefined();
+		expect(fakeThis.isAgentWorking).toBe(true);
 	});
 
 	test("does not create a retryLoader", async () => {
@@ -136,9 +134,8 @@ describe("length_retry handler", () => {
 		initTheme("dark");
 	});
 
-	test("does not stop or null out loadingAnimation", async () => {
+	test("does not clear the agent-working state", async () => {
 		const fakeThis = makeFakeThis();
-		const stopSpy = (fakeThis.loadingAnimation as any).stop;
 
 		await dispatchEvent(fakeThis, {
 			type: "length_retry",
@@ -148,8 +145,7 @@ describe("length_retry handler", () => {
 			nextMaxTokens: 8192,
 		});
 
-		expect(stopSpy).not.toHaveBeenCalled();
-		expect(fakeThis.loadingAnimation).not.toBeUndefined();
+		expect(fakeThis.isAgentWorking).toBe(true);
 	});
 
 	test("does not create a retryLoader", async () => {

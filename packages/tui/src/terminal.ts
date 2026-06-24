@@ -34,6 +34,12 @@ export interface Terminal {
 	// Whether Kitty keyboard protocol is active
 	get kittyProtocolActive(): boolean;
 
+	/**
+	 * Return the sequence that re-enables input modes after a terminal reset.
+	 * Implementations keep their input-mode bookkeeping in sync with the sequence.
+	 */
+	getInputModeReenableSequence(): string;
+
 	// Cursor positioning (relative to current position)
 	moveBy(lines: number): void; // Move cursor up (negative) or down (positive) by N lines
 
@@ -78,6 +84,14 @@ export class ProcessTerminal implements Terminal {
 
 	get kittyProtocolActive(): boolean {
 		return this._kittyProtocolActive;
+	}
+
+	getInputModeReenableSequence(): string {
+		if (this._kittyProtocolActive) {
+			return "\x1b[?2004h\x1b[>7u";
+		}
+		this._modifyOtherKeysActive = true;
+		return "\x1b[?2004h\x1b[>4;2m";
 	}
 
 	start(onInput: (data: string) => void, onResize: () => void): void {

@@ -16,6 +16,15 @@ class TestComponent implements Component {
 
 class LoggingVirtualTerminal extends VirtualTerminal {
 	private writes: string[] = [];
+	private _kittyProtocolActive = false;
+
+	override get kittyProtocolActive(): boolean {
+		return this._kittyProtocolActive;
+	}
+
+	setKittyProtocolActive(active: boolean): void {
+		this._kittyProtocolActive = active;
+	}
 
 	override write(data: string): void {
 		this.writes.push(data);
@@ -215,6 +224,164 @@ describe("TUI committed-scrollback region", () => {
 		tui.stop();
 	});
 
+	it("recommitAll() re-enables bracketed paste and modifyOtherKeys after RIS when Kitty is inactive", () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		assert.strictEqual(
+			terminal.kittyProtocolActive,
+			false,
+			"LoggingVirtualTerminal should default to Kitty inactive",
+		);
+
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		component.lines = ["content"];
+		tui.addChild(component);
+
+		tui.recommitAll();
+
+		const writes = terminal.getWrites();
+		const ris = writes.indexOf("\x1bc");
+		const clearScrollback = writes.indexOf("\x1b[3J");
+		const bracketedPaste = writes.indexOf("\x1b[?2004h");
+		const modifyOtherKeys = writes.indexOf("\x1b[>4;2m");
+
+		assert.notStrictEqual(ris, -1, "recommitAll should emit RIS reset");
+		assert.notStrictEqual(clearScrollback, -1, "recommitAll should clear scrollback");
+		assert.notStrictEqual(bracketedPaste, -1, "recommitAll should re-enable bracketed paste");
+		assert.notStrictEqual(modifyOtherKeys, -1, "recommitAll should re-enable modifyOtherKeys");
+		assert.ok(clearScrollback > ris, "scrollback clear should be emitted after RIS");
+		assert.ok(bracketedPaste > ris, "bracketed paste should be re-enabled after RIS");
+		assert.ok(modifyOtherKeys > ris, "modifyOtherKeys should be re-enabled after RIS");
+		assert.ok(!writes.includes("\x1b[>7u"), "Kitty protocol should not be re-enabled when inactive");
+	});
+
+	it("recommitAll() re-enables bracketed paste and Kitty keyboard protocol after RIS when Kitty is active", () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		terminal.setKittyProtocolActive(true);
+		assert.strictEqual(terminal.kittyProtocolActive, true, "test should run with Kitty active");
+
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		component.lines = ["content"];
+		tui.addChild(component);
+
+		tui.recommitAll();
+
+		const writes = terminal.getWrites();
+		const ris = writes.indexOf("\x1bc");
+		const clearScrollback = writes.indexOf("\x1b[3J");
+		const bracketedPaste = writes.indexOf("\x1b[?2004h");
+		const kittyProtocol = writes.indexOf("\x1b[>7u");
+
+		assert.notStrictEqual(ris, -1, "recommitAll should emit RIS reset");
+		assert.notStrictEqual(clearScrollback, -1, "recommitAll should clear scrollback");
+		assert.notStrictEqual(bracketedPaste, -1, "recommitAll should re-enable bracketed paste");
+		assert.notStrictEqual(kittyProtocol, -1, "recommitAll should re-enable Kitty keyboard protocol");
+		assert.ok(clearScrollback > ris, "scrollback clear should be emitted after RIS");
+		assert.ok(bracketedPaste > ris, "bracketed paste should be re-enabled after RIS");
+		assert.ok(kittyProtocol > ris, "Kitty protocol should be re-enabled after RIS");
+		assert.ok(!writes.includes("\x1b[>4;2m"), "modifyOtherKeys should not be enabled when Kitty is active");
+	});
+
+	it("recommitAll() throws when reached from a live-region-only render path", () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		tui.addChild({
+			render: () => {
+				tui.recommitAll();
+				return ["bad live render"];
+			},
+			invalidate: () => {},
+		});
+
+		// Spy on the terminal teardown methods that tui.stop() invokes
+		// (showCursor + terminal.stop). These bypass the logged write() path, so
+		// assert on the method calls directly.
+		let showCursorCalled = false;
+		let terminalStopCalled = false;
+		const originalShowCursor = terminal.showCursor.bind(terminal);
+		const originalStop = terminal.stop.bind(terminal);
+		terminal.showCursor = () => {
+			showCursorCalled = true;
+			originalShowCursor();
+		};
+		terminal.stop = () => {
+			terminalStopCalled = true;
+			originalStop();
+		};
+
+		assert.throws(
+			() => (tui as unknown as { doRender(): void }).doRender(),
+			/Live-only updates must use restoreLiveViewport\(\)\./,
+		);
+
+		// The guard throw tears down the terminal *before* throwing (the throw would
+		// otherwise surface uncaught from the render setTimeout and leave the
+		// terminal in raw mode). Assert the observable teardown ran — not merely
+		// that the `stopped` flag was set — so a regression replacing `this.stop()`
+		// with a bare `this.stopped = true` would fail here: tui.stop() restores the
+		// cursor and calls terminal.stop().
+		assert.ok(
+			showCursorCalled,
+			"guard throw must restore the cursor (terminal teardown ran), not just set the stopped flag",
+		);
+		assert.ok(
+			terminalStopCalled,
+			"guard throw must call terminal.stop() (terminal teardown ran), not just set the stopped flag",
+		);
+
+		// A subsequent recommitAll() is therefore a no-op (stopped TUI).
+		assert.doesNotThrow(() => tui.recommitAll(), "post-teardown recommitAll must not throw");
+
+		// External (non-render-path) recommitAll calls remain allowed on a live TUI.
+		const freshTerminal = new LoggingVirtualTerminal(40, 10);
+		const freshTui = new TUI(freshTerminal);
+		const safe = new TestComponent();
+		safe.lines = ["safe external recommit"];
+		freshTui.addChild(safe);
+
+		assert.doesNotThrow(() => freshTui.recommitAll(), "external recommitAll calls should remain allowed");
+	});
+
+	it("recommitAll preserves freshly repainted tall transcript in scrollback", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 18 }, (_, i) => `WELCOME ${i}`);
+		committed.addChild(history);
+
+		const editor = new TestComponent();
+		editor.lines = ["EDITOR >", "footer"];
+		live.addChild(editor);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		terminal.clearWrites();
+
+		tui.recommitAll();
+		await terminal.flush();
+
+		const scrollBuffer = terminal.getScrollBuffer().join("\n");
+		assert.match(scrollBuffer, /WELCOME 0/, "top of tall startup transcript must remain in scrollback");
+		assert.match(scrollBuffer, /WELCOME 17/, "bottom of committed transcript must remain in scrollback");
+		assert.strictEqual(
+			terminal.getViewportTop(),
+			terminal.getBufferLength() - terminal.rows,
+			"recommit should leave viewport at the bottom of the repainted transcript",
+		);
+
+		tui.stop();
+	});
+
 	it("width change triggers recommitAll (re-renders everything at new width)", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
@@ -248,6 +415,95 @@ describe("TUI committed-scrollback region", () => {
 		assert.ok(
 			terminal.getWrites().includes("Committed at width 40"),
 			"Width change should re-render committed content",
+		);
+
+		tui.stop();
+	});
+
+	it("width recommit while manually scrolled up bottom-anchors the viewport", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 18 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+
+		const editor = new TestComponent();
+		editor.lines = ["EDITOR >", "footer"];
+		live.addChild(editor);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+
+		terminal.scrollLines(-3);
+		await terminal.flush();
+		assert.ok(
+			terminal.getViewportTop() < terminal.getBufferLength() - terminal.rows,
+			"test should start scrolled up",
+		);
+		terminal.clearWrites();
+
+		terminal.resize(50, 8);
+		await terminal.flush();
+
+		const viewport = terminal.getViewport();
+		assert.ok(terminal.getWrites().includes("\x1b[3J"), "width change should still recommit");
+		assert.strictEqual(
+			terminal.getViewportTop(),
+			terminal.getBufferLength() - terminal.rows,
+			"recommit should force viewport to bottom even when the user was scrolled up",
+		);
+		assert.ok(viewport.at(-2)?.includes("EDITOR >"), "editor should be bottom-anchored after width recommit");
+		assert.ok(viewport.at(-1)?.includes("footer"), "footer should be bottom-anchored after width recommit");
+
+		tui.stop();
+	});
+
+	it("same-height live working indicator update while scrolled up does not replay committed content", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 8);
+		const tui = new TUI(terminal);
+
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 18 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+
+		const editor = new TestComponent();
+		editor.lines = ["EDITOR > Working", "footer"];
+		live.addChild(editor);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+
+		terminal.scrollLines(-3);
+		await terminal.flush();
+		const viewportTopBefore = terminal.getViewportTop();
+		terminal.clearWrites();
+
+		editor.lines = ["EDITOR >", "footer"];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(!terminal.getWrites().includes("\x1b[2J"), "same-height live update must not clear screen");
+		assert.ok(!terminal.getWrites().includes("\x1b[3J"), "same-height live update must not clear scrollback");
+		assert.ok(!terminal.getWrites().includes("HIST 0"), "same-height live update must not replay committed content");
+		assert.strictEqual(
+			terminal.getViewportTop(),
+			viewportTopBefore,
+			"same-height live update must not yank viewport",
 		);
 
 		tui.stop();
@@ -290,7 +546,7 @@ describe("TUI committed-scrollback region", () => {
 		tui.stop();
 	});
 
-	it("height shrink after a scrolled live region recommits and bottom-anchors", async () => {
+	it("height shrink after a scrolled live region restores live viewport without transcript replay", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
 
@@ -315,8 +571,8 @@ describe("TUI committed-scrollback region", () => {
 
 		// Grow the live region beyond the 10-row viewport, then coalesce a live-region
 		// shrink with a terminal height shrink. The heightChanged branch recomputes
-		// prevViewportTop from the previous live-region height, sees that the old
-		// live region had scrolled, and must recommit rather than live-region-only redraw.
+		// prevViewportTop from the previous live-region height and must restore the
+		// live viewport without replaying committed scrollback.
 		liveComp.lines = [...Array.from({ length: 11 }, (_, i) => `TALL ${i}`), "EDITOR >", "footer"];
 		tui.requestRender();
 		await terminal.flush();
@@ -333,14 +589,10 @@ describe("TUI committed-scrollback region", () => {
 		const editorRow = viewport.findIndex((l) => l.includes("EDITOR >"));
 		const footerRow = viewport.findIndex((l) => l.includes("footer"));
 
-		assert.ok(writes.includes("\x1b[3J"), "height shrink after scrolled live region should clear scrollback");
-		assert.ok(writes.includes("HIST 0"), "height shrink recommit should re-emit committed history");
-		assert.strictEqual(editorRow, viewport.length - 2, "editor should be second-from-bottom after recommit");
-		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after recommit");
-		assert.ok(
-			viewport.slice(0, editorRow).some((l) => l.includes("HIST")),
-			"committed history must be restored above the editor after height shrink",
-		);
+		assert.ok(!writes.includes("\x1b[3J"), "height shrink after scrolled live region must not clear scrollback");
+		assert.ok(!writes.includes("HIST 0"), "height shrink must not re-emit committed history");
+		assert.strictEqual(editorRow, viewport.length - 2, "editor should be second-from-bottom after live restore");
+		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after live restore");
 		assert.ok(tui.fullRedraws > redrawsBefore, "height shrink after scrolled live region should full-redraw");
 
 		tui.stop();
@@ -620,13 +872,12 @@ describe("TUI committed-scrollback region", () => {
 	});
 
 	// Regression for issue 277: when the live region grows taller than the viewport
-	// (big tool output, long streaming message, overlay padding) the terminal scrolls
-	// committed history into scrollback. When the live region later shrinks, the
-	// renderer must re-anchor the editor at the BOTTOM of the viewport. The old code
-	// took a live-region-only fullRender() path that could not restore committed
-	// history from scrollback, stranding the editor at the TOP of an empty viewport
+	// (big tool output, long streaming message, overlay padding) the terminal scrolls.
+	// When the live region later shrinks, the renderer must re-anchor the editor at
+	// the BOTTOM of the viewport without replaying committed history for a live-only
+	// change. The old code could strand the editor at the TOP of an empty viewport
 	// ("jump to the top").
-	it("live-region shrink past viewport re-anchors editor at the bottom (issue 277)", async () => {
+	it("live-region shrink past viewport re-anchors editor at the bottom without transcript replay (issue 277)", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
 
@@ -672,29 +923,21 @@ describe("TUI committed-scrollback region", () => {
 		assert.ok(editorRow !== -1, "editor must be visible after the shrink");
 		// The bug anchored the editor at the very top (row 0) of an otherwise empty
 		// viewport. After the fix it sits exactly second-from-bottom (the editor) with
-		// the footer bottom-anchored and committed history above — matching the exact
-		// invariant asserted by the sibling recommit tests.
+		// the footer bottom-anchored, without replaying committed transcript lines.
 		assert.strictEqual(
 			editorRow,
 			viewport.length - 2,
-			`editor should be second-from-bottom after recommit, was at row ${editorRow} of ${viewport.length}`,
+			`editor should be second-from-bottom after live restore, was at row ${editorRow} of ${viewport.length}`,
 		);
-		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after recommit");
-		assert.ok(
-			viewport.slice(0, editorRow).some((l) => l.includes("HIST")),
-			"committed history must be restored above the editor (not stranded in scrollback)",
-		);
-		// The fix re-anchors via recommitAll(), which clears scrollback and repaints.
-		assert.ok(
-			terminal.getWrites().includes("\x1b[3J"),
-			"exceeded-viewport shrink should re-anchor via recommitAll (scrollback clear)",
-		);
+		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after live restore");
+		assert.ok(!terminal.getWrites().includes("\x1b[3J"), "live-only shrink must not clear scrollback");
+		assert.ok(!terminal.getWrites().includes("HIST 0"), "live-only shrink must not replay committed history");
 		assert.ok(tui.fullRedraws > redrawsBefore, "exceeded-viewport shrink should perform a full redraw");
 
 		tui.stop();
 	});
 
-	it("pure trailing deletion that moves the viewport up recommits and bottom-anchors", async () => {
+	it("pure trailing deletion that moves the viewport up restores live viewport without transcript replay", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
 
@@ -737,20 +980,16 @@ describe("TUI committed-scrollback region", () => {
 		const editorRow = viewport.findIndex((l) => l.includes("EDITOR >"));
 		const footerRow = viewport.findIndex((l) => l.includes("footer"));
 
-		assert.ok(writes.includes("\x1b[3J"), "viewport-up trailing deletion should recommit and clear scrollback");
-		assert.ok(writes.includes("HIST 0"), "recommit should re-emit committed history");
-		assert.strictEqual(editorRow, viewport.length - 2, "editor should be second-from-bottom after recommit");
-		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after recommit");
-		assert.ok(
-			viewport.slice(0, editorRow).some((l) => l.includes("HIST")),
-			"committed history must be restored above the editor",
-		);
+		assert.ok(!writes.includes("\x1b[3J"), "viewport-up trailing deletion must not clear scrollback");
+		assert.ok(!writes.includes("HIST 0"), "live-only trailing deletion must not re-emit committed history");
+		assert.strictEqual(editorRow, viewport.length - 2, "editor should be second-from-bottom after live restore");
+		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after live restore");
 		assert.ok(tui.fullRedraws > redrawsBefore, "viewport-up trailing deletion should perform a full redraw");
 
 		tui.stop();
 	});
 
-	it("oversized trailing deletion recommits from the extraLines > height branch", async () => {
+	it("oversized trailing deletion restores live viewport from the extraLines > height branch", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 10);
 		const tui = new TUI(terminal);
 
@@ -796,14 +1035,10 @@ describe("TUI committed-scrollback region", () => {
 		const editorRow = viewport.findIndex((l) => l.includes("EDITOR >"));
 		const footerRow = viewport.findIndex((l) => l.includes("footer"));
 
-		assert.ok(writes.includes("\x1b[3J"), "oversized trailing deletion should recommit and clear scrollback");
-		assert.ok(writes.includes("HIST 0"), "recommit should re-emit committed history");
-		assert.strictEqual(editorRow, viewport.length - 2, "editor should be second-from-bottom after recommit");
-		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after recommit");
-		assert.ok(
-			viewport.slice(0, editorRow).some((l) => l.includes("HIST")),
-			"committed history must be restored above the editor",
-		);
+		assert.ok(!writes.includes("\x1b[3J"), "oversized trailing deletion must not clear scrollback");
+		assert.ok(!writes.includes("HIST 0"), "live-only oversized deletion must not re-emit committed history");
+		assert.strictEqual(editorRow, viewport.length - 2, "editor should be second-from-bottom after live restore");
+		assert.strictEqual(footerRow, viewport.length - 1, "last live line should be bottom-anchored after live restore");
 		assert.ok(tui.fullRedraws > redrawsBefore, "oversized trailing deletion should perform a full redraw");
 
 		tui.stop();
