@@ -41,9 +41,57 @@ for plugin_json in packages/*/.claude-plugin/plugin.json; do
 	echo "  $plugin_json -> $VERSION"
 done
 
-# Refresh package-lock.json so workspace versions match
-npm install --package-lock-only --ignore-scripts --install-links=false 2>/dev/null
-echo "  package-lock.json refreshed"
+# Surgically update workspace package versions in package-lock.json.
+#
+# We deliberately do NOT run `npm install --package-lock-only` here: that
+# re-resolves the entire transitive dependency graph and can rewrite large,
+# unrelated portions of the lockfile (and differs between npm versions),
+# producing noisy diffs on every build/version bump. Instead we edit only the
+# `version` fields for the root and our top-level workspace packages, leaving
+# the rest of the dependency graph byte-for-byte unchanged.
+#
+# Dependency changes still require an intentional `npm install` to refresh the
+# lockfile — that is a separate, explicit operation from a version bump.
+if [ -f package-lock.json ]; then
+	node -e "
+		const fs = require('fs');
+		const version = '$VERSION';
+		const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf-8'));
+
+		// Top-level workspace packages we just bumped (direct children of packages/).
+		// Mirrors the 'packages/*/package.json' glob above and excludes nested
+		// example extensions, which carry independent versions.
+		const dirs = fs.readdirSync('packages').filter((name) => {
+			try {
+				return fs.statSync('packages/' + name + '/package.json').isFile();
+			} catch {
+				return false;
+			}
+		});
+
+		let changed = 0;
+		const setVersion = (key) => {
+			const entry = lock.packages && lock.packages[key];
+			if (entry && entry.version !== undefined && entry.version !== version) {
+				entry.version = version;
+				changed++;
+			}
+		};
+
+		if (lock.version !== version) {
+			lock.version = version;
+			changed++;
+		}
+		setVersion('');
+		for (const dir of dirs) setVersion('packages/' + dir);
+
+		// Preserve the existing tab indentation + trailing newline npm writes.
+		fs.writeFileSync('package-lock.json', JSON.stringify(lock, null, '\t') + '\n');
+		console.log('  package-lock.json workspace versions updated (' + changed + ' field(s))');
+	"
+else
+	echo "  package-lock.json not found, skipping lockfile version sync"
+fi
 
 echo "Done. Files to stage for version bump commit:"
 echo "  package.json"

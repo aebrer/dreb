@@ -19,6 +19,8 @@ jobs:
       - run: npm ci
       - run: npm run verify-engines
       - run: npm run build
+      - name: Verify build did not mutate package-lock.json
+        run: git diff --exit-code package-lock.json
       - run: npx biome check --error-on-warnings .
       - run: npx tsgo --noEmit
 

@@ -40,7 +40,7 @@
 		"vitest": "^4.1.8"
 	},
 	"engines": {
-		"node": "^22.0.0"
+		"node": "22.x"
 	},
 	"repository": {
 		"type": "git",
