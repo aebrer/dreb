@@ -560,6 +560,11 @@ export class TUI extends Container {
 	recommitAll(): void {
 		if (this.stopped) return;
 		if (this.inDifferentialRender && !this.recommitAllowedFromRender) {
+			// Clean up terminal state before throwing. doRender() runs inside a
+			// setTimeout callback with no surrounding catch, so this throw would
+			// otherwise surface as an uncaught exception and kill the process with
+			// the terminal left in raw mode (mirrors the width-overflow throw below).
+			this.stop();
 			throw new Error(
 				"recommitAll() reached from a live-region-only render path; this would clear scrollback and replay committed content. Live-only updates must use restoreLiveViewport().",
 			);

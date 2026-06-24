@@ -300,12 +300,19 @@ describe("TUI committed-scrollback region", () => {
 			/Live-only updates must use restoreLiveViewport\(\)\./,
 		);
 
-		tui.clear();
+		// The guard throw tears down the terminal before throwing (the throw would
+		// otherwise surface uncaught from the render setTimeout and leave the
+		// terminal in raw mode). A subsequent recommitAll() is therefore a no-op.
+		assert.doesNotThrow(() => tui.recommitAll(), "post-teardown recommitAll must not throw");
+
+		// External (non-render-path) recommitAll calls remain allowed on a live TUI.
+		const freshTerminal = new LoggingVirtualTerminal(40, 10);
+		const freshTui = new TUI(freshTerminal);
 		const safe = new TestComponent();
 		safe.lines = ["safe external recommit"];
-		tui.addChild(safe);
+		freshTui.addChild(safe);
 
-		assert.doesNotThrow(() => tui.recommitAll(), "external recommitAll calls should remain allowed");
+		assert.doesNotThrow(() => freshTui.recommitAll(), "external recommitAll calls should remain allowed");
 	});
 
 	it("recommitAll preserves freshly repainted tall transcript in scrollback", async () => {
