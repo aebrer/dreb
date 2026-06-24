@@ -227,13 +227,21 @@ describe("InteractiveMode working indicator", () => {
 		(InteractiveMode as any).prototype.stopAgentWorking.call(fakeThis);
 	});
 
-	test("custom editor without inline status emits a warning", async () => {
+	test("custom editor without inline status emits a warning only once across updates", async () => {
 		const { fakeThis } = createWorkingFakeThis();
 		fakeThis.editor = { setGhostText: vi.fn() };
 
 		await dispatchEvent(fakeThis, { type: "agent_start" });
 
+		// Every spinner tick routes through setEditorInlineStatus; simulate further
+		// status updates (frame advances) the way the working interval would.
+		(InteractiveMode as any).prototype.renderWorkingIndicator.call(fakeThis);
+		(InteractiveMode as any).prototype.renderWorkingIndicator.call(fakeThis);
+
+		// The warning must be suppressed after the first emission (warnedMissingInlineStatus
+		// guard) — otherwise it would spam on every tick. Pin the once-only behavior.
 		expect(fakeThis.showWarning).toHaveBeenCalledWith(expect.stringContaining("Custom editor component"));
+		expect(fakeThis.showWarning).toHaveBeenCalledTimes(1);
 
 		(InteractiveMode as any).prototype.stopAgentWorking.call(fakeThis);
 	});

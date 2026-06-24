@@ -295,14 +295,43 @@ describe("TUI committed-scrollback region", () => {
 			invalidate: () => {},
 		});
 
+		// Spy on the terminal teardown methods that tui.stop() invokes
+		// (showCursor + terminal.stop). These bypass the logged write() path, so
+		// assert on the method calls directly.
+		let showCursorCalled = false;
+		let terminalStopCalled = false;
+		const originalShowCursor = terminal.showCursor.bind(terminal);
+		const originalStop = terminal.stop.bind(terminal);
+		terminal.showCursor = () => {
+			showCursorCalled = true;
+			originalShowCursor();
+		};
+		terminal.stop = () => {
+			terminalStopCalled = true;
+			originalStop();
+		};
+
 		assert.throws(
 			() => (tui as unknown as { doRender(): void }).doRender(),
 			/Live-only updates must use restoreLiveViewport\(\)\./,
 		);
 
-		// The guard throw tears down the terminal before throwing (the throw would
+		// The guard throw tears down the terminal *before* throwing (the throw would
 		// otherwise surface uncaught from the render setTimeout and leave the
-		// terminal in raw mode). A subsequent recommitAll() is therefore a no-op.
+		// terminal in raw mode). Assert the observable teardown ran — not merely
+		// that the `stopped` flag was set — so a regression replacing `this.stop()`
+		// with a bare `this.stopped = true` would fail here: tui.stop() restores the
+		// cursor and calls terminal.stop().
+		assert.ok(
+			showCursorCalled,
+			"guard throw must restore the cursor (terminal teardown ran), not just set the stopped flag",
+		);
+		assert.ok(
+			terminalStopCalled,
+			"guard throw must call terminal.stop() (terminal teardown ran), not just set the stopped flag",
+		);
+
+		// A subsequent recommitAll() is therefore a no-op (stopped TUI).
 		assert.doesNotThrow(() => tui.recommitAll(), "post-teardown recommitAll must not throw");
 
 		// External (non-render-path) recommitAll calls remain allowed on a live TUI.
