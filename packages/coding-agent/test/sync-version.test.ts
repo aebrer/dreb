@@ -167,6 +167,48 @@ describe("sync-version script", () => {
 		expect(raw).not.toContain("\n  "); // no two-space indentation crept in
 	});
 
+	it("is idempotent — re-syncing an already-current version is a byte-for-byte no-op", () => {
+		const dir = createFixtureProject();
+
+		// First bump establishes the new version across every file.
+		const first = runSyncVersion(dir, "2.0.0");
+		expect(first.status).toBe(0);
+
+		// Snapshot the raw bytes of every file the script can touch.
+		const trackedPaths = [
+			join(dir, "package-lock.json"),
+			join(dir, "package.json"),
+			join(dir, "packages/ai/package.json"),
+			join(dir, "packages/agent/package.json"),
+			join(dir, "packages/coding-agent/package.json"),
+			join(dir, "packages/ai/.claude-plugin/plugin.json"),
+		];
+		const snapshot = new Map(trackedPaths.map((p) => [p, readFileSync(p, "utf-8")]));
+
+		// Re-running with the SAME version must change nothing — this is the
+		// PR's core promise (no build/release churn). The `changed` counter and
+		// the `entry.version !== version` guard exist precisely for this.
+		const second = runSyncVersion(dir, "2.0.0");
+		expect(second.status).toBe(0);
+		expect(second.stdout).toContain("package-lock.json workspace versions updated (0 field(s))");
+
+		for (const [path, bytes] of snapshot) {
+			expect(readFileSync(path, "utf-8")).toBe(bytes);
+		}
+	});
+
+	it("reports the exact number of lockfile version fields it changed", () => {
+		const dir = createFixtureProject();
+
+		// The fixture lockfile carries a version on the root (`lock.version`),
+		// `packages[""]`, and the three top-level workspace packages
+		// (ai, agent, coding-agent) — so a real bump touches exactly 5 fields.
+		// Asserting the count proves the counter is real (not always-rewriting).
+		const result = runSyncVersion(dir, "2.0.0");
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("package-lock.json workspace versions updated (5 field(s))");
+	});
+
 	it("does not run a full npm install (no dependency graph re-resolution)", () => {
 		const scriptSource = readFileSync(realScriptPath, "utf-8");
 		// Ignore comment lines — the script documents *why* it avoids `npm install`.
