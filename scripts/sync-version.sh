@@ -69,6 +69,20 @@ if [ -f package-lock.json ]; then
 			}
 		});
 
+		// Fail loudly on a stale lockfile. Every on-disk workspace package was
+		// just version-bumped in its own package.json above, so if any of them
+		// has no matching package-lock.json entry the lockfile is out of sync.
+		// Silently skipping would leave a half-synced lockfile that reports
+		// success — check BEFORE writing anything so we never persist that state.
+		const missing = dirs
+			.map((dir) => 'packages/' + dir)
+			.filter((key) => !(lock.packages && lock.packages[key]));
+		if (missing.length > 0) {
+			console.error('ERROR: package-lock.json is missing entries for workspace package(s): ' + missing.join(', '));
+			console.error('The lockfile is out of sync with packages/. Run npm install to regenerate it, then re-run sync-version.');
+			process.exit(1);
+		}
+
 		let changed = 0;
 		const setVersion = (key) => {
 			const entry = lock.packages && lock.packages[key];

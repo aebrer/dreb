@@ -78,6 +78,14 @@ function createFixtureProject(): string {
 				version: "1.3.0",
 				resolved: "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
 			},
+			// A richer third-party entry (integrity + nested deps) to prove the
+			// surgical edit never touches transitive dependency metadata.
+			"node_modules/ms": {
+				version: "2.1.3",
+				resolved: "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+				integrity: "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tNAG_BST_ksCJTrFkCkkjPg==",
+				dependencies: { "lower-dep": "^1.0.0" },
+			},
 		},
 	};
 	// Tabs + trailing newline, matching how npm writes the dreb lockfile.
@@ -86,8 +94,11 @@ function createFixtureProject(): string {
 	return dir;
 }
 
-function runSyncVersion(projectDir: string, version: string) {
-	return spawnSync("bash", [join(projectDir, "scripts/sync-version.sh"), version], {
+function runSyncVersion(projectDir: string, version?: string) {
+	// Omitting the version argument exercises the no-arg release path, where the
+	// script reads the existing version from the root package.json instead.
+	const args = [join(projectDir, "scripts/sync-version.sh"), ...(version === undefined ? [] : [version])];
+	return spawnSync("bash", args, {
 		cwd: projectDir,
 		encoding: "utf-8",
 	});
@@ -148,11 +159,21 @@ describe("sync-version script", () => {
 		runSyncVersion(dir, "2.0.0");
 
 		const lock = readJson(join(dir, "package-lock.json")) as {
-			packages: Record<string, { version?: string; resolved?: string }>;
+			packages: Record<string, Record<string, unknown>>;
 		};
+		// Every node_modules/* entry must come back byte-for-byte unchanged —
+		// version, resolved, integrity, and nested dependency metadata alike.
+		// This is the robust behavioral guard against any re-resolution: a
+		// `npm install` regression would rewrite these subtrees.
 		expect(lock.packages["node_modules/left-pad"]).toEqual({
 			version: "1.3.0",
 			resolved: "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
+		});
+		expect(lock.packages["node_modules/ms"]).toEqual({
+			version: "2.1.3",
+			resolved: "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+			integrity: "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tNAG_BST_ksCJTrFkCkkjPg==",
+			dependencies: { "lower-dep": "^1.0.0" },
 		});
 	});
 
@@ -209,11 +230,76 @@ describe("sync-version script", () => {
 		expect(result.stdout).toContain("package-lock.json workspace versions updated (5 field(s))");
 	});
 
-	it("does not run a full npm install (no dependency graph re-resolution)", () => {
-		const scriptSource = readFileSync(realScriptPath, "utf-8");
-		// Ignore comment lines — the script documents *why* it avoids `npm install`.
-		const executableLines = scriptSource.split("\n").filter((line) => !line.trimStart().startsWith("#"));
-		expect(executableLines.join("\n")).not.toMatch(/npm install/);
+	it("does not re-resolve or mutate third-party dependency metadata when invoked with no argument", () => {
+		const dir = createFixtureProject();
+
+		// The behavioral guard against re-resolution lives in the
+		// "does not re-resolve or mutate third-party dependency metadata" test
+		// above. Here we additionally confirm the no-arg path is just as surgical
+		// — a `npm install` regression would rewrite these subtrees regardless of
+		// how the script is invoked.
+		writeJson(join(dir, "package.json"), { ...readJson(join(dir, "package.json")), version: "3.1.0" });
+		runSyncVersion(dir);
+
+		const lock = readJson(join(dir, "package-lock.json")) as {
+			packages: Record<string, Record<string, unknown>>;
+		};
+		expect(lock.packages["node_modules/ms"]).toEqual({
+			version: "2.1.3",
+			resolved: "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+			integrity: "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tNAG_BST_ksCJTrFkCkkjPg==",
+			dependencies: { "lower-dep": "^1.0.0" },
+		});
+	});
+
+	it("reads the version from root package.json when invoked with no argument", () => {
+		const dir = createFixtureProject();
+
+		// Mirrors the actual release flow (AGENTS.md Release Protocol): root
+		// package.json is bumped manually first, then `npm run sync-version` runs
+		// with NO argument. The script must read the existing root version and
+		// propagate it everywhere — this is the primary production path.
+		const rootPkgPath = join(dir, "package.json");
+		writeJson(rootPkgPath, { ...readJson(rootPkgPath), version: "3.1.0" });
+
+		const result = runSyncVersion(dir);
+		expect(result.status).toBe(0);
+
+		expect(readJson(join(dir, "packages/ai/package.json")).version).toBe("3.1.0");
+		expect(readJson(join(dir, "packages/agent/package.json")).version).toBe("3.1.0");
+		expect(readJson(join(dir, "packages/coding-agent/package.json")).version).toBe("3.1.0");
+		expect(readJson(join(dir, "packages/ai/.claude-plugin/plugin.json")).version).toBe("3.1.0");
+
+		const lock = readJson(join(dir, "package-lock.json")) as {
+			version: string;
+			packages: Record<string, { version?: string }>;
+		};
+		expect(lock.version).toBe("3.1.0");
+		expect(lock.packages[""].version).toBe("3.1.0");
+		expect(lock.packages["packages/ai"].version).toBe("3.1.0");
+	});
+
+	it("fails loudly when a workspace package is missing from the lockfile", () => {
+		const dir = createFixtureProject();
+
+		// "Added a package, haven't run npm install yet" drift: a new workspace
+		// package exists on disk (and gets its package.json bumped) but has no
+		// matching package-lock.json entry. The script must fail loudly rather
+		// than silently shipping a half-synced lockfile that reports success.
+		writeJson(join(dir, "packages/newpkg/package.json"), { name: "@dreb/newpkg", version: "1.0.0" });
+
+		const result = runSyncVersion(dir, "2.0.0");
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("packages/newpkg");
+		expect(result.stderr).toMatch(/out of sync|npm install/);
+
+		// The check runs BEFORE any lockfile write, so the stale lockfile must be
+		// left untouched — no half-synced state persisted, no spurious key created.
+		const lock = readJson(join(dir, "package-lock.json")) as {
+			packages: Record<string, { version?: string }>;
+		};
+		expect(lock.packages["packages/newpkg"]).toBeUndefined();
+		expect(lock.packages["packages/ai"].version).toBe("1.0.0");
 	});
 });
 
