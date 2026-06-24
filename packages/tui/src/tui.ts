@@ -41,7 +41,6 @@ export interface Component {
 
 type InputListenerResult = { consume?: boolean; data?: string } | undefined;
 type InputListener = (data: string) => InputListenerResult;
-type RecommitReason = "global" | "live-viewport-restore";
 
 /**
  * Interface for components that can receive focus and display a hardware cursor.
@@ -552,11 +551,10 @@ export class TUI extends Container {
 	 * and re-establish the committed boundary. Used for global actions that need to
 	 * repaint finalized content (theme change, width resize, expand-all, etc.).
 	 *
-	 * Live-region callers must pass an explicit reason so transcript replay cannot
-	 * be introduced accidentally as a generic redraw fallback.
+	 * Live-region-only redraw paths must not call this: they are handled by
+	 * live-region-only repaint helpers so committed scrollback is not replayed.
 	 */
-	recommitAll(reason: RecommitReason = "global"): void {
-		void reason;
+	recommitAll(): void {
 		if (this.stopped) return;
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
@@ -1109,20 +1107,49 @@ export class TUI extends Container {
 		// viewport (`prevViewportTop === 0`), because the live-region start is still
 		// on screen and reachable.
 		//
-		// But when the live region had grown taller than the viewport
-		// (`prevViewportTop > 0`), the terminal scrolled and pushed committed history
-		// — and the top of the live region — above the viewport into scrollback.
-		// Cursor-up cannot reach past the viewport top, so `fullRender(true)` would
-		// paint the (now smaller) live region anchored at the TOP of an otherwise
-		// empty viewport, with committed history stranded in scrollback. That is the
-		// "jump to the top" reported in issue 277.
-		//
-		// `recommitAll()` re-emits the committed tail + live region and re-anchors the
-		// editor at the BOTTOM of the viewport, matching the steady-state the
-		// differential renderer leaves on every keystroke.
+		// When the live region had grown taller than the viewport (`prevViewportTop > 0`),
+		// the live-region start may be above the visible viewport. A live-only restore
+		// repaints the visible working area bottom-anchored without replaying committed
+		// scrollback or clearing native scrollback. Global committed-content repainting
+		// remains explicit through `recommitAll()` callsites such as width/theme changes.
+		const restoreLiveViewport = (): void => {
+			this.fullRedrawCount += 1;
+			const visibleStart = Math.max(0, newLines.length - height);
+			const visibleLines = newLines.slice(visibleStart);
+			const topPadding = this.committedChildCount > 0 ? Math.max(0, height - visibleLines.length) : 0;
+			const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
+			let buffer = "\x1b[?2026h";
+			if (currentScreenRow > 0) buffer += `\x1b[${currentScreenRow}A`;
+			buffer += "\r";
+			for (let i = 0; i < height; i++) {
+				if (i > 0) buffer += "\x1b[1B\r";
+				buffer += "\x1b[2K";
+				const line = i < topPadding ? "" : visibleLines[i - topPadding];
+				if (line) buffer += line;
+			}
+			const desiredScreenRow = visibleLines.length === 0 ? 0 : topPadding + visibleLines.length - 1;
+			const moveBackToContent = height - 1 - desiredScreenRow;
+			if (moveBackToContent > 0) buffer += `\x1b[${moveBackToContent}A`;
+			buffer += "\x1b[?2026l";
+			this.terminal.write(buffer);
+			this.cursorRow = Math.max(0, newLines.length - 1);
+			this.hardwareCursorRow = this.cursorRow;
+			if (this.overlayStack.length === 0) {
+				this.maxLinesRendered = newLines.length;
+			} else {
+				this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+			}
+			this.previousViewportTop = Math.max(0, newLines.length - height);
+			this.previousLines = newLines;
+			this.previousWidth = width;
+			this.previousHeight = height;
+			this.positionHardwareCursor(cursorPos, newLines.length);
+			this.onPostRender?.();
+		};
+
 		const clearAndRedraw = (): void => {
 			if (prevViewportTop > 0) {
-				this.recommitAll("live-viewport-restore");
+				restoreLiveViewport();
 			} else {
 				fullRender(true);
 			}
@@ -1145,8 +1172,8 @@ export class TUI extends Container {
 		// Height changes need a full re-render to keep the visible viewport aligned.
 		// Keep the cheap live-region-only redraw when the live-region start is still
 		// reachable (`prevViewportTop === 0`). If the prior live region exceeded the
-		// viewport, recommit the transcript tail so committed history is restored and
-		// the editor is anchored at the bottom instead of stranded at the top.
+		// viewport, restore only the visible live working area bottom-anchored instead
+		// of replaying committed transcript lines.
 		if (heightChanged) {
 			clearAndRedraw();
 			return;
@@ -1340,11 +1367,10 @@ export class TUI extends Container {
 		// that don't properly collapse cleared lines below the cursor.
 		if (this.previousLines.length > newLines.length) {
 			if (this.previousLines.length > height) {
-				// Previous live content exceeded the terminal viewport — overlay padding
-				// or long streaming content caused scrolling. A live-region-only clear
-				// can't restore the viewport (CUU can't reach past viewport top into
-				// scrollback), so use the explicit live-viewport restoration path.
-				this.recommitAll("live-viewport-restore");
+				// Previous live content exceeded the terminal viewport — repaint only the
+				// live working area bottom-anchored. Do not replay committed scrollback for
+				// a live-region-only shrink.
+				restoreLiveViewport();
 				return;
 			}
 			fullRender(true);

@@ -1327,7 +1327,7 @@ export class InteractiveMode {
 			commandContextActions: {
 				waitForIdle: () => this.session.agent.waitForIdle(),
 				newSession: async (options) => {
-					this.stopAgentWorking();
+					this.stopAllInlineStatus();
 					this.statusContainer.clear();
 
 					// Delegate to AgentSession (handles setup + agent state sync)
@@ -1705,16 +1705,16 @@ export class InteractiveMode {
 	}
 
 	private setEditorInlineStatus(text: string | null): void {
-		this.defaultEditor.setInlineStatus?.(text);
-		if (this.editor !== this.defaultEditor) {
-			this.editor.setInlineStatus?.(text);
-			if (text && !this.editor.setInlineStatus && !this.warnedMissingInlineStatus) {
-				this.warnedMissingInlineStatus = true;
-				this.showWarning(
-					"Custom editor component does not support inline working status; progress and interrupt hints may be hidden.",
-				);
-			}
-		}
+		this.defaultEditor.setInlineStatus(text);
+		if (this.editor === this.defaultEditor) return;
+
+		this.editor.setInlineStatus?.(text);
+		if (!text || this.editor.setInlineStatus || this.warnedMissingInlineStatus) return;
+
+		this.warnedMissingInlineStatus = true;
+		this.showWarning(
+			"Custom editor component does not support inline working status; progress and interrupt hints may be hidden.",
+		);
 	}
 
 	private renderWorkingIndicator(): void {
@@ -1780,6 +1780,22 @@ export class InteractiveMode {
 		if (this.isAgentWorking) {
 			this.isAgentWorking = false;
 			this.stopInlineStatus("agent");
+		}
+	}
+
+	private stopAllInlineStatus(): void {
+		this.isAgentWorking = false;
+		this.pendingWorkingMessage = undefined;
+		this.stopInlineStatus();
+		this.autoCompactionLoader = undefined;
+		this.retryLoader = undefined;
+		if (this.autoCompactionEscapeHandler) {
+			this.defaultEditor.onEscape = this.autoCompactionEscapeHandler;
+			this.autoCompactionEscapeHandler = undefined;
+		}
+		if (this.retryEscapeHandler) {
+			this.defaultEditor.onEscape = this.retryEscapeHandler;
+			this.retryEscapeHandler = undefined;
 		}
 	}
 
@@ -4298,7 +4314,7 @@ export class InteractiveMode {
 
 	private async handleResumeSession(sessionPath: string): Promise<void> {
 		// Stop inline working indicator/status loader
-		this.stopAgentWorking();
+		this.stopAllInlineStatus();
 		this.statusContainer.clear();
 
 		// Clear UI state
@@ -4563,7 +4579,7 @@ export class InteractiveMode {
 
 		try {
 			// Stop inline working indicator/status loader
-			this.stopAgentWorking();
+			this.stopAllInlineStatus();
 			this.statusContainer.clear();
 
 			// Clear UI state
@@ -4902,7 +4918,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 	private async handleClearCommand(): Promise<void> {
 		// Stop inline working indicator/status loader
-		this.stopAgentWorking();
+		this.stopAllInlineStatus();
 		this.statusContainer.clear();
 
 		// New session via session (emits extension session events)
@@ -5103,7 +5119,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 	private async executeDream(): Promise<void> {
 		// Stop any existing inline working indicator/status loader
-		this.stopAgentWorking();
+		this.stopAllInlineStatus();
 		this.statusContainer.clear();
 
 		let releaseLock: (() => void) | undefined;
@@ -5214,7 +5230,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 	private async executeCompaction(customInstructions?: string, isAuto = false): Promise<CompactionResult | undefined> {
 		// Stop inline working indicator/status loader
-		this.stopAgentWorking();
+		this.stopAllInlineStatus();
 		this.statusContainer.clear();
 
 		// Set up escape handler during compaction
@@ -5500,7 +5516,7 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 
 	stop(): void {
 		this.buddyController.stop();
-		this.stopAgentWorking();
+		this.stopAllInlineStatus();
 		this.removeBuddy();
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();

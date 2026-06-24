@@ -1,5 +1,7 @@
-import { Container } from "@dreb/tui";
+import { type Component, Container, Editor, TUI } from "@dreb/tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
+import { defaultEditorTheme } from "../../tui/test/test-themes.js";
+import { VirtualTerminal } from "../../tui/test/virtual-terminal.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
 
@@ -11,6 +13,31 @@ function renderLastLine(container: Container, width = 120): string {
 
 function renderAll(container: Container, width = 120): string {
 	return container.children.flatMap((child) => child.render(width)).join("\n");
+}
+
+class TestComponent implements Component {
+	constructor(public lines: string[]) {}
+	render(_width: number): string[] {
+		return this.lines;
+	}
+	invalidate(): void {}
+}
+
+class LoggingVirtualTerminal extends VirtualTerminal {
+	private writes: string[] = [];
+
+	override write(data: string): void {
+		this.writes.push(data);
+		super.write(data);
+	}
+
+	getWrites(): string {
+		return this.writes.join("");
+	}
+
+	clearWrites(): void {
+		this.writes = [];
+	}
 }
 
 describe("InteractiveMode.showStatus", () => {
@@ -111,6 +138,7 @@ describe("InteractiveMode working indicator", () => {
 			"startInlineLoader",
 			"startAgentWorking",
 			"stopAgentWorking",
+			"stopAllInlineStatus",
 			"setWorkingMessage",
 		]) {
 			fakeThis[method] = (...args: unknown[]) => (InteractiveMode as any).prototype[method].call(fakeThis, ...args);
@@ -186,6 +214,97 @@ describe("InteractiveMode working indicator", () => {
 
 		await dispatchEvent(fakeThis, { type: "auto_retry_end", success: true, attempt: 1 });
 		expect(inlineStatuses.at(-1)).toBeNull();
+	});
+
+	test("auto-compaction loader uses inline status without adding a status row", async () => {
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+		fakeThis.session = { abortCompaction: vi.fn() };
+
+		await dispatchEvent(fakeThis, { type: "auto_compaction_start", reason: "overflow" });
+
+		expect(fakeThis.statusContainer.children).toHaveLength(0);
+		expect(inlineStatuses.at(-1)).toContain("Auto-compacting");
+
+		(InteractiveMode as any).prototype.stopAllInlineStatus.call(fakeThis);
+		expect(inlineStatuses.at(-1)).toBeNull();
+	});
+
+	test("non-agent inline loaders can update and clear branch summary, dream, and compaction statuses", () => {
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+
+		for (const [owner, label] of [
+			["branchSummary", "Generating branch summary"],
+			["dream", "Dreaming"],
+			["compaction", "Compacting context"],
+		] as const) {
+			const loader = (InteractiveMode as any).prototype.startInlineLoader.call(fakeThis, owner, label);
+			expect(fakeThis.statusContainer.children).toHaveLength(0);
+			expect(inlineStatuses.at(-1)).toContain(label);
+			loader.setText(`${label} updated`);
+			expect(inlineStatuses.at(-1)).toContain("updated");
+			loader.stop();
+			expect(inlineStatuses.at(-1)).toBeNull();
+		}
+	});
+
+	test("stopAllInlineStatus clears non-agent status and pending working message", () => {
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+
+		(InteractiveMode as any).prototype.setWorkingMessage.call(fakeThis, "Queued stale status");
+		const loader = (InteractiveMode as any).prototype.startInlineLoader.call(fakeThis, "dream", "Dreaming");
+		fakeThis.retryLoader = loader;
+
+		(InteractiveMode as any).prototype.stopAllInlineStatus.call(fakeThis);
+
+		expect(fakeThis.pendingWorkingMessage).toBeUndefined();
+		expect(fakeThis.inlineStatusOwner).toBeUndefined();
+		expect(fakeThis.workingInterval).toBeUndefined();
+		expect(fakeThis.retryLoader).toBeUndefined();
+		expect(inlineStatuses.at(-1)).toBeNull();
+	});
+
+	test("agent_end while scrolled up preserves viewport and scrollback", async () => {
+		const terminal = new LoggingVirtualTerminal(40, 8);
+		const ui = new TUI(terminal);
+		const committed = new Container();
+		const live = new Container();
+		const history = new TestComponent(Array.from({ length: 18 }, (_, i) => `HIST ${i}`));
+		const editor = new Editor(ui, defaultEditorTheme);
+		const footer = new TestComponent(["footer"]);
+
+		committed.addChild(history);
+		live.addChild(editor);
+		live.addChild(footer);
+		ui.addChild(committed);
+		ui.addChild(live);
+		ui.setCommittedChildCount(1);
+		ui.start();
+		await terminal.flush();
+		ui.commit();
+
+		const { fakeThis } = createWorkingFakeThis();
+		Object.assign(fakeThis, {
+			ui,
+			defaultEditor: editor,
+			editor,
+			statusContainer: new Container(),
+		});
+
+		await dispatchEvent(fakeThis, { type: "agent_start" });
+		await terminal.flush();
+		terminal.scrollLines(-3);
+		await terminal.flush();
+		const viewportTopBefore = terminal.getViewportTop();
+		terminal.clearWrites();
+
+		await dispatchEvent(fakeThis, { type: "agent_end" });
+		await terminal.flush();
+
+		expect(terminal.getWrites()).not.toContain("\x1b[3J");
+		expect(terminal.getWrites()).not.toContain("HIST 0");
+		expect(terminal.getViewportTop()).toBe(viewportTopBefore);
+
+		ui.stop();
 	});
 });
 

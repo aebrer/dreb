@@ -823,6 +823,42 @@ describe("Editor component", () => {
 			assert.match(inputRow, /Working/);
 		});
 
+		it("renders inline status when cursor is in the middle of input", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 50;
+
+			editor.setText("hello world");
+			editor.handleInput("\x1b[D");
+			editor.handleInput("\x1b[D");
+			editor.setInlineStatus("Working");
+			const lines = editor.render(width);
+
+			assert.strictEqual(lines.length, 3);
+			const inputRow = stripVTControlCharacters(lines[1]!);
+			assert.match(inputRow, /hello world/);
+			assert.match(inputRow, /Working/);
+		});
+
+		it("renders inline status on a wrapped cursor line", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			const width = 24;
+
+			editor.setText("alpha beta gamma delta epsilon");
+			editor.handleInput("\x1b[D");
+			editor.handleInput("\x1b[D");
+			editor.setInlineStatus("Working");
+			const lines = editor.render(width);
+
+			assert.ok(lines.length > 3, "long input should wrap");
+			assert.ok(
+				lines.some((line) => /Working/.test(stripVTControlCharacters(line))),
+				"inline status should remain visible on the cursor's wrapped line",
+			);
+			for (const line of lines) {
+				assert.ok(visibleWidth(line) <= width, `line exceeds width: ${visibleWidth(line)} > ${width}`);
+			}
+		});
+
 		it("inline status takes precedence over ghost text", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 			const width = 50;
