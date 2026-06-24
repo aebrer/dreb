@@ -158,15 +158,50 @@ describe("InteractiveMode working indicator", () => {
 		(InteractiveMode as any).prototype.stopAgentWorking.call(fakeThis);
 	});
 
-	test("agent_end clears editor inline status without removing a status row", async () => {
+	test("working indicator cycles frames on its interval", () => {
+		vi.useFakeTimers();
 		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
 
-		await dispatchEvent(fakeThis, { type: "agent_start" });
-		await dispatchEvent(fakeThis, { type: "agent_end" });
+		try {
+			fakeThis.startAgentWorking("Cycling status");
 
-		expect(fakeThis.statusContainer.children).toHaveLength(0);
-		expect(fakeThis.isAgentWorking).toBe(false);
-		expect(inlineStatuses.at(-1)).toBeNull();
+			const initialFrame = fakeThis.workingFrame;
+			const initialStatus = inlineStatuses.at(-1);
+			expect(fakeThis.workingInterval).toBeDefined();
+
+			vi.advanceTimersByTime(240);
+
+			expect(fakeThis.workingFrame).not.toBe(initialFrame);
+			expect(inlineStatuses.at(-1)).not.toBe(initialStatus);
+			expect(inlineStatuses.at(-1)).toContain(fakeThis.workingFrames[fakeThis.workingFrame]);
+
+			fakeThis.stopAgentWorking();
+			expect(fakeThis.workingInterval).toBeUndefined();
+			expect(inlineStatuses.at(-1)).toBeNull();
+		} finally {
+			fakeThis.stopAllInlineStatus();
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
+	});
+
+	test("agent_end clears editor inline status without removing a status row", async () => {
+		vi.useFakeTimers();
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+
+		try {
+			await dispatchEvent(fakeThis, { type: "agent_start" });
+			await dispatchEvent(fakeThis, { type: "agent_end" });
+
+			expect(fakeThis.statusContainer.children).toHaveLength(0);
+			expect(fakeThis.isAgentWorking).toBe(false);
+			expect(fakeThis.workingInterval).toBeUndefined();
+			expect(inlineStatuses.at(-1)).toBeNull();
+		} finally {
+			fakeThis.stopAllInlineStatus();
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
 	});
 
 	test("queued setWorkingMessage flushes on agent_start", async () => {

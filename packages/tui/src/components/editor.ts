@@ -532,7 +532,8 @@ export class Editor implements Component, Focusable {
 
 				// Inline status and ghost text are decorations inside the existing input row.
 				// They must not feed back into layout/wrapping or change rendered height.
-				const inlineDecoration = this.inlineStatusText
+				const hasInlineStatus = Boolean(this.inlineStatusText);
+				const inlineDecoration = hasInlineStatus
 					? ` ${this.inlineStatusText}`
 					: this.ghostText && this.isEditorEmpty()
 						? this.ghostText
@@ -541,9 +542,11 @@ export class Editor implements Component, Focusable {
 					const availableWidth = contentWidth - lineVisibleWidth;
 					if (availableWidth > 0) {
 						const truncatedDecoration = truncateToWidth(inlineDecoration, availableWidth);
-						const styled = this.theme.ghostText
-							? this.theme.ghostText(truncatedDecoration)
-							: `\x1b[2m${truncatedDecoration}\x1b[0m`;
+						const styled = hasInlineStatus
+							? `${truncatedDecoration}\x1b[0m`
+							: this.theme.ghostText
+								? this.theme.ghostText(truncatedDecoration)
+								: `\x1b[2m${truncatedDecoration}\x1b[0m`;
 						displayText = displayText + styled;
 						lineVisibleWidth = lineVisibleWidth + visibleWidth(truncatedDecoration);
 					}

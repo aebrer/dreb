@@ -16,6 +16,15 @@ class TestComponent implements Component {
 
 class LoggingVirtualTerminal extends VirtualTerminal {
 	private writes: string[] = [];
+	private _kittyProtocolActive = false;
+
+	override get kittyProtocolActive(): boolean {
+		return this._kittyProtocolActive;
+	}
+
+	setKittyProtocolActive(active: boolean): void {
+		this._kittyProtocolActive = active;
+	}
 
 	override write(data: string): void {
 		this.writes.push(data);
@@ -213,6 +222,90 @@ describe("TUI committed-scrollback region", () => {
 		assert.ok(tui.fullRedraws > redrawsBefore, "recommitAll should increment fullRedraws");
 
 		tui.stop();
+	});
+
+	it("recommitAll() re-enables bracketed paste and modifyOtherKeys after RIS when Kitty is inactive", () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		assert.strictEqual(
+			terminal.kittyProtocolActive,
+			false,
+			"LoggingVirtualTerminal should default to Kitty inactive",
+		);
+
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		component.lines = ["content"];
+		tui.addChild(component);
+
+		tui.recommitAll();
+
+		const writes = terminal.getWrites();
+		const ris = writes.indexOf("\x1bc");
+		const clearScrollback = writes.indexOf("\x1b[3J");
+		const bracketedPaste = writes.indexOf("\x1b[?2004h");
+		const modifyOtherKeys = writes.indexOf("\x1b[>4;2m");
+
+		assert.notStrictEqual(ris, -1, "recommitAll should emit RIS reset");
+		assert.notStrictEqual(clearScrollback, -1, "recommitAll should clear scrollback");
+		assert.notStrictEqual(bracketedPaste, -1, "recommitAll should re-enable bracketed paste");
+		assert.notStrictEqual(modifyOtherKeys, -1, "recommitAll should re-enable modifyOtherKeys");
+		assert.ok(clearScrollback > ris, "scrollback clear should be emitted after RIS");
+		assert.ok(bracketedPaste > ris, "bracketed paste should be re-enabled after RIS");
+		assert.ok(modifyOtherKeys > ris, "modifyOtherKeys should be re-enabled after RIS");
+		assert.ok(!writes.includes("\x1b[>7u"), "Kitty protocol should not be re-enabled when inactive");
+	});
+
+	it("recommitAll() re-enables bracketed paste and Kitty keyboard protocol after RIS when Kitty is active", () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		terminal.setKittyProtocolActive(true);
+		assert.strictEqual(terminal.kittyProtocolActive, true, "test should run with Kitty active");
+
+		const tui = new TUI(terminal);
+		const component = new TestComponent();
+		component.lines = ["content"];
+		tui.addChild(component);
+
+		tui.recommitAll();
+
+		const writes = terminal.getWrites();
+		const ris = writes.indexOf("\x1bc");
+		const clearScrollback = writes.indexOf("\x1b[3J");
+		const bracketedPaste = writes.indexOf("\x1b[?2004h");
+		const kittyProtocol = writes.indexOf("\x1b[>7u");
+
+		assert.notStrictEqual(ris, -1, "recommitAll should emit RIS reset");
+		assert.notStrictEqual(clearScrollback, -1, "recommitAll should clear scrollback");
+		assert.notStrictEqual(bracketedPaste, -1, "recommitAll should re-enable bracketed paste");
+		assert.notStrictEqual(kittyProtocol, -1, "recommitAll should re-enable Kitty keyboard protocol");
+		assert.ok(clearScrollback > ris, "scrollback clear should be emitted after RIS");
+		assert.ok(bracketedPaste > ris, "bracketed paste should be re-enabled after RIS");
+		assert.ok(kittyProtocol > ris, "Kitty protocol should be re-enabled after RIS");
+		assert.ok(!writes.includes("\x1b[>4;2m"), "modifyOtherKeys should not be enabled when Kitty is active");
+	});
+
+	it("recommitAll() throws when reached from a live-region-only render path", () => {
+		const terminal = new LoggingVirtualTerminal(40, 10);
+		const tui = new TUI(terminal);
+
+		tui.addChild({
+			render: () => {
+				tui.recommitAll();
+				return ["bad live render"];
+			},
+			invalidate: () => {},
+		});
+
+		assert.throws(
+			() => (tui as unknown as { doRender(): void }).doRender(),
+			/Live-only updates must use restoreLiveViewport\(\)\./,
+		);
+
+		tui.clear();
+		const safe = new TestComponent();
+		safe.lines = ["safe external recommit"];
+		tui.addChild(safe);
+
+		assert.doesNotThrow(() => tui.recommitAll(), "external recommitAll calls should remain allowed");
 	});
 
 	it("recommitAll preserves freshly repainted tall transcript in scrollback", async () => {

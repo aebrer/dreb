@@ -64,6 +64,10 @@ export class VirtualTerminal implements Terminal {
 		return true;
 	}
 
+	getInputModeReenableSequence(): string {
+		return this.kittyProtocolActive ? "\x1b[?2004h\x1b[>7u" : "\x1b[?2004h\x1b[>4;2m";
+	}
+
 	moveBy(lines: number): void {
 		if (lines > 0) {
 			// Move down
