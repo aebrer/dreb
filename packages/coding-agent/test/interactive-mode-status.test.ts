@@ -298,6 +298,87 @@ describe("InteractiveMode working indicator", () => {
 		expect(inlineStatuses.at(-1)).toBeNull();
 	});
 
+	test("a superseded loader handle becomes inert once another owner takes over", () => {
+		vi.useFakeTimers();
+		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
+
+		try {
+			// A background loader claims the inline status...
+			const dreamLoader = (InteractiveMode as any).prototype.startInlineLoader.call(fakeThis, "dream", "Dreaming");
+			expect(fakeThis.inlineStatusOwner).toBe("dream");
+
+			// ...then an agent turn starts and takes ownership (as in executeDream → prompt → agent_start).
+			fakeThis.startAgentWorking();
+			expect(fakeThis.inlineStatusOwner).toBe("agent");
+			const agentStatus = inlineStatuses.at(-1);
+			expect(agentStatus).toContain("Working");
+			const pushCountAfterTakeover = inlineStatuses.length;
+			const intervalAfterTakeover = fakeThis.workingInterval;
+			expect(intervalAfterTakeover).toBeDefined();
+
+			// The stale dream handle must not clobber the active agent indicator.
+			dreamLoader.setText("Dreaming updated");
+			expect(inlineStatuses.length).toBe(pushCountAfterTakeover);
+			expect(inlineStatuses.at(-1)).toBe(agentStatus);
+			expect(fakeThis.currentWorkingMessage).not.toContain("Dreaming");
+
+			// Stopping the stale handle must not tear down the agent's status or interval.
+			dreamLoader.stop();
+			expect(fakeThis.inlineStatusOwner).toBe("agent");
+			expect(fakeThis.workingInterval).toBe(intervalAfterTakeover);
+			expect(inlineStatuses.at(-1)).toBe(agentStatus);
+		} finally {
+			fakeThis.stopAllInlineStatus();
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
+	});
+
+	test("stopAllInlineStatus restores the auto-compaction escape handler", () => {
+		const { fakeThis } = createWorkingFakeThis();
+		const savedHandler = vi.fn();
+		const liveHandler = vi.fn();
+		fakeThis.defaultEditor.onEscape = liveHandler;
+		fakeThis.autoCompactionEscapeHandler = savedHandler;
+
+		(InteractiveMode as any).prototype.stopAllInlineStatus.call(fakeThis);
+
+		expect(fakeThis.defaultEditor.onEscape).toBe(savedHandler);
+		expect(fakeThis.autoCompactionEscapeHandler).toBeUndefined();
+	});
+
+	test("stopAllInlineStatus restores the retry escape handler", () => {
+		const { fakeThis } = createWorkingFakeThis();
+		const savedHandler = vi.fn();
+		const liveHandler = vi.fn();
+		fakeThis.defaultEditor.onEscape = liveHandler;
+		fakeThis.retryEscapeHandler = savedHandler;
+
+		(InteractiveMode as any).prototype.stopAllInlineStatus.call(fakeThis);
+
+		expect(fakeThis.defaultEditor.onEscape).toBe(savedHandler);
+		expect(fakeThis.retryEscapeHandler).toBeUndefined();
+	});
+
+	test("working status forwards to a custom editor that supports inline status", async () => {
+		const { fakeThis } = createWorkingFakeThis();
+		const customStatuses: Array<string | null> = [];
+		fakeThis.editor = {
+			setInlineStatus: vi.fn((text: string | null) => customStatuses.push(text)),
+			setGhostText: vi.fn(),
+		};
+
+		await dispatchEvent(fakeThis, { type: "agent_start" });
+
+		expect(fakeThis.showWarning).not.toHaveBeenCalled();
+		expect(fakeThis.editor.setInlineStatus).toHaveBeenCalled();
+		expect(customStatuses.some((text) => text?.includes("Working"))).toBe(true);
+
+		await dispatchEvent(fakeThis, { type: "agent_end" });
+
+		expect(customStatuses.at(-1)).toBeNull();
+	});
+
 	test("agent_end while scrolled up preserves viewport and scrollback", async () => {
 		const terminal = new LoggingVirtualTerminal(40, 8);
 		const ui = new TUI(terminal);
