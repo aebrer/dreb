@@ -2,7 +2,8 @@
  * Test that BashExecutionComponent's collapsed output respects the render-time width,
  * not a stale captured width. Regression test for #2569.
  */
-import { visibleWidth } from "@dreb/tui";
+import { isWrappableLine, stripWrapMarker, visibleWidth } from "@dreb/tui";
+import stripAnsi from "strip-ansi";
 import { beforeAll, describe, expect, it } from "vitest";
 import { BashExecutionComponent } from "../src/modes/interactive/components/bash-execution.js";
 import { initTheme } from "../src/modes/interactive/theme/theme.js";
@@ -75,6 +76,50 @@ describe("BashExecutionComponent width handling (#2569)", () => {
 		for (let i = 0; i < lines60.length; i++) {
 			const w = visibleWidth(lines60[i]);
 			expect(w, `Line ${i} visibleWidth=${w} > 60`).toBeLessThanOrEqual(60);
+		}
+	});
+
+	it("expanded output and status render as wrappable logical lines at narrow widths", () => {
+		const { stub } = createTuiStub(24);
+		const component = new BashExecutionComponent("echo long-output", stub);
+		const longLine = "expanded-bash-output-".repeat(6);
+		const fullOutputPath = `/tmp/${"full-output-path-".repeat(6)}.log`;
+
+		component.appendOutput(`${longLine}\n`);
+		component.setExpanded(true);
+		component.setComplete(
+			0,
+			false,
+			{
+				content: longLine,
+				truncated: true,
+				truncatedBy: "bytes",
+				totalLines: 1,
+				totalBytes: longLine.length,
+				outputLines: 1,
+				outputBytes: longLine.length,
+				lastLinePartial: false,
+				firstLineExceedsLimit: false,
+				maxLines: 1,
+				maxBytes: longLine.length,
+			},
+			fullOutputPath,
+		);
+
+		const lines = component.render(24);
+		const outputLine = lines.find((line) => stripAnsi(stripWrapMarker(line)).includes(longLine));
+		const statusLine = lines.find((line) => stripAnsi(stripWrapMarker(line)).includes(fullOutputPath));
+
+		for (const [name, line] of [
+			["expanded output", outputLine],
+			["status", statusLine],
+		] as const) {
+			expect(line, `${name} line should render`).toBeDefined();
+			expect(isWrappableLine(line!), `${name} line should be marked wrappable`).toBe(true);
+			expect(
+				visibleWidth(stripWrapMarker(line!)),
+				`${name} logical line should exceed narrow width`,
+			).toBeGreaterThan(24);
 		}
 	});
 });

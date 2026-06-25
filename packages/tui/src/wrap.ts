@@ -33,6 +33,47 @@ export function markWrappable(line: string): string {
 
 type WrapRowSpan = { startCol: number; width: number };
 
+function trailingZeroWidthSuffix(line: string): string {
+	const segmenter = getSegmenter();
+	let suffixStart = line.length;
+	let i = 0;
+
+	while (i < line.length) {
+		const ansi = extractAnsiCode(line, i);
+		if (ansi) {
+			i += ansi.length;
+			continue;
+		}
+
+		let textEnd = i;
+		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
+
+		for (const { segment, index } of segmenter.segment(line.slice(i, textEnd))) {
+			if (visibleWidth(segment) > 0) {
+				suffixStart = i + index + segment.length;
+			}
+		}
+		i = textEnd;
+	}
+
+	const suffix = line.slice(suffixStart);
+	let result = "";
+	let j = 0;
+	while (j < suffix.length) {
+		const ansi = extractAnsiCode(suffix, j);
+		if (ansi) {
+			// Do not duplicate APC markers such as CURSOR_MARKER on every split row.
+			// The slicer already preserves in-range markers on their actual row.
+			if (!ansi.code.startsWith("\x1b_")) result += ansi.code;
+			j += ansi.length;
+		} else {
+			result += suffix[j];
+			j++;
+		}
+	}
+	return result;
+}
+
 function wrapRowSpans(line: string, width: number): WrapRowSpan[] {
 	const rows: WrapRowSpan[] = [];
 	const segmenter = getSegmenter();
@@ -135,8 +176,9 @@ export function splitToScreenRows(line: string, width: number): string[] {
 	if (width <= 0 || !isWrappableLine(line) || visibleWidth(stripped) <= width) {
 		return [stripped];
 	}
+	const suffix = trailingZeroWidthSuffix(stripped);
 	const rows = wrapRowSpans(stripped, width).map(
-		({ startCol, width: rowWidth }) => sliceWithWidth(stripped, startCol, rowWidth, true).text,
+		({ startCol, width: rowWidth }) => sliceWithWidth(stripped, startCol, rowWidth, true).text + suffix,
 	);
 	return rows.length > 0 ? rows : [stripped];
 }

@@ -1012,9 +1012,12 @@ export class TUI extends Container {
 		}
 	}
 
-	/** Composite all overlays into terminal-row lines (sorted by focusOrder, higher = on top). */
+	/** Composite all visible overlays into terminal-row lines (sorted by focusOrder, higher = on top). */
 	private compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
-		if (this.overlayStack.length === 0) return lines;
+		const visibleEntries = this.overlayStack.filter((e) => this.isOverlayVisible(e));
+		if (visibleEntries.length === 0) return lines;
+		visibleEntries.sort((a, b) => a.focusOrder - b.focusOrder);
+
 		// Overlay rows are terminal rows, not logical lines. If the base content
 		// contains soft-wrappable logical lines, expand them first so overlay row
 		// positions target the actual screen rows they cover. Overlay compositing is
@@ -1027,9 +1030,6 @@ export class TUI extends Container {
 		// Pre-render all visible overlays and calculate positions
 		const rendered: { overlayLines: string[]; row: number; col: number; w: number }[] = [];
 		let minLinesNeeded = result.length;
-
-		const visibleEntries = this.overlayStack.filter((e) => this.isOverlayVisible(e));
-		visibleEntries.sort((a, b) => a.focusOrder - b.focusOrder);
 		for (const entry of visibleEntries) {
 			const { component, options } = entry;
 
@@ -1196,9 +1196,10 @@ export class TUI extends Container {
 
 			// Render only live-region children (after committed boundary)
 			let newLines = this.renderLive(width);
+			const hasVisibleOverlays = this.hasOverlay();
 
 			// Composite overlays into the rendered lines (before differential compare)
-			if (this.overlayStack.length > 0) {
+			if (hasVisibleOverlays) {
 				newLines = this.compositeOverlays(newLines, width, height);
 			}
 
@@ -1292,10 +1293,10 @@ export class TUI extends Container {
 				this.terminal.write(buffer);
 				this.cursorRow = Math.max(0, totalRows - 1);
 				this.hardwareCursorRow = this.cursorRow;
-				if (this.overlayStack.length === 0) {
-					this.maxLinesRendered = totalRows;
-				} else {
+				if (hasVisibleOverlays) {
 					this.maxLinesRendered = Math.max(this.maxLinesRendered, totalRows);
+				} else {
+					this.maxLinesRendered = totalRows;
 				}
 				this.previousViewportTop = Math.max(0, totalRows - height);
 				this.previousLines = newLines;
@@ -1353,7 +1354,7 @@ export class TUI extends Container {
 			const hasWrappingLines =
 				this.hasWrappingLines(newLines, width) || this.hasWrappingLines(this.previousLines, width);
 			if (hasWrappingLines) {
-				if (this.overlayStack.length > 0) {
+				if (hasVisibleOverlays) {
 					restoreLiveViewport();
 					return;
 				}
@@ -1433,11 +1434,11 @@ export class TUI extends Container {
 					this.cursorRow = targetRow;
 					this.hardwareCursorRow = targetRow;
 				}
-				// Track actual content height — shrink when no overlays to prevent ghost whitespace
-				if (this.overlayStack.length === 0) {
-					this.maxLinesRendered = newLines.length;
-				} else {
+				// Track actual content height — shrink when no visible overlays to prevent ghost whitespace
+				if (hasVisibleOverlays) {
 					this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+				} else {
+					this.maxLinesRendered = newLines.length;
 				}
 				this.positionHardwareCursor(cursorPos, newLines.length);
 				this.previousLines = newLines;
@@ -1454,10 +1455,10 @@ export class TUI extends Container {
 					// Content still fills viewport — clamp off-screen changes
 					if (lastChanged < prevViewportTop) {
 						// All changes are above viewport — update state without rendering
-						if (this.overlayStack.length === 0) {
-							this.maxLinesRendered = newLines.length;
-						} else {
+						if (hasVisibleOverlays) {
 							this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+						} else {
+							this.maxLinesRendered = newLines.length;
 						}
 						this.previousViewportTop = prevViewportTop;
 						this.positionHardwareCursor(cursorPos, newLines.length);
@@ -1541,11 +1542,11 @@ export class TUI extends Container {
 			// hardwareCursorRow tracks actual terminal cursor position (for movement)
 			this.cursorRow = Math.max(0, newLines.length - 1);
 			this.hardwareCursorRow = finalCursorRow;
-			// Track terminal's working area — shrink when no overlays to prevent ghost whitespace
-			if (this.overlayStack.length === 0) {
-				this.maxLinesRendered = newLines.length;
-			} else {
+			// Track terminal's working area — shrink when no visible overlays to prevent ghost whitespace
+			if (hasVisibleOverlays) {
 				this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+			} else {
+				this.maxLinesRendered = newLines.length;
 			}
 			this.previousViewportTop = Math.max(prevViewportTop, finalCursorRow - height + 1);
 

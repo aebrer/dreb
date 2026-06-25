@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { visibleWidth } from "../src/utils.js";
+import { applyBackgroundErase, visibleWidth } from "../src/utils.js";
 import {
 	isWrappableLine,
 	markWrappable,
@@ -75,6 +75,24 @@ describe("wrap helpers", () => {
 		assert.equal(rows.length, screenRowsForLine(line, 3));
 		assert.equal(rows.join(""), text);
 		for (const row of rows) assert.ok(visibleWidth(row) <= 3);
+	});
+
+	it("preserves trailing zero-width controls on each split row", () => {
+		const text = "abcdefghijklmno";
+		const bgFn = (s: string) => `\x1b[41m${s}\x1b[0m`;
+		const segmentReset = "\x1b[0m\x1b]8;;\x07";
+		const rows = splitToScreenRows(markWrappable(applyBackgroundErase(text, bgFn) + segmentReset), 5);
+
+		assert.equal(rows.length, 3);
+		assert.deepEqual(
+			rows.map((row) => row.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "")),
+			["abcde", "fghij", "klmno"],
+		);
+		for (const row of rows) {
+			assert.ok(row.includes("\x1b[K"), "BCE fill must be reattached to every split row");
+			assert.ok(row.endsWith(segmentReset), "line reset suffix must be reattached to every split row");
+			assert.equal(visibleWidth(row), 5);
+		}
 	});
 
 	it("returns a single row for unmarked or fitting lines", () => {

@@ -148,6 +148,37 @@ describe("TUI soft-wrap", () => {
 		tui.stop();
 	});
 
+	it("keeps hidden overlays out of the soft-wrap overlay repaint path", async () => {
+		const terminal = new LoggingVirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const comp = new TestComponent();
+		const second = "0123456789".repeat(5);
+		comp.lines = [markWrappable(WIDE)];
+		tui.addChild(comp);
+		tui.start();
+		await terminal.flush();
+
+		const overlay = new TestComponent();
+		overlay.lines = ["HIDDEN"];
+		tui.showOverlay(overlay, { row: 1, col: 0, width: 6, visible: () => false });
+		await terminal.flush();
+		terminal.clearWrites();
+
+		comp.lines = [markWrappable(WIDE), markWrappable(second)];
+		tui.requestRender();
+		await terminal.flush();
+
+		assert.ok(
+			!terminal.getWrites().includes("\x1b[2K"),
+			"invisible overlays must not force the transient overlay repaint path",
+		);
+		assert.deepEqual(
+			terminal.getLogicalScrollBuffer().filter((line) => line.length > 0),
+			[WIDE, second],
+		);
+		tui.stop();
+	});
+
 	it("throws the over-width guard from the wrapped pure-append path", () => {
 		withTempHome((home) => {
 			const terminal = new VirtualTerminal(20, 8);

@@ -100,7 +100,7 @@ export class Text implements Component {
 			this.cachedWidth = width;
 			this.cachedLines = result;
 
-			return result.length > 0 ? result : [""];
+			return result;
 		}
 
 		// Calculate content width (subtract left/right margins)

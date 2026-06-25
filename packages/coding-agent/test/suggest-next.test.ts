@@ -1,4 +1,4 @@
-import { Container, Text } from "@dreb/tui";
+import { Container, isWrappableLine, stripWrapMarker, Text, visibleWidth } from "@dreb/tui";
 import stripAnsi from "strip-ansi";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ToolRenderContext, ToolRenderResultOptions } from "../src/core/extensions/types.js";
@@ -307,6 +307,24 @@ describe("suggest_next tool", () => {
 			const rendered = stripAnsi(component.render(120).join("\n"));
 			expect(rendered).toContain("Updated the auth handler.");
 			expect(rendered).toContain("→ /skill:mach6-push");
+		});
+
+		it("renders long summary markdown as wrappable logical lines at narrow widths", () => {
+			const tool = createSuggestNextToolDefinition(() => {});
+			const summary = "suggest-next-summary-".repeat(6);
+			const result = {
+				content: [{ type: "text" as const, text: "Suggestion registered: /skill:mach6-push" }],
+				details: { suggestion: "/skill:mach6-push", summary },
+				isError: false,
+			};
+
+			const component = tool.renderResult!(result, renderOptions, theme, createRenderContext());
+			const lines = component.render(20);
+			const summaryLine = lines.find((line) => stripAnsi(stripWrapMarker(line)).includes(summary));
+
+			expect(summaryLine).toBeDefined();
+			expect(isWrappableLine(summaryLine!)).toBe(true);
+			expect(visibleWidth(stripWrapMarker(summaryLine!))).toBeGreaterThan(20);
 		});
 
 		it("reuses lastComponent Text on re-render without summary", () => {
