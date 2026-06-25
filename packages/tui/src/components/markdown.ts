@@ -2,6 +2,7 @@ import { marked, type Token } from "marked";
 import { isImageLine } from "../terminal-image.js";
 import type { Component } from "../tui.js";
 import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
+import { isWrappableLine, markWrappable, stripWrapMarker } from "../wrap.js";
 
 /**
  * Default text styling for markdown content.
@@ -57,6 +58,7 @@ export class Markdown implements Component {
 	private paddingY: number; // Top/bottom padding
 	private defaultTextStyle?: DefaultTextStyle;
 	private theme: MarkdownTheme;
+	private softWrap: boolean;
 	private defaultStylePrefix?: string;
 
 	// Cache for rendered output
@@ -70,12 +72,14 @@ export class Markdown implements Component {
 		paddingY: number,
 		theme: MarkdownTheme,
 		defaultTextStyle?: DefaultTextStyle,
+		softWrap = false,
 	) {
 		this.text = text;
 		this.paddingX = paddingX;
 		this.paddingY = paddingY;
 		this.theme = theme;
 		this.defaultTextStyle = defaultTextStyle;
+		this.softWrap = softWrap;
 	}
 
 	setText(text: string): void {
@@ -127,7 +131,7 @@ export class Markdown implements Component {
 		// Wrap lines (NO padding, NO background yet)
 		const wrappedLines: string[] = [];
 		for (const line of renderedLines) {
-			if (isImageLine(line)) {
+			if (isImageLine(line) || (this.softWrap && isWrappableLine(line))) {
 				wrappedLines.push(line);
 			} else {
 				for (const wl of wrapTextWithAnsi(line, contentWidth)) wrappedLines.push(wl);
@@ -143,6 +147,11 @@ export class Markdown implements Component {
 		for (const line of wrappedLines) {
 			if (isImageLine(line)) {
 				contentLines.push(line);
+				continue;
+			}
+
+			if (this.softWrap && isWrappableLine(line)) {
+				contentLines.push(markWrappable(leftMargin + stripWrapMarker(line)));
 				continue;
 			}
 
@@ -299,7 +308,13 @@ export class Markdown implements Component {
 
 			case "paragraph": {
 				const paragraphText = this.renderInlineTokens(token.tokens || [], styleContext);
-				lines.push(paragraphText);
+				if (this.softWrap) {
+					for (const paragraphLine of paragraphText.split("\n")) {
+						lines.push(markWrappable(paragraphLine));
+					}
+				} else {
+					lines.push(paragraphText);
+				}
 				// Don't add spacing if next token is space or list
 				if (nextTokenType && nextTokenType !== "list" && nextTokenType !== "space") {
 					lines.push("");
@@ -313,13 +328,15 @@ export class Markdown implements Component {
 				if (this.theme.highlightCode) {
 					const highlightedLines = this.theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
-						lines.push(`${indent}${hlLine}`);
+						const codeLine = `${indent}${hlLine}`;
+						lines.push(this.softWrap ? markWrappable(codeLine) : codeLine);
 					}
 				} else {
 					// Split code by newlines and style each line
 					const codeLines = token.text.split("\n");
 					for (const codeLine of codeLines) {
-						lines.push(`${indent}${this.theme.codeBlock(codeLine)}`);
+						const styledCodeLine = `${indent}${this.theme.codeBlock(codeLine)}`;
+						lines.push(this.softWrap ? markWrappable(styledCodeLine) : styledCodeLine);
 					}
 				}
 				lines.push(this.theme.codeBlockBorder("```"));
@@ -380,7 +397,13 @@ export class Markdown implements Component {
 				}
 
 				for (const quoteLine of renderedQuoteLines) {
-					const styledLine = applyQuoteStyle(quoteLine);
+					const shouldSoftWrapQuoteLine = this.softWrap && isWrappableLine(quoteLine);
+					const unmarkedQuoteLine = shouldSoftWrapQuoteLine ? stripWrapMarker(quoteLine) : quoteLine;
+					const styledLine = applyQuoteStyle(unmarkedQuoteLine);
+					if (shouldSoftWrapQuoteLine) {
+						lines.push(markWrappable(this.theme.quoteBorder("│ ") + styledLine));
+						continue;
+					}
 					const wrappedLines = wrapTextWithAnsi(styledLine, quoteContentWidth);
 					for (const wrappedLine of wrappedLines) {
 						lines.push(this.theme.quoteBorder("│ ") + wrappedLine);

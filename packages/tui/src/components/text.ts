@@ -1,5 +1,6 @@
 import type { Component } from "../tui.js";
 import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
+import { markWrappable } from "../wrap.js";
 
 /**
  * Text component - displays multi-line text with word wrapping
@@ -9,17 +10,25 @@ export class Text implements Component {
 	private paddingX: number; // Left/right padding
 	private paddingY: number; // Top/bottom padding
 	private customBgFn?: (text: string) => string;
+	private softWrap: boolean;
 
 	// Cache for rendered output
 	private cachedText?: string;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 
-	constructor(text: string = "", paddingX: number = 1, paddingY: number = 1, customBgFn?: (text: string) => string) {
+	constructor(
+		text: string = "",
+		paddingX: number = 1,
+		paddingY: number = 1,
+		customBgFn?: (text: string) => string,
+		softWrap = false,
+	) {
 		this.text = text;
 		this.paddingX = paddingX;
 		this.paddingY = paddingY;
 		this.customBgFn = customBgFn;
+		this.softWrap = softWrap;
 	}
 
 	setText(text: string): void {
@@ -60,6 +69,27 @@ export class Text implements Component {
 		// Replace tabs with 3 spaces
 		const normalizedText = this.text.replace(/\t/g, "   ");
 
+		// Add top/bottom padding (empty lines)
+		const emptyLine = " ".repeat(width);
+		const emptyLines: string[] = [];
+		for (let i = 0; i < this.paddingY; i++) {
+			const line = this.customBgFn ? applyBackgroundToLine(emptyLine, width, this.customBgFn) : emptyLine;
+			emptyLines.push(line);
+		}
+
+		if (this.softWrap) {
+			const leftMargin = " ".repeat(this.paddingX);
+			const contentLines = normalizedText.split("\n").map((line) => markWrappable(leftMargin + line));
+			const result = [...emptyLines, ...contentLines, ...emptyLines];
+
+			// Update cache
+			this.cachedText = this.text;
+			this.cachedWidth = width;
+			this.cachedLines = result;
+
+			return result.length > 0 ? result : [""];
+		}
+
 		// Calculate content width (subtract left/right margins)
 		const contentWidth = Math.max(1, width - this.paddingX * 2);
 
@@ -84,14 +114,6 @@ export class Text implements Component {
 				const paddingNeeded = Math.max(0, width - visibleLen);
 				contentLines.push(lineWithMargins + " ".repeat(paddingNeeded));
 			}
-		}
-
-		// Add top/bottom padding (empty lines)
-		const emptyLine = " ".repeat(width);
-		const emptyLines: string[] = [];
-		for (let i = 0; i < this.paddingY; i++) {
-			const line = this.customBgFn ? applyBackgroundToLine(emptyLine, width, this.customBgFn) : emptyLine;
-			emptyLines.push(line);
 		}
 
 		const result = [...emptyLines, ...contentLines, ...emptyLines];

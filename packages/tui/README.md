@@ -142,11 +142,35 @@ interface Component {
 
 | Method | Description |
 |--------|-------------|
-| `render(width)` | Returns an array of strings, one per line. Each line **must not exceed `width`** or the TUI will error. Use `truncateToWidth()` or manual wrapping to ensure this. |
+| `render(width)` | Returns an array of strings, one per line. Each line **must not exceed `width`** or the TUI will error. Use `truncateToWidth()` or manual wrapping to ensure this. The one exception is soft-wrappable lines — see below. |
 | `handleInput?(data)` | Called when the component has focus and receives keyboard input. The `data` string contains raw terminal input (may include ANSI escape sequences). |
 | `invalidate?()` | Called to clear any cached render state. Components should re-render from scratch on the next `render()` call. |
 
 The TUI appends a full SGR reset and OSC 8 reset at the end of each rendered line. Styles do not carry across lines. If you emit multi-line text with styling, reapply styles per line or use `wrapTextWithAnsi()` so styles are preserved for each wrapped line.
+
+### Soft-wrappable lines (clean copy/paste)
+
+By default a component must hard-wrap its own output so that one emitted line equals exactly one terminal row. That keeps rendering predictable, but it injects real newlines into wide content — so when a user selects and copies wide prose or a long code line from the terminal scrollback, the copied text contains spurious line breaks.
+
+A component can instead emit a line as **soft-wrappable**: the renderer leaves it un-wrapped and lets the terminal lay it out under its own autowrap, so it remains a *single logical line* in scrollback and copies cleanly with no injected newlines.
+
+```typescript
+import { markWrappable } from "@dreb/tui";
+
+render(width: number): string[] {
+  // This line may exceed `width`; the terminal will soft-wrap it and it will
+  // copy as one logical line.
+  return [markWrappable("a very long line of prose that exceeds the width …")];
+}
+```
+
+Contract for a soft-wrappable line:
+
+- Prefix it with `markWrappable(line)` (a zero-width APC sentinel the renderer strips before writing).
+- **Do not** hard-wrap it (don't pass it through `wrapTextWithAnsi()`), **do not** pad it to the full width, and **do not** apply a full-width background — none of those survive terminal autowrap, and trailing padding pollutes the copied text. Left padding/indent is fine; it becomes part of the single logical line.
+- A marked line **may exceed `width`** — that is the whole point. Unmarked lines keep the strict "must not exceed `width`" invariant and still trigger the loud over-width guard.
+
+Helpers (`@dreb/tui`): `WRAP_MARKER`, `markWrappable`, `isWrappableLine`, `stripWrapMarker`, `screenRowsForLine`, `splitToScreenRows`. The built-in `Text` and `Markdown` components accept an opt-in `softWrap` flag that emits prose and code-block lines this way (tables and other width-sensitive structures stay hard-wrapped).
 
 ### Focusable Interface (IME Support)
 

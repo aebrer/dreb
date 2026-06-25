@@ -9,6 +9,7 @@ import { isKeyRelease, matchesKey } from "./keys.js";
 import type { Terminal } from "./terminal.js";
 import { getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
 import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
+import { isWrappableLine, screenRowsForLine, splitToScreenRows, stripWrapMarker } from "./wrap.js";
 
 /**
  * Component interface - all components must implement this
@@ -252,7 +253,8 @@ export class TUI extends Container {
 
 	// Committed-scrollback state
 	private committedChildCount = 0; // children[0..n) are committed to scrollback
-	private committedLineCount = 0; // total lines written to scrollback from committed children
+	private committedLineCount = 0; // total logical lines written to scrollback from committed children
+	private committedScreenRows = 0; // total terminal rows those committed lines occupy (>= committedLineCount when soft-wrapped)
 
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
@@ -520,32 +522,38 @@ export class TUI extends Container {
 	commit(): void {
 		const width = this.terminal.columns;
 
-		// Count lines from committed children
+		// Count lines from committed children (logical lines and the terminal rows
+		// they occupy — these differ when content is soft-wrapped).
 		let newCommittedLineCount = 0;
+		let newCommittedScreenRows = 0;
 		for (let i = 0; i < this.committedChildCount && i < this.children.length; i++) {
 			const childLines = this.children[i].render(width);
 			newCommittedLineCount += childLines.length;
+			for (const line of childLines) newCommittedScreenRows += screenRowsForLine(line, width, isImageLine(line));
 		}
 
-		const delta = newCommittedLineCount - this.committedLineCount;
+		const delta = newCommittedLineCount - this.committedLineCount; // logical lines newly committed
 		if (delta <= 0) return; // nothing new to commit
+		const screenDelta = newCommittedScreenRows - this.committedScreenRows; // terminal rows newly committed
 
-		// Trim previousLines: remove the leading committed lines
+		// Trim previousLines: remove the leading committed logical lines
 		if (this.previousLines.length >= delta) {
 			this.previousLines = this.previousLines.slice(delta);
 		} else {
 			this.previousLines = [];
 		}
 
-		// Adjust cursor positions (now relative to smaller live region)
-		this.hardwareCursorRow = Math.max(0, this.hardwareCursorRow - delta);
-		this.cursorRow = Math.max(0, this.cursorRow - delta);
+		// Adjust cursor positions (now relative to smaller live region) in screen rows
+		this.hardwareCursorRow = Math.max(0, this.hardwareCursorRow - screenDelta);
+		this.cursorRow = Math.max(0, this.cursorRow - screenDelta);
 
 		this.committedLineCount = newCommittedLineCount;
+		this.committedScreenRows = newCommittedScreenRows;
 
-		// Reset live-region tracking
-		this.maxLinesRendered = this.previousLines.length;
-		this.previousViewportTop = Math.max(0, this.previousLines.length - this.terminal.rows);
+		// Reset live-region tracking (screen rows)
+		const liveRows = this.screenRowCount(this.previousLines, width);
+		this.maxLinesRendered = liveRows;
+		this.previousViewportTop = Math.max(0, liveRows - this.terminal.rows);
 	}
 
 	/**
@@ -576,11 +584,13 @@ export class TUI extends Container {
 		// Render ALL children (committed + live)
 		const allLines: string[] = [];
 		let newCommittedLineCount = 0;
+		let newCommittedScreenRows = 0;
 		for (let i = 0; i < this.children.length; i++) {
 			const childLines = this.children[i].render(width);
 			for (const line of childLines) allLines.push(line);
 			if (i < this.committedChildCount) {
 				newCommittedLineCount += childLines.length;
+				for (const line of childLines) newCommittedScreenRows += screenRowsForLine(line, width, isImageLine(line));
 			}
 		}
 
@@ -595,32 +605,39 @@ export class TUI extends Container {
 		// row 0. Resetting first drops the old scrollback and restores auto-follow;
 		// CSI 3 J runs before any transcript bytes so it cannot erase freshly
 		// repainted history. Re-enable input modes that RIS may reset.
+		//
+		// Soft-wrappable lines are emitted unwrapped (markers stripped): the
+		// terminal lays them out under autowrap so they remain a single logical
+		// line in native scrollback and copy cleanly.
 		this.fullRedrawCount += 1;
 		let buffer = `\x1bc\x1b[3J${this.terminal.getInputModeReenableSequence()}\x1b[?2026h`;
 		for (let i = 0; i < allLines.length; i++) {
 			if (i > 0) buffer += "\r\n";
-			buffer += allLines[i];
+			buffer += stripWrapMarker(allLines[i]);
 		}
 		buffer += "\x1b[?2026l";
 		this.terminal.write(buffer);
 
-		// Update state: previousLines holds only live portion
+		// Update state: previousLines holds only live portion (logical lines)
 		const liveLines = allLines.slice(newCommittedLineCount);
+		const liveRows = this.screenRowCount(liveLines, width);
 		this.committedLineCount = newCommittedLineCount;
+		this.committedScreenRows = newCommittedScreenRows;
 		this.previousLines = liveLines;
-		this.cursorRow = Math.max(0, liveLines.length - 1);
+		this.cursorRow = Math.max(0, liveRows - 1);
 		this.hardwareCursorRow = this.cursorRow;
-		this.maxLinesRendered = liveLines.length;
-		this.previousViewportTop = Math.max(0, liveLines.length - height);
+		this.maxLinesRendered = liveRows;
+		this.previousViewportTop = Math.max(0, liveRows - height);
 		this.previousWidth = width;
 		this.previousHeight = height;
 
-		// Position hardware cursor (cursorPos is absolute, adjust to live-relative)
+		// Position hardware cursor (cursorPos.row is a logical index into allLines;
+		// translate to a live-relative logical row, then to screen coordinates).
 		if (cursorPos && cursorPos.row >= newCommittedLineCount) {
 			const liveCursorPos = { row: cursorPos.row - newCommittedLineCount, col: cursorPos.col };
-			this.positionHardwareCursor(liveCursorPos, liveLines.length);
+			this.positionCursorForLines(liveCursorPos, liveLines, width);
 		} else {
-			this.positionHardwareCursor(null, liveLines.length);
+			this.positionHardwareCursor(null, liveRows);
 		}
 
 		this.onPostRender?.();
@@ -635,6 +652,63 @@ export class TUI extends Container {
 			for (const line of this.children[i].render(width)) lines.push(line);
 		}
 		return lines;
+	}
+
+	/**
+	 * Map each logical line to the terminal row it starts on (cumulative screen
+	 * rows), accounting for soft-wrapped lines that occupy multiple rows. For
+	 * content with no wrappable lines this is the identity (one row per line), so
+	 * all screen-row math degrades to the previous line-based behavior.
+	 */
+	private computeRowMap(lines: string[], width: number): { starts: number[]; total: number } {
+		const starts = new Array<number>(lines.length);
+		let acc = 0;
+		for (let i = 0; i < lines.length; i++) {
+			starts[i] = acc;
+			acc += screenRowsForLine(lines[i], width, isImageLine(lines[i]));
+		}
+		return { starts, total: acc };
+	}
+
+	/** Total terminal rows the given logical lines occupy at `width`. */
+	private screenRowCount(lines: string[], width: number): number {
+		let acc = 0;
+		for (const line of lines) acc += screenRowsForLine(line, width, isImageLine(line));
+		return acc;
+	}
+
+	/** True if any line is soft-wrappable AND actually exceeds the width (so it wraps). */
+	private hasWrappingLines(lines: string[], width: number): boolean {
+		for (const line of lines) {
+			if (isWrappableLine(line) && visibleWidth(line) > width) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Position the hardware cursor given a cursor position expressed as a *logical*
+	 * line index within `lines` (plus visible column). Converts to terminal-row
+	 * coordinates, accounting for soft-wrapped lines above and within the target.
+	 */
+	private positionCursorForLines(
+		cursorPos: { row: number; col: number } | null,
+		lines: string[],
+		width: number,
+	): void {
+		if (!cursorPos) {
+			this.positionHardwareCursor(null, 0);
+			return;
+		}
+		const map = this.computeRowMap(lines, width);
+		const logicalRow = Math.max(0, Math.min(cursorPos.row, lines.length - 1));
+		const base = map.starts[logicalRow] ?? map.total;
+		let screenRow = base;
+		let screenCol = cursorPos.col;
+		if (width > 0 && lines.length > 0 && isWrappableLine(lines[logicalRow] ?? "")) {
+			screenRow = base + Math.floor(cursorPos.col / width);
+			screenCol = cursorPos.col % width;
+		}
+		this.positionHardwareCursor({ row: screenRow, col: screenCol }, map.total);
 	}
 
 	private scheduleRender(): void {
@@ -1088,6 +1162,7 @@ export class TUI extends Container {
 			// committed scrollback above is never touched.
 			const fullRender = (clear: boolean): void => {
 				this.fullRedrawCount += 1;
+				const newRows = this.screenRowCount(newLines, width);
 				let buffer = "\x1b[?2026h"; // Begin synchronized output
 				if (clear) {
 					// Move cursor to start of live region (row 0 in live-relative coords)
@@ -1095,23 +1170,24 @@ export class TUI extends Container {
 					if (moveUp > 0) buffer += `\x1b[${moveUp}A`;
 					buffer += "\r\x1b[J"; // Carriage return + clear from cursor to end of screen
 				}
+				// Emit unwrapped (markers stripped); the terminal autowraps wide lines.
 				for (let i = 0; i < newLines.length; i++) {
 					if (i > 0) buffer += "\r\n";
-					buffer += newLines[i];
+					buffer += stripWrapMarker(newLines[i]);
 				}
 				buffer += "\x1b[?2026l"; // End synchronized output
 				this.terminal.write(buffer);
-				this.cursorRow = Math.max(0, newLines.length - 1);
+				this.cursorRow = Math.max(0, newRows - 1);
 				this.hardwareCursorRow = this.cursorRow;
-				// Reset max lines when clearing, otherwise track growth
+				// Reset max lines when clearing, otherwise track growth (screen rows)
 				if (clear) {
-					this.maxLinesRendered = newLines.length;
+					this.maxLinesRendered = newRows;
 				} else {
-					this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+					this.maxLinesRendered = Math.max(this.maxLinesRendered, newRows);
 				}
-				const bufferLength = Math.max(height, newLines.length);
+				const bufferLength = Math.max(height, newRows);
 				this.previousViewportTop = Math.max(0, bufferLength - height);
-				this.positionHardwareCursor(cursorPos, newLines.length);
+				this.positionCursorForLines(cursorPos, newLines, width);
 				this.previousLines = newLines;
 				this.previousWidth = width;
 				this.previousHeight = height;
@@ -1132,8 +1208,18 @@ export class TUI extends Container {
 			// remains explicit through `recommitAll()` callsites such as width/theme changes.
 			const restoreLiveViewport = (): void => {
 				this.fullRedrawCount += 1;
-				const visibleStart = Math.max(0, newLines.length - height);
-				const visibleLines = newLines.slice(visibleStart);
+				// Expand wrappable lines into the terminal rows they occupy. This in-place
+				// repaint addresses each screen row individually (no autowrap/scroll), so
+				// each row must be a pre-sliced fragment that fits the width. This output is
+				// transient (overwritten next frame) and never enters scrollback, so slicing
+				// here does not affect copy-cleanliness of committed content.
+				const fragments: string[] = [];
+				for (const line of newLines) {
+					for (const frag of splitToScreenRows(line, width)) fragments.push(frag);
+				}
+				const totalRows = fragments.length;
+				const visibleStart = Math.max(0, totalRows - height);
+				const visibleLines = fragments.slice(visibleStart);
 				const topPadding = this.committedChildCount > 0 ? Math.max(0, height - visibleLines.length) : 0;
 				const currentScreenRow = Math.max(0, Math.min(height - 1, hardwareCursorRow - prevViewportTop));
 				let buffer = "\x1b[?2026h";
@@ -1150,18 +1236,18 @@ export class TUI extends Container {
 				if (moveBackToContent > 0) buffer += `\x1b[${moveBackToContent}A`;
 				buffer += "\x1b[?2026l";
 				this.terminal.write(buffer);
-				this.cursorRow = Math.max(0, newLines.length - 1);
+				this.cursorRow = Math.max(0, totalRows - 1);
 				this.hardwareCursorRow = this.cursorRow;
 				if (this.overlayStack.length === 0) {
-					this.maxLinesRendered = newLines.length;
+					this.maxLinesRendered = totalRows;
 				} else {
-					this.maxLinesRendered = Math.max(this.maxLinesRendered, newLines.length);
+					this.maxLinesRendered = Math.max(this.maxLinesRendered, totalRows);
 				}
-				this.previousViewportTop = Math.max(0, newLines.length - height);
+				this.previousViewportTop = Math.max(0, totalRows - height);
 				this.previousLines = newLines;
 				this.previousWidth = width;
 				this.previousHeight = height;
-				this.positionHardwareCursor(cursorPos, newLines.length);
+				this.positionCursorForLines(cursorPos, newLines, width);
 				this.onPostRender?.();
 			};
 
@@ -1195,6 +1281,21 @@ export class TUI extends Container {
 			// of replaying committed transcript lines.
 			if (heightChanged) {
 				clearAndRedraw();
+				return;
+			}
+
+			// ── Soft-wrap path ─────────────────────────────────────────────────────
+			// When the live region contains soft-wrappable lines that exceed the width,
+			// the "one logical line == one terminal row" assumption no longer holds, so
+			// the fast per-line differential below (which moves the cursor and clears in
+			// whole-row units) cannot be used. Handle these renders with screen-row math.
+			// Overlays composite in logical-line space, so when an overlay is up we fall
+			// through to the fast path (overlay base lines are constrained to width).
+			if (
+				this.overlayStack.length === 0 &&
+				(this.hasWrappingLines(newLines, width) || this.hasWrappingLines(this.previousLines, width))
+			) {
+				this.renderWrapped(newLines, cursorPos, width, height, prevViewportTop, hardwareCursorRow, clearAndRedraw);
 				return;
 			}
 
@@ -1347,7 +1448,9 @@ export class TUI extends Container {
 				buffer += "\x1b[2K"; // Clear current line
 				const line = newLines[i];
 				const isImage = isImageLine(line);
-				if (!isImage && visibleWidth(line) > width) {
+				// Soft-wrappable lines are exempt from the over-width guard: they are
+				// allowed to exceed the width and are handled by the soft-wrap path.
+				if (!isImage && !isWrappableLine(line) && visibleWidth(line) > width) {
 					// Log all lines to crash file for debugging
 					const crashLogPath = path.join(os.homedir(), ".dreb", "agent", "dreb-crash.log");
 					const crashData = [
@@ -1375,7 +1478,7 @@ export class TUI extends Container {
 					].join("\n");
 					throw new Error(errorMsg);
 				}
-				buffer += line;
+				buffer += stripWrapMarker(line);
 			}
 
 			// Track where cursor ended up after rendering
@@ -1425,6 +1528,121 @@ export class TUI extends Container {
 		} finally {
 			this.inDifferentialRender = false;
 		}
+	}
+
+	/**
+	 * Row-aware differential render for live regions that contain soft-wrapped
+	 * lines (one logical line may occupy several terminal rows). Mirrors the fast
+	 * differential path's structure but works in screen-row units. Lines are
+	 * emitted unwrapped (markers stripped) so the terminal lays them out under
+	 * autowrap and they remain single logical lines in native scrollback.
+	 *
+	 * Off-screen changes and any net shrink fall back to `clearAndRedraw` (a
+	 * row-aware bottom-anchored repaint), which also preserves the issue-292
+	 * guarantee that live-only changes never replay committed scrollback.
+	 */
+	private renderWrapped(
+		newLines: string[],
+		cursorPos: { row: number; col: number } | null,
+		width: number,
+		height: number,
+		prevViewportTop: number,
+		hardwareCursorRow: number,
+		clearAndRedraw: () => void,
+	): void {
+		const prevMap = this.computeRowMap(this.previousLines, width);
+		const newMap = this.computeRowMap(newLines, width);
+		const prevLen = this.previousLines.length;
+
+		// Diff logical lines (same comparison as the fast path).
+		let firstChanged = -1;
+		const maxLines = Math.max(newLines.length, prevLen);
+		for (let i = 0; i < maxLines; i++) {
+			const oldLine = i < prevLen ? this.previousLines[i] : "";
+			const newLine = i < newLines.length ? newLines[i] : "";
+			if (oldLine !== newLine) {
+				if (firstChanged === -1) firstChanged = i;
+			}
+		}
+		const appended = newLines.length > prevLen;
+		if (firstChanged === -1) {
+			if (!appended) {
+				// No change — reposition cursor only.
+				this.positionCursorForLines(cursorPos, newLines, width);
+				this.previousViewportTop = prevViewportTop;
+				this.previousHeight = height;
+				this.onPostRender?.();
+				return;
+			}
+			firstChanged = prevLen;
+		}
+
+		const newTotalRows = newMap.total;
+		const prevTotalRows = prevMap.total;
+		const prevViewportBottom = prevViewportTop + height - 1;
+		const startScreenRow = firstChanged < prevLen ? prevMap.starts[firstChanged] : prevTotalRows;
+
+		// Change begins above the viewport, or the live region shrank: bottom-anchor
+		// with a row-aware repaint (covers turn-end spinner removal, deletions, and
+		// the scrolled-up cases the fast path guards against).
+		if (startScreenRow < prevViewportTop || newTotalRows < prevTotalRows) {
+			clearAndRedraw();
+			return;
+		}
+
+		const pureAppend = firstChanged === prevLen; // only new lines added at the end
+		let buffer = "\x1b[?2026h";
+		let curHw = hardwareCursorRow;
+
+		const moveTo = (targetRow: number): void => {
+			if (targetRow > prevViewportBottom) {
+				// Target sits below the viewport — drop to the bottom then scroll down.
+				const curScreen = Math.max(0, Math.min(height - 1, curHw - prevViewportTop));
+				const moveToBottom = height - 1 - curScreen;
+				if (moveToBottom > 0) buffer += `\x1b[${moveToBottom}B`;
+				const scroll = targetRow - prevViewportBottom;
+				buffer += "\r\n".repeat(scroll);
+				curHw = targetRow;
+			} else {
+				const diff = targetRow - curHw;
+				if (diff > 0) buffer += `\x1b[${diff}B`;
+				else if (diff < 0) buffer += `\x1b[${-diff}A`;
+				curHw = targetRow;
+			}
+		};
+
+		if (pureAppend) {
+			// Move to the last existing row, then append (terminal autowraps + scrolls
+			// content into native scrollback unwrapped).
+			moveTo(Math.max(0, prevTotalRows - 1));
+			buffer += "\r";
+			for (let i = prevLen; i < newLines.length; i++) {
+				buffer += `\r\n${stripWrapMarker(newLines[i])}`;
+			}
+		} else {
+			// In-place change (optionally with appended lines): rewrite from the first
+			// changed line to the end. Clear to end of screen first; the terminal
+			// re-wraps and scrolls as needed.
+			moveTo(startScreenRow);
+			buffer += "\r\x1b[J";
+			for (let i = firstChanged; i < newLines.length; i++) {
+				if (i > firstChanged) buffer += "\r\n";
+				buffer += stripWrapMarker(newLines[i]);
+			}
+		}
+
+		buffer += "\x1b[?2026l";
+		this.terminal.write(buffer);
+
+		this.cursorRow = Math.max(0, newTotalRows - 1);
+		this.hardwareCursorRow = Math.max(0, newTotalRows - 1);
+		this.maxLinesRendered = newTotalRows;
+		this.previousViewportTop = Math.max(0, newTotalRows - height);
+		this.positionCursorForLines(cursorPos, newLines, width);
+		this.previousLines = newLines;
+		this.previousWidth = width;
+		this.previousHeight = height;
+		this.onPostRender?.();
 	}
 
 	/**

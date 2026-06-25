@@ -189,6 +189,27 @@ export class VirtualTerminal implements Terminal {
 		return lines;
 	}
 
+	/**
+	 * Get the scroll buffer reconstructed into *logical* lines: rows that the
+	 * terminal soft-wrapped (marked `isWrapped`) are joined back with their
+	 * predecessor. This is what a user copy of the scrollback yields — verifying
+	 * that soft-wrapped output contains no injected hard newlines.
+	 */
+	getLogicalScrollBuffer(): string[] {
+		const logical: string[] = [];
+		const buffer = this.xterm.buffer.active;
+		for (let i = 0; i < buffer.length; i++) {
+			const line = buffer.getLine(i);
+			const text = line ? line.translateToString(true) : "";
+			if (line?.isWrapped && logical.length > 0) {
+				logical[logical.length - 1] += text;
+			} else {
+				logical.push(text);
+			}
+		}
+		return logical;
+	}
+
 	/** Scroll the viewport by a signed line count; negative moves up into scrollback. */
 	scrollLines(amount: number): void {
 		this.xterm.scrollLines(amount);
