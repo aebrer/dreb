@@ -400,6 +400,15 @@ export async function handleAgentEvent(
 			break;
 		}
 
+		case "parent_paused_for_background_agents": {
+			const count = (event as any).runningAgentCount;
+			const agentWord = count === 1 ? "agent" : "agents";
+			send(
+				`⏸️ Paused automatically — ${count} background ${agentWord} still working. dreb will resume when they report back, or send a message to continue. (configure via backgroundAgents settings)`,
+			);
+			break;
+		}
+
 		case "auto_compaction_start": {
 			updateStatusText(state, "🗜 _Compacting context..._");
 			break;

@@ -238,8 +238,8 @@ describe("AgentSession background agent guardrails", () => {
 			});
 		});
 
-		it("increments bgTurnCounter on turn_end while bg agents are running", async () => {
-			// Simulate bg agents running
+		it("increments bgTurnCounter on turn_end when bg agents were already running at turn_start", async () => {
+			// Simulate bg agents running before the turn starts
 			mockGetRunningBackgroundAgents.mockReturnValue([
 				{ agentId: "bg-1", agentType: "test", taskSummary: "test task", startedAt: Date.now(), status: "running" },
 			]);
@@ -255,6 +255,44 @@ describe("AgentSession background agent guardrails", () => {
 			// After one prompt (one turn_end), counter should be 1
 			const sessionAny = session as any;
 			expect(sessionAny._bgTurnCounter).toBe(1);
+		});
+
+		it("does not count the launch turn and pauses only after three post-launch parent turns", async () => {
+			const sessionAny = session as any;
+			const shouldContinue = (agent as any)._shouldContinue;
+
+			// Launch turn starts with no bg agents, then bg agents become visible before turn_end.
+			mockGetRunningBackgroundAgents.mockReturnValue([]);
+			streamResponder = (stream) => {
+				mockGetRunningBackgroundAgents.mockReturnValue([
+					{
+						agentId: "bg-1",
+						agentType: "test",
+						taskSummary: "test task",
+						startedAt: Date.now(),
+						status: "running",
+					},
+				]);
+				const msg = createAssistantMessage("Launched bg agent");
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				stream.push({ type: "done", reason: "stop", message: msg });
+			};
+
+			await session.prompt("launch bg agent");
+			expect(sessionAny._bgTurnCounter).toBe(0);
+			expect(shouldContinue()).toBe(true);
+
+			for (let turn = 1; turn <= 3; turn++) {
+				streamResponder = (stream) => {
+					const msg = createAssistantMessage(`Post-launch turn ${turn}`);
+					stream.push({ type: "start", partial: createAssistantMessage("") });
+					stream.push({ type: "done", reason: "stop", message: msg });
+				};
+
+				await session.prompt(`post-launch turn ${turn}`);
+				expect(sessionAny._bgTurnCounter).toBe(turn);
+				expect(shouldContinue()).toBe(turn < 3);
+			}
 		});
 
 		it("resets bgTurnCounter to 0 when no bg agents are running", async () => {
@@ -310,6 +348,175 @@ describe("AgentSession background agent guardrails", () => {
 
 			// No steer messages should have been queued (the stale warning bug was fixed)
 			expect(steerCalls.length).toBe(0);
+		});
+
+		it("emits parent_paused_for_background_agents event when the guardrail halts", () => {
+			const sessionAny = session as any;
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+				{ agentId: "bg-2", agentType: "test", taskSummary: "task b", startedAt: Date.now(), status: "running" },
+			]);
+			sessionAny._bgTurnCounter = (AgentSession as any).BG_TURN_LIMIT ?? 3;
+
+			const shouldContinue = (agent as any)._shouldContinue;
+			expect(shouldContinue()).toBe(false);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents.length).toBe(1);
+			expect(pauseEvents[0].runningAgentCount).toBe(2);
+			expect(pauseEvents[0].turnsUsed).toBe(3);
+			expect(pauseEvents[0].turnLimit).toBe(3);
+
+			// The notification must be a frontend/session event, NOT a model steer
+			expect(steerCalls.length).toBe(0);
+		});
+
+		it("emits the pause notification only once when shouldContinue is re-entered at the limit", () => {
+			const sessionAny = session as any;
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+			]);
+			sessionAny._bgTurnCounter = (AgentSession as any).BG_TURN_LIMIT ?? 3;
+
+			const shouldContinue = (agent as any)._shouldContinue;
+			expect(shouldContinue()).toBe(false);
+			expect(shouldContinue()).toBe(false);
+			expect(shouldContinue()).toBe(false);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents).toHaveLength(1);
+			expect(pauseEvents[0].turnsUsed).toBe(3);
+			expect(steerCalls.length).toBe(0);
+		});
+
+		it("re-emits the pause notification for a new episode after a bg-delivery reset", () => {
+			const sessionAny = session as any;
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+			]);
+
+			const shouldContinue = (agent as any)._shouldContinue;
+
+			// First pause episode — emit once, flag set.
+			sessionAny._bgTurnCounter = (AgentSession as any).BG_TURN_LIMIT ?? 3;
+			expect(shouldContinue()).toBe(false);
+			expect(sessionAny._bgPauseNotified).toBe(true);
+
+			// A bg agent delivers results — counter AND the pause-notified flag must reset together.
+			sessionAny._handleBackgroundComplete(
+				"bg-1",
+				{ agent: "test", task: "task a", exitCode: 0, output: "done", stderr: "", errorMessage: null },
+				false,
+			);
+			expect(sessionAny._bgTurnCounter).toBe(0);
+			expect(sessionAny._bgPauseNotified).toBe(false);
+
+			// Second pause episode (a fresh batch climbs back to the limit) — must re-notify.
+			sessionAny._bgTurnCounter = (AgentSession as any).BG_TURN_LIMIT ?? 3;
+			expect(shouldContinue()).toBe(false);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents).toHaveLength(2);
+			expect(steerCalls.length).toBe(0);
+		});
+
+		it("re-arms the pause notification on a new run's turn_start so a re-pause re-notifies", async () => {
+			const sessionAny = session as any;
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+			]);
+
+			const shouldContinue = (agent as any)._shouldContinue;
+
+			// First pause episode — emit once, flag set.
+			sessionAny._bgTurnCounter = (AgentSession as any).BG_TURN_LIMIT ?? 3;
+			expect(shouldContinue()).toBe(false);
+			expect(sessionAny._bgPauseNotified).toBe(true);
+
+			// User sends a message to continue. The ungated first turn runs; turn_start must
+			// re-arm the notification (clear _bgPauseNotified) even though bg agents are still
+			// running and the counter is still at the limit. Without the re-arm, the re-pause
+			// would break the loop silently with no notification.
+			streamResponder = (stream) => {
+				const msg = createAssistantMessage("Acknowledged — continuing");
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				stream.push({ type: "done", reason: "stop", message: msg });
+			};
+			await session.prompt("please continue");
+
+			// turn_start re-armed the flag; turn_end ticked the counter past the limit.
+			expect(sessionAny._bgPauseNotified).toBe(false);
+			expect(sessionAny._bgTurnCounter).toBeGreaterThanOrEqual((AgentSession as any).BG_TURN_LIMIT ?? 3);
+
+			// The re-pause now re-notifies instead of breaking silently.
+			expect(shouldContinue()).toBe(false);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents).toHaveLength(2);
+			expect(steerCalls.length).toBe(0);
+		});
+
+		it("does not pause and emits no event when the guardrail is disabled", () => {
+			const sessionAny = session as any;
+			session.settingsManager.setBackgroundAgentGuardrailEnabled(false);
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+			]);
+			// Counter well past the default limit
+			sessionAny._bgTurnCounter = 99;
+
+			const shouldContinue = (agent as any)._shouldContinue;
+			expect(shouldContinue()).toBe(true);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents.length).toBe(0);
+		});
+
+		it("respects a custom parentTurnLimit", () => {
+			const sessionAny = session as any;
+			// parentTurnLimit is JSON-only (no setter); poke the merged settings view directly.
+			(session.settingsManager as any).settings.backgroundAgents = { parentTurnLimit: 1 };
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+			]);
+
+			const shouldContinue = (agent as any)._shouldContinue;
+
+			// Below the custom limit — keep going
+			sessionAny._bgTurnCounter = 0;
+			expect(shouldContinue()).toBe(true);
+
+			// At the custom limit — pause and emit
+			sessionAny._bgTurnCounter = 1;
+			expect(shouldContinue()).toBe(false);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents.length).toBe(1);
+			expect(pauseEvents[0].turnLimit).toBe(1);
 		});
 
 		it("bgTurnCounter resets on bg agent delivery via _handleBackgroundComplete", () => {

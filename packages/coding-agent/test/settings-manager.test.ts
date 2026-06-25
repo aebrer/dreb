@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SettingsManager } from "../src/core/settings-manager.js";
+import { DEFAULT_BG_PARENT_TURN_LIMIT, SettingsManager } from "../src/core/settings-manager.js";
 
 describe("SettingsManager", () => {
 	const testDir = join(process.cwd(), "test-settings-tmp");
@@ -546,6 +546,42 @@ describe("SettingsManager", () => {
 
 			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
 			expect(saved.modelSettings).toEqual({ "claude-opus-4-8": { thinkingDisplay: "omitted" } });
+		});
+	});
+
+	describe("background-agent guardrail settings", () => {
+		it("defaults to enabled with the shared default turn limit", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getBackgroundAgentGuardrailEnabled()).toBe(true);
+			expect(manager.getBackgroundAgentGuardrailSettings()).toEqual({
+				enabled: true,
+				turnLimit: DEFAULT_BG_PARENT_TURN_LIMIT,
+			});
+		});
+
+		it("reads parentTurnGuardrail and parentTurnLimit from settings.json", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ backgroundAgents: { parentTurnGuardrail: false, parentTurnLimit: 7 } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getBackgroundAgentGuardrailSettings()).toEqual({ enabled: false, turnLimit: 7 });
+		});
+
+		it("falls back to the shared default limit for invalid parentTurnLimit values", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ backgroundAgents: { parentTurnLimit: 0 } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getBackgroundAgentGuardrailSettings().turnLimit).toBe(DEFAULT_BG_PARENT_TURN_LIMIT);
+		});
+
+		it("persists the guardrail toggle to global scope", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setBackgroundAgentGuardrailEnabled(false);
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.backgroundAgents).toEqual({ parentTurnGuardrail: false });
+			expect(manager.getBackgroundAgentGuardrailEnabled()).toBe(false);
 		});
 	});
 });

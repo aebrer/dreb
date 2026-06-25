@@ -77,7 +77,7 @@ import { type SecretPattern, scrubSecrets } from "./secret-scrubber.js";
 import { isSensitivePath } from "./sensitive-paths.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
-import type { SettingsManager } from "./settings-manager.js";
+import { DEFAULT_BG_PARENT_TURN_LIMIT, type SettingsManager } from "./settings-manager.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
@@ -143,6 +143,7 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
 	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean }
+	| { type: "parent_paused_for_background_agents"; runningAgentCount: number; turnsUsed: number; turnLimit: number }
 	| { type: "tasks_update"; tasks: readonly SessionTask[] }
 	| { type: "suggest_next"; command: string };
 
@@ -318,10 +319,14 @@ export class AgentSession {
 	// Session tasks (in-memory, lost on session end)
 	private _tasks: SessionTask[] = [];
 
-	// Background agent turn limiter (Layer D): counts LLM turns while bg agents are running.
+	// Background agent turn limiter (Layer D): counts LLM turns that started while bg agents were running.
 	// Reset when a bg agent delivers results. No limit when no bg agents are active.
+	// BG_TURN_LIMIT is the default cap; users can retune or disable it via
+	// settings (backgroundAgents.parentTurnLimit / parentTurnGuardrail).
 	private _bgTurnCounter = 0;
-	private static readonly BG_TURN_LIMIT = 3;
+	private _bgRunningAtTurnStart = false;
+	private _bgPauseNotified = false;
+	private static readonly BG_TURN_LIMIT = DEFAULT_BG_PARENT_TURN_LIMIT;
 
 	// Sentinel monitor state (Layer B): tracks whether we've already steered for this streaming response
 	private _sentinelSteered = false;
@@ -646,29 +651,75 @@ export class AgentSession {
 		});
 
 		// Layer D: Turn limiter — cap parent turns while bg agents are running.
-		// Increment counter on each turn_end while bg agents are active.
+		// Count only turns that started with bg agents already running; the launch turn itself is excluded.
 		this._unsubscribeGuardrailCounter = this.agent.subscribe((event) => {
+			if (event.type === "turn_start") {
+				this._bgRunningAtTurnStart = getRunningBackgroundAgents().length > 0;
+				// Re-arm the pause notification for each new run. Within a single paused
+				// episode the loop breaks (shouldContinue → false) before turn_start fires,
+				// so re-entrant shouldContinue polls stay deduped; a genuinely new run
+				// (e.g. the user sends a message to continue) re-arms and re-notifies if it
+				// re-pauses, instead of breaking silently.
+				this._bgPauseNotified = false;
+				return;
+			}
 			if (event.type !== "turn_end") return;
 			const bgRunning = getRunningBackgroundAgents();
 			if (bgRunning.length === 0) {
-				this._bgTurnCounter = 0;
+				this._resetBgGuardrailState();
 				return;
 			}
-			this._bgTurnCounter++;
+			if (this._bgRunningAtTurnStart) {
+				this._bgTurnCounter++;
+			}
 		});
 
 		// shouldContinue callback — checked before each subsequent LLM call.
 		// Does NOT inject a steer warning — the loop is already stopping, and any
 		// queued warning would go stale (consumed in the next run after bg agents
 		// have already delivered results, making the warning factually wrong).
+		//
+		// Instead, when the guardrail halts the parent, we emit a frontend/session
+		// event (`parent_paused_for_background_agents`) so the TUI and Telegram can surface a
+		// friendly, non-error notification. The guardrail can be disabled or its
+		// turn limit retuned via settings (backgroundAgents.parentTurnGuardrail /
+		// parentTurnLimit).
 		this.agent.setShouldContinue(() => {
 			const bgRunning = getRunningBackgroundAgents();
 			if (bgRunning.length === 0) {
-				this._bgTurnCounter = 0;
+				this._resetBgGuardrailState();
 				return true;
 			}
-			return this._bgTurnCounter < AgentSession.BG_TURN_LIMIT;
+			const { enabled, turnLimit } = this.settingsManager?.getBackgroundAgentGuardrailSettings() ?? {
+				enabled: true,
+				turnLimit: AgentSession.BG_TURN_LIMIT,
+			};
+			// Guardrail disabled — advanced opt-out: parent keeps running while bg agents work.
+			if (!enabled) return true;
+			if (this._bgTurnCounter >= turnLimit) {
+				if (!this._bgPauseNotified) {
+					this._emit({
+						type: "parent_paused_for_background_agents",
+						runningAgentCount: bgRunning.length,
+						turnsUsed: this._bgTurnCounter,
+						turnLimit,
+					});
+					this._bgPauseNotified = true;
+				}
+				return false;
+			}
+			return true;
 		});
+	}
+
+	/**
+	 * Reset the background-agent guardrail counter and the pause-notified flag together.
+	 * These two fields are one logical unit — they must always reset in lockstep so a new
+	 * pause episode both restarts the turn budget and re-arms the pause notification.
+	 */
+	private _resetBgGuardrailState(): void {
+		this._bgTurnCounter = 0;
+		this._bgPauseNotified = false;
 	}
 
 	/**
@@ -724,7 +775,7 @@ export class AgentSession {
 			}
 		} else {
 			// Reset bg turn counter on delivery — parent gets fresh turns
-			this._bgTurnCounter = 0;
+			this._resetBgGuardrailState();
 
 			// Normal completion — deliver and trigger a response
 			// If the agent is already streaming, steer (injects after current tool calls)

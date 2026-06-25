@@ -2833,6 +2833,16 @@ export class InteractiveMode {
 				break;
 			}
 
+			case "parent_paused_for_background_agents": {
+				const count = event.runningAgentCount;
+				const agentWord = count === 1 ? "agent" : "agents";
+				this.showStatus(
+					`Paused automatically — ${count} background ${agentWord} still working. dreb will resume when they report back, or send a message to continue. (configure via backgroundAgents settings)`,
+				);
+				this.updateBackgroundAgentStatus();
+				break;
+			}
+
 			case "tasks_update": {
 				this.tasksPanel.update(event.tasks);
 				this.ui.requestRender();
