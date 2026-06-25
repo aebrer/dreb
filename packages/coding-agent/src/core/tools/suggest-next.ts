@@ -117,8 +117,8 @@ export function createSuggestNextToolDefinition(
 			if (details.summary) {
 				const container = (context.lastComponent as Container | undefined) ?? new Container();
 				container.clear();
-				container.addChild(new Markdown(details.summary, 0, 0, getMarkdownTheme()));
-				container.addChild(new Text(theme.fg("toolOutput", `→ ${details.suggestion}`), 0, 0));
+				container.addChild(new Markdown(details.summary, 0, 0, getMarkdownTheme(), undefined, true));
+				container.addChild(new Text(theme.fg("toolOutput", `→ ${details.suggestion}`), 0, 0, undefined, true));
 				return container;
 			}
 

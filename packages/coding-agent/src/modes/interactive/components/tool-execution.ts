@@ -137,7 +137,7 @@ export class ToolExecutionComponent extends Container {
 		if (!output) {
 			return undefined;
 		}
-		return new Text(theme.fg("toolOutput", output), 0, 0);
+		return new Text(theme.fg("toolOutput", output), 0, 0, undefined, true);
 	}
 
 	updateArgs(args: any): void {

@@ -39,9 +39,16 @@ export class SkillInvocationMessageComponent extends Box {
 			this.addChild(new Text(label, 0, 0));
 			const header = `**${this.skillBlock.name}**\n\n`;
 			this.addChild(
-				new Markdown(header + this.skillBlock.content, 0, 0, this.markdownTheme, {
-					color: (text: string) => theme.fg("customMessageText", text),
-				}),
+				new Markdown(
+					header + this.skillBlock.content,
+					0,
+					0,
+					this.markdownTheme,
+					{
+						color: (text: string) => theme.fg("customMessageText", text),
+					},
+					true,
+				),
 			);
 		} else {
 			// Collapsed: single line - [skill] name (hint to expand)

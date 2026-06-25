@@ -151,7 +151,12 @@ export class Markdown implements Component {
 			}
 
 			if (this.softWrap && isWrappableLine(line)) {
-				contentLines.push(markWrappable(leftMargin + stripWrapMarker(line)));
+				// Soft-wrappable: emit a single un-padded logical line (the terminal wraps
+				// it; it copies clean). A background, if any, is applied behind the text
+				// only — it cannot fill to full width without padding that would pollute
+				// the copy, so soft-wrapped content is ragged-right rather than a block.
+				const stripped = leftMargin + stripWrapMarker(line);
+				contentLines.push(markWrappable(bgFn ? bgFn(stripped) : stripped));
 				continue;
 			}
 
@@ -299,7 +304,7 @@ export class Markdown implements Component {
 
 				const headingText = this.renderInlineTokens(token.tokens || [], headingStyleContext);
 				const styledHeading = headingLevel >= 3 ? headingStyleFn(headingPrefix) + headingText : headingText;
-				lines.push(styledHeading);
+				lines.push(this.softWrap ? markWrappable(styledHeading) : styledHeading);
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after headings (unless space token follows)
 				}
@@ -348,7 +353,8 @@ export class Markdown implements Component {
 
 			case "list": {
 				const listLines = this.renderList(token as any, 0, styleContext);
-				for (const line of listLines) lines.push(line);
+				// Each list line is prose and should soft-wrap as a single logical line.
+				for (const line of listLines) lines.push(this.softWrap && line !== "" ? markWrappable(line) : line);
 				// Don't add spacing after lists if a space token follows
 				// (the space token will handle it)
 				break;

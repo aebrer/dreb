@@ -30,6 +30,51 @@ describe("Markdown softWrap", () => {
 		assert.ok(visibleWidth(lines[0]) > width);
 	});
 
+	it("emits each long list item as one marked logical line when enabled", () => {
+		const longItem = "this is a single bullet whose text runs well past the narrow width without hard wrapping";
+		const md = `- ${longItem}\n- second item also reasonably long but distinct from the first one here`;
+		const width = 24;
+		const markdown = new Markdown(md, 0, 0, defaultMarkdownTheme, undefined, true);
+
+		const lines = markdown.render(width);
+		const marked = lines.filter(isWrappableLine);
+
+		// Two bullets → two marked logical lines, neither hard-split.
+		assert.strictEqual(marked.length, 2);
+		assert.ok(plain(marked[0]).includes(longItem));
+		assert.ok(visibleWidth(marked[0]) > width);
+	});
+
+	it("emits a long heading as one marked logical line when enabled", () => {
+		const heading = "# A heading that is quite long and would otherwise be hard wrapped at a narrow width";
+		const width = 24;
+		const markdown = new Markdown(heading, 0, 0, defaultMarkdownTheme, undefined, true);
+
+		const lines = markdown.render(width);
+		const marked = lines.filter(isWrappableLine);
+
+		assert.strictEqual(marked.length, 1);
+		assert.ok(visibleWidth(marked[0]) > width);
+	});
+
+	it("applies a background behind soft-wrapped text without padding to full width", () => {
+		// Mirrors user-message styling: a bgColor must still wrap the visible text
+		// (not be dropped) but must NOT pad to full width (which would pollute copy).
+		const bg = (t: string) => `\x1b[44m${t}\x1b[49m`;
+		const width = 24;
+		const markdown = new Markdown("hello there", 1, 0, defaultMarkdownTheme, { bgColor: bg }, true);
+
+		const lines = markdown.render(width);
+
+		assert.strictEqual(lines.length, 1);
+		assert.ok(isWrappableLine(lines[0]));
+		// Background sequence is present (not dropped)...
+		assert.ok(lines[0].includes("\x1b[44m"), "bg color should be applied behind the text");
+		// ...but the line is not padded out to full width.
+		assert.ok(visibleWidth(lines[0]) < width, "soft-wrapped bg line must not pad to full width");
+		assert.strictEqual(plain(lines[0]), " hello there");
+	});
+
 	it("emits fenced code block content as one marked unsplit line when enabled", () => {
 		const longCodeLine = `const value = ${"x".repeat(60)};`;
 		const width = 24;

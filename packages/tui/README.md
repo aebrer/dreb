@@ -154,6 +154,8 @@ By default a component must hard-wrap its own output so that one emitted line eq
 
 A component can instead emit a line as **soft-wrappable**: the renderer leaves it un-wrapped and lets the terminal lay it out under its own autowrap, so it remains a *single logical line* in scrollback and copies cleanly with no injected newlines.
 
+This is deliberately **character-level** wrapping (the terminal wraps at its right edge), not word-aware. That is a hard constraint, not a shortcut: terminals only join wrapped rows on copy when they see a continuous run of printing characters flow past the margin under their own autowrap. The moment a component forces its own break — a newline, or padding the row out with spaces to trigger the wrap at a word boundary — that break lands in the copied text (as a newline or a run of spaces). So word-aware breaks and clean terminal copy are mutually exclusive; clean copy wins here, because copyability is the whole point.
+
 ```typescript
 import { markWrappable } from "@dreb/tui";
 
@@ -167,10 +169,10 @@ render(width: number): string[] {
 Contract for a soft-wrappable line:
 
 - Prefix it with `markWrappable(line)` (a zero-width APC sentinel the renderer strips before writing).
-- **Do not** hard-wrap it (don't pass it through `wrapTextWithAnsi()`), **do not** pad it to the full width, and **do not** apply a full-width background — none of those survive terminal autowrap, and trailing padding pollutes the copied text. Left padding/indent is fine; it becomes part of the single logical line.
+- **Do not** hard-wrap it (don't pass it through `wrapTextWithAnsi()`), **do not** pad it to the full width, and **do not** apply a full-width background fill — none of those survive terminal autowrap, and trailing padding pollutes the copied text (this is the `\x1b[K`/erase-to-end-of-line "terminal contract" that ncurses apps follow). A background *behind the visible text* is fine; a full-width fill is not. Left padding/indent is also fine; it becomes part of the single logical line.
 - A marked line **may exceed `width`** — that is the whole point. Unmarked lines keep the strict "must not exceed `width`" invariant and still trigger the loud over-width guard.
 
-Helpers (`@dreb/tui`): `WRAP_MARKER`, `markWrappable`, `isWrappableLine`, `stripWrapMarker`, `screenRowsForLine`, `splitToScreenRows`. The built-in `Text` and `Markdown` components accept an opt-in `softWrap` flag that emits prose and code-block lines this way (tables and other width-sensitive structures stay hard-wrapped).
+Helpers (`@dreb/tui`): `WRAP_MARKER`, `markWrappable`, `isWrappableLine`, `stripWrapMarker`, `screenRowsForLine`, `splitToScreenRows`. The built-in `Text` and `Markdown` components accept an opt-in `softWrap` flag that emits prose, list, heading, blockquote and code-block lines this way. Only structures whose layout genuinely depends on a fixed width stay hard-wrapped: **rendered markdown tables** (column alignment) and **UI chrome inside bounded boxes** — overlays, dialogs, the editor, status/footer — which would spill their borders if wrapped at the terminal edge rather than their box width.
 
 ### Focusable Interface (IME Support)
 
