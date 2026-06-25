@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
+import { visibleWidth } from "../src/utils.js";
 import {
 	isWrappableLine,
 	markWrappable,
@@ -27,12 +28,12 @@ describe("wrap helpers", () => {
 		assert.equal(stripWrapMarker("plain"), "plain");
 	});
 
-	it("counts screen rows: one for unmarked/fitting, ceil(width) for wrapped", () => {
+	it("counts screen rows: one for unmarked/fitting, ceil(width) for ASCII wrapped", () => {
 		// Unmarked never wraps — always one row, even if (hypothetically) long.
 		assert.equal(screenRowsForLine("x".repeat(50), 20), 1);
 		// Marked but fits.
 		assert.equal(screenRowsForLine(markWrappable("x".repeat(20)), 20), 1);
-		// Marked and over width: ceil(50/20) = 3.
+		// Marked ASCII over width: ceil(50/20) = 3.
 		assert.equal(screenRowsForLine(markWrappable("x".repeat(50)), 20), 3);
 		// Exactly 2x width.
 		assert.equal(screenRowsForLine(markWrappable("x".repeat(40)), 20), 2);
@@ -42,11 +43,38 @@ describe("wrap helpers", () => {
 		assert.equal(screenRowsForLine(markWrappable("xyz"), 0), 1);
 	});
 
-	it("splits a wrapped line into width-sized rows (markers removed)", () => {
-		const line = markWrappable("ABCDEFGHIJKLMNOPQRSTUVWXYZ"); // 26 chars
+	it("splits a wrapped ASCII line into width-sized rows (markers removed)", () => {
+		const text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // 26 chars
+		const line = markWrappable(text);
 		const rows = splitToScreenRows(line, 10);
+		assert.equal(screenRowsForLine(line, 10), Math.ceil(text.length / 10));
 		assert.deepEqual(rows, ["ABCDEFGHIJ", "KLMNOPQRST", "UVWXYZ"]);
+		assert.equal(rows.length, screenRowsForLine(line, 10));
 		for (const r of rows) assert.ok(!r.includes(WRAP_MARKER));
+	});
+
+	it("wraps double-width CJK glyphs without splitting at an odd boundary", () => {
+		const text = "你好世界你好世界你"; // 9 double-width glyphs, visible width 18.
+		const line = markWrappable(text);
+		const rows = splitToScreenRows(line, 9);
+
+		assert.equal(screenRowsForLine(line, 9), 3);
+		assert.deepEqual(rows, ["你好世界", "你好世界", "你"]);
+		assert.equal(rows.length, screenRowsForLine(line, 9));
+		assert.equal(rows.join(""), text);
+		for (const row of rows) assert.ok(visibleWidth(row) <= 9);
+	});
+
+	it("counts one row per double-width glyph when odd width leaves no pair space", () => {
+		const text = "你好世";
+		const line = markWrappable(text);
+		const rows = splitToScreenRows(line, 3);
+
+		assert.equal(screenRowsForLine(line, 3), 3);
+		assert.deepEqual(rows, ["你", "好", "世"]);
+		assert.equal(rows.length, screenRowsForLine(line, 3));
+		assert.equal(rows.join(""), text);
+		for (const row of rows) assert.ok(visibleWidth(row) <= 3);
 	});
 
 	it("returns a single row for unmarked or fitting lines", () => {

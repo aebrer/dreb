@@ -685,6 +685,41 @@ export class TUI extends Container {
 		return false;
 	}
 
+	private assertLineFits(line: string, index: number, width: number, allLines: string[]): void {
+		const isImage = isImageLine(line);
+		const lineWidth = visibleWidth(line);
+		// Soft-wrappable lines are exempt from the over-width guard: they are
+		// allowed to exceed the width and are handled by the soft-wrap paths.
+		if (!isImage && !isWrappableLine(line) && lineWidth > width) {
+			// Log all lines to crash file for debugging
+			const crashLogPath = path.join(os.homedir(), ".dreb", "agent", "dreb-crash.log");
+			const crashData = [
+				`Crash at ${new Date().toISOString()}`,
+				`Terminal width: ${width}`,
+				`Line ${index} visible width: ${lineWidth}`,
+				"",
+				"=== All rendered lines ===",
+				...allLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
+				"",
+			].join("\n");
+			fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
+			fs.writeFileSync(crashLogPath, crashData);
+
+			// Clean up terminal state before throwing
+			this.stop();
+
+			const errorMsg = [
+				`Rendered line ${index} exceeds terminal width (${lineWidth} > ${width}).`,
+				"",
+				"This is likely caused by a custom TUI component not truncating its output.",
+				"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
+				"",
+				`Debug log written to: ${crashLogPath}`,
+			].join("\n");
+			throw new Error(errorMsg);
+		}
+	}
+
 	/**
 	 * Position the hardware cursor given a cursor position expressed as a *logical*
 	 * line index within `lines` (plus visible column). Converts to terminal-row
@@ -1172,8 +1207,10 @@ export class TUI extends Container {
 				}
 				// Emit unwrapped (markers stripped); the terminal autowraps wide lines.
 				for (let i = 0; i < newLines.length; i++) {
+					const line = newLines[i];
+					this.assertLineFits(line, i, width, newLines);
 					if (i > 0) buffer += "\r\n";
-					buffer += stripWrapMarker(newLines[i]);
+					buffer += stripWrapMarker(line);
 				}
 				buffer += "\x1b[?2026l"; // End synchronized output
 				this.terminal.write(buffer);
@@ -1214,7 +1251,9 @@ export class TUI extends Container {
 				// transient (overwritten next frame) and never enters scrollback, so slicing
 				// here does not affect copy-cleanliness of committed content.
 				const fragments: string[] = [];
-				for (const line of newLines) {
+				for (let i = 0; i < newLines.length; i++) {
+					const line = newLines[i];
+					this.assertLineFits(line, i, width, newLines);
 					for (const frag of splitToScreenRows(line, width)) fragments.push(frag);
 				}
 				const totalRows = fragments.length;
@@ -1288,13 +1327,21 @@ export class TUI extends Container {
 			// When the live region contains soft-wrappable lines that exceed the width,
 			// the "one logical line == one terminal row" assumption no longer holds, so
 			// the fast per-line differential below (which moves the cursor and clears in
-			// whole-row units) cannot be used. Handle these renders with screen-row math.
-			// Overlays composite in logical-line space, so when an overlay is up we fall
-			// through to the fast path (overlay base lines are constrained to width).
-			if (
-				this.overlayStack.length === 0 &&
-				(this.hasWrappingLines(newLines, width) || this.hasWrappingLines(this.previousLines, width))
-			) {
+			// whole-row units) cannot be used.
+			//
+			// With no overlay, use the row-aware differential path so appended wrapped
+			// content still flows into native scrollback unwrapped. With an overlay, do
+			// not use the fast path either: overlays only rewrite covered logical lines,
+			// and uncovered wrappable base lines can still exceed the terminal width.
+			// Repaint the live viewport in screen-row fragments instead, using the
+			// already composited `newLines`.
+			const hasWrappingLines =
+				this.hasWrappingLines(newLines, width) || this.hasWrappingLines(this.previousLines, width);
+			if (hasWrappingLines) {
+				if (this.overlayStack.length > 0) {
+					restoreLiveViewport();
+					return;
+				}
 				this.renderWrapped(newLines, cursorPos, width, height, prevViewportTop, hardwareCursorRow, clearAndRedraw);
 				return;
 			}
@@ -1447,37 +1494,7 @@ export class TUI extends Container {
 				if (i > firstChanged) buffer += "\r\n";
 				buffer += "\x1b[2K"; // Clear current line
 				const line = newLines[i];
-				const isImage = isImageLine(line);
-				// Soft-wrappable lines are exempt from the over-width guard: they are
-				// allowed to exceed the width and are handled by the soft-wrap path.
-				if (!isImage && !isWrappableLine(line) && visibleWidth(line) > width) {
-					// Log all lines to crash file for debugging
-					const crashLogPath = path.join(os.homedir(), ".dreb", "agent", "dreb-crash.log");
-					const crashData = [
-						`Crash at ${new Date().toISOString()}`,
-						`Terminal width: ${width}`,
-						`Line ${i} visible width: ${visibleWidth(line)}`,
-						"",
-						"=== All rendered lines ===",
-						...newLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${l}`),
-						"",
-					].join("\n");
-					fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
-					fs.writeFileSync(crashLogPath, crashData);
-
-					// Clean up terminal state before throwing
-					this.stop();
-
-					const errorMsg = [
-						`Rendered line ${i} exceeds terminal width (${visibleWidth(line)} > ${width}).`,
-						"",
-						"This is likely caused by a custom TUI component not truncating its output.",
-						"Use visibleWidth() to measure and truncateToWidth() to truncate lines.",
-						"",
-						`Debug log written to: ${crashLogPath}`,
-					].join("\n");
-					throw new Error(errorMsg);
-				}
+				this.assertLineFits(line, i, width, newLines);
 				buffer += stripWrapMarker(line);
 			}
 
@@ -1617,7 +1634,9 @@ export class TUI extends Container {
 			moveTo(Math.max(0, prevTotalRows - 1));
 			buffer += "\r";
 			for (let i = prevLen; i < newLines.length; i++) {
-				buffer += `\r\n${stripWrapMarker(newLines[i])}`;
+				const line = newLines[i];
+				this.assertLineFits(line, i, width, newLines);
+				buffer += `\r\n${stripWrapMarker(line)}`;
 			}
 		} else {
 			// In-place change (optionally with appended lines): rewrite from the first
@@ -1626,8 +1645,10 @@ export class TUI extends Container {
 			moveTo(startScreenRow);
 			buffer += "\r\x1b[J";
 			for (let i = firstChanged; i < newLines.length; i++) {
+				const line = newLines[i];
+				this.assertLineFits(line, i, width, newLines);
 				if (i > firstChanged) buffer += "\r\n";
-				buffer += stripWrapMarker(newLines[i]);
+				buffer += stripWrapMarker(line);
 			}
 		}
 

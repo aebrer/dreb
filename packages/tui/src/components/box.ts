@@ -1,5 +1,6 @@
 import type { Component } from "../tui.js";
-import { applyBackgroundToLine, visibleWidth } from "../utils.js";
+import { applyBackgroundErase, applyBackgroundToLine, visibleWidth } from "../utils.js";
+import { isWrappableLine } from "../wrap.js";
 
 type RenderCache = {
 	childLines: string[];
@@ -102,10 +103,11 @@ export class Box implements Component {
 
 		// Apply background and padding
 		const result: string[] = [];
+		const hasWrappableContent = childLines.some(isWrappableLine);
 
 		// Top padding
 		for (let i = 0; i < this.paddingY; i++) {
-			result.push(this.applyBg("", width));
+			result.push(this.applyBg("", width, hasWrappableContent));
 		}
 
 		// Content
@@ -115,7 +117,7 @@ export class Box implements Component {
 
 		// Bottom padding
 		for (let i = 0; i < this.paddingY; i++) {
-			result.push(this.applyBg("", width));
+			result.push(this.applyBg("", width, hasWrappableContent));
 		}
 
 		// Update cache
@@ -124,7 +126,17 @@ export class Box implements Component {
 		return result;
 	}
 
-	private applyBg(line: string, width: number): string {
+	private applyBg(line: string, width: number, useBceForEmpty = false): string {
+		const isWrappable = isWrappableLine(line);
+
+		if (this.bgFn && (isWrappable || (useBceForEmpty && line === ""))) {
+			return applyBackgroundErase(line, this.bgFn);
+		}
+
+		if (isWrappable) {
+			return line;
+		}
+
 		const visLen = visibleWidth(line);
 		const padNeeded = Math.max(0, width - visLen);
 		const padded = line + " ".repeat(padNeeded);
