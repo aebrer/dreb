@@ -397,6 +397,81 @@ describe("AgentSession background agent guardrails", () => {
 			expect(steerCalls.length).toBe(0);
 		});
 
+		it("re-emits the pause notification for a new episode after a bg-delivery reset", () => {
+			const sessionAny = session as any;
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+			]);
+
+			const shouldContinue = (agent as any)._shouldContinue;
+
+			// First pause episode — emit once, flag set.
+			sessionAny._bgTurnCounter = (AgentSession as any).BG_TURN_LIMIT ?? 3;
+			expect(shouldContinue()).toBe(false);
+			expect(sessionAny._bgPauseNotified).toBe(true);
+
+			// A bg agent delivers results — counter AND the pause-notified flag must reset together.
+			sessionAny._handleBackgroundComplete(
+				"bg-1",
+				{ agent: "test", task: "task a", exitCode: 0, output: "done", stderr: "", errorMessage: null },
+				false,
+			);
+			expect(sessionAny._bgTurnCounter).toBe(0);
+			expect(sessionAny._bgPauseNotified).toBe(false);
+
+			// Second pause episode (a fresh batch climbs back to the limit) — must re-notify.
+			sessionAny._bgTurnCounter = (AgentSession as any).BG_TURN_LIMIT ?? 3;
+			expect(shouldContinue()).toBe(false);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents).toHaveLength(2);
+			expect(steerCalls.length).toBe(0);
+		});
+
+		it("re-arms the pause notification on a new run's turn_start so a re-pause re-notifies", async () => {
+			const sessionAny = session as any;
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+			]);
+
+			const shouldContinue = (agent as any)._shouldContinue;
+
+			// First pause episode — emit once, flag set.
+			sessionAny._bgTurnCounter = (AgentSession as any).BG_TURN_LIMIT ?? 3;
+			expect(shouldContinue()).toBe(false);
+			expect(sessionAny._bgPauseNotified).toBe(true);
+
+			// User sends a message to continue. The ungated first turn runs; turn_start must
+			// re-arm the notification (clear _bgPauseNotified) even though bg agents are still
+			// running and the counter is still at the limit. Without the re-arm, the re-pause
+			// would break the loop silently with no notification.
+			streamResponder = (stream) => {
+				const msg = createAssistantMessage("Acknowledged — continuing");
+				stream.push({ type: "start", partial: createAssistantMessage("") });
+				stream.push({ type: "done", reason: "stop", message: msg });
+			};
+			await session.prompt("please continue");
+
+			// turn_start re-armed the flag; turn_end ticked the counter past the limit.
+			expect(sessionAny._bgPauseNotified).toBe(false);
+			expect(sessionAny._bgTurnCounter).toBeGreaterThanOrEqual((AgentSession as any).BG_TURN_LIMIT ?? 3);
+
+			// The re-pause now re-notifies instead of breaking silently.
+			expect(shouldContinue()).toBe(false);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents).toHaveLength(2);
+			expect(steerCalls.length).toBe(0);
+		});
+
 		it("does not pause and emits no event when the guardrail is disabled", () => {
 			const sessionAny = session as any;
 			session.settingsManager.setBackgroundAgentGuardrailEnabled(false);

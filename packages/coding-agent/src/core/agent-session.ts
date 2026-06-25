@@ -655,13 +655,18 @@ export class AgentSession {
 		this._unsubscribeGuardrailCounter = this.agent.subscribe((event) => {
 			if (event.type === "turn_start") {
 				this._bgRunningAtTurnStart = getRunningBackgroundAgents().length > 0;
+				// Re-arm the pause notification for each new run. Within a single paused
+				// episode the loop breaks (shouldContinue → false) before turn_start fires,
+				// so re-entrant shouldContinue polls stay deduped; a genuinely new run
+				// (e.g. the user sends a message to continue) re-arms and re-notifies if it
+				// re-pauses, instead of breaking silently.
+				this._bgPauseNotified = false;
 				return;
 			}
 			if (event.type !== "turn_end") return;
 			const bgRunning = getRunningBackgroundAgents();
 			if (bgRunning.length === 0) {
-				this._bgTurnCounter = 0;
-				this._bgPauseNotified = false;
+				this._resetBgGuardrailState();
 				return;
 			}
 			if (this._bgRunningAtTurnStart) {
@@ -682,8 +687,7 @@ export class AgentSession {
 		this.agent.setShouldContinue(() => {
 			const bgRunning = getRunningBackgroundAgents();
 			if (bgRunning.length === 0) {
-				this._bgTurnCounter = 0;
-				this._bgPauseNotified = false;
+				this._resetBgGuardrailState();
 				return true;
 			}
 			const { enabled, turnLimit } = this.settingsManager?.getBackgroundAgentGuardrailSettings() ?? {
@@ -706,6 +710,16 @@ export class AgentSession {
 			}
 			return true;
 		});
+	}
+
+	/**
+	 * Reset the background-agent guardrail counter and the pause-notified flag together.
+	 * These two fields are one logical unit — they must always reset in lockstep so a new
+	 * pause episode both restarts the turn budget and re-arms the pause notification.
+	 */
+	private _resetBgGuardrailState(): void {
+		this._bgTurnCounter = 0;
+		this._bgPauseNotified = false;
 	}
 
 	/**
@@ -761,8 +775,7 @@ export class AgentSession {
 			}
 		} else {
 			// Reset bg turn counter on delivery — parent gets fresh turns
-			this._bgTurnCounter = 0;
-			this._bgPauseNotified = false;
+			this._resetBgGuardrailState();
 
 			// Normal completion — deliver and trigger a response
 			// If the agent is already streaming, steer (injects after current tool calls)
