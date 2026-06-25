@@ -824,6 +824,26 @@ export function applyBackgroundToLine(line: string, width: number, bgFn: (text: 
 }
 
 /**
+ * Apply a background color to a line and fill the rest of the terminal row with
+ * that background using erase-to-end-of-line (`\x1b[K`, "background-color erase")
+ * instead of padding spaces.
+ *
+ * The erased cells are painted with the active background but hold no character,
+ * so the row renders as a full-width background block yet **copies cleanly** —
+ * terminals exclude erased trailing cells from a selection, whereas padded spaces
+ * are real characters that pollute the copy. The `\x1b[K` is re-wrapped in its own
+ * background span so the erase always runs with the background active, regardless
+ * of any resets inside `line`.
+ *
+ * Use this for soft-wrapped, copyable content (the line is emitted un-padded, so it
+ * also wraps under the terminal's own autowrap). Use {@link applyBackgroundToLine}
+ * for fixed-width chrome where an exact padded width is required.
+ */
+export function applyBackgroundErase(line: string, bgFn: (text: string) => string): string {
+	return bgFn(line) + bgFn("\x1b[K");
+}
+
+/**
  * Truncate text to fit within a maximum visible width, adding ellipsis if needed.
  * Optionally pad with spaces to reach exactly maxWidth.
  * Properly handles ANSI escape codes (they don't count toward width).

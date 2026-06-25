@@ -1,7 +1,7 @@
 import { marked, type Token } from "marked";
 import { isImageLine } from "../terminal-image.js";
 import type { Component } from "../tui.js";
-import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
+import { applyBackgroundErase, applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
 import { isWrappableLine, markWrappable, stripWrapMarker } from "../wrap.js";
 
 /**
@@ -139,8 +139,12 @@ export class Markdown implements Component {
 		}
 
 		// Add margins and background to each wrapped line
-		const leftMargin = " ".repeat(this.paddingX);
-		const rightMargin = " ".repeat(this.paddingX);
+		// Horizontal padding cannot be honored on the terminal-produced continuation
+		// rows of a soft-wrapped line, so applying it only to the first row would both
+		// misalign the wrapped rows and inject a leading space into the copy. In
+		// soft-wrap mode we therefore drop horizontal padding entirely (flush-left).
+		const leftMargin = this.softWrap ? "" : " ".repeat(this.paddingX);
+		const rightMargin = this.softWrap ? "" : " ".repeat(this.paddingX);
 		const bgFn = this.defaultTextStyle?.bgColor;
 		const contentLines: string[] = [];
 
@@ -152,11 +156,11 @@ export class Markdown implements Component {
 
 			if (this.softWrap && isWrappableLine(line)) {
 				// Soft-wrappable: emit a single un-padded logical line (the terminal wraps
-				// it; it copies clean). A background, if any, is applied behind the text
-				// only — it cannot fill to full width without padding that would pollute
-				// the copy, so soft-wrapped content is ragged-right rather than a block.
+				// it; it copies clean). When a background is set, fill the row to full width
+				// with erase-to-EOL (BCE) rather than spaces — that paints a full-width
+				// block on every wrapped row while keeping the copy free of trailing junk.
 				const stripped = leftMargin + stripWrapMarker(line);
-				contentLines.push(markWrappable(bgFn ? bgFn(stripped) : stripped));
+				contentLines.push(markWrappable(bgFn ? applyBackgroundErase(stripped, bgFn) : stripped));
 				continue;
 			}
 
@@ -176,7 +180,14 @@ export class Markdown implements Component {
 		const emptyLine = " ".repeat(width);
 		const emptyLines: string[] = [];
 		for (let i = 0; i < this.paddingY; i++) {
-			const line = bgFn ? applyBackgroundToLine(emptyLine, width, bgFn) : emptyLine;
+			let line: string;
+			if (bgFn) {
+				// Fill the margin row with the background. In soft-wrap mode use BCE so the
+				// row copies clean (no trailing spaces); otherwise pad to an exact width.
+				line = this.softWrap ? applyBackgroundErase("", bgFn) : applyBackgroundToLine(emptyLine, width, bgFn);
+			} else {
+				line = emptyLine;
+			}
 			emptyLines.push(line);
 		}
 
@@ -377,8 +388,13 @@ export class Markdown implements Component {
 					return quoteStyle(lineWithReappliedStyle);
 				};
 
-				// Calculate available width for quote content (subtract border "│ " = 2 chars)
-				const quoteContentWidth = Math.max(1, width - 2);
+				// No left sidebar: a per-row "│ " prefix cannot survive soft-wrap
+				// continuation rows (the terminal, not us, produces them, so the bar would
+				// appear only on the first visual row). Frame the quote with a thin rule
+				// above and below instead — those occupy their own rows, so the body stays
+				// plain soft-wrappable text that wraps and copies clean. The dim italic
+				// quote styling is preserved.
+				const quoteContentWidth = width;
 
 				// Blockquotes contain block-level tokens (paragraph, list, code, etc.), so render
 				// children with renderToken() instead of renderInlineTokens().
@@ -402,19 +418,22 @@ export class Markdown implements Component {
 					renderedQuoteLines.pop();
 				}
 
+				const quoteRule = this.theme.quoteBorder("─".repeat(Math.max(1, Math.min(width, 60))));
+				lines.push(quoteRule);
 				for (const quoteLine of renderedQuoteLines) {
 					const shouldSoftWrapQuoteLine = this.softWrap && isWrappableLine(quoteLine);
 					const unmarkedQuoteLine = shouldSoftWrapQuoteLine ? stripWrapMarker(quoteLine) : quoteLine;
 					const styledLine = applyQuoteStyle(unmarkedQuoteLine);
 					if (shouldSoftWrapQuoteLine) {
-						lines.push(markWrappable(this.theme.quoteBorder("│ ") + styledLine));
+						lines.push(markWrappable(styledLine));
 						continue;
 					}
 					const wrappedLines = wrapTextWithAnsi(styledLine, quoteContentWidth);
 					for (const wrappedLine of wrappedLines) {
-						lines.push(this.theme.quoteBorder("│ ") + wrappedLine);
+						lines.push(wrappedLine);
 					}
 				}
+				lines.push(quoteRule);
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after blockquotes (unless space token follows)
 				}

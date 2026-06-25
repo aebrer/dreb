@@ -1,5 +1,5 @@
 import type { Component } from "../tui.js";
-import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
+import { applyBackgroundErase, applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.js";
 import { markWrappable } from "../wrap.js";
 
 /**
@@ -73,13 +73,23 @@ export class Text implements Component {
 		const emptyLine = " ".repeat(width);
 		const emptyLines: string[] = [];
 		for (let i = 0; i < this.paddingY; i++) {
-			const line = this.customBgFn ? applyBackgroundToLine(emptyLine, width, this.customBgFn) : emptyLine;
+			let line: string;
+			if (this.customBgFn) {
+				// Soft-wrap mode fills with BCE (clean copy); fixed mode pads to width.
+				line = this.softWrap
+					? applyBackgroundErase("", this.customBgFn)
+					: applyBackgroundToLine(emptyLine, width, this.customBgFn);
+			} else {
+				line = emptyLine;
+			}
 			emptyLines.push(line);
 		}
 
 		if (this.softWrap) {
-			const leftMargin = " ".repeat(this.paddingX);
-			const contentLines = normalizedText.split("\n").map((line) => markWrappable(leftMargin + line));
+			// Flush-left: horizontal padding cannot be honored on the terminal-produced
+			// continuation rows, so applying it would misalign wrapped rows and inject a
+			// leading space into the copy. Emit each line un-padded.
+			const contentLines = normalizedText.split("\n").map((line) => markWrappable(line));
 			const result = [...emptyLines, ...contentLines, ...emptyLines];
 
 			// Update cache

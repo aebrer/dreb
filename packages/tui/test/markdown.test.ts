@@ -770,13 +770,24 @@ again, hello world`,
 			const quoteIndex = plainLines.findIndex((line) => line.includes("This is a quote"));
 			assert.ok(quoteIndex !== -1, "Should have blockquote");
 
-			const afterQuote = plainLines.slice(quoteIndex + 1);
-			const emptyLineCount = afterQuote.findIndex((line) => line !== "");
-
+			// The quote block now ends with a bottom frame rule; there should be exactly
+			// one blank line between that rule and the following paragraph.
+			const paragraphIndex = plainLines.findIndex((line) => line.includes("again, hello world"));
+			assert.ok(paragraphIndex > quoteIndex, "Should have paragraph after blockquote");
+			let blankCount = 0;
+			let k = paragraphIndex - 1;
+			while (k >= 0 && plainLines[k] === "") {
+				blankCount++;
+				k--;
+			}
 			assert.strictEqual(
-				emptyLineCount,
+				blankCount,
 				1,
-				`Expected 1 empty line after blockquote, but found ${emptyLineCount}. Lines after quote: ${JSON.stringify(afterQuote.slice(0, 5))}`,
+				`Expected 1 empty line after blockquote frame, found ${blankCount}. Lines: ${JSON.stringify(plainLines.slice(quoteIndex, paragraphIndex + 1))}`,
+			);
+			assert.ok(
+				/^─+$/.test(plainLines[k]!),
+				`Expected bottom frame rule before the blank line, got: "${plainLines[k]}"`,
 			);
 		});
 
@@ -809,10 +820,16 @@ bar`,
 
 			const lines = markdown.render(80);
 
-			// Both lines should have the quote border
+			// No sidebar any more: the body lines carry no "│ " prefix, but the quote is
+			// framed top and bottom by a rule and the italic styling is preserved.
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
-			const quotedLines = plainLines.filter((line) => line.startsWith("│ "));
-			assert.strictEqual(quotedLines.length, 2, `Expected 2 quoted lines, got: ${JSON.stringify(plainLines)}`);
+			assert.ok(!plainLines.some((line) => line.includes("│")), "Quote should not use a left sidebar");
+			const ruleLines = plainLines.filter((line) => /^─+$/.test(line.trimEnd()));
+			assert.strictEqual(
+				ruleLines.length,
+				2,
+				`Expected top and bottom frame rules, got: ${JSON.stringify(plainLines)}`,
+			);
 
 			// Both lines should have italic (from theme.quote styling)
 			const fooLine = lines.find((line) => line.includes("Foo"));
@@ -843,10 +860,15 @@ bar`,
 
 			const lines = markdown.render(80);
 
-			// Both lines should have the quote border
+			// No sidebar: body lines have no "│ " prefix; the quote is framed top/bottom.
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
-			const quotedLines = plainLines.filter((line) => line.startsWith("│ "));
-			assert.strictEqual(quotedLines.length, 2, `Expected 2 quoted lines, got: ${JSON.stringify(plainLines)}`);
+			assert.ok(!plainLines.some((line) => line.includes("│")), "Quote should not use a left sidebar");
+			const ruleLines = plainLines.filter((line) => /^─+$/.test(line.trimEnd()));
+			assert.strictEqual(
+				ruleLines.length,
+				2,
+				`Expected top and bottom frame rules, got: ${JSON.stringify(plainLines)}`,
+			);
 
 			// Both lines should have italic (from theme.quote styling)
 			const fooLine = lines.find((line) => line.includes("Foo"));
@@ -870,19 +892,20 @@ bar`,
 
 			const lines = markdown.render(80);
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
-			const quotedLines = plainLines.filter((line) => line.startsWith("│ "));
+			const bodyLines = plainLines.filter((line) => !/^─*$/.test(line.trimEnd()));
 
+			assert.ok(!plainLines.some((line) => line.includes("│")), "Quote should not use a left sidebar");
 			assert.ok(
-				quotedLines.some((line) => line.includes("1. bla bla")),
-				`Missing ordered list item: ${JSON.stringify(quotedLines)}`,
+				bodyLines.some((line) => line.includes("1. bla bla")),
+				`Missing ordered list item: ${JSON.stringify(bodyLines)}`,
 			);
 			assert.ok(
-				quotedLines.some((line) => line.includes("- nested bullet")),
-				`Missing unordered list item: ${JSON.stringify(quotedLines)}`,
+				bodyLines.some((line) => line.includes("- nested bullet")),
+				`Missing unordered list item: ${JSON.stringify(bodyLines)}`,
 			);
 		});
 
-		it("should wrap long blockquote lines and add border to each wrapped line", () => {
+		it("should wrap long blockquote lines and frame the quote top and bottom", () => {
 			const longText = "This is a very long blockquote line that should wrap to multiple lines when rendered";
 			const markdown = new Markdown(`> ${longText}`, 0, 0, defaultMarkdownTheme);
 
@@ -892,23 +915,27 @@ bar`,
 
 			// Filter to non-empty lines (exclude trailing blank line after blockquote)
 			const contentLines = plainLines.filter((line) => line.length > 0);
+			const ruleLines = contentLines.filter((line) => /^─+$/.test(line));
+			const bodyLines = contentLines.filter((line) => !/^─+$/.test(line));
 
-			// Should have multiple lines due to wrapping
-			assert.ok(contentLines.length > 1, `Expected multiple wrapped lines, got: ${JSON.stringify(contentLines)}`);
-
-			// Every content line should start with the quote border
-			for (const line of contentLines) {
-				assert.ok(line.startsWith("│ "), `Wrapped line should have quote border: "${line}"`);
-			}
+			// Framed top and bottom; no left sidebar.
+			assert.ok(!contentLines.some((line) => line.includes("│")), "Quote should not use a left sidebar");
+			assert.strictEqual(
+				ruleLines.length,
+				2,
+				`Expected top and bottom frame rules: ${JSON.stringify(contentLines)}`,
+			);
+			// Body should wrap to multiple lines.
+			assert.ok(bodyLines.length > 1, `Expected multiple wrapped body lines, got: ${JSON.stringify(bodyLines)}`);
 
 			// All content should be preserved
-			const allText = contentLines.join(" ");
+			const allText = bodyLines.join(" ");
 			assert.ok(allText.includes("very long"), "Should preserve 'very long'");
 			assert.ok(allText.includes("blockquote"), "Should preserve 'blockquote'");
 			assert.ok(allText.includes("multiple"), "Should preserve 'multiple'");
 		});
 
-		it("should properly indent wrapped blockquote lines with styling", () => {
+		it("should style wrapped blockquote body lines without a sidebar", () => {
 			const markdown = new Markdown(
 				"> This is styled text that is long enough to wrap",
 				0,
@@ -923,13 +950,8 @@ bar`,
 			const lines = markdown.render(25);
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, "").trimEnd());
 
-			// Filter to non-empty lines
-			const contentLines = plainLines.filter((line) => line.length > 0);
-
-			// All lines should have the quote border
-			for (const line of contentLines) {
-				assert.ok(line.startsWith("│ "), `Line should have quote border: "${line}"`);
-			}
+			// No sidebar on any line.
+			assert.ok(!plainLines.some((line) => line.includes("│")), "Quote should not use a left sidebar");
 
 			// Check that italic is applied (from theme.quote)
 			const allOutput = lines.join("\n");
@@ -945,10 +967,11 @@ bar`,
 			const lines = markdown.render(80);
 			const plainLines = lines.map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
 
-			// Should have the quote border
+			// Quote is framed top/bottom (no sidebar).
+			assert.ok(!plainLines.some((line) => line.includes("│")), "Quote should not use a left sidebar");
 			assert.ok(
-				plainLines.some((line) => line.startsWith("│ ")),
-				"Should have quote border",
+				plainLines.some((line) => /^─+$/.test(line.trimEnd())),
+				"Should have a quote frame rule",
 			);
 
 			// Content should be preserved
