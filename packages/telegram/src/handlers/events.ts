@@ -400,6 +400,15 @@ export async function handleAgentEvent(
 			break;
 		}
 
+		case "parent_paused_for_background_agents": {
+			const count = (event as any).runningAgentCount ?? 0;
+			const agentWord = count === 1 ? "agent" : "agents";
+			send(
+				`⏸️ Paused here while ${count} background ${agentWord} keep working — I'll continue when they report back, or send a message to steer me.`,
+			);
+			break;
+		}
+
 		case "auto_compaction_start": {
 			updateStatusText(state, "🗜 _Compacting context..._");
 			break;

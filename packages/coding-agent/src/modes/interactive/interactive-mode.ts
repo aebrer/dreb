@@ -2833,6 +2833,16 @@ export class InteractiveMode {
 				break;
 			}
 
+			case "parent_paused_for_background_agents": {
+				const count = event.runningAgentCount;
+				const agentWord = count === 1 ? "agent" : "agents";
+				this.showStatus(
+					`Paused here while ${count} background ${agentWord} keep working — I'll continue when they report back, or send a message to steer me.`,
+				);
+				this.updateBackgroundAgentStatus();
+				break;
+			}
+
 			case "tasks_update": {
 				this.tasksPanel.update(event.tasks);
 				this.ui.requestRender();

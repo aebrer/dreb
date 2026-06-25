@@ -279,6 +279,46 @@ describe("auto_retry_end", () => {
 });
 
 // ---------------------------------------------------------------------------
+// parent_paused_for_background_agents — guardrail pause notification
+// ---------------------------------------------------------------------------
+
+describe("parent_paused_for_background_agents", () => {
+	it("sends a friendly, non-error pause notification via send()", async () => {
+		const send = vi.fn();
+		const state = makeState();
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "parent_paused_for_background_agents",
+			runningAgentCount: 2,
+			turnsUsed: 3,
+			turnLimit: 3,
+		});
+
+		expect(send).toHaveBeenCalledTimes(1);
+		const message = send.mock.calls[0][0] as string;
+		expect(message).toContain("Paused");
+		expect(message).toContain("2 background agents");
+		// Friendly, not a crash/error message
+		expect(message.toLowerCase()).not.toContain("error");
+		expect(message.toLowerCase()).not.toContain("failed");
+	});
+
+	it("uses singular phrasing for a single background agent", async () => {
+		const send = vi.fn();
+		const state = makeState();
+
+		await handleAgentEvent(send, mockApi(), state, {
+			type: "parent_paused_for_background_agents",
+			runningAgentCount: 1,
+			turnsUsed: 3,
+			turnLimit: 3,
+		});
+
+		expect(send.mock.calls[0][0]).toContain("1 background agent ");
+	});
+});
+
+// ---------------------------------------------------------------------------
 // tool_execution_end — visible tool results
 // ---------------------------------------------------------------------------
 

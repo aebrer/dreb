@@ -312,6 +312,78 @@ describe("AgentSession background agent guardrails", () => {
 			expect(steerCalls.length).toBe(0);
 		});
 
+		it("emits parent_paused_for_background_agents event when the guardrail halts", () => {
+			const sessionAny = session as any;
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+				{ agentId: "bg-2", agentType: "test", taskSummary: "task b", startedAt: Date.now(), status: "running" },
+			]);
+			sessionAny._bgTurnCounter = (AgentSession as any).BG_TURN_LIMIT ?? 3;
+
+			const shouldContinue = (agent as any)._shouldContinue;
+			expect(shouldContinue()).toBe(false);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents.length).toBe(1);
+			expect(pauseEvents[0].runningAgentCount).toBe(2);
+			expect(pauseEvents[0].turnsUsed).toBe(3);
+			expect(pauseEvents[0].turnLimit).toBe(3);
+
+			// The notification must be a frontend/session event, NOT a model steer
+			expect(steerCalls.length).toBe(0);
+		});
+
+		it("does not pause and emits no event when the guardrail is disabled", () => {
+			const sessionAny = session as any;
+			session.settingsManager.setBackgroundAgentGuardrailEnabled(false);
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+			]);
+			// Counter well past the default limit
+			sessionAny._bgTurnCounter = 99;
+
+			const shouldContinue = (agent as any)._shouldContinue;
+			expect(shouldContinue()).toBe(true);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents.length).toBe(0);
+		});
+
+		it("respects a custom parentTurnLimit", () => {
+			const sessionAny = session as any;
+			// parentTurnLimit is JSON-only (no setter); poke the merged settings view directly.
+			(session.settingsManager as any).settings.backgroundAgents = { parentTurnLimit: 1 };
+
+			const events: any[] = [];
+			session.subscribe((e) => events.push(e));
+
+			mockGetRunningBackgroundAgents.mockReturnValue([
+				{ agentId: "bg-1", agentType: "test", taskSummary: "task a", startedAt: Date.now(), status: "running" },
+			]);
+
+			const shouldContinue = (agent as any)._shouldContinue;
+
+			// Below the custom limit — keep going
+			sessionAny._bgTurnCounter = 0;
+			expect(shouldContinue()).toBe(true);
+
+			// At the custom limit — pause and emit
+			sessionAny._bgTurnCounter = 1;
+			expect(shouldContinue()).toBe(false);
+
+			const pauseEvents = events.filter((e) => e.type === "parent_paused_for_background_agents");
+			expect(pauseEvents.length).toBe(1);
+			expect(pauseEvents[0].turnLimit).toBe(1);
+		});
+
 		it("bgTurnCounter resets on bg agent delivery via _handleBackgroundComplete", () => {
 			const sessionAny = session as any;
 

@@ -548,4 +548,37 @@ describe("SettingsManager", () => {
 			expect(saved.modelSettings).toEqual({ "claude-opus-4-8": { thinkingDisplay: "omitted" } });
 		});
 	});
+
+	describe("background-agent guardrail settings", () => {
+		it("defaults to enabled with a turn limit of 3", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getBackgroundAgentGuardrailEnabled()).toBe(true);
+			expect(manager.getBackgroundAgentGuardrailSettings()).toEqual({ enabled: true, turnLimit: 3 });
+		});
+
+		it("reads parentTurnGuardrail and parentTurnLimit from settings.json", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ backgroundAgents: { parentTurnGuardrail: false, parentTurnLimit: 7 } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getBackgroundAgentGuardrailSettings()).toEqual({ enabled: false, turnLimit: 7 });
+		});
+
+		it("falls back to the default limit for invalid parentTurnLimit values", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ backgroundAgents: { parentTurnLimit: 0 } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getBackgroundAgentGuardrailSettings().turnLimit).toBe(3);
+		});
+
+		it("persists the guardrail toggle to global scope", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setBackgroundAgentGuardrailEnabled(false);
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.backgroundAgents).toEqual({ parentTurnGuardrail: false });
+			expect(manager.getBackgroundAgentGuardrailEnabled()).toBe(false);
+		});
+	});
 });

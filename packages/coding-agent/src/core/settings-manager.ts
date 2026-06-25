@@ -32,6 +32,17 @@ export interface RetrySettings {
 	maxDelayMs?: number; // default: 60000 (max server-requested delay before failing)
 }
 
+export interface BackgroundAgentsSettings {
+	/**
+	 * Whether the parent agent is paused after `parentTurnLimit` turns while background
+	 * agents are still running. Disable (false) to let the parent keep running while
+	 * subagents work — an advanced opt-out with no upper bound on parent turns. default: true
+	 */
+	parentTurnGuardrail?: boolean;
+	/** Number of parent turns allowed while background agents run before pausing. default: 3 */
+	parentTurnLimit?: number;
+}
+
 export interface TerminalSettings {
 	showImages?: boolean; // default: true (only relevant if terminal supports images)
 }
@@ -91,6 +102,7 @@ export interface Settings {
 	context?: ContextSettings;
 	branchSummary?: BranchSummarySettings;
 	retry?: RetrySettings;
+	backgroundAgents?: BackgroundAgentsSettings;
 	hideThinkingBlock?: boolean;
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows)
 	quietStartup?: boolean;
@@ -719,6 +731,28 @@ export class SettingsManager {
 			maxRetries: this.settings.retry?.maxRetries ?? 3,
 			baseDelayMs: this.settings.retry?.baseDelayMs ?? 2000,
 			maxDelayMs: this.settings.retry?.maxDelayMs ?? 60000,
+		};
+	}
+
+	getBackgroundAgentGuardrailEnabled(): boolean {
+		return this.settings.backgroundAgents?.parentTurnGuardrail ?? true;
+	}
+
+	setBackgroundAgentGuardrailEnabled(enabled: boolean): void {
+		if (!this.globalSettings.backgroundAgents) {
+			this.globalSettings.backgroundAgents = {};
+		}
+		this.globalSettings.backgroundAgents.parentTurnGuardrail = enabled;
+		this.markModified("backgroundAgents", "parentTurnGuardrail");
+		this.save();
+	}
+
+	getBackgroundAgentGuardrailSettings(): { enabled: boolean; turnLimit: number } {
+		const rawLimit = this.settings.backgroundAgents?.parentTurnLimit;
+		const turnLimit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit >= 1 ? rawLimit : 3;
+		return {
+			enabled: this.getBackgroundAgentGuardrailEnabled(),
+			turnLimit,
 		};
 	}
 

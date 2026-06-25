@@ -143,6 +143,7 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
 	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean }
+	| { type: "parent_paused_for_background_agents"; runningAgentCount: number; turnsUsed: number; turnLimit: number }
 	| { type: "tasks_update"; tasks: readonly SessionTask[] }
 	| { type: "suggest_next"; command: string };
 
@@ -320,6 +321,8 @@ export class AgentSession {
 
 	// Background agent turn limiter (Layer D): counts LLM turns while bg agents are running.
 	// Reset when a bg agent delivers results. No limit when no bg agents are active.
+	// BG_TURN_LIMIT is the default cap; users can retune or disable it via
+	// settings (backgroundAgents.parentTurnLimit / parentTurnGuardrail).
 	private _bgTurnCounter = 0;
 	private static readonly BG_TURN_LIMIT = 3;
 
@@ -661,13 +664,34 @@ export class AgentSession {
 		// Does NOT inject a steer warning — the loop is already stopping, and any
 		// queued warning would go stale (consumed in the next run after bg agents
 		// have already delivered results, making the warning factually wrong).
+		//
+		// Instead, when the guardrail halts the parent, we emit a frontend/session
+		// event (`background_agent_paused`) so the TUI and Telegram can surface a
+		// friendly, non-error notification. The guardrail can be disabled or its
+		// turn limit retuned via settings (backgroundAgents.parentTurnGuardrail /
+		// parentTurnLimit).
 		this.agent.setShouldContinue(() => {
 			const bgRunning = getRunningBackgroundAgents();
 			if (bgRunning.length === 0) {
 				this._bgTurnCounter = 0;
 				return true;
 			}
-			return this._bgTurnCounter < AgentSession.BG_TURN_LIMIT;
+			const { enabled, turnLimit } = this.settingsManager?.getBackgroundAgentGuardrailSettings() ?? {
+				enabled: true,
+				turnLimit: AgentSession.BG_TURN_LIMIT,
+			};
+			// Guardrail disabled — advanced opt-out: parent keeps running while bg agents work.
+			if (!enabled) return true;
+			if (this._bgTurnCounter >= turnLimit) {
+				this._emit({
+					type: "parent_paused_for_background_agents",
+					runningAgentCount: bgRunning.length,
+					turnsUsed: this._bgTurnCounter,
+					turnLimit,
+				});
+				return false;
+			}
+			return true;
 		});
 	}
 

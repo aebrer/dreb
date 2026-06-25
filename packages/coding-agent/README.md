@@ -384,6 +384,8 @@ The `subagent` tool delegates tasks to independent child agent processes. Each s
 
 **Session metadata:** Each child process records its agent type in the session JSONL header (`agentType` field), providing an audit trail of which agent definition executed the work.
 
+**Background-agent guardrail:** Background subagents run asynchronously and return control to you while they work. To stop the parent agent from spinning ahead of results, a guardrail pauses it after `backgroundAgents.parentTurnLimit` turns (default 3) while subagents are still running. When this happens, dreb surfaces a friendly, non-error notification in the TUI and Telegram — explaining that background agents are still working and the parent paused intentionally, and that it resumes when they report back or when you send a message to steer it. This is a frontend/session event, not a model-context steer, so it can't go stale. Set `backgroundAgents.parentTurnGuardrail` to `false` to let the parent run unbounded while subagents work, or raise `parentTurnLimit` to relax the guardrail. See [settings](docs/settings.md#background-agents).
+
 ---
 
 ## Semantic Search
