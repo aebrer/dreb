@@ -401,10 +401,10 @@ export async function handleAgentEvent(
 		}
 
 		case "parent_paused_for_background_agents": {
-			const count = (event as any).runningAgentCount ?? 0;
+			const count = (event as any).runningAgentCount;
 			const agentWord = count === 1 ? "agent" : "agents";
 			send(
-				`⏸️ Paused here while ${count} background ${agentWord} keep working — I'll continue when they report back, or send a message to steer me.`,
+				`⏸️ Paused automatically — ${count} background ${agentWord} still working. dreb will resume when they report back, or send a message to continue. (configure via backgroundAgents settings)`,
 			);
 			break;
 		}

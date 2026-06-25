@@ -296,8 +296,12 @@ describe("parent_paused_for_background_agents", () => {
 
 		expect(send).toHaveBeenCalledTimes(1);
 		const message = send.mock.calls[0][0] as string;
-		expect(message).toContain("Paused");
-		expect(message).toContain("2 background agents");
+		expect(message).toBe(
+			"⏸️ Paused automatically — 2 background agents still working. dreb will resume when they report back, or send a message to continue. (configure via backgroundAgents settings)",
+		);
+		expect(message).toContain("2 background agents still working");
+		expect(message).not.toContain("2 background agent still working");
+		expect(message).toContain("configure via backgroundAgents settings");
 		// Friendly, not a crash/error message
 		expect(message.toLowerCase()).not.toContain("error");
 		expect(message.toLowerCase()).not.toContain("failed");
@@ -314,7 +318,16 @@ describe("parent_paused_for_background_agents", () => {
 			turnLimit: 3,
 		});
 
-		expect(send.mock.calls[0][0]).toContain("1 background agent ");
+		expect(send).toHaveBeenCalledTimes(1);
+		const message = send.mock.calls[0][0] as string;
+		expect(message).toBe(
+			"⏸️ Paused automatically — 1 background agent still working. dreb will resume when they report back, or send a message to continue. (configure via backgroundAgents settings)",
+		);
+		expect(message).toContain("1 background agent still working");
+		expect(message).not.toContain("1 background agents");
+		expect(message).toContain("configure via backgroundAgents settings");
+		expect(message.toLowerCase()).not.toContain("error");
+		expect(message.toLowerCase()).not.toContain("failed");
 	});
 });
 

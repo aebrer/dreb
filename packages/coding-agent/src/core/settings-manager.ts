@@ -32,6 +32,8 @@ export interface RetrySettings {
 	maxDelayMs?: number; // default: 60000 (max server-requested delay before failing)
 }
 
+export const DEFAULT_BG_PARENT_TURN_LIMIT = 3;
+
 export interface BackgroundAgentsSettings {
 	/**
 	 * Whether the parent agent is paused after `parentTurnLimit` turns while background
@@ -749,7 +751,10 @@ export class SettingsManager {
 
 	getBackgroundAgentGuardrailSettings(): { enabled: boolean; turnLimit: number } {
 		const rawLimit = this.settings.backgroundAgents?.parentTurnLimit;
-		const turnLimit = typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit >= 1 ? rawLimit : 3;
+		const turnLimit =
+			typeof rawLimit === "number" && Number.isFinite(rawLimit) && rawLimit >= 1
+				? rawLimit
+				: DEFAULT_BG_PARENT_TURN_LIMIT;
 		return {
 			enabled: this.getBackgroundAgentGuardrailEnabled(),
 			turnLimit,

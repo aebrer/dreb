@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SettingsManager } from "../src/core/settings-manager.js";
+import { DEFAULT_BG_PARENT_TURN_LIMIT, SettingsManager } from "../src/core/settings-manager.js";
 
 describe("SettingsManager", () => {
 	const testDir = join(process.cwd(), "test-settings-tmp");
@@ -550,10 +550,13 @@ describe("SettingsManager", () => {
 	});
 
 	describe("background-agent guardrail settings", () => {
-		it("defaults to enabled with a turn limit of 3", () => {
+		it("defaults to enabled with the shared default turn limit", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
 			expect(manager.getBackgroundAgentGuardrailEnabled()).toBe(true);
-			expect(manager.getBackgroundAgentGuardrailSettings()).toEqual({ enabled: true, turnLimit: 3 });
+			expect(manager.getBackgroundAgentGuardrailSettings()).toEqual({
+				enabled: true,
+				turnLimit: DEFAULT_BG_PARENT_TURN_LIMIT,
+			});
 		});
 
 		it("reads parentTurnGuardrail and parentTurnLimit from settings.json", () => {
@@ -565,10 +568,10 @@ describe("SettingsManager", () => {
 			expect(manager.getBackgroundAgentGuardrailSettings()).toEqual({ enabled: false, turnLimit: 7 });
 		});
 
-		it("falls back to the default limit for invalid parentTurnLimit values", () => {
+		it("falls back to the shared default limit for invalid parentTurnLimit values", () => {
 			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ backgroundAgents: { parentTurnLimit: 0 } }));
 			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getBackgroundAgentGuardrailSettings().turnLimit).toBe(3);
+			expect(manager.getBackgroundAgentGuardrailSettings().turnLimit).toBe(DEFAULT_BG_PARENT_TURN_LIMIT);
 		});
 
 		it("persists the guardrail toggle to global scope", async () => {
