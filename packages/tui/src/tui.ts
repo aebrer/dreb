@@ -9,7 +9,13 @@ import { isKeyRelease, matchesKey } from "./keys.js";
 import type { Terminal } from "./terminal.js";
 import { getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
 import { extractSegments, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
-import { isWrappableLine, screenRowsForLine, splitToScreenRows, stripWrapMarker } from "./wrap.js";
+import {
+	isWrappableLine,
+	screenPositionForColumn,
+	screenRowsForLine,
+	splitToScreenRows,
+	stripWrapMarker,
+} from "./wrap.js";
 
 /**
  * Component interface - all components must implement this
@@ -466,7 +472,7 @@ export class TUI extends Container {
 		this.stopped = true;
 		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
 		if (this.previousLines.length > 0) {
-			const targetRow = this.previousLines.length; // Line after the last content
+			const targetRow = this.screenRowCount(this.previousLines, this.terminal.columns); // Row after the last content
 			const lineDiff = targetRow - this.hardwareCursorRow;
 			if (lineDiff > 0) {
 				this.terminal.write(`\x1b[${lineDiff}B`);
@@ -529,7 +535,7 @@ export class TUI extends Container {
 		for (let i = 0; i < this.committedChildCount && i < this.children.length; i++) {
 			const childLines = this.children[i].render(width);
 			newCommittedLineCount += childLines.length;
-			for (const line of childLines) newCommittedScreenRows += screenRowsForLine(line, width, isImageLine(line));
+			newCommittedScreenRows += this.screenRowCount(childLines, width);
 		}
 
 		const delta = newCommittedLineCount - this.committedLineCount; // logical lines newly committed
@@ -590,7 +596,7 @@ export class TUI extends Container {
 			for (const line of childLines) allLines.push(line);
 			if (i < this.committedChildCount) {
 				newCommittedLineCount += childLines.length;
-				for (const line of childLines) newCommittedScreenRows += screenRowsForLine(line, width, isImageLine(line));
+				newCommittedScreenRows += this.screenRowCount(childLines, width);
 			}
 		}
 
@@ -613,6 +619,7 @@ export class TUI extends Container {
 		let buffer = `\x1bc\x1b[3J${this.terminal.getInputModeReenableSequence()}\x1b[?2026h`;
 		for (let i = 0; i < allLines.length; i++) {
 			if (i > 0) buffer += "\r\n";
+			this.assertLineFits(allLines[i], i, width, allLines);
 			buffer += stripWrapMarker(allLines[i]);
 		}
 		buffer += "\x1b[?2026l";
@@ -740,8 +747,9 @@ export class TUI extends Container {
 		let screenRow = base;
 		let screenCol = cursorPos.col;
 		if (width > 0 && lines.length > 0 && isWrappableLine(lines[logicalRow] ?? "")) {
-			screenRow = base + Math.floor(cursorPos.col / width);
-			screenCol = cursorPos.col % width;
+			const pos = screenPositionForColumn(lines[logicalRow] ?? "", width, cursorPos.col);
+			screenRow = base + pos.row;
+			screenCol = pos.col;
 		}
 		this.positionHardwareCursor({ row: screenRow, col: screenCol }, map.total);
 	}
@@ -1004,10 +1012,17 @@ export class TUI extends Container {
 		}
 	}
 
-	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
+	/** Composite all overlays into terminal-row lines (sorted by focusOrder, higher = on top). */
 	private compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
 		if (this.overlayStack.length === 0) return lines;
-		const result = [...lines];
+		// Overlay rows are terminal rows, not logical lines. If the base content
+		// contains soft-wrappable logical lines, expand them first so overlay row
+		// positions target the actual screen rows they cover. Overlay compositing is
+		// transient live-region repaint content, so slicing here does not affect the
+		// copy-clean scrollback path used when no overlay is visible.
+		const result = this.hasWrappingLines(lines, termWidth)
+			? lines.flatMap((line) => splitToScreenRows(line, termWidth))
+			: [...lines];
 
 		// Pre-render all visible overlays and calculate positions
 		const rendered: { overlayLines: string[]; row: number; col: number; w: number }[] = [];
@@ -1169,7 +1184,7 @@ export class TUI extends Container {
 			// not the old terminal row count. Blank space in a taller viewport must not be
 			// mistaken for scrolled live content that needs a transcript recommit.
 			let prevViewportTop = heightChanged
-				? Math.max(0, this.previousLines.length - height)
+				? Math.max(0, this.screenRowCount(this.previousLines, this.previousWidth || width) - height)
 				: this.previousViewportTop;
 			let viewportTop = prevViewportTop;
 			let hardwareCursorRow = this.hardwareCursorRow;

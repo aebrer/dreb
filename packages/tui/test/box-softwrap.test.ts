@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { Box } from "../src/components/box.js";
+import { Text } from "../src/components/text.js";
 import type { Component } from "../src/tui.js";
 import { visibleWidth } from "../src/utils.js";
 import { isWrappableLine, markWrappable, stripWrapMarker } from "../src/wrap.js";
@@ -84,6 +85,22 @@ describe("Box soft-wrap background fill", () => {
 		const term = await paintLogicalLines(lines, width);
 		const logical = term.getLogicalScrollBuffer().filter((line) => line.length > 0);
 		assert.deepStrictEqual(logical, [" short"]);
+	});
+
+	it("Text soft-wrap applies custom backgrounds to content rows with BCE", async () => {
+		const text = new Text("ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0, 0, blue, true);
+		const lines = text.render(12);
+
+		assert.strictEqual(lines.length, 1);
+		assert.ok(isWrappableLine(lines[0]), "soft-wrapped Text content should be marked wrappable");
+		assert.ok(lines[0].includes("\x1b[K"), "custom background should use BCE on content rows");
+		assert.strictEqual(visibleWidth(lines[0]), 26, "Text content must not be padded with copyable spaces");
+
+		const term = await paintLogicalLines(lines, 12);
+		assert.deepStrictEqual(
+			term.getLogicalScrollBuffer().filter((line) => line.length > 0),
+			["ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
+		);
 	});
 
 	it("keeps non-wrappable content on the existing fixed-width padded background path", () => {

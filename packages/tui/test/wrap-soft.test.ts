@@ -115,8 +115,8 @@ describe("TUI soft-wrap", () => {
 		);
 	});
 
-	it("uses a row-aware repaint when overlays coexist with wrapping lines", async () => {
-		const terminal = new VirtualTerminal(20, 8);
+	it("composites overlays over wrapped screen rows", async () => {
+		const terminal = new LoggingVirtualTerminal(20, 8);
 		const tui = new TUI(terminal);
 		const comp = new TestComponent();
 		comp.lines = [markWrappable(WIDE)];
@@ -125,15 +125,24 @@ describe("TUI soft-wrap", () => {
 		await terminal.flush();
 
 		const fullRedrawsBefore = tui.fullRedraws;
+		terminal.clearWrites();
 		const overlay = new TestComponent();
 		overlay.lines = ["OVERLAY"];
-		tui.showOverlay(overlay, { row: 4, col: 0, width: 7 });
+		tui.showOverlay(overlay, { row: 1, col: 0, width: 7 });
 		await terminal.flush();
 
+		const writes = terminal.getWrites();
+		const viewport = terminal.getViewport();
 		assert.equal(tui.fullRedraws, fullRedrawsBefore + 1, "overlay + soft-wrap must not use fast line diff");
+		assert.ok(!writes.includes("\x1b[3J"), "overlay repaint must not clear scrollback");
+		assert.ok(!writes.includes("\x1b[2J"), "overlay repaint must not clear the whole screen");
+		assert.equal(viewport[0], "ABCDEFGHIJKLMNOPQRST");
+		assert.ok(viewport[1].startsWith("OVERLAY"), "overlay row should target the second wrapped screen row");
+		assert.match(viewport[1], /123456789abcd$/, "overlay should splice into the wrapped row, not the logical line");
+		assert.equal(viewport[2], "efghijklmn");
 		assert.equal(
 			(tui as unknown as TuiRenderInternals).hardwareCursorRow,
-			6,
+			2,
 			"cursor accounting must use terminal rows, not logical overlay lines",
 		);
 		tui.stop();
@@ -475,6 +484,95 @@ describe("TUI soft-wrap", () => {
 		);
 
 		tui.stop();
+	});
+
+	it("maps wide-character cursor positions through the real renderer", async () => {
+		const terminal = new VirtualTerminal(9, 8);
+		const tui = new TUI(terminal, true);
+		const comp = new TestComponent();
+		const preceding = "漢".repeat(5); // 4 glyphs fit in row 0, fifth moves to row 1 at width 9.
+		const cursorLine = `${"界".repeat(5)}${CURSOR_MARKER}tail`;
+		comp.lines = [markWrappable(preceding), markWrappable(cursorLine)];
+		tui.addChild(comp);
+		tui.start();
+		await terminal.flush();
+
+		assert.deepEqual(
+			terminal.getCursorPosition(),
+			{ x: 2, y: 3 },
+			"double-width glyphs at odd terminal boundaries should not use naive col % width math",
+		);
+		assert.deepEqual(
+			terminal.getLogicalScrollBuffer().filter((line) => line.length > 0),
+			[preceding, `${"界".repeat(5)}tail`],
+		);
+
+		tui.stop();
+	});
+
+	it("keeps height-only resize anchored using wrapped screen rows", async () => {
+		const terminal = new LoggingVirtualTerminal(20, 10);
+		const tui = new TUI(terminal);
+		const committed = new Container();
+		const live = new Container();
+		tui.addChild(committed);
+		tui.addChild(live);
+
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 6 }, (_, i) => `HIST ${i}`);
+		committed.addChild(history);
+		const liveComp = new TestComponent();
+		liveComp.lines = Array.from({ length: 4 }, (_, i) => markWrappable(`${WIDE}${i}`));
+		live.addChild(liveComp);
+
+		tui.start();
+		await terminal.flush();
+		tui.setCommittedChildCount(1);
+		tui.commit();
+		await terminal.flush();
+		assert.equal((tui as unknown as TuiRenderState).previousViewportTop, 2);
+
+		terminal.clearWrites();
+		terminal.resize(20, 6);
+		await terminal.flush();
+
+		const writes = terminal.getWrites();
+		const viewport = terminal.getViewport();
+		assert.ok(!writes.includes("\x1b[3J"), "height-only resize must not clear scrollback");
+		assert.ok(!writes.includes("HIST 0"), "height-only resize must not replay committed history");
+		assert.equal((tui as unknown as TuiRenderState).previousViewportTop, 6);
+		assert.deepEqual(viewport.slice(-3), ["ABCDEFGHIJKLMNOPQRST", "UVWXYZ0123456789abcd", "efghijklmn3"]);
+
+		tui.stop();
+	});
+
+	it("recommitAll throws the over-width guard for unmarked wide lines", () => {
+		withTempHome((home) => {
+			const terminal = new VirtualTerminal(20, 8);
+			const tui = new TUI(terminal);
+			const comp = new TestComponent();
+			comp.lines = ["x".repeat(21)];
+			tui.addChild(comp);
+
+			assert.throws(() => tui.recommitAll(), /Rendered line 0 exceeds terminal width \(21 > 20\)\./);
+			const crashLogPath = path.join(home, ".dreb", "agent", "dreb-crash.log");
+			assert.ok(fs.existsSync(crashLogPath), "recommitAll guard must write a crash log");
+		});
+	});
+
+	it("stop moves below wrapped screen rows", async () => {
+		const terminal = new LoggingVirtualTerminal(20, 8);
+		const tui = new TUI(terminal);
+		const comp = new TestComponent();
+		comp.lines = [markWrappable(WIDE)];
+		tui.addChild(comp);
+		tui.start();
+		await terminal.flush();
+
+		terminal.clearWrites();
+		tui.stop();
+
+		assert.match(terminal.getWrites(), /\x1b\[1B\r\n/, "stop should move from row 2 to row 3 before newline");
 	});
 
 	it("reflows wrapped content on resize (recommitAll) and keeps it copy-clean", async () => {

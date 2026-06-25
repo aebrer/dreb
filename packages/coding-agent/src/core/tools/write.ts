@@ -269,7 +269,7 @@ export function createWriteToolDefinition(
 				component.clear();
 				return component;
 			}
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			text.setText(output);
 			return text;
 		},

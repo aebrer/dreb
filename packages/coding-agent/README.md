@@ -156,6 +156,8 @@ The editor can be temporarily replaced by other UI, like built-in `/settings` or
 
 Standard editing keybindings for delete word, undo, etc. See [docs/keybindings.md](docs/keybindings.md).
 
+Transcript content is optimized for copy/paste: assistant prose, code blocks, tool output, bash output, diffs, and subagent/background-agent results use terminal soft-wrap, so selecting from scrollback preserves long logical lines without app-injected hard newlines. Fixed-width chrome such as tables, boxes, overlays, and the footer remains width-constrained.
+
 ### Commands
 
 Type `/` in the editor to trigger commands. [Extensions](#extensions) can register custom commands, [skills](#skills) are available as `/skill:name`, and [prompt templates](#prompt-templates) expand via `/templatename`.

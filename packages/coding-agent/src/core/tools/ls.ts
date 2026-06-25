@@ -212,12 +212,12 @@ export function createLsToolDefinition(
 			});
 		},
 		renderCall(args, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			text.setText(formatLsCall(args, theme));
 			return text;
 		},
 		renderResult(result, options, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			text.setText(formatLsResult(result as any, options, theme, context.showImages));
 			return text;
 		},

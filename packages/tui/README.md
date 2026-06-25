@@ -173,7 +173,23 @@ Contract for a soft-wrappable line:
 - A **background fill** is allowed, but it must be drawn with erase-to-end-of-line (`\x1b[K`, "background-color erase") rather than padded spaces — use `applyBackgroundErase(line, bgFn)`. The terminal paints the erased cells with the active background (so the row is a full-width block on every wrapped row) but excludes those erased cells from a copy, so the line still copies clean. This is the `\x1b[K` "terminal contract" that ncurses apps follow; `visibleWidth()`/`extractAnsiCode()` already treat `\x1b[K` as zero-width so row-counting and the guard are unaffected.
 - A marked line **may exceed `width`** — that is the whole point. Unmarked lines keep the strict "must not exceed `width`" invariant and still trigger the loud over-width guard.
 
-Helpers (`@dreb/tui`): `WRAP_MARKER`, `markWrappable`, `isWrappableLine`, `stripWrapMarker`, `screenRowsForLine`, `splitToScreenRows`, `applyBackgroundErase`. The built-in `Text` and `Markdown` components accept an opt-in `softWrap` flag that emits prose, list, heading, blockquote and code-block lines this way; backgrounded content (e.g. user messages) is filled with `applyBackgroundErase` so it reads as a full-width block and still copies clean. Blockquotes drop the per-row `│` sidebar when soft-wrapping (it can't survive continuation rows) and are framed top/bottom by a rule instead, keeping the dim-italic body styling. Only structures whose layout genuinely depends on a fixed width stay hard-wrapped: **rendered markdown tables** (column alignment) and **UI chrome inside bounded boxes** — overlays, dialogs, the editor, status/footer — which would spill their borders if wrapped at the terminal edge rather than their box width.
+Helpers (`@dreb/tui`): `WRAP_MARKER`, `markWrappable`, `isWrappableLine`, `stripWrapMarker`, `screenRowsForLine`, `screenPositionForColumn`, `splitToScreenRows`, `applyBackgroundErase`. The built-in `Text` and `Markdown` components accept an opt-in `softWrap` flag that emits prose, list, heading, blockquote and code-block lines this way; backgrounded content (e.g. user messages) is filled with `applyBackgroundErase` so it reads as a full-width block and still copies clean. Blockquotes drop the per-row `│` sidebar when soft-wrapping (it can't survive continuation rows) and are framed top/bottom by a rule instead, keeping the dim-italic body styling. Only structures whose layout genuinely depends on a fixed width stay hard-wrapped: **rendered markdown tables** (column alignment) and **UI chrome inside bounded boxes** — overlays, dialogs, the editor, status/footer — which would spill their borders if wrapped at the terminal edge rather than their box width.
+
+Manual copy verification matrix for soft-wrapped transcript content:
+
+| Terminal | Expected check |
+| --- | --- |
+| xterm-headless (`VirtualTerminal`) | Covered by automated tests: wrapped rows reconstruct as one logical line with no trailing-space padding. |
+| iTerm2 | Select a wrapped prose/code/tool line from scrollback; pasted text should contain no newline at terminal wrap points. |
+| Terminal.app | Same copy check; verify BCE-filled background rows do not add trailing spaces. |
+| VTE/GNOME Terminal | Same copy check. |
+| Konsole | Same copy check. |
+| kitty | Same copy check, including with Kitty image protocol enabled. |
+| alacritty | Same copy check. |
+| WezTerm | Same copy check. |
+| tmux | Same copy check inside a tmux pane. |
+| VS Code integrated terminal | Same copy check. |
+| Windows Terminal | Same copy check. |
 
 ### Focusable Interface (IME Support)
 

@@ -371,12 +371,12 @@ export function createGrepToolDefinition(
 			});
 		},
 		renderCall(args, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			text.setText(formatGrepCall(args, theme));
 			return text;
 		},
 		renderResult(result, options, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			text.setText(formatGrepResult(result as any, options, theme, context.showImages));
 			return text;
 		},

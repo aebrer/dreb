@@ -1,4 +1,4 @@
-import { Text, type TUI } from "@dreb/tui";
+import { isWrappableLine, Text, type TUI } from "@dreb/tui";
 import { Type } from "@sinclair/typebox";
 import stripAnsi from "strip-ansi";
 import { beforeAll, describe, expect, test } from "vitest";
@@ -224,6 +224,46 @@ describe("ToolExecutionComponent parity", () => {
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom_tool");
 		expect(rendered).toContain("done");
+	});
+
+	test("soft-wraps generic fallback tool transcript content", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+		};
+		const longOutput = "tool-output-".repeat(12);
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-6b",
+			{ longArgument: "argument-value-".repeat(10) },
+			{},
+			toolDefinition,
+			createFakeTui(),
+		);
+		component.updateResult({ content: [{ type: "text", text: longOutput }], details: {}, isError: false }, false);
+
+		const rendered = component.render(20);
+		expect(rendered.some((line) => isWrappableLine(line))).toBe(true);
+		expect(stripAnsi(rendered.join("\n"))).toContain(longOutput);
+	});
+
+	test("soft-wraps built-in tool renderer output at narrow widths", () => {
+		const longLine = "file-content-".repeat(12);
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-6c",
+			{ path: "README.md" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+		);
+		component.updateResult(
+			{ content: [{ type: "text", text: longLine }], details: undefined, isError: false },
+			false,
+		);
+
+		const rendered = component.render(20);
+		expect(rendered.some((line) => isWrappableLine(line))).toBe(true);
+		expect(stripAnsi(rendered.join("\n"))).toContain(longLine);
 	});
 
 	test("trims trailing blank display lines from write previews", () => {

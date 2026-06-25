@@ -106,10 +106,11 @@ export {
 	TUI,
 } from "./tui.js";
 // Utilities
-export { joinColumns, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";
+export { applyBackgroundErase, joinColumns, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "./utils.js";
 export {
 	isWrappableLine,
 	markWrappable,
+	screenPositionForColumn,
 	screenRowsForLine,
 	splitToScreenRows,
 	stripWrapMarker,

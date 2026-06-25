@@ -136,7 +136,7 @@ export function createSkillToolDefinition(
 		},
 
 		renderCall(args, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			const skillName = args?.skill ?? "...";
 			const argsStr = args?.args ? ` ${theme.fg("accent", args.args)}` : "";
 			text.setText(`${theme.fg("toolTitle", theme.bold("skill"))} ${theme.fg("accent", skillName)}${argsStr}`);
@@ -144,7 +144,7 @@ export function createSkillToolDefinition(
 		},
 
 		renderResult(result, options, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			const output = getTextOutput(result, context.showImages).trim();
 			if (!output) {
 				text.setText("");

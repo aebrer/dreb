@@ -238,13 +238,13 @@ export function createSearchToolDefinition(cwd: string): ToolDefinition<typeof s
 		},
 
 		renderCall(args, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			text.setText(formatSearchCall(args, theme));
 			return text;
 		},
 
 		renderResult(result, options, theme, context) {
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			text.setText(formatSearchResult(result as any, options, theme));
 			return text;
 		},

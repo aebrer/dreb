@@ -88,8 +88,11 @@ export class Text implements Component {
 		if (this.softWrap) {
 			// Flush-left: horizontal padding cannot be honored on the terminal-produced
 			// continuation rows, so applying it would misalign wrapped rows and inject a
-			// leading space into the copy. Emit each line un-padded.
-			const contentLines = normalizedText.split("\n").map((line) => markWrappable(line));
+			// leading space into the copy. Emit each line un-padded. Backgrounds use BCE
+			// so autowrapped continuation rows stay filled without adding copyable spaces.
+			const contentLines = normalizedText
+				.split("\n")
+				.map((line) => markWrappable(this.customBgFn ? applyBackgroundErase(line, this.customBgFn) : line));
 			const result = [...emptyLines, ...contentLines, ...emptyLines];
 
 			// Update cache

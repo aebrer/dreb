@@ -93,6 +93,33 @@ export function screenRowsForLine(line: string, width: number, isImage = false):
 }
 
 /**
+ * Convert a visible column within a wrappable logical line to terminal row/col
+ * coordinates, using the same wide-glyph boundary behavior as `splitToScreenRows`.
+ */
+export function screenPositionForColumn(line: string, width: number, column: number): { row: number; col: number } {
+	if (width <= 0) return { row: 0, col: Math.max(0, column) };
+	const stripped = stripWrapMarker(line);
+	if (!isWrappableLine(line) || visibleWidth(stripped) <= width) {
+		return { row: 0, col: Math.max(0, column) };
+	}
+	const target = Math.max(0, column);
+	const spans = wrapRowSpans(stripped, width);
+	for (let row = 0; row < spans.length; row++) {
+		const span = spans[row];
+		const rowEnd = span.startCol + span.width;
+		if (target < rowEnd) {
+			return { row, col: target - span.startCol };
+		}
+		if (target === rowEnd) {
+			if (span.width >= width && row + 1 < spans.length) return { row: row + 1, col: 0 };
+			return { row, col: span.width };
+		}
+	}
+	const last = spans[spans.length - 1] ?? { startCol: 0, width: 0 };
+	return { row: Math.max(0, spans.length - 1), col: Math.max(0, target - last.startCol) };
+}
+
+/**
  * Split a (possibly wrappable) line into the terminal rows it would occupy under
  * autowrap, including wide-glyph boundary behavior. The marker is removed.
  *

@@ -96,13 +96,13 @@ export const waitToolDefinition: ToolDefinition<typeof waitSchema, WaitToolDetai
 	},
 
 	renderCall(args, theme, context) {
-		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 		text.setText(formatWaitCall(args, theme));
 		return text;
 	},
 
 	renderResult(result, _options, theme, context) {
-		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+		const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 		text.setText(formatWaitResult(result as any, theme));
 		return text;
 	},

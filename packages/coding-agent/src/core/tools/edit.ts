@@ -310,7 +310,7 @@ export function createEditToolDefinition(
 					});
 				}
 			}
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			text.setText(formatEditCall(args, context.state, theme));
 			return text;
 		},
@@ -321,7 +321,7 @@ export function createEditToolDefinition(
 				component.clear();
 				return component;
 			}
-			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0, undefined, true);
 			text.setText(output);
 			return text;
 		},
