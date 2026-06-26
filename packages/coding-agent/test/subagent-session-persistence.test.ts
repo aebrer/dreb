@@ -313,4 +313,120 @@ describe("SessionHeader parentSession", () => {
 		expect(diskHeader.agentType).toBe("feature-dev");
 		expect(diskHeader.parentSession).toBe("/path/to/parent/session.jsonl");
 	});
+
+	test("setAgentType after first flush rewrites header to disk", () => {
+		const sm = SessionManager.create("/tmp", tempDir);
+
+		// Add a user message then an assistant message to trigger flush to disk
+		sm.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		sm.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "hi" }],
+			api: "anthropic-messages",
+			model: "test-model",
+			provider: "test",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		// Now call setAgentType after flush
+		sm.setAgentType("feature-dev");
+
+		// Read back the JSONL file from disk
+		const sessionFile = sm.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		expect(existsSync(sessionFile!)).toBe(true);
+
+		const content = readFileSync(sessionFile!, "utf8");
+		const firstLine = content.trim().split("\n")[0];
+		const diskHeader = JSON.parse(firstLine) as SessionHeader;
+		expect(diskHeader.type).toBe("session");
+		expect(diskHeader.agentType).toBe("feature-dev");
+	});
+
+	test("setParentSession after first flush rewrites header to disk", () => {
+		const sm = SessionManager.create("/tmp", tempDir);
+
+		// Add a user message then an assistant message to trigger flush to disk
+		sm.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		sm.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "hi" }],
+			api: "anthropic-messages",
+			model: "test-model",
+			provider: "test",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		// Now call setParentSession after flush
+		sm.setParentSession("/path/to/parent/session.jsonl");
+
+		// Read back the JSONL file from disk
+		const sessionFile = sm.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		expect(existsSync(sessionFile!)).toBe(true);
+
+		const content = readFileSync(sessionFile!, "utf8");
+		const firstLine = content.trim().split("\n")[0];
+		const diskHeader = JSON.parse(firstLine) as SessionHeader;
+		expect(diskHeader.type).toBe("session");
+		expect(diskHeader.parentSession).toBe("/path/to/parent/session.jsonl");
+	});
+
+	test("setAgentType and setParentSession after first flush both work", () => {
+		const sm = SessionManager.create("/tmp", tempDir);
+
+		// Add a user message then an assistant message to trigger flush to disk
+		sm.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+		sm.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "hi" }],
+			api: "anthropic-messages",
+			model: "test-model",
+			provider: "test",
+			usage: {
+				input: 10,
+				output: 5,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 15,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+
+		// Now call setAgentType and setParentSession after flush
+		sm.setAgentType("feature-dev");
+		sm.setParentSession("/path/to/parent/session.jsonl");
+
+		// Read back the JSONL file from disk
+		const sessionFile = sm.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		expect(existsSync(sessionFile!)).toBe(true);
+
+		const content = readFileSync(sessionFile!, "utf8");
+		const firstLine = content.trim().split("\n")[0];
+		const diskHeader = JSON.parse(firstLine) as SessionHeader;
+		expect(diskHeader.type).toBe("session");
+		expect(diskHeader.agentType).toBe("feature-dev");
+		expect(diskHeader.parentSession).toBe("/path/to/parent/session.jsonl");
+	});
 });

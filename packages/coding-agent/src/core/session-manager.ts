@@ -757,6 +757,9 @@ export class SessionManager {
 		const header = this.fileEntries[0] as SessionHeader | undefined;
 		if (header?.type === "session") {
 			header.agentType = agentType;
+			if (this.flushed) {
+				this._rewriteFile();
+			}
 		}
 	}
 
@@ -770,6 +773,9 @@ export class SessionManager {
 		const header = this.fileEntries[0] as SessionHeader | undefined;
 		if (header?.type === "session") {
 			header.parentSession = parentSession;
+			if (this.flushed) {
+				this._rewriteFile();
+			}
 		}
 	}
 
