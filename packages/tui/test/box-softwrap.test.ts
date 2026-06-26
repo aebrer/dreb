@@ -38,7 +38,7 @@ function rowBgColors(term: VirtualTerminal, row: number, width: number): number[
 describe("Box soft-wrap background fill", () => {
 	it("uses BCE for wrappable content and padding so wrapped rows stay background-filled and copy clean", async () => {
 		const width = 12;
-		const wide = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // plus Box left padding => wraps across 3 rows at width 12
+		const wide = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // 26 chars => wraps across 3 rows at width 12
 		const box = new Box(1, 1, blue);
 		box.addChild(new StaticComponent([markWrappable(wide)]));
 
@@ -48,8 +48,12 @@ describe("Box soft-wrap background fill", () => {
 		assert.ok(lines[0].includes("\x1b[K"), "top padding row should use BCE");
 		assert.ok(lines[1].includes("\x1b[K"), "wrappable content row should use BCE");
 		assert.ok(lines[2].includes("\x1b[K"), "bottom padding row should use BCE");
-		assert.ok(isWrappableLine(lines[1]), "Box must preserve the wrap marker even after prepending left padding");
-		assert.strictEqual(visibleWidth(lines[1]), wide.length + 1, "wrappable content must not be space-padded");
+		assert.ok(isWrappableLine(lines[1]), "Box must preserve the wrap marker on soft-wrappable content");
+		assert.strictEqual(
+			visibleWidth(lines[1]),
+			wide.length,
+			"wrappable content must render flush-left (no left pad) and must not be space-padded",
+		);
 
 		const term = await paintLogicalLines(lines, width);
 		const wrappedRows = Math.ceil(visibleWidth(lines[1]) / width);
@@ -64,7 +68,7 @@ describe("Box soft-wrap background fill", () => {
 		}
 
 		const logical = term.getLogicalScrollBuffer().filter((line) => line.length > 0);
-		assert.deepStrictEqual(logical, [` ${wide}`]);
+		assert.deepStrictEqual(logical, [wide]);
 		assert.ok(
 			!logical.some((line) => / +$/.test(line)),
 			`logical copy should not contain trailing spaces: ${logical}`,
@@ -80,11 +84,11 @@ describe("Box soft-wrap background fill", () => {
 
 		assert.strictEqual(lines.length, 1);
 		assert.ok(lines[0].includes("\x1b[K"), "short wrappable content should fill via BCE");
-		assert.strictEqual(visibleWidth(lines[0]), " short".length);
+		assert.strictEqual(visibleWidth(lines[0]), "short".length);
 
 		const term = await paintLogicalLines(lines, width);
 		const logical = term.getLogicalScrollBuffer().filter((line) => line.length > 0);
-		assert.deepStrictEqual(logical, [" short"]);
+		assert.deepStrictEqual(logical, ["short"]);
 	});
 
 	it("Text soft-wrap applies custom backgrounds to content rows with BCE", async () => {

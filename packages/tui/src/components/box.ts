@@ -85,7 +85,11 @@ export class Box implements Component {
 		for (const child of this.children) {
 			const lines = child.render(contentWidth);
 			for (const line of lines) {
-				childLines.push(leftPad + line);
+				// Soft-wrappable children render flush-left (matching Text/Markdown
+				// soft-wrap mode): horizontal padding can only be honored on the first
+				// visual row, so prepending it would misalign the terminal-autowrapped
+				// continuation rows and inject a leading space into the copied line.
+				childLines.push(isWrappableLine(line) ? line : leftPad + line);
 			}
 		}
 

@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
+import { CURSOR_MARKER } from "../src/index.js";
 import { applyBackgroundErase, visibleWidth } from "../src/utils.js";
 import {
 	isWrappableLine,
@@ -93,6 +94,27 @@ describe("wrap helpers", () => {
 			assert.ok(row.endsWith(segmentReset), "line reset suffix must be reattached to every split row");
 			assert.equal(visibleWidth(row), 5);
 		}
+	});
+
+	it("does not duplicate trailing APC markers (e.g. CURSOR_MARKER) across split rows", () => {
+		// A wrappable line whose trailing zero-width suffix carries BOTH a non-APC
+		// reset and an APC marker (CURSOR_MARKER). The non-APC reset must be
+		// reattached to every continuation row; the APC marker must NOT be, or the
+		// renderer's cursor scan could latch onto it on the wrong row.
+		const text = "abcdefghijklmno"; // 15 chars => 3 rows at width 5
+		const reset = "\x1b[0m";
+		const line = markWrappable(text + reset + CURSOR_MARKER);
+		const rows = splitToScreenRows(line, 5);
+
+		assert.equal(rows.length, 3);
+		// Non-APC reset is reattached to every split row.
+		for (const row of rows) {
+			assert.ok(row.includes(reset), "non-APC reset must be reattached to every split row");
+		}
+		// The APC marker must appear at most once across all rows (not on every
+		// continuation row). trailingZeroWidthSuffix filters `\x1b_...` out.
+		const markerCount = rows.reduce((n, row) => n + row.split(CURSOR_MARKER).length - 1, 0);
+		assert.ok(markerCount <= 1, `CURSOR_MARKER must not be duplicated across split rows (found ${markerCount})`);
 	});
 
 	it("returns a single row for unmarked or fitting lines", () => {
