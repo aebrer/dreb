@@ -140,6 +140,16 @@ describe("parseArgs", () => {
 			const result = parseArgs(["--agent-type"]);
 			expect(result.agentType).toBeUndefined();
 		});
+
+		test("parses --parent-session", () => {
+			const result = parseArgs(["--parent-session", "/path/to/parent/session.jsonl"]);
+			expect(result.parentSession).toBe("/path/to/parent/session.jsonl");
+		});
+
+		test("--parent-session with no following value does not set parentSession", () => {
+			const result = parseArgs(["--parent-session"]);
+			expect(result.parentSession).toBeUndefined();
+		});
 	});
 
 	describe("--no-session flag", () => {

@@ -218,6 +218,7 @@ ${chalk.bold("Options:")}
   --session <path>               Use specific session file
   --fork <path>                  Fork specific session file or partial UUID into a new session
   --session-dir <dir>            Directory for session storage and lookup
+  --parent-session <path>        Parent session file path for subagent child lineage tracking
   --no-session                   Don't save session (ephemeral)
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching
