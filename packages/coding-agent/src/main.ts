@@ -809,6 +809,10 @@ export async function main(args: string[]) {
 	if (parsed.agentType && sessionManager) {
 		sessionManager.setAgentType(parsed.agentType);
 	}
+	// Set parent session file metadata for subagent child processes (must happen before first flush)
+	if (parsed.parentSession && sessionManager) {
+		sessionManager.setParentSession(parsed.parentSession);
+	}
 
 	// Handle --resume: show session picker
 	if (parsed.resume) {

@@ -27,6 +27,7 @@ export interface Args {
 	session?: string;
 	fork?: string;
 	sessionDir?: string;
+	parentSession?: string;
 	models?: string[];
 	tools?: ToolName[];
 	noTools?: boolean;
@@ -151,6 +152,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.noPromptTemplates = true;
 		} else if (arg === "--no-themes") {
 			result.noThemes = true;
+		} else if (arg === "--parent-session" && i + 1 < args.length) {
+			result.parentSession = args[++i];
 		} else if (arg === "--agent-type" && i + 1 < args.length) {
 			result.agentType = args[++i];
 		} else if (arg === "--list-models") {

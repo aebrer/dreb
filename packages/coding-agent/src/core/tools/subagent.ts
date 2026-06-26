@@ -199,6 +199,7 @@ async function spawnSubagent(
 	onProgress?: (event: string) => void,
 	parentProvider?: string,
 	sessionDir?: string,
+	parentSessionFile?: string,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
 	log.debug(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
@@ -242,6 +243,10 @@ async function spawnSubagent(
 	}
 	// Pass agent type metadata so the child session can record it in its JSONL header
 	args.push("--agent-type", agentConfig.name);
+	// Pass parent session file path so the child session can record it in its JSONL header
+	if (parentSessionFile) {
+		args.push("--parent-session", parentSessionFile);
+	}
 	args.push("-p", task);
 
 	// Early abort check — if the signal is already aborted (e.g. queued task whose
@@ -848,6 +853,7 @@ export async function executeSingle(
 	sessionDir?: string,
 	parentModel?: string,
 	agentModels?: string[],
+	parentSessionFile?: string,
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -909,7 +915,16 @@ export async function executeSingle(
 
 	const usedModel = effectiveConfig.model?.toString();
 	onProgress?.(`Running ${name} agent${usedModel ? ` (${usedModel})` : ""}...`);
-	const result = await spawnSubagent(effectiveConfig, task, cwd, signal, onProgress, resolvedProvider, sessionDir);
+	const result = await spawnSubagent(
+		effectiveConfig,
+		task,
+		cwd,
+		signal,
+		onProgress,
+		resolvedProvider,
+		sessionDir,
+		parentSessionFile,
+	);
 	result.output = prependModelFallbackSummary(result.output, skippedModels, result.model ?? usedModel);
 	if (warning) {
 		result.output = `[WARNING: ${warning}]\n\n${result.output}`;
@@ -930,6 +945,7 @@ async function executeChain(
 	defaultModel?: string,
 	parentModel?: string,
 	getAgentModelsForAgentFn?: (name: string) => string[] | undefined,
+	parentSessionFile?: string,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -983,6 +999,7 @@ async function executeChain(
 			stepSessionDir,
 			parentModel,
 			stepMach6Models,
+			parentSessionFile,
 		);
 		results.push(result);
 
@@ -1060,6 +1077,8 @@ export interface SubagentToolOptions {
 	parentProvider?: () => string | undefined;
 	/** Parent session's current model ID. Used as a final fallback when all subagent-configured models fail to resolve. Called at each invocation for fresh value. */
 	parentModel?: () => string | undefined;
+	/** Parent session's current session file path. Used to link subagent child sessions back to their parent session. */
+	parentSessionFile?: () => string | undefined;
 	/** Model registry for validating model names before spawning child processes. */
 	modelRegistry?: ModelRegistry;
 	/** Settings-based model override getter for mach6.models. */
@@ -1230,6 +1249,7 @@ export function createSubagentToolDefinition(
 	const onBackgroundComplete = options?.onBackgroundComplete;
 	const getParentProvider = options?.parentProvider ?? (() => undefined);
 	const getParentModel = options?.parentModel ?? (() => undefined);
+	const getParentSessionFile = options?.parentSessionFile ?? (() => undefined);
 	const modelRegistry = options?.modelRegistry;
 	const getAgentModelsForAgent = options?.getAgentModelsForAgent;
 
@@ -1425,6 +1445,7 @@ export function createSubagentToolDefinition(
 							sessionDir,
 							getParentModel(),
 							agentModels,
+							getParentSessionFile(),
 						),
 					);
 				};
@@ -1516,6 +1537,7 @@ export function createSubagentToolDefinition(
 							params.model,
 							getParentModel(),
 							getAgentModelsForAgent,
+							getParentSessionFile(),
 						);
 						const resultText = results
 							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
