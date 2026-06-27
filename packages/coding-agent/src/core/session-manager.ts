@@ -757,6 +757,25 @@ export class SessionManager {
 		const header = this.fileEntries[0] as SessionHeader | undefined;
 		if (header?.type === "session") {
 			header.agentType = agentType;
+			if (this.flushed) {
+				this._rewriteFile();
+			}
+		}
+	}
+
+	/**
+	 * Set parent session file path on the current session header.
+	 * Must be called before the first flush (i.e., before the first assistant message).
+	 * Used by subagent child processes to record the parent session file path for lineage tracking.
+	 */
+	setParentSession(parentSession: string | undefined): void {
+		if (!parentSession) return;
+		const header = this.fileEntries[0] as SessionHeader | undefined;
+		if (header?.type === "session") {
+			header.parentSession = parentSession;
+			if (this.flushed) {
+				this._rewriteFile();
+			}
 		}
 	}
 

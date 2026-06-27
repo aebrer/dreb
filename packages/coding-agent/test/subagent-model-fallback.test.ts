@@ -1729,3 +1729,60 @@ describe("subagent tool agentModels wiring (issue 219, finding 4)", () => {
 		expect(step2Args).not.toContain("override/model");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// parentSessionFile threading tests
+// ---------------------------------------------------------------------------
+
+describe("parentSessionFile threading", () => {
+	test("spawnSubagent includes --parent-session flag when parentSessionFile is provided", async () => {
+		mockSpawnSubagentResult({ model: "fallback-model", output: "child output" });
+
+		const result = await executeSingle(
+			makeAgents("fallback-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"parent-model",
+			["agent-models"],
+			"/path/to/parent/session.jsonl", // parentSessionFile
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain("--parent-session");
+		expect(spawnArgs).toContain("/path/to/parent/session.jsonl");
+	});
+
+	test("spawnSubagent does not include --parent-session flag when parentSessionFile is not provided", async () => {
+		mockSpawnSubagentResult({ model: "fallback-model", output: "child output" });
+
+		const result = await executeSingle(
+			makeAgents("fallback-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"parent-model",
+			["agent-models"],
+			undefined, // parentSessionFile not provided
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).not.toContain("--parent-session");
+	});
+});

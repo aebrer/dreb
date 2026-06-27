@@ -27,6 +27,7 @@ export interface Args {
 	session?: string;
 	fork?: string;
 	sessionDir?: string;
+	parentSession?: string;
 	models?: string[];
 	tools?: ToolName[];
 	noTools?: boolean;
@@ -151,6 +152,8 @@ export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "
 			result.noPromptTemplates = true;
 		} else if (arg === "--no-themes") {
 			result.noThemes = true;
+		} else if (arg === "--parent-session" && i + 1 < args.length) {
+			result.parentSession = args[++i];
 		} else if (arg === "--agent-type" && i + 1 < args.length) {
 			result.agentType = args[++i];
 		} else if (arg === "--list-models") {
@@ -215,6 +218,7 @@ ${chalk.bold("Options:")}
   --session <path>               Use specific session file
   --fork <path>                  Fork specific session file or partial UUID into a new session
   --session-dir <dir>            Directory for session storage and lookup
+  --parent-session <path>        Parent session file path for subagent child lineage tracking
   --no-session                   Don't save session (ephemeral)
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching

@@ -2949,6 +2949,7 @@ export class AgentSession {
 					subagent: {
 						parentProvider: () => this.model?.provider,
 						parentModel: () => this.model?.id,
+						parentSessionFile: () => this.sessionFile,
 						modelRegistry: this._modelRegistry,
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
 						onBackgroundStart: (agentId, agentType, taskSummary) => {

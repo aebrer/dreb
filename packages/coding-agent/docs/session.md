@@ -197,10 +197,10 @@ For sessions with a parent (created via `/fork` or `newSession({ parentSession }
 {"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","parentSession":"/path/to/original/session.jsonl"}
 ```
 
-For subagent child sessions (set via `--agent-type`):
+For subagent child sessions (set via `--agent-type` and `--parent-session`):
 
 ```json
-{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","agentType":"feature-dev"}
+{"type":"session","version":3,"id":"uuid","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/path/to/project","agentType":"feature-dev","parentSession":"/path/to/parent/session.jsonl"}
 ```
 
 ### SessionMessageEntry
