@@ -225,6 +225,22 @@ describe("TUI soft-wrap", () => {
 		});
 	});
 
+	it("throws the raw-line-break guard even when a line contains image escapes", () => {
+		withTempHome((home) => {
+			const terminal = new VirtualTerminal(20, 8);
+			const tui = new TUI(terminal);
+			const comp = new TestComponent();
+			comp.lines = ["before \x1b_Ga=T,f=100;AAAA\x1b\\\nafter"];
+			tui.addChild(comp);
+
+			assert.throws(() => renderNow(tui), /Rendered line 0 contains a raw CR\/LF character\./);
+
+			const crashLogPath = path.join(home, ".dreb", "agent", "dreb-crash.log");
+			assert.ok(fs.existsSync(crashLogPath), "raw-line-break guard must write a crash log");
+			assert.match(fs.readFileSync(crashLogPath, "utf8"), /Line 0 contains a raw CR\/LF character/);
+		});
+	});
+
 	it("throws the over-width guard from the wrapped pure-append path", () => {
 		withTempHome((home) => {
 			const terminal = new VirtualTerminal(20, 8);

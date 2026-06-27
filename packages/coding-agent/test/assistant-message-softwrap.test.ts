@@ -90,4 +90,19 @@ describe("AssistantMessageComponent soft-wrap rendering", () => {
 			expectNoRawLineBreaks(lines);
 		}
 	});
+
+	test("renders streamed thinking markdown list continuations without raw line breaks", () => {
+		const component = new AssistantMessageComponent(undefined, false);
+		const updates = [
+			"Reasoning steps:\n\n1. Check the Bridge GUI state.",
+			"Reasoning steps:\n\n1. Check the Bridge GUI state.\n2. Inspect connection settings:\n    - IMAP host, usually 127.0.0.1\n    -",
+			"Reasoning steps:\n\n1. Check the Bridge GUI state.\n2. Inspect connection settings:\n    - IMAP host, usually 127.0.0.1\n    - IMAP port",
+		];
+
+		for (const thinking of updates) {
+			component.updateContent(createAssistantMessage({ content: [{ type: "thinking", thinking }] }));
+			const lines = component.render(170);
+			expectNoRawLineBreaks(lines);
+		}
+	});
 });

@@ -695,8 +695,7 @@ export class TUI extends Container {
 	}
 
 	private assertLineFits(line: string, index: number, width: number, allLines: string[]): void {
-		const isImage = isImageLine(line);
-		if (!isImage && /[\r\n]/.test(line)) {
+		if (/[\r\n]/.test(line)) {
 			// Log all lines to crash file for debugging
 			const crashLogPath = path.join(os.homedir(), ".dreb", "agent", "dreb-crash.log");
 			const crashData = [
@@ -724,6 +723,7 @@ export class TUI extends Container {
 			].join("\n");
 			throw new Error(errorMsg);
 		}
+		const isImage = isImageLine(line);
 		const lineWidth = visibleWidth(line);
 		// Soft-wrappable lines are exempt from the over-width guard: they are
 		// allowed to exceed the width and are handled by the soft-wrap paths.
