@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Fixed streamed markdown list rendering from returning raw newline characters inside a single TUI render entry, preventing serial duplicate rows during soft-wrapped assistant output ([#301](https://github.com/aebrer/dreb/issues/301))
+- Fixed the TUI render-contract guard so raw line breaks are rejected even when a rendered entry contains terminal image escape sequences
 - Fixed blockquote text color breaking after inline links (and other inline elements) due to missing style restoration prefix
 - Fixed slash-command Tab completion from immediately chaining into argument autocomplete after completing the command name, restoring flows like `/model` that submit into a selector dialog ([#2577](https://github.com/badlogic/pi-mono/issues/2577))
 - Fixed stale content and incorrect viewport tracking after TUI content shrinks or transient components inflate the working area ([#2126](https://github.com/badlogic/pi-mono/pull/2126) by [@Perlence](https://github.com/Perlence))

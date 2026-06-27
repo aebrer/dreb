@@ -21,12 +21,12 @@ interface Component {
 
 | Method | Description |
 |--------|-------------|
-| `render(width)` | Return array of strings (one per line). Each line **must not exceed `width`**. |
+| `render(width)` | Return array of strings, one logical line per entry. Entries **must not contain raw `\n` or `\r`**; split multi-line content into separate entries. Each unmarked line **must not exceed `width`**. |
 | `handleInput?(data)` | Receive keyboard input when component has focus. |
 | `wantsKeyRelease?` | If true, component receives key release events (Kitty protocol). Default: false. |
 | `invalidate()` | Clear cached render state. Called on theme changes. |
 
-The TUI appends a full SGR reset and OSC 8 reset at the end of each rendered line. Styles do not carry across lines. If you emit multi-line text with styling, reapply styles per line or use `wrapTextWithAnsi()` so styles are preserved for each wrapped line.
+The TUI appends a full SGR reset and OSC 8 reset at the end of each rendered line. Styles do not carry across lines. If you emit multi-line text with styling, split it into separate render entries and reapply styles per line, or use `wrapTextWithAnsi()` so styles are preserved for each wrapped line.
 
 ## Focusable Interface (IME Support)
 
@@ -287,21 +287,21 @@ handleInput(data: string) {
 
 ## Line Width
 
-**Critical:** Each line from `render()` must not exceed the `width` parameter.
+**Critical:** Each entry from `render()` must represent one logical line and must not contain raw `\n` or `\r`. Split multi-line content before returning it. Unmarked lines must not exceed the `width` parameter.
 
 ```typescript
-import { visibleWidth, truncateToWidth } from "@dreb/tui";
+import { visibleWidth, truncateToWidth, wrapTextWithAnsi } from "@dreb/tui";
 
 render(width: number): string[] {
-  // Truncate long lines
-  return [truncateToWidth(this.text, width)];
+  // Split styled multi-line content into separate render entries.
+  return wrapTextWithAnsi(this.text.replace(/\r\n?/g, "\n"), width);
 }
 ```
 
 Utilities:
 - `visibleWidth(str)` - Get display width (ignores ANSI codes)
 - `truncateToWidth(str, width, ellipsis?)` - Truncate with optional ellipsis
-- `wrapTextWithAnsi(str, width)` - Word wrap preserving ANSI codes
+- `wrapTextWithAnsi(str, width)` - Word wrap preserving ANSI codes and splitting on raw line breaks
 
 ## Creating Custom Components
 
