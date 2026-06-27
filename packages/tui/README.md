@@ -142,11 +142,11 @@ interface Component {
 
 | Method | Description |
 |--------|-------------|
-| `render(width)` | Returns an array of strings, one per line. Each line **must not exceed `width`** or the TUI will error. Use `truncateToWidth()` or manual wrapping to ensure this. The one exception is soft-wrappable lines — see below. |
+| `render(width)` | Returns an array of strings, one logical line per entry. Entries **must not contain raw `\n` or `\r`**; split multi-line content into separate array entries. Each unmarked line **must not exceed `width`** or the TUI will error. Use `truncateToWidth()` or manual wrapping to ensure this. The one exception is soft-wrappable lines — see below. |
 | `handleInput?(data)` | Called when the component has focus and receives keyboard input. The `data` string contains raw terminal input (may include ANSI escape sequences). |
 | `invalidate?()` | Called to clear any cached render state. Components should re-render from scratch on the next `render()` call. |
 
-The TUI appends a full SGR reset and OSC 8 reset at the end of each rendered line. Styles do not carry across lines. If you emit multi-line text with styling, reapply styles per line or use `wrapTextWithAnsi()` so styles are preserved for each wrapped line.
+The TUI appends a full SGR reset and OSC 8 reset at the end of each rendered line. Styles do not carry across lines. If you emit multi-line text with styling, split it into separate render entries and reapply styles per line, or use `wrapTextWithAnsi()` so styles are preserved for each wrapped line.
 
 ### Soft-wrappable lines (clean copy/paste)
 

@@ -30,6 +30,12 @@ function plain(line: string): string {
 	return stripAnsi(stripWrapMarker(line));
 }
 
+function expectNoRawLineBreaks(lines: string[]): void {
+	for (const [index, line] of lines.entries()) {
+		expect(line, `line ${index} must not contain raw CR/LF`).not.toMatch(/[\r\n]/);
+	}
+}
+
 describe("AssistantMessageComponent soft-wrap rendering", () => {
 	beforeAll(() => {
 		initTheme("dark");
@@ -67,6 +73,21 @@ describe("AssistantMessageComponent soft-wrap rendering", () => {
 				visibleWidth(stripWrapMarker(line!)),
 				`${name} logical line should exceed narrow width`,
 			).toBeGreaterThan(24);
+		}
+	});
+
+	test("renders streamed markdown list continuations without raw line breaks", () => {
+		const component = new AssistantMessageComponent(undefined, false);
+		const updates = [
+			"Next practical step:\n\n1. In the Bridge GUI, confirm your account is logged in.",
+			"Next practical step:\n\n1. In the Bridge GUI, confirm your account is logged in.\n2. Find the mail client settings Bridge shows:\n    - IMAP host, usually 127.0.0.1\n    -",
+			"Next practical step:\n\n1. In the Bridge GUI, confirm your account is logged in.\n2. Find the mail client settings Bridge shows:\n    - IMAP host, usually 127.0.0.1\n    - IMAP port",
+		];
+
+		for (const text of updates) {
+			component.updateContent(createAssistantMessage({ content: [{ type: "text", text }] }));
+			const lines = component.render(170);
+			expectNoRawLineBreaks(lines);
 		}
 	});
 });

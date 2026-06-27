@@ -3,8 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
+import { Markdown } from "../src/components/markdown.js";
 import { type Component, Container, CURSOR_MARKER, TUI } from "../src/tui.js";
 import { markWrappable } from "../src/wrap.js";
+import { defaultMarkdownTheme } from "./test-themes.js";
 import { VirtualTerminal } from "./virtual-terminal.js";
 
 class TestComponent implements Component {
@@ -13,6 +15,22 @@ class TestComponent implements Component {
 		return this.lines;
 	}
 	invalidate(): void {}
+}
+
+class StreamingMarkdownComponent implements Component {
+	private markdown = new Markdown("", 0, 0, defaultMarkdownTheme, undefined, true);
+
+	setText(text: string): void {
+		this.markdown.setText(text);
+	}
+
+	render(width: number): string[] {
+		return this.markdown.render(width);
+	}
+
+	invalidate(): void {
+		this.markdown.invalidate();
+	}
 }
 
 class LoggingVirtualTerminal extends VirtualTerminal {
@@ -44,6 +62,18 @@ type TuiRenderState = TuiRenderInternals & {
 
 function renderNow(tui: TUI): void {
 	(tui as unknown as TuiRenderInternals).doRender();
+}
+
+function plainTerminalLine(line: string): string {
+	return line.replace(/\x1b\[[0-9;]*m/g, "").replaceAll(CURSOR_MARKER, "");
+}
+
+function adjacentDuplicateRows(lines: string[]): string[] {
+	const duplicates: string[] = [];
+	for (let i = 1; i < lines.length; i++) {
+		if (lines[i] !== "" && lines[i] === lines[i - 1]) duplicates.push(lines[i]);
+	}
+	return duplicates;
 }
 
 function withTempHome<T>(fn: (home: string) => T): T {
@@ -177,6 +207,22 @@ describe("TUI soft-wrap", () => {
 			[WIDE, second],
 		);
 		tui.stop();
+	});
+
+	it("throws the raw-line-break guard before terminal state can drift", () => {
+		withTempHome((home) => {
+			const terminal = new VirtualTerminal(20, 8);
+			const tui = new TUI(terminal);
+			const comp = new TestComponent();
+			comp.lines = ["first\nsecond"];
+			tui.addChild(comp);
+
+			assert.throws(() => renderNow(tui), /Rendered line 0 contains a raw CR\/LF character\./);
+
+			const crashLogPath = path.join(home, ".dreb", "agent", "dreb-crash.log");
+			assert.ok(fs.existsSync(crashLogPath), "raw-line-break guard must write a crash log");
+			assert.match(fs.readFileSync(crashLogPath, "utf8"), /Line 0 contains a raw CR\/LF character/);
+		});
 	});
 
 	it("throws the over-width guard from the wrapped pure-append path", () => {
@@ -326,6 +372,84 @@ describe("TUI soft-wrap", () => {
 				`expected logical scrollback to contain "${w}" intact; got:\n${logical.join("\n")}`,
 			);
 		}
+	});
+
+	it("streams partial markdown lists without duplicate rows from raw line breaks", async () => {
+		const terminal = new LoggingVirtualTerminal(170, 45);
+		const tui = new TUI(terminal);
+		const committed = new Container();
+		const live = new Container();
+		const history = new TestComponent();
+		history.lines = Array.from({ length: 6 }, (_, i) => `short line ${i + 1}`);
+		committed.addChild(history);
+		const markdown = new StreamingMarkdownComponent();
+		live.addChild(markdown);
+		tui.addChild(committed);
+		tui.addChild(live);
+		tui.setCommittedChildCount(1);
+		tui.start();
+		await terminal.flush();
+		tui.recommitAll();
+		await terminal.flush();
+		terminal.clearWrites();
+
+		const sample = `Looks installed correctly.
+
+Found:
+
+\`\`\`text
+  /usr/bin/protonmail-bridge
+  /usr/bin/protonmail-bridge-core
+  protonmail-bridge 3.25.0-5
+  protonmail-bridge-core 3.25.0-5
+\`\`\`
+
+protonmail-bridge is the GUI app. It detected an existing GUI instance, so Bridge is likely already running.
+
+protonmail-bridge-core has CLI flags:
+
+\`\`\`text
+  protonmail-bridge-core --cli
+  protonmail-bridge-core --noninteractive
+  protonmail-bridge-core --version
+\`\`\`
+
+Important: don’t enable these:
+
+\`\`\`text
+  --log-imap
+  --log-smtp
+\`\`\`
+
+Bridge says those may contain decrypted mail.
+
+Next practical step:
+
+1. In the Bridge GUI, confirm your account is logged in.
+2. Find the mail client settings Bridge shows:
+    - IMAP host, usually 127.0.0.1
+    - IMAP port
+    - SMTP port
+    - Bridge username/password — do not paste these here
+3. Create/move a couple known-safe emails into a folder/label like Agent Samples.`;
+
+		for (let i = 1; i <= sample.length; i += 7) {
+			markdown.setText(sample.slice(0, i));
+			tui.requestRender();
+			await terminal.flush();
+
+			const rendered = markdown.render(terminal.columns);
+			assert.ok(
+				rendered.every((line) => !/[\r\n]/.test(line)),
+				`rendered markdown lines must not contain raw CR/LF at chunk ${i}`,
+			);
+			const viewport = terminal.getViewport().map(plainTerminalLine);
+			assert.deepEqual(adjacentDuplicateRows(viewport), [], `viewport should not duplicate rows at chunk ${i}`);
+		}
+
+		const writes = terminal.getWrites();
+		assert.ok(!writes.includes("\x1b[3J"), "streaming regression must not be fixed by clearing scrollback");
+		tui.stop();
 	});
 
 	it("bottom-anchors on shrink without wiping scrollback (turn-end style)", async () => {

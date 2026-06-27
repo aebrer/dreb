@@ -22,9 +22,11 @@ import {
  */
 export interface Component {
 	/**
-	 * Render the component to lines for the given viewport width
+	 * Render the component to lines for the given viewport width.
+	 * Each returned string must represent exactly one logical line: do not
+	 * include raw CR/LF characters inside a returned entry.
 	 * @param width - Current viewport width
-	 * @returns Array of strings, each representing a line
+	 * @returns Array of strings, each representing one logical line
 	 */
 	render(width: number): string[];
 
@@ -694,6 +696,34 @@ export class TUI extends Container {
 
 	private assertLineFits(line: string, index: number, width: number, allLines: string[]): void {
 		const isImage = isImageLine(line);
+		if (!isImage && /[\r\n]/.test(line)) {
+			// Log all lines to crash file for debugging
+			const crashLogPath = path.join(os.homedir(), ".dreb", "agent", "dreb-crash.log");
+			const crashData = [
+				`Crash at ${new Date().toISOString()}`,
+				`Terminal width: ${width}`,
+				`Line ${index} contains a raw CR/LF character`,
+				"",
+				"=== All rendered lines ===",
+				...allLines.map((l, idx) => `[${idx}] (w=${visibleWidth(l)}) ${JSON.stringify(l)}`),
+				"",
+			].join("\n");
+			fs.mkdirSync(path.dirname(crashLogPath), { recursive: true });
+			fs.writeFileSync(crashLogPath, crashData);
+
+			// Clean up terminal state before throwing
+			this.stop();
+
+			const errorMsg = [
+				`Rendered line ${index} contains a raw CR/LF character.`,
+				"",
+				"This is likely caused by a custom TUI component returning multiple logical lines in one string.",
+				"Component render() results must contain one logical line per array entry.",
+				"",
+				`Debug log written to: ${crashLogPath}`,
+			].join("\n");
+			throw new Error(errorMsg);
+		}
 		const lineWidth = visibleWidth(line);
 		// Soft-wrappable lines are exempt from the over-width guard: they are
 		// allowed to exceed the width and are handled by the soft-wrap paths.

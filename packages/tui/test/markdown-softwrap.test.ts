@@ -15,6 +15,12 @@ function plain(line: string): string {
 	return stripAnsi(stripWrapMarker(line));
 }
 
+function assertNoRawLineBreaks(lines: string[]): void {
+	for (const [index, line] of lines.entries()) {
+		assert.ok(!/[\r\n]/.test(line), `line ${index} must not contain raw CR/LF: ${JSON.stringify(line)}`);
+	}
+}
+
 describe("Markdown softWrap", () => {
 	it("renders long prose as one marked logical line when enabled", () => {
 		const longParagraph =
@@ -41,9 +47,63 @@ describe("Markdown softWrap", () => {
 		const marked = lines.filter(isWrappableLine);
 
 		// Two bullets → two marked logical lines, neither hard-split.
+		assertNoRawLineBreaks(lines);
 		assert.strictEqual(marked.length, 2);
 		assert.ok(plain(marked[0]).includes(longItem));
 		assert.ok(visibleWidth(marked[0]) > width);
+	});
+
+	it("splits soft-wrapped list continuation text into separate logical lines", () => {
+		const markdown = new Markdown(
+			"- first line\n  continuation in same item\n- next item",
+			0,
+			0,
+			defaultMarkdownTheme,
+			undefined,
+			true,
+		);
+
+		const lines = markdown.render(80);
+		const plainLines = lines.map(plain).filter((line) => line.trim().length > 0);
+
+		assertNoRawLineBreaks(lines);
+		assert.ok(
+			plainLines.some((line) => line.includes("- first line")),
+			JSON.stringify(plainLines),
+		);
+		assert.ok(
+			plainLines.some((line) => line.includes("continuation in same item")),
+			JSON.stringify(plainLines),
+		);
+		assert.ok(
+			plainLines.some((line) => line.includes("- next item")),
+			JSON.stringify(plainLines),
+		);
+		assert.ok(lines.filter(isWrappableLine).length >= 3, "list lines should remain soft-wrappable");
+	});
+
+	it("keeps streamed partial nested lists free of raw line breaks", () => {
+		const markdown = new Markdown(
+			"1. Find the mail client settings Bridge shows:\n    - IMAP host, usually 127.0.0.1\n    -",
+			0,
+			0,
+			defaultMarkdownTheme,
+			undefined,
+			true,
+		);
+
+		const lines = markdown.render(170);
+		const plainLines = lines.map(plain).filter((line) => line.trim().length > 0);
+
+		assertNoRawLineBreaks(lines);
+		assert.ok(
+			plainLines.some((line) => line.includes("Find the mail client settings Bridge shows")),
+			JSON.stringify(plainLines),
+		);
+		assert.ok(
+			plainLines.some((line) => line.includes("IMAP host")),
+			JSON.stringify(plainLines),
+		);
 	});
 
 	it("emits a long heading as one marked logical line when enabled", () => {

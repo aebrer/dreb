@@ -285,6 +285,10 @@ export class Markdown implements Component {
 		};
 	}
 
+	private splitRenderedTextLines(text: string): string[] {
+		return wrapTextWithAnsi(text.replace(/\r\n/g, "\n").replace(/\r/g, "\n"), Number.MAX_SAFE_INTEGER);
+	}
+
 	private renderToken(
 		token: Token,
 		width: number,
@@ -315,7 +319,13 @@ export class Markdown implements Component {
 
 				const headingText = this.renderInlineTokens(token.tokens || [], headingStyleContext);
 				const styledHeading = headingLevel >= 3 ? headingStyleFn(headingPrefix) + headingText : headingText;
-				lines.push(this.softWrap ? markWrappable(styledHeading) : styledHeading);
+				if (this.softWrap) {
+					for (const headingLine of this.splitRenderedTextLines(styledHeading)) {
+						lines.push(markWrappable(headingLine));
+					}
+				} else {
+					lines.push(styledHeading);
+				}
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(""); // Add spacing after headings (unless space token follows)
 				}
@@ -325,7 +335,7 @@ export class Markdown implements Component {
 			case "paragraph": {
 				const paragraphText = this.renderInlineTokens(token.tokens || [], styleContext);
 				if (this.softWrap) {
-					for (const paragraphLine of paragraphText.split("\n")) {
+					for (const paragraphLine of this.splitRenderedTextLines(paragraphText)) {
 						lines.push(markWrappable(paragraphLine));
 					}
 				} else {
@@ -365,7 +375,11 @@ export class Markdown implements Component {
 			case "list": {
 				const listLines = this.renderList(token as any, 0, styleContext);
 				// Each list line is prose and should soft-wrap as a single logical line.
-				for (const line of listLines) lines.push(this.softWrap && line !== "" ? markWrappable(line) : line);
+				for (const line of listLines) {
+					for (const logicalLine of this.splitRenderedTextLines(line)) {
+						lines.push(this.softWrap && logicalLine !== "" ? markWrappable(logicalLine) : logicalLine);
+					}
+				}
 				// Don't add spacing after lists if a space token follows
 				// (the space token will handle it)
 				break;
@@ -630,11 +644,11 @@ export class Markdown implements Component {
 					token.tokens && token.tokens.length > 0
 						? this.renderInlineTokens(token.tokens, styleContext)
 						: token.text || "";
-				lines.push(text);
+				lines.push(...this.splitRenderedTextLines(text));
 			} else if (token.type === "paragraph") {
 				// Paragraph in list item
 				const text = this.renderInlineTokens(token.tokens || [], styleContext);
-				lines.push(text);
+				lines.push(...this.splitRenderedTextLines(text));
 			} else if (token.type === "code") {
 				// Code block in list item
 				const indent = this.theme.codeBlockIndent ?? "  ";
@@ -642,7 +656,9 @@ export class Markdown implements Component {
 				if (this.theme.highlightCode) {
 					const highlightedLines = this.theme.highlightCode(token.text, token.lang);
 					for (const hlLine of highlightedLines) {
-						lines.push(`${indent}${hlLine}`);
+						for (const codeLine of this.splitRenderedTextLines(hlLine)) {
+							lines.push(`${indent}${codeLine}`);
+						}
 					}
 				} else {
 					const codeLines = token.text.split("\n");
@@ -655,7 +671,7 @@ export class Markdown implements Component {
 				// Other token types - try to render as inline
 				const text = this.renderInlineTokens([token], styleContext);
 				if (text) {
-					lines.push(text);
+					lines.push(...this.splitRenderedTextLines(text));
 				}
 			}
 		}

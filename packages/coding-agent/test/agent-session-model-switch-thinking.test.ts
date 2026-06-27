@@ -12,7 +12,7 @@ import { SettingsManager } from "../src/core/settings-manager.js";
 import { createTestResourceLoader } from "./utilities.js";
 
 const reasoningModel = findModel("anthropic", "sonnet")!;
-const nonReasoningModel = findModel("anthropic", "3-5-haiku")!;
+const nonReasoningModel = findModel("openai", "gpt-4o-mini")!;
 
 // Adaptive-thinking model (Opus/Sonnet 4.6+): thinkingDisplay is honored, defaults to "summarized".
 const adaptiveModel = findModel("anthropic", "opus-4-8")!;
@@ -32,6 +32,7 @@ function createSession({
 	const sessionManager = SessionManager.inMemory();
 	const authStorage = AuthStorage.inMemory();
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	authStorage.setRuntimeApiKey("openai", "test-key");
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",
