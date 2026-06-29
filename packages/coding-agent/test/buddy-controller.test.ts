@@ -208,12 +208,16 @@ describe("enabled flag", () => {
 	});
 
 	it("should suppress reaction in handleEvent when disabled (agent_end)", () => {
-		writeStoredBuddy();
+		// A realistically-disabled buddy is hidden on disk (via /buddy off), which
+		// start() surfaces as enabled=false. agent_end re-syncs from disk and must
+		// keep it disabled — no reaction.
+		writeStoredBuddy({ hidden: true });
 		const { controller, manager } = createTestController();
 		manager.load();
+		controller.start();
+		expect(controller.enabled).toBe(false);
 
 		const reactSpy = vi.spyOn(manager, "react").mockResolvedValue("quip");
-		controller.enabled = false;
 
 		controller.handleEvent({ type: "agent_end", messages: [] });
 		expect(reactSpy).not.toHaveBeenCalled();
@@ -328,8 +332,122 @@ describe("enabled flag", () => {
 });
 
 // ===========================================================================
-// Context buffer
+// Cross-instance hidden-flag sync (issue 302)
 // ===========================================================================
+describe("cross-instance hidden sync", () => {
+	/** Build a controller with its own manager + a visibility spy, simulating a
+	 *  separate dreb instance that shares the same buddy.json (via TEST_DIR). */
+	function makeInstance() {
+		const onVisibilityChange = vi.fn();
+		const manager = new BuddyManager();
+		const controller = new BuddyController(
+			manager,
+			{
+				onSpeech: vi.fn(),
+				onThinkingStart: vi.fn(),
+				onThinkingEnd: vi.fn(),
+				onHatch: vi.fn(),
+				onReroll: vi.fn(),
+				onVisibilityChange,
+			},
+			{ idleTimeoutMs: 30000, reactionCooldownMs: 100, contextMaxEntries: 5 },
+		);
+		return { controller, manager, onVisibilityChange };
+	}
+
+	it("stops reacting in instance B after instance A runs /buddy off (on agent_end)", async () => {
+		writeStoredBuddy();
+		const a = makeInstance();
+		const b = makeInstance();
+		a.controller.start();
+		b.controller.start();
+		expect(b.controller.enabled).toBe(true);
+
+		// Instance A turns the buddy off — persists hidden=true to shared buddy.json
+		await a.controller.handleCommand("off");
+
+		// Instance B hasn't restarted; its next agent_end must converge to disk
+		b.controller.handleEvent({ type: "agent_end" });
+		expect(b.controller.enabled).toBe(false);
+		expect(b.onVisibilityChange).toHaveBeenCalledWith(false);
+	});
+
+	it("converges on the next user message in instance B", async () => {
+		writeStoredBuddy();
+		const a = makeInstance();
+		const b = makeInstance();
+		a.controller.start();
+		b.controller.start();
+
+		await a.controller.handleCommand("off");
+		b.controller.processUserMessage("hello");
+		expect(b.controller.enabled).toBe(false);
+		expect(b.onVisibilityChange).toHaveBeenCalledWith(false);
+	});
+
+	it("re-enabling in instance A brings the buddy back in instance B", async () => {
+		writeStoredBuddy({ hidden: true });
+		const a = makeInstance();
+		const b = makeInstance();
+		a.controller.start();
+		b.controller.start();
+		expect(b.controller.enabled).toBe(false);
+
+		// Instance A brings the buddy back via /buddy
+		await a.controller.handleCommand("");
+		b.controller.processUserMessage("hi");
+		expect(b.controller.enabled).toBe(true);
+		expect(b.onVisibilityChange).toHaveBeenCalledWith(true);
+	});
+
+	it("fires onVisibilityChange only on transition, not every sync", async () => {
+		writeStoredBuddy();
+		const b = makeInstance();
+		b.controller.start();
+
+		// No change yet — repeated syncs must not fire the callback
+		b.controller.processUserMessage("one");
+		b.controller.handleEvent({ type: "agent_end" });
+		expect(b.onVisibilityChange).not.toHaveBeenCalled();
+
+		// External off → one transition
+		const a = makeInstance();
+		a.controller.start();
+		await a.controller.handleCommand("off");
+		b.controller.processUserMessage("two");
+		b.controller.handleEvent({ type: "agent_end" });
+		expect(b.onVisibilityChange).toHaveBeenCalledTimes(1);
+		expect(b.onVisibilityChange).toHaveBeenCalledWith(false);
+	});
+
+	it("reset() picks up a hidden flag written by another instance", async () => {
+		writeStoredBuddy();
+		const a = makeInstance();
+		const b = makeInstance();
+		a.controller.start();
+		b.controller.start();
+
+		await a.controller.handleCommand("off");
+		// Simulate Telegram bridge reconnect on instance B
+		b.controller.reset();
+		expect(b.controller.enabled).toBe(false);
+		expect(b.onVisibilityChange).toHaveBeenCalledWith(false);
+	});
+
+	it("treats an externally deleted buddy.json as gone (unmount)", () => {
+		writeStoredBuddy();
+		const b = makeInstance();
+		b.controller.start();
+		expect(b.controller.enabled).toBe(true);
+
+		// User deletes the file out from under the running instance
+		rmSync(join(TEST_DIR, "buddy.json"));
+		b.controller.processUserMessage("still there?");
+		expect(b.controller.enabled).toBe(false);
+		expect(b.onVisibilityChange).toHaveBeenCalledWith(false);
+	});
+});
+
 describe("context buffer", () => {
 	it("should append and build context", () => {
 		const { controller } = createTestController();

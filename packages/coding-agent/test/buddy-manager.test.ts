@@ -149,6 +149,42 @@ describe("BuddyManager", () => {
 
 		restore();
 	});
+
+	it("isHidden returns false when no buddy is stored", () => {
+		const restore = withTestEnv();
+		const mgr = new BuddyManager();
+		expect(mgr.isHidden()).toBe(false);
+		restore();
+	});
+
+	it("isHidden returns false for a visible stored buddy", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		const mgr = new BuddyManager();
+		expect(mgr.isHidden()).toBe(false);
+		restore();
+	});
+
+	it("isHidden returns true when the stored buddy is hidden", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy({ hidden: true });
+		const mgr = new BuddyManager();
+		expect(mgr.isHidden()).toBe(true);
+		restore();
+	});
+
+	it("isHidden reflects a hidden flag written by another instance", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		const mgr = new BuddyManager();
+		expect(mgr.isHidden()).toBe(false);
+
+		// A different instance sets hidden via its own manager (shared file)
+		new BuddyManager().setHidden(true);
+		expect(mgr.isHidden()).toBe(true);
+
+		restore();
+	});
 });
 
 describe("BuddyManager.hatch()", () => {

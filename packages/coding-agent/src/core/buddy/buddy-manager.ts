@@ -454,6 +454,15 @@ export class BuddyManager {
 		this.ollamaStatus = null;
 	}
 
+	/**
+	 * Fresh-read the persisted `hidden` flag from disk (bypasses the in-memory
+	 * cache). Returns false when no buddy is stored. Used to detect a `/buddy off`
+	 * (or re-enable) performed by another concurrently-running dreb instance.
+	 */
+	isHidden(): boolean {
+		return loadStored()?.hidden ?? false;
+	}
+
 	/** Update the hidden flag in persisted storage */
 	setHidden(hidden: boolean): void {
 		const stored = loadStored();
