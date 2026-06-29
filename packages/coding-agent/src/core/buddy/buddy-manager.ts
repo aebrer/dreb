@@ -8,7 +8,7 @@
 
 import type { Context, Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { hostname } from "os";
 import { join } from "path";
 import { getAgentDir } from "../../config.js";
@@ -164,7 +164,21 @@ function saveStored(stored: StoredCompanion): void {
 	if (!existsSync(dir)) {
 		mkdirSync(dir, { recursive: true });
 	}
-	writeFileSync(path, JSON.stringify(stored, null, 2));
+
+	let tempPath: string | undefined = join(dir, `.buddy-${process.pid}-${Date.now()}.json.tmp`);
+	try {
+		writeFileSync(tempPath, JSON.stringify(stored, null, 2), "utf8");
+		renameSync(tempPath, path);
+		tempPath = undefined;
+	} finally {
+		if (tempPath) {
+			try {
+				rmSync(tempPath, { force: true });
+			} catch {
+				// Best-effort cleanup only
+			}
+		}
+	}
 }
 
 // =============================================================================

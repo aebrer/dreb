@@ -4,7 +4,7 @@
 
 import type { Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -182,6 +182,28 @@ describe("BuddyManager", () => {
 		// A different instance sets hidden via its own manager (shared file)
 		new BuddyManager().setHidden(true);
 		expect(mgr.isHidden()).toBe(true);
+
+		restore();
+	});
+
+	it("setHidden saves complete JSON and leaves no temp files behind", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+
+		new BuddyManager().setHidden(true);
+
+		const raw = readFileSync(join(TEST_DIR, "buddy.json"), "utf-8");
+		const stored = JSON.parse(raw) as StoredCompanion;
+		expect(stored).toMatchObject({
+			rerollCount: 0,
+			name: "TestBuddy",
+			personality: "Test personality",
+			backstory: "A mysterious past shrouded in legend.",
+			ollamaModel: "test-model",
+			hidden: true,
+		});
+		expect(new BuddyManager().isHidden()).toBe(true);
+		expect(readdirSync(TEST_DIR).filter((name) => name.startsWith(".buddy-") || name.endsWith(".tmp"))).toEqual([]);
 
 		restore();
 	});

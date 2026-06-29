@@ -559,7 +559,11 @@ export class BuddyController {
 		} else {
 			this.stop();
 		}
-		this.callbacks.onVisibilityChange?.(visible);
+		try {
+			this.callbacks.onVisibilityChange?.(visible);
+		} catch (err) {
+			log.debug(`[buddy] onVisibilityChange failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	/**

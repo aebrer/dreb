@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type BuddyCallbacks, BuddyController } from "../src/core/buddy/buddy-controller.js";
 import { BuddyManager, checkOllama } from "../src/core/buddy/buddy-manager.js";
 import { type BuddyState, Rarity } from "../src/core/buddy/buddy-types.js";
+import { log } from "../src/core/logger.js";
 
 vi.mock("../src/core/buddy/buddy-manager.js", async () => {
 	const actual = await vi.importActual("../src/core/buddy/buddy-manager.js");
@@ -337,8 +338,7 @@ describe("enabled flag", () => {
 describe("cross-instance hidden sync", () => {
 	/** Build a controller with its own manager + a visibility spy, simulating a
 	 *  separate dreb instance that shares the same buddy.json (via TEST_DIR). */
-	function makeInstance() {
-		const onVisibilityChange = vi.fn();
+	function makeInstance(onVisibilityChange = vi.fn()) {
 		const manager = new BuddyManager();
 		const controller = new BuddyController(
 			manager,
@@ -385,6 +385,36 @@ describe("cross-instance hidden sync", () => {
 		expect(b.onVisibilityChange).toHaveBeenCalledWith(false);
 	});
 
+	it("converges via refreshVisibility() in instance B", async () => {
+		writeStoredBuddy();
+		const a = makeInstance();
+		const b = makeInstance();
+		a.controller.start();
+		b.controller.start();
+
+		await a.controller.handleCommand("off");
+		b.controller.refreshVisibility();
+		expect(b.controller.enabled).toBe(false);
+		expect(b.onVisibilityChange).toHaveBeenCalledWith(false);
+	});
+
+	it("continues syncing when onVisibilityChange throws", () => {
+		writeStoredBuddy();
+		const debugSpy = vi.spyOn(log, "debug").mockImplementation(() => {});
+		const onVisibilityChange = vi.fn(() => {
+			throw new Error("render boom");
+		});
+		const b = makeInstance(onVisibilityChange);
+		b.controller.start();
+
+		writeStoredBuddy({ hidden: true });
+		expect(() => b.controller.refreshVisibility()).not.toThrow();
+		expect(b.controller.enabled).toBe(false);
+		expect(onVisibilityChange).toHaveBeenCalledWith(false);
+		expect(debugSpy).toHaveBeenCalledWith("[buddy] onVisibilityChange failed: render boom");
+		debugSpy.mockRestore();
+	});
+
 	it("re-enabling in instance A brings the buddy back in instance B", async () => {
 		writeStoredBuddy({ hidden: true });
 		const a = makeInstance();
@@ -398,6 +428,25 @@ describe("cross-instance hidden sync", () => {
 		b.controller.processUserMessage("hi");
 		expect(b.controller.enabled).toBe(true);
 		expect(b.onVisibilityChange).toHaveBeenCalledWith(true);
+	});
+
+	it("refreshes in-memory buddy state when visibility returns", async () => {
+		writeStoredBuddy();
+		const a = makeInstance();
+		const b = makeInstance();
+		a.controller.start();
+		b.controller.start();
+		expect(b.controller.manager.getState()?.name).toBe("Testbud");
+
+		await a.controller.handleCommand("off");
+		b.controller.refreshVisibility();
+		expect(b.controller.enabled).toBe(false);
+
+		writeStoredBuddy({ name: "Zorp", hidden: false });
+		b.controller.refreshVisibility();
+		expect(b.controller.enabled).toBe(true);
+		expect(b.onVisibilityChange).toHaveBeenCalledWith(true);
+		expect(b.controller.manager.getState()?.name).toBe("Zorp");
 	});
 
 	it("fires onVisibilityChange only on transition, not every sync", async () => {
@@ -418,6 +467,19 @@ describe("cross-instance hidden sync", () => {
 		b.controller.handleEvent({ type: "agent_end" });
 		expect(b.onVisibilityChange).toHaveBeenCalledTimes(1);
 		expect(b.onVisibilityChange).toHaveBeenCalledWith(false);
+	});
+
+	it("does not fire onVisibilityChange again after same-instance /buddy off", async () => {
+		writeStoredBuddy();
+		const b = makeInstance();
+		b.controller.start();
+
+		await b.controller.handleCommand("off");
+		b.controller.handleEvent({ type: "agent_end" });
+		b.controller.processUserMessage("x");
+
+		expect(b.controller.enabled).toBe(false);
+		expect(b.onVisibilityChange).not.toHaveBeenCalled();
 	});
 
 	it("reset() picks up a hidden flag written by another instance", async () => {
