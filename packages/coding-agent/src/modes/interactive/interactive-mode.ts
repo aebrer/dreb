@@ -324,17 +324,7 @@ export class InteractiveMode {
 				if (!apiKey) throw new Error("No API key available for the current model.");
 				return manager.reroll(model, apiKey);
 			},
-			onVisibilityChange: (visible) => {
-				// Another concurrent dreb instance toggled the buddy via /buddy off
-				// or /buddy. Converge this TUI's widget to the persisted state.
-				if (visible) {
-					const state = this.buddyController.manager.getState() ?? this.buddyController.manager.load();
-					if (state) this.mountBuddy(state);
-				} else {
-					this.removeBuddy();
-				}
-				this.ui.requestRender();
-			},
+			onVisibilityChange: (visible) => this.syncBuddyWidget(visible),
 		});
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.headerContainer = new Container();
@@ -5423,6 +5413,18 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 		if (existingBuddy && !existingBuddy.hidden) {
 			this.mountBuddy(existingBuddy);
 		}
+	}
+
+	private syncBuddyWidget(visible: boolean): void {
+		// Another concurrent dreb instance toggled the buddy via /buddy off
+		// or /buddy. Converge this TUI's widget to the persisted state.
+		if (visible) {
+			const state = this.buddyController.manager.getState() ?? this.buddyController.manager.load();
+			if (state) this.mountBuddy(state);
+		} else {
+			this.removeBuddy();
+		}
+		this.ui.requestRender();
 	}
 
 	private mountBuddy(state: import("../../core/buddy/buddy-types.js").BuddyState): void {

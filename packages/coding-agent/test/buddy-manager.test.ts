@@ -4,7 +4,7 @@
 
 import type { Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,14 @@ import type { StoredCompanion } from "../src/core/buddy/buddy-types.js";
 const TEST_DIR = join(tmpdir(), "dreb-buddy-test");
 
 // vi.mock is hoisted, so we use the factory pattern to avoid TDZ issues
+vi.mock("fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("fs")>();
+	return {
+		...actual,
+		renameSync: vi.fn(actual.renameSync),
+	};
+});
+
 vi.mock("@dreb/ai", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@dreb/ai")>();
 	return {
@@ -206,6 +214,27 @@ describe("BuddyManager", () => {
 		expect(readdirSync(TEST_DIR).filter((name) => name.startsWith(".buddy-") || name.endsWith(".tmp"))).toEqual([]);
 
 		restore();
+	});
+
+	it("setHidden preserves buddy.json and cleans temp file when atomic rename fails", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		const originalRaw = readFileSync(join(TEST_DIR, "buddy.json"), "utf-8");
+		const renameError = new Error("rename failed");
+		vi.mocked(renameSync).mockImplementationOnce(() => {
+			throw renameError;
+		});
+
+		try {
+			expect(() => new BuddyManager().setHidden(true)).toThrow(renameError);
+			expect(readFileSync(join(TEST_DIR, "buddy.json"), "utf-8")).toBe(originalRaw);
+			expect(readdirSync(TEST_DIR).filter((name) => name.startsWith(".buddy-") || name.endsWith(".tmp"))).toEqual(
+				[],
+			);
+		} finally {
+			vi.mocked(renameSync).mockRestore();
+			restore();
+		}
 	});
 });
 
