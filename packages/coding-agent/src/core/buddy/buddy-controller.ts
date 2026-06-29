@@ -30,6 +30,14 @@ export interface BuddyCallbacks {
 	onHatch: (manager: BuddyManager) => Promise<BuddyState>;
 	/** Reroll the buddy — frontend resolves API key and calls manager.reroll() */
 	onReroll: (manager: BuddyManager) => Promise<BuddyState>;
+	/**
+	 * Optional: notify the host that the buddy's persisted visibility changed —
+	 * e.g. another concurrently-running dreb instance ran `/buddy off` (visible
+	 * false) or brought it back with `/buddy` (visible true). The host should
+	 * mount/unmount its visual representation accordingly. Fired only on a
+	 * transition, never on every sync.
+	 */
+	onVisibilityChange?: (visible: boolean) => void;
 }
 
 /** Configuration for buddy behavior — differs between TUI and Telegram */
@@ -68,6 +76,11 @@ export class BuddyController {
 	/** When false, all active functionality is disabled: no reactions, name-calls,
 	 *  idle timer, or Ollama calls. Context capture (passive) still happens. */
 	enabled = true;
+
+	/** Last visibility observed from the persisted `hidden` flag. Tracks whether
+	 *  the buddy is currently shown/active so syncHiddenState() can detect a
+	 *  cross-instance transition and fire onVisibilityChange exactly once. */
+	private lastVisible = false;
 
 	readonly manager: BuddyManager;
 	private readonly callbacks: BuddyCallbacks;
@@ -320,6 +333,10 @@ export class BuddyController {
 			}
 
 			case "agent_end": {
+				// Re-sync the persisted hidden flag once per response — cheap at
+				// this cadence, and the point at which a /buddy off performed by
+				// another concurrent instance must take effect here.
+				this.syncHiddenState();
 				if (this.enabled) {
 					const ctx = this.buildContext();
 					this.triggerReaction(`The agent finished responding. Recent activity:\n${ctx}`).catch(() => {
@@ -337,6 +354,7 @@ export class BuddyController {
 	 * Returns true if a name-call was detected and is being handled.
 	 */
 	processUserMessage(text: string): boolean {
+		this.syncHiddenState();
 		this.appendContext(`User: ${text}`);
 		this.markActivity();
 		this.resetIdleTimer();
@@ -377,6 +395,7 @@ export class BuddyController {
 					this.callbacks.onThinkingEnd();
 					this.enabled = true;
 					this.manager.setHidden(false);
+					this.lastVisible = true;
 					return { type: "reroll", state };
 				} catch (err) {
 					this.callbacks.onThinkingEnd();
@@ -393,6 +412,7 @@ export class BuddyController {
 			case "off": {
 				this.enabled = false;
 				this.manager.setHidden(true);
+				this.lastVisible = false;
 				this.stop();
 				return { type: "off" };
 			}
@@ -408,6 +428,7 @@ export class BuddyController {
 					// Already showing — just enable and return
 					this.enabled = true;
 					this.manager.setHidden(false);
+					this.lastVisible = true;
 					return { type: "show", state: current };
 				}
 
@@ -416,6 +437,7 @@ export class BuddyController {
 				if (existing) {
 					this.enabled = true;
 					this.manager.setHidden(false);
+					this.lastVisible = true;
 					return { type: "show", state: existing };
 				}
 
@@ -425,6 +447,7 @@ export class BuddyController {
 					const hatchState = await this.callbacks.onHatch(this.manager);
 					this.callbacks.onThinkingEnd();
 					this.enabled = true;
+					this.lastVisible = true;
 					return { type: "hatch", state: hatchState };
 				} catch (err) {
 					this.callbacks.onThinkingEnd();
@@ -502,9 +525,56 @@ export class BuddyController {
 		if (existing) {
 			// If buddy was hidden (via /buddy off), keep it loaded but disabled
 			this.enabled = !existing.hidden;
+			this.lastVisible = !existing.hidden;
 			return existing;
 		}
+		this.lastVisible = false;
 		return null;
+	}
+
+	/**
+	 * Re-read the persisted `hidden` flag from disk and converge local state to
+	 * it. This is what makes `/buddy off` (or re-enable via `/buddy`) propagate
+	 * across concurrently-running dreb instances: the flag lives in the shared
+	 * buddy.json, and each instance re-checks it at turn-level sync points
+	 * (user message, agent_end, bridge reset) rather than caching it for the
+	 * life of the process.
+	 *
+	 * A buddy that is absent on disk (file deleted) or hidden counts as not
+	 * visible. On a visibility transition the host is notified via
+	 * onVisibilityChange so it can mount/unmount its widget.
+	 */
+	private syncHiddenState(): void {
+		const exists = this.manager.hasStoredBuddy();
+		const visible = exists && !this.manager.isHidden();
+		this.enabled = visible;
+
+		if (visible === this.lastVisible) return;
+
+		this.lastVisible = visible;
+		if (visible) {
+			// Refresh in-memory state from disk so reactions and the host mount
+			// see the current buddy (it may have been hatched/changed elsewhere).
+			this.manager.load();
+		} else {
+			this.stop();
+		}
+		try {
+			this.callbacks.onVisibilityChange?.(visible);
+		} catch (err) {
+			log.debug(`[buddy] onVisibilityChange failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	/**
+	 * Public sync point for hosts that don't route user input through
+	 * processUserMessage(). The TUI inlines its buddy wiring (appendContext /
+	 * idle / name-call) rather than calling processUserMessage(), so it calls
+	 * this on each user message to converge the buddy's visibility to the shared
+	 * buddy.json — i.e. pick up a /buddy off (or re-enable) from another instance.
+	 */
+	refreshVisibility(): void {
+		this.syncHiddenState();
 	}
 
 	/** Stop the controller — clear timers */
@@ -516,14 +586,15 @@ export class BuddyController {
 	}
 
 	/** Full reset — clear context buffer, idle timer, reaction budget.
-	 *  Respects persisted hidden state so bridge reconnects don't undo /buddy off. */
+	 *  Re-reads the persisted hidden state from disk so bridge reconnects pick up
+	 *  a /buddy off performed in another instance (and don't undo it). */
 	reset(): void {
 		this.stop();
 		this.contextBuffer = [];
 		this.lastReactionTime = 0;
 		this.reactionTimestamps = [];
-		// Re-enable unless buddy was explicitly hidden via /buddy off
-		const state = this.manager.getState() ?? this.manager.load();
-		this.enabled = state ? !state.hidden : true;
+		// Refresh in-memory state from disk, then converge to the persisted flag.
+		this.manager.load();
+		this.syncHiddenState();
 	}
 }

@@ -133,6 +133,12 @@ export function createTelegramBuddyController(
 			const bridge = await ensureBridgeWithSession(config, userState);
 			return bridge.buddyReroll();
 		},
+		onVisibilityChange(_visible: boolean): void {
+			// Telegram has no persistent buddy widget — reaction suppression and
+			// re-enable already flow from the controller's `enabled` flag, which
+			// syncHiddenState() updates from the shared buddy.json. Nothing to
+			// mount/unmount here, so this is intentionally a no-op.
+		},
 	};
 
 	const controller = new BuddyController(manager, callbacks, {

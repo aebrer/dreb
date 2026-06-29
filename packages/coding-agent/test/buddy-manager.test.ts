@@ -4,7 +4,7 @@
 
 import type { Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,14 @@ import type { StoredCompanion } from "../src/core/buddy/buddy-types.js";
 const TEST_DIR = join(tmpdir(), "dreb-buddy-test");
 
 // vi.mock is hoisted, so we use the factory pattern to avoid TDZ issues
+vi.mock("fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("fs")>();
+	return {
+		...actual,
+		renameSync: vi.fn(actual.renameSync),
+	};
+});
+
 vi.mock("@dreb/ai", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@dreb/ai")>();
 	return {
@@ -148,6 +156,85 @@ describe("BuddyManager", () => {
 		expect(mgr.getName()).toBe("Quackers");
 
 		restore();
+	});
+
+	it("isHidden returns false when no buddy is stored", () => {
+		const restore = withTestEnv();
+		const mgr = new BuddyManager();
+		expect(mgr.isHidden()).toBe(false);
+		restore();
+	});
+
+	it("isHidden returns false for a visible stored buddy", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		const mgr = new BuddyManager();
+		expect(mgr.isHidden()).toBe(false);
+		restore();
+	});
+
+	it("isHidden returns true when the stored buddy is hidden", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy({ hidden: true });
+		const mgr = new BuddyManager();
+		expect(mgr.isHidden()).toBe(true);
+		restore();
+	});
+
+	it("isHidden reflects a hidden flag written by another instance", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		const mgr = new BuddyManager();
+		expect(mgr.isHidden()).toBe(false);
+
+		// A different instance sets hidden via its own manager (shared file)
+		new BuddyManager().setHidden(true);
+		expect(mgr.isHidden()).toBe(true);
+
+		restore();
+	});
+
+	it("setHidden saves complete JSON and leaves no temp files behind", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+
+		new BuddyManager().setHidden(true);
+
+		const raw = readFileSync(join(TEST_DIR, "buddy.json"), "utf-8");
+		const stored = JSON.parse(raw) as StoredCompanion;
+		expect(stored).toMatchObject({
+			rerollCount: 0,
+			name: "TestBuddy",
+			personality: "Test personality",
+			backstory: "A mysterious past shrouded in legend.",
+			ollamaModel: "test-model",
+			hidden: true,
+		});
+		expect(new BuddyManager().isHidden()).toBe(true);
+		expect(readdirSync(TEST_DIR).filter((name) => name.startsWith(".buddy-") || name.endsWith(".tmp"))).toEqual([]);
+
+		restore();
+	});
+
+	it("setHidden preserves buddy.json and cleans temp file when atomic rename fails", () => {
+		const restore = withTestEnv();
+		writeStoredBuddy();
+		const originalRaw = readFileSync(join(TEST_DIR, "buddy.json"), "utf-8");
+		const renameError = new Error("rename failed");
+		vi.mocked(renameSync).mockImplementationOnce(() => {
+			throw renameError;
+		});
+
+		try {
+			expect(() => new BuddyManager().setHidden(true)).toThrow(renameError);
+			expect(readFileSync(join(TEST_DIR, "buddy.json"), "utf-8")).toBe(originalRaw);
+			expect(readdirSync(TEST_DIR).filter((name) => name.startsWith(".buddy-") || name.endsWith(".tmp"))).toEqual(
+				[],
+			);
+		} finally {
+			vi.mocked(renameSync).mockRestore();
+			restore();
+		}
 	});
 });
 

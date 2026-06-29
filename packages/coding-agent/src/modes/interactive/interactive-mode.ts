@@ -324,6 +324,7 @@ export class InteractiveMode {
 				if (!apiKey) throw new Error("No API key available for the current model.");
 				return manager.reroll(model, apiKey);
 			},
+			onVisibilityChange: (visible) => this.syncBuddyWidget(visible),
 		});
 		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.headerContainer = new Container();
@@ -2448,7 +2449,10 @@ export class InteractiveMode {
 				}
 			}
 
-			// Capture user message for buddy context and reset idle timer
+			// Capture user message for buddy context and reset idle timer.
+			// refreshVisibility() first, so a /buddy off from another concurrent
+			// instance unmounts this TUI's widget as the user resumes interacting.
+			this.buddyController.refreshVisibility();
 			this.buddyController.appendContext(`User: ${text}`);
 			this.buddyController.markActivity();
 			this.buddyController.resetIdleTimer();
@@ -5409,6 +5413,18 @@ ${cycleModelForward || cycleModelBackward ? `| \`${cycleModelForward}\` / \`${cy
 		if (existingBuddy && !existingBuddy.hidden) {
 			this.mountBuddy(existingBuddy);
 		}
+	}
+
+	private syncBuddyWidget(visible: boolean): void {
+		// Another concurrent dreb instance toggled the buddy via /buddy off
+		// or /buddy. Converge this TUI's widget to the persisted state.
+		if (visible) {
+			const state = this.buddyController.manager.getState() ?? this.buddyController.manager.load();
+			if (state) this.mountBuddy(state);
+		} else {
+			this.removeBuddy();
+		}
+		this.ui.requestRender();
 	}
 
 	private mountBuddy(state: import("../../core/buddy/buddy-types.js").BuddyState): void {

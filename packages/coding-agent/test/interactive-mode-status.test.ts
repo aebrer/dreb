@@ -605,3 +605,73 @@ describe("InteractiveMode.mountExistingBuddyIfVisible", () => {
 		expect(mountBuddy).not.toHaveBeenCalled();
 	});
 });
+
+// Regression for cross-instance buddy visibility sync: when another dreb
+// instance toggles /buddy or /buddy off, this TUI must converge its widget to
+// the persisted hidden state and re-render.
+describe("InteractiveMode.syncBuddyWidget", () => {
+	function createFakeThis(getStateReturn: unknown, loadReturn: unknown) {
+		const getState = vi.fn(() => getStateReturn);
+		const load = vi.fn(() => loadReturn);
+		const mountBuddy = vi.fn();
+		const removeBuddy = vi.fn();
+		const requestRender = vi.fn();
+		const fakeThis: any = {
+			buddyController: { manager: { getState, load } },
+			mountBuddy,
+			removeBuddy,
+			ui: { requestRender },
+		};
+		return { fakeThis, getState, load, mountBuddy, removeBuddy, requestRender };
+	}
+
+	test("mounts the current manager state when becoming visible", () => {
+		const state = { hidden: false, name: "Quack" };
+		const { fakeThis, load, mountBuddy, removeBuddy, requestRender } = createFakeThis(state, null);
+
+		(InteractiveMode as any).prototype.syncBuddyWidget.call(fakeThis, true);
+
+		expect(mountBuddy).toHaveBeenCalledWith(state);
+		expect(load).not.toHaveBeenCalled();
+		expect(removeBuddy).not.toHaveBeenCalled();
+		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	test("falls back to loading persisted state when current manager state is missing", () => {
+		const loadedState = { hidden: false, name: "Loaded" };
+		const { fakeThis, load, mountBuddy, removeBuddy, requestRender } = createFakeThis(undefined, loadedState);
+
+		(InteractiveMode as any).prototype.syncBuddyWidget.call(fakeThis, true);
+
+		expect(load).toHaveBeenCalledTimes(1);
+		expect(mountBuddy).toHaveBeenCalledWith(loadedState);
+		expect(removeBuddy).not.toHaveBeenCalled();
+		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	test("renders without mounting when no visible buddy state exists", () => {
+		const { fakeThis, load, mountBuddy, removeBuddy, requestRender } = createFakeThis(null, null);
+
+		(InteractiveMode as any).prototype.syncBuddyWidget.call(fakeThis, true);
+
+		expect(load).toHaveBeenCalledTimes(1);
+		expect(mountBuddy).not.toHaveBeenCalled();
+		expect(removeBuddy).not.toHaveBeenCalled();
+		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	test("removes the buddy widget when becoming hidden", () => {
+		const { fakeThis, getState, load, mountBuddy, removeBuddy, requestRender } = createFakeThis(
+			{ hidden: false },
+			{ hidden: false },
+		);
+
+		(InteractiveMode as any).prototype.syncBuddyWidget.call(fakeThis, false);
+
+		expect(removeBuddy).toHaveBeenCalledTimes(1);
+		expect(requestRender).toHaveBeenCalledTimes(1);
+		expect(mountBuddy).not.toHaveBeenCalled();
+		expect(getState).not.toHaveBeenCalled();
+		expect(load).not.toHaveBeenCalled();
+	});
+});
