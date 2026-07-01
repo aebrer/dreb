@@ -2,7 +2,7 @@
 
 dreb is a hackable, open-source terminal coding agent and agent runtime for people who want to own their AI development workflow. It gives you a practical coding assistant today — tools, sessions, memory, model switching, subagents, and a polished TUI — while keeping the core flexible enough to reshape with skills, extensions, packages, custom providers, and alternate frontends.
 
-Use dreb if you want a coding agent that can run against direct APIs, coding subscriptions, proxies, cloud providers, local models, or your own provider code; if you want workflows such as issue-to-merge automation and multi-agent review to be inspectable and replaceable; or if you want an agent runtime you can embed in a CLI, an RPC process, an SDK integration, or a Telegram bot.
+Use dreb if you want a coding agent that can run against direct APIs, coding subscriptions, proxies, cloud providers, local models, or your own provider code; if you want workflows such as issue-to-merge automation and multi-agent review to be inspectable and replaceable; or if you want an agent runtime you can embed in a CLI, a browser dashboard, an RPC process, an SDK integration, or a Telegram bot.
 
 ## Why choose dreb?
 
@@ -16,7 +16,7 @@ Use dreb if you want a coding agent that can run against direct APIs, coding sub
 - **Codebase and web understanding.** dreb includes file, grep/find/ls, bash, web search/fetch, task tracking, skill invocation, and semantic `search`. Semantic search uses AST-aware chunks, embeddings, POEM ranking, memory indexing, and also ships as [`@dreb/semantic-search`](packages/semantic-search/) with an MCP server for other harnesses. The semantic search package requires Node.js 22+.
 - **Detailed usage tracking and performance logging.** dreb records per-session token usage, cost, context-window utilization, and rolling tokens-per-second performance in a local JSONL log (`~/.dreb/agent/performance.jsonl`). This data stays on your machine and can be queried via the TUI footer, Telegram `/stats`, or RPC for personal analytics and model comparison.
 - **Safety and reliability primitives.** Recent dreb-specific hardening includes secret output scrubbing, sensitive-file guards, destructive-command guards, resource diagnostics surfaced in-session, warning propagation, rate-limited web search across parallel subagents, and JSON/RPC protocol hardening. Dropped provider streams are retried (discarding the partial), and responses truncated at the model's output-token limit are retried with a larger token budget — failing loudly rather than returning a silently empty or truncated result.
-- **Multiple interfaces.** Run dreb as an interactive TUI, print/headless CLI, JSON event stream, RPC process, embedded [SDK](packages/coding-agent/docs/sdk.md), or [Telegram bot](packages/telegram/).
+- **Multiple interfaces.** Run dreb as an interactive TUI, first-party [web dashboard](packages/coding-agent/docs/dashboard.md), print/headless CLI, JSON event stream, RPC process, embedded [SDK](packages/coding-agent/docs/sdk.md), or [Telegram bot](packages/telegram/).
 
 ## Quick Start
 
@@ -108,6 +108,7 @@ Project context files (`AGENTS.md`/`CLAUDE.md`) are loaded at startup by walking
 The same agent runtime powers multiple surfaces:
 
 - **Interactive TUI** — the default terminal coding workspace.
+- **Dashboard** — `@dreb/dashboard` serves a first-party browser UI for projects, sessions, chat, files, subagents, and settings with localhost/Tailscale access controls.
 - **Print/headless CLI** — `dreb -p` for one-shot prompts, including piped stdin.
 - **JSON mode** — event stream for scripts and automation.
 - **RPC mode** — strict [JSONL stdin/stdout protocol](packages/coding-agent/docs/rpc.md) for non-Node clients and custom UIs.
@@ -142,6 +143,7 @@ See [FORK.md](FORK.md) for details.
 | [`@dreb/agent-core`](packages/agent/) | General-purpose agent runtime: tool loop, state, streaming, hooks, steering/follow-up queue semantics |
 | [`@dreb/tui`](packages/tui/) | Terminal UI library with differential rendering, markdown/syntax rendering, editor/input components, overlays, keybindings |
 | [`@dreb/semantic-search`](packages/semantic-search/) | Semantic codebase search engine with AST chunking, embeddings, POEM ranking, library API, and MCP server |
+| [`@dreb/dashboard`](packages/dashboard/) | First-party browser dashboard for dreb over the native RPC protocol, with localhost/Tailscale access controls |
 | [`@dreb/telegram`](packages/telegram/) | Telegram bot frontend for dreb over the native RPC protocol |
 
 ## License

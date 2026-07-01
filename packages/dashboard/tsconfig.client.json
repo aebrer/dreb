@@ -1,0 +1,13 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist/static/client",
+		"rootDir": "./src/client",
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"declaration": false,
+		"declarationMap": false,
+		"sourceMap": true
+	},
+	"include": ["src/client/**/*.ts"],
+	"exclude": ["node_modules", "dist", "**/*.d.ts"]
+}

@@ -25,6 +25,10 @@
 			"types": "./dist/modes/rpc/index.d.ts",
 			"import": "./dist/modes/rpc/index.js"
 		},
+		"./session-manager": {
+			"types": "./dist/core/session-manager.d.ts",
+			"import": "./dist/core/session-manager.js"
+		},
 		"./buddy": {
 			"types": "./dist/core/buddy/index.d.ts",
 			"import": "./dist/core/buddy/index.js"

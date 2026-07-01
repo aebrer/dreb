@@ -81,7 +81,7 @@ Or use a custom provider (corporate proxy, Bedrock, etc.) — see [Custom provid
 
 Then just talk to dreb. All 11 built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, and `wait`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Three additional tools — `search`, `skill`, and `tasks_update` — are always active regardless of `--tools`. `suggest_next` is active by default but excluded when `--tools` is specified. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
 
-**Also available:** [`@dreb/telegram`](https://www.npmjs.com/package/@dreb/telegram) — run dreb as a Telegram bot with live tool status and visible results for user-facing tools (`npm install -g @dreb/telegram`).
+**Also available:** [`@dreb/dashboard`](docs/dashboard.md) — run dreb in a browser with project/session browsing, chat, files, subagents, settings, and localhost/Tailscale access controls (`npm install -g @dreb/dashboard`); [`@dreb/telegram`](https://www.npmjs.com/package/@dreb/telegram) — run dreb as a Telegram bot with live tool status and visible results for user-facing tools (`npm install -g @dreb/telegram`).
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -548,6 +548,19 @@ await session.prompt("What files are in the current directory?");
 ```
 
 See [docs/sdk.md](docs/sdk.md) and [examples/sdk/](examples/sdk/).
+
+### Dashboard
+
+For a browser interface, use the first-party dashboard package:
+
+```bash
+npm install -g @dreb/dashboard
+dreb-dashboard
+```
+
+The dashboard serves a local web UI for project/file browsing, session history, chat, live subagents, and runtime settings. Localhost access works without pairing; non-localhost access is opt-in and should go through Tailscale allowlisting plus PIN pairing.
+
+See [docs/dashboard.md](docs/dashboard.md) for launch and security details.
 
 ### RPC Mode
 

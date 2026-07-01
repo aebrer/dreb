@@ -1,0 +1,52 @@
+{
+	"name": "@dreb/dashboard",
+	"version": "2.34.4",
+	"description": "First-party web dashboard for dreb coding agent",
+	"license": "MIT",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"bin": {
+		"dreb-dashboard": "./dist/index.js"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"CHANGELOG.md"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json && tsgo -p tsconfig.client.json && shx chmod +x dist/index.js && npm run copy-assets",
+		"copy-assets": "shx mkdir -p dist/static && shx cp src/static/* dist/static/",
+		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"dependencies": {
+		"@dreb/agent-core": "*",
+		"@dreb/coding-agent": "*"
+	},
+	"devDependencies": {
+		"@types/node": "^24.3.0",
+		"shx": "^0.4.0",
+		"typescript": "^5.9.2",
+		"vitest": "^4.1.8"
+	},
+	"engines": {
+		"node": "22.x"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/aebrer/dreb.git",
+		"directory": "packages/dashboard"
+	}
+}

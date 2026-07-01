@@ -16,6 +16,7 @@ export default defineConfig({
 			"packages/ai",
 			"packages/agent",
 			"packages/coding-agent",
+			"packages/dashboard",
 			"packages/semantic-search",
 			"packages/telegram",
 		],

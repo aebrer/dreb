@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>dreb dashboard</title>
+		<link rel="stylesheet" href="/app.css" />
+		<script type="module" src="/client/app.js"></script>
+	</head>
+	<body>
+		<header class="topbar">
+			<div>
+				<p class="eyebrow">dreb</p>
+				<h1>Dashboard</h1>
+			</div>
+			<div class="status-stack">
+				<span id="runtime-badge" class="badge">no runtime</span>
+				<span id="status-line" class="muted">Starting…</span>
+			</div>
+		</header>
+
+		<main>
+			<section id="auth-panel" class="card auth-card">
+				<h2>Pair this browser</h2>
+				<p>Remote clients need the dashboard PIN. Local loopback clients are trusted automatically.</p>
+				<form id="pair-form" class="inline-form">
+					<label>
+						<span>PIN</span>
+						<input id="pin-input" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" />
+					</label>
+					<button type="submit">Pair</button>
+				</form>
+			</section>
+
+			<div id="app-shell" class="dashboard" hidden>
+				<nav class="tabs" aria-label="Dashboard sections">
+					<button type="button" class="active" data-tab="chat">Chat</button>
+					<button type="button" data-tab="files">Files</button>
+					<button type="button" data-tab="sessions">Sessions</button>
+					<button type="button" data-tab="runtime">Runtime</button>
+				</nav>
+
+				<section class="panel-grid">
+					<section class="card panel main-panel" data-panel="chat">
+						<div class="panel-heading">
+							<h2>Transcript</h2>
+							<button id="refresh-runtime-button" type="button" class="secondary">Refresh</button>
+						</div>
+						<div id="transcript" class="transcript" aria-live="polite"></div>
+						<form id="message-form" class="composer">
+							<select id="command-select" aria-label="Message command">
+								<option value="prompt">Prompt</option>
+								<option value="steer">Steer</option>
+								<option value="follow_up">Follow-up</option>
+							</select>
+							<textarea id="message-input" rows="3" placeholder="Message the agent…"></textarea>
+							<div class="composer-actions">
+								<button type="submit">Send</button>
+								<button id="abort-button" type="button" class="danger">Abort</button>
+							</div>
+						</form>
+					</section>
+
+					<section class="card panel" data-panel="files" hidden>
+						<div class="panel-heading">
+							<h2>Files</h2>
+							<div class="button-row">
+								<button id="use-project-button" type="button" class="secondary">Use as project</button>
+								<button id="up-button" type="button" class="secondary">Up</button>
+							</div>
+						</div>
+						<label>
+							<span>Root</span>
+							<select id="root-select"></select>
+						</label>
+						<form id="browse-form" class="inline-form">
+							<label>
+								<span>Path</span>
+								<input id="path-input" value="." />
+							</label>
+							<button type="submit">Browse</button>
+						</form>
+						<form id="upload-form" class="inline-form">
+							<label>
+								<span>Upload here</span>
+								<input id="upload-input" type="file" />
+							</label>
+							<button type="submit">Upload</button>
+						</form>
+						<ul id="entries-list" class="list"></ul>
+					</section>
+
+					<section class="card panel" data-panel="sessions" hidden>
+						<div class="panel-heading">
+							<h2>Sessions</h2>
+							<button id="refresh-sessions-button" type="button" class="secondary">Refresh</button>
+						</div>
+						<div class="two-column">
+							<section>
+								<h3>This project</h3>
+								<ul id="project-sessions-list" class="list compact"></ul>
+							</section>
+							<section>
+								<h3>All projects</h3>
+								<ul id="all-sessions-list" class="list compact"></ul>
+							</section>
+						</div>
+					</section>
+
+					<section class="card panel" data-panel="runtime" hidden>
+						<h2>Runtime</h2>
+						<label>
+							<span>Project cwd</span>
+							<input id="cwd-input" placeholder="/path/to/project" />
+						</label>
+						<label>
+							<span>Session</span>
+							<select id="session-select"><option value="">New session</option></select>
+						</label>
+						<div class="button-row">
+							<button id="new-runtime-button" type="button">New runtime</button>
+							<button id="open-session-button" type="button" class="secondary">Open session</button>
+						</div>
+						<hr />
+						<h3>Settings</h3>
+						<label>
+							<span>Model</span>
+							<select id="model-select"><option value="">Open a runtime first</option></select>
+						</label>
+						<button id="apply-model-button" type="button" class="secondary">Apply model</button>
+						<div class="settings-grid">
+							<label>
+								<span>Thinking</span>
+								<select id="thinking-select">
+									<option value="off">off</option>
+									<option value="minimal">minimal</option>
+									<option value="low">low</option>
+									<option value="medium">medium</option>
+									<option value="high">high</option>
+									<option value="xhigh">xhigh</option>
+								</select>
+							</label>
+							<label>
+								<span>Steering</span>
+								<select id="steering-mode-select">
+									<option value="all">all</option>
+									<option value="one-at-a-time">one-at-a-time</option>
+								</select>
+							</label>
+							<label>
+								<span>Follow-up</span>
+								<select id="follow-up-mode-select">
+									<option value="all">all</option>
+									<option value="one-at-a-time">one-at-a-time</option>
+								</select>
+							</label>
+						</div>
+						<button id="apply-settings-button" type="button" class="secondary">Apply settings</button>
+					</section>
+
+					<aside class="side-stack">
+						<section class="card side-card">
+							<h2>Suggested next</h2>
+							<div id="suggestions" class="chips"></div>
+						</section>
+						<section class="card side-card">
+							<h2>Tasks</h2>
+							<ul id="task-list" class="list compact"></ul>
+						</section>
+						<section class="card side-card">
+							<h2>Subagents</h2>
+							<ul id="subagent-list" class="list compact"></ul>
+						</section>
+						<section class="card side-card">
+							<h2>Events</h2>
+							<ul id="event-log" class="list compact event-list"></ul>
+						</section>
+					</aside>
+				</section>
+			</div>
+		</main>
+	</body>
+</html>
