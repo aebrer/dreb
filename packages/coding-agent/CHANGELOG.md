@@ -42,6 +42,8 @@
 
 ### Fixed
 
+- Fixed semantic `search` results from crashing the interactive TUI when indexed content or result previews contain CRLF or lone-CR line endings. Search result rendering and semantic-search previews now normalize platform line endings before display while preserving the strict TUI raw-line-break guard. ([#308](https://github.com/aebrer/dreb/issues/308))
+
 - Fixed serial duplicate rows during streamed assistant/thinking markdown lists by normalizing TUI markdown render entries and rejecting raw line breaks before terminal row state can drift. ([#301](https://github.com/aebrer/dreb/issues/301))
 
 - Fixed the TUI yanking the viewport to the top and wiping scrollback when a live-region-only change occurred while the user was scrolled up — at turn end (the working spinner disappearing) or on resize. A one-line live-region change was escalating to `recommitAll()`, which clears scrollback and repaints the whole session from the top, destroying the user's scroll position and native scrollback. The working indicator now lives on the always-present editor input line (constant live-region height, so turn boundaries no longer shrink the live region), live-region-only viewport shifts route through a new `restoreLiveViewport()` that bottom-anchors without replaying committed content, and `recommitAll()` re-establishes input modes via a RIS reset before any transcript bytes. A structural guard now makes it a loud error (with terminal teardown) for any live-only render path to reach `recommitAll()`, so the committed-replay class of bug cannot silently return. ([#292](https://github.com/aebrer/dreb/issues/292))

@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Fixed `Text` rendering for CRLF and lone-CR input so platform line endings are split into separate logical render entries instead of returning raw carriage returns to the TUI guard. ([#308](https://github.com/aebrer/dreb/issues/308))
 - Fixed streamed markdown list rendering from returning raw newline characters inside a single TUI render entry, preventing serial duplicate rows during soft-wrapped assistant output ([#301](https://github.com/aebrer/dreb/issues/301))
 - Fixed the TUI render-contract guard so raw line breaks are rejected even when a rendered entry contains terminal image escape sequences
 - Fixed blockquote text color breaking after inline links (and other inline elements) due to missing style restoration prefix
