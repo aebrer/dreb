@@ -2,6 +2,10 @@
 
 import type { SearchResult } from "./types.js";
 
+function splitLogicalLines(text: string): string[] {
+	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+}
+
 export function formatResults(results: SearchResult[]): string {
 	if (results.length === 0) return "No results found.";
 
@@ -28,7 +32,7 @@ export function formatResults(results: SearchResult[]): string {
 		}
 
 		// Content preview (first 3 lines)
-		const contentLines = chunk.content.split("\n");
+		const contentLines = splitLogicalLines(chunk.content);
 		const previewLines = contentLines.slice(0, 3);
 		for (const line of previewLines) {
 			const trimmed = line.length > 120 ? `${line.slice(0, 117)}...` : line;

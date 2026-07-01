@@ -52,6 +52,10 @@ export interface SearchToolDetails {
 	indexStats?: { files: number; chunks: number };
 }
 
+function normalizeLineEndings(text: string): string {
+	return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
 // ============================================================================
 // Rendering
 // ============================================================================
@@ -89,7 +93,7 @@ export function formatSearchResult(
 	options: ToolRenderResultOptions,
 	theme: typeof import("../../modes/interactive/theme/theme.js").theme,
 ): string {
-	const output = result.content[0]?.text?.trim() ?? "";
+	const output = result.content[0]?.text ? normalizeLineEndings(result.content[0].text).trim() : "";
 	if (!output) return "";
 
 	const lines = output.split("\n");

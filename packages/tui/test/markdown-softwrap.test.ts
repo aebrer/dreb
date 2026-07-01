@@ -206,6 +206,17 @@ describe("Text softWrap", () => {
 		assert.strictEqual(lines[2], " ".repeat(20));
 	});
 
+	it("normalizes CRLF and lone CR input into separate soft-wrapped logical lines", () => {
+		const text = new Text("first\r\nsecond\rthird", 0, 0, undefined, true);
+
+		const lines = text.render(20);
+		const plainLines = lines.map(plain);
+
+		assertNoRawLineBreaks(lines);
+		assert.deepStrictEqual(plainLines, ["first", "second", "third"]);
+		assert.ok(lines.every(isWrappableLine));
+	});
+
 	it("defaults to existing padded hard-wrapped behavior", () => {
 		const text = new Text("short", 2, 0);
 

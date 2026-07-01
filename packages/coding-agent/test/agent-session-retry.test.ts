@@ -289,8 +289,8 @@ describe("AgentSession retry", () => {
 		// second call succeeds. This drives the _handleEvents length_retry branch
 		// that forwards all 5 fields to the extension runner.
 		let callCount = 0;
-		const model = findModel("anthropic", "sonnet")!;
-		// Guard the expected numbers against future model changes.
+		const model = { ...findModel("anthropic", "sonnet")!, maxTokens: 64000 };
+		// Keep the test fixture stable even if the live registry changes Sonnet's ceiling.
 		expect(model.maxTokens).toBe(64000);
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -370,8 +370,8 @@ describe("AgentSession retry", () => {
 		// first retry bumps 32000 → 64000 (sonnet's ceiling); a second truncation
 		// at the ceiling then fails loudly.
 		let callCount = 0;
-		const model = findModel("anthropic", "sonnet")!;
-		// Guard the expected numbers against future model changes.
+		const model = { ...findModel("anthropic", "sonnet")!, maxTokens: 64000 };
+		// Keep the test fixture stable even if the live registry changes Sonnet's ceiling.
 		expect(model.maxTokens).toBe(64000);
 		const agent = new Agent({
 			getApiKey: () => "test-key",
