@@ -251,6 +251,19 @@ describe("createSearchToolDefinition", () => {
 			expect(result).not.toContain("more lines");
 		});
 
+		it("normalizes CRLF and lone CR result text", () => {
+			const result = formatSearchResult(
+				{ content: [{ type: "text", text: "first\r\nsecond\rthird" }] },
+				{ expanded: false, isPartial: false },
+				stubTheme,
+			);
+
+			expect(result).toContain("first");
+			expect(result).toContain("second");
+			expect(result).toContain("third");
+			expect(result).not.toContain("\r");
+		});
+
 		it("truncates at 20 lines in collapsed mode with remaining count", () => {
 			const lines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
 			const result = formatSearchResult(

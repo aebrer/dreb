@@ -135,6 +135,19 @@ describe("formatResults", () => {
 		expect(output).toContain("... (2 more lines)");
 	});
 
+	it("normalizes CRLF and lone CR content previews", () => {
+		const content = "line 1\r\nline 2\rline 3\r\nline 4\r\nline 5";
+		const result = makeResult({ chunk: makeChunk({ content }) });
+		const output = formatResults([result]);
+
+		expect(output).toContain("line 1");
+		expect(output).toContain("line 2");
+		expect(output).toContain("line 3");
+		expect(output).not.toContain("line 4");
+		expect(output).toContain("... (2 more lines)");
+		expect(output).not.toContain("\r");
+	});
+
 	it("truncates long content lines at 120 chars", () => {
 		const longLine = "x".repeat(200);
 		const result = makeResult({ chunk: makeChunk({ content: longLine }) });

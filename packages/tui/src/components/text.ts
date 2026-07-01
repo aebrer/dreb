@@ -66,8 +66,8 @@ export class Text implements Component {
 			return result;
 		}
 
-		// Replace tabs with 3 spaces
-		const normalizedText = this.text.replace(/\t/g, "   ");
+		// Normalize line endings and replace tabs with 3 spaces.
+		const normalizedText = this.text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, "   ");
 
 		// Add top/bottom padding (empty lines)
 		const emptyLine = " ".repeat(width);
