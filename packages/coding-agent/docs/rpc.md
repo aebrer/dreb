@@ -621,6 +621,29 @@ If an extension cancelled the switch:
 {"type": "response", "command": "switch_session", "success": true, "data": {"cancelled": true}}
 ```
 
+#### delete_session
+
+Delete a session file. Deletion tries trash first and falls back to unlink. The currently active session cannot be deleted.
+
+```json
+{"type": "delete_session", "sessionPath": "/path/to/session.jsonl"}
+```
+
+Response:
+```json
+{"type": "response", "command": "delete_session", "success": true, "data": {"method": "trash"}}
+```
+
+If attempting to delete the currently active session:
+```json
+{
+  "type": "response",
+  "command": "delete_session",
+  "success": false,
+  "error": "Cannot delete the currently active session"
+}
+```
+
 #### fork
 
 Create a new fork from a previous user message. Can be cancelled by a `session_before_fork` extension event handler. Returns the text of the message being forked from.
@@ -794,6 +817,39 @@ Each session has:
 - `modified`: ISO timestamp of last modification
 - `messageCount`: Number of messages in the session
 - `firstMessage`: First user message text (for preview)
+
+#### list_all_sessions
+
+List sessions across all projects. Returns sessions sorted by most recently modified first. May be slow with many sessions.
+
+```json
+{"type": "list_all_sessions"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "list_all_sessions",
+  "success": true,
+  "data": {
+    "sessions": [
+      {
+        "path": "/home/user/.dreb/agent/sessions/--home-user-project--/2024-01-15T10-30-00_abc123.jsonl",
+        "id": "abc123-def456-...",
+        "cwd": "/home/user/project",
+        "name": "feature-work",
+        "created": "2024-01-15T10:30:00.000Z",
+        "modified": "2024-01-15T11:45:00.000Z",
+        "messageCount": 12,
+        "firstMessage": "Help me refactor the auth module"
+      }
+    ]
+  }
+}
+```
+
+Each session has the same fields as `list_sessions`.
 
 ### Version
 

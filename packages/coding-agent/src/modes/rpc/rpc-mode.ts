@@ -570,6 +570,18 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "switch_session", { cancelled });
 			}
 
+			case "delete_session": {
+				const activePath = session.sessionManager.getSessionFile();
+				if (activePath && command.sessionPath === activePath) {
+					return error(id, "delete_session", "Cannot delete the currently active session");
+				}
+				const result = await SessionManager.deleteSession(command.sessionPath);
+				if (!result.ok) {
+					return error(id, "delete_session", result.error ?? "Unknown deletion error");
+				}
+				return success(id, "delete_session", { method: result.method });
+			}
+
 			case "fork": {
 				const result = await session.fork(command.entryId);
 				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
@@ -625,6 +637,21 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 					firstMessage: s.firstMessage,
 				}));
 				return success(id, "list_sessions", { sessions: data });
+			}
+
+			case "list_all_sessions": {
+				const sessions = await SessionManager.listAll();
+				const data: RpcSessionInfo[] = sessions.map((s) => ({
+					path: s.path,
+					id: s.id,
+					cwd: s.cwd,
+					name: s.name,
+					created: s.created.toISOString(),
+					modified: s.modified.toISOString(),
+					messageCount: s.messageCount,
+					firstMessage: s.firstMessage,
+				}));
+				return success(id, "list_all_sessions", { sessions: data });
 			}
 
 			// =================================================================

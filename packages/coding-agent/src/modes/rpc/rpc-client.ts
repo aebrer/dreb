@@ -454,6 +454,15 @@ export class RpcClient {
 	}
 
 	/**
+	 * Delete a session file, trying trash first and falling back to unlink.
+	 * Throws on failure, including when attempting to delete the active session.
+	 */
+	async deleteSession(sessionPath: string): Promise<{ method: "trash" | "unlink" }> {
+		const response = await this.send({ type: "delete_session", sessionPath });
+		return this.getData(response);
+	}
+
+	/**
 	 * Fork from a specific message.
 	 * @returns Object with `text` (the message text) and `cancelled` (if extension cancelled)
 	 */
@@ -507,6 +516,15 @@ export class RpcClient {
 	 */
 	async listSessions(): Promise<RpcSessionInfo[]> {
 		const response = await this.send({ type: "list_sessions" });
+		return this.getData<{ sessions: RpcSessionInfo[] }>(response).sessions;
+	}
+
+	/**
+	 * List sessions across all projects.
+	 * Returns sessions sorted by most recently modified first. May be slow with many sessions.
+	 */
+	async listAllSessions(): Promise<RpcSessionInfo[]> {
+		const response = await this.send({ type: "list_all_sessions" });
 		return this.getData<{ sessions: RpcSessionInfo[] }>(response).sessions;
 	}
 

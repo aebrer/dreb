@@ -4,6 +4,9 @@
 
 ### Added
 
+- **`list_all_sessions` RPC command** - List sessions across all projects for external frontends.
+- **`delete_session` RPC command** - Delete a session file (trash-first) with active-session protection. Session deletion logic moved from the TUI into `SessionManager.deleteSession`.
+
 - Thinking summaries are visible again on Opus 4.7+ (and any adaptive-thinking Claude model). Anthropic flipped the API default for `thinking.display` to `"omitted"`, so these models returned empty thinking blocks — dreb now sends `"summarized"` by default. Added a model-keyed `modelSettings` setting with a `thinkingDisplay` override (`"summarized" | "omitted"`), exposed in `/settings` → **Show thinking summaries** (shown only for adaptive models). Because the setting is keyed by model ID and resolved at the shared session-creation chokepoint, it is honored uniformly across the TUI, headless, JSON, RPC, and Telegram clients — and inherited automatically by subagents using the same model. ([#250](https://github.com/aebrer/dreb/issues/250))
 
 - Secret scrubbing and sensitive file access guards — two layers of defense against accidental credential leaks through the tool pipeline. Output scrubbing detects and redacts known secret patterns (AWS, GitHub, OpenAI, Anthropic, Slack, Stripe, PEM/SSH keys, URL credentials) in tool output before it enters the LLM conversation. Sensitive file guard blocks read access to credential files (`~/.ssh/id_*`, `~/.aws/credentials`, `~/.dreb/secrets/`, etc.) via both the `read` tool and bash commands. Both layers configurable via `sensitiveFilePaths` and `secretOutputPatterns` settings. ([#171](https://github.com/aebrer/dreb/issues/171))

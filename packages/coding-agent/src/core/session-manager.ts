@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import type { AgentMessage } from "@dreb/agent-core";
 import type { ImageContent, Message, TextContent } from "@dreb/ai";
 import { randomUUID } from "crypto";
@@ -13,7 +15,6 @@ import {
 	statSync,
 	writeFileSync,
 } from "fs";
-import { readdir, readFile, stat } from "fs/promises";
 import { join, resolve } from "path";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
@@ -1375,6 +1376,55 @@ export class SessionManager {
 		}
 
 		return new SessionManager(targetCwd, dir, newSessionFile, true);
+	}
+
+	/**
+	 * Delete a session file, trying the `trash` CLI first, then falling back to unlink.
+	 * Refuses to delete non-session files or missing files.
+	 */
+	static async deleteSession(
+		sessionPath: string,
+	): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
+		if (!sessionPath.endsWith(".jsonl")) {
+			return { ok: false, method: "unlink", error: `Not a session file (expected .jsonl): ${sessionPath}` };
+		}
+
+		if (!existsSync(sessionPath)) {
+			return { ok: false, method: "unlink", error: `Session file does not exist: ${sessionPath}` };
+		}
+
+		// Try `trash` first (if installed)
+		const trashArgs = sessionPath.startsWith("-") ? ["--", sessionPath] : [sessionPath];
+		const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
+
+		const getTrashErrorHint = (): string | null => {
+			const parts: string[] = [];
+			if (trashResult.error) {
+				parts.push(trashResult.error.message);
+			}
+			const stderr = trashResult.stderr?.trim();
+			if (stderr) {
+				parts.push(stderr.split("\n")[0] ?? stderr);
+			}
+			if (parts.length === 0) return null;
+			return `trash: ${parts.join(" · ").slice(0, 200)}`;
+		};
+
+		// If trash reports success, or the file is gone afterwards, treat it as successful
+		if (trashResult.status === 0 || !existsSync(sessionPath)) {
+			return { ok: true, method: "trash" };
+		}
+
+		// Fallback to permanent deletion
+		try {
+			await unlink(sessionPath);
+			return { ok: true, method: "unlink" };
+		} catch (err) {
+			const unlinkError = err instanceof Error ? err.message : String(err);
+			const trashErrorHint = getTrashErrorHint();
+			const error = trashErrorHint ? `${unlinkError} (${trashErrorHint})` : unlinkError;
+			return { ok: false, method: "unlink", error };
+		}
 	}
 
 	/**
