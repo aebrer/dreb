@@ -3469,6 +3469,14 @@ export class AgentSession {
 		targetId: string,
 		options: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string } = {},
 	): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean; summaryEntry?: BranchSummaryEntry }> {
+		// Navigating mid-stream would replace agent messages during an active run,
+		// corrupting the conversation state. Fail loudly instead.
+		if (this.isStreaming) {
+			throw new Error(
+				"Cannot navigate the session tree while the agent is streaming. Abort or wait for idle first.",
+			);
+		}
+
 		const oldLeafId = this.sessionManager.getLeafId();
 
 		// No-op if already at target

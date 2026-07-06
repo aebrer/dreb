@@ -21,7 +21,7 @@ import type {
 } from "../../core/extensions/index.js";
 import { parseModelPattern } from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
-import type { SessionInfo } from "../../core/session-manager.js";
+import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -33,6 +33,7 @@ import type {
 	RpcSessionInfo,
 	RpcSessionState,
 	RpcSlashCommand,
+	RpcTreeNode,
 } from "./rpc-types.js";
 
 // Re-export types for consumers
@@ -95,6 +96,141 @@ export async function deleteSessionForRpc(
 export async function listAllSessionsForRpc(): Promise<RpcSessionInfo[]> {
 	const sessions = await SessionManager.listAll();
 	return sessions.map(toRpcSessionInfo);
+}
+
+function normalizePreview(text: string): string {
+	return text.replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+function extractTextContent(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+
+	let text = "";
+	for (const part of content) {
+		if (
+			typeof part === "object" &&
+			part !== null &&
+			"type" in part &&
+			part.type === "text" &&
+			"text" in part &&
+			typeof part.text === "string"
+		) {
+			text += part.text;
+		}
+	}
+	return text;
+}
+
+function getRpcEntryPreview(node: SessionTreeNode): string {
+	const entry = node.entry;
+
+	switch (entry.type) {
+		case "message": {
+			const msg = entry.message as {
+				role: string;
+				content?: unknown;
+				stopReason?: string;
+				errorMessage?: string;
+				toolName?: string;
+				command?: string;
+			};
+			const role = msg.role;
+			if (role === "user") {
+				return normalizePreview(extractTextContent(msg.content));
+			}
+			if (role === "assistant") {
+				const textContent = normalizePreview(extractTextContent(msg.content));
+				if (textContent) return textContent;
+				if (msg.stopReason === "aborted") return "(aborted)";
+				if (msg.errorMessage) return normalizePreview(msg.errorMessage);
+				return "(no content)";
+			}
+			if (role === "toolResult") {
+				return normalizePreview(`[${msg.toolName ?? "tool"}]`);
+			}
+			if (role === "bashExecution") {
+				return normalizePreview(`[bash]: ${msg.command ?? ""}`);
+			}
+			return normalizePreview(`[${role}]`);
+		}
+		case "custom_message":
+			return normalizePreview(`[${entry.customType}]: ${extractTextContent(entry.content)}`);
+		case "compaction":
+			return normalizePreview(`[compaction: ${Math.round(entry.tokensBefore / 1000)}k tokens]`);
+		case "branch_summary":
+			return normalizePreview(`[branch summary]: ${entry.summary}`);
+		case "model_change":
+			return normalizePreview(`[model: ${entry.modelId}]`);
+		case "thinking_level_change":
+			return normalizePreview(`[thinking: ${entry.thinkingLevel}]`);
+		case "custom":
+			return normalizePreview(`[custom: ${entry.customType}]`);
+		case "label":
+			return normalizePreview(`[label: ${entry.label ?? "(cleared)"}]`);
+		case "session_info":
+			return normalizePreview(`[title: ${entry.name ?? "empty"}]`);
+	}
+}
+
+function toRpcTreeNode(node: SessionTreeNode): RpcTreeNode {
+	const role = node.entry.type === "message" ? String(node.entry.message.role) : undefined;
+	return {
+		id: node.entry.id,
+		parentId: node.entry.parentId,
+		type: node.entry.type,
+		...(role !== undefined ? { role } : {}),
+		preview: getRpcEntryPreview(node),
+		timestamp: node.entry.timestamp,
+		...(node.label !== undefined ? { label: node.label } : {}),
+		children: [],
+	};
+}
+
+/**
+ * Map core session tree nodes to stable RPC DTOs without leaking raw entries/messages.
+ * Uses an explicit stack so deep linear session trees do not overflow the JS call stack.
+ */
+export function toRpcTreeNodes(nodes: SessionTreeNode[]): RpcTreeNode[] {
+	const roots: RpcTreeNode[] = [];
+	const stack: Array<{ source: SessionTreeNode; targetSiblings: RpcTreeNode[] }> = [];
+
+	for (let i = nodes.length - 1; i >= 0; i--) {
+		stack.push({ source: nodes[i]!, targetSiblings: roots });
+	}
+
+	while (stack.length > 0) {
+		const { source, targetSiblings } = stack.pop()!;
+		const dto = toRpcTreeNode(source);
+		targetSiblings.push(dto);
+
+		for (let i = source.children.length - 1; i >= 0; i--) {
+			stack.push({ source: source.children[i]!, targetSiblings: dto.children });
+		}
+	}
+
+	return roots;
+}
+
+/** Return the current session tree and active leaf as RPC DTOs. */
+export function getTreeForRpc(sessionManager: Pick<SessionManager, "getTree" | "getLeafId">): {
+	roots: RpcTreeNode[];
+	leafId: string | null;
+} {
+	return { roots: toRpcTreeNodes(sessionManager.getTree()), leafId: sessionManager.getLeafId() };
+}
+
+/** Navigate the active session tree, returning only the stable RPC result fields. */
+export async function navigateTreeForRpc(
+	session: Pick<AgentSession, "navigateTree">,
+	targetId: string,
+	options?: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string },
+): Promise<{ cancelled: boolean; editorText?: string }> {
+	const result = await session.navigateTree(targetId, options ?? {});
+	return {
+		cancelled: result.cancelled,
+		...(result.editorText !== undefined ? { editorText: result.editorText } : {}),
+	};
 }
 
 /**
@@ -633,6 +769,24 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			case "get_fork_messages": {
 				const messages = session.getUserMessagesForForking();
 				return success(id, "get_fork_messages", { messages });
+			}
+
+			case "get_tree": {
+				return success(id, "get_tree", getTreeForRpc(session.sessionManager));
+			}
+
+			case "navigate_tree": {
+				try {
+					const result = await navigateTreeForRpc(session, command.targetId, {
+						summarize: command.summarize,
+						customInstructions: command.customInstructions,
+						replaceInstructions: command.replaceInstructions,
+						label: command.label,
+					});
+					return success(id, "navigate_tree", result);
+				} catch (e) {
+					return error(id, "navigate_tree", e instanceof Error ? e.message : String(e));
+				}
 			}
 
 			case "get_last_assistant_text": {

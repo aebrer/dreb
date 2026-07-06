@@ -861,6 +861,123 @@ Response:
 
 Each session has the same fields as `list_sessions`.
 
+### Session Tree
+
+Sessions are append-only trees: editing/retrying a message or navigating back creates a branch rather than discarding entries. These commands expose tree inspection and navigation — the scriptable equivalent of the TUI's `/tree` selector.
+
+#### get_tree
+
+Get the session tree as a serializable DTO, plus the current leaf position.
+
+```json
+{"type": "get_tree"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_tree",
+  "success": true,
+  "data": {
+    "roots": [
+      {
+        "id": "a1b2c3d4",
+        "parentId": null,
+        "type": "message",
+        "role": "user",
+        "preview": "Help me refactor the auth module",
+        "timestamp": "2024-01-15T10:30:00.000Z",
+        "label": "start",
+        "children": [
+          {
+            "id": "e5f6a7b8",
+            "parentId": "a1b2c3d4",
+            "type": "message",
+            "role": "assistant",
+            "preview": "Sure — let's look at the middleware first.",
+            "timestamp": "2024-01-15T10:30:05.000Z",
+            "children": []
+          }
+        ]
+      }
+    ],
+    "leafId": "e5f6a7b8"
+  }
+}
+```
+
+Each node has:
+- `id`: Entry id (use with `navigate_tree`, `fork`)
+- `parentId`: Parent entry id, or `null` for a root
+- `type`: Entry type (`message`, `compaction`, `branch_summary`, `model_change`, `thinking_level_change`, `custom`, `custom_message`, `label`, `session_info`)
+- `role`: Message role, present only for `type: "message"` entries (`user`, `assistant`, `toolResult`, `bashExecution`)
+- `preview`: Short single-line content preview (whitespace-collapsed, max 200 chars). Non-text entries use bracketed forms like `[compaction: 50k tokens]`, `[branch summary]: ...`, `[model: claude-sonnet-4]`, `[bash]: npm test`
+- `timestamp`: ISO timestamp of the entry
+- `label`: Resolved user label, if any
+- `children`: Child nodes, oldest first
+
+`leafId` is the id of the current leaf entry (`null` for an empty session) — the "you are here" marker for a tree UI. The DTO is stable and deliberately does **not** include full message payloads; use `get_messages` for content after navigation.
+
+A well-formed session has exactly one root; orphaned entries (broken parent chains) also surface as roots.
+
+#### navigate_tree
+
+Navigate the current session to a different tree node, optionally summarizing the abandoned branch. Unlike `fork` (which creates a new session file), navigation stays within the same session file.
+
+```json
+{"type": "navigate_tree", "targetId": "a1b2c3d4"}
+```
+
+With branch summarization:
+```json
+{
+  "type": "navigate_tree",
+  "targetId": "a1b2c3d4",
+  "summarize": true,
+  "customInstructions": "Focus on decisions made",
+  "replaceInstructions": false,
+  "label": "before-refactor"
+}
+```
+
+Options (all optional, passed through verbatim to the core navigation — the TUI's interactive summarize prompt is not replicated):
+- `summarize`: Generate an LLM summary of the branch being abandoned and attach it at the navigation target. Requires a model and API key.
+- `customInstructions`: Extra instructions for the summarizer.
+- `replaceInstructions`: If `true`, `customInstructions` replaces the default summarizer prompt instead of augmenting it.
+- `label`: Label to attach to the branch summary entry (or to the target entry when not summarizing).
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "navigate_tree",
+  "success": true,
+  "data": {"cancelled": false, "editorText": "Help me refactor the auth module"}
+}
+```
+
+- `cancelled`: `true` if an extension (`session_before_tree`) cancelled the navigation or summarization was aborted.
+- `editorText`: Present when navigating to a `user` (or `custom_message`) entry — the text of that message. The leaf moves to the entry's *parent* so the message can be re-edited and resubmitted; a client should pre-fill its input with this text (this is what the TUI does). Navigating to any other entry type moves the leaf to the entry itself and returns no `editorText`.
+
+After a successful `navigate_tree`, `get_state` and `get_messages` reflect the post-navigation session state.
+
+Errors are explicit `success: false` responses:
+```json
+{
+  "type": "response",
+  "command": "navigate_tree",
+  "success": false,
+  "error": "Entry zzz not found"
+}
+```
+
+- Unknown `targetId`: `Entry <id> not found`
+- Agent currently streaming: `Cannot navigate the session tree while the agent is streaming. Abort or wait for idle first.`
+- `summarize: true` with no model available: `No model available for summarization`
+
+Note: with `summarize: true` the command is LLM-bound and can take a while. `RpcClient.navigateTree` uses a 5-minute client timeout (overridable via its client-side `timeoutMs` option, which is not sent over the wire); raw-protocol clients should budget accordingly. There is no scriptable abort for an in-flight branch summarization over RPC.
+
 ### Version
 
 #### get_version

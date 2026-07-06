@@ -4,6 +4,9 @@
 
 ### Added
 
+- **`get_tree` and `navigate_tree` RPC commands** - Session-tree inspection and navigation for external frontends (TUI `/tree` parity). `get_tree` returns a stable serializable DTO per node (id, parentId, type, role, 200-char preview, timestamp, label, children) plus the current `leafId` — no raw entry/message payloads. `navigate_tree` takes `targetId` plus the core navigation options (`summarize`, `customInstructions`, `replaceInstructions`, `label`) and returns `{ cancelled, editorText? }`; unknown target ids, mid-stream navigation, and summarize-without-model all surface as explicit `success: false` errors. `RpcClient` gains `getTree()` and `navigateTree()` (with a client-side 5-minute timeout for LLM-bound summarization). ([#313](https://github.com/aebrer/dreb/issues/313))
+- **Streaming guard in `AgentSession.navigateTree`** - Navigating the session tree mid-stream now throws loudly instead of silently replacing agent messages during an active run (a latent corruption bug previously reachable from the TUI and extensions too). ([#313](https://github.com/aebrer/dreb/issues/313))
+
 - **`list_all_sessions` RPC command** - List sessions across all projects for external frontends. If the underlying listing fails (I/O error reading the sessions store), the command responds `success: false` instead of a silently-empty list, so clients can tell "no sessions" apart from "listing failed."
 - **`delete_session` RPC command** - Delete a session file (trash-first) with active-session protection. Uses the same unrestricted, cross-project path addressing as `switch_session` (no sessions-directory containment guard — this is a trusted local channel, and a frontend exposing it owns its own authorization); the path is `resolve()`d before the active-session compare and deletion. Refuses the active session, non-`.jsonl` paths, and nonexistent files. Session deletion logic moved from the TUI into `SessionManager.deleteSession`.
 
