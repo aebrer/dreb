@@ -644,7 +644,7 @@ If attempting to delete the currently active session:
 }
 ```
 
-The path is canonicalized before every check, and deletion is refused for paths outside the sessions directory (the global sessions directory, or the active session's own directory for custom `--session-dir` setups), non-`.jsonl` paths, and nonexistent files:
+The path is canonicalized with `realpathSync` before every check — dereferencing symlinked path components as well as `.`/`..` segments — and deletion is refused for paths outside the sessions directory (the global sessions directory, or the active session's own directory for custom `--session-dir` setups), non-`.jsonl` paths, and nonexistent files:
 ```json
 {
   "type": "response",

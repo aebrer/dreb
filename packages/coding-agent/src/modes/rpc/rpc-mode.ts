@@ -12,7 +12,6 @@
  */
 
 import * as crypto from "node:crypto";
-import { resolve } from "node:path";
 import { VERSION } from "../../config.js";
 import type { AgentSession } from "../../core/agent-session.js";
 import type {
@@ -67,6 +66,35 @@ export function getPerformanceStatsData(session: Pick<AgentSession, "getPerforma
 } {
 	const tracker = session.getPerformanceTracker();
 	return { models: tracker.getAllRollingAverages() };
+}
+
+/**
+ * Handle the `delete_session` RPC command: wires the active session and its directory into
+ * the core {@link SessionManager.deleteSession} guards and maps the result to a discriminated
+ * union the handler serializes. Extracted (like {@link getPerformanceStatsData}) so the guard
+ * wiring is unit-testable without a live RPC session. Note: the authoritative active-session
+ * and containment/canonicalization guards live in core — this passes the active path and the
+ * session directory through; it does not re-implement them.
+ */
+export async function deleteSessionForRpc(
+	sessionManager: Pick<SessionManager, "getSessionFile" | "getSessionDir">,
+	sessionPath: string,
+): Promise<{ ok: true; method: "trash" | "unlink" } | { ok: false; error: string }> {
+	const activePath = sessionManager.getSessionFile();
+	const result = await SessionManager.deleteSession(sessionPath, {
+		allowedDirs: [sessionManager.getSessionDir()],
+		activeSessionPath: activePath,
+	});
+	if (!result.ok) {
+		return { ok: false, error: result.error ?? "Unknown deletion error" };
+	}
+	return { ok: true, method: result.method };
+}
+
+/** Handle the `list_all_sessions` RPC command: list every project's sessions as RPC DTOs. */
+export async function listAllSessionsForRpc(): Promise<RpcSessionInfo[]> {
+	const sessions = await SessionManager.listAll();
+	return sessions.map(toRpcSessionInfo);
 }
 
 /**
@@ -590,16 +618,9 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "delete_session": {
-				const activePath = session.sessionManager.getSessionFile();
-				if (activePath && resolve(command.sessionPath) === resolve(activePath)) {
-					return error(id, "delete_session", "Cannot delete the currently active session");
-				}
-				const result = await SessionManager.deleteSession(command.sessionPath, {
-					allowedDirs: [session.sessionManager.getSessionDir()],
-					activeSessionPath: activePath,
-				});
+				const result = await deleteSessionForRpc(session.sessionManager, command.sessionPath);
 				if (!result.ok) {
-					return error(id, "delete_session", result.error ?? "Unknown deletion error");
+					return error(id, "delete_session", result.error);
 				}
 				return success(id, "delete_session", { method: result.method });
 			}
@@ -652,8 +673,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "list_all_sessions": {
-				const sessions = await SessionManager.listAll();
-				return success(id, "list_all_sessions", { sessions: sessions.map(toRpcSessionInfo) });
+				return success(id, "list_all_sessions", { sessions: await listAllSessionsForRpc() });
 			}
 
 			// =================================================================

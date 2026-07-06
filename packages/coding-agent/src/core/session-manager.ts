@@ -12,10 +12,11 @@ import {
 	readdirSync,
 	readFileSync,
 	readSync,
+	realpathSync,
 	statSync,
 	writeFileSync,
 } from "fs";
-import { join, resolve, sep } from "path";
+import { basename, dirname, join, resolve, sep } from "path";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
 	type BashExecutionMessage,
@@ -544,6 +545,42 @@ function getSessionModifiedDate(entries: FileEntry[], header: SessionHeader, sta
 	return !Number.isNaN(headerTime) ? new Date(headerTime) : statsMtime;
 }
 
+/**
+ * Resolve a session's creation date from its header timestamp, falling back to the file's
+ * mtime when the header timestamp is missing or malformed. Without this guard a bad header
+ * yields an Invalid Date, which later throws `RangeError: Invalid time value` when serialized
+ * via `.toISOString()` — and because listings map over every session, one bad file would
+ * take down the entire `list_all_sessions` response instead of degrading a single entry.
+ */
+function getSessionCreatedDate(header: SessionHeader, statsMtime: Date): Date {
+	const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : NaN;
+	return !Number.isNaN(headerTime) ? new Date(headerTime) : statsMtime;
+}
+
+/**
+ * Canonicalize a directory path, dereferencing symlinks via realpathSync. Falls back to the
+ * purely-lexical resolve() when the directory does not exist yet (realpath throws ENOENT).
+ */
+function canonicalizeDir(dir: string): string {
+	const lexical = resolve(dir);
+	try {
+		return realpathSync(lexical);
+	} catch {
+		return lexical;
+	}
+}
+
+/**
+ * Canonicalize a file path for the deletion guards. The containing directory is resolved
+ * through realpathSync so a symlinked parent component cannot smuggle the target outside the
+ * sessions tree; the basename is preserved (not dereferenced) so a session file that is itself
+ * a symlink is addressed and deleted directly rather than followed to another name.
+ */
+function canonicalizeForDeletion(filePath: string): string {
+	const lexical = resolve(filePath);
+	return join(canonicalizeDir(dirname(lexical)), basename(lexical));
+}
+
 async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 	try {
 		const content = await readFile(filePath, "utf8");
@@ -596,6 +633,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 		const parentSessionPath = (header as SessionHeader).parentSession;
 
 		const modified = getSessionModifiedDate(entries, header as SessionHeader, stats.mtime);
+		const created = getSessionCreatedDate(header as SessionHeader, stats.mtime);
 
 		return {
 			path: filePath,
@@ -603,7 +641,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			cwd,
 			name,
 			parentSessionPath,
-			created: new Date((header as SessionHeader).timestamp),
+			created,
 			modified,
 			messageCount,
 			firstMessage: firstMessage || "(no messages)",
@@ -1383,8 +1421,10 @@ export class SessionManager {
 	 * Refuses to delete non-session files, missing files, paths outside the sessions
 	 * directory, or the currently active session.
 	 *
-	 * The path is canonicalized before every check and before deletion, so a non-canonical
-	 * spelling (relative segments, `..`, symlinked components) cannot bypass the containment
+	 * The path is canonicalized with `realpathSync` (which dereferences symlinked path
+	 * components, unlike the purely-lexical `resolve()`) before every check and before
+	 * deletion, so a non-canonical spelling — relative segments, `..`, or a symlinked
+	 * parent directory pointing outside the sessions tree — cannot bypass the containment
 	 * or active-session guards.
 	 *
 	 * @param sessionPath Path to the session file to delete.
@@ -1397,20 +1437,22 @@ export class SessionManager {
 		sessionPath: string,
 		opts: { allowedDirs?: string[]; activeSessionPath?: string } = {},
 	): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
-		// Canonicalize once so no guard below can be bypassed by a non-canonical spelling.
-		const resolvedPath = resolve(sessionPath);
+		// Canonicalize once so no guard below can be bypassed by a non-canonical spelling
+		// (relative segments, `..`, or a symlinked parent directory).
+		const resolvedPath = canonicalizeForDeletion(sessionPath);
 
 		if (!resolvedPath.endsWith(".jsonl")) {
 			return { ok: false, method: "unlink", error: `Not a session file (expected .jsonl): ${sessionPath}` };
 		}
 
-		if (opts.activeSessionPath && resolvedPath === resolve(opts.activeSessionPath)) {
+		if (opts.activeSessionPath && resolvedPath === canonicalizeForDeletion(opts.activeSessionPath)) {
 			return { ok: false, method: "unlink", error: "Cannot delete the currently active session" };
 		}
 
 		// Containment guard: the resolved path must live inside the global sessions directory
-		// or one of the explicitly allowed directories (e.g. a custom --session-dir).
-		const allowedRoots = [getSessionsDir(), ...(opts.allowedDirs ?? [])].map((dir) => resolve(dir));
+		// or one of the explicitly allowed directories (e.g. a custom --session-dir). Roots are
+		// canonicalized the same way so symlinked roots (e.g. macOS /tmp -> /private/tmp) match.
+		const allowedRoots = [getSessionsDir(), ...(opts.allowedDirs ?? [])].map((dir) => canonicalizeDir(dir));
 		const isContained = allowedRoots.some((root) => resolvedPath.startsWith(root + sep));
 		if (!isContained) {
 			return {
@@ -1424,9 +1466,11 @@ export class SessionManager {
 			return { ok: false, method: "unlink", error: `Session file does not exist: ${sessionPath}` };
 		}
 
-		// Try `trash` first (if installed)
-		const trashArgs = resolvedPath.startsWith("-") ? ["--", resolvedPath] : [resolvedPath];
-		const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
+		// Try `trash` first (if installed). The path is absolute after canonicalization, so it
+		// can never be mistaken for a flag — no `--` guard needed. A timeout prevents a hung
+		// `trash` (e.g. a stuck network/FUSE trash location) from freezing the caller, since
+		// spawnSync blocks synchronously; on timeout we fall through to unlink.
+		const trashResult = spawnSync("trash", [resolvedPath], { encoding: "utf-8", timeout: 10_000 });
 
 		const getTrashErrorHint = (): string | null => {
 			const parts: string[] = [];

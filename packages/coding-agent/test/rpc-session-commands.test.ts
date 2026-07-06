@@ -1,8 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
+import { existsSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionInfo } from "../src/core/session-manager.js";
+import { SessionManager } from "../src/core/session-manager.js";
 import { RpcClient } from "../src/modes/rpc/rpc-client.js";
-import { toRpcSessionInfo } from "../src/modes/rpc/rpc-mode.js";
+import { deleteSessionForRpc, listAllSessionsForRpc, toRpcSessionInfo } from "../src/modes/rpc/rpc-mode.js";
 import type { RpcSessionInfo } from "../src/modes/rpc/rpc-types.js";
+
+const tempDirs: string[] = [];
+
+async function createTempDir(): Promise<string> {
+	const dir = await mkdtemp(join(tmpdir(), "dreb-rpc-session-"));
+	tempDirs.push(dir);
+	return dir;
+}
+
+afterEach(async () => {
+	vi.restoreAllMocks();
+	await Promise.all(tempDirs.splice(0, tempDirs.length).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 describe("toRpcSessionInfo", () => {
 	it("maps a SessionInfo to the RPC DTO, converting Date fields to ISO strings", () => {
@@ -101,5 +119,87 @@ describe("RPC session commands", () => {
 		});
 
 		await expect(client.listAllSessions()).rejects.toThrow("Unable to list sessions");
+	});
+});
+
+describe("deleteSessionForRpc (server-side handler wiring)", () => {
+	function stubSessionManager(sessionDir: string, activeFile?: string) {
+		return {
+			getSessionDir: () => sessionDir,
+			getSessionFile: () => activeFile,
+		} satisfies Pick<SessionManager, "getSessionDir" | "getSessionFile">;
+	}
+
+	it("refuses to delete the active session without touching the filesystem", async () => {
+		const dir = await createTempDir();
+		const activePath = join(dir, "active.jsonl");
+		writeFileSync(activePath, "{}\n", "utf8");
+
+		const result = await deleteSessionForRpc(stubSessionManager(dir, activePath), activePath);
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("Cannot delete the currently active session");
+		// The active-session guard fires before any deletion — the file must survive.
+		expect(existsSync(activePath)).toBe(true);
+	});
+
+	it("deletes a valid session under the active session directory and reports the method", async () => {
+		const dir = await createTempDir();
+		const sessionPath = join(dir, "session.jsonl");
+		writeFileSync(sessionPath, "{}\n", "utf8");
+
+		// No active session; the file lives under the (allowed) active session directory.
+		const result = await deleteSessionForRpc(stubSessionManager(dir), sessionPath);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("unreachable");
+		expect(["trash", "unlink"]).toContain(result.method);
+		expect(existsSync(sessionPath)).toBe(false);
+	});
+
+	it("surfaces the core error for a nonexistent session path", async () => {
+		const dir = await createTempDir();
+		const result = await deleteSessionForRpc(stubSessionManager(dir), join(dir, "missing.jsonl"));
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("does not exist");
+	});
+
+	it("surfaces the containment error for a path outside the sessions directory", async () => {
+		const allowedDir = await createTempDir();
+		const outsideDir = await createTempDir();
+		const outside = join(outsideDir, "outside.jsonl");
+		writeFileSync(outside, "{}\n", "utf8");
+
+		const result = await deleteSessionForRpc(stubSessionManager(allowedDir), outside);
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("outside the sessions directory");
+		expect(existsSync(outside)).toBe(true);
+	});
+});
+
+describe("listAllSessionsForRpc (server-side handler wiring)", () => {
+	it("maps every SessionManager.listAll() result through toRpcSessionInfo (Date -> ISO)", async () => {
+		const info: SessionInfo = {
+			path: "/home/user/.dreb/agent/sessions/project/session.jsonl",
+			id: "abc123",
+			cwd: "/home/user/project",
+			name: "feature-work",
+			created: new Date("2024-01-15T10:30:00.000Z"),
+			modified: new Date("2024-01-15T11:45:00.000Z"),
+			messageCount: 3,
+			firstMessage: "hi",
+			allMessagesText: "hi",
+		};
+		vi.spyOn(SessionManager, "listAll").mockResolvedValue([info]);
+
+		const dtos = await listAllSessionsForRpc();
+
+		expect(dtos).toEqual([toRpcSessionInfo(info)]);
+		expect(typeof dtos[0]?.created).toBe("string");
 	});
 });

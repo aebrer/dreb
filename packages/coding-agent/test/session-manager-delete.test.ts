@@ -122,6 +122,30 @@ describe("SessionManager.deleteSession", () => {
 		expect(result.error).not.toContain("second line ignored");
 	});
 
+	it("includes both the spawn error and stderr in the hint when trash errored and unlink failed", async () => {
+		const dir = await createTempDir();
+		const sessionPath = join(dir, "stubborn.jsonl");
+		mkdirSync(sessionPath); // unlink() throws on a directory
+
+		mockSpawnSync.mockReturnValue({
+			status: null,
+			signal: null,
+			output: [],
+			pid: 0,
+			stdout: "",
+			stderr: "trash: cannot access",
+			error: new Error("spawn trash EACCES"),
+		} as unknown as ReturnType<typeof spawnSync>);
+
+		const result = await SessionManager.deleteSession(sessionPath, { allowedDirs: [dir] });
+
+		expect(result.ok).toBe(false);
+		// Both the spawn error message and the first stderr line are composed into the hint.
+		expect(result.error).toContain("spawn trash EACCES");
+		expect(result.error).toContain(" · ");
+		expect(result.error).toContain("trash: cannot access");
+	});
+
 	it("fails for a nonexistent session path", async () => {
 		const dir = await createTempDir();
 		const sessionPath = join(dir, "missing.jsonl");
@@ -165,6 +189,52 @@ describe("SessionManager.deleteSession", () => {
 		// A non-canonical spelling of the same file must still be refused.
 		const nonCanonical = join(dir, ".", "active.jsonl");
 		const result = await SessionManager.deleteSession(nonCanonical, {
+			allowedDirs: [dir],
+			activeSessionPath: sessionPath,
+		});
+
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain("Cannot delete the currently active session");
+		expect(existsSync(sessionPath)).toBe(true);
+	});
+
+	it("refuses a path whose symlinked parent directory points outside the allowed roots", async () => {
+		// The containment guard must dereference symlinks (realpathSync), not just resolve()
+		// lexically — otherwise a symlinked directory inside an allowed root smuggles the real
+		// deletion target outside the sessions tree.
+		const { symlinkSync } = await import("node:fs");
+		const outsideDir = await createTempDir(); // the real (forbidden) deletion target
+		const sessionsRoot = await createTempDir(); // an allowed root
+		const victim = join(outsideDir, "victim.jsonl");
+		writeFileSync(victim, "{}\n", "utf8");
+
+		// sessionsRoot/link -> outsideDir. Lexically, sessionsRoot/link/victim.jsonl looks
+		// contained; only realpath reveals it resolves to outsideDir/victim.jsonl.
+		const link = join(sessionsRoot, "link");
+		symlinkSync(outsideDir, link, "dir");
+
+		const result = await SessionManager.deleteSession(join(link, "victim.jsonl"), {
+			allowedDirs: [sessionsRoot],
+		});
+
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain("outside the sessions directory");
+		expect(existsSync(victim)).toBe(true);
+	});
+
+	it("refuses the active session addressed through a symlinked parent directory", async () => {
+		// The active-session guard must also survive symlink spellings, not just `.`/`..`.
+		const { symlinkSync } = await import("node:fs");
+		const dir = await createTempDir();
+		const realDir = join(dir, "real");
+		mkdirSync(realDir);
+		const sessionPath = join(realDir, "active.jsonl");
+		writeFileSync(sessionPath, "{}\n", "utf8");
+
+		const linkedDir = join(dir, "link");
+		symlinkSync(realDir, linkedDir, "dir");
+
+		const result = await SessionManager.deleteSession(join(linkedDir, "active.jsonl"), {
 			allowedDirs: [dir],
 			activeSessionPath: sessionPath,
 		});
