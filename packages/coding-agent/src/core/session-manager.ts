@@ -15,7 +15,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "fs";
-import { join, resolve } from "path";
+import { join, resolve, sep } from "path";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
 	type BashExecutionMessage,
@@ -1380,21 +1380,52 @@ export class SessionManager {
 
 	/**
 	 * Delete a session file, trying the `trash` CLI first, then falling back to unlink.
-	 * Refuses to delete non-session files or missing files.
+	 * Refuses to delete non-session files, missing files, paths outside the sessions
+	 * directory, or the currently active session.
+	 *
+	 * The path is canonicalized before every check and before deletion, so a non-canonical
+	 * spelling (relative segments, `..`, symlinked components) cannot bypass the containment
+	 * or active-session guards.
+	 *
+	 * @param sessionPath Path to the session file to delete.
+	 * @param opts.allowedDirs Additional directories (beyond the global sessions directory)
+	 *   whose contents may be deleted — e.g. a custom `--session-dir`.
+	 * @param opts.activeSessionPath If provided, refuses to delete this session (defense-in-depth
+	 *   for the active-session guard; callers should still guard at their own layer).
 	 */
 	static async deleteSession(
 		sessionPath: string,
+		opts: { allowedDirs?: string[]; activeSessionPath?: string } = {},
 	): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
-		if (!sessionPath.endsWith(".jsonl")) {
+		// Canonicalize once so no guard below can be bypassed by a non-canonical spelling.
+		const resolvedPath = resolve(sessionPath);
+
+		if (!resolvedPath.endsWith(".jsonl")) {
 			return { ok: false, method: "unlink", error: `Not a session file (expected .jsonl): ${sessionPath}` };
 		}
 
-		if (!existsSync(sessionPath)) {
+		if (opts.activeSessionPath && resolvedPath === resolve(opts.activeSessionPath)) {
+			return { ok: false, method: "unlink", error: "Cannot delete the currently active session" };
+		}
+
+		// Containment guard: the resolved path must live inside the global sessions directory
+		// or one of the explicitly allowed directories (e.g. a custom --session-dir).
+		const allowedRoots = [getSessionsDir(), ...(opts.allowedDirs ?? [])].map((dir) => resolve(dir));
+		const isContained = allowedRoots.some((root) => resolvedPath.startsWith(root + sep));
+		if (!isContained) {
+			return {
+				ok: false,
+				method: "unlink",
+				error: `Refusing to delete a path outside the sessions directory: ${sessionPath}`,
+			};
+		}
+
+		if (!existsSync(resolvedPath)) {
 			return { ok: false, method: "unlink", error: `Session file does not exist: ${sessionPath}` };
 		}
 
 		// Try `trash` first (if installed)
-		const trashArgs = sessionPath.startsWith("-") ? ["--", sessionPath] : [sessionPath];
+		const trashArgs = resolvedPath.startsWith("-") ? ["--", resolvedPath] : [resolvedPath];
 		const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
 
 		const getTrashErrorHint = (): string | null => {
@@ -1411,13 +1442,13 @@ export class SessionManager {
 		};
 
 		// If trash reports success, or the file is gone afterwards, treat it as successful
-		if (trashResult.status === 0 || !existsSync(sessionPath)) {
+		if (trashResult.status === 0 || !existsSync(resolvedPath)) {
 			return { ok: true, method: "trash" };
 		}
 
 		// Fallback to permanent deletion
 		try {
-			await unlink(sessionPath);
+			await unlink(resolvedPath);
 			return { ok: true, method: "unlink" };
 		} catch (err) {
 			const unlinkError = err instanceof Error ? err.message : String(err);

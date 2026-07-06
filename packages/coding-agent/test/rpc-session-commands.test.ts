@@ -1,6 +1,40 @@
 import { describe, expect, it, vi } from "vitest";
+import type { SessionInfo } from "../src/core/session-manager.js";
 import { RpcClient } from "../src/modes/rpc/rpc-client.js";
+import { toRpcSessionInfo } from "../src/modes/rpc/rpc-mode.js";
 import type { RpcSessionInfo } from "../src/modes/rpc/rpc-types.js";
+
+describe("toRpcSessionInfo", () => {
+	it("maps a SessionInfo to the RPC DTO, converting Date fields to ISO strings", () => {
+		const info: SessionInfo = {
+			path: "/home/user/.dreb/agent/sessions/project/session.jsonl",
+			id: "abc123",
+			cwd: "/home/user/project",
+			name: "feature-work",
+			created: new Date("2024-01-15T10:30:00.000Z"),
+			modified: new Date("2024-01-15T11:45:00.000Z"),
+			messageCount: 12,
+			firstMessage: "Help me refactor the auth module",
+			allMessagesText: "Help me refactor the auth module",
+		};
+
+		const dto = toRpcSessionInfo(info);
+
+		expect(dto).toEqual({
+			path: "/home/user/.dreb/agent/sessions/project/session.jsonl",
+			id: "abc123",
+			cwd: "/home/user/project",
+			name: "feature-work",
+			created: "2024-01-15T10:30:00.000Z",
+			modified: "2024-01-15T11:45:00.000Z",
+			messageCount: 12,
+			firstMessage: "Help me refactor the auth module",
+		});
+		// Dates must be serialized to strings, not left as Date objects.
+		expect(typeof dto.created).toBe("string");
+		expect(typeof dto.modified).toBe("string");
+	});
+});
 
 describe("RPC session commands", () => {
 	it("RpcClient.listAllSessions sends the list_all_sessions command and unwraps sessions", async () => {

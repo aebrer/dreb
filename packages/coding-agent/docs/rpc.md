@@ -644,6 +644,16 @@ If attempting to delete the currently active session:
 }
 ```
 
+The path is canonicalized before every check, and deletion is refused for paths outside the sessions directory (the global sessions directory, or the active session's own directory for custom `--session-dir` setups), non-`.jsonl` paths, and nonexistent files:
+```json
+{
+  "type": "response",
+  "command": "delete_session",
+  "success": false,
+  "error": "Refusing to delete a path outside the sessions directory: /tmp/evil.jsonl"
+}
+```
+
 #### fork
 
 Create a new fork from a previous user message. Can be cancelled by a `session_before_fork` extension event handler. Returns the text of the message being forked from.

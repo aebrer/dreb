@@ -12,6 +12,7 @@
  */
 
 import * as crypto from "node:crypto";
+import { resolve } from "node:path";
 import { VERSION } from "../../config.js";
 import type { AgentSession } from "../../core/agent-session.js";
 import type {
@@ -21,6 +22,7 @@ import type {
 } from "../../core/extensions/index.js";
 import { parseModelPattern } from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import type { SessionInfo } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -42,6 +44,23 @@ export type {
 	RpcResponse,
 	RpcSessionState,
 } from "./rpc-types.js";
+
+/**
+ * Map a core {@link SessionInfo} to the RPC DTO, converting Date fields to ISO strings.
+ * Shared by the `list_sessions` and `list_all_sessions` handlers so their shapes cannot drift.
+ */
+export function toRpcSessionInfo(s: SessionInfo): RpcSessionInfo {
+	return {
+		path: s.path,
+		id: s.id,
+		cwd: s.cwd,
+		name: s.name,
+		created: s.created.toISOString(),
+		modified: s.modified.toISOString(),
+		messageCount: s.messageCount,
+		firstMessage: s.firstMessage,
+	};
+}
 
 export function getPerformanceStatsData(session: Pick<AgentSession, "getPerformanceTracker">): {
 	models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
@@ -572,10 +591,13 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 
 			case "delete_session": {
 				const activePath = session.sessionManager.getSessionFile();
-				if (activePath && command.sessionPath === activePath) {
+				if (activePath && resolve(command.sessionPath) === resolve(activePath)) {
 					return error(id, "delete_session", "Cannot delete the currently active session");
 				}
-				const result = await SessionManager.deleteSession(command.sessionPath);
+				const result = await SessionManager.deleteSession(command.sessionPath, {
+					allowedDirs: [session.sessionManager.getSessionDir()],
+					activeSessionPath: activePath,
+				});
 				if (!result.ok) {
 					return error(id, "delete_session", result.error ?? "Unknown deletion error");
 				}
@@ -626,32 +648,12 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				const cwd = session.sessionManager.getCwd();
 				const sessionDir = session.sessionManager.getSessionDir();
 				const sessions = await SessionManager.list(cwd, sessionDir);
-				const data: RpcSessionInfo[] = sessions.map((s) => ({
-					path: s.path,
-					id: s.id,
-					cwd: s.cwd,
-					name: s.name,
-					created: s.created.toISOString(),
-					modified: s.modified.toISOString(),
-					messageCount: s.messageCount,
-					firstMessage: s.firstMessage,
-				}));
-				return success(id, "list_sessions", { sessions: data });
+				return success(id, "list_sessions", { sessions: sessions.map(toRpcSessionInfo) });
 			}
 
 			case "list_all_sessions": {
 				const sessions = await SessionManager.listAll();
-				const data: RpcSessionInfo[] = sessions.map((s) => ({
-					path: s.path,
-					id: s.id,
-					cwd: s.cwd,
-					name: s.name,
-					created: s.created.toISOString(),
-					modified: s.modified.toISOString(),
-					messageCount: s.messageCount,
-					firstMessage: s.firstMessage,
-				}));
-				return success(id, "list_all_sessions", { sessions: data });
+				return success(id, "list_all_sessions", { sessions: sessions.map(toRpcSessionInfo) });
 			}
 
 			// =================================================================
