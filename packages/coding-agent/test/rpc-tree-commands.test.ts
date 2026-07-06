@@ -171,12 +171,15 @@ describe("toRpcTreeNodes and getTreeForRpc", () => {
 		const modelId = sessionManager.appendModelChange("anthropic", "claude-3-5-sonnet");
 		const customId = sessionManager.appendCustomEntry("artifact", { id: 1 });
 		const sessionInfoId = sessionManager.appendSessionInfo("Project Name");
+		const emptyTitleId = sessionManager.appendSessionInfo("  ");
 
 		expect(previewFor(sessionManager, customMessageId)).toBe("[note]: hello there");
 		expect(previewFor(sessionManager, compactionId)).toBe("[compaction: 50k tokens]");
 		expect(previewFor(sessionManager, modelId)).toBe("[model: claude-3-5-sonnet]");
 		expect(previewFor(sessionManager, customId)).toBe("[custom: artifact]");
 		expect(previewFor(sessionManager, sessionInfoId)).toBe("[title: Project Name]");
+		// Empty titles (reachable via extension setSessionName("")) match the TUI's "[title: empty]"
+		expect(previewFor(sessionManager, emptyTitleId)).toBe("[title: empty]");
 	});
 
 	it("renders a placeholder for unknown entry types from future or corrupt session files", () => {
@@ -375,6 +378,19 @@ describe("navigateTreeForRpc real-session integration", () => {
 
 		expect(sessionManager.getLeafId()).toBe(originalLeafId);
 		expect(sessionManager.getEntries()).toEqual(originalEntries);
+		// The abort controller must be cleared on the throw path, or isCompacting wedges true
+		// (queuing all interactive input and misreporting get_state) until the next navigation.
+		expect(session.isCompacting).toBe(false);
+	});
+
+	it("rejects summarize when no model is available", async () => {
+		const { session, sessionManager } = trackSessionContext(createTestSession({ inMemory: true }));
+		const ids = buildBranchedTree(sessionManager);
+		vi.spyOn(session, "model", "get").mockReturnValue(undefined);
+
+		await expect(navigateTreeForRpc(session, ids.get("u1 text")!, { summarize: true })).rejects.toThrow(
+			"No model available for summarization",
+		);
 	});
 });
 
