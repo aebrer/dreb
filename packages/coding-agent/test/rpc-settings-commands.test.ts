@@ -253,8 +253,12 @@ describe("setSettingsForRpc writes", () => {
 	it("surfaces write errors as explicit failures", async () => {
 		const manager = SettingsManager.inMemory();
 		// Simulate an I/O failure recorded during the queued write.
+		// The handler calls drainErrors() twice: first to discard stale errors,
+		// then after flush to check for this operation's errors.
 		vi.spyOn(manager, "flush").mockResolvedValue(undefined);
-		vi.spyOn(manager, "drainErrors").mockReturnValue([{ scope: "global", error: new Error("disk full") }]);
+		const drainSpy = vi.spyOn(manager, "drainErrors");
+		drainSpy.mockReturnValueOnce([]); // first call: discard stale
+		drainSpy.mockReturnValueOnce([{ scope: "global", error: new Error("disk full") }]); // second call: post-flush
 
 		const result = await setSettingsForRpc(manager, stubRegistry([]), { retryEnabled: false });
 
@@ -262,6 +266,48 @@ describe("setSettingsForRpc writes", () => {
 		if (result.ok) throw new Error("unreachable");
 		expect(result.error).toContain("Failed to persist settings");
 		expect(result.error).toContain("disk full");
+	});
+
+	it("discards stale errors from prior commands instead of mis-attributing them", async () => {
+		const manager = SettingsManager.inMemory();
+		// Simulate a stale error left by a prior command (e.g. set_model with a failed write)
+		// that was recorded in the shared error bucket but never drained.
+		const drainSpy = vi.spyOn(manager, "drainErrors");
+		drainSpy.mockReturnValueOnce([{ scope: "global", error: new Error("stale write error from set_model") }]); // first call: stale
+		drainSpy.mockReturnValueOnce([]); // second call: this operation's write succeeded
+
+		const result = await setSettingsForRpc(manager, stubRegistry([]), { retryEnabled: false });
+
+		// The stale error must NOT cause this operation to report failure.
+		expect(result.ok).toBe(true);
+		expect(drainSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("serializes concurrent set_settings calls so errors are correctly attributed", async () => {
+		const manager = SettingsManager.inMemory();
+
+		// Track the order of operations to verify serialization.
+		const ops: string[] = [];
+		const realFlush = manager.flush.bind(manager);
+		vi.spyOn(manager, "flush").mockImplementation(async () => {
+			ops.push("flush-start");
+			await realFlush();
+			// Simulate a small delay so concurrency bugs would manifest.
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			ops.push("flush-end");
+		});
+
+		// Launch two concurrent set_settings calls.
+		const [result1, result2] = await Promise.all([
+			setSettingsForRpc(manager, stubRegistry([]), { retryEnabled: false }),
+			setSettingsForRpc(manager, stubRegistry([]), { compactionEnabled: false }),
+		]);
+
+		expect(result1.ok).toBe(true);
+		expect(result2.ok).toBe(true);
+
+		// Flushes must be serialized: the second flush-start must come after the first flush-end.
+		expect(ops).toEqual(["flush-start", "flush-end", "flush-start", "flush-end"]);
 	});
 });
 

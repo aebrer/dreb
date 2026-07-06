@@ -161,6 +161,24 @@ const SETTINGS_UPDATE_KEYS = [
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
 
 /**
+ * Simple promise-based mutex that serializes settings writes. RPC commands are dispatched
+ * concurrently (`void handleInputLine(line)`) so two `set_settings` commands can overlap.
+ * Without serialization, concurrent commands race on SettingsManager's shared error bucket
+ * (`drainErrors()` clears the array for everyone): the first to drain takes all errors
+ * (including the second's), and the second reports false success despite its write failing.
+ *
+ * This lock ensures only one apply+flush+drain block runs at a time — each command gets
+ * a clean error window isolated from both stale errors and concurrent operations.
+ */
+let settingsWriteQueue: Promise<unknown> = Promise.resolve();
+function settingsWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+	const prev = settingsWriteQueue;
+	const next = prev.then(fn, fn);
+	settingsWriteQueue = next.catch(() => {});
+	return next;
+}
+
+/**
  * Handle the `set_settings` RPC command: validate and persist default settings.
  *
  * Writes persistent defaults via SettingsManager only — never touches live session state
@@ -170,6 +188,12 @@ const QUEUE_MODES = ["all", "one-at-a-time"] as const;
  * Persistence is verified loudly: if the settings file failed to load at startup,
  * SettingsManager.save() silently no-ops — this handler reports that as an error instead
  * of returning success while nothing was written. Write failures surface the same way.
+ *
+ * The apply+flush+drain block is serialized via {@link settingsWriteLock} so that
+ * concurrent `set_settings` commands (dispatched concurrently by the RPC input loop)
+ * cannot race on the shared error bucket. Pre-existing stale errors (from other commands
+ * like `set_model` that record write failures but never drain) are discarded before
+ * applying, so only errors produced by *this* operation's writes are attributed here.
  */
 export async function setSettingsForRpc(
 	settingsManager: SettingsWriter,
@@ -250,35 +274,44 @@ export async function setSettingsForRpc(
 		};
 	}
 
-	// --- Apply (validated) ---
-	if (update.defaultProvider !== undefined && update.defaultModel !== undefined) {
-		settingsManager.setDefaultModelAndProvider(update.defaultProvider, update.defaultModel);
-	}
-	if (update.defaultThinkingLevel !== undefined) {
-		settingsManager.setDefaultThinkingLevel(update.defaultThinkingLevel);
-	}
-	if (update.steeringMode !== undefined) {
-		settingsManager.setSteeringMode(update.steeringMode);
-	}
-	if (update.followUpMode !== undefined) {
-		settingsManager.setFollowUpMode(update.followUpMode);
-	}
-	if (update.compactionEnabled !== undefined) {
-		settingsManager.setCompactionEnabled(update.compactionEnabled);
-	}
-	if (update.retryEnabled !== undefined) {
-		settingsManager.setRetryEnabled(update.retryEnabled);
-	}
+	// Serialize the apply+flush+drain block so concurrent set_settings commands
+	// cannot race on the shared error bucket. See settingsWriteLock doc.
+	return settingsWriteLock(async () => {
+		// Discard stale errors left by other operations (set_model, set_steering_mode, etc.)
+		// that record write failures into SettingsManager's shared error bucket but never
+		// drain it. Without this, we'd mis-attribute their failures to this operation.
+		settingsManager.drainErrors();
 
-	// Ensure durability and surface write errors instead of losing them.
-	await settingsManager.flush();
-	const writeErrors = settingsManager.drainErrors();
-	if (writeErrors.length > 0) {
-		const detail = writeErrors.map((e) => `${e.scope}: ${e.error.message}`).join("; ");
-		return { ok: false, error: `Failed to persist settings: ${detail}` };
-	}
+		// --- Apply (validated) ---
+		if (update.defaultProvider !== undefined && update.defaultModel !== undefined) {
+			settingsManager.setDefaultModelAndProvider(update.defaultProvider, update.defaultModel);
+		}
+		if (update.defaultThinkingLevel !== undefined) {
+			settingsManager.setDefaultThinkingLevel(update.defaultThinkingLevel);
+		}
+		if (update.steeringMode !== undefined) {
+			settingsManager.setSteeringMode(update.steeringMode);
+		}
+		if (update.followUpMode !== undefined) {
+			settingsManager.setFollowUpMode(update.followUpMode);
+		}
+		if (update.compactionEnabled !== undefined) {
+			settingsManager.setCompactionEnabled(update.compactionEnabled);
+		}
+		if (update.retryEnabled !== undefined) {
+			settingsManager.setRetryEnabled(update.retryEnabled);
+		}
 
-	return { ok: true, settings: getSettingsForRpc(settingsManager) };
+		// Ensure durability and surface write errors instead of losing them.
+		await settingsManager.flush();
+		const writeErrors = settingsManager.drainErrors();
+		if (writeErrors.length > 0) {
+			const detail = writeErrors.map((e) => `${e.scope}: ${e.error.message}`).join("; ");
+			return { ok: false as const, error: `Failed to persist settings: ${detail}` };
+		}
+
+		return { ok: true as const, settings: getSettingsForRpc(settingsManager) };
+	});
 }
 
 function normalizePreview(text: string): string {
