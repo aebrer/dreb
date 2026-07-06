@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SessionManager } from "../src/core/session-manager.js";
+import { type SessionEntry, SessionManager } from "../src/core/session-manager.js";
 import { RpcClient } from "../src/modes/rpc/rpc-client.js";
 import { getTreeForRpc, navigateTreeForRpc, toRpcTreeNodes } from "../src/modes/rpc/rpc-mode.js";
 import type { RpcTreeNode } from "../src/modes/rpc/rpc-types.js";
-import { buildTestTree, createTestSession, type TestSessionContext, userMsg } from "./utilities.js";
+import { createHarnessWithExtensions } from "./test-harness.js";
+import { assistantMsg, buildTestTree, createTestSession, userMsg } from "./utilities.js";
 
-const sessionContexts: TestSessionContext[] = [];
+const sessionContexts: Array<{ cleanup: () => void }> = [];
 
-function trackSessionContext(context: TestSessionContext): TestSessionContext {
+function trackSessionContext<T extends { cleanup: () => void }>(context: T): T {
 	sessionContexts.push(context);
 	return context;
 }
@@ -33,6 +34,10 @@ function buildBranchedTree(sessionManager: SessionManager): Map<string, string> 
 			{ role: "assistant", text: "a3 text" },
 		],
 	});
+}
+
+function previewFor(sessionManager: SessionManager, id: string): string {
+	return findNode(toRpcTreeNodes(sessionManager.getTree()), id)!.preview;
 }
 
 afterEach(() => {
@@ -99,6 +104,94 @@ describe("toRpcTreeNodes and getTreeForRpc", () => {
 		const preview = findNode(toRpcTreeNodes(long.getTree()), longId)!.preview;
 		expect(preview).toHaveLength(200);
 		expect(preview).toBe("x".repeat(200));
+	});
+
+	it("renders assistant previews for text, aborted, errors, and empty content", () => {
+		const sessionManager = SessionManager.inMemory();
+		const textId = sessionManager.appendMessage(assistantMsg("assistant\ntext"));
+		const abortedId = sessionManager.appendMessage({ ...assistantMsg(""), content: [], stopReason: "aborted" });
+		const errorId = sessionManager.appendMessage({
+			...assistantMsg(""),
+			content: [],
+			stopReason: "error",
+			errorMessage: "  provider\nfailed  ",
+		});
+		const emptyId = sessionManager.appendMessage({ ...assistantMsg(""), content: [] });
+
+		expect(previewFor(sessionManager, textId)).toBe("assistant text");
+		expect(previewFor(sessionManager, abortedId)).toBe("(aborted)");
+		expect(previewFor(sessionManager, errorId)).toBe("provider failed");
+		expect(previewFor(sessionManager, emptyId)).toBe("(no content)");
+	});
+
+	it("renders tool, bash, and unknown-role message previews", () => {
+		const sessionManager = SessionManager.inMemory();
+		const toolId = sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "tc1",
+			toolName: "read",
+			content: [{ type: "text", text: "contents" }],
+			isError: false,
+			timestamp: Date.now(),
+		});
+		const fallbackToolId = sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "tc2",
+			content: [{ type: "text", text: "contents" }],
+			isError: false,
+			timestamp: Date.now(),
+		} as Parameters<SessionManager["appendMessage"]>[0]);
+		const bashId = sessionManager.appendMessage({
+			role: "bashExecution",
+			command: "npm test",
+			output: "ok",
+			exitCode: 0,
+			cancelled: false,
+			truncated: false,
+			timestamp: Date.now(),
+		});
+		const unknownRoleId = sessionManager.appendMessage({
+			role: "futureRole",
+			content: "future",
+			timestamp: Date.now(),
+			// Targeted cast: exercises the unknown-role fallback for forward-compat session data.
+		} as unknown as Parameters<SessionManager["appendMessage"]>[0]);
+
+		expect(previewFor(sessionManager, toolId)).toBe("[read]");
+		expect(previewFor(sessionManager, fallbackToolId)).toBe("[tool]");
+		expect(previewFor(sessionManager, bashId)).toBe("[bash]: npm test");
+		expect(previewFor(sessionManager, unknownRoleId)).toBe("[futureRole]");
+	});
+
+	it("renders custom, compaction, model, and session metadata previews", () => {
+		const sessionManager = SessionManager.inMemory();
+		const rootId = sessionManager.appendMessage(userMsg("root"));
+		const customMessageId = sessionManager.appendCustomMessageEntry("note", "hello\nthere", true);
+		const compactionId = sessionManager.appendCompaction("summary", rootId, 50000);
+		const modelId = sessionManager.appendModelChange("anthropic", "claude-3-5-sonnet");
+		const customId = sessionManager.appendCustomEntry("artifact", { id: 1 });
+		const sessionInfoId = sessionManager.appendSessionInfo("Project Name");
+
+		expect(previewFor(sessionManager, customMessageId)).toBe("[note]: hello there");
+		expect(previewFor(sessionManager, compactionId)).toBe("[compaction: 50k tokens]");
+		expect(previewFor(sessionManager, modelId)).toBe("[model: claude-3-5-sonnet]");
+		expect(previewFor(sessionManager, customId)).toBe("[custom: artifact]");
+		expect(previewFor(sessionManager, sessionInfoId)).toBe("[title: Project Name]");
+	});
+
+	it("renders a placeholder for unknown entry types from future or corrupt session files", () => {
+		// Targeted cast: session files are JSON-parsed, so runtime data can contain
+		// forward-compatible or corrupt entry types outside the current SessionEntry union.
+		const futureEntry = {
+			type: "future_type",
+			id: "future-1",
+			parentId: null,
+			timestamp: "2024-01-01T00:00:00.000Z",
+		} as unknown as SessionEntry;
+
+		const roots = toRpcTreeNodes([{ entry: futureEntry, children: [] }]);
+
+		expect(roots[0]!.preview).toBe("[future_type]");
 	});
 
 	it("resolves labels and renders label entries", () => {
@@ -256,6 +349,33 @@ describe("navigateTreeForRpc real-session integration", () => {
 			"Cannot navigate the session tree while the agent is streaming",
 		);
 	});
+
+	it("rejects if streaming starts during async tree preparation without mutating session state", async () => {
+		const { session, sessionManager } = trackSessionContext(
+			await createHarnessWithExtensions({
+				extensionFactories: [
+					(dreb) => {
+						dreb.on("session_before_tree", async () => {
+							await Promise.resolve();
+						});
+					},
+				],
+			}),
+		);
+		const ids = buildBranchedTree(sessionManager);
+		const targetId = ids.get("u1 text")!;
+		const originalLeafId = sessionManager.getLeafId();
+		const originalEntries = sessionManager.getEntries();
+		let isStreamingCalls = 0;
+		vi.spyOn(session, "isStreaming", "get").mockImplementation(() => isStreamingCalls++ > 0);
+
+		await expect(navigateTreeForRpc(session, targetId)).rejects.toThrow(
+			"Cannot navigate the session tree while the agent is streaming. Abort or wait for idle first.",
+		);
+
+		expect(sessionManager.getLeafId()).toBe(originalLeafId);
+		expect(sessionManager.getEntries()).toEqual(originalEntries);
+	});
 });
 
 describe("RpcClient tree commands", () => {
@@ -284,6 +404,21 @@ describe("RpcClient tree commands", () => {
 
 		await expect(client.getTree()).resolves.toEqual(data);
 		expect(client.send).toHaveBeenCalledWith({ type: "get_tree" });
+		expect(client.send.mock.calls[0]).toHaveLength(1);
+	});
+
+	it("navigateTree uses the five-minute default timeout when no options are provided", async () => {
+		const client = new RpcClient() as any;
+		const data = { cancelled: false };
+		client.send = vi.fn().mockResolvedValue({
+			type: "response",
+			command: "navigate_tree",
+			success: true,
+			data,
+		});
+
+		await expect(client.navigateTree("u1")).resolves.toEqual(data);
+		expect(client.send).toHaveBeenCalledWith({ type: "navigate_tree", targetId: "u1" }, 300000);
 	});
 
 	it("navigateTree sends options without timeoutMs and unwraps navigation data", async () => {

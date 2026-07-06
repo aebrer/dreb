@@ -909,7 +909,7 @@ Response:
 
 Each node has:
 - `id`: Entry id (use with `navigate_tree`, `fork`)
-- `parentId`: Parent entry id, or `null` for a root
+- `parentId`: Parent entry id, or `null` for a root. Orphaned roots keep their original non-null `parentId` (referencing an entry not in the tree) — prefer `children` for hierarchy
 - `type`: Entry type (`message`, `compaction`, `branch_summary`, `model_change`, `thinking_level_change`, `custom`, `custom_message`, `label`, `session_info`)
 - `role`: Message role, present only for `type: "message"` entries (`user`, `assistant`, `toolResult`, `bashExecution`)
 - `preview`: Short single-line content preview (whitespace-collapsed, max 200 chars). Non-text entries use bracketed forms like `[compaction: 50k tokens]`, `[branch summary]: ...`, `[model: claude-sonnet-4]`, `[bash]: npm test`
@@ -976,7 +976,7 @@ Errors are explicit `success: false` responses:
 - Agent currently streaming: `Cannot navigate the session tree while the agent is streaming. Abort or wait for idle first.`
 - `summarize: true` with no model available: `No model available for summarization`
 
-Note: with `summarize: true` the command is LLM-bound and can take a while. `RpcClient.navigateTree` uses a 5-minute client timeout (overridable via its client-side `timeoutMs` option, which is not sent over the wire); raw-protocol clients should budget accordingly. There is no scriptable abort for an in-flight branch summarization over RPC.
+Note: with `summarize: true` the command is LLM-bound and can take a while. `RpcClient.navigateTree` uses a 5-minute client timeout (overridable via its client-side `timeoutMs` option, which is not sent over the wire); raw-protocol clients should budget accordingly. There is no scriptable abort for an in-flight branch summarization over RPC. A client-side timeout does not stop the server: a timed-out `navigate_tree` may still complete server-side and move the leaf — after a timeout, resync with `get_tree`/`get_state` instead of assuming the navigation failed.
 
 ### Version
 

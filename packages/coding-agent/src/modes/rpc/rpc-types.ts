@@ -323,7 +323,11 @@ export interface RpcSessionInfo {
 export interface RpcTreeNode {
 	/** Entry id */
 	id: string;
-	/** Parent entry id, or null for a root */
+	/**
+	 * Parent entry id, or null for a root. Orphaned roots (broken parent chains) keep their
+	 * original non-null parentId, which references an entry not present in the tree — prefer
+	 * the nested `children` structure over parentId when reconstructing hierarchy.
+	 */
 	parentId: string | null;
 	/** Session entry type */
 	type: SessionEntry["type"];

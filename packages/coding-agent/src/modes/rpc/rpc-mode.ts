@@ -170,6 +170,12 @@ function getRpcEntryPreview(node: SessionTreeNode): string {
 			return normalizePreview(`[label: ${entry.label ?? "(cleared)"}]`);
 		case "session_info":
 			return normalizePreview(`[title: ${entry.name ?? "empty"}]`);
+		default: {
+			// Compile-time exhaustiveness guard: a new SessionEntry type forces an update here.
+			const _exhaustive: never = entry;
+			// Runtime: unknown types from forward-compat/corrupt session files get a placeholder.
+			return normalizePreview(`[${(entry as { type: string }).type}]`);
+		}
 	}
 }
 

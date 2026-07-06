@@ -3586,6 +3586,15 @@ export class AgentSession {
 			summaryDetails = extensionSummary.details;
 		}
 
+		// Re-check after extension/summarization awaits: prompt dispatch can start streaming
+		// while we yielded (same race class guarded in the prompt path), and the mutation
+		// block below must not replace messages during an active run.
+		if (this.isStreaming) {
+			throw new Error(
+				"Cannot navigate the session tree while the agent is streaming. Abort or wait for idle first.",
+			);
+		}
+
 		// Determine the new leaf position based on target type
 		let newLeafId: string | null;
 		let editorText: string | undefined;
