@@ -43,7 +43,7 @@ vi.mock("@anthropic-ai/sdk", () => {
 });
 
 describe("Copilot Claude via Anthropic Messages", () => {
-	const copilotClaudeModelId = "claude-sonnet-4.5";
+	const copilotClaudeModelId = "claude-opus-4.5";
 	const context: Context = {
 		systemPrompt: "You are a helpful assistant.",
 		messages: [{ role: "user", content: "Hello", timestamp: Date.now() }],

@@ -888,7 +888,7 @@ describe("Generate E2E Tests", () => {
 	});
 
 	describe("GitHub Copilot Provider (claude-sonnet-4 via Anthropic Messages)", () => {
-		const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-sonnet-4.5"), githubCopilotToken);
+		const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.5"), githubCopilotToken);
 
 		it.skipIf(!githubCopilotToken)("should complete basic text generation", { retry: 3 }, async () => {
 			await basicTextGeneration(llm, { apiKey: githubCopilotToken });

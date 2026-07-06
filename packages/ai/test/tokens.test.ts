@@ -225,7 +225,7 @@ describe("Token Statistics on Abort", () => {
 			"claude-sonnet-4 - should include token stats when aborted mid-stream",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-sonnet-4.5"), githubCopilotToken);
+				const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.5"), githubCopilotToken);
 				await testTokensOnAbort(llm, { apiKey: githubCopilotToken });
 			},
 		);

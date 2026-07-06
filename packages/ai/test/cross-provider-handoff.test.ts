@@ -70,7 +70,7 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	{ provider: "google-antigravity", model: "gemini-3-flash", label: "antigravity-gemini-3-flash" },
 	{ provider: "google-antigravity", model: "claude-sonnet-4-5", label: "antigravity-claude-sonnet-4-5" },
 	// GitHub Copilot
-	{ provider: "github-copilot", model: "claude-sonnet-4.5", label: "copilot-claude-sonnet-4.5" },
+	{ provider: "github-copilot", model: "claude-opus-4.5", label: "copilot-claude-opus-4.5" },
 	{ provider: "github-copilot", model: "gpt-5.1-codex", label: "copilot-gpt-5.1-codex" },
 	{ provider: "github-copilot", model: "gemini-3-flash-preview", label: "copilot-gemini-3-flash-preview" },
 	{ provider: "github-copilot", model: "grok-code-fast-1", label: "copilot-grok-code-fast-1" },

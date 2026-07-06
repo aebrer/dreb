@@ -136,12 +136,12 @@ describe("Context overflow error handling", () => {
 		it.skipIf(!githubCopilotToken)(
 			"claude-sonnet-4 - should detect overflow via isContextOverflow",
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-sonnet-4.5"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.5"), githubCopilotToken);
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 
 				expect(result.stopReason).toBe("error");
-				expect(result.errorMessage).toMatch(/exceeds the limit of \d+|input is too long/i);
+				expect(result.errorMessage).toMatch(/exceeds the limit of \d+|input is too long|prompt is too long/i);
 				expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
 			},
 			120000,
