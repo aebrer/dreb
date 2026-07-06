@@ -69,20 +69,20 @@ export function getPerformanceStatsData(session: Pick<AgentSession, "getPerforma
 }
 
 /**
- * Handle the `delete_session` RPC command: wires the active session and its directory into
- * the core {@link SessionManager.deleteSession} guards and maps the result to a discriminated
+ * Handle the `delete_session` RPC command: wires the active session into the core
+ * {@link SessionManager.deleteSession} guard and maps the result to a discriminated
  * union the handler serializes. Extracted (like {@link getPerformanceStatsData}) so the guard
  * wiring is unit-testable without a live RPC session. Note: the authoritative active-session
- * and containment/canonicalization guards live in core — this passes the active path and the
- * session directory through; it does not re-implement them.
+ * guard lives in core — this passes the active path through; it does not re-implement it.
+ * Uses the same unrestricted path-based addressing as `switch_session` (no containment guard —
+ * see PR #315 discussion).
  */
 export async function deleteSessionForRpc(
-	sessionManager: Pick<SessionManager, "getSessionFile" | "getSessionDir">,
+	sessionManager: Pick<SessionManager, "getSessionFile">,
 	sessionPath: string,
 ): Promise<{ ok: true; method: "trash" | "unlink" } | { ok: false; error: string }> {
 	const activePath = sessionManager.getSessionFile();
 	const result = await SessionManager.deleteSession(sessionPath, {
-		allowedDirs: [sessionManager.getSessionDir()],
 		activeSessionPath: activePath,
 	});
 	if (!result.ok) {

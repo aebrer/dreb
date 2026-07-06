@@ -40,12 +40,16 @@ afterEach(async () => {
 });
 
 describe("SessionManager.deleteSession", () => {
+	// deleteSession uses the same unrestricted path-based addressing as switch_session:
+	// there is no sessions-directory containment guard, so a .jsonl file anywhere the process
+	// can write (here, a temp dir outside the global sessions directory) is deletable. See the
+	// PR #315 discussion for the rationale.
 	it("deletes an existing .jsonl file via unlink and reports the method", async () => {
 		const dir = await createTempDir();
 		const sessionPath = join(dir, "session.jsonl");
 		writeFileSync(sessionPath, "{}\n", "utf8");
 
-		const result = await SessionManager.deleteSession(sessionPath, { allowedDirs: [dir] });
+		const result = await SessionManager.deleteSession(sessionPath);
 
 		expect(result.ok).toBe(true);
 		expect(result.method).toBe("unlink");
@@ -66,7 +70,7 @@ describe("SessionManager.deleteSession", () => {
 			stderr: "",
 		} as unknown as ReturnType<typeof spawnSync>);
 
-		const result = await SessionManager.deleteSession(sessionPath, { allowedDirs: [dir] });
+		const result = await SessionManager.deleteSession(sessionPath);
 
 		expect(result.ok).toBe(true);
 		expect(result.method).toBe("trash");
@@ -92,7 +96,7 @@ describe("SessionManager.deleteSession", () => {
 			} as unknown as ReturnType<typeof spawnSync>;
 		}) as unknown as typeof spawnSync);
 
-		const result = await SessionManager.deleteSession(sessionPath, { allowedDirs: [dir] });
+		const result = await SessionManager.deleteSession(sessionPath);
 
 		expect(result.ok).toBe(true);
 		expect(result.method).toBe("trash");
@@ -113,7 +117,7 @@ describe("SessionManager.deleteSession", () => {
 			stderr: "trash: permission denied\nsecond line ignored",
 		} as unknown as ReturnType<typeof spawnSync>);
 
-		const result = await SessionManager.deleteSession(sessionPath, { allowedDirs: [dir] });
+		const result = await SessionManager.deleteSession(sessionPath);
 
 		expect(result.ok).toBe(false);
 		expect(result.error).toContain("trash: ");
@@ -137,7 +141,7 @@ describe("SessionManager.deleteSession", () => {
 			error: new Error("spawn trash EACCES"),
 		} as unknown as ReturnType<typeof spawnSync>);
 
-		const result = await SessionManager.deleteSession(sessionPath, { allowedDirs: [dir] });
+		const result = await SessionManager.deleteSession(sessionPath);
 
 		expect(result.ok).toBe(false);
 		// Both the spawn error message and the first stderr line are composed into the hint.
@@ -150,7 +154,7 @@ describe("SessionManager.deleteSession", () => {
 		const dir = await createTempDir();
 		const sessionPath = join(dir, "missing.jsonl");
 
-		const result = await SessionManager.deleteSession(sessionPath, { allowedDirs: [dir] });
+		const result = await SessionManager.deleteSession(sessionPath);
 
 		expect(result.ok).toBe(false);
 		expect(result.error).toContain("does not exist");
@@ -161,81 +165,21 @@ describe("SessionManager.deleteSession", () => {
 		const filePath = join(dir, "not-a-session.txt");
 		writeFileSync(filePath, "do not delete\n", "utf8");
 
-		const result = await SessionManager.deleteSession(filePath, { allowedDirs: [dir] });
+		const result = await SessionManager.deleteSession(filePath);
 
 		expect(result.ok).toBe(false);
 		expect(result.error).toContain("Not a session file");
 		expect(existsSync(filePath)).toBe(true);
 	});
 
-	it("refuses to delete a path outside the sessions directory", async () => {
-		const dir = await createTempDir();
-		const sessionPath = join(dir, "outside.jsonl");
-		writeFileSync(sessionPath, "{}\n", "utf8");
-
-		// No allowedDirs: the temp dir is outside the global sessions directory.
-		const result = await SessionManager.deleteSession(sessionPath);
-
-		expect(result.ok).toBe(false);
-		expect(result.error).toContain("outside the sessions directory");
-		expect(existsSync(sessionPath)).toBe(true);
-	});
-
-	it("refuses to delete the active session even via a non-canonical path (guard cannot be bypassed)", async () => {
+	it("refuses to delete the active session even via a non-canonical (./..) path", async () => {
 		const dir = await createTempDir();
 		const sessionPath = join(dir, "active.jsonl");
 		writeFileSync(sessionPath, "{}\n", "utf8");
 
-		// A non-canonical spelling of the same file must still be refused.
-		const nonCanonical = join(dir, ".", "active.jsonl");
+		// A non-canonical spelling of the same file must still be refused after resolve().
+		const nonCanonical = join(dir, "sub", "..", ".", "active.jsonl");
 		const result = await SessionManager.deleteSession(nonCanonical, {
-			allowedDirs: [dir],
-			activeSessionPath: sessionPath,
-		});
-
-		expect(result.ok).toBe(false);
-		expect(result.error).toContain("Cannot delete the currently active session");
-		expect(existsSync(sessionPath)).toBe(true);
-	});
-
-	it("refuses a path whose symlinked parent directory points outside the allowed roots", async () => {
-		// The containment guard must dereference symlinks (realpathSync), not just resolve()
-		// lexically — otherwise a symlinked directory inside an allowed root smuggles the real
-		// deletion target outside the sessions tree.
-		const { symlinkSync } = await import("node:fs");
-		const outsideDir = await createTempDir(); // the real (forbidden) deletion target
-		const sessionsRoot = await createTempDir(); // an allowed root
-		const victim = join(outsideDir, "victim.jsonl");
-		writeFileSync(victim, "{}\n", "utf8");
-
-		// sessionsRoot/link -> outsideDir. Lexically, sessionsRoot/link/victim.jsonl looks
-		// contained; only realpath reveals it resolves to outsideDir/victim.jsonl.
-		const link = join(sessionsRoot, "link");
-		symlinkSync(outsideDir, link, "dir");
-
-		const result = await SessionManager.deleteSession(join(link, "victim.jsonl"), {
-			allowedDirs: [sessionsRoot],
-		});
-
-		expect(result.ok).toBe(false);
-		expect(result.error).toContain("outside the sessions directory");
-		expect(existsSync(victim)).toBe(true);
-	});
-
-	it("refuses the active session addressed through a symlinked parent directory", async () => {
-		// The active-session guard must also survive symlink spellings, not just `.`/`..`.
-		const { symlinkSync } = await import("node:fs");
-		const dir = await createTempDir();
-		const realDir = join(dir, "real");
-		mkdirSync(realDir);
-		const sessionPath = join(realDir, "active.jsonl");
-		writeFileSync(sessionPath, "{}\n", "utf8");
-
-		const linkedDir = join(dir, "link");
-		symlinkSync(realDir, linkedDir, "dir");
-
-		const result = await SessionManager.deleteSession(join(linkedDir, "active.jsonl"), {
-			allowedDirs: [dir],
 			activeSessionPath: sessionPath,
 		});
 

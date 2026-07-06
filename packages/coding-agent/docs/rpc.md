@@ -644,13 +644,13 @@ If attempting to delete the currently active session:
 }
 ```
 
-The path is canonicalized with `realpathSync` before every check — dereferencing symlinked path components as well as `.`/`..` segments — and deletion is refused for paths outside the sessions directory (the global sessions directory, or the active session's own directory for custom `--session-dir` setups), non-`.jsonl` paths, and nonexistent files:
+The path uses the same unrestricted, cross-project addressing as [`switch_session`](#switch_session): it is `resolve()`d (collapsing `.`/`..`/relative segments) and then checked against the active session. There is **no** sessions-directory containment guard — this is a trusted local channel, and any frontend exposing it (e.g. the web dashboard) is expected to enforce its own authorization. Deletion is refused only for the currently active session, non-`.jsonl` paths, and nonexistent files:
 ```json
 {
   "type": "response",
   "command": "delete_session",
   "success": false,
-  "error": "Refusing to delete a path outside the sessions directory: /tmp/evil.jsonl"
+  "error": "Not a session file (expected .jsonl): /tmp/evil.txt"
 }
 ```
 
@@ -830,7 +830,7 @@ Each session has:
 
 #### list_all_sessions
 
-List sessions across all projects. Returns sessions sorted by most recently modified first. May be slow with many sessions.
+List sessions across all projects. Returns sessions sorted by most recently modified first. May be slow with many sessions. If the underlying listing fails (an I/O error reading the sessions store), the command responds `success: false` rather than a silently-empty list — so a client can distinguish "no sessions" from "listing failed."
 
 ```json
 {"type": "list_all_sessions"}

@@ -123,11 +123,10 @@ describe("RPC session commands", () => {
 });
 
 describe("deleteSessionForRpc (server-side handler wiring)", () => {
-	function stubSessionManager(sessionDir: string, activeFile?: string) {
+	function stubSessionManager(activeFile?: string) {
 		return {
-			getSessionDir: () => sessionDir,
 			getSessionFile: () => activeFile,
-		} satisfies Pick<SessionManager, "getSessionDir" | "getSessionFile">;
+		} satisfies Pick<SessionManager, "getSessionFile">;
 	}
 
 	it("refuses to delete the active session without touching the filesystem", async () => {
@@ -135,7 +134,7 @@ describe("deleteSessionForRpc (server-side handler wiring)", () => {
 		const activePath = join(dir, "active.jsonl");
 		writeFileSync(activePath, "{}\n", "utf8");
 
-		const result = await deleteSessionForRpc(stubSessionManager(dir, activePath), activePath);
+		const result = await deleteSessionForRpc(stubSessionManager(activePath), activePath);
 
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("unreachable");
@@ -144,13 +143,13 @@ describe("deleteSessionForRpc (server-side handler wiring)", () => {
 		expect(existsSync(activePath)).toBe(true);
 	});
 
-	it("deletes a valid session under the active session directory and reports the method", async () => {
+	it("deletes a valid session and reports the method", async () => {
 		const dir = await createTempDir();
 		const sessionPath = join(dir, "session.jsonl");
 		writeFileSync(sessionPath, "{}\n", "utf8");
 
-		// No active session; the file lives under the (allowed) active session directory.
-		const result = await deleteSessionForRpc(stubSessionManager(dir), sessionPath);
+		// No active session; same unrestricted path addressing as switch_session (no containment).
+		const result = await deleteSessionForRpc(stubSessionManager(), sessionPath);
 
 		expect(result.ok).toBe(true);
 		if (!result.ok) throw new Error("unreachable");
@@ -160,25 +159,24 @@ describe("deleteSessionForRpc (server-side handler wiring)", () => {
 
 	it("surfaces the core error for a nonexistent session path", async () => {
 		const dir = await createTempDir();
-		const result = await deleteSessionForRpc(stubSessionManager(dir), join(dir, "missing.jsonl"));
+		const result = await deleteSessionForRpc(stubSessionManager(), join(dir, "missing.jsonl"));
 
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("unreachable");
 		expect(result.error).toContain("does not exist");
 	});
 
-	it("surfaces the containment error for a path outside the sessions directory", async () => {
-		const allowedDir = await createTempDir();
-		const outsideDir = await createTempDir();
-		const outside = join(outsideDir, "outside.jsonl");
-		writeFileSync(outside, "{}\n", "utf8");
+	it("surfaces the core error for a non-.jsonl path without deleting it", async () => {
+		const dir = await createTempDir();
+		const filePath = join(dir, "not-a-session.txt");
+		writeFileSync(filePath, "keep me\n", "utf8");
 
-		const result = await deleteSessionForRpc(stubSessionManager(allowedDir), outside);
+		const result = await deleteSessionForRpc(stubSessionManager(), filePath);
 
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("unreachable");
-		expect(result.error).toContain("outside the sessions directory");
-		expect(existsSync(outside)).toBe(true);
+		expect(result.error).toContain("Not a session file");
+		expect(existsSync(filePath)).toBe(true);
 	});
 });
 

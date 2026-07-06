@@ -1,5 +1,4 @@
 import * as os from "node:os";
-import { dirname } from "node:path";
 import {
 	type Component,
 	Container,
@@ -763,11 +762,7 @@ export class SessionSelectorComponent extends Container implements Focusable {
 
 		// Handle session deletion
 		this.sessionList.onDeleteSession = async (sessionPath: string) => {
-			// Allow deletion of sessions in the active session's own directory too, so a custom
-			// `--session-dir` (which may live outside the global sessions directory) still works.
-			const allowedDirs = currentSessionFilePath ? [dirname(currentSessionFilePath)] : [];
 			const result = await SessionManager.deleteSession(sessionPath, {
-				allowedDirs,
 				activeSessionPath: currentSessionFilePath,
 			});
 

@@ -12,11 +12,10 @@ import {
 	readdirSync,
 	readFileSync,
 	readSync,
-	realpathSync,
 	statSync,
 	writeFileSync,
 } from "fs";
-import { basename, dirname, join, resolve, sep } from "path";
+import { join, resolve } from "path";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
 	type BashExecutionMessage,
@@ -558,27 +557,13 @@ function getSessionCreatedDate(header: SessionHeader, statsMtime: Date): Date {
 }
 
 /**
- * Canonicalize a directory path, dereferencing symlinks via realpathSync. Falls back to the
- * purely-lexical resolve() when the directory does not exist yet (realpath throws ENOENT).
+ * Canonicalize a session path for the deletion guards. Collapses `.`/`..` and relative
+ * segments and absolutizes via the purely-lexical `resolve()`. This is a trusted local
+ * channel with the same path-based addressing as `switch_session`, so no symlink-escape
+ * or sessions-directory containment defense is applied here (see PR #315 discussion).
  */
-function canonicalizeDir(dir: string): string {
-	const lexical = resolve(dir);
-	try {
-		return realpathSync(lexical);
-	} catch {
-		return lexical;
-	}
-}
-
-/**
- * Canonicalize a file path for the deletion guards. The containing directory is resolved
- * through realpathSync so a symlinked parent component cannot smuggle the target outside the
- * sessions tree; the basename is preserved (not dereferenced) so a session file that is itself
- * a symlink is addressed and deleted directly rather than followed to another name.
- */
-function canonicalizeForDeletion(filePath: string): string {
-	const lexical = resolve(filePath);
-	return join(canonicalizeDir(dirname(lexical)), basename(lexical));
+function resolveForDeletion(filePath: string): string {
+	return resolve(filePath);
 }
 
 async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
@@ -1418,55 +1403,39 @@ export class SessionManager {
 
 	/**
 	 * Delete a session file, trying the `trash` CLI first, then falling back to unlink.
-	 * Refuses to delete non-session files, missing files, paths outside the sessions
-	 * directory, or the currently active session.
+	 * Refuses to delete non-session files, missing files, or the currently active session.
 	 *
-	 * The path is canonicalized with `realpathSync` (which dereferences symlinked path
-	 * components, unlike the purely-lexical `resolve()`) before every check and before
-	 * deletion, so a non-canonical spelling — relative segments, `..`, or a symlinked
-	 * parent directory pointing outside the sessions tree — cannot bypass the containment
-	 * or active-session guards.
+	 * Uses the same path-based addressing as `switch_session`: the path is `resolve()`d
+	 * (collapsing `.`/`..`/relative segments) before the active-session compare and before
+	 * deletion. This is a trusted local channel, so there is no sessions-directory containment
+	 * guard — see the PR #315 discussion for the rationale (the sibling `switch_session`
+	 * command is likewise unrestricted, and the dashboard owns its own authorization layer).
 	 *
 	 * @param sessionPath Path to the session file to delete.
-	 * @param opts.allowedDirs Additional directories (beyond the global sessions directory)
-	 *   whose contents may be deleted — e.g. a custom `--session-dir`.
-	 * @param opts.activeSessionPath If provided, refuses to delete this session (defense-in-depth
-	 *   for the active-session guard; callers should still guard at their own layer).
+	 * @param opts.activeSessionPath If provided, refuses to delete this session (the active-session
+	 *   guard; callers may also guard at their own layer).
 	 */
 	static async deleteSession(
 		sessionPath: string,
-		opts: { allowedDirs?: string[]; activeSessionPath?: string } = {},
+		opts: { activeSessionPath?: string } = {},
 	): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
-		// Canonicalize once so no guard below can be bypassed by a non-canonical spelling
-		// (relative segments, `..`, or a symlinked parent directory).
-		const resolvedPath = canonicalizeForDeletion(sessionPath);
+		// Resolve once so the active-session compare below can't be bypassed by a non-canonical
+		// spelling (relative segments or `..`).
+		const resolvedPath = resolveForDeletion(sessionPath);
 
 		if (!resolvedPath.endsWith(".jsonl")) {
 			return { ok: false, method: "unlink", error: `Not a session file (expected .jsonl): ${sessionPath}` };
 		}
 
-		if (opts.activeSessionPath && resolvedPath === canonicalizeForDeletion(opts.activeSessionPath)) {
+		if (opts.activeSessionPath && resolvedPath === resolveForDeletion(opts.activeSessionPath)) {
 			return { ok: false, method: "unlink", error: "Cannot delete the currently active session" };
-		}
-
-		// Containment guard: the resolved path must live inside the global sessions directory
-		// or one of the explicitly allowed directories (e.g. a custom --session-dir). Roots are
-		// canonicalized the same way so symlinked roots (e.g. macOS /tmp -> /private/tmp) match.
-		const allowedRoots = [getSessionsDir(), ...(opts.allowedDirs ?? [])].map((dir) => canonicalizeDir(dir));
-		const isContained = allowedRoots.some((root) => resolvedPath.startsWith(root + sep));
-		if (!isContained) {
-			return {
-				ok: false,
-				method: "unlink",
-				error: `Refusing to delete a path outside the sessions directory: ${sessionPath}`,
-			};
 		}
 
 		if (!existsSync(resolvedPath)) {
 			return { ok: false, method: "unlink", error: `Session file does not exist: ${sessionPath}` };
 		}
 
-		// Try `trash` first (if installed). The path is absolute after canonicalization, so it
+		// Try `trash` first (if installed). The path is absolute after resolve(), so it
 		// can never be mistaken for a flag — no `--` guard needed. A timeout prevents a hung
 		// `trash` (e.g. a stuck network/FUSE trash location) from freezing the caller, since
 		// spawnSync blocks synchronously; on timeout we fall through to unlink.
@@ -1522,52 +1491,46 @@ export class SessionManager {
 	static async listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]> {
 		const sessionsDir = getSessionsDir();
 
-		try {
-			if (!existsSync(sessionsDir)) {
-				return [];
-			}
-			const entries = await readdir(sessionsDir, { withFileTypes: true });
-			const dirs = entries.filter((e) => e.isDirectory()).map((e) => join(sessionsDir, e.name));
-
-			// Count total files first for accurate progress
-			let totalFiles = 0;
-			const dirFiles: string[][] = [];
-			for (const dir of dirs) {
-				try {
-					const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
-					dirFiles.push(files.map((f) => join(dir, f)));
-					totalFiles += files.length;
-				} catch {
-					/* Directory unreadable — skip */
-					dirFiles.push([]);
-				}
-			}
-
-			// Process all files with progress tracking
-			let loaded = 0;
-			const sessions: SessionInfo[] = [];
-			const allFiles = dirFiles.flat();
-
-			const results = await Promise.all(
-				allFiles.map(async (file) => {
-					const info = await buildSessionInfo(file);
-					loaded++;
-					onProgress?.(loaded, totalFiles);
-					return info;
-				}),
-			);
-
-			for (const info of results) {
-				if (info) {
-					sessions.push(info);
-				}
-			}
-
-			sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-			return sessions;
-		} catch {
-			/* Session listing failed — return empty list */
+		// A missing sessions directory is a legitimate empty state (fresh install), not a
+		// failure — return []. Any actual I/O failure below propagates loudly so callers can
+		// distinguish "no sessions" from "listing failed" (RPC responds success:false; the TUI
+		// selector surfaces "Failed to load sessions"). No silent catch-and-return-[].
+		if (!existsSync(sessionsDir)) {
 			return [];
 		}
+		const entries = await readdir(sessionsDir, { withFileTypes: true });
+		const dirs = entries.filter((e) => e.isDirectory()).map((e) => join(sessionsDir, e.name));
+
+		// Count total files first for accurate progress
+		let totalFiles = 0;
+		const dirFiles: string[][] = [];
+		for (const dir of dirs) {
+			const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+			dirFiles.push(files.map((f) => join(dir, f)));
+			totalFiles += files.length;
+		}
+
+		// Process all files with progress tracking
+		let loaded = 0;
+		const sessions: SessionInfo[] = [];
+		const allFiles = dirFiles.flat();
+
+		const results = await Promise.all(
+			allFiles.map(async (file) => {
+				const info = await buildSessionInfo(file);
+				loaded++;
+				onProgress?.(loaded, totalFiles);
+				return info;
+			}),
+		);
+
+		for (const info of results) {
+			if (info) {
+				sessions.push(info);
+			}
+		}
+
+		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+		return sessions;
 	}
 }
