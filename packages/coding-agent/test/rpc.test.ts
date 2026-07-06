@@ -376,4 +376,32 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		const noMatch = await client.resolveModel("nonexistent-model-xyz-12345");
 		expect(noMatch).toBeNull();
 	}, 30000);
+
+	test("should get, set, and re-get settings", async () => {
+		await client.start();
+
+		// Read the persistent defaults through the real dispatch
+		const before = await client.getSettings();
+		expect(before.steeringMode).toBe("one-at-a-time");
+		expect(before.followUpMode).toBe("one-at-a-time");
+		expect(typeof before.compactionEnabled).toBe("boolean");
+		expect(typeof before.retryEnabled).toBe("boolean");
+
+		// Write persistent defaults; response is the post-write snapshot
+		const after = await client.setSettings({ defaultThinkingLevel: "low", retryEnabled: false });
+		expect(after.defaultThinkingLevel).toBe("low");
+		expect(after.retryEnabled).toBe(false);
+
+		// Reflected in a subsequent read
+		const reread = await client.getSettings();
+		expect(reread.defaultThinkingLevel).toBe("low");
+		expect(reread.retryEnabled).toBe(false);
+
+		// set_settings does NOT touch live runtime state
+		const state = await client.getState();
+		expect(state.thinkingLevel).not.toBe("low");
+
+		// Validation failures surface the handler's clean error text
+		await expect(client.setSettings({ steeringMode: "bogus" as never })).rejects.toThrow("Invalid steeringMode");
+	}, 30000);
 });

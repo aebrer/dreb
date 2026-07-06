@@ -563,6 +563,15 @@ export class SettingsManager {
 		await this.writeQueue;
 	}
 
+	/**
+	 * True when the global settings file failed to load/parse. In that state {@link save}
+	 * silently no-ops (to avoid stomping the corrupt file), so callers that need write
+	 * durability must check this and fail loudly instead of reporting success.
+	 */
+	hasGlobalSettingsLoadError(): boolean {
+		return this.globalSettingsLoadError !== null;
+	}
+
 	drainErrors(): SettingsError[] {
 		const drained = [...this.errors];
 		this.errors = [];

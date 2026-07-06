@@ -89,6 +89,10 @@ export type RpcCommand =
 	| { id?: string; type: "list_sessions" }
 	| { id?: string; type: "list_all_sessions" }
 
+	// Settings (persistent defaults)
+	| { id?: string; type: "get_settings" }
+	| { id?: string; type: "set_settings"; settings: RpcSettingsUpdate }
+
 	// Version
 	| { id?: string; type: "get_version" };
 
@@ -289,6 +293,10 @@ export type RpcResponse =
 			data: { sessions: RpcSessionInfo[] };
 	  }
 
+	// Settings
+	| { id?: string; type: "response"; command: "get_settings"; success: true; data: RpcSettingsSnapshot }
+	| { id?: string; type: "response"; command: "set_settings"; success: true; data: RpcSettingsSnapshot }
+
 	// Version
 	| { id?: string; type: "response"; command: "get_version"; success: true; data: { version: string } }
 
@@ -341,6 +349,49 @@ export interface RpcTreeNode {
 	label?: string;
 	/** Child nodes, oldest first */
 	children: RpcTreeNode[];
+}
+
+// ============================================================================
+// Settings (persistent defaults)
+// ============================================================================
+
+/**
+ * Snapshot of persistent default settings returned by `get_settings` and `set_settings`.
+ *
+ * These are the values persisted via SettingsManager (merged global + project view) that
+ * seed fresh runtimes — NOT the live session state. For the current runtime state
+ * (active model, effective thinking level, modes in effect), use `get_state`.
+ */
+export interface RpcSettingsSnapshot {
+	/** Default provider used at startup (absent if never set) */
+	defaultProvider?: string;
+	/** Default model id used at startup (absent if never set) */
+	defaultModel?: string;
+	/** Default thinking level applied at startup (absent if never set) */
+	defaultThinkingLevel?: ThinkingLevel;
+	/** How queued steering messages are delivered */
+	steeringMode: "all" | "one-at-a-time";
+	/** How queued follow-up messages are delivered */
+	followUpMode: "all" | "one-at-a-time";
+	/** Whether automatic context compaction is enabled */
+	compactionEnabled: boolean;
+	/** Whether automatic retry on transient errors is enabled */
+	retryEnabled: boolean;
+}
+
+/**
+ * Partial update payload for `set_settings`. All fields optional, but at least one
+ * must be present. `defaultProvider` and `defaultModel` must be supplied together.
+ * Writes persistent defaults only — never touches live session state.
+ */
+export interface RpcSettingsUpdate {
+	defaultProvider?: string;
+	defaultModel?: string;
+	defaultThinkingLevel?: ThinkingLevel;
+	steeringMode?: "all" | "one-at-a-time";
+	followUpMode?: "all" | "one-at-a-time";
+	compactionEnabled?: boolean;
+	retryEnabled?: boolean;
 }
 
 // ============================================================================
