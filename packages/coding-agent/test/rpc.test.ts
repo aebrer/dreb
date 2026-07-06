@@ -320,6 +320,49 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		expect(sessionInfoEntries[0].name).toBe("my-test-session");
 	}, 60000);
 
+	test("should get tree and navigate it", async () => {
+		await client.start();
+
+		// Build a small tree: user + assistant entries
+		await client.promptAndWait("Reply with just the word 'hello'");
+
+		// get_tree round-trips through the real command dispatch
+		const tree = await client.getTree();
+		expect(tree.roots.length).toBeGreaterThanOrEqual(1);
+		expect(tree.leafId).toBeTruthy();
+		const findUserNode = (nodes: typeof tree.roots): (typeof tree.roots)[number] | undefined => {
+			const stack = [...nodes];
+			while (stack.length > 0) {
+				const node = stack.pop()!;
+				if (node.type === "message" && node.role === "user") return node;
+				stack.push(...node.children);
+			}
+			return undefined;
+		};
+		const userNode = findUserNode(tree.roots);
+		expect(userNode).toBeDefined();
+		expect(userNode!.preview).toContain("hello");
+		expect(userNode!.children.length).toBeGreaterThanOrEqual(1);
+
+		// navigate_tree with a label exercises the handler's option field-mapping:
+		// the label must reach AgentSession.navigateTree and land on the target entry
+		const result = await client.navigateTree(userNode!.id, { label: "back-here" });
+		expect(result.cancelled).toBe(false);
+		expect(result.editorText).toContain("hello");
+
+		// Post-navigation state: the leaf moved off the assistant reply and get_state
+		// reflects the emptied message list (user-message navigation rewinds to its parent)
+		const state = await client.getState();
+		expect(state.messageCount).toBe(0);
+		const treeAfter = await client.getTree();
+		expect(treeAfter.leafId).not.toBe(tree.leafId);
+		expect(findUserNode(treeAfter.roots)?.label).toBe("back-here");
+
+		// Unknown target ids surface the handler's clean error text, not the
+		// generic top-level "Command failed:" wrapper
+		await expect(client.navigateTree("missing-entry")).rejects.toThrow("Entry missing-entry not found");
+	}, 90000);
+
 	test("should resolve model patterns via resolve_model command", async () => {
 		await client.start();
 

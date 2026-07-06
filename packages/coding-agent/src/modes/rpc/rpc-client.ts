@@ -11,7 +11,14 @@ import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
-import type { RpcCommand, RpcResponse, RpcSessionInfo, RpcSessionState, RpcSlashCommand } from "./rpc-types.js";
+import type {
+	RpcCommand,
+	RpcResponse,
+	RpcSessionInfo,
+	RpcSessionState,
+	RpcSlashCommand,
+	RpcTreeNode,
+} from "./rpc-types.js";
 
 // ============================================================================
 // Types
@@ -480,6 +487,35 @@ export class RpcClient {
 	}
 
 	/**
+	 * Get the session tree and current leaf.
+	 */
+	async getTree(): Promise<{ roots: RpcTreeNode[]; leafId: string | null }> {
+		const response = await this.send({ type: "get_tree" });
+		return this.getData(response);
+	}
+
+	/**
+	 * Navigate to a session tree entry.
+	 * @param targetId Entry ID to navigate to
+	 * @param options Navigation options; timeoutMs is client-side only and is not sent over RPC
+	 * @returns Object with `cancelled: true` if navigation was cancelled, and `editorText` when re-editing a message
+	 */
+	async navigateTree(
+		targetId: string,
+		options?: {
+			summarize?: boolean;
+			customInstructions?: string;
+			replaceInstructions?: boolean;
+			label?: string;
+			timeoutMs?: number;
+		},
+	): Promise<{ cancelled: boolean; editorText?: string }> {
+		const { timeoutMs = 300000, ...commandOptions } = options ?? {};
+		const response = await this.send({ type: "navigate_tree", targetId, ...commandOptions }, timeoutMs);
+		return this.getData(response);
+	}
+
+	/**
 	 * Get text of last assistant message.
 	 */
 	async getLastAssistantText(): Promise<string | null> {
@@ -630,7 +666,7 @@ export class RpcClient {
 		}
 	}
 
-	private async send(command: RpcCommandBody): Promise<RpcResponse> {
+	private async send(command: RpcCommandBody, timeoutMs = 30000): Promise<RpcResponse> {
 		if (this._dead || !this.process?.stdin) {
 			// Surface the real spawn cause (e.g. uid/gid EPERM) if one was captured,
 			// rather than a generic message that hides why the process is gone.
@@ -646,7 +682,7 @@ export class RpcClient {
 			const timeout = setTimeout(() => {
 				this.pendingRequests.delete(id);
 				reject(new Error(`Timeout waiting for response to ${command.type}. Stderr: ${this.stderr}`));
-			}, 30000);
+			}, timeoutMs);
 
 			this.pendingRequests.set(id, {
 				resolve: (response) => {

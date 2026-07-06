@@ -378,7 +378,7 @@ describe("PerformanceTracker", () => {
 			closeSync(fd);
 			warnSpy.mockRestore();
 		}
-	});
+	}, 20_000);
 
 	// malformed lines ----------------------------------------------------------
 

@@ -10,6 +10,7 @@ import type { ImageContent, Model } from "@dreb/ai";
 import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
+import type { SessionEntry } from "../../core/session-manager.js";
 import type { SourceInfo } from "../../core/source-info.js";
 
 // ============================================================================
@@ -65,6 +66,16 @@ export type RpcCommand =
 	| { id?: string; type: "delete_session"; sessionPath: string }
 	| { id?: string; type: "fork"; entryId: string }
 	| { id?: string; type: "get_fork_messages" }
+	| { id?: string; type: "get_tree" }
+	| {
+			id?: string;
+			type: "navigate_tree";
+			targetId: string;
+			summarize?: boolean;
+			customInstructions?: string;
+			replaceInstructions?: boolean;
+			label?: string;
+	  }
 	| { id?: string; type: "get_last_assistant_text" }
 	| { id?: string; type: "set_session_name"; name: string }
 
@@ -230,6 +241,20 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "get_tree";
+			success: true;
+			data: { roots: RpcTreeNode[]; leafId: string | null };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "navigate_tree";
+			success: true;
+			data: { cancelled: boolean; editorText?: string };
+	  }
+	| {
+			id?: string;
+			type: "response";
 			command: "get_last_assistant_text";
 			success: true;
 			data: { text: string | null };
@@ -292,6 +317,30 @@ export interface RpcSessionInfo {
 	messageCount: number;
 	/** First user message text */
 	firstMessage: string;
+}
+
+/** Serializable session tree node returned by get_tree. Stable DTO — no raw entry payloads. */
+export interface RpcTreeNode {
+	/** Entry id */
+	id: string;
+	/**
+	 * Parent entry id, or null for a root. Orphaned roots (broken parent chains) keep their
+	 * original non-null parentId, which references an entry not present in the tree — prefer
+	 * the nested `children` structure over parentId when reconstructing hierarchy.
+	 */
+	parentId: string | null;
+	/** Session entry type */
+	type: SessionEntry["type"];
+	/** Message role, present only when type === "message" (user, assistant, toolResult, bashExecution, ...) */
+	role?: string;
+	/** Short single-line content preview (whitespace-collapsed, max 200 chars) */
+	preview: string;
+	/** ISO timestamp of the entry */
+	timestamp: string;
+	/** Resolved label, if any */
+	label?: string;
+	/** Child nodes, oldest first */
+	children: RpcTreeNode[];
 }
 
 // ============================================================================
