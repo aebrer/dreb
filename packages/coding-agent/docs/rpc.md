@@ -621,6 +621,39 @@ If an extension cancelled the switch:
 {"type": "response", "command": "switch_session", "success": true, "data": {"cancelled": true}}
 ```
 
+#### delete_session
+
+Delete a session file. Deletion tries trash first and falls back to unlink. The currently active session cannot be deleted.
+
+```json
+{"type": "delete_session", "sessionPath": "/path/to/session.jsonl"}
+```
+
+Response:
+```json
+{"type": "response", "command": "delete_session", "success": true, "data": {"method": "trash"}}
+```
+
+If attempting to delete the currently active session:
+```json
+{
+  "type": "response",
+  "command": "delete_session",
+  "success": false,
+  "error": "Cannot delete the currently active session"
+}
+```
+
+The path uses the same unrestricted, cross-project addressing as [`switch_session`](#switch_session): it is `resolve()`d (collapsing `.`/`..`/relative segments) and then checked against the active session. There is **no** sessions-directory containment guard — this is a trusted local channel, and any frontend exposing it (e.g. the web dashboard) is expected to enforce its own authorization. Deletion is refused only for the currently active session, non-`.jsonl` paths, and nonexistent files:
+```json
+{
+  "type": "response",
+  "command": "delete_session",
+  "success": false,
+  "error": "Not a session file (expected .jsonl): /tmp/evil.txt"
+}
+```
+
 #### fork
 
 Create a new fork from a previous user message. Can be cancelled by a `session_before_fork` extension event handler. Returns the text of the message being forked from.
@@ -794,6 +827,39 @@ Each session has:
 - `modified`: ISO timestamp of last modification
 - `messageCount`: Number of messages in the session
 - `firstMessage`: First user message text (for preview)
+
+#### list_all_sessions
+
+List sessions across all projects. Returns sessions sorted by most recently modified first. May be slow with many sessions. If the underlying listing fails (an I/O error reading the sessions store), the command responds `success: false` rather than a silently-empty list — so a client can distinguish "no sessions" from "listing failed."
+
+```json
+{"type": "list_all_sessions"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "list_all_sessions",
+  "success": true,
+  "data": {
+    "sessions": [
+      {
+        "path": "/home/user/.dreb/agent/sessions/--home-user-project--/2024-01-15T10-30-00_abc123.jsonl",
+        "id": "abc123-def456-...",
+        "cwd": "/home/user/project",
+        "name": "feature-work",
+        "created": "2024-01-15T10:30:00.000Z",
+        "modified": "2024-01-15T11:45:00.000Z",
+        "messageCount": 12,
+        "firstMessage": "Help me refactor the auth module"
+      }
+    ]
+  }
+}
+```
+
+Each session has the same fields as `list_sessions`.
 
 ### Version
 

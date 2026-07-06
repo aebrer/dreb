@@ -26,7 +26,7 @@ import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { DefaultResourceLoader } from "./core/resource-loader.js";
 import { type CreateAgentSessionOptions, createAgentSession } from "./core/sdk.js";
-import { SessionManager } from "./core/session-manager.js";
+import { type SessionInfo, SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
 import { allTools } from "./core/tools/index.js";
@@ -357,8 +357,17 @@ async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: 
 		return { type: "local", path: localMatches[0].path };
 	}
 
-	// Try global search across all projects
-	const allSessions = await SessionManager.listAll();
+	// Try global search across all projects. listAll fails loud on real I/O errors —
+	// convert a rejection into a clean, actionable exit instead of a raw stack dump,
+	// matching the RPC (success:false) and TUI ("Failed to load sessions") consumers.
+	let allSessions: SessionInfo[];
+	try {
+		allSessions = await SessionManager.listAll();
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		log.error(chalk.red(`Failed to list sessions while resolving '${sessionArg}': ${message}`));
+		process.exit(1);
+	}
 	const globalMatches = allSessions.filter((s) => s.id.startsWith(sessionArg));
 
 	if (globalMatches.length >= 1) {

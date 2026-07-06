@@ -21,6 +21,7 @@ import type {
 } from "../../core/extensions/index.js";
 import { parseModelPattern } from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import type { SessionInfo } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -43,11 +44,57 @@ export type {
 	RpcSessionState,
 } from "./rpc-types.js";
 
+/**
+ * Map a core {@link SessionInfo} to the RPC DTO, converting Date fields to ISO strings.
+ * Shared by the `list_sessions` and `list_all_sessions` handlers so their shapes cannot drift.
+ */
+export function toRpcSessionInfo(s: SessionInfo): RpcSessionInfo {
+	return {
+		path: s.path,
+		id: s.id,
+		cwd: s.cwd,
+		name: s.name,
+		created: s.created.toISOString(),
+		modified: s.modified.toISOString(),
+		messageCount: s.messageCount,
+		firstMessage: s.firstMessage,
+	};
+}
+
 export function getPerformanceStatsData(session: Pick<AgentSession, "getPerformanceTracker">): {
 	models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
 } {
 	const tracker = session.getPerformanceTracker();
 	return { models: tracker.getAllRollingAverages() };
+}
+
+/**
+ * Handle the `delete_session` RPC command: wires the active session into the core
+ * {@link SessionManager.deleteSession} guard and maps the result to a discriminated
+ * union the handler serializes. Extracted (like {@link getPerformanceStatsData}) so the guard
+ * wiring is unit-testable without a live RPC session. Note: the authoritative active-session
+ * guard lives in core — this passes the active path through; it does not re-implement it.
+ * Uses the same unrestricted path-based addressing as `switch_session` (no containment guard —
+ * see PR #315 discussion).
+ */
+export async function deleteSessionForRpc(
+	sessionManager: Pick<SessionManager, "getSessionFile">,
+	sessionPath: string,
+): Promise<{ ok: true; method: "trash" | "unlink" } | { ok: false; error: string }> {
+	const activePath = sessionManager.getSessionFile();
+	const result = await SessionManager.deleteSession(sessionPath, {
+		activeSessionPath: activePath,
+	});
+	if (!result.ok) {
+		return { ok: false, error: result.error ?? "Unknown deletion error" };
+	}
+	return { ok: true, method: result.method };
+}
+
+/** Handle the `list_all_sessions` RPC command: list every project's sessions as RPC DTOs. */
+export async function listAllSessionsForRpc(): Promise<RpcSessionInfo[]> {
+	const sessions = await SessionManager.listAll();
+	return sessions.map(toRpcSessionInfo);
 }
 
 /**
@@ -570,6 +617,14 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "switch_session", { cancelled });
 			}
 
+			case "delete_session": {
+				const result = await deleteSessionForRpc(session.sessionManager, command.sessionPath);
+				if (!result.ok) {
+					return error(id, "delete_session", result.error);
+				}
+				return success(id, "delete_session", { method: result.method });
+			}
+
 			case "fork": {
 				const result = await session.fork(command.entryId);
 				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
@@ -614,17 +669,11 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				const cwd = session.sessionManager.getCwd();
 				const sessionDir = session.sessionManager.getSessionDir();
 				const sessions = await SessionManager.list(cwd, sessionDir);
-				const data: RpcSessionInfo[] = sessions.map((s) => ({
-					path: s.path,
-					id: s.id,
-					cwd: s.cwd,
-					name: s.name,
-					created: s.created.toISOString(),
-					modified: s.modified.toISOString(),
-					messageCount: s.messageCount,
-					firstMessage: s.firstMessage,
-				}));
-				return success(id, "list_sessions", { sessions: data });
+				return success(id, "list_sessions", { sessions: sessions.map(toRpcSessionInfo) });
+			}
+
+			case "list_all_sessions": {
+				return success(id, "list_all_sessions", { sessions: await listAllSessionsForRpc() });
 			}
 
 			// =================================================================

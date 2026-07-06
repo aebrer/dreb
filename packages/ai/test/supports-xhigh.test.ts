@@ -20,8 +20,8 @@ describe("supportsXhigh", () => {
 		expect(supportsXhigh(model!)).toBe(false);
 	});
 
-	it("returns false for base Opus 4 dated model (opus-4-20250514)", () => {
-		const model = getModel("anthropic", "claude-opus-4-20250514");
+	it("returns false for Opus 4.1 (below threshold)", () => {
+		const model = getModel("anthropic", "claude-opus-4-1");
 		expect(model).toBeDefined();
 		expect(supportsXhigh(model!)).toBe(false);
 	});

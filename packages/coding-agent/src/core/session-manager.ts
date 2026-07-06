@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import type { AgentMessage } from "@dreb/agent-core";
 import type { ImageContent, Message, TextContent } from "@dreb/ai";
 import { randomUUID } from "crypto";
@@ -13,7 +15,6 @@ import {
 	statSync,
 	writeFileSync,
 } from "fs";
-import { readdir, readFile, stat } from "fs/promises";
 import { join, resolve } from "path";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
@@ -543,6 +544,28 @@ function getSessionModifiedDate(entries: FileEntry[], header: SessionHeader, sta
 	return !Number.isNaN(headerTime) ? new Date(headerTime) : statsMtime;
 }
 
+/**
+ * Resolve a session's creation date from its header timestamp, falling back to the file's
+ * mtime when the header timestamp is missing or malformed. Without this guard a bad header
+ * yields an Invalid Date, which later throws `RangeError: Invalid time value` when serialized
+ * via `.toISOString()` — and because listings map over every session, one bad file would
+ * take down the entire `list_all_sessions` response instead of degrading a single entry.
+ */
+function getSessionCreatedDate(header: SessionHeader, statsMtime: Date): Date {
+	const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : NaN;
+	return !Number.isNaN(headerTime) ? new Date(headerTime) : statsMtime;
+}
+
+/**
+ * Canonicalize a session path for the deletion guards. Collapses `.`/`..` and relative
+ * segments and absolutizes via the purely-lexical `resolve()`. This is a trusted local
+ * channel with the same path-based addressing as `switch_session`, so no symlink-escape
+ * or sessions-directory containment defense is applied here (see PR #315 discussion).
+ */
+function resolveForDeletion(filePath: string): string {
+	return resolve(filePath);
+}
+
 async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 	try {
 		const content = await readFile(filePath, "utf8");
@@ -595,6 +618,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 		const parentSessionPath = (header as SessionHeader).parentSession;
 
 		const modified = getSessionModifiedDate(entries, header as SessionHeader, stats.mtime);
+		const created = getSessionCreatedDate(header as SessionHeader, stats.mtime);
 
 		return {
 			path: filePath,
@@ -602,7 +626,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			cwd,
 			name,
 			parentSessionPath,
-			created: new Date((header as SessionHeader).timestamp),
+			created,
 			modified,
 			messageCount,
 			firstMessage: firstMessage || "(no messages)",
@@ -1378,6 +1402,76 @@ export class SessionManager {
 	}
 
 	/**
+	 * Delete a session file, trying the `trash` CLI first, then falling back to unlink.
+	 * Refuses to delete non-session files, missing files, or the currently active session.
+	 *
+	 * Uses the same path-based addressing as `switch_session`: the path is `resolve()`d
+	 * (collapsing `.`/`..`/relative segments) before the active-session compare and before
+	 * deletion. This is a trusted local channel, so there is no sessions-directory containment
+	 * guard — see the PR #315 discussion for the rationale (the sibling `switch_session`
+	 * command is likewise unrestricted, and the dashboard owns its own authorization layer).
+	 *
+	 * @param sessionPath Path to the session file to delete.
+	 * @param opts.activeSessionPath If provided, refuses to delete this session (the active-session
+	 *   guard; callers may also guard at their own layer).
+	 */
+	static async deleteSession(
+		sessionPath: string,
+		opts: { activeSessionPath?: string } = {},
+	): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
+		// Resolve once so the active-session compare below can't be bypassed by a non-canonical
+		// spelling (relative segments or `..`).
+		const resolvedPath = resolveForDeletion(sessionPath);
+
+		if (!resolvedPath.endsWith(".jsonl")) {
+			return { ok: false, method: "unlink", error: `Not a session file (expected .jsonl): ${sessionPath}` };
+		}
+
+		if (opts.activeSessionPath && resolvedPath === resolveForDeletion(opts.activeSessionPath)) {
+			return { ok: false, method: "unlink", error: "Cannot delete the currently active session" };
+		}
+
+		if (!existsSync(resolvedPath)) {
+			return { ok: false, method: "unlink", error: `Session file does not exist: ${sessionPath}` };
+		}
+
+		// Try `trash` first (if installed). The path is absolute after resolve(), so it
+		// can never be mistaken for a flag — no `--` guard needed. A timeout prevents a hung
+		// `trash` (e.g. a stuck network/FUSE trash location) from freezing the caller, since
+		// spawnSync blocks synchronously; on timeout we fall through to unlink.
+		const trashResult = spawnSync("trash", [resolvedPath], { encoding: "utf-8", timeout: 10_000 });
+
+		const getTrashErrorHint = (): string | null => {
+			const parts: string[] = [];
+			if (trashResult.error) {
+				parts.push(trashResult.error.message);
+			}
+			const stderr = trashResult.stderr?.trim();
+			if (stderr) {
+				parts.push(stderr.split("\n")[0] ?? stderr);
+			}
+			if (parts.length === 0) return null;
+			return `trash: ${parts.join(" · ").slice(0, 200)}`;
+		};
+
+		// If trash reports success, or the file is gone afterwards, treat it as successful
+		if (trashResult.status === 0 || !existsSync(resolvedPath)) {
+			return { ok: true, method: "trash" };
+		}
+
+		// Fallback to permanent deletion
+		try {
+			await unlink(resolvedPath);
+			return { ok: true, method: "unlink" };
+		} catch (err) {
+			const unlinkError = err instanceof Error ? err.message : String(err);
+			const trashErrorHint = getTrashErrorHint();
+			const error = trashErrorHint ? `${unlinkError} (${trashErrorHint})` : unlinkError;
+			return { ok: false, method: "unlink", error };
+		}
+	}
+
+	/**
 	 * List all sessions for a directory.
 	 * @param cwd Working directory (used to compute default session directory)
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.dreb/agent/sessions/<encoded-cwd>/).
@@ -1397,52 +1491,46 @@ export class SessionManager {
 	static async listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]> {
 		const sessionsDir = getSessionsDir();
 
-		try {
-			if (!existsSync(sessionsDir)) {
-				return [];
-			}
-			const entries = await readdir(sessionsDir, { withFileTypes: true });
-			const dirs = entries.filter((e) => e.isDirectory()).map((e) => join(sessionsDir, e.name));
-
-			// Count total files first for accurate progress
-			let totalFiles = 0;
-			const dirFiles: string[][] = [];
-			for (const dir of dirs) {
-				try {
-					const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
-					dirFiles.push(files.map((f) => join(dir, f)));
-					totalFiles += files.length;
-				} catch {
-					/* Directory unreadable — skip */
-					dirFiles.push([]);
-				}
-			}
-
-			// Process all files with progress tracking
-			let loaded = 0;
-			const sessions: SessionInfo[] = [];
-			const allFiles = dirFiles.flat();
-
-			const results = await Promise.all(
-				allFiles.map(async (file) => {
-					const info = await buildSessionInfo(file);
-					loaded++;
-					onProgress?.(loaded, totalFiles);
-					return info;
-				}),
-			);
-
-			for (const info of results) {
-				if (info) {
-					sessions.push(info);
-				}
-			}
-
-			sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-			return sessions;
-		} catch {
-			/* Session listing failed — return empty list */
+		// A missing sessions directory is a legitimate empty state (fresh install), not a
+		// failure — return []. Any actual I/O failure below propagates loudly so callers can
+		// distinguish "no sessions" from "listing failed" (RPC responds success:false; the TUI
+		// selector surfaces "Failed to load sessions"). No silent catch-and-return-[].
+		if (!existsSync(sessionsDir)) {
 			return [];
 		}
+		const entries = await readdir(sessionsDir, { withFileTypes: true });
+		const dirs = entries.filter((e) => e.isDirectory()).map((e) => join(sessionsDir, e.name));
+
+		// Count total files first for accurate progress
+		let totalFiles = 0;
+		const dirFiles: string[][] = [];
+		for (const dir of dirs) {
+			const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+			dirFiles.push(files.map((f) => join(dir, f)));
+			totalFiles += files.length;
+		}
+
+		// Process all files with progress tracking
+		let loaded = 0;
+		const sessions: SessionInfo[] = [];
+		const allFiles = dirFiles.flat();
+
+		const results = await Promise.all(
+			allFiles.map(async (file) => {
+				const info = await buildSessionInfo(file);
+				loaded++;
+				onProgress?.(loaded, totalFiles);
+				return info;
+			}),
+		);
+
+		for (const info of results) {
+			if (info) {
+				sessions.push(info);
+			}
+		}
+
+		sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+		return sessions;
 	}
 }

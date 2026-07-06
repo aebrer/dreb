@@ -242,7 +242,7 @@ describe("Tool Call Without Result Tests", () => {
 			"claude-sonnet-4 - should filter out tool calls without corresponding tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-sonnet-4.5"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.5"), githubCopilotToken);
 				await testToolCallWithoutResult(model, { apiKey: githubCopilotToken });
 			},
 		);
