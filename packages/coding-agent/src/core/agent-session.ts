@@ -3477,6 +3477,14 @@ export class AgentSession {
 			);
 		}
 
+		// A second concurrent navigation (or a compaction) would clobber the shared branch-summary
+		// abort controller and interleave tree mutations. Fail loudly instead.
+		if (this.isCompacting) {
+			throw new Error(
+				"Cannot navigate the session tree while summarization or compaction is in progress. Wait for idle first.",
+			);
+		}
+
 		const oldLeafId = this.sessionManager.getLeafId();
 
 		// No-op if already at target

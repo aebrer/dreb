@@ -974,6 +974,7 @@ Errors are explicit `success: false` responses:
 
 - Unknown `targetId`: `Entry <id> not found`
 - Agent currently streaming: `Cannot navigate the session tree while the agent is streaming. Abort or wait for idle first.`
+- Branch summarization or compaction in progress: `Cannot navigate the session tree while summarization or compaction is in progress. Wait for idle first.`
 - `summarize: true` with no model available: `No model available for summarization`
 
 Note: with `summarize: true` the command is LLM-bound and can take a while. `RpcClient.navigateTree` uses a 5-minute client timeout (overridable via its client-side `timeoutMs` option, which is not sent over the wire); raw-protocol clients should budget accordingly. There is no scriptable abort for an in-flight branch summarization over RPC. A client-side timeout does not stop the server: a timed-out `navigate_tree` may still complete server-side and move the leaf — after a timeout, resync with `get_tree`/`get_state` instead of assuming the navigation failed.

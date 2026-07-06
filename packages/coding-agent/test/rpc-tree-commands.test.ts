@@ -8,6 +8,22 @@ import { assistantMsg, buildTestTree, createTestSession, userMsg } from "./utili
 
 const sessionContexts: Array<{ cleanup: () => void }> = [];
 
+type Deferred<T> = {
+	promise: Promise<T>;
+	resolve: (value: T) => void;
+	reject: (reason?: unknown) => void;
+};
+
+function createDeferred<T = void>(): Deferred<T> {
+	let resolve: (value: T) => void = () => {};
+	let reject: (reason?: unknown) => void = () => {};
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
+}
+
 function trackSessionContext<T extends { cleanup: () => void }>(context: T): T {
 	sessionContexts.push(context);
 	return context;
@@ -380,6 +396,64 @@ describe("navigateTreeForRpc real-session integration", () => {
 		expect(sessionManager.getEntries()).toEqual(originalEntries);
 		// The abort controller must be cleared on the throw path, or isCompacting wedges true
 		// (queuing all interactive input and misreporting get_state) until the next navigation.
+		expect(session.isCompacting).toBe(false);
+	});
+
+	it("rejects concurrent navigation while the first navigation is preparing the tree", async () => {
+		const firstParked = createDeferred();
+		const releaseFirst = createDeferred();
+		let beforeTreeCalls = 0;
+		const { session, sessionManager } = trackSessionContext(
+			await createHarnessWithExtensions({
+				extensionFactories: [
+					(dreb) => {
+						dreb.on("session_before_tree", async () => {
+							beforeTreeCalls++;
+							if (beforeTreeCalls === 1) {
+								firstParked.resolve();
+								await releaseFirst.promise;
+							}
+						});
+					},
+				],
+			}),
+		);
+		const ids = buildBranchedTree(sessionManager);
+		const firstTargetId = ids.get("u1 text")!;
+		const secondTargetId = ids.get("u2 text")!;
+
+		const firstNavigation = navigateTreeForRpc(session, firstTargetId);
+		await firstParked.promise;
+
+		await expect(navigateTreeForRpc(session, secondTargetId)).rejects.toThrow(
+			"Cannot navigate the session tree while summarization or compaction is in progress. Wait for idle first.",
+		);
+
+		releaseFirst.resolve();
+		await expect(firstNavigation).resolves.toEqual({ cancelled: false, editorText: "u1 text" });
+		expect(beforeTreeCalls).toBe(1);
+		expect(session.isCompacting).toBe(false);
+	});
+
+	it("clears compaction state when an extension cancels tree navigation", async () => {
+		const { session, sessionManager } = trackSessionContext(
+			await createHarnessWithExtensions({
+				extensionFactories: [
+					(dreb) => {
+						dreb.on("session_before_tree", () => ({ cancel: true }));
+					},
+				],
+			}),
+		);
+		const ids = buildBranchedTree(sessionManager);
+		const targetId = ids.get("u1 text")!;
+		const originalLeafId = sessionManager.getLeafId();
+		const originalEntries = sessionManager.getEntries();
+
+		await expect(navigateTreeForRpc(session, targetId)).resolves.toEqual({ cancelled: true });
+
+		expect(sessionManager.getLeafId()).toBe(originalLeafId);
+		expect(sessionManager.getEntries()).toEqual(originalEntries);
 		expect(session.isCompacting).toBe(false);
 	});
 

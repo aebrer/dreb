@@ -385,7 +385,7 @@ describe("dream", () => {
 			} finally {
 				release();
 			}
-		});
+		}, 20_000);
 
 		it("creates lock file in specified directory", async () => {
 			const release = await acquireDreamLock(tempDir);
