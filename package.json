@@ -12,7 +12,7 @@
 	"scripts": {
 		"clean": "npm run clean --workspaces",
 		"sync-version": "bash scripts/sync-version.sh",
-		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../semantic-search && npm run build && cd ../coding-agent && npm run build && cd ../telegram && npm run build",
+		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../semantic-search && npm run build && cd ../coding-agent && npm run build && cd ../telegram && npm run build && cd ../dashboard && npm run build",
 		"dev": "concurrently --names \"ai,agent,coding-agent,tui\" --prefix-colors \"cyan,yellow,red,magenta\" \"cd packages/ai && npm run dev\" \"cd packages/agent && npm run dev\" \"cd packages/coding-agent && npm run dev\" \"cd packages/tui && npm run dev\"",
 		"check": "npm run verify-git-hooks && npm run verify-engines && biome check --write --error-on-warnings . && tsgo --noEmit",
 		"verify-git-hooks": "node scripts/verify-git-hooks.js",

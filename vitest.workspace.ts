@@ -18,6 +18,7 @@ export default defineConfig({
 			"packages/coding-agent",
 			"packages/semantic-search",
 			"packages/telegram",
+			"packages/dashboard",
 		],
 	},
 });

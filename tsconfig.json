@@ -11,6 +11,8 @@
 			"@dreb/agent-core": ["./packages/agent/src/index.ts"],
 			"@dreb/agent-core/*": ["./packages/agent/src/*"],
 			"@dreb/telegram": ["./packages/telegram/src/index.ts"],
+			"@dreb/dashboard": ["./packages/dashboard/src/index.ts"],
+			"@dreb/dashboard/*": ["./packages/dashboard/src/*"],
 			"@dreb/telegram/*": ["./packages/telegram/src/*"],
 			"@dreb/coding-agent": ["./packages/coding-agent/src/index.ts"],
 			"@dreb/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
@@ -24,5 +26,5 @@
 		}
 	},
 	"include": ["packages/*/src/**/*", "packages/*/test/**/*", "packages/coding-agent/examples/**/*"],
-	"exclude": ["packages/web-ui/**/*", "**/dist/**", "packages/coding-agent/examples/extensions/sandbox/**"]
+	"exclude": ["packages/web-ui/**/*", "**/dist/**", "packages/dashboard/src/client/**/*", "packages/dashboard/test/client/**/*", "packages/coding-agent/examples/extensions/sandbox/**"]
 }

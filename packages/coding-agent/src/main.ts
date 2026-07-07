@@ -607,6 +607,45 @@ function buildSessionOptions(
 	return { options, cliThinkingFromModel };
 }
 
+/**
+ * Handle `dreb dashboard [...args]` — delegate to the @dreb/dashboard package.
+ *
+ * The dashboard is a separate workspace package; coding-agent must not depend
+ * on it (the dashboard depends on coding-agent — a hard dependency here would
+ * be a cycle). Resolution is dynamic: installed → hand over argv; missing →
+ * fail loudly with install instructions.
+ */
+async function handleDashboardCommand(args: string[]): Promise<boolean> {
+	if (args[0] !== "dashboard") {
+		return false;
+	}
+	let entryHref: string;
+	try {
+		entryHref = import.meta.resolve("@dreb/dashboard");
+	} catch {
+		console.error(
+			"The dashboard package is not installed.\n\n" +
+				"Install it with:\n" +
+				"  npm install -g @dreb/dashboard\n\n" +
+				"Then run `dreb dashboard` again, or run `dreb-dashboard` directly.",
+		);
+		process.exit(1);
+	}
+	// Re-exec the dashboard bin with the remaining args so its own arg parser
+	// and process lifecycle (SIGINT shutdown of pooled runtimes) apply.
+	const { spawn } = await import("node:child_process");
+	const { fileURLToPath } = await import("node:url");
+	const child = spawn(process.execPath, [fileURLToPath(entryHref), ...args.slice(1)], {
+		stdio: "inherit",
+	});
+	child.on("exit", (code) => process.exit(code ?? 0));
+	child.on("error", (err) => {
+		console.error(`Failed to launch dashboard: ${err.message}`);
+		process.exit(1);
+	});
+	return true;
+}
+
 async function handleConfigCommand(args: string[]): Promise<boolean> {
 	if (args[0] !== "config") {
 		return false;
@@ -643,6 +682,10 @@ export async function main(args: string[]) {
 	}
 
 	if (await handlePackageCommand(args)) {
+		return;
+	}
+
+	if (await handleDashboardCommand(args)) {
 		return;
 	}
 
