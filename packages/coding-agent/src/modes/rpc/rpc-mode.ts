@@ -167,8 +167,17 @@ const QUEUE_MODES = ["all", "one-at-a-time"] as const;
  * (`drainErrors()` clears the array for everyone): the first to drain takes all errors
  * (including the second's), and the second reports false success despite its write failing.
  *
- * This lock ensures only one apply+flush+drain block runs at a time — each command gets
- * a clean error window isolated from both stale errors and concurrent operations.
+ * This lock ensures only one apply+flush+drain block runs at a time — each `set_settings`
+ * gets an error window isolated from other `set_settings` commands and from stale errors.
+ *
+ * Known limitation: the lock does NOT cover the per-runtime commands (`set_model`,
+ * `set_steering_mode`, etc.), which persist through the same SettingsManager write queue
+ * and record failures into the same shared error bucket. Because `flush()` awaits the
+ * entire shared queue, a concurrent runtime setter's write failure can land in this
+ * operation's post-flush drain window and be reported as a `set_settings` failure (loud
+ * but mis-attributed — never a silent success). Per-operation error isolation in
+ * SettingsManager is the proper fix and is tracked in
+ * https://github.com/aebrer/dreb/issues/319.
  */
 let settingsWriteQueue: Promise<unknown> = Promise.resolve();
 function settingsWriteLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -193,7 +202,8 @@ function settingsWriteLock<T>(fn: () => Promise<T>): Promise<T> {
  * concurrent `set_settings` commands (dispatched concurrently by the RPC input loop)
  * cannot race on the shared error bucket. Pre-existing stale errors (from other commands
  * like `set_model` that record write failures but never drain) are discarded before
- * applying, so only errors produced by *this* operation's writes are attributed here.
+ * applying. See the {@link settingsWriteLock} doc for the remaining attribution caveat
+ * with runtime setters that write concurrently during the flush window.
  */
 export async function setSettingsForRpc(
 	settingsManager: SettingsWriter,
@@ -213,8 +223,8 @@ export async function setSettingsForRpc(
 		};
 	}
 
-	const presentKeys = SETTINGS_UPDATE_KEYS.filter((key) => update[key] !== undefined);
-	if (presentKeys.length === 0) {
+	const hasAnySetting = SETTINGS_UPDATE_KEYS.some((key) => update[key] !== undefined);
+	if (!hasAnySetting) {
 		return { ok: false, error: "set_settings requires at least one setting to change" };
 	}
 
@@ -266,14 +276,6 @@ export async function setSettingsForRpc(
 		}
 	}
 
-	// Persisting would silently no-op if the settings file failed to load — fail loudly instead.
-	if (settingsManager.hasGlobalSettingsLoadError()) {
-		return {
-			ok: false,
-			error: "Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)",
-		};
-	}
-
 	// Serialize the apply+flush+drain block so concurrent set_settings commands
 	// cannot race on the shared error bucket. See settingsWriteLock doc.
 	return settingsWriteLock(async () => {
@@ -281,6 +283,17 @@ export async function setSettingsForRpc(
 		// that record write failures into SettingsManager's shared error bucket but never
 		// drain it. Without this, we'd mis-attribute their failures to this operation.
 		settingsManager.drainErrors();
+
+		// Persisting would silently no-op if the settings file failed to load — fail loudly
+		// instead. Checked INSIDE the lock (after the stale-error discard) so a concurrent
+		// reload() that flips the load-error state cannot slip between check and apply and
+		// turn this write into a silent no-op reported as success.
+		if (settingsManager.hasGlobalSettingsLoadError()) {
+			return {
+				ok: false as const,
+				error: "Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)",
+			};
+		}
 
 		// --- Apply (validated) ---
 		if (update.defaultProvider !== undefined && update.defaultModel !== undefined) {

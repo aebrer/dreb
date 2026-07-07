@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -267,6 +267,46 @@ describe("setSettingsForRpc writes", () => {
 		expect(result.error).toContain("Failed to persist settings");
 		expect(result.error).toContain("disk full");
 	});
+
+	// chmod-based write-failure injection is bypassed by root (permissions don't apply)
+	// and not enforced for directories on Windows.
+	const cannotInjectWriteFailure =
+		process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0);
+
+	it.skipIf(cannotInjectWriteFailure)(
+		"surfaces a real failed write loudly (no mocks — read-only agent dir)",
+		async () => {
+			const dir = await createTempDir();
+			const agentDir = join(dir, "agent");
+			const projectDir = join(dir, "project");
+			mkdirSync(agentDir, { recursive: true });
+			mkdirSync(projectDir, { recursive: true });
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: true } }), "utf8");
+
+			// Load must succeed (writable dir) — only the queued write may fail.
+			const manager = SettingsManager.create(projectDir, agentDir);
+			// Now make the agent dir read-only: the write (which creates a lock entry
+			// next to settings.json) fails with EACCES and must surface loudly through
+			// the REAL recordError → drainErrors path, with no mocks.
+			chmodSync(agentDir, 0o555);
+
+			try {
+				const result = await setSettingsForRpc(manager, stubRegistry([]), { retryEnabled: false });
+
+				expect(result.ok).toBe(false);
+				if (result.ok) throw new Error("unreachable");
+				expect(result.error).toContain("Failed to persist settings");
+				expect(result.error).toContain("global:");
+				// The settings file must be unchanged.
+				expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"))).toEqual({
+					retry: { enabled: true },
+				});
+			} finally {
+				// Restore permissions so afterEach temp-dir cleanup can delete the tree.
+				chmodSync(agentDir, 0o755);
+			}
+		},
+	);
 
 	it("discards stale errors from prior commands instead of mis-attributing them", async () => {
 		const manager = SettingsManager.inMemory();
