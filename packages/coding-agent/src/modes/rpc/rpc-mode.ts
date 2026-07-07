@@ -26,9 +26,11 @@ import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager } from "../../core/settings-manager.js";
+import { type BackgroundAgentInfo, getBackgroundAgents } from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
+	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
@@ -101,6 +103,23 @@ export async function deleteSessionForRpc(
 export async function listAllSessionsForRpc(): Promise<RpcSessionInfo[]> {
 	const sessions = await SessionManager.listAll();
 	return sessions.map(toRpcSessionInfo);
+}
+
+/**
+ * Map a {@link BackgroundAgentInfo} registry entry to the RPC DTO, converting the
+ * epoch-ms timestamp to an ISO string. Shared shape guard for `list_background_agents`.
+ */
+export function toRpcBackgroundAgentInfo(a: Readonly<BackgroundAgentInfo>): RpcBackgroundAgentInfo {
+	return {
+		agentId: a.agentId,
+		agentType: a.agentType,
+		taskSummary: a.taskSummary,
+		startedAt: new Date(a.startedAt).toISOString(),
+		status: a.status,
+		sessionDir: a.sessionDir,
+		sessionFile: a.sessionFile,
+		cwd: a.cwd,
+	};
 }
 
 /** The slice of SettingsManager the settings RPC handlers need. */
@@ -813,6 +832,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 					autoCompactionEnabled: session.autoCompactionEnabled,
 					messageCount: session.messages.length,
 					pendingMessageCount: session.pendingMessageCount,
+					contextUsage: session.getContextUsage(),
 					modelFallbackMessage,
 				};
 				return success(id, "get_state", state);
@@ -1063,6 +1083,16 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 
 			case "list_all_sessions": {
 				return success(id, "list_all_sessions", { sessions: await listAllSessionsForRpc() });
+			}
+
+			// =================================================================
+			// Background agents
+			// =================================================================
+
+			case "list_background_agents": {
+				return success(id, "list_background_agents", {
+					agents: getBackgroundAgents().map(toRpcBackgroundAgentInfo),
+				});
 			}
 
 			// =================================================================

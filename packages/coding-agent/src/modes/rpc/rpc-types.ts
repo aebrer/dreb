@@ -10,6 +10,7 @@ import type { ImageContent, Model } from "@dreb/ai";
 import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
+import type { ContextUsage } from "../../core/extensions/types.js";
 import type { SessionEntry } from "../../core/session-manager.js";
 import type { SourceInfo } from "../../core/source-info.js";
 
@@ -89,6 +90,9 @@ export type RpcCommand =
 	| { id?: string; type: "list_sessions" }
 	| { id?: string; type: "list_all_sessions" }
 
+	// Background agents
+	| { id?: string; type: "list_background_agents" }
+
 	// Settings (persistent defaults)
 	| { id?: string; type: "get_settings" }
 	| { id?: string; type: "set_settings"; settings: RpcSettingsUpdate }
@@ -129,6 +133,13 @@ export interface RpcSessionState {
 	autoCompactionEnabled: boolean;
 	messageCount: number;
 	pendingMessageCount: number;
+	/**
+	 * Context window usage computed by the session — the exact numbers the TUI footer
+	 * renders (AgentSession.getContextUsage()). `tokens`/`percent` are null when usage
+	 * is unknown (e.g. right after compaction, before the next LLM response). Undefined
+	 * when no model is set or the model has no context window.
+	 */
+	contextUsage?: ContextUsage;
 	/** Non-empty when the model was changed from the user's saved preference
 	 *  (e.g. saved model unavailable after restart). */
 	modelFallbackMessage?: string;
@@ -293,6 +304,15 @@ export type RpcResponse =
 			data: { sessions: RpcSessionInfo[] };
 	  }
 
+	// Background agents
+	| {
+			id?: string;
+			type: "response";
+			command: "list_background_agents";
+			success: true;
+			data: { agents: RpcBackgroundAgentInfo[] };
+	  }
+
 	// Settings
 	| { id?: string; type: "response"; command: "get_settings"; success: true; data: RpcSettingsSnapshot }
 	| { id?: string; type: "response"; command: "set_settings"; success: true; data: RpcSettingsSnapshot }
@@ -325,6 +345,26 @@ export interface RpcSessionInfo {
 	messageCount: number;
 	/** First user message text */
 	firstMessage: string;
+}
+
+/** Background agent metadata returned by list_background_agents */
+export interface RpcBackgroundAgentInfo {
+	/** Registry ID (hex) used in background_agent_* events */
+	agentId: string;
+	/** Agent type name (e.g. "Explore") */
+	agentType: string;
+	/** Short human-readable task label */
+	taskSummary: string;
+	/** ISO timestamp of launch */
+	startedAt: string;
+	/** Lifecycle status */
+	status: "running" | "completed" | "failed";
+	/** Directory containing the agent's session JSONL file (known at spawn time) */
+	sessionDir?: string;
+	/** Path to the agent's session JSONL file (available after the child exits) */
+	sessionFile?: string;
+	/** Working directory the agent runs in */
+	cwd?: string;
 }
 
 /** Serializable session tree node returned by get_tree. Stable DTO — no raw entry payloads. */

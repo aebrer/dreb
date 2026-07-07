@@ -8,6 +8,7 @@
 export type { ModelInfo, RpcClientOptions, RpcEventListener } from "./rpc-client.js";
 export { RpcClient } from "./rpc-client.js";
 export type {
+	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcCommandType,
 	RpcExtensionUIRequest,

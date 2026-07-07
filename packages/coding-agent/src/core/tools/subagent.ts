@@ -191,6 +191,70 @@ function findDrebBinary(): string {
 	return DREB_SCRIPT;
 }
 
+/**
+ * Sinks for the child process's JSONL stdout stream. Extracted so the line
+ * handling is unit-testable without spawning a real child process.
+ */
+export interface ChildLineSinks {
+	/** Called with every successfully parsed JSONL event (including the session header). */
+	onEvent?: (event: Record<string, unknown>) => void;
+	/** Called with each complete assistant message (`message_end`). */
+	onAssistantMessage: (message: { role: string; content: any[] }) => void;
+	/** Called with human-readable progress lines (tool start/end). */
+	onProgress?: (text: string) => void;
+	/** Called when the child reports its resolved model (`agent_start`). */
+	onModel: (modelId: string) => void;
+	/** Called with lines that failed to parse as JSON (often real startup errors). */
+	onPlainLine: (line: string) => void;
+	/** Mutable holder for the last tool name, shared across lines for progress text. */
+	toolNameRef: { current: string };
+}
+
+/**
+ * Handle one line of a subagent child's JSONL stdout. Parses the line and
+ * dispatches to the sinks: full-event relay, assistant-message collection,
+ * tool progress, resolved model, and non-JSON passthrough.
+ */
+export function handleChildJsonlLine(line: string, sinks: ChildLineSinks): void {
+	if (!line.trim()) return;
+	// Separate JSON.parse from event handling so only parse failures
+	// are caught as non-JSON lines — errors in handling propagate normally
+	let event: any;
+	try {
+		event = JSON.parse(line);
+	} catch {
+		// Capture non-JSON lines — on failure these often contain the real error
+		// (e.g. startup errors printed before JSONL mode begins)
+		sinks.onPlainLine(line.trim());
+		if (line.trim().startsWith("{")) {
+			log.warn(`[subagent] Failed to parse JSONL event: ${line.slice(0, 200)}`);
+		}
+		return;
+	}
+	if (event === null || typeof event !== "object") {
+		// Valid JSON but not an event object (e.g. a bare string or number) — treat
+		// like a plain line so diagnostic content is preserved.
+		sinks.onPlainLine(line.trim());
+		return;
+	}
+	if (typeof event.type === "string") {
+		sinks.onEvent?.(event);
+	}
+	if (event.type === "agent_start" && event.model) {
+		sinks.onModel(event.model.id);
+	}
+	if (event.type === "message_end" && event.message?.role === "assistant") {
+		sinks.onAssistantMessage(event.message);
+	}
+	if (event.type === "tool_execution_start" && sinks.onProgress) {
+		sinks.toolNameRef.current = event.toolName || "";
+		sinks.onProgress(`Using ${sinks.toolNameRef.current}...`);
+	}
+	if (event.type === "tool_execution_end" && sinks.onProgress) {
+		sinks.onProgress(`${sinks.toolNameRef.current} done`);
+	}
+}
+
 async function spawnSubagent(
 	agentConfig: AgentTypeConfig,
 	task: string,
@@ -200,6 +264,7 @@ async function spawnSubagent(
 	parentProvider?: string,
 	sessionDir?: string,
 	parentSessionFile?: string,
+	onChildEvent?: (event: Record<string, unknown>) => void,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
 	log.debug(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
@@ -284,7 +349,7 @@ async function spawnSubagent(
 		let stderrSize = 0;
 		const MAX_STDERR_BYTES = 8192;
 		const plainStdoutLines: string[] = [];
-		let lastToolName = "";
+		const toolNameRef = { current: "" };
 		let resolvedModel: string | undefined;
 
 		// Drain stderr concurrently to avoid pipe deadlock (capped to prevent OOM from verbose subagents)
@@ -305,34 +370,16 @@ async function spawnSubagent(
 				log.warn(`[subagent] stdout stream error (agent=${agentConfig.name}): ${err.message}`);
 			});
 			attachJsonlLineReader(proc.stdout, (line) => {
-				if (!line.trim()) return;
-				// Separate JSON.parse from event handling so only parse failures
-				// are caught as non-JSON lines — errors in handling propagate normally
-				let event: any;
-				try {
-					event = JSON.parse(line);
-				} catch {
-					// Capture non-JSON lines — on failure these often contain the real error
-					// (e.g. startup errors printed before JSONL mode begins)
-					plainStdoutLines.push(line.trim());
-					if (line.trim().startsWith("{")) {
-						log.warn(`[subagent] Failed to parse JSONL event: ${line.slice(0, 200)}`);
-					}
-					return;
-				}
-				if (event.type === "agent_start" && event.model) {
-					resolvedModel = event.model.id;
-				}
-				if (event.type === "message_end" && event.message?.role === "assistant") {
-					collectedMessages.push(event.message);
-				}
-				if (event.type === "tool_execution_start" && onProgress) {
-					lastToolName = event.toolName || "";
-					onProgress(`Using ${lastToolName}...`);
-				}
-				if (event.type === "tool_execution_end" && onProgress) {
-					onProgress(`${lastToolName} done`);
-				}
+				handleChildJsonlLine(line, {
+					onEvent: onChildEvent,
+					onAssistantMessage: (message) => collectedMessages.push(message),
+					onProgress,
+					onModel: (modelId) => {
+						resolvedModel = modelId;
+					},
+					onPlainLine: (plain) => plainStdoutLines.push(plain),
+					toolNameRef,
+				});
 			});
 		}
 
@@ -854,6 +901,7 @@ export async function executeSingle(
 	parentModel?: string,
 	agentModels?: string[],
 	parentSessionFile?: string,
+	onChildEvent?: (event: Record<string, unknown>) => void,
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -924,6 +972,7 @@ export async function executeSingle(
 		resolvedProvider,
 		sessionDir,
 		parentSessionFile,
+		onChildEvent,
 	);
 	result.output = prependModelFallbackSummary(result.output, skippedModels, result.model ?? usedModel);
 	if (warning) {
@@ -946,6 +995,7 @@ async function executeChain(
 	parentModel?: string,
 	getAgentModelsForAgentFn?: (name: string) => string[] | undefined,
 	parentSessionFile?: string,
+	onChildEvent?: (event: Record<string, unknown>) => void,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -1000,6 +1050,7 @@ async function executeChain(
 			parentModel,
 			stepMach6Models,
 			parentSessionFile,
+			onChildEvent,
 		);
 		results.push(result);
 
@@ -1030,6 +1081,12 @@ export interface BackgroundAgentInfo {
 	taskSummary: string;
 	startedAt: number;
 	status: "running" | "completed" | "failed";
+	/** Directory containing the agent's session JSONL file (known at spawn time). */
+	sessionDir?: string;
+	/** Path to the agent's session JSONL file (discovered when the child exits). */
+	sessionFile?: string;
+	/** Working directory the agent runs in. */
+	cwd?: string;
 }
 
 const backgroundAgentRegistry = new Map<string, BackgroundAgentInfo>();
@@ -1070,9 +1127,15 @@ export function pruneBackgroundAgents(maxAgeMs = 5 * 60 * 1000): void {
 
 export interface SubagentToolOptions {
 	/** Called when a background subagent starts. Used by TUI to show status indicators. */
-	onBackgroundStart?: (agentId: string, agentType: string, taskSummary: string) => void;
+	onBackgroundStart?: (agentId: string, agentType: string, taskSummary: string, sessionDir?: string) => void;
 	/** Called when a background subagent completes with its result. `cancelled` is true if the user aborted it. */
 	onBackgroundComplete?: (agentId: string, result: SubagentResult, cancelled: boolean) => void;
+	/**
+	 * Called with every JSONL event a background child process emits, tagged with the
+	 * child's agentId. Enables live observability relays (e.g. the dashboard) without
+	 * tailing session files. Chain steps share the chain's agentId.
+	 */
+	onBackgroundEvent?: (agentId: string, event: Record<string, unknown>) => void;
 	/** Parent session's current provider (e.g. "anthropic"). Called at each invocation to get the live value after mid-session model switches. */
 	parentProvider?: () => string | undefined;
 	/** Parent session's current model ID. Used as a final fallback when all subagent-configured models fail to resolve. Called at each invocation for fresh value. */
@@ -1247,6 +1310,7 @@ export function createSubagentToolDefinition(
 ): ToolDefinition<typeof subagentSchema, SubagentToolDetails | undefined> {
 	const onBackgroundStart = options?.onBackgroundStart;
 	const onBackgroundComplete = options?.onBackgroundComplete;
+	const onBackgroundEvent = options?.onBackgroundEvent;
 	const getParentProvider = options?.parentProvider ?? (() => undefined);
 	const getParentModel = options?.parentModel ?? (() => undefined);
 	const getParentSessionFile = options?.parentSessionFile ?? (() => undefined);
@@ -1332,12 +1396,19 @@ export function createSubagentToolDefinition(
 				 * Shared lifecycle for all background launches: generates agent ID,
 				 * sets up registry/abort/notification, gates on the concurrency
 				 * semaphore, and handles errors. The caller provides the actual
-				 * work via `runFn(signal)` which must return a SubagentResult.
+				 * work via `runFn(signal, onChildEvent)` which must return a
+				 * SubagentResult; `onChildEvent` (when defined) must be forwarded to
+				 * the spawn so the child's JSONL events reach the relay.
 				 */
 				const launchBackgroundLifecycle = (
 					agentName: string,
 					taskSummary: string,
-					runFn: (signal: AbortSignal) => Promise<SubagentResult>,
+					sessionDir: string,
+					agentCwd: string,
+					runFn: (
+						signal: AbortSignal,
+						onChildEvent?: (event: Record<string, unknown>) => void,
+					) => Promise<SubagentResult>,
 				): string => {
 					const agentId = generateAgentId();
 					const bgAbort = new AbortController();
@@ -1347,9 +1418,25 @@ export function createSubagentToolDefinition(
 						taskSummary,
 						startedAt: Date.now(),
 						status: "running",
+						sessionDir,
+						cwd: agentCwd,
 					});
 					backgroundAbortControllers.set(agentId, bgAbort);
-					onBackgroundStart?.(agentId, agentName, taskSummary);
+					onBackgroundStart?.(agentId, agentName, taskSummary, sessionDir);
+
+					// Relay child JSONL events tagged with this agent's ID. Guarded so a
+					// throwing relay listener can never kill the stdout reader.
+					const onChildEvent = onBackgroundEvent
+						? (event: Record<string, unknown>) => {
+								try {
+									onBackgroundEvent(agentId, event);
+								} catch (err) {
+									log.warn(
+										`[subagent] onBackgroundEvent threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
+									);
+								}
+							}
+						: undefined;
 
 					const bgSignal = bgAbort.signal;
 
@@ -1366,9 +1453,10 @@ export function createSubagentToolDefinition(
 					const run = async () => {
 						await bgAcquire();
 						try {
-							const result = await runFn(bgSignal);
+							const result = await runFn(bgSignal, onChildEvent);
 							const entry = backgroundAgentRegistry.get(agentId);
 							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
+							if (entry && result.sessionFile) entry.sessionFile = result.sessionFile;
 							backgroundAbortControllers.delete(agentId);
 							safeNotify(result);
 						} catch (err) {
@@ -1431,7 +1519,7 @@ export function createSubagentToolDefinition(
 					const sessionId = generateAgentId();
 					const sessionDir = join(subagentSessionsBase, sessionId);
 					const agentModels = getAgentModelsForAgent?.(agentName || DEFAULT_AGENT);
-					return launchBackgroundLifecycle(agentName, taskLabel, (signal) =>
+					return launchBackgroundLifecycle(agentName, taskLabel, sessionDir, resolvedCwd, (signal, onChildEvent) =>
 						executeSingle(
 							agents,
 							agentName === DEFAULT_AGENT ? undefined : agentName,
@@ -1446,6 +1534,7 @@ export function createSubagentToolDefinition(
 							getParentModel(),
 							agentModels,
 							getParentSessionFile(),
+							onChildEvent,
 						),
 					);
 				};
@@ -1523,39 +1612,46 @@ export function createSubagentToolDefinition(
 					const chainSteps = params.chain!;
 
 					const chainSessionDir = join(subagentSessionsBase, `chain-${generateAgentId()}`);
-					const agentId = launchBackgroundLifecycle(agentName, taskSummary, async (signal) => {
-						const results = await executeChain(
-							agents,
-							chainSteps,
-							cwd,
-							signal,
-							undefined,
-							getParentProvider(),
-							modelRegistry,
-							chainSessionDir,
-							params.agent,
-							params.model,
-							getParentModel(),
-							getAgentModelsForAgent,
-							getParentSessionFile(),
-						);
-						const resultText = results
-							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
-							.join("\n\n---\n\n");
-						const failed = results.filter((r) => r.exitCode !== 0);
-						// Per-step session logs are already embedded in resultText via formatSingleResult
-						return {
-							agent: agentName,
-							task: taskSummary,
-							exitCode: failed.length > 0 ? 1 : 0,
-							output: resultText,
-							stderr: "",
-							errorMessage:
-								failed.length > 0
-									? `Chain stopped at step ${results.length} of ${chainSteps.length}: ${results[results.length - 1]?.errorMessage}`
-									: null,
-						};
-					});
+					const agentId = launchBackgroundLifecycle(
+						agentName,
+						taskSummary,
+						chainSessionDir,
+						cwd,
+						async (signal, onChildEvent) => {
+							const results = await executeChain(
+								agents,
+								chainSteps,
+								cwd,
+								signal,
+								undefined,
+								getParentProvider(),
+								modelRegistry,
+								chainSessionDir,
+								params.agent,
+								params.model,
+								getParentModel(),
+								getAgentModelsForAgent,
+								getParentSessionFile(),
+								onChildEvent,
+							);
+							const resultText = results
+								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
+								.join("\n\n---\n\n");
+							const failed = results.filter((r) => r.exitCode !== 0);
+							// Per-step session logs are already embedded in resultText via formatSingleResult
+							return {
+								agent: agentName,
+								task: taskSummary,
+								exitCode: failed.length > 0 ? 1 : 0,
+								output: resultText,
+								stderr: "",
+								errorMessage:
+									failed.length > 0
+										? `Chain stopped at step ${results.length} of ${chainSteps.length}: ${results[results.length - 1]?.errorMessage}`
+										: null,
+							};
+						},
+					);
 
 					return {
 						content: [

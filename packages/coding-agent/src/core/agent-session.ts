@@ -141,8 +141,14 @@ export type AgentSessionEvent =
 	  }
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
-	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean }
+	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string; sessionDir?: string }
+	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; sessionFile?: string }
+	| {
+			type: "background_agent_event";
+			agentId: string;
+			/** A single AgentSessionEvent (or session header) emitted by the background child process, relayed verbatim. */
+			event: Record<string, unknown>;
+	  }
 	| { type: "parent_paused_for_background_agents"; runningAgentCount: number; turnsUsed: number; turnLimit: number }
 	| { type: "tasks_update"; tasks: readonly SessionTask[] }
 	| { type: "suggest_next"; command: string };
@@ -805,6 +811,7 @@ export class AgentSession {
 				agentId,
 				agentType: result.agent,
 				success: result.exitCode === 0,
+				sessionFile: result.sessionFile,
 			});
 		} catch (emitErr) {
 			log.warn(
@@ -2952,11 +2959,14 @@ export class AgentSession {
 						parentSessionFile: () => this.sessionFile,
 						modelRegistry: this._modelRegistry,
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
-						onBackgroundStart: (agentId, agentType, taskSummary) => {
-							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary });
+						onBackgroundStart: (agentId, agentType, taskSummary, sessionDir) => {
+							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary, sessionDir });
 						},
 						onBackgroundComplete: (agentId, result, cancelled) => {
 							this._handleBackgroundComplete(agentId, result, cancelled);
+						},
+						onBackgroundEvent: (agentId, event) => {
+							this._emit({ type: "background_agent_event", agentId, event });
 						},
 					},
 				});

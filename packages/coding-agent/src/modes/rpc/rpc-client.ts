@@ -5,14 +5,16 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import type { AgentEvent, AgentMessage, ThinkingLevel } from "@dreb/agent-core";
+import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
 import type { ImageContent } from "@dreb/ai";
-import type { SessionStats } from "../../core/agent-session.js";
+import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
+	RpcBackgroundAgentInfo,
 	RpcCommand,
+	RpcExtensionUIResponse,
 	RpcResponse,
 	RpcSessionInfo,
 	RpcSessionState,
@@ -74,7 +76,12 @@ export interface ModelInfo {
 	reasoning: boolean;
 }
 
-export type RpcEventListener = (event: AgentEvent) => void;
+/**
+ * Listener for events streamed by the RPC server. The wire carries the full
+ * {@link AgentSessionEvent} union (core AgentEvents plus session-level events like
+ * background_agent_start/end/event, tasks_update, suggest_next).
+ */
+export type RpcEventListener = (event: AgentSessionEvent) => void;
 
 // ============================================================================
 // RPC Client
@@ -567,6 +574,28 @@ export class RpcClient {
 	}
 
 	/**
+	 * List background subagents tracked by the server's registry (running and
+	 * recently completed), including session dir/file paths where known.
+	 */
+	async listBackgroundAgents(): Promise<RpcBackgroundAgentInfo[]> {
+		const response = await this.send({ type: "list_background_agents" });
+		return this.getData<{ agents: RpcBackgroundAgentInfo[] }>(response).agents;
+	}
+
+	/**
+	 * Answer an extension UI request (select/confirm/input/editor) previously
+	 * received as an `extension_ui_request` event. Fire-and-forget: the server
+	 * does not send a response to this message.
+	 */
+	sendExtensionUIResponse(response: RpcExtensionUIResponse): void {
+		if (this._dead || !this.process?.stdin) {
+			const cause = this.spawnError ? ` Spawn error: ${this.spawnError.message}.` : "";
+			throw new Error(`RPC process is not running.${cause} Stderr: ${this.stderr}`);
+		}
+		this.process.stdin.write(serializeJsonLine(response));
+	}
+
+	/**
 	 * Get the dreb version.
 	 */
 	async getVersion(): Promise<string> {
@@ -622,9 +651,9 @@ export class RpcClient {
 	/**
 	 * Collect events until agent becomes idle.
 	 */
-	collectEvents(timeout = 60000): Promise<AgentEvent[]> {
+	collectEvents(timeout = 60000): Promise<AgentSessionEvent[]> {
 		return new Promise((resolve, reject) => {
-			const events: AgentEvent[] = [];
+			const events: AgentSessionEvent[] = [];
 			const timer = setTimeout(() => {
 				unsubscribe();
 				reject(new Error(`Timeout collecting events. Stderr: ${this.stderr}`));
@@ -644,7 +673,7 @@ export class RpcClient {
 	/**
 	 * Send prompt and wait for completion, returning all events.
 	 */
-	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<AgentEvent[]> {
+	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<AgentSessionEvent[]> {
 		const eventsPromise = this.collectEvents(timeout);
 		await this.prompt(message, images);
 		return eventsPromise;
@@ -681,7 +710,7 @@ export class RpcClient {
 
 			// Otherwise it's an event
 			for (const listener of this.eventListeners) {
-				listener(data as AgentEvent);
+				listener(data as AgentSessionEvent);
 			}
 		} catch {
 			// Ignore non-JSON lines

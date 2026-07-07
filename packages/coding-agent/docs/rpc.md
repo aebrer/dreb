@@ -6,10 +6,10 @@ RPC mode enables headless operation of the coding agent via a JSON protocol over
 
 ### Running the agent child as a specific OS user
 
-When using the `RpcClient` from `@dreb/coding-agent`, `RpcClientOptions` accepts optional `uid` and `gid` fields. When set, they are forwarded directly to `child_process.spawn`, so the agent child (and every subprocess it spawns, including `bash`) runs under that OS user/group. When unset they are omitted entirely, leaving spawn behavior unchanged.
+When using the `RpcClient` from `@dreb/coding-agent/rpc`, `RpcClientOptions` accepts optional `uid` and `gid` fields. When set, they are forwarded directly to `child_process.spawn`, so the agent child (and every subprocess it spawns, including `bash`) runs under that OS user/group. When unset they are omitted entirely, leaving spawn behavior unchanged.
 
 ```ts
-import { RpcClient } from "@dreb/coding-agent";
+import { RpcClient } from "@dreb/coding-agent/rpc";
 
 // Parent must hold CAP_SETUID / CAP_SETGID (e.g. run as root) for this to succeed.
 const client = new RpcClient({ cwd: "/srv/users/alice", uid: 4001, gid: 4001 });
@@ -197,12 +197,19 @@ Response:
     "sessionName": "my-feature-work",
     "autoCompactionEnabled": true,
     "messageCount": 5,
-    "pendingMessageCount": 0
+    "pendingMessageCount": 0,
+    "contextUsage": {
+      "tokens": 60000,
+      "contextWindow": 200000,
+      "percent": 30
+    }
   }
 }
 ```
 
 The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
+
+`contextUsage` carries the same numbers the TUI footer shows, computed by the session itself — clients must render these rather than deriving their own estimate. `tokens` and `percent` are `null` when usage is unknown (right after compaction, before the next LLM response). The whole field is omitted when no model is set or the model has no context window.
 
 #### get_messages
 
@@ -861,6 +868,38 @@ Response:
 
 Each session has the same fields as `list_sessions`.
 
+### Background Agents
+
+#### list_background_agents
+
+List background subagents tracked by this process's registry — running and recently completed (finished entries are pruned after ~5 minutes). `sessionDir` is known from launch; `sessionFile` appears once the child process exits. Live transcripts are delivered via `background_agent_event` events (see Events), not by reading these paths.
+
+```json
+{"type": "list_background_agents"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "list_background_agents",
+  "success": true,
+  "data": {
+    "agents": [
+      {
+        "agentId": "a1b2c3d4e5f6",
+        "agentType": "Explore",
+        "taskSummary": "Explore task 1/2",
+        "startedAt": "2026-07-07T12:00:00.000Z",
+        "status": "running",
+        "sessionDir": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6",
+        "cwd": "/home/user/project"
+      }
+    ]
+  }
+}
+```
+
 ### Session Tree
 
 Sessions are append-only trees: editing/retrying a message or navigating back creates a branch rather than discarding entries. These commands expose tree inspection and navigation — the scriptable equivalent of the TUI's `/tree` selector.
@@ -1111,11 +1150,22 @@ Events are streamed to stdout as JSON lines during agent operation. Events do NO
 | `tool_execution_start` | Tool begins execution |
 | `tool_execution_update` | Tool execution progress (streaming output) |
 | `tool_execution_end` | Tool completes |
+| `stream_retry` | Stream dropped mid-turn; retrying (partial output discarded) |
+| `length_retry` | Response hit the token limit; retrying with a larger budget |
 | `auto_compaction_start` | Auto-compaction begins |
 | `auto_compaction_end` | Auto-compaction completes |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
+| `background_agent_start` | Background subagent launched (includes `sessionDir`) |
+| `background_agent_end` | Background subagent finished (includes `sessionFile` when known) |
+| `background_agent_event` | Relayed event from a background subagent's own stream |
+| `parent_paused_for_background_agents` | Parent paused waiting on background agents |
+| `tasks_update` | Session task list replaced (see the `tasks_update` tool) |
+| `suggest_next` | Agent suggested a next command |
 | `extension_error` | Extension threw an error |
+
+Treat the event union as open — dispatch on `type` and ignore unknown values
+rather than validating against a closed list; new event types may be added.
 
 ### agent_start
 
@@ -1307,6 +1357,55 @@ On final failure (max retries exceeded):
   "success": false,
   "attempt": 3,
   "finalError": "529 overloaded_error: Overloaded"
+}
+```
+
+### background_agent_start / background_agent_end / background_agent_event
+
+Lifecycle and live-observability events for background subagents (the `subagent` tool's background mode).
+
+`background_agent_start` fires at launch. `sessionDir` is the directory the child will write its session JSONL into (per-launch, known before spawn):
+
+```json
+{
+  "type": "background_agent_start",
+  "agentId": "a1b2c3d4e5f6",
+  "agentType": "Explore",
+  "taskSummary": "Explore task 1/2",
+  "sessionDir": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6"
+}
+```
+
+`background_agent_end` fires after the result is delivered to the parent agent. `sessionFile` is the child's session JSONL path when one was written:
+
+```json
+{
+  "type": "background_agent_end",
+  "agentId": "a1b2c3d4e5f6",
+  "agentType": "Explore",
+  "success": true,
+  "sessionFile": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6/2026-07-07T12-00-00-000Z_uuid.jsonl"
+}
+```
+
+`background_agent_event` relays every JSONL event the child process emits (the same event union documented here, plus the initial session header), verbatim, tagged with the child's `agentId`. This is the live-transcript transport for observers like the dashboard — no session-file tailing needed. Streaming children emit `message_update` deltas at high frequency; consumers that fan events out further (e.g. over a network) should batch or throttle:
+
+```json
+{
+  "type": "background_agent_event",
+  "agentId": "a1b2c3d4e5f6",
+  "event": {"type": "tool_execution_start", "toolName": "read", "args": {"path": "src/index.ts"}}
+}
+```
+
+`parent_paused_for_background_agents` fires when the parent agent pauses because its background-agent turn guardrail was hit while agents are still running:
+
+```json
+{
+  "type": "parent_paused_for_background_agents",
+  "runningAgentCount": 2,
+  "turnsUsed": 10,
+  "turnLimit": 10
 }
 ```
 
