@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>dreb — settings</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link
+		href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+		rel="stylesheet"
+	/>
+	<link rel="stylesheet" href="../tokens.css" />
+	<style>
+		.settings-wrap {
+			max-width: 720px;
+		}
+
+		.settings-wrap h1 {
+			margin: var(--space-5) 0 var(--space-2);
+		}
+
+		.settings-intro {
+			color: var(--muted);
+			font-size: var(--fs-secondary);
+			margin-bottom: var(--space-6);
+		}
+
+		.settings-section {
+			margin-bottom: var(--space-6);
+		}
+
+		.settings-section > h2 {
+			font-size: var(--fs-h3);
+			border-bottom: var(--hairline);
+			padding-bottom: var(--space-2);
+			margin-bottom: var(--space-4);
+		}
+
+		.setting-row {
+			display: flex;
+			align-items: baseline;
+			justify-content: space-between;
+			gap: var(--space-4);
+			padding: var(--space-3) 0;
+			border-bottom: var(--hairline);
+		}
+
+		.setting-row:last-child {
+			border-bottom: none;
+		}
+
+		.setting-label {
+			min-width: 0;
+		}
+
+		.setting-label .name {
+			display: block;
+		}
+
+		.setting-label .hint {
+			display: block;
+			font-size: var(--fs-small);
+			color: var(--muted);
+			margin-top: 2px;
+		}
+
+		.setting-control {
+			flex-shrink: 0;
+			display: flex;
+			align-items: center;
+			gap: var(--space-2);
+		}
+
+		.value-btn {
+			border: var(--hairline);
+			border-radius: var(--radius);
+			background: var(--bg);
+			color: var(--text);
+			padding: 2px var(--space-3);
+			font-size: var(--fs-secondary);
+			cursor: pointer;
+			transition: border-color 0.2s;
+			white-space: nowrap;
+		}
+
+		.value-btn:hover {
+			border-color: var(--text);
+		}
+
+		.scope-tag {
+			font-size: var(--fs-small);
+			color: var(--muted);
+		}
+
+		/* devices list */
+		.device-row {
+			display: flex;
+			align-items: baseline;
+			gap: var(--space-3);
+			padding: var(--space-3) 0;
+			border-bottom: var(--hairline);
+			flex-wrap: wrap;
+		}
+
+		.device-row:last-child {
+			border-bottom: none;
+		}
+
+		.device-row .meta {
+			color: var(--muted);
+			font-size: var(--fs-small);
+		}
+
+		.device-row .actions {
+			margin-left: auto;
+		}
+
+		.this-device {
+			font-size: var(--fs-small);
+			border: var(--hairline);
+			border-radius: var(--radius);
+			padding: 0 var(--space-2);
+			color: var(--muted);
+		}
+
+		@media (max-width: 700px) {
+			.setting-row {
+				flex-direction: column;
+				align-items: stretch;
+				gap: var(--space-2);
+			}
+
+			.setting-control {
+				justify-content: flex-end;
+			}
+		}
+	</style>
+</head>
+<body>
+	<header class="topbar">
+		<div class="topbar-inner">
+			<a class="wordmark" href="#">dreb</a>
+			<nav>
+				<a href="#">fleet</a>
+				<a href="#">files</a>
+				<a href="#" aria-current="page">settings</a>
+			</nav>
+			<span class="topbar-spacer"></span>
+			<span class="chip chip-plain"><span class="dot">⌂</span> local · 127.0.0.1</span>
+		</div>
+	</header>
+
+	<main class="container settings-wrap">
+		<h1>settings</h1>
+		<p class="settings-intro">
+			Defaults for new sessions. Live sessions keep their current values — change those
+			from the session view. Writes go to the global settings file on the host.
+		</p>
+
+		<section class="settings-section">
+			<h2>model</h2>
+			<div class="setting-row">
+				<span class="setting-label">
+					<span class="name">default model</span>
+					<span class="hint">used by new sessions; validated against configured providers</span>
+				</span>
+				<span class="setting-control">
+					<button class="value-btn">anthropic / claude-fable-5 ▾</button>
+				</span>
+			</div>
+			<div class="setting-row">
+				<span class="setting-label">
+					<span class="name">default thinking level</span>
+					<span class="hint">off · minimal · low · medium · high · xhigh</span>
+				</span>
+				<span class="setting-control">
+					<button class="value-btn">high ▾</button>
+				</span>
+			</div>
+		</section>
+
+		<section class="settings-section">
+			<h2>queueing</h2>
+			<div class="setting-row">
+				<span class="setting-label">
+					<span class="name">steering delivery</span>
+					<span class="hint">deliver queued steers all at once, or one per turn</span>
+				</span>
+				<span class="setting-control">
+					<button class="value-btn">one-at-a-time ▾</button>
+				</span>
+			</div>
+			<div class="setting-row">
+				<span class="setting-label">
+					<span class="name">follow-up delivery</span>
+					<span class="hint">deliver queued follow-ups all at once, or one per turn</span>
+				</span>
+				<span class="setting-control">
+					<button class="value-btn">one-at-a-time ▾</button>
+				</span>
+			</div>
+		</section>
+
+		<section class="settings-section">
+			<h2>reliability</h2>
+			<div class="setting-row">
+				<span class="setting-label">
+					<span class="name">auto-compaction</span>
+					<span class="hint">summarize old context when the window fills</span>
+				</span>
+				<span class="setting-control">
+					<span class="toggle"><span class="on">on</span><span>off</span></span>
+				</span>
+			</div>
+			<div class="setting-row">
+				<span class="setting-label">
+					<span class="name">auto-retry</span>
+					<span class="hint">retry transient stream errors (rate limits, 5xx)</span>
+				</span>
+				<span class="setting-control">
+					<span class="toggle"><span class="on">on</span><span>off</span></span>
+				</span>
+			</div>
+		</section>
+
+		<section class="settings-section">
+			<h2>devices</h2>
+			<div class="device-row">
+				<span>quark <span class="this-device">this machine</span></span>
+				<span class="meta">local · always allowed</span>
+			</div>
+			<div class="device-row">
+				<span>pixel-9</span>
+				<span class="meta">andrew@github · paired 3d ago · last seen 2h ago</span>
+				<span class="actions"><button class="btn btn-small btn-danger">unpair</button></span>
+			</div>
+			<div class="device-row">
+				<span>work-laptop</span>
+				<span class="meta">andrew@github · paired 1mo ago · last seen 6d ago</span>
+				<span class="actions"><button class="btn btn-small btn-danger">unpair</button></span>
+			</div>
+		</section>
+
+		<footer>dreb v2.34.4 · dashboard</footer>
+	</main>
+</body>
+</html>

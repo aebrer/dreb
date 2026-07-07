@@ -1,0 +1,486 @@
+/*
+ * dreb dashboard — design tokens + shared primitives
+ *
+ * Forked from the pico8_carts/docs gallery CSS (approved starting template).
+ * Design language:
+ *   - IBM Plex Mono everywhere. No second typeface.
+ *   - Pure #000 / #fff, automatic dark mode via prefers-color-scheme.
+ *   - ONE neutral gray for secondary text (--muted). No gray ramps.
+ *   - 1px hairline borders are the only separator device. No shadows,
+ *     no gradients, no glow, no glassmorphism.
+ *   - 3px maximum border radius.
+ *   - Hover = border-color swap (hairline -> text color). Nothing else moves.
+ *   - Accent color is permitted in exactly one place: status chips
+ *     (running / needs-attention / idle / error). Destructive-action hover
+ *     may reuse --status-error (it communicates status, not decoration).
+ *   - Status is never communicated by color alone: every status pairs a
+ *     glyph (see .chip variants) with its color.
+ *
+ * Dark-mode note: the dashboard MVP is fixed light/dark (this file).
+ * TUI-theme-following CSS variables (getResolvedThemeColors bridge in
+ * core/export-html) are deliberately later work — see SPEC.md.
+ */
+
+/* ---------------------------------------------------------------- tokens */
+
+:root {
+	/* color */
+	--bg: #ffffff;
+	--text: #000000;
+	--border: #e0e0e0;
+	--muted: #666666;
+
+	/* status accents (PICO-8 palette, darkened to ≥4.5:1 WCAG AA on white —
+	   both as text-on-white and as fill-under-white-text for the filled chip) */
+	--status-running: #00871f;
+	--status-attention: #8a5400;
+	--status-idle: #666666; /* the neutral gray — idle earns no new color */
+	--status-error: #d10041;
+
+	/* typography */
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+	--fs-small: 12px;
+	--fs-secondary: 13px;
+	--fs-body: 14px;
+	--fs-h3: 16px;
+	--fs-h2: 18px;
+	--fs-h1: 24px;
+
+	/* spacing scale */
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+	--space-5: 24px;
+	--space-6: 32px;
+	--space-7: 48px;
+
+	/* shape */
+	--radius: 3px; /* maximum anywhere */
+	--hairline: 1px solid var(--border);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #000000;
+		--text: #ffffff;
+		--border: #333333;
+		--muted: #999999;
+
+		/* status accents (PICO-8 palette, full brightness on black) */
+		--status-running: #00e436;
+		--status-attention: #ffa300;
+		--status-idle: #999999;
+		--status-error: #ff004d;
+	}
+}
+
+/* ----------------------------------------------------------------- reset */
+
+* {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+}
+
+img,
+svg {
+	display: block;
+	max-width: 100%;
+}
+
+button,
+input,
+textarea,
+select {
+	font: inherit;
+	color: inherit;
+}
+
+/* ------------------------------------------------------------------ base */
+
+body {
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--mono-font);
+	font-size: var(--fs-body);
+	line-height: 1.6;
+	overflow-x: hidden;
+	overflow-wrap: break-word;
+}
+
+h1 {
+	font-size: var(--fs-h1);
+	font-weight: 500;
+}
+
+h2 {
+	font-size: var(--fs-h2);
+	font-weight: 500;
+}
+
+h3 {
+	font-size: var(--fs-h3);
+	font-weight: 500;
+}
+
+a {
+	color: var(--text);
+	cursor: pointer;
+}
+
+a:hover {
+	color: var(--muted);
+}
+
+code,
+pre {
+	font-family: var(--mono-font);
+	font-size: var(--fs-secondary);
+}
+
+pre {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: var(--space-3);
+	overflow-x: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+::placeholder {
+	color: var(--muted);
+	opacity: 1;
+}
+
+/* Visible focus without glow: hairline outline in text color. */
+:focus-visible {
+	outline: 1px solid var(--text);
+	outline-offset: 2px;
+}
+
+.muted {
+	color: var(--muted);
+}
+
+.small {
+	font-size: var(--fs-small);
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.container {
+	max-width: 1200px;
+	margin: 0 auto;
+	padding: var(--space-4) var(--space-5);
+}
+
+.topbar {
+	border-bottom: var(--hairline);
+}
+
+.topbar-inner {
+	max-width: 1200px;
+	margin: 0 auto;
+	padding: var(--space-3) var(--space-5);
+	display: flex;
+	align-items: center;
+	gap: var(--space-4);
+	flex-wrap: wrap;
+}
+
+.wordmark {
+	font-size: var(--fs-h2);
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-decoration: none;
+}
+
+.topbar nav {
+	display: flex;
+	gap: var(--space-4);
+	align-items: center;
+}
+
+.topbar nav a {
+	text-decoration: none;
+	padding: var(--space-1) 0;
+	border-bottom: 1px solid transparent;
+}
+
+.topbar nav a:hover {
+	color: var(--text);
+	border-bottom-color: var(--text);
+}
+
+.topbar nav a[aria-current="page"] {
+	border-bottom-color: var(--text);
+}
+
+.topbar-spacer {
+	margin-left: auto;
+}
+
+footer {
+	border-top: var(--hairline);
+	margin-top: var(--space-7);
+	padding: var(--space-4) 0;
+	font-size: var(--fs-secondary);
+	color: var(--muted);
+}
+
+/* --------------------------------------------------------------- buttons */
+
+.btn {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-2) var(--space-4);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	text-decoration: none;
+	cursor: pointer;
+	font-size: var(--fs-body);
+	transition: border-color 0.2s;
+}
+
+.btn:hover {
+	border-color: var(--text);
+	color: var(--text);
+}
+
+/* Primary action: inverted. */
+.btn-primary {
+	background: var(--text);
+	color: var(--bg);
+	border-color: var(--text);
+}
+
+.btn-primary:hover {
+	color: var(--bg);
+}
+
+/* Destructive action: hover communicates risk via the error status color. */
+.btn-danger:hover {
+	border-color: var(--status-error);
+	color: var(--status-error);
+}
+
+.btn-small {
+	padding: 2px var(--space-2);
+	font-size: var(--fs-small);
+}
+
+/* ----------------------------------------------------------------- chips */
+
+/*
+ * Status chips — the one accent-color surface.
+ * Glyph + color together; never color alone:
+ *   running         ● (filled dot)
+ *   needs-attention ◆ (diamond, chip is inverted/filled for weight)
+ *   idle            ○ (hollow dot)
+ *   error           ✕ (cross)
+ */
+.chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 1px var(--space-2);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	font-size: var(--fs-small);
+	line-height: 1.5;
+	white-space: nowrap;
+}
+
+.chip .dot {
+	font-size: 10px;
+}
+
+.chip-running {
+	border-color: var(--status-running);
+	color: var(--status-running);
+}
+
+/* Filled: needs-attention carries visual weight beyond color. */
+.chip-attention {
+	background: var(--status-attention);
+	border-color: var(--status-attention);
+	color: var(--bg);
+	font-weight: 600;
+}
+
+.chip-idle {
+	border-color: var(--border);
+	color: var(--status-idle);
+}
+
+.chip-error {
+	border-color: var(--status-error);
+	color: var(--status-error);
+}
+
+/* Neutral metadata chip (no status semantics — hairline + muted). */
+.chip-plain {
+	border-color: var(--border);
+	color: var(--muted);
+}
+
+/* ----------------------------------------------------------------- cards */
+
+.card {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: var(--space-4);
+	transition: border-color 0.2s;
+}
+
+a.card {
+	display: block;
+	text-decoration: none;
+}
+
+.card:hover {
+	border-color: var(--text);
+	color: var(--text);
+}
+
+/* ----------------------------------------------------------------- forms */
+
+.input,
+.textarea,
+.select {
+	width: 100%;
+	padding: var(--space-2) var(--space-3);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	font-size: var(--fs-body);
+	transition: border-color 0.2s;
+}
+
+.input:hover,
+.textarea:hover,
+.select:hover {
+	border-color: var(--text);
+}
+
+.textarea {
+	resize: vertical;
+	min-height: 72px;
+	line-height: 1.6;
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin-bottom: var(--space-4);
+}
+
+.field > label {
+	font-size: var(--fs-secondary);
+}
+
+.field > .hint {
+	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
+/* Toggle rendered as a two-state bordered switch (no skeuomorphism). */
+.toggle {
+	display: inline-flex;
+	border: var(--hairline);
+	border-radius: var(--radius);
+	overflow: hidden;
+}
+
+.toggle span {
+	padding: 2px var(--space-3);
+	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
+.toggle .on {
+	background: var(--text);
+	color: var(--bg);
+}
+
+/* ---------------------------------------------------------------- tables */
+
+.table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: var(--fs-body);
+}
+
+.table th {
+	text-align: left;
+	font-weight: 500;
+	font-size: var(--fs-small);
+	color: var(--muted);
+	padding: var(--space-2) var(--space-3);
+	border-bottom: var(--hairline);
+}
+
+.table td {
+	padding: var(--space-2) var(--space-3);
+	border-bottom: var(--hairline);
+}
+
+/* ---------------------------------------------------------------- modals */
+
+.modal-backdrop {
+	position: fixed;
+	inset: 0;
+	background: rgba(128, 128, 128, 0.25);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--space-4);
+}
+
+.modal {
+	background: var(--bg);
+	border: 1px solid var(--text);
+	border-radius: var(--radius);
+	max-width: 480px;
+	width: 100%;
+	padding: var(--space-5);
+}
+
+.modal h3 {
+	margin-bottom: var(--space-3);
+}
+
+.modal-actions {
+	display: flex;
+	gap: var(--space-2);
+	justify-content: flex-end;
+	margin-top: var(--space-5);
+}
+
+/* --------------------------------------------------------------- utility */
+
+.row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+}
+
+.stack {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.hidden {
+	display: none;
+}

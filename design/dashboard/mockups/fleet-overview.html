@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>dreb — fleet</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link
+		href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+		rel="stylesheet"
+	/>
+	<link rel="stylesheet" href="../tokens.css" />
+	<style>
+		/* ------------------------------------------------- fleet page */
+		.fleet-head {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: var(--space-4);
+			margin: var(--space-5) 0 var(--space-6);
+			flex-wrap: wrap;
+		}
+
+		.project-group {
+			margin-bottom: var(--space-6);
+		}
+
+		.group-head {
+			display: flex;
+			align-items: baseline;
+			gap: var(--space-3);
+			border-bottom: var(--hairline);
+			padding-bottom: var(--space-2);
+			margin-bottom: var(--space-4);
+			flex-wrap: wrap;
+		}
+
+		.group-head h2 {
+			font-size: var(--fs-h3);
+		}
+
+		.group-head .btn {
+			margin-left: auto;
+		}
+
+		.session-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+			gap: var(--space-4);
+			margin-bottom: var(--space-4);
+		}
+
+		/* --------------------------------------------- live session card */
+		.session-card {
+			/* min-width 0: let ellipsis work — nowrap children must not
+			   inflate the grid track's min-content width */
+			min-width: 0;
+			border: var(--hairline);
+			border-radius: var(--radius);
+			padding: var(--space-4);
+			display: flex;
+			flex-direction: column;
+			gap: var(--space-2);
+			transition: border-color 0.2s;
+		}
+
+		.session-card:hover {
+			border-color: var(--text);
+		}
+
+		.session-card.attention {
+			border-color: var(--status-attention);
+		}
+
+		.session-card.error {
+			border-color: var(--status-error);
+		}
+
+		.session-title {
+			display: flex;
+			align-items: baseline;
+			justify-content: space-between;
+			gap: var(--space-2);
+		}
+
+		.session-title .name {
+			font-weight: 500;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.attention-reason {
+			font-weight: 600;
+			font-size: var(--fs-secondary);
+		}
+
+		.error-reason {
+			color: var(--status-error);
+			font-size: var(--fs-secondary);
+		}
+
+		.activity {
+			font-size: var(--fs-secondary);
+			color: var(--muted);
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.subagents {
+			border-left: var(--hairline);
+			padding-left: var(--space-3);
+			font-size: var(--fs-small);
+			display: flex;
+			flex-direction: column;
+			gap: 2px;
+		}
+
+		.subagents .agent-line {
+			color: var(--muted);
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.subagents .agent-line .live {
+			color: var(--status-running);
+		}
+
+		.session-meta {
+			font-size: var(--fs-small);
+			color: var(--muted);
+			display: flex;
+			gap: var(--space-2);
+			flex-wrap: wrap;
+		}
+
+		.session-actions {
+			display: flex;
+			gap: var(--space-2);
+			margin-top: var(--space-1);
+		}
+
+		/* ------------------------------------------------ disk inventory */
+		.disk-label {
+			font-size: var(--fs-small);
+			color: var(--muted);
+			margin-bottom: var(--space-1);
+		}
+
+		.disk-row {
+			display: flex;
+			align-items: center;
+			gap: var(--space-3);
+			padding: var(--space-2) 0;
+			border-bottom: var(--hairline);
+		}
+
+		.disk-row .name {
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.disk-row .meta {
+			margin-left: auto;
+			font-size: var(--fs-small);
+			color: var(--muted);
+			white-space: nowrap;
+		}
+
+		.disk-row .actions {
+			display: flex;
+			gap: var(--space-2);
+		}
+
+		.disk-more {
+			display: inline-block;
+			margin-top: var(--space-2);
+			font-size: var(--fs-secondary);
+		}
+
+		/* ------------------------------------------------------- mobile */
+		@media (max-width: 700px) {
+			.session-grid {
+				grid-template-columns: 1fr;
+			}
+
+			.disk-row {
+				flex-wrap: wrap;
+			}
+
+			.disk-row .meta {
+				margin-left: 0;
+				width: 100%;
+				order: 3;
+			}
+		}
+	</style>
+</head>
+<body>
+	<header class="topbar">
+		<div class="topbar-inner">
+			<a class="wordmark" href="#">dreb</a>
+			<nav>
+				<a href="#" aria-current="page">fleet</a>
+				<a href="#">files</a>
+				<a href="#">settings</a>
+			</nav>
+			<span class="topbar-spacer"></span>
+			<span class="chip chip-plain"><span class="dot">⌂</span> local · 127.0.0.1</span>
+		</div>
+	</header>
+
+	<main class="container">
+		<div class="fleet-head">
+			<div>
+				<h1>fleet</h1>
+				<p class="muted small">5 live · 1 needs attention · 21 on disk</p>
+			</div>
+			<button class="btn btn-primary">+ new session</button>
+		</div>
+
+		<!-- ~/software/dreb -->
+		<section class="project-group">
+			<div class="group-head">
+				<h2>~/software/dreb</h2>
+				<span class="muted small">3 live · 14 on disk</span>
+				<button class="btn btn-small">+ new</button>
+			</div>
+
+			<div class="session-grid">
+				<!-- needs attention: sorts first, filled chip + colored border for weight -->
+				<article class="session-card attention">
+					<div class="session-title">
+						<span class="name">dashboard ux design</span>
+						<span class="chip chip-attention"><span class="dot">◆</span> needs attention</span>
+					</div>
+					<p class="attention-reason">waiting for input — confirm: “Post the plan comment to PR 320?”</p>
+					<div class="session-meta">
+						<span>claude-fable-5</span><span>·</span><span>ctx 64%</span><span>·</span><span>148 msgs</span><span>·</span><span>2m ago</span>
+					</div>
+					<div class="session-actions">
+						<button class="btn btn-small btn-primary">open</button>
+					</div>
+				</article>
+
+				<article class="session-card">
+					<div class="session-title">
+						<span class="name">fix search CRLF crash</span>
+						<span class="chip chip-running"><span class="dot">●</span> running</span>
+					</div>
+					<p class="activity">▸ bash: npx vitest --run packages/coding-agent/test/search.test.ts</p>
+					<div class="subagents">
+						<span>⚡ 2 running · 1 done</span>
+						<span class="agent-line"><span class="live">●</span> Explore — inventory slash commands</span>
+						<span class="agent-line"><span class="live">●</span> Explore — map keybound behaviors</span>
+					</div>
+					<div class="session-meta">
+						<span>tasks 3/6</span><span>·</span><span>claude-fable-5</span><span>·</span><span>ctx 41%</span><span>·</span><span>87 msgs</span>
+					</div>
+					<div class="session-actions">
+						<button class="btn btn-small">open</button>
+					</div>
+				</article>
+
+				<article class="session-card">
+					<div class="session-title">
+						<span class="name">release checklist v2.34.5</span>
+						<span class="chip chip-idle"><span class="dot">○</span> idle</span>
+					</div>
+					<p class="activity">suggested next: /skill:mach6-publish 318</p>
+					<div class="session-meta">
+						<span>claude-fable-5</span><span>·</span><span>ctx 12%</span><span>·</span><span>23 msgs</span><span>·</span><span>1h ago</span>
+					</div>
+					<div class="session-actions">
+						<button class="btn btn-small">open</button>
+					</div>
+				</article>
+			</div>
+
+			<p class="disk-label">on disk</p>
+			<div class="disk-row">
+				<span class="name">telegram bridge debugging</span>
+				<span class="meta">118 msgs · 6d ago</span>
+				<span class="actions">
+					<button class="btn btn-small">resume</button>
+					<button class="btn btn-small btn-danger">delete</button>
+				</span>
+			</div>
+			<div class="disk-row">
+				<span class="name muted">“Expose settings read and write over RPC, then…”</span>
+				<span class="meta">42 msgs · 8d ago</span>
+				<span class="actions">
+					<button class="btn btn-small">resume</button>
+					<button class="btn btn-small btn-danger">delete</button>
+				</span>
+			</div>
+			<a class="disk-more" href="#">all 14 on disk →</a>
+		</section>
+
+		<!-- ~/projects/webapp -->
+		<section class="project-group">
+			<div class="group-head">
+				<h2>~/projects/webapp</h2>
+				<span class="muted small">1 live · 5 on disk</span>
+				<button class="btn btn-small">+ new</button>
+			</div>
+
+			<div class="session-grid">
+				<article class="session-card error">
+					<div class="session-title">
+						<span class="name">auth middleware refactor</span>
+						<span class="chip chip-error"><span class="dot">✕</span> error</span>
+					</div>
+					<p class="error-reason">stream failed after 3 retries — 429 rate limited</p>
+					<div class="session-meta">
+						<span>gpt-5.2-codex</span><span>·</span><span>ctx 78%</span><span>·</span><span>203 msgs</span><span>·</span><span>11m ago</span>
+					</div>
+					<div class="session-actions">
+						<button class="btn btn-small btn-primary">open</button>
+					</div>
+				</article>
+			</div>
+
+			<p class="disk-label">on disk</p>
+			<div class="disk-row">
+				<span class="name">landing page copy</span>
+				<span class="meta">17 msgs · 3d ago</span>
+				<span class="actions">
+					<button class="btn btn-small">resume</button>
+					<button class="btn btn-small btn-danger">delete</button>
+				</span>
+			</div>
+			<a class="disk-more" href="#">all 5 on disk →</a>
+		</section>
+
+		<!-- ~/software/llama.cpp -->
+		<section class="project-group">
+			<div class="group-head">
+				<h2>~/software/llama.cpp</h2>
+				<span class="muted small">1 live · 2 on disk</span>
+				<button class="btn btn-small">+ new</button>
+			</div>
+
+			<div class="session-grid">
+				<article class="session-card">
+					<div class="session-title">
+						<span class="name">quantization sweep</span>
+						<span class="chip chip-idle"><span class="dot">○</span> idle</span>
+					</div>
+					<div class="session-meta">
+						<span>qwen3-coder</span><span>·</span><span>ctx 8%</span><span>·</span><span>11 msgs</span><span>·</span><span>3h ago</span>
+					</div>
+					<div class="session-actions">
+						<button class="btn btn-small">open</button>
+					</div>
+				</article>
+			</div>
+
+			<p class="disk-label">on disk</p>
+			<div class="disk-row">
+				<span class="name">ggml build flags</span>
+				<span class="meta">31 msgs · 1mo ago</span>
+				<span class="actions">
+					<button class="btn btn-small">resume</button>
+					<button class="btn btn-small btn-danger">delete</button>
+				</span>
+			</div>
+			<a class="disk-more" href="#">all 2 on disk →</a>
+		</section>
+
+		<footer>dreb v2.34.4 · dashboard</footer>
+	</main>
+</body>
+</html>
