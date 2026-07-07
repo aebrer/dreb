@@ -15,6 +15,8 @@ export type {
 	RpcResponse,
 	RpcSessionInfo,
 	RpcSessionState,
+	RpcSettingsSnapshot,
+	RpcSettingsUpdate,
 	RpcSlashCommand,
 	RpcTreeNode,
 } from "./rpc-types.js";

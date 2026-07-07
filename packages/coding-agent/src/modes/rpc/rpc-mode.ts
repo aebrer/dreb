@@ -12,6 +12,7 @@
  */
 
 import * as crypto from "node:crypto";
+import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../../cli/args.js";
 import { VERSION } from "../../config.js";
 import type { AgentSession } from "../../core/agent-session.js";
 import type {
@@ -19,10 +20,12 @@ import type {
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.js";
+import type { ModelRegistry } from "../../core/model-registry.js";
 import { parseModelPattern } from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
+import type { SettingsManager } from "../../core/settings-manager.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
@@ -32,6 +35,8 @@ import type {
 	RpcResponse,
 	RpcSessionInfo,
 	RpcSessionState,
+	RpcSettingsSnapshot,
+	RpcSettingsUpdate,
 	RpcSlashCommand,
 	RpcTreeNode,
 } from "./rpc-types.js";
@@ -96,6 +101,230 @@ export async function deleteSessionForRpc(
 export async function listAllSessionsForRpc(): Promise<RpcSessionInfo[]> {
 	const sessions = await SessionManager.listAll();
 	return sessions.map(toRpcSessionInfo);
+}
+
+/** The slice of SettingsManager the settings RPC handlers need. */
+type SettingsReader = Pick<
+	SettingsManager,
+	| "getDefaultProvider"
+	| "getDefaultModel"
+	| "getDefaultThinkingLevel"
+	| "getSteeringMode"
+	| "getFollowUpMode"
+	| "getCompactionEnabled"
+	| "getRetryEnabled"
+>;
+
+type SettingsWriter = SettingsReader &
+	Pick<
+		SettingsManager,
+		| "setDefaultModelAndProvider"
+		| "setDefaultThinkingLevel"
+		| "setSteeringMode"
+		| "setFollowUpMode"
+		| "setCompactionEnabled"
+		| "setRetryEnabled"
+		| "hasGlobalSettingsLoadError"
+		| "flush"
+		| "drainErrors"
+	>;
+
+/**
+ * Handle the `get_settings` RPC command: snapshot the persistent default settings.
+ *
+ * Reads the SettingsManager's merged (global + project) view — these are the values that
+ * seed fresh runtimes, NOT the live session state (`get_state` reports that). Extracted
+ * (like {@link deleteSessionForRpc}) so it is unit-testable without a live RPC session.
+ */
+export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsSnapshot {
+	return {
+		defaultProvider: settingsManager.getDefaultProvider(),
+		defaultModel: settingsManager.getDefaultModel(),
+		defaultThinkingLevel: settingsManager.getDefaultThinkingLevel(),
+		steeringMode: settingsManager.getSteeringMode(),
+		followUpMode: settingsManager.getFollowUpMode(),
+		compactionEnabled: settingsManager.getCompactionEnabled(),
+		retryEnabled: settingsManager.getRetryEnabled(),
+	};
+}
+
+const SETTINGS_UPDATE_KEYS = [
+	"defaultProvider",
+	"defaultModel",
+	"defaultThinkingLevel",
+	"steeringMode",
+	"followUpMode",
+	"compactionEnabled",
+	"retryEnabled",
+] as const;
+
+const QUEUE_MODES = ["all", "one-at-a-time"] as const;
+
+/**
+ * Simple promise-based mutex that serializes settings writes. RPC commands are dispatched
+ * concurrently (`void handleInputLine(line)`) so two `set_settings` commands can overlap.
+ * Without serialization, concurrent commands race on SettingsManager's shared error bucket
+ * (`drainErrors()` clears the array for everyone): the first to drain takes all errors
+ * (including the second's), and the second reports false success despite its write failing.
+ *
+ * This lock ensures only one apply+flush+drain block runs at a time — each `set_settings`
+ * gets an error window isolated from other `set_settings` commands and from stale errors.
+ *
+ * Known limitation: the lock does NOT cover the per-runtime commands (`set_model`,
+ * `set_steering_mode`, etc.), which persist through the same SettingsManager write queue
+ * and record failures into the same shared error bucket. Because `flush()` awaits the
+ * entire shared queue, a concurrent runtime setter's write failure can land in this
+ * operation's post-flush drain window and be reported as a `set_settings` failure (loud
+ * but mis-attributed — never a silent success). Per-operation error isolation in
+ * SettingsManager is the proper fix and is tracked in
+ * https://github.com/aebrer/dreb/issues/319.
+ */
+let settingsWriteQueue: Promise<unknown> = Promise.resolve();
+function settingsWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+	const prev = settingsWriteQueue;
+	const next = prev.then(fn, fn);
+	settingsWriteQueue = next.catch(() => {});
+	return next;
+}
+
+/**
+ * Handle the `set_settings` RPC command: validate and persist default settings.
+ *
+ * Writes persistent defaults via SettingsManager only — never touches live session state
+ * (the existing per-runtime commands do that). The whole payload is validated before
+ * anything is applied: on any invalid field, nothing changes.
+ *
+ * Persistence is verified loudly: if the settings file failed to load at startup,
+ * SettingsManager.save() silently no-ops — this handler reports that as an error instead
+ * of returning success while nothing was written. Write failures surface the same way.
+ *
+ * The apply+flush+drain block is serialized via {@link settingsWriteLock} so that
+ * concurrent `set_settings` commands (dispatched concurrently by the RPC input loop)
+ * cannot race on the shared error bucket. Pre-existing stale errors (from other commands
+ * like `set_model` that record write failures but never drain) are discarded before
+ * applying. See the {@link settingsWriteLock} doc for the remaining attribution caveat
+ * with runtime setters that write concurrently during the flush window.
+ */
+export async function setSettingsForRpc(
+	settingsManager: SettingsWriter,
+	modelRegistry: Pick<ModelRegistry, "getAvailable">,
+	update: RpcSettingsUpdate | undefined,
+): Promise<{ ok: true; settings: RpcSettingsSnapshot } | { ok: false; error: string }> {
+	// --- Validate everything first; apply nothing on any failure ---
+	if (update === undefined || update === null || typeof update !== "object" || Array.isArray(update)) {
+		return { ok: false, error: "set_settings requires a settings object" };
+	}
+
+	const unknownKeys = Object.keys(update).filter((key) => !(SETTINGS_UPDATE_KEYS as readonly string[]).includes(key));
+	if (unknownKeys.length > 0) {
+		return {
+			ok: false,
+			error: `Unknown settings key(s): ${unknownKeys.join(", ")}. Valid keys: ${SETTINGS_UPDATE_KEYS.join(", ")}`,
+		};
+	}
+
+	const hasAnySetting = SETTINGS_UPDATE_KEYS.some((key) => update[key] !== undefined);
+	if (!hasAnySetting) {
+		return { ok: false, error: "set_settings requires at least one setting to change" };
+	}
+
+	if (update.defaultThinkingLevel !== undefined) {
+		if (typeof update.defaultThinkingLevel !== "string" || !isValidThinkingLevel(update.defaultThinkingLevel)) {
+			return {
+				ok: false,
+				error: `Invalid defaultThinkingLevel: ${JSON.stringify(update.defaultThinkingLevel)}. Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
+			};
+		}
+	}
+
+	for (const key of ["steeringMode", "followUpMode"] as const) {
+		const value = update[key];
+		if (value !== undefined && !(QUEUE_MODES as readonly string[]).includes(value as string)) {
+			return {
+				ok: false,
+				error: `Invalid ${key}: ${JSON.stringify(value)}. Valid values: ${QUEUE_MODES.join(", ")}`,
+			};
+		}
+	}
+
+	for (const key of ["compactionEnabled", "retryEnabled"] as const) {
+		const value = update[key];
+		if (value !== undefined && typeof value !== "boolean") {
+			return { ok: false, error: `Invalid ${key}: ${JSON.stringify(value)}. Must be a boolean` };
+		}
+	}
+
+	const hasProvider = update.defaultProvider !== undefined;
+	const hasModel = update.defaultModel !== undefined;
+	if (hasProvider !== hasModel) {
+		return {
+			ok: false,
+			error: "defaultProvider and defaultModel must be set together",
+		};
+	}
+	if (hasProvider && hasModel) {
+		if (typeof update.defaultProvider !== "string" || typeof update.defaultModel !== "string") {
+			return { ok: false, error: "defaultProvider and defaultModel must be strings" };
+		}
+		const models = await modelRegistry.getAvailable();
+		const match = models.find((m) => m.provider === update.defaultProvider && m.id === update.defaultModel);
+		if (!match) {
+			return {
+				ok: false,
+				error: `Model not found: ${update.defaultProvider}/${update.defaultModel}`,
+			};
+		}
+	}
+
+	// Serialize the apply+flush+drain block so concurrent set_settings commands
+	// cannot race on the shared error bucket. See settingsWriteLock doc.
+	return settingsWriteLock(async () => {
+		// Discard stale errors left by other operations (set_model, set_steering_mode, etc.)
+		// that record write failures into SettingsManager's shared error bucket but never
+		// drain it. Without this, we'd mis-attribute their failures to this operation.
+		settingsManager.drainErrors();
+
+		// Persisting would silently no-op if the settings file failed to load — fail loudly
+		// instead. Checked INSIDE the lock (after the stale-error discard) so a concurrent
+		// reload() that flips the load-error state cannot slip between check and apply and
+		// turn this write into a silent no-op reported as success.
+		if (settingsManager.hasGlobalSettingsLoadError()) {
+			return {
+				ok: false as const,
+				error: "Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)",
+			};
+		}
+
+		// --- Apply (validated) ---
+		if (update.defaultProvider !== undefined && update.defaultModel !== undefined) {
+			settingsManager.setDefaultModelAndProvider(update.defaultProvider, update.defaultModel);
+		}
+		if (update.defaultThinkingLevel !== undefined) {
+			settingsManager.setDefaultThinkingLevel(update.defaultThinkingLevel);
+		}
+		if (update.steeringMode !== undefined) {
+			settingsManager.setSteeringMode(update.steeringMode);
+		}
+		if (update.followUpMode !== undefined) {
+			settingsManager.setFollowUpMode(update.followUpMode);
+		}
+		if (update.compactionEnabled !== undefined) {
+			settingsManager.setCompactionEnabled(update.compactionEnabled);
+		}
+		if (update.retryEnabled !== undefined) {
+			settingsManager.setRetryEnabled(update.retryEnabled);
+		}
+
+		// Ensure durability and surface write errors instead of losing them.
+		await settingsManager.flush();
+		const writeErrors = settingsManager.drainErrors();
+		if (writeErrors.length > 0) {
+			const detail = writeErrors.map((e) => `${e.scope}: ${e.error.message}`).join("; ");
+			return { ok: false as const, error: `Failed to persist settings: ${detail}` };
+		}
+
+		return { ok: true as const, settings: getSettingsForRpc(settingsManager) };
+	});
 }
 
 function normalizePreview(text: string): string {
@@ -834,6 +1063,22 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 
 			case "list_all_sessions": {
 				return success(id, "list_all_sessions", { sessions: await listAllSessionsForRpc() });
+			}
+
+			// =================================================================
+			// Settings (persistent defaults)
+			// =================================================================
+
+			case "get_settings": {
+				return success(id, "get_settings", getSettingsForRpc(session.settingsManager));
+			}
+
+			case "set_settings": {
+				const result = await setSettingsForRpc(session.settingsManager, session.modelRegistry, command.settings);
+				if (!result.ok) {
+					return error(id, "set_settings", result.error);
+				}
+				return success(id, "set_settings", result.settings);
 			}
 
 			// =================================================================

@@ -57,6 +57,9 @@ export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
 }
 
+/** Canonical list of thinking levels, shared so validators and error messages cannot drift. */
+export { VALID_THINKING_LEVELS };
+
 export function parseArgs(args: string[], extensionFlags?: Map<string, { type: "boolean" | "string" }>): Args {
 	const result: Args = {
 		messages: [],

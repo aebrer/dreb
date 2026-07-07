@@ -16,6 +16,8 @@ import type {
 	RpcResponse,
 	RpcSessionInfo,
 	RpcSessionState,
+	RpcSettingsSnapshot,
+	RpcSettingsUpdate,
 	RpcSlashCommand,
 	RpcTreeNode,
 } from "./rpc-types.js";
@@ -570,6 +572,26 @@ export class RpcClient {
 	async getVersion(): Promise<string> {
 		const response = await this.send({ type: "get_version" });
 		return this.getData<{ version: string }>(response).version;
+	}
+
+	/**
+	 * Get the persistent default settings (SettingsManager-backed).
+	 * These seed fresh runtimes — for live session state use getState().
+	 */
+	async getSettings(): Promise<RpcSettingsSnapshot> {
+		const response = await this.send({ type: "get_settings" });
+		return this.getData<RpcSettingsSnapshot>(response);
+	}
+
+	/**
+	 * Update persistent default settings. Validates the whole payload before applying
+	 * anything (atomic: on any invalid field, nothing changes). Does NOT touch live
+	 * session state — use setModel/setThinkingLevel/etc. for that.
+	 * Returns the full settings snapshot after the write.
+	 */
+	async setSettings(settings: RpcSettingsUpdate): Promise<RpcSettingsSnapshot> {
+		const response = await this.send({ type: "set_settings", settings });
+		return this.getData<RpcSettingsSnapshot>(response);
 	}
 
 	// =========================================================================

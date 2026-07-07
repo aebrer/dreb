@@ -979,6 +979,100 @@ Errors are explicit `success: false` responses:
 
 Note: with `summarize: true` the command is LLM-bound and can take a while. `RpcClient.navigateTree` uses a 5-minute client timeout (overridable via its client-side `timeoutMs` option, which is not sent over the wire); raw-protocol clients should budget accordingly. There is no scriptable abort for an in-flight branch summarization over RPC. A client-side timeout does not stop the server: a timed-out `navigate_tree` may still complete server-side and move the leaf — after a timeout, resync with `get_tree`/`get_state` instead of assuming the navigation failed.
 
+### Settings
+
+Persistent default settings, backed by the settings file (see [settings.md](settings.md)). These are distinct from live session state:
+
+- **Persistent defaults** (`get_settings` / `set_settings`): the values stored in `settings.json` that seed fresh runtimes — default provider/model, default thinking level, queue modes, compaction/retry toggles. Writing them does **not** change the running session.
+- **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
+
+A dashboard settings tab typically reads both: `get_state` for what's active now, `get_settings` for what the next startup will use.
+
+#### get_settings
+
+Get the persistent default settings (merged global + project view).
+
+```json
+{"type": "get_settings"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_settings",
+  "success": true,
+  "data": {
+    "defaultProvider": "anthropic",
+    "defaultModel": "claude-sonnet-4-5",
+    "defaultThinkingLevel": "high",
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "compactionEnabled": true,
+    "retryEnabled": true
+  }
+}
+```
+
+`defaultProvider`, `defaultModel`, and `defaultThinkingLevel` are absent if never set.
+
+#### set_settings
+
+Update persistent default settings. Takes a partial payload — only the supplied keys change. The whole payload is validated before anything is applied: on any invalid field, nothing changes and the response is an explicit error. Writes target the global settings file (same scope as every runtime setter).
+
+```json
+{"type": "set_settings", "settings": {"defaultThinkingLevel": "low", "retryEnabled": false}}
+```
+
+Setting the default model (both keys required together, validated against available models — the provider must have credentials configured, same rule as `set_model`):
+
+```json
+{"type": "set_settings", "settings": {"defaultProvider": "anthropic", "defaultModel": "claude-sonnet-4-5"}}
+```
+
+Response is the full settings snapshot after the write (same shape as `get_settings`):
+
+```json
+{
+  "type": "response",
+  "command": "set_settings",
+  "success": true,
+  "data": {
+    "defaultProvider": "anthropic",
+    "defaultModel": "claude-sonnet-4-5",
+    "defaultThinkingLevel": "low",
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "compactionEnabled": true,
+    "retryEnabled": false
+  }
+}
+```
+
+Valid keys and values:
+
+| Key | Values |
+|-----|--------|
+| `defaultProvider` + `defaultModel` | Must be supplied together; must match a model from `get_available_models` |
+| `defaultThinkingLevel` | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` (validated against the full set — a stored default is not tied to the current model's capabilities) |
+| `steeringMode` | `"all"`, `"one-at-a-time"` |
+| `followUpMode` | `"all"`, `"one-at-a-time"` |
+| `compactionEnabled` | boolean |
+| `retryEnabled` | boolean |
+
+Errors are explicit `success: false` responses (nothing is applied on any of them):
+
+- Missing/empty payload: `set_settings requires at least one setting to change`
+- Unknown key: `Unknown settings key(s): ...`
+- Invalid enum value: `Invalid defaultThinkingLevel: "extreme". Valid values: off, minimal, low, medium, high, xhigh`
+- Non-boolean toggle: `Invalid retryEnabled: "yes". Must be a boolean`
+- Provider without model (or vice versa): `defaultProvider and defaultModel must be set together`
+- Unavailable model: `Model not found: provider/model-id`
+- Corrupt settings file: `Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)` — without this guard the write would silently no-op
+- Write failure (I/O error): `Failed to persist settings: ...`
+
+Unlike `set_thinking_level` (which silently clamps to the current model's capabilities), `set_settings` rejects invalid values loudly — a dashboard needs the error, not a silent correction.
+
 ### Version
 
 #### get_version
