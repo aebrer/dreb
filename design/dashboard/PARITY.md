@@ -13,8 +13,8 @@ estimates. Where the counts differ from the assessment, source wins.
 | Built-in slash commands | 26 | **21** (+2 hidden easter eggs) | `core/slash-commands.ts` `BUILTIN_SLASH_COMMANDS`; dispatch in `interactive-mode.ts` |
 | Keybound behaviors | ~35 | **~74** (incl. per-modal and component-local bindings) | `docs/keybindings.md` + `matchesKey()` literals in components |
 | Message-stream component types | 9 | **15** core + tool sub-matrix + 3 easter eggs | `interactive-mode.ts` `addMessageToChat()`; `components/*` |
-| Session-level event types | 9 | **19** (12 AgentEvent + 7 session) + `extension_error` on the RPC wire | `agent-session.ts:132`; `packages/agent/src/types.ts` |
-| RPC commands | — | **39** | `modes/rpc/rpc-types.ts`, `docs/rpc.md` |
+| Session-level event types | 9 | **21** (12 AgentEvent + 9 session) + `extension_error` on the RPC wire | `agent-session.ts:132`; `packages/agent/src/types.ts` |
+| RPC commands | — | **40** | `modes/rpc/rpc-types.ts`, `docs/rpc.md` |
 | TUI-only affordances | ~15 | **19** | see section 7 |
 
 Disposition legend:
@@ -45,7 +45,7 @@ TUI input idiom; the dashboard maps each command's *outcome* to a UI control.
 | `/changelog` | ❌ out | TUI/product-update concern; release notes live on GitHub. Dashboard shows version in footer |
 | `/hotkeys` | ❌ out | No keyboard-modal interface to document. Dashboard keyboard shortcuts (if any) documented inline |
 | `/fork` | ✅ dashboard | Fork from any user message (message hover action) → `get_fork_messages` + `fork` |
-| `/tree` | ✅ dashboard | Tree screen (`mockups/tree.html`) → `get_tree` + `navigate_tree` |
+| `/tree` | 🔜 later | Tree screen fully designed (`mockups/tree.html`) → `get_tree` + `navigate_tree`; sequenced after the foundation (SPEC.md §7) — fork covers the go-back-and-re-edit loop meanwhile |
 | `/login` | ❌ out | OAuth flows open browsers and store host credentials; running them from a remote browser is a credential-exfiltration hazard. Do on the host TUI |
 | `/logout` | ❌ out | Same reason as `/login` |
 | `/new` | ✅ dashboard | "+ new session" (fleet, `mockups/fleet-overview.html`) → `new_session` |
@@ -80,16 +80,16 @@ groups. Editor-internal keys (cursor movement, kill ring, undo, jump-to-char —
 | Follow-up queue (`alt+enter`) | ✅ dashboard | Composer mode toggle "follow-up" |
 | Dequeue (`alt+up`) | ✅ dashboard | Queued-message chips above composer with per-item dismiss/edit (spec §Interaction) |
 | Abort (`escape`) | ✅ dashboard | ■ stop button, visible only while streaming (`session-view.html`) |
-| Double-escape → tree/fork | ✅ dashboard | Tree screen + fork actions are first-class navigation; no gesture needed |
+| Double-escape → tree/fork | ✅ dashboard | Fork actions are first-class (message hover); tree screen 🔜 later (§1 `/tree`); no gesture needed |
 | Abort compaction/retry/dream (`escape` variants) | ✅ dashboard | Status line shows compaction/retry state with its own stop affordance |
 | Model cycling / selector | ✅ dashboard | Model switcher in session bar → selector modal |
 | Thinking cycling (`shift+tab`) | ✅ dashboard | Thinking switcher in session bar |
 | Tool output expand/collapse (`ctrl+o`, global) | ✅ dashboard | Per-tool-card `<details>` + "expand/collapse all" in ⋯ menu |
 | Thinking visibility (`ctrl+t`) | ✅ dashboard | Per-thinking-block `<details>` (collapsed default) |
 | Tasks panel toggle | ✅ dashboard | Tasks panel is collapsible in dock (`session-view.html`) |
-| Session new/tree/fork/resume keys | ✅ dashboard | First-class UI (fleet, tree screen, message actions) |
+| Session new/tree/fork/resume keys | ✅ dashboard | First-class UI (fleet, message actions); tree screen 🔜 later (§1 `/tree`) |
 | Session selector: sort/filter/rename/delete keys | ✅ dashboard | Fleet on-disk list with actions; sort/filter controls 🔜 later ("all N on disk" screen) |
-| Tree selector: filter modes (`ctrl+d/t/u/l/a/o`), fold/unfold, label editing | ✅ dashboard | Tree screen filter chips; labels shown as tags. Label *editing* 🔜 later (needs `navigate_tree` label param — exists — plus a label-only RPC ⚙️ for non-navigation labeling) |
+| Tree selector: filter modes (`ctrl+d/t/u/l/a/o`), fold/unfold, label editing | 🔜 later | Tree screen filter chips (designed, `tree.html`); follows the §1 `/tree` sequencing. Label *editing* additionally needs a label-only RPC ⚙️ for non-navigation labeling (`navigate_tree` label param exists) |
 | Copy messages (`ctrl+shift+c`, multi-select) | 🔜 later | Per-message copy first; multi-select copy screen later |
 | Image paste (`ctrl+v`) | ✅ dashboard | Browser-native paste/attach in composer (spec §Interaction; `prompt` RPC carries images) |
 | External editor (`ctrl+g`) | ❌ out | `$EDITOR` is a host-terminal concept; the browser composer *is* the editor |
@@ -129,7 +129,7 @@ The chat pane renders every entry type the export-html renderer knows
 | BorderedLoader (blocking, `/reload`) | ❌ out | `/reload` is out; extension blocking UI uses modals (§6) |
 | Buddy / Armin / Daxnuts components | ❌ out | Terminal easter eggs |
 
-## 5. Session-level events (19 + `extension_error`)
+## 5. Session-level events (21 + `extension_error`)
 
 How each streamed event drives the UI. Transport: SSE from the dashboard
 server, which subscribes via RPC (spec §Architecture).
@@ -199,7 +199,7 @@ Commands the dashboard uses that have no single TUI-key equivalent:
 |---|---|
 | `get_state`, `get_messages` | Session view hydration; `modelFallbackMessage` surfaces as a warning banner |
 | `list_sessions`, `list_all_sessions`, `delete_session` | Fleet overview + on-disk inventory |
-| `get_tree`, `navigate_tree` | Tree screen |
+| `get_tree`, `navigate_tree` | Tree screen (🔜 later, §1 `/tree` — RPC ready) |
 | `get_settings`, `set_settings` | Settings tab |
 | `get_version` | Footer |
 | `get_last_assistant_text` | Fleet card "last activity" previews |

@@ -30,9 +30,10 @@
 	--border: #e0e0e0;
 	--muted: #666666;
 
-	/* status accents (PICO-8 palette, darkened for contrast on white) */
+	/* status accents (PICO-8 palette, darkened to ≥4.5:1 WCAG AA on white —
+	   both as text-on-white and as fill-under-white-text for the filled chip) */
 	--status-running: #00871f;
-	--status-attention: #b36e00;
+	--status-attention: #8a5400;
 	--status-idle: #666666; /* the neutral gray — idle earns no new color */
 	--status-error: #d10041;
 
