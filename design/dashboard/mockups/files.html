@@ -49,6 +49,42 @@
 			margin-top: var(--space-1);
 		}
 
+		.head-actions {
+			display: flex;
+			gap: var(--space-2);
+		}
+
+		/* places: quick jumps to common roots */
+		.places {
+			display: flex;
+			gap: var(--space-2);
+			margin-bottom: var(--space-4);
+			flex-wrap: wrap;
+			align-items: baseline;
+		}
+
+		.places .label {
+			font-size: var(--fs-small);
+			color: var(--muted);
+		}
+
+		.place-chip {
+			border: var(--hairline);
+			border-radius: var(--radius);
+			background: var(--bg);
+			color: var(--muted);
+			font-size: var(--fs-small);
+			padding: 1px var(--space-2);
+			cursor: pointer;
+			text-decoration: none;
+			transition: border-color 0.2s;
+		}
+
+		.place-chip:hover {
+			border-color: var(--text);
+			color: var(--text);
+		}
+
 		.file-table td:first-child {
 			width: 100%;
 		}
@@ -129,6 +165,11 @@
 			.file-table .meta.cols {
 				display: none;
 			}
+
+			.head-actions {
+				width: 100%;
+				flex-wrap: wrap;
+			}
 		}
 	</style>
 </head>
@@ -150,11 +191,24 @@
 		<div class="files-head">
 			<div>
 				<nav class="crumbs" aria-label="breadcrumb">
-					<a href="#">~/software/dreb</a><span class="sep">/</span><a href="#">packages</a><span class="sep">/</span><span>coding-agent</span>
+					<a href="#">/</a><a href="#">home</a><span class="sep">/</span><a href="#">andrew</a><span class="sep">/</span><a href="#">software</a><span class="sep">/</span><a href="#">dreb</a><span class="sep">/</span><a href="#">packages</a><span class="sep">/</span><span>coding-agent</span>
 				</nav>
-				<p class="scope-note">browsing is scoped to this project — paths outside it are not served</p>
+				<p class="scope-note">whole host filesystem — you can browse anywhere the dreb process can read</p>
 			</div>
-			<button class="btn">↑ upload to this folder</button>
+			<div class="head-actions">
+				<button class="btn">+ new folder</button>
+				<button class="btn">↑ upload here</button>
+				<button class="btn btn-primary">▸ new session here</button>
+			</div>
+		</div>
+
+		<div class="places">
+			<span class="label">places</span>
+			<a class="place-chip" href="#">~</a>
+			<a class="place-chip" href="#">/tmp</a>
+			<a class="place-chip" href="#">~/software/dreb</a>
+			<a class="place-chip" href="#">~/projects/webapp</a>
+			<a class="place-chip" href="#">~/software/llama.cpp</a>
 		</div>
 
 		<table class="table file-table">
@@ -217,7 +271,7 @@
 			<button class="btn btn-small">or choose files…</button>
 			<p class="upload-warning">
 				<strong>Uploads land on the host machine</strong> and become visible to any agent
-				working in this project. Existing files are never overwritten silently — you'll
+				working near this path. Existing files are never overwritten silently — you'll
 				be asked first.
 			</p>
 		</div>

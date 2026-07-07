@@ -333,6 +333,62 @@
 			font-weight: 600;
 		}
 
+		/* subagent strip: live background agents above the status line */
+		.subagent-strip {
+			border: var(--hairline);
+			border-radius: var(--radius);
+			padding: var(--space-2) var(--space-3);
+			font-size: var(--fs-secondary);
+			display: flex;
+			align-items: center;
+			gap: var(--space-3);
+			flex-wrap: wrap;
+		}
+
+		.subagent-strip .count {
+			color: var(--muted);
+			font-size: var(--fs-small);
+			white-space: nowrap;
+		}
+
+		.subagent-strip .agent-chip {
+			display: inline-flex;
+			align-items: center;
+			gap: 6px;
+			border: var(--hairline);
+			border-radius: var(--radius);
+			padding: 1px var(--space-2);
+			font-size: var(--fs-small);
+			background: var(--bg);
+			color: var(--text);
+			cursor: pointer;
+			transition: border-color 0.2s;
+			max-width: 260px;
+		}
+
+		.subagent-strip .agent-chip:hover {
+			border-color: var(--text);
+		}
+
+		.subagent-strip .agent-chip .live {
+			color: var(--status-running);
+		}
+
+		.subagent-strip .agent-chip .done {
+			color: var(--muted);
+		}
+
+		.subagent-strip .agent-chip .task {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.subagent-strip .view-all {
+			margin-left: auto;
+			font-size: var(--fs-small);
+		}
+
 		/* status line: streaming state + abort — only visible while streaming */
 		.status-line {
 			display: flex;
@@ -575,6 +631,21 @@
 					<li>☐ Update chunker doc comment</li>
 				</ul>
 			</details>
+
+			<!-- subagent strip (background_agent_start/end): click a chip to view its session -->
+			<div class="subagent-strip">
+				<span class="count">⚡ 2 running · 1 done</span>
+				<button class="agent-chip" title="view this subagent's session">
+					<span class="live">●</span><span class="task">Explore — inventory slash commands</span>
+				</button>
+				<button class="agent-chip" title="view this subagent's session">
+					<span class="live">●</span><span class="task">Explore — map keybound behaviors</span>
+				</button>
+				<button class="agent-chip" title="view this subagent's session">
+					<span class="done">✓</span><span class="task">Explore — RPC surface</span>
+				</button>
+				<a class="view-all" href="#">all subagents →</a>
+			</div>
 
 			<!-- status line: present only while streaming -->
 			<div class="status-line">

@@ -143,7 +143,7 @@ server, which subscribes via RPC (spec §Architecture).
 | `stream_retry` / `length_retry` | ✅ dashboard | Status line warning ("stream dropped, retrying n/m"); discarded partial removed |
 | `auto_compaction_start` / `end` | ✅ dashboard | Status line + compaction summary entry on completion |
 | `auto_retry_start` / `end` | ✅ dashboard | Status line with attempt/backoff |
-| `background_agent_start` / `end` | ✅ dashboard | Live subagent list on fleet card + session subagent strip (`fleet-overview.html`) |
+| `background_agent_start` / `end` | ✅ dashboard | Fleet card counts/lines + session subagent strip + read-only drill-in view (`fleet-overview.html`, `session-view.html`, `subagent-view.html`). Live transcript needs the §5a event relay (⚙️ RPC gap, implementation-PR scope); subagent *steering* is future work gated on a child control channel |
 | `parent_paused_for_background_agents` | ✅ dashboard | Status line ("paused — waiting on N background agents") |
 | `tasks_update` | ✅ dashboard | Tasks dock panel |
 | `suggest_next` | ✅ dashboard | Composer suggestion chip |
@@ -205,8 +205,13 @@ Commands the dashboard uses that have no single TUI-key equivalent:
 | `get_last_assistant_text` | Fleet card "last activity" previews |
 | `buddy_hatch`, `buddy_reroll` | ❌ unused (buddy is out) — note: undocumented in `docs/rpc.md` |
 
-**RPC gaps discovered (all non-blocking):** label-only tree entries without
-navigation (§3); scoped-models/settings keys beyond the current `set_settings`
-whitelist (§1); session import (§1). File browse/upload/download is served by
-the dashboard server itself (path-guarded, per closed draft PR 310's design),
-not by agent RPC — deliberate, see SPEC.md §Security.
+**RPC gaps discovered:** subagent observability is the one **foundation-scope**
+gap — `background_agent_start` events carry no session path, the background
+registry (`getBackgroundAgents()`) has no RPC command, and child JSONL events
+are consumed privately by the parent; the implementation PR must add registry
+exposure + an event relay (SPEC.md §5a — file-tailing hacks explicitly
+rejected). Non-blocking gaps: label-only tree entries without navigation
+(§3); scoped-models/settings keys beyond the current `set_settings` whitelist
+(§1); session import (§1). File browse/upload/download is served by the
+dashboard server itself (host-wide, canonicalized paths), not by agent RPC —
+deliberate, see SPEC.md §6.
