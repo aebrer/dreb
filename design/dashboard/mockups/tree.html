@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>dreb — session tree</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link
+		href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+		rel="stylesheet"
+	/>
+	<link rel="stylesheet" href="../tokens.css" />
+	<style>
+		.tree-head {
+			margin: var(--space-5) 0 var(--space-4);
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: var(--space-4);
+			flex-wrap: wrap;
+		}
+
+		.tree-head .sub {
+			color: var(--muted);
+			font-size: var(--fs-secondary);
+			margin-top: var(--space-1);
+		}
+
+		.filter-row {
+			display: flex;
+			gap: var(--space-2);
+			margin-bottom: var(--space-4);
+			flex-wrap: wrap;
+		}
+
+		.filter-chip {
+			border: var(--hairline);
+			border-radius: var(--radius);
+			background: var(--bg);
+			color: var(--muted);
+			font-size: var(--fs-small);
+			padding: 1px var(--space-2);
+			cursor: pointer;
+			transition: border-color 0.2s;
+		}
+
+		.filter-chip:hover {
+			border-color: var(--text);
+		}
+
+		.filter-chip.selected {
+			background: var(--text);
+			color: var(--bg);
+			border-color: var(--text);
+		}
+
+		/* tree rows: indent guides via border-left, one row per node */
+		.tree {
+			font-size: var(--fs-secondary);
+		}
+
+		.node {
+			display: flex;
+			align-items: baseline;
+			gap: var(--space-2);
+			padding: var(--space-1) var(--space-2);
+			border-radius: var(--radius);
+			border: 1px solid transparent;
+			cursor: pointer;
+			min-width: 0;
+		}
+
+		.node:hover {
+			border-color: var(--text);
+		}
+
+		.node .glyph {
+			color: var(--muted);
+			white-space: pre;
+			flex-shrink: 0;
+		}
+
+		.node .role {
+			flex-shrink: 0;
+			width: 7em;
+			color: var(--muted);
+			font-size: var(--fs-small);
+		}
+
+		.node .preview {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			min-width: 0;
+		}
+
+		.node .label-tag {
+			flex-shrink: 0;
+			border: var(--hairline);
+			border-radius: var(--radius);
+			padding: 0 var(--space-1);
+			font-size: var(--fs-small);
+			color: var(--muted);
+		}
+
+		.node .when {
+			margin-left: auto;
+			flex-shrink: 0;
+			color: var(--muted);
+			font-size: var(--fs-small);
+		}
+
+		.node.meta-entry .preview {
+			color: var(--muted);
+		}
+
+		/* current leaf: "you are here" */
+		.node.leaf {
+			border-color: var(--status-running);
+		}
+
+		.node.leaf .here {
+			flex-shrink: 0;
+			color: var(--status-running);
+			font-weight: 600;
+			font-size: var(--fs-small);
+		}
+
+		/* abandoned branch group */
+		.branch-label {
+			color: var(--muted);
+			font-size: var(--fs-small);
+			padding: var(--space-2) var(--space-2) var(--space-1);
+		}
+
+		/* navigate confirm modal (shown open in this mockup, docked right so
+		   the tree behind stays reviewable — live version centers it) */
+		.modal-backdrop.mock-docked {
+			justify-content: flex-end;
+			align-items: flex-end;
+			padding: var(--space-6);
+		}
+		.modal .target-preview {
+			border: var(--hairline);
+			border-radius: var(--radius);
+			padding: var(--space-2) var(--space-3);
+			font-size: var(--fs-secondary);
+			color: var(--muted);
+			margin-bottom: var(--space-4);
+		}
+
+		.modal .option {
+			display: flex;
+			gap: var(--space-2);
+			align-items: baseline;
+			margin-bottom: var(--space-2);
+			font-size: var(--fs-secondary);
+		}
+
+		.modal .option input {
+			accent-color: var(--text);
+		}
+
+		.modal .option .hint {
+			color: var(--muted);
+			font-size: var(--fs-small);
+		}
+
+		@media (max-width: 700px) {
+			.node .when {
+				display: none;
+			}
+
+			.node .role {
+				width: 4em;
+			}
+
+			/* mobile: modal becomes a bottom sheet */
+			.modal-backdrop.mock-docked {
+				padding: 0;
+				align-items: flex-end;
+				justify-content: stretch;
+			}
+
+			.modal-backdrop.mock-docked .modal {
+				max-width: none;
+				border-left: none;
+				border-right: none;
+				border-bottom: none;
+				border-radius: 0;
+			}
+		}
+	</style>
+</head>
+<body>
+	<header class="topbar">
+		<div class="topbar-inner">
+			<a class="wordmark" href="#">dreb</a>
+			<nav>
+				<a href="#">fleet</a>
+				<a href="#">files</a>
+				<a href="#">settings</a>
+			</nav>
+			<span class="topbar-spacer"></span>
+			<span class="chip chip-plain"><span class="dot">⌂</span> local · 127.0.0.1</span>
+		</div>
+	</header>
+
+	<main class="container">
+		<div class="tree-head">
+			<div>
+				<h1>session tree</h1>
+				<p class="sub">dashboard ux design · ~/software/dreb · sessions branch when you edit, retry, or navigate back</p>
+			</div>
+			<a class="btn" href="#">← back to session</a>
+		</div>
+
+		<div class="filter-row" role="radiogroup" aria-label="filter">
+			<button class="filter-chip selected">default</button>
+			<button class="filter-chip">user only</button>
+			<button class="filter-chip">no tools</button>
+			<button class="filter-chip">labeled</button>
+			<button class="filter-chip">everything</button>
+		</div>
+
+		<div class="tree">
+			<div class="node">
+				<span class="glyph">●</span>
+				<span class="role">user</span>
+				<span class="preview">Design the dashboard fleet overview screen first</span>
+				<span class="label-tag">start</span>
+				<span class="when">13:02</span>
+			</div>
+			<div class="node">
+				<span class="glyph">│</span>
+				<span class="role">assistant</span>
+				<span class="preview">Starting with the fleet overview — grouping sessions by project…</span>
+				<span class="when">13:02</span>
+			</div>
+			<div class="node meta-entry">
+				<span class="glyph">│</span>
+				<span class="role">compaction</span>
+				<span class="preview">[compaction: 52k tokens]</span>
+				<span class="when">13:40</span>
+			</div>
+			<div class="node">
+				<span class="glyph">├</span>
+				<span class="role">user</span>
+				<span class="preview">Try a denser single-column list instead of cards</span>
+				<span class="when">13:44</span>
+			</div>
+
+			<div class="branch-label">└ abandoned branch (2 entries, summarized)</div>
+			<div class="node meta-entry" style="padding-left: 24px;">
+				<span class="glyph">├</span>
+				<span class="role">assistant</span>
+				<span class="preview">Dense list mock: single column, status glyph left…</span>
+				<span class="when">13:45</span>
+			</div>
+			<div class="node meta-entry" style="padding-left: 24px;">
+				<span class="glyph">└</span>
+				<span class="role">summary</span>
+				<span class="preview">[branch summary]: tried dense list; cards won for scanability</span>
+				<span class="when">13:52</span>
+			</div>
+
+			<div class="node">
+				<span class="glyph">├</span>
+				<span class="role">user</span>
+				<span class="preview">Keep the cards. Make needs-attention sort first with real weight</span>
+				<span class="label-tag">cards-win</span>
+				<span class="when">13:53</span>
+			</div>
+			<div class="node">
+				<span class="glyph">│</span>
+				<span class="role">assistant</span>
+				<span class="preview">Filled amber chip + colored card border, attention sorts to slot one…</span>
+				<span class="when">13:54</span>
+			</div>
+			<div class="node leaf">
+				<span class="glyph">└</span>
+				<span class="role">user</span>
+				<span class="preview">Ship the mobile variant next</span>
+				<span class="here">◀ you are here</span>
+				<span class="when">14:07</span>
+			</div>
+		</div>
+	</main>
+
+	<!-- navigate confirmation modal -->
+	<div class="modal-backdrop mock-docked">
+		<div class="modal">
+			<h3>jump to this point?</h3>
+			<div class="target-preview">user · 13:44 — “Try a denser single-column list instead of cards”</div>
+			<label class="option">
+				<input type="radio" name="nav" checked />
+				<span>just move — the newer branch stays in the tree<br /><span class="hint">you can come back here anytime</span></span>
+			</label>
+			<label class="option">
+				<input type="radio" name="nav" />
+				<span>move + summarize the branch I'm leaving<br /><span class="hint">an LLM writes a short summary and pins it at the target (takes a moment)</span></span>
+			</label>
+			<p class="hint muted small" style="margin-top: 8px;">
+				Jumping to a user message re-opens it in the composer for editing — the tree keeps
+				everything; nothing is deleted.
+			</p>
+			<div class="modal-actions">
+				<button class="btn">cancel</button>
+				<button class="btn btn-primary">jump</button>
+			</div>
+		</div>
+	</div>
+</body>
+</html>

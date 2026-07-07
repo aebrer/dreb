@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>dreb — files</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link
+		href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+		rel="stylesheet"
+	/>
+	<link rel="stylesheet" href="../tokens.css" />
+	<style>
+		.files-head {
+			margin: var(--space-5) 0 var(--space-4);
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: var(--space-4);
+			flex-wrap: wrap;
+		}
+
+		.crumbs {
+			font-size: var(--fs-body);
+			display: flex;
+			gap: var(--space-1);
+			flex-wrap: wrap;
+			align-items: baseline;
+		}
+
+		.crumbs a {
+			text-decoration: none;
+			border-bottom: 1px solid transparent;
+		}
+
+		.crumbs a:hover {
+			border-bottom-color: var(--text);
+			color: var(--text);
+		}
+
+		.crumbs .sep {
+			color: var(--muted);
+		}
+
+		.scope-note {
+			font-size: var(--fs-small);
+			color: var(--muted);
+			margin-top: var(--space-1);
+		}
+
+		.file-table td:first-child {
+			width: 100%;
+		}
+
+		.file-table td,
+		.file-table th {
+			white-space: nowrap;
+		}
+
+		.file-table td:last-child,
+		.file-table th:last-child {
+			text-align: right;
+		}
+
+		.file-table .name {
+			display: flex;
+			align-items: baseline;
+			gap: var(--space-2);
+			text-decoration: none;
+		}
+
+		.file-table .icon {
+			color: var(--muted);
+			font-size: var(--fs-small);
+		}
+
+		.file-table .meta {
+			color: var(--muted);
+			font-size: var(--fs-small);
+			white-space: nowrap;
+		}
+
+		.file-table .actions {
+			text-align: right;
+		}
+
+		.file-table .actions .btn {
+			white-space: nowrap;
+		}
+
+		tr:hover td {
+			border-bottom-color: var(--text);
+		}
+
+		/* upload drop zone */
+		.dropzone {
+			border: 1px dashed var(--border);
+			border-radius: var(--radius);
+			padding: var(--space-5);
+			text-align: center;
+			color: var(--muted);
+			font-size: var(--fs-secondary);
+			margin-top: var(--space-5);
+			transition: border-color 0.2s;
+		}
+
+		.dropzone:hover {
+			border-color: var(--text);
+			color: var(--text);
+		}
+
+		.dropzone .btn {
+			margin-top: var(--space-3);
+		}
+
+		.upload-warning {
+			font-size: var(--fs-small);
+			color: var(--muted);
+			margin-top: var(--space-3);
+			line-height: 1.7;
+		}
+
+		.upload-warning strong {
+			color: var(--text);
+		}
+
+		@media (max-width: 700px) {
+			.file-table .meta.cols {
+				display: none;
+			}
+		}
+	</style>
+</head>
+<body>
+	<header class="topbar">
+		<div class="topbar-inner">
+			<a class="wordmark" href="#">dreb</a>
+			<nav>
+				<a href="#">fleet</a>
+				<a href="#" aria-current="page">files</a>
+				<a href="#">settings</a>
+			</nav>
+			<span class="topbar-spacer"></span>
+			<span class="chip chip-plain"><span class="dot">⇄</span> remote · pixel-9 via tailscale</span>
+		</div>
+	</header>
+
+	<main class="container">
+		<div class="files-head">
+			<div>
+				<nav class="crumbs" aria-label="breadcrumb">
+					<a href="#">~/software/dreb</a><span class="sep">/</span><a href="#">packages</a><span class="sep">/</span><span>coding-agent</span>
+				</nav>
+				<p class="scope-note">browsing is scoped to this project — paths outside it are not served</p>
+			</div>
+			<button class="btn">↑ upload to this folder</button>
+		</div>
+
+		<table class="table file-table">
+			<thead>
+				<tr>
+					<th>name</th>
+					<th class="meta cols">size</th>
+					<th class="meta cols">modified</th>
+					<th></th>
+				</tr>
+			</thead>
+			<tbody>
+				<tr>
+					<td><a class="name" href="#"><span class="icon">▸</span> src/</a></td>
+					<td class="meta cols">—</td>
+					<td class="meta cols">2h ago</td>
+					<td class="actions"></td>
+				</tr>
+				<tr>
+					<td><a class="name" href="#"><span class="icon">▸</span> test/</a></td>
+					<td class="meta cols">—</td>
+					<td class="meta cols">2h ago</td>
+					<td class="actions"></td>
+				</tr>
+				<tr>
+					<td><a class="name" href="#"><span class="icon">▸</span> docs/</a></td>
+					<td class="meta cols">—</td>
+					<td class="meta cols">6d ago</td>
+					<td class="actions"></td>
+				</tr>
+				<tr>
+					<td><a class="name" href="#"><span class="icon">·</span> package.json</a></td>
+					<td class="meta cols">2.1 KB</td>
+					<td class="meta cols">8d ago</td>
+					<td class="actions"><button class="btn btn-small">↓ download</button></td>
+				</tr>
+				<tr>
+					<td><a class="name" href="#"><span class="icon">·</span> README.md</a></td>
+					<td class="meta cols">41 KB</td>
+					<td class="meta cols">6d ago</td>
+					<td class="actions"><button class="btn btn-small">↓ download</button></td>
+				</tr>
+				<tr>
+					<td><a class="name" href="#"><span class="icon">·</span> CHANGELOG.md</a></td>
+					<td class="meta cols">183 KB</td>
+					<td class="meta cols">6d ago</td>
+					<td class="actions"><button class="btn btn-small">↓ download</button></td>
+				</tr>
+				<tr>
+					<td><a class="name" href="#"><span class="icon">·</span> tsconfig.json</a></td>
+					<td class="meta cols">412 B</td>
+					<td class="meta cols">1mo ago</td>
+					<td class="actions"><button class="btn btn-small">↓ download</button></td>
+				</tr>
+			</tbody>
+		</table>
+
+		<div class="dropzone">
+			<p>drop files here to upload to <strong>packages/coding-agent/</strong></p>
+			<button class="btn btn-small">or choose files…</button>
+			<p class="upload-warning">
+				<strong>Uploads land on the host machine</strong> and become visible to any agent
+				working in this project. Existing files are never overwritten silently — you'll
+				be asked first.
+			</p>
+		</div>
+
+		<footer>dreb v2.34.4 · dashboard</footer>
+	</main>
+</body>
+</html>

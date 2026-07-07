@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>dreb — pair this device</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link
+		href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+		rel="stylesheet"
+	/>
+	<link rel="stylesheet" href="../tokens.css" />
+	<style>
+		body {
+			min-height: 100vh;
+			display: flex;
+			flex-direction: column;
+		}
+
+		.pair-wrap {
+			flex: 1;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: var(--space-5);
+		}
+
+		.pair-card {
+			border: var(--hairline);
+			border-radius: var(--radius);
+			padding: var(--space-6);
+			max-width: 460px;
+			width: 100%;
+		}
+
+		.pair-card .wordmark {
+			display: block;
+			margin-bottom: var(--space-5);
+		}
+
+		.pair-card h1 {
+			font-size: var(--fs-h2);
+			margin-bottom: var(--space-2);
+		}
+
+		.pair-card .sub {
+			color: var(--muted);
+			font-size: var(--fs-secondary);
+			margin-bottom: var(--space-5);
+		}
+
+		.identity {
+			border: var(--hairline);
+			border-radius: var(--radius);
+			padding: var(--space-3);
+			font-size: var(--fs-secondary);
+			margin-bottom: var(--space-5);
+			display: flex;
+			flex-direction: column;
+			gap: var(--space-1);
+		}
+
+		.identity .row-line {
+			display: flex;
+			justify-content: space-between;
+			gap: var(--space-3);
+		}
+
+		.identity .k {
+			color: var(--muted);
+		}
+
+		.pin-row {
+			display: flex;
+			gap: var(--space-2);
+			margin-bottom: var(--space-3);
+		}
+
+		.pin-box {
+			flex: 1;
+			border: var(--hairline);
+			border-radius: var(--radius);
+			text-align: center;
+			font-size: 28px;
+			font-weight: 600;
+			padding: var(--space-3) 0;
+			letter-spacing: 0.1em;
+			transition: border-color 0.2s;
+		}
+
+		.pin-box:focus-within,
+		.pin-box.filled {
+			border-color: var(--text);
+		}
+
+		.pin-hint {
+			font-size: var(--fs-small);
+			color: var(--muted);
+			margin-bottom: var(--space-5);
+		}
+
+		.pin-hint .expiry {
+			color: var(--status-attention);
+			font-weight: 600;
+		}
+
+		.pair-actions {
+			display: flex;
+			gap: var(--space-2);
+			margin-bottom: var(--space-5);
+		}
+
+		.pair-actions .btn {
+			flex: 1;
+			justify-content: center;
+		}
+
+		.security-note {
+			border-top: var(--hairline);
+			padding-top: var(--space-4);
+			font-size: var(--fs-small);
+			color: var(--muted);
+			line-height: 1.7;
+		}
+
+		.security-note strong {
+			color: var(--text);
+			font-weight: 600;
+		}
+
+		.security-note p {
+			margin-bottom: var(--space-2);
+		}
+	</style>
+</head>
+<body>
+	<div class="pair-wrap">
+		<main class="pair-card">
+			<span class="wordmark">dreb</span>
+			<h1>pair this device</h1>
+			<p class="sub">First login from a new device needs a one-time PIN.</p>
+
+			<div class="identity">
+				<span class="row-line"><span class="k">your device</span><span>pixel-9 · 100.71.4.22</span></span>
+				<span class="row-line"><span class="k">tailscale identity</span><span>andrew@github</span></span>
+				<span class="row-line"><span class="k">allowlist</span><span class="chip chip-running" style="align-self: flex-end"><span class="dot">●</span> allowed</span></span>
+			</div>
+
+			<div class="pin-row" role="group" aria-label="6-digit PIN">
+				<span class="pin-box filled">7</span>
+				<span class="pin-box filled">3</span>
+				<span class="pin-box filled">0</span>
+				<span class="pin-box filled">4</span>
+				<span class="pin-box">&nbsp;</span>
+				<span class="pin-box">&nbsp;</span>
+			</div>
+			<p class="pin-hint">
+				The PIN is showing <strong>in the dreb terminal on quark</strong> right now.
+				It expires in <span class="expiry">4:37</span> and works once.
+			</p>
+
+			<div class="pair-actions">
+				<button class="btn btn-primary">pair device</button>
+			</div>
+
+			<div class="security-note">
+				<p><strong>Why a PIN?</strong> Your network identity got you here, but identity
+				alone doesn't grant control. The PIN proves you can see the host machine's
+				terminal — so a stolen or shared allowlist entry can't quietly gain access.</p>
+				<p><strong>What pairing grants.</strong> This browser gets a signed cookie for this
+				host. It can chat with agents, run commands through them, browse project files,
+				and upload/download — the same power as sitting at the terminal. Unpair anytime
+				from settings → devices.</p>
+			</div>
+		</main>
+	</div>
+</body>
+</html>
