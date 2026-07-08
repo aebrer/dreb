@@ -12,20 +12,24 @@
  */
 
 import * as crypto from "node:crypto";
+import { basename } from "node:path";
 import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../../cli/args.js";
 import { VERSION } from "../../config.js";
 import type { AgentSession } from "../../core/agent-session.js";
+import { DailyCostTracker } from "../../core/daily-cost-tracker.js";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.js";
+import { getGitBranch } from "../../core/git-branch.js";
 import type { ModelRegistry } from "../../core/model-registry.js";
 import { parseModelPattern } from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager } from "../../core/settings-manager.js";
+import { TabTitleGenerator } from "../../core/tab-title.js";
 import { type BackgroundAgentInfo, getBackgroundAgents } from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -34,7 +38,10 @@ import type {
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
+	RpcPendingMessages,
+	RpcResources,
 	RpcResponse,
+	RpcScopedModel,
 	RpcSessionInfo,
 	RpcSessionState,
 	RpcSettingsSnapshot,
@@ -74,6 +81,67 @@ export function getPerformanceStatsData(session: Pick<AgentSession, "getPerforma
 } {
 	const tracker = session.getPerformanceTracker();
 	return { models: tracker.getAllRollingAverages() };
+}
+
+export function getScopedModelsForRpc(session: Pick<AgentSession, "scopedModels">): RpcScopedModel[] {
+	return session.scopedModels.map(({ model, thinkingLevel }) => ({
+		provider: model.provider,
+		id: model.id,
+		name: model.name,
+		reasoning: model.reasoning,
+		thinkingLevel,
+	}));
+}
+
+export function getResourcesForRpc(
+	session: Pick<AgentSession, "resourceLoader" | "getFilteredSkills" | "promptTemplates">,
+): RpcResources {
+	const extensionsResult = session.resourceLoader.getExtensions();
+	return {
+		contextFiles: session.resourceLoader.getAgentsFiles().agentsFiles.map((file) => ({ path: file.path })),
+		skills: session.getFilteredSkills().map((skill) => ({ name: skill.name, description: skill.description })),
+		extensions: extensionsResult.extensions.map((extension) => ({
+			path: extension.path,
+			name: extension.sourceInfo.source || basename(extension.path),
+		})),
+		promptTemplates: session.promptTemplates.map((template) => ({
+			name: template.name,
+			description: template.description,
+		})),
+		systemPromptPresent:
+			session.resourceLoader.getSystemPrompt() !== undefined ||
+			session.resourceLoader.getAppendSystemPrompt().length > 0,
+	};
+}
+
+export function getPendingMessagesForRpc(
+	session: Pick<AgentSession, "getSteeringMessages" | "getFollowUpMessages">,
+): RpcPendingMessages {
+	return {
+		steering: [...session.getSteeringMessages()],
+		followUp: [...session.getFollowUpMessages()],
+	};
+}
+
+export function getStateForRpc(session: AgentSession, modelFallbackMessage?: string): RpcSessionState {
+	return {
+		model: session.model,
+		scopedModels: getScopedModelsForRpc(session),
+		usingSubscription: session.model ? session.modelRegistry.isUsingOAuth(session.model) : false,
+		thinkingLevel: session.thinkingLevel,
+		isStreaming: session.isStreaming,
+		isCompacting: session.isCompacting,
+		steeringMode: session.steeringMode,
+		followUpMode: session.followUpMode,
+		sessionFile: session.sessionFile,
+		sessionId: session.sessionId,
+		sessionName: session.sessionName,
+		autoCompactionEnabled: session.autoCompactionEnabled,
+		messageCount: session.messages.length,
+		pendingMessageCount: session.pendingMessageCount,
+		contextUsage: session.getContextUsage(),
+		modelFallbackMessage,
+	};
 }
 
 /**
@@ -521,6 +589,8 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 
 	// Shutdown request flag
 	let shutdownRequested = false;
+	let dailyCostTracker: DailyCostTracker | undefined;
+	let dailyCostTrackerPrimed = false;
 
 	/** Helper for dialog methods with signal/timeout support */
 	function createDialogPromise<T>(
@@ -763,8 +833,50 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		},
 	});
 
+	const getDailyCost = async (): Promise<number> => {
+		dailyCostTracker ??= new DailyCostTracker();
+		if (!dailyCostTrackerPrimed) {
+			await dailyCostTracker.refresh();
+			dailyCostTrackerPrimed = true;
+		}
+		return dailyCostTracker.getDailyCost();
+	};
+
+	const cwd = session.sessionManager.getCwd();
+	const tabTitleSettings = session.settingsManager.getTabTitleSettings();
+	const tabTitleGenerator =
+		!session.sessionName && tabTitleSettings?.enabled !== false
+			? new TabTitleGenerator(tabTitleSettings, {
+					setTitle: () => {},
+					setSessionName: (name) => {
+						if (!session.sessionName) {
+							session.setSessionName(name);
+						}
+					},
+					getMessages: () => session.messages,
+					getModel: () => session.model,
+					getModelRegistry: () => session.modelRegistry,
+					getProvider: () => session.model?.provider,
+					getAgentModelsOverride: (name) => session.settingsManager.getAgentModelsForAgent(name),
+					getBranch: () => getGitBranch(cwd),
+					getRepo: () => basename(cwd),
+					getCwd: () => cwd,
+				})
+			: undefined;
+
 	// Output all agent events as JSON
 	session.subscribe((event) => {
+		if (tabTitleGenerator && !session.sessionName) {
+			if (event.type === "tool_execution_end") {
+				tabTitleGenerator.onToolEnd({
+					toolName: event.toolName,
+					isError: event.isError,
+					result: event.result,
+				});
+			} else if (event.type === "message_end") {
+				tabTitleGenerator.onMessageEnd(event.message);
+			}
+		}
 		output(event);
 	});
 
@@ -819,23 +931,19 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			// =================================================================
 
 			case "get_state": {
-				const state: RpcSessionState = {
-					model: session.model,
-					thinkingLevel: session.thinkingLevel,
-					isStreaming: session.isStreaming,
-					isCompacting: session.isCompacting,
-					steeringMode: session.steeringMode,
-					followUpMode: session.followUpMode,
-					sessionFile: session.sessionFile,
-					sessionId: session.sessionId,
-					sessionName: session.sessionName,
-					autoCompactionEnabled: session.autoCompactionEnabled,
-					messageCount: session.messages.length,
-					pendingMessageCount: session.pendingMessageCount,
-					contextUsage: session.getContextUsage(),
-					modelFallbackMessage,
-				};
-				return success(id, "get_state", state);
+				return success(id, "get_state", getStateForRpc(session, modelFallbackMessage));
+			}
+
+			case "get_resources": {
+				return success(id, "get_resources", getResourcesForRpc(session));
+			}
+
+			case "get_git_branch": {
+				return success(id, "get_git_branch", { branch: getGitBranch(session.sessionManager.getCwd()) });
+			}
+
+			case "get_daily_cost": {
+				return success(id, "get_daily_cost", { cost: await getDailyCost() });
 			}
 
 			// =================================================================
@@ -943,6 +1051,14 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "set_follow_up_mode");
 			}
 
+			case "get_pending_messages": {
+				return success(id, "get_pending_messages", getPendingMessagesForRpc(session));
+			}
+
+			case "clear_pending_messages": {
+				return success(id, "clear_pending_messages", session.clearQueue());
+			}
+
 			// =================================================================
 			// Compaction
 			// =================================================================
@@ -955,6 +1071,11 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			case "set_auto_compaction": {
 				session.setAutoCompactionEnabled(command.enabled);
 				return success(id, "set_auto_compaction");
+			}
+
+			case "abort_compaction": {
+				session.abortCompaction();
+				return success(id, "abort_compaction");
 			}
 
 			// =================================================================
@@ -1171,6 +1292,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			await currentRunner.emit({ type: "session_shutdown" });
 		}
 
+		dailyCostTracker?.dispose();
 		detachInput();
 		process.stdin.pause();
 		process.exit(0);

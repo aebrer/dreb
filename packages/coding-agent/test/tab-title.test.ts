@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TabTitleSettings } from "../src/core/settings-manager.js";
-import { type TabTitleDeps, TabTitleGenerator } from "../src/modes/interactive/tab-title.js";
+import { type TabTitleDeps, TabTitleGenerator } from "../src/core/tab-title.js";
 
 // Mock @dreb/ai
 vi.mock("@dreb/ai", () => ({

@@ -510,7 +510,7 @@ async function createSessionManager(
 	return undefined;
 }
 
-function buildSessionOptions(
+export function buildSessionOptions(
 	parsed: Args,
 	scopedModels: ScopedModel[],
 	sessionManager: SessionManager | undefined,
@@ -551,7 +551,7 @@ function buildSessionOptions(
 		}
 	}
 
-	if (!options.model && scopedModels.length > 0 && !parsed.continue && !parsed.resume) {
+	if (!options.model && scopedModels.length > 0 && !parsed.continue && !parsed.resume && !parsed.session) {
 		// Check if saved default is in scoped models - use it if so, otherwise first scoped model
 		const savedProvider = settingsManager.getDefaultProvider();
 		const savedModelId = settingsManager.getDefaultModel();

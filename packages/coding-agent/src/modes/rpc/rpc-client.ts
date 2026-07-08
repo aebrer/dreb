@@ -15,6 +15,8 @@ import type {
 	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcExtensionUIResponse,
+	RpcPendingMessages,
+	RpcResources,
 	RpcResponse,
 	RpcSessionInfo,
 	RpcSessionState,
@@ -306,6 +308,30 @@ export class RpcClient {
 	}
 
 	/**
+	 * Get loaded context/resources metadata (paths/names only, no file contents).
+	 */
+	async getResources(): Promise<RpcResources> {
+		const response = await this.send({ type: "get_resources" });
+		return this.getData(response);
+	}
+
+	/**
+	 * Get current git branch for the agent cwd.
+	 */
+	async getGitBranch(): Promise<string | null> {
+		const response = await this.send({ type: "get_git_branch" });
+		return this.getData<{ branch: string | null }>(response).branch;
+	}
+
+	/**
+	 * Get cached same-day cost across all sessions, primed by the server on first call.
+	 */
+	async getDailyCost(): Promise<number> {
+		const response = await this.send({ type: "get_daily_cost" });
+		return this.getData<{ cost: number }>(response).cost;
+	}
+
+	/**
 	 * Set model by provider and ID.
 	 */
 	async setModel(provider: string, modelId: string): Promise<{ provider: string; id: string }> {
@@ -391,6 +417,22 @@ export class RpcClient {
 	}
 
 	/**
+	 * Get pending steering and follow-up messages without clearing them.
+	 */
+	async getPendingMessages(): Promise<RpcPendingMessages> {
+		const response = await this.send({ type: "get_pending_messages" });
+		return this.getData<RpcPendingMessages>(response);
+	}
+
+	/**
+	 * Clear pending steering and follow-up messages, returning the cleared text.
+	 */
+	async clearPendingMessages(): Promise<RpcPendingMessages> {
+		const response = await this.send({ type: "clear_pending_messages" });
+		return this.getData<RpcPendingMessages>(response);
+	}
+
+	/**
 	 * Compact session context.
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
@@ -403,6 +445,13 @@ export class RpcClient {
 	 */
 	async setAutoCompaction(enabled: boolean): Promise<void> {
 		await this.send({ type: "set_auto_compaction", enabled });
+	}
+
+	/**
+	 * Abort in-progress compaction.
+	 */
+	async abortCompaction(): Promise<void> {
+		await this.send({ type: "abort_compaction" });
 	}
 
 	/**

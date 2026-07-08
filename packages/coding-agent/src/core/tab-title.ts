@@ -11,11 +11,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Api, Context, Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
-import { CONFIG_DIR_NAME, getPackageDir } from "../../config.js";
-import { labelMessageEnd, labelToolEnd, RollingContextBuffer } from "../../core/context-buffer.js";
-import type { ModelRegistry } from "../../core/model-registry.js";
-import type { TabTitleSettings } from "../../core/settings-manager.js";
-import { parseAgentFrontmatter, resolveModelForSubagentSpawn } from "../../core/tools/subagent.js";
+import { CONFIG_DIR_NAME, getPackageDir } from "../config.js";
+import { labelMessageEnd, labelToolEnd, RollingContextBuffer } from "./context-buffer.js";
+import type { ModelRegistry } from "./model-registry.js";
+import type { TabTitleSettings } from "./settings-manager.js";
+import { parseAgentFrontmatter, resolveModelForSubagentSpawn } from "./tools/subagent.js";
 
 const DEFAULT_TRIGGER_AFTER = 9;
 const MAX_TITLE_LENGTH = 30;

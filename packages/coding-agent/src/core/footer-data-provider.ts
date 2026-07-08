@@ -1,85 +1,7 @@
-import { type ExecFileException, execFile, spawnSync } from "child_process";
-import { existsSync, type FSWatcher, readFileSync, statSync, watch } from "fs";
-import { dirname, join, resolve } from "path";
+import { existsSync, type FSWatcher, watch } from "node:fs";
+import { dirname, join } from "node:path";
 import { DailyCostTracker } from "./daily-cost-tracker.js";
-
-type GitPaths = {
-	repoDir: string;
-	commonGitDir: string;
-	headPath: string;
-};
-
-/**
- * Find git metadata paths by walking up from cwd.
- * Handles both regular git repos (.git is a directory) and worktrees (.git is a file).
- */
-function findGitPaths(): GitPaths | null {
-	let dir = process.cwd();
-	while (true) {
-		const gitPath = join(dir, ".git");
-		if (existsSync(gitPath)) {
-			try {
-				const stat = statSync(gitPath);
-				if (stat.isFile()) {
-					const content = readFileSync(gitPath, "utf8").trim();
-					if (content.startsWith("gitdir: ")) {
-						const gitDir = resolve(dir, content.slice(8).trim());
-						const headPath = join(gitDir, "HEAD");
-						if (!existsSync(headPath)) return null;
-						const commonDirPath = join(gitDir, "commondir");
-						const commonGitDir = existsSync(commonDirPath)
-							? resolve(gitDir, readFileSync(commonDirPath, "utf8").trim())
-							: gitDir;
-						return { repoDir: dir, commonGitDir, headPath };
-					}
-				} else if (stat.isDirectory()) {
-					const headPath = join(gitPath, "HEAD");
-					if (!existsSync(headPath)) return null;
-					return { repoDir: dir, commonGitDir: gitPath, headPath };
-				}
-			} catch {
-				/* Not inside a git repository, or git dir unreadable */
-				return null;
-			}
-		}
-		const parent = dirname(dir);
-		if (parent === dir) return null;
-		dir = parent;
-	}
-}
-
-/** Ask git for the current branch. Returns null on detached HEAD or if git is unavailable. */
-function resolveBranchWithGitSync(repoDir: string): string | null {
-	const result = spawnSync("git", ["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"], {
-		cwd: repoDir,
-		encoding: "utf8",
-		stdio: ["ignore", "pipe", "ignore"],
-	});
-	const branch = result.status === 0 ? result.stdout.trim() : "";
-	return branch || null;
-}
-
-/** Ask git for the current branch asynchronously. Returns null on detached HEAD or if git is unavailable. */
-function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
-	return new Promise((resolvePromise) => {
-		execFile(
-			"git",
-			["--no-optional-locks", "symbolic-ref", "--quiet", "--short", "HEAD"],
-			{
-				cwd: repoDir,
-				encoding: "utf8",
-			},
-			(error: ExecFileException | null, stdout: string) => {
-				if (error) {
-					resolvePromise(null);
-					return;
-				}
-				const branch = stdout.trim();
-				resolvePromise(branch || null);
-			},
-		);
-	});
-}
+import { findGitPaths, type GitPaths, getGitBranch, getGitBranchAsync } from "./git-branch.js";
 
 /**
  * Provides git branch and extension statuses - data not otherwise accessible to extensions.
@@ -221,35 +143,11 @@ export class FooterDataProvider {
 	}
 
 	private resolveGitBranchSync(): string | null {
-		try {
-			if (!this.gitPaths) return null;
-			const content = readFileSync(this.gitPaths.headPath, "utf8").trim();
-			if (content.startsWith("ref: refs/heads/")) {
-				const branch = content.slice(16);
-				return branch === ".invalid" ? (resolveBranchWithGitSync(this.gitPaths.repoDir) ?? "detached") : branch;
-			}
-			return "detached";
-		} catch {
-			/* Git HEAD unreadable — branch display unavailable */
-			return null;
-		}
+		return getGitBranch();
 	}
 
 	private async resolveGitBranchAsync(): Promise<string | null> {
-		try {
-			if (!this.gitPaths) return null;
-			const content = readFileSync(this.gitPaths.headPath, "utf8").trim();
-			if (content.startsWith("ref: refs/heads/")) {
-				const branch = content.slice(16);
-				return branch === ".invalid"
-					? ((await resolveBranchWithGitAsync(this.gitPaths.repoDir)) ?? "detached")
-					: branch;
-			}
-			return "detached";
-		} catch {
-			/* Git HEAD unreadable — branch display unavailable */
-			return null;
-		}
+		return getGitBranchAsync();
 	}
 
 	private setupGitWatcher(): void {

@@ -150,6 +150,7 @@ export type AgentSessionEvent =
 			event: Record<string, unknown>;
 	  }
 	| { type: "parent_paused_for_background_agents"; runningAgentCount: number; turnsUsed: number; turnLimit: number }
+	| { type: "session_name_changed"; name: string }
 	| { type: "tasks_update"; tasks: readonly SessionTask[] }
 	| { type: "suggest_next"; command: string };
 
@@ -2768,7 +2769,7 @@ export class AgentSession {
 					this.sessionManager.appendCustomEntry(customType, data);
 				},
 				setSessionName: (name) => {
-					this.sessionManager.appendSessionInfo(name);
+					this.setSessionName(name);
 				},
 				getSessionName: () => {
 					return this.sessionManager.getSessionName();
@@ -3394,6 +3395,7 @@ export class AgentSession {
 	 */
 	setSessionName(name: string): void {
 		this.sessionManager.appendSessionInfo(name);
+		this._emit({ type: "session_name_changed", name: this.sessionName ?? "" });
 	}
 
 	/**

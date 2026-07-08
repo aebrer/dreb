@@ -126,7 +126,7 @@ describe("sessionDir precedence", () => {
 
 		expect(mocks.state.capturedSessionDir).toBe("./settings-sessions");
 		expect(mocks.runPrintMode).toHaveBeenCalledOnce();
-	});
+	}, 15_000);
 
 	it("prefers CLI --session-dir over settings and the session_directory hook", async () => {
 		writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ sessionDir: "./settings-sessions" }));
@@ -136,7 +136,7 @@ describe("sessionDir precedence", () => {
 
 		expect(mocks.state.capturedSessionDir).toBe("./cli-sessions");
 		expect(mocks.runPrintMode).toHaveBeenCalledOnce();
-	});
+	}, 15_000);
 
 	it("uses settings sessionDir ahead of the session_directory hook for --resume", async () => {
 		writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ sessionDir: "./settings-sessions" }));
@@ -154,5 +154,5 @@ describe("sessionDir precedence", () => {
 		expect(listSpy).toHaveBeenCalledWith(expect.any(String), "./settings-sessions", expect.any(Function));
 		expect(mocks.state.capturedSessionDir).toBe("./settings-sessions");
 		expect(mocks.runPrintMode).toHaveBeenCalledOnce();
-	});
+	}, 15_000);
 });

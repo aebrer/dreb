@@ -28,6 +28,9 @@ export type RpcCommand =
 
 	// State
 	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_resources" }
+	| { id?: string; type: "get_git_branch" }
+	| { id?: string; type: "get_daily_cost" }
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
@@ -46,10 +49,13 @@ export type RpcCommand =
 	// Queue modes
 	| { id?: string; type: "set_steering_mode"; mode: "all" | "one-at-a-time" }
 	| { id?: string; type: "set_follow_up_mode"; mode: "all" | "one-at-a-time" }
+	| { id?: string; type: "get_pending_messages" }
+	| { id?: string; type: "clear_pending_messages" }
 
 	// Compaction
 	| { id?: string; type: "compact"; customInstructions?: string }
 	| { id?: string; type: "set_auto_compaction"; enabled: boolean }
+	| { id?: string; type: "abort_compaction" }
 
 	// Retry
 	| { id?: string; type: "set_auto_retry"; enabled: boolean }
@@ -116,12 +122,35 @@ export interface RpcSlashCommand {
 	sourceInfo: SourceInfo;
 }
 
+export interface RpcScopedModel {
+	provider: string;
+	id: string;
+	name?: string;
+	reasoning?: boolean;
+	thinkingLevel?: string;
+}
+
+export interface RpcResources {
+	contextFiles: Array<{ path: string }>;
+	skills: Array<{ name: string; description: string }>;
+	extensions: Array<{ name?: string; path: string }>;
+	promptTemplates: Array<{ name: string; description?: string }>;
+	systemPromptPresent: boolean;
+}
+
+export interface RpcPendingMessages {
+	steering: string[];
+	followUp: string[];
+}
+
 // ============================================================================
 // RPC State
 // ============================================================================
 
 export interface RpcSessionState {
 	model?: Model<any>;
+	scopedModels: RpcScopedModel[];
+	usingSubscription: boolean;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -160,6 +189,9 @@ export type RpcResponse =
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
+	| { id?: string; type: "response"; command: "get_resources"; success: true; data: RpcResources }
+	| { id?: string; type: "response"; command: "get_git_branch"; success: true; data: { branch: string | null } }
+	| { id?: string; type: "response"; command: "get_daily_cost"; success: true; data: { cost: number } }
 
 	// Model
 	| {
@@ -220,10 +252,13 @@ export type RpcResponse =
 	// Queue modes
 	| { id?: string; type: "response"; command: "set_steering_mode"; success: true }
 	| { id?: string; type: "response"; command: "set_follow_up_mode"; success: true }
+	| { id?: string; type: "response"; command: "get_pending_messages"; success: true; data: RpcPendingMessages }
+	| { id?: string; type: "response"; command: "clear_pending_messages"; success: true; data: RpcPendingMessages }
 
 	// Compaction
 	| { id?: string; type: "response"; command: "compact"; success: true; data: CompactionResult }
 	| { id?: string; type: "response"; command: "set_auto_compaction"; success: true }
+	| { id?: string; type: "response"; command: "abort_compaction"; success: true }
 
 	// Retry
 	| { id?: string; type: "response"; command: "set_auto_retry"; success: true }
