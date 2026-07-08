@@ -9,8 +9,8 @@
  *
  * Mode B — remote (explicit opt-in): requires Tailscale. Enforcement layers,
  * all fail-closed: (1) Tailscale identity resolution of the peer address,
- * (2) identity allowlist (empty allowlist = deny all), (3) first-login PIN
- * pairing (single-use, 5-minute expiry, printed to the host terminal),
+ * (2) identity allowlist (empty allowlist = deny all), (3) first-login
+ * rotating pairing code (visible only from the host/local dashboard),
  * (4) signed per-device cookie thereafter.
  *
  * There is no LAN mode. Any auth-subsystem error denies the request.
@@ -21,6 +21,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const PAIRING_CODE_STEP_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // Address / Host helpers
@@ -122,7 +123,7 @@ export class TailscaleStatusResolver implements TailscaleResolver {
 }
 
 // ---------------------------------------------------------------------------
-// Pairing store (PIN + device tokens)
+// Pairing store (rotating pairing codes + device tokens)
 // ---------------------------------------------------------------------------
 
 export interface PairedDevice {
@@ -159,8 +160,6 @@ export interface DashboardAuthOptions {
 	remoteEnabled?: boolean;
 	/** Allowed Tailscale login names. Empty = deny all remote. */
 	allowedIdentities?: string[];
-	/** PIN validity window. Default 5 minutes. */
-	pinTtlMs?: number;
 	/** Device pairing validity. Default 30 days. */
 	pairingTtlMs?: number;
 	resolver?: TailscaleResolver;
@@ -178,7 +177,7 @@ export type AuthDecision =
 			allowed: false;
 			status: number;
 			reason: string;
-			/** Set when an allowed identity needs PIN pairing. */
+			/** Set when an allowed identity needs pairing-code entry. */
 			needsPairing?: boolean;
 			identity?: TailscaleIdentity;
 	  };
@@ -202,18 +201,15 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 export class DashboardAuth {
 	private readonly remoteEnabled: boolean;
 	private readonly allowedIdentities: Set<string>;
-	private readonly pinTtlMs: number;
 	private readonly pairingTtlMs: number;
 	private readonly resolver: TailscaleResolver;
 	private readonly storage: PairingStorage;
 	private readonly secret: Buffer;
 	private readonly now: () => number;
-	private currentPin: { hmac: string; expiresAt: number } | null = null;
 
 	constructor(options: DashboardAuthOptions = {}) {
 		this.remoteEnabled = options.remoteEnabled ?? false;
 		this.allowedIdentities = new Set(options.allowedIdentities ?? []);
-		this.pinTtlMs = options.pinTtlMs ?? 5 * 60 * 1000;
 		this.pairingTtlMs = options.pairingTtlMs ?? 30 * 24 * 60 * 60 * 1000;
 		this.resolver = options.resolver ?? new TailscaleStatusResolver();
 		this.storage = options.storage ?? new MemoryPairingStorage();
@@ -229,12 +225,35 @@ export class DashboardAuth {
 		return createHmac("sha256", this.secret).update(value).digest("hex");
 	}
 
-	/** Generate a new single-use PIN, invalidating any previous one. */
-	generatePin(): { pin: string; expiresAt: string } {
-		const pin = String(randomBytes(4).readUInt32BE(0) % 1_000_000).padStart(6, "0");
-		const expiresAt = this.now() + this.pinTtlMs;
-		this.currentPin = { hmac: this.hmac(pin), expiresAt };
-		return { pin, expiresAt: new Date(expiresAt).toISOString() };
+	private pairingCodeForWindow(window: number): string {
+		const counter = Buffer.alloc(8);
+		counter.writeBigUInt64BE(BigInt(window));
+		const digest = createHmac("sha1", this.secret).update(counter).digest();
+		const offset = digest[digest.length - 1]! & 0x0f;
+		const value =
+			((digest[offset]! & 0x7f) << 24) |
+			((digest[offset + 1]! & 0xff) << 16) |
+			((digest[offset + 2]! & 0xff) << 8) |
+			(digest[offset + 3]! & 0xff);
+		return String(value % 1_000_000).padStart(6, "0");
+	}
+
+	/** Current RFC-6238-style rotating code for pairing new remote devices. */
+	currentPairingCode(): { code: string; expiresInMs: number } {
+		const nowMs = this.now();
+		const window = Math.floor(nowMs / PAIRING_CODE_STEP_MS);
+		const expiresInMs = (window + 1) * PAIRING_CODE_STEP_MS - nowMs;
+		return { code: this.pairingCodeForWindow(window), expiresInMs };
+	}
+
+	private isValidPairingCode(code: string): boolean {
+		if (!/^\d{6}$/.test(code)) return false;
+		const window = Math.floor(this.now() / PAIRING_CODE_STEP_MS);
+		for (const candidateWindow of [window - 1, window, window + 1]) {
+			if (candidateWindow < 0) continue;
+			if (timingSafeEqualStr(code, this.pairingCodeForWindow(candidateWindow))) return true;
+		}
+		return false;
 	}
 
 	/**
@@ -301,7 +320,7 @@ export class DashboardAuth {
 			return {
 				allowed: false,
 				status: 401,
-				reason: "Device is not paired — PIN pairing required",
+				reason: "Device is not paired — pairing code required",
 				needsPairing: true,
 				identity,
 			};
@@ -311,10 +330,11 @@ export class DashboardAuth {
 	}
 
 	/**
-	 * Complete PIN pairing for an allowed remote identity. Returns the device
-	 * token to set as a cookie. Throws (with `status`) on any failure.
+	 * Complete pairing for an allowed remote identity using the current rotating
+	 * code. Returns the device token to set as a cookie. Throws (with `status`) on
+	 * any failure.
 	 */
-	async pair(info: AuthRequestInfo, pin: string): Promise<{ token: string; device: PairedDevice }> {
+	async pair(info: AuthRequestInfo, code: string): Promise<{ token: string; device: PairedDevice }> {
 		if (isLoopbackAddress(info.remoteAddress)) {
 			throw Object.assign(new Error("Loopback clients do not pair"), { status: 400 });
 		}
@@ -325,15 +345,9 @@ export class DashboardAuth {
 		if (!identity || this.allowedIdentities.size === 0 || !this.allowedIdentities.has(identity.loginName)) {
 			throw Object.assign(new Error("Identity is not on the dashboard allowlist"), { status: 403 });
 		}
-		if (!this.currentPin || this.now() > this.currentPin.expiresAt) {
-			this.currentPin = null;
-			throw Object.assign(new Error("No active pairing PIN — generate one on the host"), { status: 401 });
+		if (!this.isValidPairingCode(code)) {
+			throw Object.assign(new Error("Incorrect pairing code"), { status: 401 });
 		}
-		if (!timingSafeEqualStr(this.hmac(pin), this.currentPin.hmac)) {
-			throw Object.assign(new Error("Incorrect PIN"), { status: 401 });
-		}
-		// Single-use: consume before issuing.
-		this.currentPin = null;
 
 		const token = randomBytes(32).toString("base64url");
 		const nowMs = this.now();

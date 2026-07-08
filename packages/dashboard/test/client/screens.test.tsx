@@ -52,6 +52,7 @@ vi.mock("../../src/client/api.js", () => ({
 		dailyCost: vi.fn(async () => ({ cost: 0.42 })),
 		settings: vi.fn(async () => ({ defaultProvider: "anthropic", defaultModel: "m1" })),
 		devices: vi.fn(async () => ({ devices: [] })),
+		pairingCode: vi.fn(async () => ({ enabled: false })),
 		version: vi.fn(async () => ({ version: "0.0.0-test" })),
 		serverInfo: vi.fn(async () => ({
 			version: "0.0.0-test",
@@ -595,7 +596,7 @@ describe("dashboard client regressions", () => {
 		const store = makeStore();
 		const el = mount(() => <SettingsScreen store={store} />);
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		const checkbox = el.querySelector(".checkbox-control input") as HTMLInputElement | null;
+		const checkbox = el.querySelector("#pref-expand-thinking") as HTMLInputElement | null;
 		expect(checkbox).not.toBeNull();
 		expect(window.localStorage.getItem("dreb.dashboard.expandThinking")).toBeNull();
 
@@ -617,8 +618,7 @@ describe("dashboard client regressions", () => {
 		const store = makeStore();
 		const el = mount(() => <SettingsScreen store={store} />);
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		const boxes = el.querySelectorAll(".checkbox-control input");
-		const notifications = boxes[1] as HTMLInputElement;
+		const notifications = el.querySelector("#pref-notifications") as HTMLInputElement;
 
 		notifications.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));

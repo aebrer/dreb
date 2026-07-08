@@ -113,7 +113,12 @@ export function createAppStore() {
 			const status = await api.auth();
 			setAuth(status);
 		} catch (err: any) {
-			setAuth({ mode: "remote", needsPairing: err?.body?.needsPairing ?? false, error: err?.message });
+			setAuth({
+				mode: "remote",
+				needsPairing: err?.body?.needsPairing ?? false,
+				identity: err?.body?.identity,
+				error: err?.message,
+			});
 			if (err?.body?.needsPairing) {
 				navigate({ screen: "pairing" });
 				return;

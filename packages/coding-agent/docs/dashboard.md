@@ -49,10 +49,12 @@ Layers, in order, all fail-closed (any auth-subsystem error denies):
    identity via `tailscale status --json`. No Tailscale, no access.
 2. **Identity allowlist** — `--allow` login names. An empty allowlist denies
    everyone. Rejected identities see a denial page naming the identity.
-3. **PIN pairing** — first login from a new device requires a 6-digit PIN
-   printed to the host terminal at server start. Single-use, expires after 5
-   minutes. The PIN proves the person can see the host's terminal, so a
-   stolen allowlist identity can't quietly gain access.
+3. **Pairing code** — first login from a new device requires the current
+   6-digit rotating code. The code is shown live in settings → devices on the
+   host/local dashboard and rotates every 30 seconds (the current code is also
+   printed at server start as a headless fallback). It proves the person can
+   see the host machine's local dashboard, so a stolen allowlist identity can't
+   quietly gain access.
 4. **Device cookie** — successful pairing sets a signed HttpOnly cookie
    (30-day expiry). Paired devices are listed in settings → devices and can be
    unpaired at any time.
@@ -76,8 +78,8 @@ logged server-side.
 | **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs and markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, compaction/branch summaries, custom messages), per-message copy, tasks panel, subagent strip, status line with elapsed time plus ■ stop and compaction/retry aborts, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, median tok/s, and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests (select/confirm/input/editor) render as modals; notifications as toasts. |
 | **Subagent view** | Read-only transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the view survives browser reloads. Shows the task, streaming output, and tool activity. No composer — subagents can't be steered yet; the parent session controls them. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. |
-| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Dashboard-local preferences (always expand thinking, needs-attention notification permission) live in the browser. Paired-devices list with unpair. |
-| **Pairing** | Remote first-login: identity echo, PIN entry, expiry note, and the security copy explaining what pairing grants. |
+| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Dashboard-local preferences (always expand thinking, needs-attention notification permission) live in the browser. Shows the current rotating pairing code on the host/local dashboard, plus the paired-devices list with unpair. |
+| **Pairing** | Remote first-login: identity echo, rotating-code entry, and the security copy explaining what pairing grants. |
 
 ### Composer modes
 

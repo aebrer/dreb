@@ -100,14 +100,77 @@ describe("dashboard server — auth middleware", () => {
 	});
 });
 
+describe("dashboard server — pairing code", () => {
+	const alice: TailscaleIdentity = { loginName: "alice@example.com", device: "phone" };
+
+	it("GET /api/pairing-code returns the current code for a local request when remote mode is enabled", async () => {
+		const auth = new DashboardAuth({
+			remoteEnabled: true,
+			allowedIdentities: ["alice@example.com"],
+			resolver: { resolve: async () => alice },
+			storage: new MemoryPairingStorage(),
+			secret: Buffer.from("dashboard-server-test-secret"),
+			now: () => 1_000_000,
+		});
+		const { base } = await startServer({ auth });
+		const res = await fetch(`${base}/api/pairing-code`);
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({
+			enabled: true,
+			code: auth.currentPairingCode().code,
+			expiresInMs: 20_000,
+		});
+	});
+
+	it("GET /api/pairing-code returns disabled for local requests when remote mode is disabled", async () => {
+		const { base } = await startServer();
+		const res = await fetch(`${base}/api/pairing-code`);
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({ enabled: false });
+	});
+
+	it("GET /api/pairing-code denies authenticated remote devices", async () => {
+		const auth = new DashboardAuth({
+			remoteEnabled: true,
+			allowedIdentities: ["alice@example.com"],
+			resolver: { resolve: async () => alice },
+			storage: new MemoryPairingStorage(),
+		});
+		vi.spyOn(auth, "authenticate").mockResolvedValue({ allowed: true, mode: "remote", identity: alice });
+		const { base } = await startServer({ auth });
+		const res = await fetch(`${base}/api/pairing-code`);
+
+		expect(res.status).toBe(403);
+		await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("host machine") });
+	});
+});
+
 describe("dashboard server — fleet and runtimes", () => {
 	it("GET /api/fleet returns runtimes and disk sessions", async () => {
-		const disk = [{ path: "/s/one.jsonl", id: "one", cwd: "/p" }];
+		const dir = await createTempProject();
+		const disk = [{ path: "/s/one.jsonl", id: "one", cwd: dir }];
 		const { base } = await startServer({ listAllSessions: async () => disk });
 		const res = await fetch(`${base}/api/fleet`);
 		const body = (await res.json()) as { runtimes: unknown[]; diskSessions: unknown[] };
 		expect(body.runtimes).toEqual([]);
 		expect(body.diskSessions).toEqual(disk);
+	});
+
+	it("GET /api/fleet hides disk sessions whose cwd no longer exists", async () => {
+		const liveCwd = await createTempProject();
+		const missingCwd = join(tmpdir(), `dreb-dash-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const liveSession = { path: "/s/live.jsonl", id: "live", cwd: liveCwd };
+		const missingSession = { path: "/s/missing.jsonl", id: "missing", cwd: missingCwd };
+		const { base } = await startServer({ listAllSessions: async () => [liveSession, missingSession] });
+
+		const res = await fetch(`${base}/api/fleet`);
+		const body = (await res.json()) as { runtimes: unknown[]; diskSessions: Array<{ id: string; cwd: string }> };
+
+		expect(res.status).toBe(200);
+		expect(body.diskSessions).toEqual([liveSession]);
+		expect(body.diskSessions).not.toContainEqual(missingSession);
 	});
 
 	it("POST /api/runtimes validates cwd and creates a runtime", async () => {

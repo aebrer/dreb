@@ -179,6 +179,13 @@ export interface AuthStatusDto {
 	device?: string;
 }
 
+/** Current rotating pairing code, readable only from the host/local dashboard. */
+export interface PairingCodeDto {
+	enabled: boolean;
+	code?: string;
+	expiresInMs?: number;
+}
+
 /** A paired device (settings → devices). */
 export interface PairedDeviceDto {
 	id: string;

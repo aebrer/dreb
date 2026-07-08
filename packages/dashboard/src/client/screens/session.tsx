@@ -36,6 +36,12 @@ function modelLabel(model: SessionStateDto["model"] | undefined): string {
 	return model ? `${model.provider}/${model.id}` : "—";
 }
 
+function modelTitle(model: (Pick<ModelInfoDto, "provider" | "id"> & { name?: string }) | undefined): string {
+	if (!model) return "—";
+	const id = `${model.provider}/${model.id}`;
+	return model.name ? `${id} — ${model.name}` : id;
+}
+
 export function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
 	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
@@ -275,7 +281,7 @@ function ModelSelectorModal(props: {
 			<Show when={error()}>
 				<p class="pair-error">{error()}</p>
 			</Show>
-			<div class="model-list" style={{ "max-height": "320px" }}>
+			<div class="model-list session-model-list" style={{ "max-height": "320px" }}>
 				<Show when={filteredGroups().length > 0} fallback={<p class="muted small">No matching models.</p>}>
 					<For each={filteredGroups()}>
 						{(group) => (
@@ -287,6 +293,7 @@ function ModelSelectorModal(props: {
 											type="button"
 											class="model-row"
 											classList={{ current: isCurrent(model) }}
+											title={modelTitle(model)}
 											onClick={() => selectModel(model)}
 										>
 											<span class="model-current">{isCurrent(model) ? "✓" : ""}</span>
@@ -317,6 +324,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [composerText, setComposerText] = createSignal(composerDrafts.get(props.sessionKey) ?? "");
 	const [sendMode, setSendMode] = createSignal<"steer" | "follow_up">("steer");
 	const [stopping, setStopping] = createSignal(false);
+	const [stoppingRuntime, setStoppingRuntime] = createSignal(false);
 	const [showModelSelector, setShowModelSelector] = createSignal(false);
 	const [showOverflow, setShowOverflow] = createSignal(false);
 	const [showCompactModal, setShowCompactModal] = createSignal(false);
@@ -603,6 +611,20 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
+	async function stopRuntime() {
+		if (stoppingRuntime()) return;
+		setStoppingRuntime(true);
+		setActionError(undefined);
+		try {
+			await api.stopRuntime(props.sessionKey);
+			props.store.navigate({ screen: "fleet" });
+		} catch (err) {
+			setActionError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setStoppingRuntime(false);
+		}
+	}
+
 	async function abortStatus(key: string) {
 		try {
 			if (key === "compaction") await api.abortCompaction(props.sessionKey);
@@ -724,6 +746,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						<button
 							type="button"
 							class="switcher optional model-switcher"
+							title={modelTitle(runtime()?.state.model)}
 							onClick={() => setShowModelSelector(true)}
 						>
 							<span class="label">model</span> <span class="value">{modelLabel(runtime()?.state.model)}</span>
@@ -822,6 +845,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 								model
 							</button>
 						</Show>
+						<button
+							type="button"
+							class="btn btn-small btn-danger"
+							disabled={stoppingRuntime()}
+							onClick={stopRuntime}
+						>
+							{stoppingRuntime() ? "stopping runtime…" : "stop runtime"}
+						</button>
 					</div>
 				</Show>
 			</header>

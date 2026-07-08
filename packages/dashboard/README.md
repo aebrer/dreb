@@ -48,8 +48,8 @@ Open `http://127.0.0.1:5343`.
   thinking, queue modes, image handling, skill commands, nested context,
   transport, hide-thinking, compaction/retry), per-agent model fallback editor,
   dashboard-local preferences (thinking expansion and notification permission),
-  and paired-devices management.
-- **Pairing** — remote first-login PIN flow.
+  current pairing code, and paired-devices management.
+- **Pairing** — remote first-login rotating-code flow.
 
 ## Security model — exactly two modes
 
@@ -67,8 +67,9 @@ Enforcement layers, all fail-closed:
 
 1. Tailscale identity resolution of the peer address (`tailscale status`)
 2. Identity allowlist — empty allowlist denies everyone
-3. First-login PIN pairing: 6 digits, single-use, 5-minute expiry, printed to
-   the host terminal
+3. First-login pairing code: 6 digits, rotates every 30 seconds, shown live in
+   the dashboard Settings tab on the host machine (also printed at startup as a
+   headless fallback)
 4. Signed per-device cookie thereafter; devices are listed and unpair-able in
    settings
 

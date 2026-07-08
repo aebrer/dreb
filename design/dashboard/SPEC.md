@@ -51,8 +51,8 @@ states, and stream-abort-requiring conditions.
 | Session view | `session-view.html` | Chat drill-in: full-parity transcript, dock (tasks, status line, composer), session bar (back, name, model/thinking/ctx switchers, ⋯ overflow) |
 | Tree | `tree.html` | Session tree: filter chips, role+preview+label rows, "you are here" leaf marker, navigate-confirm modal with summarize option |
 | Files | `files.html` | Host-wide filesystem browse (places shortcuts, breadcrumbs to `/`), new-folder, download, drop-zone upload, "new session here" |
-| Settings | `settings.html` | Persistent defaults (get/set_settings surface: model, thinking, queue modes, compaction/retry toggles) + paired-devices management |
-| Pairing | `pairing.html` | Remote first-login: identity echo, 6-digit PIN, expiry, "why a PIN" + "what pairing grants" copy |
+| Settings | `settings.html` | Persistent defaults (get/set_settings surface: model, thinking, queue modes, compaction/retry toggles) + current pairing code + paired-devices management |
+| Pairing | `pairing.html` | Remote first-login: identity echo, rotating 6-digit code, "why a PIN" + "what pairing grants" copy |
 | Subagent view | `subagent-view.html` | Read-only live drill-in to a background subagent's session: task, transcript, tool activity, status; no composer (see §5a) |
 
 The transcript's structural reference is the export-html renderer
@@ -71,10 +71,11 @@ prompt to create a session in a recent project.
 **Remote pairing.** Device on the tailnet opens the dashboard URL → server
 checks Tailscale identity against the allowlist → allowed identities see the
 pairing screen (`pairing.html`); others get a plain denial page naming the
-identity that was rejected. User enters the PIN shown in the host terminal
-(6 digits, single-use, 5-minute expiry — countdown shown). Success sets a
-signed device cookie and lands on the fleet. The device appears in
-settings → devices with unpair.
+identity that was rejected. User enters the current 6-digit rotating code shown
+in the dashboard Settings tab on the host machine (the code rotates every 30
+seconds; the server also prints the current code at startup for headless use).
+Success sets a signed device cookie and lands on the fleet. The device appears
+in settings → devices with unpair.
 
 **Project selection / new session.** "+ new session" (global or per-project
 header) → modal: project path (recent projects listed; free-text path entry),
@@ -245,10 +246,11 @@ always allowed."
 order, all fail-closed (carried forward from closed draft PR 310's endorsed
 auth design): (1) Tailscale network reachability, (2) identity/device
 allowlist — non-allowed identities get a denial page naming the rejected
-identity, (3) first-login PIN pairing — short-lived (5 min), single-use,
-displayed only in the host terminal, (4) signed per-device cookie thereafter.
-UI badge: `⇄ remote · <device> via tailscale`. Every paired device is listed
-and unpair-able in settings.
+identity, (3) first-login pairing code — 6 digits, rotating every 30 seconds,
+displayed only in the host/local dashboard Settings tab (with a startup stdout
+fallback), (4) signed per-device cookie thereafter. UI badge: `⇄ remote ·
+<device> via tailscale`. Every paired device is listed and unpair-able in
+settings.
 
 **Dangerous-capability copy** (fixed screen copy, verbatim in mockups):
 
@@ -257,9 +259,9 @@ and unpair-able in settings.
   files, and upload/download — the same power as sitting at the terminal.
   Unpair anytime from settings → devices."
 - PIN rationale (`pairing.html`): "Your network identity got you here, but
-  identity alone doesn't grant control. The PIN proves you can see the host
-  machine's terminal — so a stolen or shared allowlist entry can't quietly
-  gain access."
+  identity alone doesn't grant control. The code proves you can see the host
+  machine's local dashboard — so a stolen or shared allowlist entry can't
+  quietly gain access."
 - Upload (`files.html`): "Uploads land on the host machine and become visible
   to any agent working near this path. Existing files are never overwritten
   silently — you'll be asked first."
@@ -369,8 +371,8 @@ under rapid extension requests.
 ## 9. Acceptance criteria for the implementation PR
 
 1. **Modes:** loopback-only by default (no Tailscale required, no LAN
-   reachability); remote mode requires Tailscale + allowlist + PIN pairing +
-   device cookies, fail-closed on every auth path. No third mode exists.
+   reachability); remote mode requires Tailscale + allowlist + rotating-code
+   pairing + device cookies, fail-closed on every auth path. No third mode exists.
 2. **Fleet:** groups by project; live cards show status chip (glyph+color),
    activity line, live subagents, tasks progress, ctx%, model, last-activity;
    needs-attention sorts first and badges the tab; on-disk inventory lists,
@@ -393,9 +395,10 @@ under rapid extension requests.
    `list_background_agents` (or equivalent registry exposure) exists over
    RPC with session paths; no composer is present in the subagent view.
 7. **Settings:** reads live+default state, writes defaults, surfaces RPC
-   validation errors verbatim; devices list with unpair.
-8. **Pairing:** PIN flow matches `pairing.html` including the two security
-   copy blocks; PINs are single-use, expiring, terminal-displayed.
+   validation errors verbatim; devices list with unpair and the current
+   rotating pairing code on the host/local dashboard.
+8. **Pairing:** rotating-code flow matches `pairing.html` including the two
+   security copy blocks; codes are host/local-visible and rotate every 30s.
 9. **Visual language:** `tokens.css` adopted unmodified (extensions allowed,
    overrides are a design change requiring this spec's update); IBM Plex Mono;
    light+dark; no additional colors beyond the four status accents; WCAG AA

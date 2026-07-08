@@ -1,6 +1,6 @@
 /**
- * Pairing screen — remote first-login. Identity echo, PIN entry with the two
- * verbatim security copy blocks (SPEC §6). Shown outside the tab structure.
+ * Pairing screen — remote first-login. Identity echo, pairing-code entry with
+ * the two verbatim security copy blocks (SPEC §6). Shown outside the tab structure.
  */
 
 import { createSignal, type JSX, Show } from "solid-js";
@@ -52,7 +52,7 @@ export function PairingScreen(props: { store: AppStore }): JSX.Element {
 				<main class="pair-card">
 					<span class="wordmark">dreb</span>
 					<h1>pair this device</h1>
-					<p class="sub">First login from a new device needs a one-time PIN.</p>
+					<p class="sub">First login from a new device needs the current pairing code.</p>
 
 					<div class="identity">
 						<span class="row-line">
@@ -68,7 +68,7 @@ export function PairingScreen(props: { store: AppStore }): JSX.Element {
 					</div>
 
 					<div class="field">
-						<label for="pairing-pin">6-digit PIN</label>
+						<label for="pairing-pin">6-digit code</label>
 						<input
 							id="pairing-pin"
 							class="pin-input"
@@ -84,8 +84,8 @@ export function PairingScreen(props: { store: AppStore }): JSX.Element {
 						/>
 					</div>
 					<p class="pin-hint">
-						The PIN is showing <strong>in the dreb terminal on the host</strong> right now. It is single-use and
-						expires five minutes after it was generated.
+						The code is shown in the dashboard <strong>Settings tab on the host machine</strong>. It rotates every
+						30 seconds.
 					</p>
 
 					<Show when={error()}>
@@ -101,8 +101,8 @@ export function PairingScreen(props: { store: AppStore }): JSX.Element {
 					<div class="security-note">
 						<p>
 							<strong>Why a PIN?</strong> Your network identity got you here, but identity alone doesn't grant
-							control. The PIN proves you can see the host machine's terminal — so a stolen or shared allowlist
-							entry can't quietly gain access.
+							control. The code proves you can see the host machine's local dashboard — so a stolen or shared
+							allowlist entry can't quietly gain access.
 						</p>
 						<p>
 							<strong>What pairing grants.</strong> This browser gets a signed cookie for this host. It can chat

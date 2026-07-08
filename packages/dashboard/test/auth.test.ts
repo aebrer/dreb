@@ -120,6 +120,7 @@ describe("DashboardAuth — local mode", () => {
 
 describe("DashboardAuth — remote mode", () => {
 	const alice: TailscaleIdentity = { loginName: "alice@example.com", device: "phone" };
+	const TEST_SECRET = Buffer.from("dashboard-auth-test-secret");
 	const REMOTE = {
 		remoteAddress: "100.64.0.9",
 		hostHeader: "host.tailnet:5343",
@@ -133,6 +134,7 @@ describe("DashboardAuth — remote mode", () => {
 			allowedIdentities: ["alice@example.com"],
 			resolver: new StubResolver({ "100.64.0.9": alice, "100.64.0.66": { loginName: "mallory@example.com" } }),
 			storage: new MemoryPairingStorage(),
+			secret: TEST_SECRET,
 			...overrides,
 		});
 	}
@@ -168,10 +170,21 @@ describe("DashboardAuth — remote mode", () => {
 		}
 	});
 
-	it("pairs with a valid PIN and then authenticates with the device token", async () => {
-		const auth = makeAuth();
-		const { pin } = auth.generatePin();
-		const { token, device } = await auth.pair(REMOTE, pin);
+	it("reports the current rotating pairing code and expiry", () => {
+		let now = 1_000_000;
+		const auth = makeAuth({ now: () => now });
+		const first = auth.currentPairingCode();
+		expect(first.code).toMatch(/^\d{6}$/);
+		expect(first.expiresInMs).toBe(20_000);
+
+		now += 30_000;
+		expect(auth.currentPairingCode().code).not.toBe(first.code);
+	});
+
+	it("pairs with the current rotating code and then authenticates with the device token", async () => {
+		const auth = makeAuth({ now: () => 1_000_000 });
+		const { code } = auth.currentPairingCode();
+		const { token, device } = await auth.pair(REMOTE, code);
 		expect(device.identity).toBe("alice@example.com");
 
 		const decision = await auth.authenticate({ ...REMOTE, deviceToken: token });
@@ -181,32 +194,62 @@ describe("DashboardAuth — remote mode", () => {
 		}
 	});
 
-	it("rejects an incorrect PIN", async () => {
-		const auth = makeAuth();
-		auth.generatePin();
-		await expect(auth.pair(REMOTE, "000000")).rejects.toThrow(/Incorrect PIN/);
+	it("rejects an incorrect pairing code", async () => {
+		const auth = makeAuth({ now: () => 1_000_000 });
+		const valid = auth.currentPairingCode().code;
+		const wrong = valid === "000000" ? "000001" : "000000";
+		await expect(auth.pair(REMOTE, wrong)).rejects.toThrow(/Incorrect pairing code/);
 	});
 
-	it("PINs are single-use", async () => {
-		const auth = makeAuth();
-		const { pin } = auth.generatePin();
-		await auth.pair(REMOTE, pin);
-		await expect(auth.pair(REMOTE, pin)).rejects.toThrow(/No active pairing PIN/);
-	});
-
-	it("PINs expire", async () => {
+	it("accepts pairing codes from the adjacent clock-skew windows", async () => {
 		let now = 1_000_000;
-		const auth = makeAuth({ now: () => now, pinTtlMs: 5 * 60 * 1000 });
-		const { pin } = auth.generatePin();
-		now += 5 * 60 * 1000 + 1;
-		await expect(auth.pair(REMOTE, pin)).rejects.toThrow(/No active pairing PIN/);
+		const auth = makeAuth({ now: () => now });
+		const currentWindow = now;
+
+		now = currentWindow - 30_000;
+		const previousCode = auth.currentPairingCode().code;
+		now = currentWindow;
+		await expect(auth.pair(REMOTE, previousCode)).resolves.toMatchObject({
+			device: { identity: "alice@example.com" },
+		});
+
+		now = currentWindow + 30_000;
+		const nextCode = auth.currentPairingCode().code;
+		now = currentWindow;
+		await expect(auth.pair(REMOTE, nextCode)).resolves.toMatchObject({
+			device: { identity: "alice@example.com" },
+		});
+	});
+
+	it("rejects pairing codes outside the clock-skew window", async () => {
+		let now = 1_000_000;
+		const auth = makeAuth({ now: () => now });
+		const currentWindow = now;
+		const acceptedCodes = new Set<string>();
+		for (const offset of [-1, 0, 1]) {
+			now = currentWindow + offset * 30_000;
+			acceptedCodes.add(auth.currentPairingCode().code);
+		}
+
+		let tooFarFutureCode: string | undefined;
+		for (let offset = 2; offset < 20; offset++) {
+			now = currentWindow + offset * 30_000;
+			const candidate = auth.currentPairingCode().code;
+			if (!acceptedCodes.has(candidate)) {
+				tooFarFutureCode = candidate;
+				break;
+			}
+		}
+		expect(tooFarFutureCode).toBeDefined();
+		now = currentWindow;
+
+		await expect(auth.pair(REMOTE, tooFarFutureCode!)).rejects.toThrow(/Incorrect pairing code/);
 	});
 
 	it("expired pairings stop authenticating", async () => {
 		let now = 1_000_000;
 		const auth = makeAuth({ now: () => now, pairingTtlMs: 1000 });
-		const { pin } = auth.generatePin();
-		const { token } = await auth.pair(REMOTE, pin);
+		const { token } = await auth.pair(REMOTE, auth.currentPairingCode().code);
 		now += 1001;
 		const decision = await auth.authenticate({ ...REMOTE, deviceToken: token });
 		expect(decision.allowed).toBe(false);
@@ -219,9 +262,8 @@ describe("DashboardAuth — remote mode", () => {
 	});
 
 	it("unpaired devices lose access", async () => {
-		const auth = makeAuth();
-		const { pin } = auth.generatePin();
-		const { token, device } = await auth.pair(REMOTE, pin);
+		const auth = makeAuth({ now: () => 1_000_000 });
+		const { token, device } = await auth.pair(REMOTE, auth.currentPairingCode().code);
 		expect(await auth.unpair(device.id)).toBe(true);
 		const decision = await auth.authenticate({ ...REMOTE, deviceToken: token });
 		expect(decision.allowed).toBe(false);
@@ -229,7 +271,6 @@ describe("DashboardAuth — remote mode", () => {
 
 	it("loopback clients cannot pair", async () => {
 		const auth = makeAuth();
-		auth.generatePin();
 		await expect(auth.pair(LOCAL_REQUEST, "123456")).rejects.toThrow(/do not pair/);
 	});
 
@@ -241,9 +282,8 @@ describe("DashboardAuth — remote mode", () => {
 	});
 
 	it("storage failure denies (fail-closed)", async () => {
-		const auth = makeAuth({ storage: new ThrowingStorage() });
-		const { pin } = auth.generatePin();
-		await expect(auth.pair(REMOTE, pin)).rejects.toThrow(/storage exploded/);
+		const auth = makeAuth({ storage: new ThrowingStorage(), now: () => 1_000_000 });
+		await expect(auth.pair(REMOTE, auth.currentPairingCode().code)).rejects.toThrow(/storage exploded/);
 		const decision = await auth.authenticate({ ...REMOTE, deviceToken: "whatever" });
 		expect(decision.allowed).toBe(false);
 	});

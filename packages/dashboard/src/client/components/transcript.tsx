@@ -9,7 +9,7 @@ import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { marked } from "marked";
 import { createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
-import { expandThinking } from "../state/preferences.js";
+import { expandThinking, isToolAutoOpen } from "../state/preferences.js";
 import type { AgentResultEntry, AssistantEntry, ToolEntry, TranscriptEntry } from "../state/reducer.js";
 
 function renderMarkdown(text: string): string {
@@ -238,8 +238,6 @@ function DiffBody(props: { text: string }): JSX.Element {
 	);
 }
 
-const LEGIBLE_OPEN_TOOLS = new Set(["read", "edit", "write", "suggest_next", "bash"]);
-
 function editDiffText(entry: ToolEntry): string | undefined {
 	if (entry.toolName !== "edit") return undefined;
 	const diff = (entry.details as { diff?: unknown } | undefined)?.diff;
@@ -268,7 +266,7 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 	const bodyIsMarkdown = () => MARKDOWN_RESULT_TOOLS.has(props.entry.toolName) && props.entry.status !== "error";
 	const inputSections = () => toolInputSections(props.entry);
 	return (
-		<details class="tool" open={LEGIBLE_OPEN_TOOLS.has(props.entry.toolName) || props.entry.status === "running"}>
+		<details class="tool" open={isToolAutoOpen(props.entry.toolName) || props.entry.status === "running"}>
 			<summary>
 				<span class="tool-name">{props.entry.toolName}</span>
 				<span class="tool-arg">{toolArgSummary(props.entry)}</span>

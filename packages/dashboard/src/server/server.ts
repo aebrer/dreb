@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
-import type { AuthStatusDto, FleetDto, ImageAttachmentDto } from "../shared/protocol.js";
+import type { AuthStatusDto, FleetDto, ImageAttachmentDto, PairingCodeDto } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
 import { EventHub } from "./event-hub.js";
 import { defaultPlaces, FileApi } from "./files.js";
@@ -111,6 +111,21 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 		});
 	});
 
+	app.get("/api/pairing-code", (req: AuthedRequest, res) => {
+		const decision = req.authDecision!;
+		if (!decision.allowed || decision.mode !== "local") {
+			res.status(403).json({ error: "Pairing code is only available from the host machine" });
+			return;
+		}
+		if (!auth.isRemoteEnabled) {
+			const body: PairingCodeDto = { enabled: false };
+			res.json(body);
+			return;
+		}
+		const body: PairingCodeDto = { enabled: true, ...auth.currentPairingCode() };
+		res.json(body);
+	});
+
 	app.post("/api/pair", (req: AuthedRequest, res) => {
 		const pin = typeof req.body?.pin === "string" ? req.body.pin : "";
 		auth
@@ -185,7 +200,9 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 	app.get("/api/fleet", (_req, res) => {
 		(async () => {
 			const runtimes = await Promise.all(pool.list().map((h) => pool.describe(h)));
-			const diskSessions = (await options.listAllSessions()) as FleetDto["diskSessions"];
+			const diskSessions = ((await options.listAllSessions()) as FleetDto["diskSessions"]).filter((session) =>
+				existsSync(session.cwd),
+			);
 			const fleet: FleetDto = { runtimes, diskSessions };
 			res.json(fleet);
 		})().catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));

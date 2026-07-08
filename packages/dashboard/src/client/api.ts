@@ -14,6 +14,7 @@ import type {
 	ImageAttachmentDto,
 	ModelInfoDto,
 	PairedDeviceDto,
+	PairingCodeDto,
 	PendingMessagesDto,
 	PerformanceStatsDto,
 	ResourcesDto,
@@ -57,6 +58,7 @@ function json(body: unknown): RequestInit {
 export const api = {
 	auth: () => request<AuthStatusDto & { needsPairing: boolean; identity?: string; error?: string }>("/api/auth"),
 	pair: (pin: string) => request<{ device: PairedDeviceDto }>("/api/pair", json({ pin })),
+	pairingCode: () => request<PairingCodeDto>("/api/pairing-code"),
 	devices: () => request<{ devices: PairedDeviceDto[] }>("/api/devices"),
 	unpair: (id: string) => request<{ ok: true }>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
 

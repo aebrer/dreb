@@ -3,11 +3,17 @@
  * shown verbatim) + paired-devices management + version footer.
  */
 
-import { createMemo, createResource, createSignal, For, type JSX, Show } from "solid-js";
-import type { AgentTypeDto, ModelInfoDto, SettingsDto } from "../../shared/protocol.js";
+import { createMemo, createResource, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import type { AgentTypeDto, ModelInfoDto, PairingCodeDto, SettingsDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
-import { expandThinking, setExpandThinking } from "../state/preferences.js";
+import {
+	expandThinking,
+	isToolAutoOpen,
+	setExpandThinking,
+	setToolAutoExpand,
+	TOOL_AUTO_EXPAND_TOOLS,
+} from "../state/preferences.js";
 import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -19,6 +25,11 @@ type ModelPickerTarget = { kind: "default" } | { kind: "agent"; agentName: strin
 
 function modelKey(model: Pick<ModelInfoDto, "provider" | "id">): string {
 	return `${model.provider}/${model.id}`;
+}
+
+function modelTitle(model: Pick<ModelInfoDto, "provider" | "id"> & { name?: string }): string {
+	const id = modelKey(model);
+	return model.name ? `${id} — ${model.name}` : id;
 }
 
 function defaultModelLabel(settings: SettingsDto): string {
@@ -95,6 +106,7 @@ function ModelPickerModal(props: {
 											type="button"
 											class="model-row"
 											classList={{ current: isCurrent(model) }}
+											title={modelTitle(model)}
 											onClick={() => props.onPick(model)}
 										>
 											<span class="model-current">{isCurrent(model) ? "✓" : ""}</span>
@@ -163,6 +175,37 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		return devices;
 	});
 
+	const [pairingCode, setPairingCode] = createSignal<PairingCodeDto>();
+	let pairingCodeTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function clearPairingCodeTimer() {
+		if (pairingCodeTimer) clearTimeout(pairingCodeTimer);
+		pairingCodeTimer = undefined;
+	}
+
+	function schedulePairingCodeRefresh(expiresInMs: number | undefined) {
+		clearPairingCodeTimer();
+		const delay = Math.max(250, expiresInMs ?? 30_000) + 100;
+		pairingCodeTimer = setTimeout(() => void refreshPairingCode(), delay);
+	}
+
+	async function refreshPairingCode() {
+		try {
+			const next = await api.pairingCode();
+			if (!next.enabled || !next.code) {
+				setPairingCode(undefined);
+				clearPairingCodeTimer();
+				return;
+			}
+			setPairingCode(next);
+			schedulePairingCodeRefresh(next.expiresInMs);
+		} catch (err) {
+			console.warn("pairing code unavailable", err);
+			setPairingCode(undefined);
+			clearPairingCodeTimer();
+		}
+	}
+
 	const [version] = createResource(async () => {
 		try {
 			const { version } = await api.version();
@@ -225,6 +268,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		if (typeof Notification === "undefined") return;
 		setNotificationPermission(await Notification.requestPermission());
 	}
+
+	onMount(() => void refreshPairingCode());
+	onCleanup(clearPairingCodeTimer);
 
 	const auth = () => props.store.auth();
 
@@ -576,12 +622,34 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 						<span class="setting-control">
 							<label class="checkbox-control">
 								<input
+									id="pref-expand-thinking"
 									type="checkbox"
 									checked={expandThinking()}
 									onChange={(e) => setExpandThinking(e.currentTarget.checked)}
 								/>
 								<span>open by default</span>
 							</label>
+						</span>
+					</div>
+					<div class="setting-row">
+						<span class="setting-label">
+							<span class="name">auto-expand tool cards</span>
+							<span class="hint">this browser only — stored in localStorage, not the host settings file</span>
+						</span>
+						<span class="setting-control" style={{ display: "grid", gap: "6px" }}>
+							<For each={TOOL_AUTO_EXPAND_TOOLS}>
+								{(toolName) => (
+									<label class="checkbox-control">
+										<input
+											id={`pref-tool-expand-${toolName}`}
+											type="checkbox"
+											checked={isToolAutoOpen(toolName)}
+											onChange={(e) => setToolAutoExpand(toolName, e.currentTarget.checked)}
+										/>
+										<span>{toolName}</span>
+									</label>
+								)}
+							</For>
 						</span>
 					</div>
 					<div class="setting-row">
@@ -598,6 +666,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 						<span class="setting-control">
 							<label class="checkbox-control">
 								<input
+									id="pref-notifications"
 									type="checkbox"
 									checked={notificationPermission() === "granted"}
 									disabled={
@@ -644,6 +713,19 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 						</span>
 						<span class="meta">local · always allowed</span>
 					</div>
+					<Show when={pairingCode()?.enabled && pairingCode()?.code}>
+						<div class="setting-row">
+							<span class="setting-label">
+								<span class="name">pairing code</span>
+								<span class="hint">new devices enter this in the pairing screen; it rotates every 30s</span>
+							</span>
+							<span class="setting-control">
+								<code style={{ "font-size": "var(--fs-h2)", "letter-spacing": "0.08em" }}>
+									{pairingCode()!.code}
+								</code>
+							</span>
+						</div>
+					</Show>
 					<For each={devices() ?? []}>
 						{(device) => (
 							<div class="device-row">

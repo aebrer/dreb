@@ -1846,6 +1846,18 @@ details.thinking .thinking-body {
 	padding: 0 var(--space-1);
 }
 
+.session-model-list .model-row {
+	align-items: start;
+}
+
+.session-model-list .model-id,
+.session-model-list .model-name {
+	overflow: visible;
+	overflow-wrap: anywhere;
+	text-overflow: clip;
+	white-space: normal;
+}
+
 .context-modal-body {
 	display: flex;
 	flex-direction: column;

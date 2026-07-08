@@ -16,6 +16,8 @@ function runtimeStatus(runtime: RuntimeInfoDto): "running" | "attention" | "idle
 	return "idle";
 }
 
+// Display-only normalization: /tmp children are grouped together in the fleet UI.
+// Resume still uses each session's own real cwd and session log path unchanged.
 export function fleetGroupKey(cwd: string): string {
 	return cwd === "/tmp" || cwd.startsWith("/tmp/") ? "/tmp" : cwd;
 }
@@ -220,6 +222,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	const [showNewSession, setShowNewSession] = createSignal(false);
 	const [confirmDelete, setConfirmDelete] = createSignal<SessionInfoDto>();
 	const [expandedGroups, setExpandedGroups] = createSignal<Record<string, boolean>>({});
+	const [resumeError, setResumeError] = createSignal<string>();
 
 	// Live sessions: one flat grid, deterministically ordered — alphabetical by
 	// project path, then session start time as tiebreak. Stable ordering beats
@@ -268,9 +271,14 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	});
 
 	async function resume(session: SessionInfoDto) {
-		const runtime = await api.createRuntime(session.cwd, { sessionPath: session.path });
-		await props.store.refreshFleet();
-		props.store.navigate({ screen: "session", key: runtime.key });
+		setResumeError(undefined);
+		try {
+			const runtime = await api.createRuntime(session.cwd, { sessionPath: session.path });
+			await props.store.refreshFleet();
+			props.store.navigate({ screen: "session", key: runtime.key });
+		} catch (err) {
+			setResumeError(`Failed to resume session: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	return (
@@ -322,6 +330,9 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 					<Show when={diskGroups().length > 0}>
 						<section class="past-sessions">
 							<h2 class="past-sessions-head">past sessions</h2>
+							<Show when={resumeError()}>
+								<p class="pair-error">{resumeError()}</p>
+							</Show>
 							<For each={diskGroups()}>
 								{([project, sessions]) => {
 									const expanded = () => expandedGroups()[project] ?? false;
