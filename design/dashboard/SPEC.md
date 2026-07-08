@@ -146,8 +146,9 @@ become an explicit two-state toggle, visible only while the agent is streaming
   button (RPC `abort`). Research precedent (Happy's three modes) maps to:
   steer = steer-now, follow-up = queue, interrupt = abort button.
 
-Queued messages render as dismissible chips above the composer (dequeue =
-TUI `alt+up`; per-chip ✕ restores text to the composer).
+Queued messages render as chips above the composer (dequeue = TUI `alt+up`);
+the foundation restores the queued batch to the composer because RPC exposes
+`clear_pending_messages` as a batch operation, matching the TUI shortcut.
 
 **Abort state machine** (claude-code-webui precedent): idle → composer shows
 "send"; streaming → status line appears (working text + elapsed), send button
@@ -308,9 +309,10 @@ with the auth layer proven.
 **Sequenced later (non-blocking):** tree screen (RPC is ready; navigation via
 re-edit covers the primary loop meanwhile), shell passthrough, scoped-models
 UI, multi-select copy, extension custom-tool ANSI bridge, tree label editing,
-browser notifications beyond tab badge, TUI-theme following, **subagent
-steering** (§5a — requires child stdin control channel; the event relay ships
-first and defines its addressing).
+notification refinements beyond the shipped hidden-tab needs-attention
+Notification API + tab-title badge, TUI-theme following, **subagent steering**
+(§5a — requires child stdin control channel; the event relay ships first and
+defines its addressing).
 
 Anything in "later" must degrade to an honest absence (no dead buttons).
 

@@ -5,8 +5,9 @@ mobile-friendly interface for browsing projects and sessions, controlling
 multiple dreb agents, watching background subagents live, and using dreb from
 devices that are not sitting at the host terminal.
 
-The dashboard is a pure RPC client: it spawns `dreb --mode rpc` child
-processes (one per live session) and never imports dreb session internals.
+Live agent control goes through RPC: the dashboard spawns `dreb --mode rpc`
+child processes (one per live session). The server also uses dreb's public
+session APIs for on-disk inventory/delete and serves its own host file API.
 
 ## Install & launch
 
@@ -25,18 +26,23 @@ Open `http://127.0.0.1:5343`.
 ## Screens
 
 - **Fleet** (home) — live sessions grouped by project: status chips, current
-  activity, live subagents, task progress, ctx%, model. On-disk session
-  inventory with resume/delete. `+ new session` anywhere.
-- **Session view** — full chat parity: streaming transcript, tool cards,
-  thinking blocks, compaction summaries, tasks panel, suggest-next chip,
-  steer/follow-up composer modes, ■ abort, model/thinking switchers,
-  extension-UI modals, export HTML.
+  activity, live subagents, task progress, ctx%, model, cost, last-assistant
+  preview. On-disk session inventory with resume/delete. `+ new session`
+  anywhere.
+- **Session view** — full chat parity: markdown streaming transcript, tool
+  cards, thinking blocks, compaction summaries, per-message copy, tasks panel,
+  suggest-next chip, slash-command autocomplete, image attach/paste,
+  queued-message restore, footer-parity info bar (branch, tokens, cost, ctx%,
+  median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
+  modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
+  and live auto-naming.
 - **Subagent drill-in** — read-only live transcript of a background agent via
   the event relay. No composer: the parent session controls the agent.
 - **Files** — host-wide browse with places shortcuts, upload (collision
   prompts before overwrite), download, new-folder, "new session here".
 - **Settings** — persistent defaults (model, thinking, queue modes,
-  compaction/retry) + paired-devices management.
+  compaction/retry), dashboard-local preferences (thinking expansion and
+  notification permission), and paired-devices management.
 - **Pairing** — remote first-login PIN flow.
 
 ## Security model — exactly two modes
@@ -65,7 +71,9 @@ goes through Tailscale.
 
 A paired device has the same power as sitting at the terminal: it can chat
 with agents, run commands through them, browse the host's files, and
-upload/download. Every file operation is logged server-side.
+upload/download. Every file operation is logged server-side. Browser
+notifications are opt-in per device from settings; the tab-title attention
+badge works without permission.
 
 ## Options
 

@@ -113,6 +113,48 @@ The same agent runtime powers multiple surfaces:
 - **RPC mode** — strict [JSONL stdin/stdout protocol](packages/coding-agent/docs/rpc.md) for non-Node clients and custom UIs.
 - **SDK** — import `@dreb/coding-agent` and create agent sessions directly in TypeScript.
 - **Telegram** — `@dreb/telegram` runs dreb as a bot with sessions, model controls, file upload/download, live tool status, and visible results for user-facing tools.
+- **Web dashboard** — `dreb dashboard` serves a browser UI (fleet overview of all sessions, full chat with steering, subagent observability, host file browser); local-only by default, remote via Tailscale + PIN pairing. See [dashboard docs](packages/coding-agent/docs/dashboard.md).
+
+### Web dashboard
+
+Launch locally:
+
+```bash
+dreb dashboard
+# or: dreb-dashboard
+```
+
+Remote access is explicit and Tailscale-only:
+
+```bash
+dreb-dashboard --remote --allow you@example.com
+```
+
+The dashboard has exactly two modes. Local mode binds loopback only and still validates loopback Host/Origin headers. Remote mode binds for Tailscale access but every request passes fail-closed identity allowlisting, first-login PIN pairing, and a signed device cookie. There is no unauthenticated LAN mode.
+
+<!-- TODO: screenshots — fleet, session view, files, settings, pairing -->
+
+For auto-restart on Linux, install a systemd user unit. Use the absolute path from `which dreb-dashboard` for `ExecStart` (the example below matches an npm global prefix under `~/.npm-global`):
+
+```ini
+# ~/.config/systemd/user/dreb-dashboard.service
+[Unit]
+Description=dreb web dashboard
+
+[Service]
+ExecStart=%h/.npm-global/bin/dreb-dashboard
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now dreb-dashboard
+```
+
+macOS users can run the same command under a launchd user agent; a full plist is deferred.
 
 ## Design philosophy
 
@@ -143,6 +185,7 @@ See [FORK.md](FORK.md) for details.
 | [`@dreb/tui`](packages/tui/) | Terminal UI library with differential rendering, markdown/syntax rendering, editor/input components, overlays, keybindings |
 | [`@dreb/semantic-search`](packages/semantic-search/) | Semantic codebase search engine with AST chunking, embeddings, POEM ranking, library API, and MCP server |
 | [`@dreb/telegram`](packages/telegram/) | Telegram bot frontend for dreb over the native RPC protocol |
+| [`@dreb/dashboard`](packages/dashboard/) | Web dashboard frontend with fleet overview, chat steering, subagent observability, host file browser, and Tailscale/PIN pairing |
 
 ## License
 

@@ -187,6 +187,10 @@ Response:
   "success": true,
   "data": {
     "model": {...},
+    "scopedModels": [
+      {"provider": "anthropic", "id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5", "reasoning": true, "thinkingLevel": "high"}
+    ],
+    "usingSubscription": false,
     "thinkingLevel": "medium",
     "isStreaming": false,
     "isCompacting": false,
@@ -207,9 +211,69 @@ Response:
 }
 ```
 
-The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
+The `model` field is a full [Model](#model) object or `null`. `scopedModels` is the runtime model scope (from settings `enabledModels` / CLI `--models`) in the same order used by model cycling; it is an empty array when no scope is active. `usingSubscription` is true when the active model is using OAuth subscription credentials, matching the TUI footer's `(sub)` cost indicator. The `sessionName` field is the display name set via `set_session_name` or auto-naming, or omitted if not set.
 
 `contextUsage` carries the same numbers the TUI footer shows, computed by the session itself — clients must render these rather than deriving their own estimate. `tokens` and `percent` are `null` when usage is unknown (right after compaction, before the next LLM response). The whole field is omitted when no model is set or the model has no context window.
+
+#### get_resources
+
+Get loaded resource metadata for the current session. This returns paths/names/descriptions only — it does not include context file contents, prompt bodies, skill bodies, or system prompt text.
+
+```json
+{"type": "get_resources"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_resources",
+  "success": true,
+  "data": {
+    "contextFiles": [{"path": "/repo/AGENTS.md"}],
+    "skills": [{"name": "review-code", "description": "Review code"}],
+    "extensions": [{"name": "my-extension", "path": "/repo/.dreb/extensions/my-extension.ts"}],
+    "promptTemplates": [{"name": "plan", "description": "Create an implementation plan"}],
+    "systemPromptPresent": true
+  }
+}
+```
+
+#### get_git_branch
+
+Get the current git branch for the session cwd. Returns `null` outside a git repository and `"detached"` for detached HEAD.
+
+```json
+{"type": "get_git_branch"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_git_branch",
+  "success": true,
+  "data": {"branch": "feature/dashboard"}
+}
+```
+
+#### get_daily_cost
+
+Get the same-day aggregate cost across all session files. The RPC process scans once on first call so the first response is current, then returns the cached value (refreshed periodically by the tracker).
+
+```json
+{"type": "get_daily_cost"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_daily_cost",
+  "success": true,
+  "data": {"cost": 1.23}
+}
+```
 
 #### get_messages
 
@@ -249,6 +313,29 @@ Response contains the full [Model](#model) object:
   "success": true,
   "data": {...}
 }
+```
+
+#### resolve_model
+
+Resolve a model pattern using the same matching rules as the interactive `/model` command, without switching the current session. Returns `null` if no model matches; a warning may be included when the match required fallback behavior.
+
+```json
+{"type": "resolve_model", "pattern": "sonnet"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "resolve_model",
+  "success": true,
+  "data": {"model": {...}, "warning": "matched provider/model-id"}
+}
+```
+
+If no model matches:
+```json
+{"type": "response", "command": "resolve_model", "success": true, "data": null}
 ```
 
 #### cycle_model
@@ -292,6 +379,46 @@ Response contains an array of full [Model](#model) objects:
   "data": {
     "models": [...]
   }
+}
+```
+
+### Buddy
+
+Buddy commands run inside the agent process so provider credentials never leave the RPC child. They are exposed for clients that choose to render the terminal companion; most non-terminal clients can ignore them.
+
+#### buddy_hatch
+
+Create or load the current buddy state.
+
+```json
+{"type": "buddy_hatch"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "buddy_hatch",
+  "success": true,
+  "data": {"state": {...}}
+}
+```
+
+#### buddy_reroll
+
+Reroll buddy appearance/state.
+
+```json
+{"type": "buddy_reroll"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "buddy_reroll",
+  "success": true,
+  "data": {"state": {...}}
 }
 ```
 
@@ -368,6 +495,32 @@ Response:
 {"type": "response", "command": "set_follow_up_mode", "success": true}
 ```
 
+#### get_pending_messages
+
+Return queued steering and follow-up messages without clearing them.
+
+```json
+{"type": "get_pending_messages"}
+```
+
+Response:
+```json
+{"type": "response", "command": "get_pending_messages", "success": true, "data": {"steering": ["steer text"], "followUp": ["follow-up text"]}}
+```
+
+#### clear_pending_messages
+
+Clear queued steering and follow-up messages, returning the cleared text. This mirrors the TUI restore-to-editor flow.
+
+```json
+{"type": "clear_pending_messages"}
+```
+
+Response:
+```json
+{"type": "response", "command": "clear_pending_messages", "success": true, "data": {"steering": ["steer text"], "followUp": ["follow-up text"]}}
+```
+
 ### Compaction
 
 #### compact
@@ -409,6 +562,19 @@ Enable or disable automatic compaction when context is nearly full.
 Response:
 ```json
 {"type": "response", "command": "set_auto_compaction", "success": true}
+```
+
+#### abort_compaction
+
+Abort an in-progress manual or automatic compaction.
+
+```json
+{"type": "abort_compaction"}
+```
+
+Response:
+```json
+{"type": "response", "command": "abort_compaction", "success": true}
 ```
 
 ### Retry
@@ -749,7 +915,7 @@ Response:
 }
 ```
 
-The current session name is available via `get_state` in the `sessionName` field.
+The current session name is available via `get_state` in the `sessionName` field. Successful renames also emit a `session_name_changed` event.
 
 ### Commands
 
@@ -1160,6 +1326,7 @@ Events are streamed to stdout as JSON lines during agent operation. Events do NO
 | `background_agent_end` | Background subagent finished (includes `sessionFile` when known) |
 | `background_agent_event` | Relayed event from a background subagent's own stream |
 | `parent_paused_for_background_agents` | Parent paused waiting on background agents |
+| `session_name_changed` | Session display name changed (manual rename, extension rename, or auto-title) |
 | `tasks_update` | Session task list replaced (see the `tasks_update` tool) |
 | `suggest_next` | Agent suggested a next command |
 | `extension_error` | Extension threw an error |

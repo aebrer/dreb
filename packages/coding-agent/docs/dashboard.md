@@ -5,15 +5,16 @@ across projects, a full-parity chat view, live background-subagent
 observability, host file browsing, and settings — usable from desktop and
 mobile browsers.
 
-The dashboard lives in the `@dreb/dashboard` package and talks to dreb purely
+The dashboard lives in the `@dreb/dashboard` package. Live agent control goes
 over [RPC mode](rpc.md): the server maintains a pool of `dreb --mode rpc`
-child processes, one per live session.
+child processes, one per live session. The server uses dreb's public session
+APIs for on-disk inventory/delete and serves its own host file API.
 
 ## Launching
 
 ```bash
 # via the dreb CLI (requires @dreb/dashboard to be installed)
-dreb dashboard
+dreb dashboard [--port 5343]
 
 # or directly
 dreb-dashboard [--port 5343]
@@ -38,7 +39,8 @@ malicious website cannot drive the dashboard API through DNS rebinding.
 on the same LAN — the path is [Tailscale](https://tailscale.com):
 
 ```bash
-dreb-dashboard --remote --allow you@example.com --allow teammate@example.com
+dreb dashboard --remote --allow you@example.com --allow teammate@example.com
+# or: dreb-dashboard --remote --allow you@example.com --allow teammate@example.com
 ```
 
 Layers, in order, all fail-closed (any auth-subsystem error denies):
@@ -71,10 +73,10 @@ logged server-side.
 | Screen | What it does |
 |---|---|
 | **Fleet** | Home. Live sessions grouped by project — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), activity line, live subagent lines, tasks progress, ctx%, model, last activity. Needs-attention cards sort first and badge the browser tab. Below the cards: on-disk session inventory with resume and delete. |
-| **Session view** | Full chat drill-in. Streaming transcript (text, thinking blocks, tool cards with bespoke read/write/edit/bash bodies, compaction/branch summaries, custom messages), tasks panel, subagent strip, status line with elapsed time and ■ stop, composer, model/thinking switchers, ctx%, ⋯ menu (export HTML, compact, rename). Extension UI requests (select/confirm/input/editor) render as modals; notifications as toasts. |
+| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, agent-result cards, tool cards with bespoke read/write/edit/bash bodies, compaction/branch summaries, custom messages), per-message copy, tasks panel, subagent strip, status line with elapsed time plus ■ stop and compaction/retry aborts, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, median tok/s, and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests (select/confirm/input/editor) render as modals; notifications as toasts. |
 | **Subagent view** | Read-only live transcript of a background agent, fed by the RPC event relay. Shows the task, streaming output, and tool activity. No composer — subagents can't be steered yet; the parent session controls them. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. |
-| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Paired-devices list with unpair. |
+| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Dashboard-local preferences (always expand thinking, needs-attention notification permission) live in the browser. Paired-devices list with unpair. |
 | **Pairing** | Remote first-login: identity echo, PIN entry, expiry note, and the security copy explaining what pairing grants. |
 
 ### Composer modes
@@ -87,6 +89,13 @@ While the agent is streaming, the send button becomes mode-aware:
 - **■ stop** — abort the current turn. Only visible while streaming.
 
 When the agent is idle, send is a plain prompt.
+
+## Notifications
+
+The settings tab exposes a browser-local permission toggle for needs-attention
+notifications. When permission is granted, a hidden dashboard tab sends a
+browser notification when a session newly needs input; all browsers still get a
+`◆` tab-title badge fallback.
 
 ## Subagent observability
 
@@ -121,6 +130,9 @@ Browser dashboard (SolidJS + Vite, tokens.css design system)
   refetch when the gap is too old.
 - **ctx%** comes from the session itself (`get_state.contextUsage` — the same
   numbers the TUI footer shows), never client-side estimates.
+- **Auto-naming** runs in the shared `AgentSession` layer, so dashboard-created
+  RPC sessions get the same LLM-generated session names as the TUI and update
+  live via `session_name_changed`.
 - **Design source**: `design/dashboard/` (SPEC.md, PARITY.md, tokens.css,
   mockups). tokens.css is adopted unmodified; a unit test enforces
   byte-equality.
@@ -132,6 +144,5 @@ Browser dashboard (SolidJS + Vite, tokens.css design system)
 - No shell passthrough from the browser.
 - No subagent steering (the drill-in view is read-only).
 - Fixed light/dark via `prefers-color-scheme` — no TUI-theme following.
-- No image paste in the composer yet.
 
 See `design/dashboard/PARITY.md` for the full TUI-parity disposition table.

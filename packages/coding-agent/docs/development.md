@@ -28,13 +28,16 @@ The script can be run from any directory. dreb keeps the caller's current workin
 
 ```
 packages/
-  ai/           # Model registry, provider APIs, types (@dreb/ai)
-  agent/        # Core agent loop, event system, types (@dreb/agent-core)
-  tui/          # Terminal UI components (@dreb/tui)
-  coding-agent/ # CLI, tools, interactive mode, TUI app (@dreb/coding-agent)
+  ai/              # Model registry, provider APIs, types (@dreb/ai)
+  agent/           # Core agent loop, event system, types (@dreb/agent-core)
+  tui/             # Terminal UI components (@dreb/tui)
+  coding-agent/    # CLI, tools, interactive mode, TUI app (@dreb/coding-agent)
+  semantic-search/ # Semantic code search library + MCP server (@dreb/semantic-search)
+  telegram/        # Telegram bot frontend over RPC (@dreb/telegram)
+  dashboard/       # Web dashboard server/client over RPC (@dreb/dashboard)
 ```
 
-Dependencies flow one way: `coding-agent` → `agent` → `ai`, and `coding-agent` → `tui`. Changes to a dependency require rebuilding downstream packages — `npm run build` handles this automatically in the correct order.
+Dependencies flow one way through the workspace: `coding-agent` depends on `agent`, `ai`, and `tui`; frontend packages such as `telegram`, `dashboard`, and `semantic-search` build on the published workspace APIs instead of creating reverse dependencies. Changes to a dependency require rebuilding downstream packages — `npm run build` handles this automatically in the correct order.
 
 ## Code style
 
