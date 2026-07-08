@@ -83,6 +83,10 @@ Documentation files to check on every feature change:
 
 **There is no such thing as a "pre-existing" test or lint failure that's okay to ignore.** If a test fails or a linter complains — whether it's in files you touched or not — it gets fixed. No bypassing with `--no-verify`, no rationalizing that it's "unrelated," no deferring to a future PR. If CI would fail on it, it's your problem now.
 
+## UI Ordering — Determinism Over Recency
+
+**Lists of live/long-lived UI cards (fleet sessions, agent strips, etc.) must sort deterministically, not by dynamic activity.** Order by a stable key (e.g. project path alphabetical, then session start time as tiebreak) so cards keep a fixed position. Sorting by `lastActivity` or other constantly-changing signals makes cards jump around on every event — consistency is better UX than dynamic reordering. When a new ordering dimension is needed, add a stable field (like `createdAt`) rather than reusing a mutable one.
+
 ## Testing
 
 ```bash

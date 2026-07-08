@@ -221,14 +221,15 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	const [confirmDelete, setConfirmDelete] = createSignal<SessionInfoDto>();
 	const [expandedGroups, setExpandedGroups] = createSignal<Record<string, boolean>>({});
 
-	// Live sessions: one flat grid, attention-first then most-recent-first —
-	// every live session visible at a glance without scrolling past disk rows.
+	// Live sessions: one flat grid, deterministically ordered — alphabetical by
+	// project path, then session start time as tiebreak. Stable ordering beats
+	// dynamic reordering for UX: cards never jump around as activity ticks.
 	const liveRuntimes = createMemo(() => {
 		const runtimes = [...props.store.fleet().runtimes];
 		runtimes.sort((a, b) => {
-			const attention = Number(b.needsAttention) - Number(a.needsAttention);
-			if (attention !== 0) return attention;
-			return new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
+			const byPath = a.cwd.localeCompare(b.cwd);
+			if (byPath !== 0) return byPath;
+			return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
 		});
 		return runtimes;
 	});

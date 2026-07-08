@@ -238,7 +238,7 @@ function DiffBody(props: { text: string }): JSX.Element {
 	);
 }
 
-const LEGIBLE_OPEN_TOOLS = new Set(["read", "edit", "write", "suggest_next"]);
+const LEGIBLE_OPEN_TOOLS = new Set(["read", "edit", "write", "suggest_next", "bash"]);
 
 function editDiffText(entry: ToolEntry): string | undefined {
 	if (entry.toolName !== "edit") return undefined;

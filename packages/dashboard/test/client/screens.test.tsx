@@ -53,6 +53,32 @@ vi.mock("../../src/client/api.js", () => ({
 		settings: vi.fn(async () => ({ defaultProvider: "anthropic", defaultModel: "m1" })),
 		devices: vi.fn(async () => ({ devices: [] })),
 		version: vi.fn(async () => ({ version: "0.0.0-test" })),
+		serverInfo: vi.fn(async () => ({
+			version: "0.0.0-test",
+			startedAt: new Date().toISOString(),
+			supervised: false,
+			restartable: true,
+		})),
+		restartServer: vi.fn(async () => ({ ok: true, restarting: true })),
+		runtime: vi.fn(async (key: string) => ({
+			key,
+			cwd: "/home/test/project",
+			state: {
+				sessionId: key,
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			backgroundAgents: [],
+			needsAttention: false,
+			createdAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+		})),
 		places: vi.fn(async () => ({ places: [{ label: "home", path: "/home/test" }] })),
 		listFiles: vi.fn(async () => ({
 			path: "/home/test",
@@ -89,6 +115,7 @@ vi.mock("../../src/client/api.js", () => ({
 			},
 			backgroundAgents: [],
 			needsAttention: false,
+			createdAt: new Date().toISOString(),
 			lastActivity: new Date().toISOString(),
 		})),
 	},
@@ -317,6 +344,7 @@ describe("screen smoke tests", () => {
 						},
 						backgroundAgents: [],
 						needsAttention: false,
+						createdAt: new Date().toISOString(),
 						lastActivity: new Date().toISOString(),
 					},
 				],
@@ -383,6 +411,7 @@ describe("screen smoke tests", () => {
 						},
 						backgroundAgents: [],
 						needsAttention: false,
+						createdAt: new Date().toISOString(),
 						lastActivity: new Date().toISOString(),
 					},
 				],
@@ -830,6 +859,7 @@ describe("dashboard client regressions", () => {
 			stats: { tokensTotal: 1545, cost: 0.42 },
 			backgroundAgents: [],
 			needsAttention: false,
+			createdAt: new Date().toISOString(),
 			lastActivity: new Date().toISOString(),
 		});
 		const diskSession = (id: string, cwd: string) => ({
@@ -898,6 +928,7 @@ describe("dashboard client regressions", () => {
 						},
 						backgroundAgents: [],
 						needsAttention: false,
+						createdAt: new Date().toISOString(),
 						lastActivity: new Date().toISOString(),
 					},
 				],
@@ -970,6 +1001,7 @@ describe("dashboard client regressions", () => {
 						},
 						backgroundAgents: [],
 						needsAttention: false,
+						createdAt: new Date().toISOString(),
 						lastActivity: new Date().toISOString(),
 					},
 				],
@@ -1014,6 +1046,7 @@ describe("dashboard client regressions", () => {
 						},
 						backgroundAgents: [],
 						needsAttention: false,
+						createdAt: new Date().toISOString(),
 						lastActivity: new Date().toISOString(),
 					},
 				],
@@ -1229,6 +1262,7 @@ describe("dashboard client regressions", () => {
 						backgroundAgents: [],
 						needsAttention: false,
 						lastAssistantText: "last assistant preview text",
+						createdAt: new Date().toISOString(),
 						lastActivity: new Date().toISOString(),
 					},
 				],
@@ -1267,6 +1301,7 @@ describe("dashboard client regressions", () => {
 						},
 						backgroundAgents: [],
 						needsAttention: false,
+						createdAt: new Date().toISOString(),
 						lastActivity: new Date().toISOString(),
 					},
 				],
@@ -1473,7 +1508,7 @@ describe("dashboard client regressions", () => {
 		expect(code?.textContent).toContain("export const answer = 42");
 	});
 
-	it("completed legible tool cards are open by default but completed bash is collapsed", () => {
+	it("completed legible tool cards including bash are open by default", () => {
 		const entries = [
 			toolEntryFromEvents({ toolName: "read", args: { path: "/tmp/a.ts" }, resultText: "const a = 1;" }),
 			toolEntryFromEvents({
@@ -1498,9 +1533,8 @@ describe("dashboard client regressions", () => {
 		const el = mount(() => <Transcript entries={entries} />);
 		const tools = Array.from(el.querySelectorAll("details.tool")) as HTMLDetailsElement[];
 
-		expect(tools.slice(0, 4).every((tool) => tool.open && tool.hasAttribute("open"))).toBe(true);
-		expect(tools[4]?.open).toBe(false);
-		expect(tools[4]?.hasAttribute("open")).toBe(false);
+		// read/edit/write/suggest_next AND bash are all legible-open by default.
+		expect(tools.slice(0, 5).every((tool) => tool.open && tool.hasAttribute("open"))).toBe(true);
 	});
 
 	it("suggest_next completed card shows markdown summary and command without interaction", () => {

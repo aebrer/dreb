@@ -28,6 +28,10 @@ export interface DashboardServerOptions {
 	listAllSessions: () => Promise<unknown[]>;
 	deleteSession: (path: string) => Promise<unknown>;
 	logger?: (line: string) => void;
+	/** Build version of the running server process (for the settings footer / stale-server detection). */
+	serverVersion?: string;
+	/** Restart hook — when set, POST /api/server/restart invokes it (typically process exit for a supervisor to respawn). */
+	onRestart?: () => void;
 }
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
@@ -49,6 +53,7 @@ interface AuthedRequest extends Request {
 
 export function createDashboardServer(options: DashboardServerOptions): express.Express {
 	const { auth, pool } = options;
+	const serverStartedAt = new Date().toISOString();
 	const log = options.logger ?? ((line: string) => console.log(`[dashboard] ${line}`));
 	const files = new FileApi((op, path, detail) => log(`file ${op}: ${path}${detail ? ` (${detail})` : ""}`));
 	const hub = new EventHub();
@@ -70,8 +75,14 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 			.then((decision) => {
 				req.authDecision = decision;
 				if (decision.allowed) return next();
-				// The pairing endpoints must be reachable by allowed-but-unpaired identities.
-				if (decision.needsPairing && (req.path === "/api/pair" || req.path === "/api/auth")) return next();
+				if (decision.needsPairing) {
+					// The pairing endpoints must be reachable by allowed-but-unpaired identities.
+					if (req.path === "/api/pair" || req.path === "/api/auth") return next();
+					// Let the SPA shell + static assets load so the client-side pairing
+					// screen can render. No data exposure: every /api/* data route below
+					// stays fail-closed — only non-API GETs (the app shell) are allowed.
+					if (req.method === "GET" && !req.path.startsWith("/api/")) return next();
+				}
 				log(`denied ${req.method} ${req.path}: ${decision.reason}`);
 				res.status(decision.status).json({ error: decision.reason, needsPairing: decision.needsPairing ?? false });
 			})
@@ -429,15 +440,13 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 	});
 
 	// -- settings ------------------------------------------------------------------
-	// Settings go through a pooled runtime (any one — they are process-global
-	// persistent defaults). 503 when no runtime is live.
+	// Settings are process-global persistent defaults. They route through any live
+	// runtime; when no user session exists the pool spins up a hidden utility
+	// runtime so the settings page works with zero sessions open (never 503s).
 	function withAnyRuntime(res: Response, fn: (h: NonNullable<ReturnType<RuntimePool["get"]>>) => Promise<unknown>) {
-		const handle = pool.list()[0];
-		if (!handle) {
-			res.status(503).json({ error: "No live runtime — start or resume a session first" });
-			return;
-		}
-		fn(handle)
+		pool
+			.ensureUtilityRuntime()
+			.then((handle) => fn(handle))
 			.then((data) => res.json(data ?? { ok: true }))
 			.catch((err) => {
 				res.status(502).json({ error: String(err?.message ?? err) });
@@ -466,6 +475,32 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 
 	app.get("/api/version", (_req, res) => {
 		withAnyRuntime(res, async (h) => ({ version: await h.client.getVersion() }));
+	});
+
+	// -- server lifecycle ----------------------------------------------------------
+	// Build/version of the *server* process (distinct from a freshly-spawned RPC
+	// child's version) so a stale long-running service is visible at a glance.
+	app.get("/api/server/info", (_req, res) => {
+		res.json({
+			version: options.serverVersion ?? null,
+			startedAt: serverStartedAt,
+			// systemd sets INVOCATION_ID; other supervisors set LISTEN_PID. Best-effort.
+			supervised: Boolean(process.env.INVOCATION_ID || process.env.LISTEN_PID),
+			restartable: Boolean(options.onRestart),
+		});
+	});
+
+	app.post("/api/server/restart", (_req, res) => {
+		if (!options.onRestart) {
+			res.status(501).json({
+				error: "Restart is unavailable — the dashboard is not running under a supervisor that can respawn it",
+			});
+			return;
+		}
+		log("restart requested via API");
+		res.json({ ok: true, restarting: true });
+		// Defer so the HTTP response flushes before the process exits.
+		setTimeout(() => options.onRestart?.(), 100);
 	});
 
 	// -- files -----------------------------------------------------------------------

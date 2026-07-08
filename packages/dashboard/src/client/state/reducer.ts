@@ -290,7 +290,12 @@ let toastCounter = 0;
 
 /** Derive needs-attention from current state. */
 function updateAttention(state: SessionViewState): void {
-	state.needsAttention = state.uiRequests.length > 0 || state.statusEntries.some((s) => s.tone === "error");
+	state.needsAttention =
+		state.uiRequests.length > 0 ||
+		state.statusEntries.some((s) => s.tone === "error") ||
+		// A suggest_next as the agent's final action is a "your move" signal —
+		// the card should read needs-attention, not idle, until the next turn.
+		!!state.suggestedCommand;
 }
 
 function lastAssistant(state: { entries: TranscriptEntry[] }): AssistantEntry | undefined {

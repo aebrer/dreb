@@ -132,6 +132,8 @@ export interface RuntimeInfoDto {
 	needsAttention: boolean;
 	/** Last assistant text, truncated for fleet-card previews. */
 	lastAssistantText?: string;
+	/** Session start timestamp (ISO) — stable tiebreak for deterministic fleet ordering. */
+	createdAt: string;
 	/** Last activity timestamp (ISO). */
 	lastActivity: string;
 }

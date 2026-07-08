@@ -62,6 +62,13 @@ const MOCK_MODEL = {
 	maxTokens: 4096,
 };
 
+const EXPLORE_MODEL = {
+	...MOCK_MODEL,
+	id: "explore-model",
+	name: "Explore Model",
+	provider: "explore-provider",
+};
+
 function createMockDeps(overrides: Partial<TabTitleDeps> = {}): TabTitleDeps {
 	return {
 		setTitle: vi.fn(),
@@ -75,6 +82,8 @@ function createMockDeps(overrides: Partial<TabTitleDeps> = {}): TabTitleDeps {
 			({
 				getApiKey: vi.fn().mockResolvedValue("test-key"),
 				getAvailable: () => [MOCK_MODEL],
+				find: (provider: string, modelId: string) =>
+					[MOCK_MODEL].find((model) => model.provider === provider && model.id === modelId),
 			}) as any,
 		getProvider: () => "test-provider",
 		getBranch: () => "main",
@@ -207,20 +216,66 @@ describe("TabTitleGenerator", () => {
 	});
 
 	describe("failure handling", () => {
-		it("swallows LLM errors silently", async () => {
+		it("does not throw LLM errors from the fire-and-forget path", async () => {
 			mockCompleteSimple.mockRejectedValue(new Error("API timeout"));
 
 			const deps = createMockDeps();
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
 
-			// Should not throw
-			gen.onToolEnd();
+			expect(() => gen.onToolEnd()).not.toThrow();
 
 			// Flush microtask queue to let the rejected promise chain settle
 			await vi.waitFor(() => {
 				expect(gen.hasFired).toBe(true);
 			});
 			expect(deps.setTitle).not.toHaveBeenCalled();
+		});
+
+		it("reports final failure via onError when Explore and parent model calls both fail", async () => {
+			mockParseAgent.mockReturnValue({
+				ok: true,
+				config: {
+					name: "Explore",
+					description: "test",
+					model: ["explore-provider/explore-model"],
+					systemPrompt: "",
+				},
+			});
+			mockResolveModel.mockResolvedValue({
+				ok: true,
+				modelId: "explore-model",
+				provider: "explore-provider",
+				skippedModels: [],
+			});
+			mockCompleteSimple
+				.mockRejectedValueOnce(new Error("404 model-not-available"))
+				.mockRejectedValueOnce(new Error("parent provider failed"));
+
+			const registry = {
+				getApiKey: vi.fn().mockResolvedValue("test-key"),
+				getAvailable: () => [MOCK_MODEL, EXPLORE_MODEL],
+				find: vi.fn((provider: string, modelId: string) =>
+					[MOCK_MODEL, EXPLORE_MODEL].find((model) => model.provider === provider && model.id === modelId),
+				),
+			};
+			const onError = vi.fn();
+			const deps = createMockDeps({ getModelRegistry: () => registry as any, onError });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			expect(() => gen.onToolEnd()).not.toThrow();
+
+			await vi.waitFor(() => {
+				expect(onError).toHaveBeenCalled();
+			});
+
+			expect(mockCompleteSimple).toHaveBeenCalledTimes(2);
+			expect(deps.setTitle).not.toHaveBeenCalled();
+			const reported = onError.mock.calls[0][0];
+			expect(reported).toBeInstanceOf(Error);
+			expect((reported as Error).message).toContain(
+				"Tab title generation failed with model explore-provider/explore-model",
+			);
+			expect((reported as Error).message).toContain("Parent fallback test-provider/test-model also failed");
 		});
 
 		it("handles null/undefined model gracefully", async () => {
@@ -650,6 +705,53 @@ describe("TabTitleGenerator", () => {
 			// Should still have been called with the parent model
 			const callArgs = mockCompleteSimple.mock.calls[0];
 			expect((callArgs[0] as any).id).toBe("test-model");
+		});
+
+		it("uses provider-aware Explore resolution and falls back to parent model when the resolved model fails", async () => {
+			mockParseAgent.mockReturnValue({
+				ok: true,
+				config: {
+					name: "Explore",
+					description: "test",
+					model: ["explore-provider/explore-model"],
+					systemPrompt: "",
+				},
+			});
+			mockResolveModel.mockResolvedValue({
+				ok: true,
+				modelId: "explore-model",
+				provider: "explore-provider",
+				skippedModels: [],
+			});
+			mockCompleteSimple
+				.mockRejectedValueOnce(new Error("404 model-not-available"))
+				.mockResolvedValueOnce(makeAssistantResponse("Fix auth bug") as any);
+
+			const wrongProviderSameIdModel = { ...EXPLORE_MODEL, provider: "wrong-provider" };
+			const registry = {
+				getApiKey: vi.fn().mockResolvedValue("test-key"),
+				getAvailable: () => [wrongProviderSameIdModel, MOCK_MODEL, EXPLORE_MODEL],
+				find: vi.fn((provider: string, modelId: string) =>
+					[MOCK_MODEL, EXPLORE_MODEL].find((model) => model.provider === provider && model.id === modelId),
+				),
+			};
+			const deps = createMockDeps({ getModelRegistry: () => registry as any });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(deps.setTitle).toHaveBeenCalledWith("dreb - Fix auth bug");
+			});
+
+			expect(registry.find).toHaveBeenCalledWith("explore-provider", "explore-model");
+			expect(mockCompleteSimple).toHaveBeenCalledTimes(2);
+			expect(mockCompleteSimple.mock.calls[0][0]).toMatchObject({
+				id: "explore-model",
+				provider: "explore-provider",
+			});
+			expect(mockCompleteSimple.mock.calls[1][0]).toMatchObject({ id: "test-model", provider: "test-provider" });
+			expect(deps.setSessionName).toHaveBeenCalledWith("Fix auth bug");
 		});
 	});
 

@@ -30,7 +30,12 @@ import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js
 import { SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager, TransportSetting } from "../../core/settings-manager.js";
 import { TabTitleGenerator } from "../../core/tab-title.js";
-import { type BackgroundAgentInfo, discoverAgentTypes, getBackgroundAgents } from "../../core/tools/subagent.js";
+import {
+	type BackgroundAgentInfo,
+	discoverAgentTypes,
+	getBackgroundAgents,
+	rehydrateBackgroundAgentsFromDisk,
+} from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
@@ -718,6 +723,15 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		return { id, type: "response", command, success: false, error: message };
 	};
 
+	if (session.sessionFile && session.messages.length > 0) {
+		const rehydratedCount = rehydrateBackgroundAgentsFromDisk(session.sessionFile);
+		if (rehydratedCount > 0) {
+			console.error(
+				`[rpc] Rehydrated ${rehydratedCount} background subagent${rehydratedCount === 1 ? "" : "s"} from disk`,
+			);
+		}
+	}
+
 	// Pending extension UI requests waiting for response
 	const pendingExtensionRequests = new Map<
 		string,
@@ -998,6 +1012,11 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 					getBranch: () => getGitBranch(cwd),
 					getRepo: () => basename(cwd),
 					getCwd: () => cwd,
+					onError: (err) => {
+						console.error(
+							`[rpc] Tab title auto-generation failed: ${err instanceof Error ? err.message : String(err)}`,
+						);
+					},
 				})
 			: undefined;
 

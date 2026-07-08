@@ -238,6 +238,29 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(pool.get(key)).toBeDefined();
 	});
 
+	it("POST /api/runtimes/:key/abort aborts the runtime and unknown keys 404", async () => {
+		const dir = await createTempProject();
+		const { base, clients } = await startServer();
+		const create = await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const { key } = (await create.json()) as { key: string };
+		const client = clients[0] as any;
+		client.abort = vi.fn(async () => {});
+
+		const res = await fetch(`${base}/api/runtimes/${key}/abort`, { method: "POST" });
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({ ok: true });
+		expect(client.abort).toHaveBeenCalledTimes(1);
+
+		const missing = await fetch(`${base}/api/runtimes/nope/abort`, { method: "POST" });
+		expect(missing.status).toBe(404);
+		await expect(missing.json()).resolves.toMatchObject({ error: expect.stringContaining("No runtime nope") });
+		expect(client.abort).toHaveBeenCalledTimes(1);
+	});
+
 	it("unknown runtime keys 404", async () => {
 		const { base } = await startServer();
 		const res = await fetch(`${base}/api/runtimes/nope`, { method: "GET" });
@@ -317,15 +340,21 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[0].listAgentTypes).toHaveBeenCalled();
 	});
 
-	it("settings model metadata endpoints return 503 when no runtime is live", async () => {
-		const { base } = await startServer();
+	it("settings model metadata endpoints use a utility runtime when no user runtime is live", async () => {
+		const { base, clients } = await startServer();
 		const models = await fetch(`${base}/api/settings/models`);
 		const agentTypes = await fetch(`${base}/api/settings/agent-types`);
 
-		expect(models.status).toBe(503);
-		expect(agentTypes.status).toBe(503);
-		await expect(models.json()).resolves.toMatchObject({ error: expect.stringContaining("No live runtime") });
-		await expect(agentTypes.json()).resolves.toMatchObject({ error: expect.stringContaining("No live runtime") });
+		expect(models.status).toBe(200);
+		expect(agentTypes.status).toBe(200);
+		await expect(models.json()).resolves.toEqual({
+			models: [{ provider: "test", id: "m1", name: "Test Model", contextWindow: 200000, reasoning: false }],
+		});
+		await expect(agentTypes.json()).resolves.toEqual({
+			agentTypes: [{ name: "Explore", description: "Explore the codebase" }],
+		});
+		expect(clients[0].getAvailableModels).toHaveBeenCalled();
+		expect(clients[0].listAgentTypes).toHaveBeenCalled();
 	});
 
 	it("protects dashboard RPC data routes with auth middleware", async () => {

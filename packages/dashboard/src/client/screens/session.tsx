@@ -25,6 +25,9 @@ import type { AppStore } from "../state/store.js";
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const composerHistory = new Map<string, string[]>();
+// Per-session composer drafts — unsent text survives fleet→session navigation
+// for as long as the tab lives (module scope). Keyed by runtime key.
+const composerDrafts = new Map<string, string>();
 
 type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
 type ModelScope = "scoped" | "all";
@@ -311,8 +314,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const session = (): SessionViewState | undefined => props.store.sessions[props.sessionKey];
 	const runtime = createMemo(() => props.store.fleet().runtimes.find((r) => r.key === props.sessionKey));
 
-	const [composerText, setComposerText] = createSignal("");
+	const [composerText, setComposerText] = createSignal(composerDrafts.get(props.sessionKey) ?? "");
 	const [sendMode, setSendMode] = createSignal<"steer" | "follow_up">("steer");
+	const [stopping, setStopping] = createSignal(false);
 	const [showModelSelector, setShowModelSelector] = createSignal(false);
 	const [showOverflow, setShowOverflow] = createSignal(false);
 	const [showCompactModal, setShowCompactModal] = createSignal(false);
@@ -347,6 +351,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	let disposed = false;
 
 	const streaming = () => session()?.streaming ?? false;
+	const compacting = () => session()?.compacting ?? false;
+	const parentPaused = () => (session()?.statusEntries ?? []).some((s) => s.key === "paused");
+	const anyLiveAgent = () => Object.values(session()?.backgroundAgents ?? {}).some((a) => a.status === "running");
+	// Show stop controls whenever anything is stoppable — streaming, compacting,
+	// or the parent is paused waiting on still-running background agents. TUI ESC
+	// halts all of these; the dashboard stop button must reach the same states
+	// (a mid-turn refresh or a paused-on-subagents parent must not hide it).
+	const showStopControls = () => streaming() || compacting() || parentPaused() || anyLiveAgent();
 
 	async function refreshRuntimeDetails(includeDailyCost = false) {
 		const [statsResult, performanceResult, branchResult] = await Promise.allSettled([
@@ -388,10 +400,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	}
 
 	async function refreshPendingMessages() {
-		if ((runtime()?.state.pendingMessageCount ?? 0) <= 0) {
-			setPendingMessages({ steering: [], followUp: [] });
-			return;
-		}
+		// Always ask the runtime — never gate on the fleet's pendingMessageCount.
+		// The fleet snapshot only refreshes on agent start/end, so a steer/follow-up
+		// submitted mid-turn would be invisible if we trusted the stale count.
 		try {
 			setPendingMessages(await api.pending(props.sessionKey));
 		} catch (err) {
@@ -402,9 +413,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	async function restorePendingToComposer() {
 		try {
 			const cleared = await api.dequeue(props.sessionKey);
-			const text = [...cleared.steering, ...cleared.followUp].join("\n\n");
+			const queuedText = [...cleared.steering, ...cleared.followUp].join("\n\n");
 			setPendingMessages({ steering: [], followUp: [] });
-			setComposerText(text);
+			// TUI parity: prepend the dequeued messages to whatever is already typed
+			// rather than clobbering the composer.
+			const current = composerText();
+			setComposerText([queuedText, current].filter((t) => t.trim()).join("\n\n"));
 			await props.store.refreshFleet();
 			queueMicrotask(() => composerRef?.focus());
 		} catch (err) {
@@ -537,9 +551,16 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	});
 
 	createEffect(() => {
-		const count = runtime()?.state.pendingMessageCount ?? 0;
-		if (count > 0) void refreshPendingMessages();
-		else setPendingMessages({ steering: [], followUp: [] });
+		// Re-fetch pending whenever the fleet-driven count changes; refreshPendingMessages
+		// is authoritative (returns empty when there are none) so this never clears
+		// on a stale snapshot.
+		runtime()?.state.pendingMessageCount;
+		void refreshPendingMessages();
+	});
+
+	// Persist the composer draft per session so navigating away and back keeps it.
+	createEffect(() => {
+		composerDrafts.set(props.sessionKey, composerText());
 	});
 
 	async function send() {
@@ -568,10 +589,17 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	}
 
 	async function abort() {
+		setStopping(true);
 		try {
 			await api.abort(props.sessionKey);
+			// TUI ESC parity: clear the queue and return queued messages to the
+			// composer so they don't silently restart the agent after the abort.
+			await restorePendingToComposer();
+			await props.store.refreshFleet();
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setStopping(false);
 		}
 	}
 
@@ -882,7 +910,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						</div>
 					</Show>
 
-					<Show when={streaming() || (session()?.statusEntries.length ?? 0) > 0 || actionError()}>
+					<Show when={showStopControls() || (session()?.statusEntries.length ?? 0) > 0 || actionError()}>
 						<div class="status-line">
 							<Show when={streaming()}>
 								<span class="working">
@@ -909,9 +937,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							<Show when={actionError()}>
 								<span class="error">{actionError()}</span>
 							</Show>
-							<Show when={streaming()}>
-								<button type="button" class="btn btn-small btn-danger" onClick={abort}>
-									■ stop
+							<Show when={showStopControls()}>
+								<button type="button" class="btn btn-small btn-danger" disabled={stopping()} onClick={abort}>
+									{stopping() ? "stopping…" : "■ stop"}
 								</button>
 							</Show>
 						</div>

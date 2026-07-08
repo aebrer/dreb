@@ -7,6 +7,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RpcClient } from "@dreb/coding-agent/rpc";
@@ -29,6 +30,8 @@ export interface RuntimeHandle {
 	key: string;
 	cwd: string;
 	client: RpcClient;
+	/** Session start time (ms epoch) — stable tiebreak for deterministic fleet ordering. */
+	createdAt: number;
 	lastActivity: number;
 	/** Needs-attention sources, keyed so they can be cleared independently. */
 	attention: Map<string, string>;
@@ -52,6 +55,13 @@ export class RuntimePool {
 	private readonly baseArgs: string[];
 	private readonly clientFactory: (options: { cliPath: string; cwd: string; args: string[] }) => RpcClient;
 	private readonly logger: (line: string) => void;
+	/**
+	 * A single lazily-spawned utility runtime used to service settings/model/
+	 * agent-type endpoints when no user session is live. Kept out of `runtimes`
+	 * (and therefore out of the fleet) so it never shows as a session card.
+	 */
+	private utility?: RuntimeHandle;
+	private utilityPromise?: Promise<RuntimeHandle>;
 
 	constructor(options: RuntimePoolOptions = {}) {
 		this.cliPath = options.cliPath ?? resolveDrebCliPath();
@@ -88,6 +98,7 @@ export class RuntimePool {
 			key,
 			cwd,
 			client,
+			createdAt: Date.now(),
 			lastActivity: Date.now(),
 			attention: new Map(),
 			backgroundAgents: new Map(),
@@ -107,9 +118,51 @@ export class RuntimePool {
 		return true;
 	}
 
+	/**
+	 * Return any live runtime suitable for process-global settings work, spawning
+	 * a hidden utility runtime (in the home directory) if no user session exists.
+	 * This is what lets the settings page — models, agent types, defaults — work
+	 * with zero sessions open, instead of 503-ing.
+	 */
+	async ensureUtilityRuntime(): Promise<RuntimeHandle> {
+		const existing = this.runtimes.values().next().value as RuntimeHandle | undefined;
+		if (existing) return existing;
+		if (this.utility) return this.utility;
+		if (!this.utilityPromise) {
+			this.utilityPromise = (async () => {
+				const cwd = homedir();
+				const args = ["--ui", "dashboard", ...this.baseArgs];
+				const client = this.clientFactory({ cliPath: this.cliPath, cwd, args });
+				const handle: RuntimeHandle = {
+					key: "utility",
+					cwd,
+					client,
+					createdAt: Date.now(),
+					lastActivity: Date.now(),
+					attention: new Map(),
+					backgroundAgents: new Map(),
+				};
+				await client.start();
+				this.utility = handle;
+				return handle;
+			})().catch((err) => {
+				// Allow a retry on the next request instead of caching the failure.
+				this.utilityPromise = undefined;
+				throw err;
+			});
+		}
+		return this.utilityPromise;
+	}
+
 	async stopAll(): Promise<void> {
 		const keys = [...this.runtimes.keys()];
 		await Promise.allSettled(keys.map((k) => this.stop(k)));
+		if (this.utility) {
+			const utility = this.utility;
+			this.utility = undefined;
+			this.utilityPromise = undefined;
+			await utility.client.stop().catch(() => {});
+		}
 	}
 
 	private handleEvent(handle: RuntimeHandle, event: Record<string, unknown>): void {
@@ -133,6 +186,12 @@ export class RuntimePool {
 				if (k.startsWith("ui:")) handle.attention.delete(k);
 			}
 			handle.attention.delete("paused");
+			handle.attention.delete("suggest");
+		}
+		if (type === "suggest_next") {
+			// suggest_next as the ending action = "your move": mark needs-attention
+			// so the fleet card doesn't read idle. Cleared on the next agent_start.
+			handle.attention.set("suggest", "suggested command awaiting");
 		}
 		if (type === "parent_paused_for_background_agents") {
 			handle.attention.set("paused", `paused — ${event.runningAgentCount} background agents running`);
@@ -198,6 +257,7 @@ export class RuntimePool {
 			backgroundAgents: [...handle.backgroundAgents.values()],
 			needsAttention: handle.attention.size > 0,
 			lastAssistantText,
+			createdAt: new Date(handle.createdAt).toISOString(),
 			lastActivity: new Date(handle.lastActivity).toISOString(),
 		};
 	}

@@ -172,6 +172,30 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		}
 	});
 
+	const [serverInfo] = createResource(async () => {
+		try {
+			return await api.serverInfo();
+		} catch {
+			return undefined;
+		}
+	});
+	const [showRestartConfirm, setShowRestartConfirm] = createSignal(false);
+	const [restarting, setRestarting] = createSignal(false);
+	const [restartError, setRestartError] = createSignal<string>();
+
+	async function restartServer() {
+		setRestartError(undefined);
+		setRestarting(true);
+		try {
+			await api.restartServer();
+			// The server exits and (under a supervisor) respawns; the SSE stream drops
+			// and reconnects. Nothing more to do client-side.
+		} catch (err) {
+			setRestartError(err instanceof Error ? err.message : String(err));
+			setRestarting(false);
+		}
+	}
+
 	async function save(update: Partial<SettingsDto>) {
 		setError(undefined);
 		setWarnings([]);
@@ -231,7 +255,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 				<Show
 					when={settings()}
 					fallback={
-						<p class="muted">Settings need a live runtime — start or resume a session first, then return here.</p>
+						<p class="muted">
+							{error() ? "Settings could not be loaded — see the error above." : "Loading settings…"}
+						</p>
 					}
 				>
 					{(current) => (
@@ -585,6 +611,29 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 							</label>
 						</span>
 					</div>
+					<div class="setting-row">
+						<span class="setting-label">
+							<span class="name">restart dashboard service</span>
+							<span class="hint">
+								{serverInfo()?.supervised
+									? "restarts the server process (a supervisor respawns it with the latest build) — kills all running sessions"
+									: "exits the server process — only auto-restarts if run under a supervisor (systemd, pm2, …); otherwise the dashboard goes down. kills all running sessions"}
+							</span>
+						</span>
+						<span class="setting-control">
+							<button
+								type="button"
+								class="btn btn-small btn-danger"
+								disabled={restarting()}
+								onClick={() => setShowRestartConfirm(true)}
+							>
+								{restarting() ? "restarting…" : "restart"}
+							</button>
+						</span>
+					</div>
+					<Show when={restartError()}>
+						<div class="settings-error">{restartError()}</div>
+					</Show>
 				</section>
 
 				<section class="settings-section">
@@ -625,8 +674,42 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 					</Show>
 				</section>
 
-				<footer>dreb{version() ? ` v${version()}` : ""} · dashboard</footer>
+				<footer>
+					dreb
+					{serverInfo()?.version ? ` v${serverInfo()!.version}` : version() ? ` v${version()}` : ""} · dashboard
+					<Show when={serverInfo()?.startedAt}> · server build, up {relativeTime(serverInfo()!.startedAt)}</Show>
+				</footer>
 			</main>
+			<Show when={showRestartConfirm()}>
+				<Modal
+					title="restart dashboard service?"
+					onDismiss={() => setShowRestartConfirm(false)}
+					actions={
+						<>
+							<button type="button" class="btn btn-small" onClick={() => setShowRestartConfirm(false)}>
+								cancel
+							</button>
+							<button
+								type="button"
+								class="btn btn-small btn-danger"
+								onClick={() => {
+									setShowRestartConfirm(false);
+									void restartServer();
+								}}
+							>
+								restart
+							</button>
+						</>
+					}
+				>
+					<p>
+						This exits the dashboard server process and terminates <strong>all running sessions</strong>.
+						{serverInfo()?.supervised
+							? " A supervisor is detected — the server should respawn automatically with the latest build."
+							: " No supervisor was detected — the dashboard will NOT come back on its own; you'll need to relaunch it manually."}
+					</p>
+				</Modal>
+			</Show>
 			<Show when={modelPickerTarget()}>
 				{(target) => (
 					<ModelPickerModal

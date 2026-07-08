@@ -23,13 +23,28 @@ import type {
 	SettingsSaveResultDto,
 } from "../shared/protocol.js";
 
+/**
+ * Turn a non-JSON error body (typically Express's default HTML 404 page —
+ * "Cannot GET /api/…") into a clean, single-line diagnostic. Dumping raw HTML
+ * into an error box is unreadable; surface `METHOD /path → status` instead.
+ */
+function cleanErrorMessage(path: string, init: RequestInit | undefined, status: number, body: unknown): string {
+	if (typeof body === "object" && body !== null && "error" in body) return String((body as any).error);
+	const text = typeof body === "string" ? body : String(body);
+	// Express default 404/500 pages are HTML; never render markup verbatim.
+	if (/^\s*<(?:!doctype|html)/i.test(text)) {
+		const method = (init?.method ?? "GET").toUpperCase();
+		return `${method} ${path} → ${status} ${status === 404 ? "Not Found" : "error"}`;
+	}
+	return text.trim() || `Request failed (${status})`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const res = await fetch(path, init);
 	const contentType = res.headers.get("content-type") ?? "";
 	const body = contentType.includes("application/json") ? await res.json() : await res.text();
 	if (!res.ok) {
-		const message =
-			typeof body === "object" && body !== null && "error" in body ? String((body as any).error) : String(body);
+		const message = cleanErrorMessage(path, init, res.status, body);
 		throw Object.assign(new Error(message), { status: res.status, body });
 	}
 	return body as T;
@@ -101,6 +116,11 @@ export const api = {
 	settingsModels: () => request<{ models: ModelInfoDto[] }>("/api/settings/models"),
 	agentTypes: () => request<{ agentTypes: AgentTypeDto[] }>("/api/settings/agent-types"),
 	version: () => request<{ version: string }>("/api/version"),
+	serverInfo: () =>
+		request<{ version: string | null; startedAt: string; supervised: boolean; restartable: boolean }>(
+			"/api/server/info",
+		),
+	restartServer: () => request<{ ok: true; restarting: boolean }>("/api/server/restart", { method: "POST" }),
 	dailyCost: () => request<{ cost: number }>("/api/daily-cost"),
 
 	listFiles: (path: string) => request<DirListingDto>(`/api/files?path=${encodeURIComponent(path)}`),

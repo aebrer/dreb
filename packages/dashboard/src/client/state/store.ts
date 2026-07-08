@@ -163,9 +163,10 @@ export function createAppStore() {
 		 * keeps running server-side).
 		 */
 		async hydrateSession(key: string): Promise<void> {
-			const [messagesResult, agentsResult] = await Promise.allSettled([
+			const [messagesResult, agentsResult, runtimeResult] = await Promise.allSettled([
 				api.messages(key),
 				api.backgroundAgents(key),
+				api.runtime(key),
 			] as const);
 			let session = reducerState.sessions.get(key);
 			if (!session) {
@@ -180,9 +181,25 @@ export function createAppStore() {
 					session.backgroundAgents[agent.agentId] = agent;
 				}
 			}
+			// Seed live turn state from the runtime so a mid-turn browser refresh
+			// still shows stop/working UI. Without this, `streaming` only becomes
+			// true via a future agent_start SSE event — after a refresh that event
+			// is in the past, leaving the stop button and status line missing while
+			// the agent is visibly running.
+			if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
+				const state = runtimeResult.value.state;
+				session.streaming = state.isStreaming;
+				session.compacting = state.isCompacting;
+				if (state.isStreaming && !session.workingSince) {
+					session.workingSince = Date.now();
+					session.workingText = session.workingText ?? "working";
+				} else if (!state.isStreaming) {
+					session.workingSince = undefined;
+				}
+			}
 			syncSession(key);
 			// Loud failure: apply what succeeded above, then surface the error.
-			const failed = [messagesResult, agentsResult].find((result) => result.status === "rejected");
+			const failed = [messagesResult, agentsResult, runtimeResult].find((result) => result.status === "rejected");
 			if (failed?.status === "rejected") {
 				throw failed.reason instanceof Error ? failed.reason : new Error(String(failed.reason));
 			}

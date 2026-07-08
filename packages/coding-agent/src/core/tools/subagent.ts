@@ -1,8 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, type Dirent, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
 import { type Api, type AssistantMessage, type Context, completeSimple, type Model } from "@dreb/ai";
 import { Text } from "@dreb/tui";
@@ -1091,6 +1091,266 @@ export interface BackgroundAgentInfo {
 
 const backgroundAgentRegistry = new Map<string, BackgroundAgentInfo>();
 const backgroundAbortControllers = new Map<string, AbortController>();
+
+const REHYDRATED_AGENT_ID_PREFIX = "rehydrated-";
+const HEADER_READ_CHUNK_BYTES = 8192;
+const MAX_HEADER_READ_BYTES = 256 * 1024;
+const METADATA_READ_BYTES = 256 * 1024;
+const TAIL_READ_BYTES = 64 * 1024;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isExpectedFilesystemError(err: unknown): boolean {
+	return typeof (err as NodeJS.ErrnoException | undefined)?.code === "string";
+}
+
+function parseJsonlLine(line: string): Record<string, unknown> | undefined {
+	try {
+		const parsed = JSON.parse(line);
+		return isRecord(parsed) ? parsed : undefined;
+	} catch (err) {
+		if (err instanceof SyntaxError) return undefined;
+		throw err;
+	}
+}
+
+function readFirstNonEmptyLine(filePath: string): string | undefined {
+	let fd: number | undefined;
+	try {
+		fd = openSync(filePath, "r");
+		const chunk = Buffer.alloc(HEADER_READ_CHUNK_BYTES);
+		let buffered = "";
+		let bytesReadTotal = 0;
+
+		while (bytesReadTotal < MAX_HEADER_READ_BYTES) {
+			const bytesRead = readSync(fd, chunk, 0, Math.min(chunk.length, MAX_HEADER_READ_BYTES - bytesReadTotal), null);
+			if (bytesRead === 0) break;
+			bytesReadTotal += bytesRead;
+			buffered += chunk.toString("utf8", 0, bytesRead);
+
+			const lines = buffered.split(/\r?\n/);
+			const completeLines = buffered.endsWith("\n") || buffered.endsWith("\r") ? lines : lines.slice(0, -1);
+			for (const line of completeLines) {
+				if (line.trim()) return line;
+			}
+			buffered = lines.at(-1) ?? "";
+		}
+
+		return buffered.trim() ? buffered : undefined;
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return undefined;
+		throw err;
+	} finally {
+		if (fd !== undefined) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Best-effort observability: close errors are filesystem cleanup noise.
+			}
+		}
+	}
+}
+
+function readFileSlice(filePath: string, start: number, length: number): string | undefined {
+	let fd: number | undefined;
+	try {
+		fd = openSync(filePath, "r");
+		const buffer = Buffer.alloc(length);
+		const bytesRead = readSync(fd, buffer, 0, length, start);
+		return buffer.toString("utf8", 0, bytesRead);
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return undefined;
+		throw err;
+	} finally {
+		if (fd !== undefined) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Best-effort observability: close errors are filesystem cleanup noise.
+			}
+		}
+	}
+}
+
+function readFileStart(filePath: string, maxBytes: number): string | undefined {
+	let size = maxBytes;
+	try {
+		size = Math.min(statSync(filePath).size, maxBytes);
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return undefined;
+		throw err;
+	}
+	return readFileSlice(filePath, 0, size);
+}
+
+function readFileTail(filePath: string, maxBytes: number): string | undefined {
+	let start = 0;
+	let length = maxBytes;
+	try {
+		const size = statSync(filePath).size;
+		start = Math.max(0, size - maxBytes);
+		length = size - start;
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return undefined;
+		throw err;
+	}
+	return readFileSlice(filePath, start, length);
+}
+
+function parseSessionHeader(sessionFile: string): Record<string, unknown> | undefined {
+	const headerLine = readFirstNonEmptyLine(sessionFile);
+	if (!headerLine) return undefined;
+	return parseJsonlLine(headerLine);
+}
+
+function comparablePath(pathValue: string): string {
+	const resolved = resolve(pathValue);
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function parentSessionMatches(recordedParentSession: string, parentSessionFile: string): boolean {
+	if (recordedParentSession === parentSessionFile) return true;
+	if (comparablePath(recordedParentSession) === comparablePath(parentSessionFile)) return true;
+
+	// Older/foreign invocations may disagree about absolute vs relative roots, but
+	// dreb session filenames include a timestamp and UUID. A basename match is a
+	// safe final fallback for recovering observability across process boundaries.
+	return basename(recordedParentSession) === basename(parentSessionFile);
+}
+
+function extractTextFromContent(content: unknown): string | undefined {
+	if (typeof content === "string") return content.trim() || undefined;
+	if (!Array.isArray(content)) return undefined;
+
+	const parts: string[] = [];
+	for (const item of content) {
+		if (!isRecord(item)) continue;
+		if (item.type === "text" && typeof item.text === "string" && item.text.trim()) {
+			parts.push(item.text.trim());
+		}
+	}
+	const text = parts.join("\n").trim();
+	return text || undefined;
+}
+
+function truncateTaskSummary(text: string): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function findFirstUserMessageSummary(sessionFile: string): string | undefined {
+	const head = readFileStart(sessionFile, METADATA_READ_BYTES);
+	if (!head) return undefined;
+
+	for (const line of head.split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		const entry = parseJsonlLine(line);
+		if (entry?.type !== "message" || !isRecord(entry.message)) continue;
+		if (entry.message.role !== "user") continue;
+		const text = extractTextFromContent(entry.message.content);
+		if (text) return truncateTaskSummary(text);
+	}
+	return undefined;
+}
+
+function inferCompletedSessionStatus(sessionFile: string): "completed" | "failed" {
+	const tail = readFileTail(sessionFile, TAIL_READ_BYTES);
+	if (!tail) return "completed";
+
+	const lines = tail.split(/\r?\n/).reverse();
+	for (const line of lines) {
+		if (!line.trim()) continue;
+		const entry = parseJsonlLine(line);
+		if (entry?.type !== "message" || !isRecord(entry.message)) continue;
+		if (entry.message.role !== "assistant") continue;
+
+		const stopReason = entry.message.stopReason;
+		return stopReason === "error" || stopReason === "aborted" ? "failed" : "completed";
+	}
+	return "completed";
+}
+
+function parseStartedAt(header: Record<string, unknown>, sessionFile: string): number {
+	if (typeof header.timestamp === "string") {
+		const timestamp = Date.parse(header.timestamp);
+		if (Number.isFinite(timestamp)) return timestamp;
+	}
+
+	try {
+		return statSync(sessionFile).mtime.getTime();
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return Date.now();
+		throw err;
+	}
+}
+
+function hasRegisteredSession(sessionDir: string, sessionFile: string): boolean {
+	const comparableSessionDir = comparablePath(sessionDir);
+	const comparableSessionFile = comparablePath(sessionFile);
+	for (const agent of backgroundAgentRegistry.values()) {
+		if (agent.sessionDir && comparablePath(agent.sessionDir) === comparableSessionDir) return true;
+		if (agent.sessionFile && comparablePath(agent.sessionFile) === comparableSessionFile) return true;
+	}
+	return false;
+}
+
+/**
+ * Best-effort recovery for completed background subagents after a dashboard/RPC
+ * process resumes an existing parent session. Live background-agent state is an
+ * in-memory registry, while child sessions are durable JSONL files under the
+ * subagent sessions directory.
+ *
+ * Returns the number of newly registered agents. Expected filesystem and JSONL
+ * parse failures are skipped; unexpected programming errors are allowed to throw.
+ */
+export function rehydrateBackgroundAgentsFromDisk(
+	parentSessionFile: string | undefined,
+	subagentSessionsBase = getSubagentSessionsDir(),
+): number {
+	if (!parentSessionFile) return 0;
+
+	let entries: Dirent[];
+	try {
+		entries = readdirSync(subagentSessionsBase, { withFileTypes: true });
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return 0;
+		throw err;
+	}
+
+	let registered = 0;
+	for (const entry of entries) {
+		if (!entry.isDirectory()) continue;
+
+		const sessionDir = join(subagentSessionsBase, entry.name);
+		const sessionFile = discoverSessionFile(sessionDir, entry.name);
+		if (!sessionFile) continue;
+
+		const header = parseSessionHeader(sessionFile);
+		if (header?.type !== "session" || typeof header.parentSession !== "string") continue;
+		if (!parentSessionMatches(header.parentSession, parentSessionFile)) continue;
+
+		const agentId = `${REHYDRATED_AGENT_ID_PREFIX}${entry.name}`;
+		if (backgroundAgentRegistry.has(agentId) || hasRegisteredSession(sessionDir, sessionFile)) continue;
+
+		const agentType = typeof header.agentType === "string" && header.agentType.trim() ? header.agentType : "agent";
+		const taskSummary = findFirstUserMessageSummary(sessionFile) ?? `${agentType} (${entry.name})`;
+		backgroundAgentRegistry.set(agentId, {
+			agentId,
+			agentType,
+			taskSummary,
+			startedAt: parseStartedAt(header, sessionFile),
+			status: inferCompletedSessionStatus(sessionFile),
+			sessionDir,
+			sessionFile,
+			cwd: typeof header.cwd === "string" ? header.cwd : undefined,
+		});
+		registered++;
+	}
+
+	return registered;
+}
 
 /** Get a snapshot of all tracked background agents (running and recently completed). Returns readonly clones. */
 export function getBackgroundAgents(): readonly Readonly<BackgroundAgentInfo>[] {

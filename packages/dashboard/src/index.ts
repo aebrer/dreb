@@ -11,7 +11,7 @@
  *   dreb-dashboard [--port 5343] [--remote --allow me@example.com [--allow ...]]
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -103,11 +103,33 @@ async function main(): Promise<void> {
 	// Static client assets live next to the compiled server (dist/static).
 	const staticDir = join(dirname(fileURLToPath(import.meta.url)), "static");
 
+	// The server's own build version (dist/index.js → ../package.json) — surfaced
+	// in the settings footer so a stale long-running service is spottable.
+	let serverVersion: string | undefined;
+	try {
+		const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+		serverVersion = JSON.parse(readFileSync(pkgPath, "utf8")).version;
+	} catch {
+		serverVersion = undefined;
+	}
+
+	// Restart hook: exit non-zero so a supervisor (systemd Restart=on-failure,
+	// etc.) respawns the process with the freshly-built dist. Assigned the http
+	// server below via a mutable holder so the closure can close it first.
+	let httpServer: ReturnType<typeof app.listen> | undefined;
+	const onRestart = () => {
+		console.log("restart requested — exiting for supervisor to respawn");
+		httpServer?.close();
+		pool.stopAll().finally(() => process.exit(1));
+	};
+
 	const { SessionManager } = await import("@dreb/coding-agent");
 	const app = createDashboardServer({
 		auth,
 		pool,
 		staticDir: existsSync(staticDir) ? staticDir : undefined,
+		serverVersion,
+		onRestart,
 		listAllSessions: () => SessionManager.listAll(),
 		deleteSession: async (path: string) => {
 			const result = await SessionManager.deleteSession(path, {});
@@ -128,6 +150,7 @@ async function main(): Promise<void> {
 			console.log("local mode: loopback only — use --remote for Tailscale access");
 		}
 	});
+	httpServer = server;
 
 	const shutdown = () => {
 		console.log("shutting down…");
