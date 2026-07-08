@@ -53,6 +53,7 @@ export function makeFakeClient() {
 		getGitBranch: vi.fn(async () => "feature/test"),
 		getDailyCost: vi.fn(async () => 1.23),
 		getLastAssistantText: vi.fn(async () => "last assistant activity preview"),
+		listBackgroundAgents: vi.fn(async () => [] as unknown[]),
 		getPendingMessages: vi.fn(async () => ({ steering: ["queued steer"], followUp: ["queued follow"] })),
 		clearPendingMessages: vi.fn(async () => ({ steering: ["queued steer"], followUp: ["queued follow"] })),
 		prompt: vi.fn(async () => {}),

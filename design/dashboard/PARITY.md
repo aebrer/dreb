@@ -114,7 +114,7 @@ The chat pane renders every entry type the export-html renderer knows
 | Assistant message (text + thinking blocks in order) | ✅ dashboard | Markdown-rendered text (marked + DOMPurify); thinking as `<details>` with expand preference |
 | Tool execution (call + merged result) | ✅ dashboard | Hairline card: name + arg summary + status, collapsible result |
 | — tool sub-matrix: `read`/`write`/`edit`/`bash` bespoke bodies | ✅ dashboard | Per-tool formatting; `edit` renders diff with status colors |
-| — `grep`/`find`/`ls`/`search`/`web_*`/`subagent`/`skill`/`tasks_update`/`wait`/`suggest_next` | ✅ dashboard | Name + arg summary headers; result bodies start generic (pre) and get bespoke treatment incrementally |
+| — `grep`/`find`/`ls`/`search`/`web_*`/`subagent`/`skill`/`tasks_update`/`wait`/`suggest_next` | ✅ dashboard | Name + arg summary headers; expanded cards show full inputs (subagent task prompts as markdown, generic long args labeled); markdown-contract results (`subagent`/`skill`/`web_fetch`) render as markdown; `suggest_next` renders its summary + command from details |
 | — extension custom tools (`renderCall`/`renderResult` are TUI/ANSI renderers) | 🔜 later | Foundation renders generic JSON; ANSI→HTML bridge (like `tool-renderer.ts` does for export) later |
 | Bash execution (`!` passthrough entries) | ✅ dashboard | Historical `bashExecution` messages render as `bash (user)` tool cards (read-only until §3 shell passthrough ships) |
 | Custom message (`role: custom`, extension-injected) | ✅ dashboard | Bordered card with extension tag; custom TUI renderers fall back to text |
@@ -205,7 +205,7 @@ Commands the dashboard uses that have no single TUI-key equivalent:
 | `get_pending_messages`, `clear_pending_messages` | Queued-message chips + restore-all dequeue action |
 | `list_sessions`, `list_all_sessions`, `delete_session` | RPC-ready session inventory for clients; dashboard fleet uses server-side `SessionManager` injection so on-disk inventory works without a live runtime |
 | `get_tree`, `navigate_tree` | Tree screen (🔜 later, §1 `/tree` — RPC ready) |
-| `list_background_agents` | Subagent strip/fleet hydration; live transcript arrives via `background_agent_event` relay |
+| `list_background_agents` | Subagent strip/fleet/session hydration (registry re-seeds `backgroundAgents` on drill-in, so strips survive browser reloads); live transcript arrives via `background_agent_event` relay, backfilled from the agent's on-disk session log (`/subagents/:agentId/messages`) |
 | `get_settings`, `set_settings` | Settings tab |
 | `get_version` | Footer/settings version display |
 | `get_last_assistant_text` | Fleet card "last activity" previews |

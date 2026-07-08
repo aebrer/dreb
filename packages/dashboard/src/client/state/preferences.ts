@@ -2,12 +2,17 @@ import { createSignal } from "solid-js";
 
 export const EXPAND_THINKING_KEY = "dreb.dashboard.expandThinking";
 
-function readBooleanPreference(key: string): boolean {
-	if (typeof window === "undefined") return false;
+/** Expanded thinking is opt-OUT: new users see thinking blocks open. */
+const EXPAND_THINKING_DEFAULT = true;
+
+function readBooleanPreference(key: string, defaultValue: boolean): boolean {
+	if (typeof window === "undefined") return defaultValue;
 	try {
-		return window.localStorage.getItem(key) === "true";
+		const raw = window.localStorage.getItem(key);
+		if (raw === null) return defaultValue;
+		return raw === "true";
 	} catch {
-		return false;
+		return defaultValue;
 	}
 }
 
@@ -21,7 +26,9 @@ function writeBooleanPreference(key: string, value: boolean): void {
 	}
 }
 
-const [expandThinkingSignal, setExpandThinkingSignal] = createSignal(readBooleanPreference(EXPAND_THINKING_KEY));
+const [expandThinkingSignal, setExpandThinkingSignal] = createSignal(
+	readBooleanPreference(EXPAND_THINKING_KEY, EXPAND_THINKING_DEFAULT),
+);
 
 export const expandThinking = expandThinkingSignal;
 
@@ -31,5 +38,5 @@ export function setExpandThinking(value: boolean): void {
 }
 
 export function reloadExpandThinkingPreference(): void {
-	setExpandThinkingSignal(readBooleanPreference(EXPAND_THINKING_KEY));
+	setExpandThinkingSignal(readBooleanPreference(EXPAND_THINKING_KEY, EXPAND_THINKING_DEFAULT));
 }

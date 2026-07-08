@@ -13,6 +13,17 @@ vi.mock("../../src/client/api.js", () => ({
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
 		messages: vi.fn(async () => ({ messages: [] })),
+		backgroundAgents: vi.fn(async () => ({ agents: [] })),
+		subagentMessages: vi.fn(async () => ({
+			agent: {
+				agentId: "bg1",
+				agentType: "Explore",
+				taskSummary: "scan things",
+				startedAt: new Date().toISOString(),
+				status: "completed",
+			},
+			messages: [],
+		})),
 		models: vi.fn(async () => ({ models: [] })),
 		stats: vi.fn(async () => ({
 			sessionId: "s1",
@@ -659,21 +670,100 @@ describe("dashboard client regressions", () => {
 			needsAttention: false,
 			lastActivity: new Date().toISOString(),
 		});
+		const diskSession = (id: string, cwd: string) => ({
+			path: `/sessions/${id}.jsonl`,
+			id,
+			cwd,
+			name: `disk ${id}`,
+			created: new Date().toISOString(),
+			modified: new Date().toISOString(),
+			messageCount: 3,
+			firstMessage: "hello",
+		});
 		const fakeStore = {
 			...store,
 			sessions: { a: liveSession },
-			fleet: () => ({ runtimes: [runtime("a", "/tmp/a"), runtime("b", "/tmp/b")], diskSessions: [] }),
+			fleet: () => ({
+				runtimes: [runtime("a", "/tmp/a"), runtime("b", "/tmp/b")],
+				diskSessions: [diskSession("d1", "/tmp/x"), diskSession("d2", "/tmp/y")],
+			}),
 		};
 		const el = mount(() => <FleetScreen store={fakeStore} />);
-		const headers = [...el.querySelectorAll(".group-head h2")].map((node) => node.textContent);
 
-		expect(headers).toEqual(["/tmp"]);
+		// Live cards are one flat grid (no project group headers); each card
+		// carries its own real cwd.
 		expect(el.querySelectorAll(".session-card")).toHaveLength(2);
-		expect(el.textContent).toContain("/tmp/a");
-		expect(el.textContent).toContain("/tmp/b");
+		const cardProjects = [...el.querySelectorAll(".session-card .session-project")].map((node) => node.textContent);
+		expect(cardProjects).toEqual(["/tmp/a", "/tmp/b"]);
+		// Past sessions bundle /tmp/* into a single group.
+		const headers = [...el.querySelectorAll(".group-head h3")].map((node) => node.textContent);
+		expect(headers).toEqual(["/tmp"]);
 		expect(el.textContent).toContain("github-copilot/claude-fable-5");
 		expect(el.textContent).toContain("$0.42");
 		expect(el.textContent).toContain("live fleet name");
+	});
+
+	it("fleet shows live sessions first and collapses past sessions to three rows with an expand toggle", () => {
+		const store = makeStore() as any;
+		const diskSession = (id: string, modified: string) => ({
+			path: `/sessions/${id}.jsonl`,
+			id,
+			cwd: "/repo",
+			name: `disk ${id}`,
+			created: modified,
+			modified,
+			messageCount: 3,
+			firstMessage: "hello",
+		});
+		const fakeStore = {
+			...store,
+			sessions: {},
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "live1",
+						cwd: "/repo",
+						state: {
+							sessionId: "live1",
+							thinkingLevel: "off",
+							isStreaming: true,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 1,
+							pendingMessageCount: 0,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [
+					diskSession("d1", "2026-01-04T00:00:00Z"),
+					diskSession("d2", "2026-01-03T00:00:00Z"),
+					diskSession("d3", "2026-01-02T00:00:00Z"),
+					diskSession("d4", "2026-01-01T00:00:00Z"),
+				],
+			}),
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+
+		// Live grid renders before the past-sessions section.
+		const live = el.querySelector(".live-sessions");
+		const past = el.querySelector(".past-sessions");
+		expect(live).not.toBeNull();
+		expect(past).not.toBeNull();
+		expect(live!.compareDocumentPosition(past!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+		// Only 3 disk rows visible; the rest behind the expand toggle.
+		expect(el.querySelectorAll(".disk-row")).toHaveLength(3);
+		const toggle = el.querySelector(".disk-more") as HTMLButtonElement;
+		expect(toggle.textContent).toContain("all 4 on disk");
+
+		toggle.click();
+		expect(el.querySelectorAll(".disk-row")).toHaveLength(4);
+		expect((el.querySelector(".disk-more") as HTMLButtonElement).textContent).toContain("show fewer");
 	});
 
 	it("model selector groups by provider and marks the current same-id model", async () => {
@@ -1030,5 +1120,142 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("scoped");
 		expect(el.textContent).toContain("scoped-model");
 		expect(el.textContent).not.toContain("all-only");
+	});
+
+	it("expanded thinking is the default for fresh browsers (opt-out, not opt-in)", async () => {
+		// afterEach forces the signal to false — reload from clean storage to
+		// exercise the real default path.
+		window.localStorage.clear();
+		const { reloadExpandThinkingPreference, expandThinking } = await import("../../src/client/state/preferences.js");
+		reloadExpandThinkingPreference();
+		expect(expandThinking()).toBe(true);
+
+		// An explicit opt-out is honored.
+		window.localStorage.setItem("dreb.dashboard.expandThinking", "false");
+		reloadExpandThinkingPreference();
+		expect(expandThinking()).toBe(false);
+	});
+
+	it("subagent drill-in hydrates from the on-disk session log on mount", async () => {
+		vi.mocked(api.subagentMessages).mockResolvedValue({
+			agent: {
+				agentId: "bg9",
+				agentType: "Explore",
+				taskSummary: "hydrated task",
+				startedAt: new Date().toISOString(),
+				status: "completed",
+			},
+			messages: [{ role: "assistant", content: [{ type: "text", text: "found the answer on disk" }] }],
+		});
+		// Real store: hydrateSubagent must create the session + subagent state
+		// from nothing (browser reloaded — reducer state is empty).
+		const store = makeStore();
+		const el = mount(() => <SubagentScreen store={store} sessionKey="k-reload" agentId="bg9" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.subagentMessages).toHaveBeenCalledWith("k-reload", "bg9");
+		expect(el.textContent).toContain("found the answer on disk");
+		expect(el.textContent).toContain("hydrated task");
+	});
+
+	it("subagent drill-in surfaces hydration errors loudly", async () => {
+		vi.mocked(api.subagentMessages).mockRejectedValue(new Error("No session log found for this agent"));
+		const store = makeStore();
+		const el = mount(() => <SubagentScreen store={store} sessionKey="k-reload" agentId="bg-missing" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("No session log found for this agent");
+	});
+
+	it("hydrateSession re-seeds background agents from the runtime registry", async () => {
+		vi.mocked(api.messages).mockResolvedValue({ messages: [] });
+		vi.mocked(api.backgroundAgents).mockResolvedValue({
+			agents: [
+				{
+					agentId: "bg7",
+					agentType: "Explore",
+					taskSummary: "registry-seeded task",
+					startedAt: new Date().toISOString(),
+					status: "running",
+				},
+			],
+		});
+		const store = makeStore();
+		await store.hydrateSession("k-reload");
+
+		expect(store.sessions["k-reload"]?.backgroundAgents.bg7?.taskSummary).toBe("registry-seeded task");
+	});
+
+	it("tool cards render full inputs expanded (subagent task markdown, generic long args)", () => {
+		const longTask = `investigate the following:\n\n- ${"x".repeat(150)}\n- item two`;
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{
+						kind: "tool",
+						toolCallId: "t1",
+						toolName: "subagent",
+						args: { task: longTask },
+						status: "done",
+						resultText: "## Agent: Explore\n\ndone",
+						startedAt: Date.now(),
+					},
+					{
+						kind: "tool",
+						toolCallId: "t2",
+						toolName: "web_search",
+						args: { query: `a long query ${"y".repeat(120)}` },
+						status: "done",
+						resultText: "results",
+						startedAt: Date.now(),
+					},
+				]}
+			/>
+		));
+
+		const inputs = el.querySelectorAll(".tool-input");
+		expect(inputs.length).toBe(2);
+		// Subagent task renders as markdown (list), in full.
+		expect(inputs[0]?.querySelector(".markdown-body li")?.textContent).toContain("x".repeat(150));
+		// Generic long string arg gets a labeled full-text section.
+		expect(inputs[1]?.textContent).toContain("query");
+		expect(inputs[1]?.textContent).toContain("y".repeat(120));
+	});
+
+	it("markdown-contract tool results render as markdown; suggest_next uses details", () => {
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{
+						kind: "tool",
+						toolCallId: "t1",
+						toolName: "subagent",
+						args: { task: "short" },
+						status: "done",
+						resultText: "## Agent: Explore\n\n**bold finding**",
+						startedAt: Date.now(),
+					},
+					{
+						kind: "tool",
+						toolCallId: "t2",
+						toolName: "suggest_next",
+						args: { command: "/skill:mach6-push" },
+						status: "done",
+						resultText: "Suggestion registered: /skill:mach6-push",
+						details: { suggestion: "/skill:mach6-push", summary: "Fixed *all* the bugs" },
+						startedAt: Date.now(),
+					},
+				]}
+			/>
+		));
+
+		const results = el.querySelectorAll(".tool-result");
+		// Subagent completion report: markdown headers/bold, not <pre>.
+		expect(results[0]?.querySelector(".markdown-body h2")?.textContent).toBe("Agent: Explore");
+		expect(results[0]?.querySelector("pre")).toBeNull();
+		// suggest_next renders the markdown summary + the command, not the raw ack.
+		expect(results[1]?.querySelector(".markdown-body em")?.textContent).toBe("all");
+		expect(results[1]?.textContent).toContain("/skill:mach6-push");
+		expect(results[1]?.textContent).not.toContain("Suggestion registered");
 	});
 });

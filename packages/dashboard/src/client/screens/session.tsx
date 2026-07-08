@@ -519,8 +519,11 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		if (composerRef) queueMicrotask(() => composerRef && autoGrowTextarea(composerRef));
 	});
 
-	// Auto-scroll on new entries unless the user scrolled up.
+	// Stick-to-bottom autoscroll: revisions bump on every applied envelope,
+	// including in-place streaming text deltas (entries.length alone only
+	// fires when a new entry appends — i.e. after completion).
 	createEffect(() => {
+		props.store.revisions[props.sessionKey];
 		session()?.entries.length;
 		if (autoScroll && chatRef) chatRef.scrollTop = chatRef.scrollHeight;
 	});

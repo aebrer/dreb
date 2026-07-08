@@ -72,9 +72,9 @@ logged server-side.
 
 | Screen | What it does |
 |---|---|
-| **Fleet** | Home. Live sessions grouped by project — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), activity line, live subagent lines, tasks progress, ctx%, model, last activity. Needs-attention cards sort first and badge the browser tab. Below the cards: on-disk session inventory with resume and delete. |
-| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, agent-result cards, tool cards with bespoke read/write/edit/bash bodies, compaction/branch summaries, custom messages), per-message copy, tasks panel, subagent strip, status line with elapsed time plus ■ stop and compaction/retry aborts, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, median tok/s, and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests (select/confirm/input/editor) render as modals; notifications as toasts. |
-| **Subagent view** | Read-only live transcript of a background agent, fed by the RPC event relay. Shows the task, streaming output, and tool activity. No composer — subagents can't be steered yet; the parent session controls them. |
+| **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, last activity. Needs-attention cards sort first and badge the browser tab. Below the grid: past sessions grouped by project, three compact rows per group with an "all N on disk" expander, resume and delete. |
+| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs and markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, compaction/branch summaries, custom messages), per-message copy, tasks panel, subagent strip, status line with elapsed time plus ■ stop and compaction/retry aborts, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, median tok/s, and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests (select/confirm/input/editor) render as modals; notifications as toasts. |
+| **Subagent view** | Read-only transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the view survives browser reloads. Shows the task, streaming output, and tool activity. No composer — subagents can't be steered yet; the parent session controls them. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. |
 | **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Dashboard-local preferences (always expand thinking, needs-attention notification permission) live in the browser. Paired-devices list with unpair. |
 | **Pairing** | Remote first-login: identity echo, PIN entry, expiry note, and the security copy explaining what pairing grants. |
@@ -105,8 +105,9 @@ Background subagents are first-class:
 - The session view shows a chip strip — one chip per background agent; click
   to drill into its live transcript.
 - The drill-in view streams the child's events in real time via the
-  `background_agent_event` relay (see [RPC events](rpc.md#event-types)) — no
-  file tailing, one transport.
+  `background_agent_event` relay (see [RPC events](rpc.md#event-types)) and
+  hydrates from the agent's on-disk session log on mount, so transcripts
+  survive browser reloads and remain viewable after the agent finishes.
 
 ## Responsive behavior
 

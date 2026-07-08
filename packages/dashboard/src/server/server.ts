@@ -17,6 +17,7 @@ import type { AuthDecision, DashboardAuth } from "./auth.js";
 import { EventHub } from "./event-hub.js";
 import { defaultPlaces, FileApi } from "./files.js";
 import type { RuntimePool } from "./runtime-pool.js";
+import { readSubagentMessages } from "./subagent-log.js";
 
 export interface DashboardServerOptions {
 	auth: DashboardAuth;
@@ -383,6 +384,18 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 
 	app.get("/api/runtimes/:key/background-agents", (req, res) => {
 		withRuntime(req, res, async (h) => ({ agents: await h.client.listBackgroundAgents() }));
+	});
+
+	app.get("/api/runtimes/:key/subagents/:agentId/messages", (req, res) => {
+		const agentId = String(req.params.agentId);
+		withRuntime(req, res, async (h) => {
+			// The runtime's registry is authoritative for status + log location.
+			const agents = await h.client.listBackgroundAgents();
+			const agent = agents.find((a) => a.agentId === agentId);
+			if (!agent) throw new Error(`No background agent ${agentId} in this runtime`);
+			const messages = readSubagentMessages(agent);
+			return { agent, messages };
+		});
 	});
 
 	app.post("/api/runtimes/:key/extension-ui-response", (req, res) => {

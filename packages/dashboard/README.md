@@ -25,10 +25,12 @@ Open `http://127.0.0.1:5343`.
 
 ## Screens
 
-- **Fleet** (home) — live sessions grouped by project: status chips, current
-  activity, live subagents, task progress, ctx%, model, cost, last-assistant
-  preview. On-disk session inventory with resume/delete. `+ new session`
-  anywhere.
+- **Fleet** (home) — live-first: every live session in one grid at the top
+  (needs-attention sorts first; each card shows its project path, status chip,
+  current activity, live subagents, task progress, ctx%, model, cost,
+  last-assistant preview). Below, past sessions grouped by project — three
+  compact rows each with an "all N on disk" expander — with resume/delete.
+  `+ new session` anywhere.
 - **Session view** — full chat parity: markdown streaming transcript, tool
   cards, thinking blocks, compaction summaries, per-message copy, tasks panel,
   suggest-next chip, slash-command autocomplete, image attach/paste,
@@ -36,8 +38,10 @@ Open `http://127.0.0.1:5343`.
   median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
   and live auto-naming.
-- **Subagent drill-in** — read-only live transcript of a background agent via
-  the event relay. No composer: the parent session controls the agent.
+- **Subagent drill-in** — read-only transcript of a background agent: live
+  events via the relay, hydrated from the agent's on-disk session log so the
+  view survives browser reloads. No composer: the parent session controls the
+  agent.
 - **Files** — host-wide browse with places shortcuts, upload (collision
   prompts before overwrite), download, new-folder, "new session here".
 - **Settings** — persistent defaults (model, thinking, queue modes,

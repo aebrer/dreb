@@ -1,7 +1,7 @@
 /**
- * Fleet overview — home screen. Live cards grouped by project (status chip,
- * activity, subagents, tasks, ctx%, model), on-disk inventory with
- * resume/delete, "+ new session" modal. Needs-attention sorts first.
+ * Fleet overview — home screen. Live-first: one grid of all live session
+ * cards (attention-first, project path on each card), then compact past
+ * sessions grouped by project (3 rows + expand). "+ new session" modal.
  */
 
 import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
@@ -33,7 +33,7 @@ function runtimeCostLabel(runtime: RuntimeInfoDto): string | undefined {
 	return runtime.stats ? `$${runtime.stats.cost.toFixed(2)}` : undefined;
 }
 
-function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto; groupKey: string }): JSX.Element {
+function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.Element {
 	const status = () => runtimeStatus(props.runtime);
 	const session = () => props.store.sessions[props.runtime.key];
 	const liveAgents = () => props.runtime.backgroundAgents.filter((a) => a.status === "running");
@@ -58,6 +58,9 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto; groupKey
 					<StatusChip status="error" />
 				</Show>
 			</div>
+			<p class="session-project" title={props.runtime.cwd}>
+				{shortenPath(props.runtime.cwd)}
+			</p>
 			<Show when={status() === "attention"}>
 				<p class="attention-reason">
 					{session()?.uiRequests[0] ? `waiting for input — ${session()!.uiRequests[0].title}` : "needs attention"}
@@ -84,10 +87,6 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto; groupKey
 				</div>
 			</Show>
 			<div class="session-meta">
-				<Show when={props.runtime.cwd !== props.groupKey}>
-					<span title={props.runtime.cwd}>{shortenPath(props.runtime.cwd)}</span>
-					<span>·</span>
-				</Show>
 				<Show when={tasks().length > 0}>
 					<span>
 						tasks {tasksDone()}/{tasks().length}
@@ -220,33 +219,34 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	const [newSessionCwd, setNewSessionCwd] = createSignal<string | undefined>();
 	const [showNewSession, setShowNewSession] = createSignal(false);
 	const [confirmDelete, setConfirmDelete] = createSignal<SessionInfoDto>();
+	const [expandedGroups, setExpandedGroups] = createSignal<Record<string, boolean>>({});
 
-	const groups = createMemo(() => {
+	// Live sessions: one flat grid, attention-first then most-recent-first —
+	// every live session visible at a glance without scrolling past disk rows.
+	const liveRuntimes = createMemo(() => {
+		const runtimes = [...props.store.fleet().runtimes];
+		runtimes.sort((a, b) => {
+			const attention = Number(b.needsAttention) - Number(a.needsAttention);
+			if (attention !== 0) return attention;
+			return new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
+		});
+		return runtimes;
+	});
+
+	// Past sessions: grouped by project, compact rows, newest group first.
+	const diskGroups = createMemo(() => {
 		const fleet = props.store.fleet();
-		const byProject = new Map<string, { runtimes: RuntimeInfoDto[]; disk: SessionInfoDto[] }>();
-		for (const runtime of fleet.runtimes) {
-			const key = fleetGroupKey(runtime.cwd);
-			const group = byProject.get(key) ?? { runtimes: [], disk: [] };
-			group.runtimes.push(runtime);
-			byProject.set(key, group);
-		}
 		const liveSessionFiles = new Set(fleet.runtimes.map((r) => r.state.sessionFile).filter(Boolean));
+		const byProject = new Map<string, SessionInfoDto[]>();
 		for (const session of fleet.diskSessions) {
 			if (liveSessionFiles.has(session.path)) continue; // already live
 			const key = fleetGroupKey(session.cwd);
-			const group = byProject.get(key) ?? { runtimes: [], disk: [] };
-			group.disk.push(session);
+			const group = byProject.get(key) ?? [];
+			group.push(session);
 			byProject.set(key, group);
 		}
-		// Attention-first sort within each group; groups with attention first.
 		const entries = [...byProject.entries()];
-		for (const [, group] of entries) {
-			group.runtimes.sort((a, b) => Number(b.needsAttention) - Number(a.needsAttention));
-		}
-		entries.sort(
-			([, a], [, b]) =>
-				Number(b.runtimes.some((r) => r.needsAttention)) - Number(a.runtimes.some((r) => r.needsAttention)),
-		);
+		entries.sort(([, a], [, b]) => new Date(b[0]?.modified ?? 0).getTime() - new Date(a[0]?.modified ?? 0).getTime());
 		return entries;
 	});
 
@@ -296,7 +296,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 				</div>
 
 				<Show
-					when={groups().length > 0}
+					when={liveRuntimes().length > 0 || diskGroups().length > 0}
 					fallback={
 						<div class="empty-state">
 							<p>No sessions yet.</p>
@@ -308,62 +308,84 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 						</div>
 					}
 				>
-					<For each={groups()}>
-						{([project, group]) => (
-							<section class="project-group">
-								<div class="group-head">
-									<h2>{shortenPath(project)}</h2>
-									<span class="muted small">
-										{group.runtimes.length} live · {group.disk.length} on disk
-									</span>
-									<button
-										type="button"
-										class="btn btn-small"
-										onClick={() => {
-											setNewSessionCwd(project);
-											setShowNewSession(true);
-										}}
-									>
-										+ new
-									</button>
-								</div>
-								<Show when={group.runtimes.length > 0}>
-									<div class="session-grid">
-										<For each={group.runtimes}>
-											{(runtime) => <SessionCard store={props.store} runtime={runtime} groupKey={project} />}
-										</For>
-									</div>
-								</Show>
-								<Show when={group.disk.length > 0}>
-									<p class="disk-label">on disk</p>
-									<For each={group.disk.slice(0, 5)}>
-										{(session) => (
-											<div class="disk-row">
-												<span class="name" classList={{ muted: !session.name }}>
-													{session.name ?? `“${session.firstMessage.slice(0, 60)}…”`}
-												</span>
-												<span class="meta">
-													{session.messageCount} msgs · {relativeTime(session.modified)}
-												</span>
-												<span class="actions">
-													<button type="button" class="btn btn-small" onClick={() => resume(session)}>
-														resume
-													</button>
-													<button
-														type="button"
-														class="btn btn-small btn-danger"
-														onClick={() => setConfirmDelete(session)}
-													>
-														delete
-													</button>
-												</span>
+					<Show when={liveRuntimes().length > 0}>
+						<section class="live-sessions">
+							<div class="session-grid">
+								<For each={liveRuntimes()}>
+									{(runtime) => <SessionCard store={props.store} runtime={runtime} />}
+								</For>
+							</div>
+						</section>
+					</Show>
+
+					<Show when={diskGroups().length > 0}>
+						<section class="past-sessions">
+							<h2 class="past-sessions-head">past sessions</h2>
+							<For each={diskGroups()}>
+								{([project, sessions]) => {
+									const expanded = () => expandedGroups()[project] ?? false;
+									const visible = () => (expanded() ? sessions : sessions.slice(0, 3));
+									return (
+										<section class="project-group">
+											<div class="group-head">
+												<h3>{shortenPath(project)}</h3>
+												<span class="muted small">{sessions.length} on disk</span>
+												<button
+													type="button"
+													class="btn btn-small"
+													onClick={() => {
+														setNewSessionCwd(project);
+														setShowNewSession(true);
+													}}
+												>
+													+ new
+												</button>
 											</div>
-										)}
-									</For>
-								</Show>
-							</section>
-						)}
-					</For>
+											<For each={visible()}>
+												{(session) => (
+													<div class="disk-row">
+														<span class="name" classList={{ muted: !session.name }}>
+															{session.name ?? `“${session.firstMessage.slice(0, 60)}…”`}
+														</span>
+														<span class="meta">
+															{session.messageCount} msgs · {relativeTime(session.modified)}
+														</span>
+														<span class="actions">
+															<button
+																type="button"
+																class="btn btn-small"
+																onClick={() => resume(session)}
+															>
+																resume
+															</button>
+															<button
+																type="button"
+																class="btn btn-small btn-danger"
+																onClick={() => setConfirmDelete(session)}
+															>
+																delete
+															</button>
+														</span>
+													</div>
+												)}
+											</For>
+											<Show when={sessions.length > 3}>
+												<button
+													type="button"
+													class="disk-more"
+													onClick={() =>
+														setExpandedGroups((current) => ({ ...current, [project]: !expanded() }))
+													}
+												>
+													{expanded() ? "show fewer ←" : `all ${sessions.length} on disk →`}
+												</button>
+											</Show>
+										</section>
+									);
+								}}
+							</For>
+						</section>
+					</Show>
 				</Show>
 			</main>
 

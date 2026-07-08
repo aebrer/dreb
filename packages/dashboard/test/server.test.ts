@@ -145,6 +145,45 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[0].prompt).toHaveBeenCalledWith("hello");
 	});
 
+	it("GET subagent messages reads the agent's session log from disk", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
+		tempDirs.push(dir);
+		const logDir = await mkdtemp(join(tmpdir(), "dreb-dash-sublog-"));
+		tempDirs.push(logDir);
+		const message = { role: "assistant", content: [{ type: "text", text: "subagent findings" }] };
+		await writeFile(
+			join(logDir, "session.jsonl"),
+			`${JSON.stringify({ type: "session", cwd: dir })}\n${JSON.stringify({ type: "message", id: "1", message })}\n`,
+		);
+		const { base, clients } = await startServer();
+		const created = await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const { key } = (await created.json()) as { key: string };
+		const agent = {
+			agentId: "bg1",
+			agentType: "Explore",
+			taskSummary: "scan",
+			startedAt: new Date().toISOString(),
+			status: "running",
+			sessionDir: logDir,
+		};
+		(clients[0].listBackgroundAgents as ReturnType<typeof vi.fn>).mockResolvedValue([agent]);
+
+		const res = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/messages`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { agent: { agentId: string }; messages: unknown[] };
+		expect(body.agent.agentId).toBe("bg1");
+		expect(body.messages).toEqual([message]);
+
+		// Unknown agent id → loud 502 with the registry error.
+		const missing = await fetch(`${base}/api/runtimes/${key}/subagents/nope/messages`);
+		expect(missing.status).toBe(502);
+		await expect(missing.json()).resolves.toMatchObject({ error: expect.stringContaining("No background agent") });
+	});
+
 	it("prompt endpoint dispatches steer/follow_up/prompt modes", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
 		tempDirs.push(dir);

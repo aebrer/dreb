@@ -86,6 +86,69 @@ function toolStatus(entry: ToolEntry): { text: string; cls: string } {
 	return { text: "done", cls: "" };
 }
 
+/**
+ * Tools whose result text is markdown by contract (mirrors the TUI, which
+ * renders these through its Markdown component): subagent completion reports
+ * (`## Agent:` headers), skill bodies (SKILL.md), web_fetch extractions
+ * (markdown-converted readable text).
+ */
+const MARKDOWN_RESULT_TOOLS = new Set(["subagent", "skill", "web_fetch"]);
+
+/** Args rendered as full-input sections in the expanded card body, per tool. */
+function toolInputSections(entry: ToolEntry): Array<{ label: string; text: string; markdown?: boolean }> {
+	const args = entry.args as Record<string, unknown> | undefined;
+	if (!args || typeof args !== "object") return [];
+	switch (entry.toolName) {
+		case "bash":
+		case "bash (user)":
+			return []; // full command already rendered via .tool-command
+		case "read":
+		case "ls":
+		case "edit":
+			return []; // path is fully visible in the summary; edit's diff result carries the change
+		case "write":
+			// While running the full content IS the body (no result yet); after
+			// completion the result replaces it, so surface the input here.
+			return entry.resultText && typeof args.content === "string"
+				? [{ label: "content", text: String(args.content) }]
+				: [];
+		case "subagent": {
+			const sections: Array<{ label: string; text: string; markdown?: boolean }> = [];
+			if (typeof args.task === "string") sections.push({ label: "task", text: args.task, markdown: true });
+			if (Array.isArray(args.tasks)) {
+				(args.tasks as Array<Record<string, unknown>>).forEach((task, i) => {
+					if (typeof task?.task === "string")
+						sections.push({
+							label: `task ${i + 1}${task.agent ? ` (${task.agent})` : ""}`,
+							text: task.task,
+							markdown: true,
+						});
+				});
+			}
+			if (Array.isArray(args.chain)) {
+				(args.chain as Array<Record<string, unknown>>).forEach((step, i) => {
+					if (typeof step?.task === "string")
+						sections.push({
+							label: `step ${i + 1}${step.agent ? ` (${step.agent})` : ""}`,
+							text: step.task,
+							markdown: true,
+						});
+				});
+			}
+			return sections;
+		}
+		default: {
+			// Generic: every string arg longer than the summary can show, in full.
+			const sections: Array<{ label: string; text: string }> = [];
+			for (const [key, value] of Object.entries(args)) {
+				const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+				if (text && text.length > 80) sections.push({ label: key, text });
+			}
+			return sections;
+		}
+	}
+}
+
 /** Render an edit-tool diff body with status-colored add/del lines. */
 function DiffBody(props: { text: string }): JSX.Element {
 	return (
@@ -106,12 +169,18 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 	const status = () => toolStatus(props.entry);
 	const isDiff = () => props.entry.toolName === "edit";
 	const args = () => props.entry.args as Record<string, unknown> | undefined;
+	const suggestDetails = () => {
+		if (props.entry.toolName !== "suggest_next") return undefined;
+		return props.entry.details as { suggestion?: string; summary?: string } | undefined;
+	};
 	const bodyText = () => {
 		if (props.entry.toolName === "write" && !props.entry.resultText && typeof args()?.content === "string") {
 			return String(args()?.content);
 		}
 		return props.entry.resultText;
 	};
+	const bodyIsMarkdown = () => MARKDOWN_RESULT_TOOLS.has(props.entry.toolName) && props.entry.status !== "error";
+	const inputSections = () => toolInputSections(props.entry);
 	return (
 		<details class="tool" open={props.entry.status === "running"}>
 			<summary>
@@ -124,13 +193,42 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 					<code>{String(args()?.command ?? "")}</code>
 				</div>
 			</Show>
-			<Show when={bodyText()}>
-				<div class="tool-result">
-					<Show when={isDiff()} fallback={<pre>{bodyText()}</pre>}>
-						<DiffBody text={bodyText()} />
-					</Show>
-				</div>
-			</Show>
+			<For each={inputSections()}>
+				{(section) => (
+					<div class="tool-input">
+						<span class="tool-input-label">{section.label}</span>
+						<Show when={section.markdown} fallback={<pre>{section.text}</pre>}>
+							<div class="markdown-body" innerHTML={renderMarkdown(section.text)} />
+						</Show>
+					</div>
+				)}
+			</For>
+			<Switch>
+				<Match when={suggestDetails()}>
+					{(details) => (
+						<div class="tool-result">
+							<Show when={details().summary}>
+								<div class="markdown-body" innerHTML={renderMarkdown(details().summary!)} />
+							</Show>
+							<p class="suggested-command">
+								→ <code>{details().suggestion}</code>
+							</p>
+						</div>
+					)}
+				</Match>
+				<Match when={bodyText()}>
+					<div class="tool-result">
+						<Switch fallback={<pre>{bodyText()}</pre>}>
+							<Match when={isDiff()}>
+								<DiffBody text={bodyText()} />
+							</Match>
+							<Match when={bodyIsMarkdown()}>
+								<div class="markdown-body" innerHTML={renderMarkdown(bodyText())} />
+							</Match>
+						</Switch>
+					</div>
+				</Match>
+			</Switch>
 		</details>
 	);
 }

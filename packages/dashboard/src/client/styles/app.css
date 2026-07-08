@@ -32,22 +32,37 @@
 	flex-wrap: wrap;
 }
 
-.project-group {
+/* Live sessions come first — the fleet's primary content. */
+.live-sessions {
 	margin-bottom: var(--space-6);
+}
+
+/* Past sessions: secondary stratum, tighter than live cards. */
+.past-sessions-head {
+	font-size: var(--fs-h3);
+	color: var(--muted);
+	border-bottom: var(--hairline);
+	padding-bottom: var(--space-2);
+	margin-bottom: var(--space-4);
+}
+
+.project-group {
+	margin-bottom: var(--space-5);
 }
 
 .group-head {
 	display: flex;
 	align-items: baseline;
 	gap: var(--space-3);
-	border-bottom: var(--hairline);
-	padding-bottom: var(--space-2);
-	margin-bottom: var(--space-4);
+	padding-bottom: var(--space-1);
+	margin-bottom: var(--space-1);
 	flex-wrap: wrap;
 }
 
-.group-head h2 {
-	font-size: var(--fs-h3);
+.group-head h2,
+.group-head h3 {
+	font-size: var(--fs-secondary);
+	font-weight: 600;
 }
 
 .group-head .btn {
@@ -93,6 +108,16 @@
 
 .session-title .name {
 	font-weight: 500;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Project path on each live card — cards live in one flat grid, so the
+   path is the only project cue. */
+.session-project {
+	font-size: var(--fs-small);
+	color: var(--muted);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -152,17 +177,11 @@
 	padding-top: var(--space-2);
 }
 
-.disk-label {
-	font-size: var(--fs-small);
-	color: var(--muted);
-	margin-bottom: var(--space-2);
-}
-
 .disk-row {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
-	padding: var(--space-2) 0;
+	padding: 2px 0;
 	border-bottom: var(--hairline);
 	font-size: var(--fs-secondary);
 }
@@ -185,6 +204,23 @@
 	display: flex;
 	gap: var(--space-2);
 	flex-shrink: 0;
+}
+
+.disk-more {
+	display: inline-block;
+	margin-top: var(--space-1);
+	font-size: var(--fs-small);
+	color: var(--muted);
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	text-decoration: underline;
+	font-family: inherit;
+}
+
+.disk-more:hover {
+	color: var(--text);
 }
 
 .empty-state {
@@ -608,13 +644,45 @@ details.thinking .thinking-body {
 	white-space: pre-wrap;
 }
 
+/* Full tool inputs — expanded card shows inputs in full (summary row truncates). */
+.tool .tool-input {
+	border-top: var(--hairline);
+	padding: var(--space-2) var(--space-3);
+	overflow-x: auto;
+}
+
+.tool .tool-input-label {
+	display: block;
+	font-size: var(--fs-small);
+	color: var(--muted);
+	margin-bottom: var(--space-1);
+}
+
+.tool .tool-input pre {
+	border: none;
+	padding: 0;
+	font-size: var(--fs-small);
+	white-space: pre-wrap;
+}
+
+.tool .suggested-command {
+	margin-top: var(--space-1);
+}
+
+.tool .suggested-command code {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: 1px var(--space-2);
+}
+
 .tool .tool-result {
 	border-top: var(--hairline);
 	padding: var(--space-2) var(--space-3);
 	overflow-x: auto;
 }
 
-.tool .tool-command + .tool-result {
+.tool .tool-command + .tool-result,
+.tool .tool-input + .tool-result {
 	border-top: none;
 }
 
@@ -1646,6 +1714,20 @@ details.thinking .thinking-body {
 /* ---------------------------------------------------------------- mobile */
 
 @media (max-width: 700px) {
+	.session-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.disk-row {
+		flex-wrap: wrap;
+	}
+
+	.disk-row .meta {
+		margin-left: 0;
+		width: 100%;
+		order: 3;
+	}
+
 	.session-bar .project {
 		display: none;
 	}

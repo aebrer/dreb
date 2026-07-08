@@ -74,6 +74,10 @@ export const api = {
 		request<{ text: string; cancelled: boolean }>(`/api/runtimes/${key}/fork`, json({ entryId })),
 	backgroundAgents: (key: string) =>
 		request<{ agents: BackgroundAgentDto[] }>(`/api/runtimes/${key}/background-agents`),
+	subagentMessages: (key: string, agentId: string) =>
+		request<{ agent: BackgroundAgentDto; messages: unknown[] }>(
+			`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/messages`,
+		),
 	extensionUiResponse: (key: string, response: Record<string, unknown>) =>
 		request<{ ok: true }>(`/api/runtimes/${key}/extension-ui-response`, json(response)),
 	exportHtmlUrl: (key: string) => `/api/runtimes/${key}/export-html`,

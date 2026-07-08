@@ -1,10 +1,11 @@
 /**
  * Subagent drill-in — read-only live view of a background agent's transcript
- * via the event relay. No composer (SPEC §5a): a fixed note explains the
- * parent controls this agent.
+ * via the event relay, hydrated from the agent's on-disk session log so the
+ * view survives browser reloads. No composer (SPEC §5a): a fixed note explains
+ * the parent controls this agent.
  */
 
-import { createMemo, type JSX, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, type JSX, onMount, Show } from "solid-js";
 import { StatusChip } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
 import type { AppStore } from "../state/store.js";
@@ -15,6 +16,24 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	const sub = () => parent()?.subagents[props.agentId];
 	const runtime = createMemo(() => props.store.fleet().runtimes.find((r) => r.key === props.sessionKey));
 	const parentName = () => runtime()?.state.sessionName ?? props.sessionKey;
+	const [hydrateError, setHydrateError] = createSignal<string>();
+
+	let chatRef: HTMLDivElement | undefined;
+	let autoScroll = true;
+
+	onMount(() => {
+		// Hydrate from the on-disk session log: after a reload the live relay
+		// state is gone, and even mid-run the log carries everything so far.
+		props.store.hydrateSubagent(props.sessionKey, props.agentId).catch((err) => {
+			setHydrateError(err instanceof Error ? err.message : String(err));
+		});
+	});
+
+	// Stick-to-bottom autoscroll during streaming (revision bumps per envelope).
+	createEffect(() => {
+		props.store.revisions[props.sessionKey];
+		if (autoScroll && chatRef) chatRef.scrollTop = chatRef.scrollHeight;
+	});
 
 	return (
 		<div class="session-screen">
@@ -38,15 +57,25 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 				</div>
 			</header>
 
-			<main class="chat">
+			<main
+				class="chat"
+				ref={chatRef}
+				onScroll={() => {
+					if (!chatRef) return;
+					autoScroll = chatRef.scrollTop + chatRef.clientHeight >= chatRef.scrollHeight - 40;
+				}}
+			>
 				<div class="chat-inner">
+					<Show when={hydrateError()}>
+						<p class="pair-error">{hydrateError()}</p>
+					</Show>
 					<Show
 						when={sub() && sub()!.entries.length > 0}
 						fallback={
 							<p class="muted">
 								{agent()
-									? "waiting for relayed events from this agent…"
-									: "no live data for this agent — it may have finished before this view opened. Its session log is on disk."}
+									? "waiting for output from this agent…"
+									: "no data for this agent — it may not have started writing its session log yet."}
 							</p>
 						}
 					>
