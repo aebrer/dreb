@@ -34,6 +34,14 @@
 
 /* ------------------------------------------------------------- app shell */
 
+html,
+body,
+#root {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+}
+
 #root {
 	min-height: 100vh;
 	display: flex;
@@ -130,10 +138,12 @@
 	align-items: baseline;
 	justify-content: space-between;
 	gap: var(--space-2);
+	min-width: 0;
 }
 
 .session-title .name {
 	font-weight: 500;
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -201,6 +211,7 @@
 	gap: var(--space-2);
 	margin-top: auto;
 	padding-top: var(--space-2);
+	flex-wrap: wrap;
 }
 
 .disk-row {
@@ -261,7 +272,11 @@
 /* ------------------------------------------------------------ session view */
 
 .session-screen {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
 	height: 100vh;
+	height: 100dvh;
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
@@ -273,7 +288,9 @@
 }
 
 .session-bar-inner {
+	width: 100%;
 	max-width: 960px;
+	min-width: 0;
 	margin: 0 auto;
 	padding: var(--space-2) var(--space-4);
 	display: flex;
@@ -308,10 +325,12 @@
 }
 
 .session-bar .right {
+	min-width: 0;
 	margin-left: auto;
 	display: flex;
 	align-items: center;
 	gap: var(--space-2);
+	flex-wrap: wrap;
 }
 
 .session-info-bar {
@@ -379,6 +398,7 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
+	min-width: 0;
 	padding: 1px var(--space-2);
 	border: var(--hairline);
 	border-radius: var(--radius);
@@ -1041,11 +1061,22 @@ details.thinking .thinking-body {
 	flex-wrap: wrap;
 }
 
-.attachment-thumb {
+.attachment-thumb,
+.attachment-file {
 	position: relative;
 	border: var(--hairline);
 	border-radius: var(--radius);
 	padding: 2px;
+}
+
+.attachment-file {
+	display: inline-flex;
+	align-items: baseline;
+	gap: var(--space-2);
+	padding: 2px var(--space-2);
+	font-size: var(--fs-small);
+	max-width: 100%;
+	overflow-wrap: anywhere;
 }
 
 .attachment-thumb img {
@@ -1055,7 +1086,8 @@ details.thinking .thinking-body {
 	object-fit: cover;
 }
 
-.attachment-thumb button {
+.attachment-thumb button,
+.attachment-file button {
 	position: absolute;
 	top: -8px;
 	right: -8px;
@@ -1491,10 +1523,11 @@ details.thinking .thinking-body {
 }
 
 .model-picker-button {
-	max-width: 320px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	max-width: min(100%, 520px);
+	min-width: 0;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	text-align: left;
 }
 
 .agent-model-row {
@@ -1537,9 +1570,9 @@ details.thinking .thinking-body {
 	font-size: var(--fs-small);
 	padding: 0 var(--space-1);
 	max-width: 100%;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	white-space: normal;
 }
 
 .agent-model-editor {
@@ -1558,6 +1591,12 @@ details.thinking .thinking-body {
 	gap: var(--space-2);
 	align-items: center;
 	font-size: var(--fs-secondary);
+	min-width: 0;
+}
+
+.agent-model-entry > span:first-child {
+	min-width: 0;
+	overflow-wrap: anywhere;
 }
 
 .agent-model-entry-actions {
@@ -1773,11 +1812,25 @@ details.thinking .thinking-body {
 	color: var(--bg);
 }
 
+.model-picker-modal {
+	max-width: min(900px, calc(100vw - 32px));
+	min-width: min(360px, calc(100vw - 32px));
+	overflow: auto;
+}
+
+@media (min-width: 701px) {
+	.model-picker-modal {
+		resize: horizontal;
+	}
+}
+
 .model-list {
 	overflow-y: auto;
+	overflow-x: hidden;
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
+	min-width: 0;
 }
 
 .model-provider-group {
@@ -1799,9 +1852,9 @@ details.thinking .thinking-body {
 
 .model-row {
 	display: grid;
-	grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1.4fr) auto auto;
-	align-items: baseline;
-	gap: var(--space-2);
+	grid-template-columns: 18px minmax(0, 1fr) auto auto;
+	align-items: start;
+	gap: 2px var(--space-2);
 	text-align: left;
 	background: none;
 	border: var(--hairline);
@@ -1811,6 +1864,7 @@ details.thinking .thinking-body {
 	font-size: var(--fs-secondary);
 	padding: var(--space-1) var(--space-2);
 	cursor: pointer;
+	min-width: 0;
 }
 
 .model-row:hover,
@@ -1819,43 +1873,47 @@ details.thinking .thinking-body {
 }
 
 .model-current {
+	grid-column: 1;
+	grid-row: 1;
 	color: var(--status-running);
 }
 
 .model-id {
+	grid-column: 2;
+	grid-row: 1;
 	font-weight: 600;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	white-space: normal;
 }
 
-.model-name,
-.model-provider-badge,
-.model-reasoning {
+.model-name {
+	grid-column: 2 / -1;
+	grid-row: 2;
 	color: var(--muted);
 	font-size: var(--fs-small);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	white-space: normal;
 }
 
 .model-provider-badge,
 .model-reasoning {
+	grid-row: 1;
+	color: var(--muted);
+	font-size: var(--fs-small);
+	white-space: nowrap;
 	border: var(--hairline);
 	border-radius: var(--radius);
 	padding: 0 var(--space-1);
 }
 
-.session-model-list .model-row {
-	align-items: start;
+.model-provider-badge {
+	grid-column: 3;
 }
 
-.session-model-list .model-id,
-.session-model-list .model-name {
-	overflow: visible;
-	overflow-wrap: anywhere;
-	text-overflow: clip;
-	white-space: normal;
+.model-reasoning {
+	grid-column: 4;
 }
 
 .context-modal-body {
@@ -1915,11 +1973,29 @@ details.thinking .thinking-body {
 /* ---------------------------------------------------------------- mobile */
 
 @media (max-width: 700px) {
-	.session-grid {
-		grid-template-columns: 1fr;
+	.container,
+	.topbar-inner,
+	.session-bar-inner,
+	.dock-inner,
+	.chat-inner {
+		width: 100%;
+		max-width: 100%;
+		min-width: 0;
+		padding-left: var(--space-3);
+		padding-right: var(--space-3);
 	}
 
-	.disk-row {
+	.session-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.session-card,
+	.disk-row,
+	.session-meta,
+	.session-actions,
+	.disk-row .actions {
+		min-width: 0;
+		max-width: 100%;
 		flex-wrap: wrap;
 	}
 
@@ -1933,12 +2009,23 @@ details.thinking .thinking-body {
 		display: none;
 	}
 
-	.entry.user {
+	.session-bar .right {
+		width: 100%;
+		margin-left: 0;
+		align-items: stretch;
+	}
+
+	.session-bar .right .switcher {
+		justify-content: center;
+	}
+
+	.session-bar .right .model-switcher {
+		flex: 1 1 100%;
 		max-width: 100%;
 	}
 
-	.session-bar .right .switcher.optional {
-		display: none;
+	.entry.user {
+		max-width: 100%;
 	}
 
 	.file-table .cols {

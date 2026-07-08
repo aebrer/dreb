@@ -85,7 +85,7 @@ function ModelPickerModal(props: {
 	const isCurrent = (model: ModelInfoDto) => selected().has(modelKey(model));
 
 	return (
-		<Modal title={props.title} onDismiss={props.onClose}>
+		<Modal title={props.title} onDismiss={props.onClose} class="model-picker-modal">
 			<div class="field" style={{ "margin-bottom": "8px" }}>
 				<input
 					type="text"

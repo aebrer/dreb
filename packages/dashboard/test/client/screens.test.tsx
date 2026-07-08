@@ -5,7 +5,7 @@
  */
 
 import { render } from "solid-js/web/dist/web.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the API module: screens fetch on mount; smoke tests must not hit a server.
 vi.mock("../../src/client/api.js", () => ({
@@ -81,6 +81,10 @@ vi.mock("../../src/client/api.js", () => ({
 			lastActivity: new Date().toISOString(),
 		})),
 		places: vi.fn(async () => ({ places: [{ label: "home", path: "/home/test" }] })),
+		upload: vi.fn(async (_dir: string, file: File) => ({
+			path: `/home/test/project/.dreb-dashboard-uploads/${file.name}`,
+		})),
+		mkdir: vi.fn(async (dir: string, name: string) => ({ path: `${dir}/${name}` })),
 		listFiles: vi.fn(async () => ({
 			path: "/home/test",
 			entries: [
@@ -142,6 +146,24 @@ import { createAppStore } from "../../src/client/state/store.js";
 
 const disposers: Array<() => void> = [];
 
+beforeEach(() => {
+	if (window.localStorage) return;
+	const values = new Map<string, string>();
+	Object.defineProperty(window, "localStorage", {
+		configurable: true,
+		value: {
+			getItem: (key: string) => values.get(key) ?? null,
+			setItem: (key: string, value: string) => values.set(key, String(value)),
+			removeItem: (key: string) => values.delete(key),
+			clear: () => values.clear(),
+			key: (index: number) => [...values.keys()][index] ?? null,
+			get length() {
+				return values.size;
+			},
+		},
+	});
+});
+
 afterEach(() => {
 	for (const dispose of disposers.splice(0)) dispose();
 	document.body.innerHTML = "";
@@ -182,6 +204,10 @@ afterEach(() => {
 	vi.mocked(api.dailyCost).mockResolvedValue({ cost: 0.42 });
 	vi.unstubAllGlobals();
 	vi.mocked(api.places).mockResolvedValue({ places: [{ label: "home", path: "/home/test" }] });
+	vi.mocked(api.upload).mockImplementation(async (_dir: string, file: File) => ({
+		path: `/home/test/project/.dreb-dashboard-uploads/${file.name}`,
+	}));
+	vi.mocked(api.mkdir).mockImplementation(async (dir: string, name: string) => ({ path: `${dir}/${name}` }));
 	vi.mocked(api.listFiles).mockResolvedValue({
 		path: "/home/test",
 		entries: [
@@ -639,6 +665,7 @@ describe("dashboard client regressions", () => {
 
 		(el.querySelector(".model-picker-button") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.querySelector(".modal")?.classList.contains("model-picker-modal")).toBe(true);
 		expect(el.querySelector(".model-provider-heading")?.textContent).toBe("anthropic");
 
 		(el.querySelector(".model-row") as HTMLButtonElement).click();
@@ -1014,6 +1041,7 @@ describe("dashboard client regressions", () => {
 		(el.querySelector(".model-switcher") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
+		expect(el.querySelector(".modal")?.classList.contains("model-picker-modal")).toBe(true);
 		const headers = [...el.querySelectorAll(".model-provider-heading")].map((node) => node.textContent);
 		expect(headers).toEqual(["anthropic", "github-copilot"]);
 		expect(el.querySelectorAll(".model-row")).toHaveLength(2);
@@ -1222,7 +1250,7 @@ describe("dashboard client regressions", () => {
 			hydrateSession: async () => {},
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="image" />);
-		const input = el.querySelector('input[type="file"]') as HTMLInputElement;
+		const input = el.querySelector('input[accept="image/*"]') as HTMLInputElement;
 		const file = new File(["img"], "tiny.png", { type: "image/png" });
 		Object.defineProperty(input, "files", { configurable: true, value: [file] });
 		input.dispatchEvent(new Event("change", { bubbles: true }));
@@ -1232,9 +1260,69 @@ describe("dashboard client regressions", () => {
 		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
 		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(api.prompt).toHaveBeenCalledWith("image", "describe this", undefined, [
-			expect.objectContaining({ mimeType: "image/png", data: expect.any(String) }),
-		]);
+		expect(api.prompt).toHaveBeenCalledWith(
+			"image",
+			expect.stringContaining("Attached images included inline with this turn"),
+			undefined,
+			[expect.objectContaining({ mimeType: "image/png", data: expect.any(String) })],
+		);
+		expect(vi.mocked(api.prompt).mock.calls[0]?.[1]).toContain("tiny.png");
+	});
+
+	it("generic file attachments upload to the workspace and send paths, not inline file contents", async () => {
+		vi.mocked(api.prompt).mockClear();
+		vi.mocked(api.upload).mockClear();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { files: createSessionViewState("files") },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "files",
+						cwd: "/home/test/project",
+						state: {
+							sessionId: "files",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 0,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="files" />);
+		const input = el.querySelector('input[type="file"]:not([accept])') as HTMLInputElement;
+		const file = new File(["binary-content-should-not-be-in-prompt"], "archive.zip", {
+			type: "application/zip",
+		});
+		Object.defineProperty(input, "files", { configurable: true, value: [file] });
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		(el.querySelector(".send") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.upload).toHaveBeenCalledWith(
+			"/home/test/project/.dreb-dashboard-uploads",
+			expect.objectContaining({ name: expect.stringContaining("archive.zip") }),
+			false,
+		);
+		expect(api.prompt).toHaveBeenCalledWith("files", expect.stringContaining("Attached files uploaded to the host"));
+		const promptText = vi.mocked(api.prompt).mock.calls[0]?.[1] as string;
+		expect(promptText).toContain("archive.zip");
+		expect(promptText).toContain("/home/test/project/.dreb-dashboard-uploads/");
+		expect(promptText).not.toContain("binary-content-should-not-be-in-prompt");
 	});
 
 	it("fleet cards use lastAssistantText as a muted activity preview", () => {

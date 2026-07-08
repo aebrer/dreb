@@ -24,6 +24,7 @@ import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const UPLOAD_DIR_NAME = ".dreb-dashboard-uploads";
 const composerHistory = new Map<string, string[]>();
 // Per-session composer drafts — unsent text survives fleet→session navigation
 // for as long as the tab lives (module scope). Keyed by runtime key.
@@ -31,6 +32,18 @@ const composerDrafts = new Map<string, string>();
 
 type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
 type ModelScope = "scoped" | "all";
+
+interface PendingImageAttachment extends ImageAttachmentDto {
+	fileName: string;
+	size: number;
+}
+
+interface UploadedFileAttachment {
+	fileName: string;
+	size: number;
+	mimeType: string;
+	path: string;
+}
 
 function modelLabel(model: SessionStateDto["model"] | undefined): string {
 	return model ? `${model.provider}/${model.id}` : "—";
@@ -52,6 +65,27 @@ export function formatTokens(count: number): string {
 
 function shortenPath(path: string): string {
 	return path.replace(/^\/home\/[^/]+/, "~");
+}
+
+function joinPath(dir: string, name: string): string {
+	return `${dir.replace(/\/+$/, "")}/${name}`;
+}
+
+function sanitizeUploadName(name: string): string {
+	const trimmed = name.trim().replace(/[\\/\0]/g, "_");
+	return trimmed && trimmed !== "." && trimmed !== ".." ? trimmed : "upload.bin";
+}
+
+function uniqueUploadName(file: File, index: number): string {
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+	return `${stamp}-${index + 1}-${sanitizeUploadName(file.name || "upload.bin")}`;
+}
+
+function formatBytes(size: number): string {
+	if (size < 1024) return `${size} B`;
+	if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+	if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+	return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function modelMatchesQuery(model: ModelChoice, query: string): boolean {
@@ -247,7 +281,7 @@ function ModelSelectorModal(props: {
 	}
 
 	return (
-		<Modal title="select model" onDismiss={props.onClose}>
+		<Modal title="select model" onDismiss={props.onClose} class="model-picker-modal">
 			<Show when={hasScoped()}>
 				<div class="model-scope-tabs" role="tablist" aria-label="model scope">
 					<button
@@ -343,7 +377,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [resources, setResources] = createSignal<ResourcesDto>();
 	const [resourcesError, setResourcesError] = createSignal<string>();
 	const [pendingMessages, setPendingMessages] = createSignal<PendingMessagesDto>({ steering: [], followUp: [] });
-	const [attachments, setAttachments] = createSignal<ImageAttachmentDto[]>([]);
+	const [imageAttachments, setImageAttachments] = createSignal<PendingImageAttachment[]>([]);
+	const [fileAttachments, setFileAttachments] = createSignal<UploadedFileAttachment[]>([]);
 	const [historyIndex, setHistoryIndex] = createSignal<number>();
 	const [showForkModal, setShowForkModal] = createSignal(false);
 	const [forkMessages, setForkMessages] = createSignal<Array<{ entryId: string; text: string }>>([]);
@@ -353,7 +388,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 
 	let chatRef: HTMLDivElement | undefined;
 	let composerRef: HTMLTextAreaElement | undefined;
-	let fileInputRef: HTMLInputElement | undefined;
+	let genericFileInputRef: HTMLInputElement | undefined;
+	let imageFileInputRef: HTMLInputElement | undefined;
 	let statsPopoverRef: HTMLDivElement | undefined;
 	let autoScroll = true;
 	let disposed = false;
@@ -434,7 +470,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
-	function attachmentFromFile(file: File): Promise<ImageAttachmentDto> {
+	function imageAttachmentFromFile(file: File): Promise<PendingImageAttachment> {
 		if (!file.type.startsWith("image/")) throw new Error(`Not an image: ${file.name || file.type}`);
 		if (file.size > MAX_IMAGE_BYTES) throw new Error(`Image too large: ${file.name || file.type} exceeds 10MB`);
 		return new Promise((resolve, reject) => {
@@ -443,7 +479,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			reader.onload = () => {
 				const result = String(reader.result ?? "");
 				const comma = result.indexOf(",");
-				resolve({ data: comma >= 0 ? result.slice(comma + 1) : result, mimeType: file.type });
+				resolve({
+					data: comma >= 0 ? result.slice(comma + 1) : result,
+					mimeType: file.type,
+					fileName: file.name || "image",
+					size: file.size,
+				});
 			};
 			reader.readAsDataURL(file);
 		});
@@ -451,8 +492,47 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 
 	async function addImageFiles(files: Iterable<File>) {
 		try {
-			const next = await Promise.all([...files].map((file) => attachmentFromFile(file)));
-			setAttachments((current) => [...current, ...next]);
+			const next = await Promise.all([...files].map((file) => imageAttachmentFromFile(file)));
+			setImageAttachments((current) => [...current, ...next]);
+		} catch (err) {
+			setActionError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function ensureUploadDir(cwd: string): Promise<string> {
+		const dir = joinPath(cwd, UPLOAD_DIR_NAME);
+		try {
+			await api.listFiles(dir);
+			return dir;
+		} catch {
+			await api.mkdir(cwd, UPLOAD_DIR_NAME);
+			return dir;
+		}
+	}
+
+	async function addGenericFiles(files: Iterable<File>) {
+		const selected = [...files];
+		if (selected.length === 0) return;
+		const cwd = runtime()?.cwd;
+		if (!cwd) {
+			setActionError("Cannot attach files until the runtime is loaded.");
+			return;
+		}
+		setActionError(undefined);
+		try {
+			const uploadDir = await ensureUploadDir(cwd);
+			const uploaded: UploadedFileAttachment[] = [];
+			for (const [index, file] of selected.entries()) {
+				const uploadName = uniqueUploadName(file, index);
+				const result = await api.upload(uploadDir, new File([file], uploadName, { type: file.type }), false);
+				uploaded.push({
+					fileName: file.name || uploadName,
+					size: file.size,
+					mimeType: file.type || "application/octet-stream",
+					path: result.path,
+				});
+			}
+			setFileAttachments((current) => [...current, ...uploaded]);
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
 		}
@@ -571,25 +651,57 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		composerDrafts.set(props.sessionKey, composerText());
 	});
 
+	function promptWithAttachmentList(text: string): string {
+		const sections: string[] = [];
+		if (fileAttachments().length > 0) {
+			sections.push(
+				[
+					"Attached files uploaded to the host (paths only; inspect deliberately if needed):",
+					...fileAttachments().map(
+						(file) =>
+							`- ${file.path} (${file.fileName}, ${formatBytes(file.size)}, ${file.mimeType || "unknown type"})`,
+					),
+				].join("\n"),
+			);
+		}
+		if (imageAttachments().length > 0) {
+			sections.push(
+				[
+					"Attached images included inline with this turn:",
+					...imageAttachments().map(
+						(image, index) =>
+							`- image ${index + 1}: ${image.fileName} (${formatBytes(image.size)}, ${image.mimeType})`,
+					),
+				].join("\n"),
+			);
+		}
+		return [text, ...sections].filter((part) => part.trim()).join("\n\n");
+	}
+
 	async function send() {
 		const text = composerText().trim();
-		if (!text) return;
+		if (!text && fileAttachments().length === 0 && imageAttachments().length === 0) return;
+		const promptText = promptWithAttachmentList(text || "Please review the attached item(s). ");
 		setActionError(undefined);
 		try {
-			const images = attachments().length > 0 ? attachments() : undefined;
+			const images =
+				imageAttachments().length > 0
+					? imageAttachments().map(({ data, mimeType }) => ({ data, mimeType }))
+					: undefined;
 			if (streaming()) {
-				await api.prompt(props.sessionKey, text, sendMode(), images);
+				await api.prompt(props.sessionKey, promptText, sendMode(), images);
 			} else if (images) {
-				await api.prompt(props.sessionKey, text, undefined, images);
+				await api.prompt(props.sessionKey, promptText, undefined, images);
 			} else {
-				await api.prompt(props.sessionKey, text);
+				await api.prompt(props.sessionKey, promptText);
 			}
 			const history = composerHistory.get(props.sessionKey) ?? [];
-			history.push(text);
+			history.push(promptText);
 			composerHistory.set(props.sessionKey, history.slice(-100));
 			setHistoryIndex(undefined);
 			setComposerText("");
-			setAttachments([]);
+			setImageAttachments([]);
+			setFileAttachments([]);
 			void refreshPendingMessages();
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
@@ -842,7 +954,24 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						</button>
 						<Show when={isMobile()}>
 							<button type="button" class="btn btn-small" onClick={() => setShowModelSelector(true)}>
-								model
+								model: {modelLabel(runtime()?.state.model)}
+							</button>
+							<button
+								type="button"
+								class="btn btn-small"
+								onClick={async () => {
+									const current = runtime()?.state.thinkingLevel ?? "off";
+									const next =
+										THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
+									try {
+										await api.setThinking(props.sessionKey, next);
+										await props.store.refreshFleet();
+									} catch (err) {
+										setActionError(err instanceof Error ? err.message : String(err));
+									}
+								}}
+							>
+								think: {runtime()?.state.thinkingLevel ?? "—"}
 							</button>
 						</Show>
 						<button
@@ -992,16 +1121,35 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 								</button>
 							</div>
 						</Show>
-						<Show when={attachments().length > 0}>
+						<Show when={fileAttachments().length > 0 || imageAttachments().length > 0}>
 							<div class="attachment-strip">
-								<For each={attachments()}>
+								<For each={fileAttachments()}>
+									{(file, index) => (
+										<span class="attachment-file" title={file.path}>
+											<span>📎 {file.fileName}</span>
+											<span class="muted">{formatBytes(file.size)}</span>
+											<button
+												type="button"
+												aria-label="remove file attachment"
+												onClick={() =>
+													setFileAttachments((current) => current.filter((_, i) => i !== index()))
+												}
+											>
+												×
+											</button>
+										</span>
+									)}
+								</For>
+								<For each={imageAttachments()}>
 									{(image, index) => (
-										<span class="attachment-thumb">
-											<img src={`data:${image.mimeType};base64,${image.data}`} alt="pending attachment" />
+										<span class="attachment-thumb" title={`${image.fileName} (${formatBytes(image.size)})`}>
+											<img src={`data:${image.mimeType};base64,${image.data}`} alt={image.fileName} />
 											<button
 												type="button"
 												aria-label="remove image"
-												onClick={() => setAttachments((current) => current.filter((_, i) => i !== index()))}
+												onClick={() =>
+													setImageAttachments((current) => current.filter((_, i) => i !== index()))
+												}
 											>
 												×
 											</button>
@@ -1118,7 +1266,17 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						/>
 						<div class="composer-row">
 							<input
-								ref={fileInputRef}
+								ref={genericFileInputRef}
+								type="file"
+								multiple
+								class="hidden-file-input"
+								onChange={(e) => {
+									void addGenericFiles(e.currentTarget.files ?? []);
+									e.currentTarget.value = "";
+								}}
+							/>
+							<input
+								ref={imageFileInputRef}
 								type="file"
 								accept="image/*"
 								multiple
@@ -1131,10 +1289,18 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							<button
 								type="button"
 								class="btn btn-small"
-								title="attach image"
-								onClick={() => fileInputRef?.click()}
+								title="attach file (uploads to workspace and sends path)"
+								onClick={() => genericFileInputRef?.click()}
 							>
-								📎
+								📎 file
+							</button>
+							<button
+								type="button"
+								class="btn btn-small"
+								title="attach image inline"
+								onClick={() => imageFileInputRef?.click()}
+							>
+								🖼 photo
 							</button>
 							<Show when={streaming()}>
 								<span class="mode-toggle" role="radiogroup" aria-label="send mode">

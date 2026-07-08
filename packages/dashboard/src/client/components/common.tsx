@@ -72,6 +72,7 @@ export function Modal(props: {
 	onDismiss: () => void;
 	children: JSX.Element;
 	actions?: JSX.Element;
+	class?: string;
 }): JSX.Element {
 	return (
 		// biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-to-dismiss is supplementary — the modal itself provides Escape handling and dismiss buttons
@@ -85,7 +86,7 @@ export function Modal(props: {
 				if (e.key === "Escape") props.onDismiss();
 			}}
 		>
-			<div class="modal" role="dialog" aria-label={props.title}>
+			<div class={`modal ${props.class ?? ""}`} role="dialog" aria-label={props.title}>
 				<div class="modal-title">{props.title}</div>
 				<div class="modal-body">{props.children}</div>
 				<Show when={props.actions}>
