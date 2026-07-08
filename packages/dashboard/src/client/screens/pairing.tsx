@@ -14,6 +14,7 @@ export function PairingScreen(props: { store: AppStore }): JSX.Element {
 
 	const auth = () => props.store.auth();
 	const denied = () => auth()?.error && !auth()?.needsPairing;
+	const isMobile = () => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches;
 
 	async function pair() {
 		setBusy(true);
@@ -79,7 +80,7 @@ export function PairingScreen(props: { store: AppStore }): JSX.Element {
 							value={pin()}
 							onInput={(e) => setPin(e.currentTarget.value.replace(/\D/g, "").slice(0, 6))}
 							onKeyDown={(e) => {
-								if (e.key === "Enter" && pin().length === 6) pair();
+								if (e.key === "Enter" && pin().length === 6 && !isMobile()) pair();
 							}}
 						/>
 					</div>

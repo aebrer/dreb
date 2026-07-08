@@ -16,14 +16,14 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DashboardAuth } from "./server/auth.js";
-import { FilePairingStorage } from "./server/pairing-storage.js";
+import { FilePairingStorage, loadOrCreateDashboardSecret } from "./server/pairing-storage.js";
 import { RuntimePool } from "./server/runtime-pool.js";
 import { createDashboardServer } from "./server/server.js";
 
 export { DashboardAuth, TailscaleStatusResolver } from "./server/auth.js";
 export { EventHub } from "./server/event-hub.js";
 export { canonicalizePath, FileApi } from "./server/files.js";
-export { FilePairingStorage } from "./server/pairing-storage.js";
+export { FilePairingStorage, loadOrCreateDashboardSecret } from "./server/pairing-storage.js";
 export { RuntimePool, resolveDrebCliPath } from "./server/runtime-pool.js";
 export { createDashboardServer, parseDeviceCookie } from "./server/server.js";
 export type * from "./shared/protocol.js";
@@ -93,10 +93,12 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	const agentDir = join(homedir(), ".dreb", "agent");
 	const auth = new DashboardAuth({
 		remoteEnabled: args.remote,
 		allowedIdentities: args.allow,
-		storage: new FilePairingStorage(join(homedir(), ".dreb", "agent", "dashboard-pairings.json")),
+		storage: new FilePairingStorage(join(agentDir, "dashboard-pairings.json")),
+		secret: loadOrCreateDashboardSecret(join(agentDir, "dashboard-auth-secret")),
 	});
 	const pool = new RuntimePool();
 

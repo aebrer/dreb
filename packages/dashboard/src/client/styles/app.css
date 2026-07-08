@@ -430,6 +430,31 @@ body,
 	max-width: min(340px, 45vw);
 }
 
+.session-bar.collapsed {
+	background: var(--bg);
+}
+
+.session-bar-main .chrome-toggle {
+	margin-left: auto;
+}
+
+.chrome-toggle {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--muted);
+	font: inherit;
+	font-size: var(--fs-small);
+	padding: 1px var(--space-2);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.chrome-toggle:hover {
+	border-color: var(--text);
+	color: var(--text);
+}
+
 .chat {
 	flex: 1;
 	overflow-y: auto;
@@ -895,6 +920,28 @@ details.thinking .thinking-body {
 .dock {
 	border-top: var(--hairline);
 	flex-shrink: 0;
+}
+
+.dock.collapsed {
+	background: var(--bg);
+}
+
+.dock-collapse-row {
+	max-width: 960px;
+	margin: 0 auto;
+	padding: var(--space-1) var(--space-4);
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
+.dock-collapsed-hint {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .dock-inner {
@@ -1977,6 +2024,7 @@ details.thinking .thinking-body {
 	.topbar-inner,
 	.session-bar-inner,
 	.dock-inner,
+	.dock-collapse-row,
 	.chat-inner {
 		width: 100%;
 		max-width: 100%;

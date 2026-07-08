@@ -3,6 +3,7 @@
  * dir so pairings survive dashboard restarts. Written with mode 0600.
  */
 
+import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -18,6 +19,33 @@ interface StoredPairing {
 interface PairingFile {
 	version: 1;
 	pairings: StoredPairing[];
+}
+
+/**
+ * Load or create the per-install dashboard auth secret. This secret keys both
+ * device-token HMACs and the rotating pairing code, so it must survive process
+ * restarts but must never be shared across installs/servers.
+ */
+export function loadOrCreateDashboardSecret(path: string): Buffer {
+	try {
+		const raw = readFileSync(path, "utf8").trim();
+		if (!/^[0-9a-f]{64}$/i.test(raw)) throw new Error(`Invalid dashboard auth secret at ${path}`);
+		return Buffer.from(raw, "hex");
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+	}
+
+	mkdirSync(dirname(path), { recursive: true });
+	const secret = randomBytes(32);
+	try {
+		writeFileSync(path, `${secret.toString("hex")}\n`, { mode: 0o600, flag: "wx" });
+		return secret;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+		const raw = readFileSync(path, "utf8").trim();
+		if (!/^[0-9a-f]{64}$/i.test(raw)) throw new Error(`Invalid dashboard auth secret at ${path}`);
+		return Buffer.from(raw, "hex");
+	}
 }
 
 export class FilePairingStorage {

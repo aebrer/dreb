@@ -361,6 +361,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [stoppingRuntime, setStoppingRuntime] = createSignal(false);
 	const [showModelSelector, setShowModelSelector] = createSignal(false);
 	const [showOverflow, setShowOverflow] = createSignal(false);
+	const [topChromeCollapsed, setTopChromeCollapsed] = createSignal(false);
+	const [bottomDockCollapsed, setBottomDockCollapsed] = createSignal(false);
 	const [showCompactModal, setShowCompactModal] = createSignal(false);
 	const [showRenameModal, setShowRenameModal] = createSignal(false);
 	const [showContextModal, setShowContextModal] = createSignal(false);
@@ -847,118 +849,28 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 
 	return (
 		<div class="session-screen">
-			<header class="session-bar">
-				<div class="session-bar-inner">
+			<header class="session-bar" classList={{ collapsed: topChromeCollapsed() }}>
+				<div class="session-bar-inner session-bar-main">
 					<a class="back" href="#/">
 						← fleet
 					</a>
 					<span class="title">{headerTitle()}</span>
-					<span class="project">{runtime()?.cwd ? shortenPath(runtime()!.cwd) : undefined}</span>
-					<span class="right">
-						<button
-							type="button"
-							class="switcher optional model-switcher"
-							title={modelTitle(runtime()?.state.model)}
-							onClick={() => setShowModelSelector(true)}
-						>
-							<span class="label">model</span> <span class="value">{modelLabel(runtime()?.state.model)}</span>
-						</button>
-						<button
-							type="button"
-							class="switcher optional"
-							onClick={async () => {
-								const current = runtime()?.state.thinkingLevel ?? "off";
-								const next = THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
-								try {
-									await api.setThinking(props.sessionKey, next);
-									await props.store.refreshFleet();
-								} catch (err) {
-									setActionError(err instanceof Error ? err.message : String(err));
-								}
-							}}
-						>
-							<span class="label">think</span> {runtime()?.state.thinkingLevel ?? "—"}
-						</button>
-						<Show when={ctx()}>
-							<output class="switcher">
-								<span class="label">ctx</span>{" "}
-								{ctx()!.percent === null ? "?" : `${ctx()!.percent!.toFixed(0)}%`}
-							</output>
-						</Show>
-						<button type="button" class="switcher" onClick={() => setShowOverflow(!showOverflow())}>
-							⋯
-						</button>
-					</span>
-				</div>
-				<div class="session-bar-inner session-info-bar">
-					<span class="session-info-left">{infoLeft()}</span>
-					<button type="button" class="session-info-right stats-trigger" onClick={openStatsPopover}>
-						<For each={infoStats()}>{(item) => <span>{item}</span>}</For>
-					</button>
-					<Show when={showStatsPopover()}>
-						<div class="stats-popover" ref={statsPopoverRef}>
-							<Show when={statsPopoverError()}>
-								<p class="pair-error">{statsPopoverError()}</p>
-							</Show>
-							<Show when={stats()} fallback={<p class="muted small">loading stats…</p>}>
-								{(s) => (
-									<div class="stats-grid">
-										<span>user messages</span>
-										<strong>{s().userMessages}</strong>
-										<span>assistant messages</span>
-										<strong>{s().assistantMessages}</strong>
-										<span>tool calls/results</span>
-										<strong>
-											{s().toolCalls}/{s().toolResults}
-										</strong>
-										<span>input/output</span>
-										<strong>
-											{formatTokens(s().tokens.input)} / {formatTokens(s().tokens.output)}
-										</strong>
-										<span>cache read/write</span>
-										<strong>
-											{formatTokens(s().tokens.cacheRead)} / {formatTokens(s().tokens.cacheWrite)}
-										</strong>
-										<span>total tokens</span>
-										<strong>{formatTokens(s().tokens.total)}</strong>
-										<span>cost</span>
-										<strong>${s().cost.toFixed(4)}</strong>
-									</div>
-								)}
-							</Show>
-						</div>
+					<Show when={!topChromeCollapsed()}>
+						<span class="project">{runtime()?.cwd ? shortenPath(runtime()!.cwd) : undefined}</span>
 					</Show>
-				</div>
-				<Show when={showOverflow()}>
-					<div class="session-bar-inner" style={{ "justify-content": "flex-end", gap: "8px" }}>
-						<a class="btn btn-small" href={api.exportHtmlUrl(props.sessionKey)}>
-							export HTML
-						</a>
-						<button type="button" class="btn btn-small" onClick={() => setShowCompactModal(true)}>
-							compact now
-						</button>
-						<button type="button" class="btn btn-small" onClick={() => setAllToolDetails(true)}>
-							expand tools
-						</button>
-						<button type="button" class="btn btn-small" onClick={() => setAllToolDetails(false)}>
-							collapse tools
-						</button>
-						<button type="button" class="btn btn-small" onClick={() => setShowRenameModal(true)}>
-							rename
-						</button>
-						<button type="button" class="btn btn-small" onClick={openForkModal}>
-							fork
-						</button>
-						<button type="button" class="btn btn-small" onClick={openContextModal}>
-							loaded context
-						</button>
-						<Show when={isMobile()}>
-							<button type="button" class="btn btn-small" onClick={() => setShowModelSelector(true)}>
-								model: {modelLabel(runtime()?.state.model)}
+					<Show when={!topChromeCollapsed()}>
+						<span class="right">
+							<button
+								type="button"
+								class="switcher optional model-switcher"
+								title={modelTitle(runtime()?.state.model)}
+								onClick={() => setShowModelSelector(true)}
+							>
+								<span class="label">model</span> <span class="value">{modelLabel(runtime()?.state.model)}</span>
 							</button>
 							<button
 								type="button"
-								class="btn btn-small"
+								class="switcher optional"
 								onClick={async () => {
 									const current = runtime()?.state.thinkingLevel ?? "off";
 									const next =
@@ -971,22 +883,127 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 									}
 								}}
 							>
-								think: {runtime()?.state.thinkingLevel ?? "—"}
+								<span class="label">think</span> {runtime()?.state.thinkingLevel ?? "—"}
 							</button>
-						</Show>
-						<button
-							type="button"
-							class="btn btn-small btn-danger"
-							disabled={stoppingRuntime()}
-							onClick={stopRuntime}
-						>
-							{stoppingRuntime() ? "stopping runtime…" : "stop runtime"}
+							<Show when={ctx()}>
+								<output class="switcher">
+									<span class="label">ctx</span>{" "}
+									{ctx()!.percent === null ? "?" : `${ctx()!.percent!.toFixed(0)}%`}
+								</output>
+							</Show>
+							<button type="button" class="switcher" onClick={() => setShowOverflow(!showOverflow())}>
+								⋯
+							</button>
+						</span>
+					</Show>
+					<button
+						type="button"
+						class="chrome-toggle"
+						title={topChromeCollapsed() ? "show session details" : "hide session details"}
+						onClick={() => setTopChromeCollapsed(!topChromeCollapsed())}
+					>
+						{topChromeCollapsed() ? "details ▾" : "details ▴"}
+					</button>
+				</div>
+				<Show when={!topChromeCollapsed()}>
+					<div class="session-bar-inner session-info-bar">
+						<span class="session-info-left">{infoLeft()}</span>
+						<button type="button" class="session-info-right stats-trigger" onClick={openStatsPopover}>
+							<For each={infoStats()}>{(item) => <span>{item}</span>}</For>
 						</button>
+						<Show when={showStatsPopover()}>
+							<div class="stats-popover" ref={statsPopoverRef}>
+								<Show when={statsPopoverError()}>
+									<p class="pair-error">{statsPopoverError()}</p>
+								</Show>
+								<Show when={stats()} fallback={<p class="muted small">loading stats…</p>}>
+									{(s) => (
+										<div class="stats-grid">
+											<span>user messages</span>
+											<strong>{s().userMessages}</strong>
+											<span>assistant messages</span>
+											<strong>{s().assistantMessages}</strong>
+											<span>tool calls/results</span>
+											<strong>
+												{s().toolCalls}/{s().toolResults}
+											</strong>
+											<span>input/output</span>
+											<strong>
+												{formatTokens(s().tokens.input)} / {formatTokens(s().tokens.output)}
+											</strong>
+											<span>cache read/write</span>
+											<strong>
+												{formatTokens(s().tokens.cacheRead)} / {formatTokens(s().tokens.cacheWrite)}
+											</strong>
+											<span>total tokens</span>
+											<strong>{formatTokens(s().tokens.total)}</strong>
+											<span>cost</span>
+											<strong>${s().cost.toFixed(4)}</strong>
+										</div>
+									)}
+								</Show>
+							</div>
+						</Show>
 					</div>
+					<Show when={showOverflow()}>
+						<div class="session-bar-inner" style={{ "justify-content": "flex-end", gap: "8px" }}>
+							<a class="btn btn-small" href={api.exportHtmlUrl(props.sessionKey)}>
+								export HTML
+							</a>
+							<button type="button" class="btn btn-small" onClick={() => setShowCompactModal(true)}>
+								compact now
+							</button>
+							<button type="button" class="btn btn-small" onClick={() => setAllToolDetails(true)}>
+								expand tools
+							</button>
+							<button type="button" class="btn btn-small" onClick={() => setAllToolDetails(false)}>
+								collapse tools
+							</button>
+							<button type="button" class="btn btn-small" onClick={() => setShowRenameModal(true)}>
+								rename
+							</button>
+							<button type="button" class="btn btn-small" onClick={openForkModal}>
+								fork
+							</button>
+							<button type="button" class="btn btn-small" onClick={openContextModal}>
+								loaded context
+							</button>
+							<Show when={isMobile()}>
+								<button type="button" class="btn btn-small" onClick={() => setShowModelSelector(true)}>
+									model: {modelLabel(runtime()?.state.model)}
+								</button>
+								<button
+									type="button"
+									class="btn btn-small"
+									onClick={async () => {
+										const current = runtime()?.state.thinkingLevel ?? "off";
+										const next =
+											THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
+										try {
+											await api.setThinking(props.sessionKey, next);
+											await props.store.refreshFleet();
+										} catch (err) {
+											setActionError(err instanceof Error ? err.message : String(err));
+										}
+									}}
+								>
+									think: {runtime()?.state.thinkingLevel ?? "—"}
+								</button>
+							</Show>
+							<button
+								type="button"
+								class="btn btn-small btn-danger"
+								disabled={stoppingRuntime()}
+								onClick={stopRuntime}
+							>
+								{stoppingRuntime() ? "stopping runtime…" : "stop runtime"}
+							</button>
+						</div>
+					</Show>
 				</Show>
 			</header>
 
-			<Show when={runtime()?.state.modelFallbackMessage && !fallbackDismissed()}>
+			<Show when={!topChromeCollapsed() && runtime()?.state.modelFallbackMessage && !fallbackDismissed()}>
 				<div class="container" style={{ "padding-top": "8px" }}>
 					<div class="fallback-banner">
 						<span>◆ {runtime()!.state.modelFallbackMessage}</span>
@@ -1014,329 +1031,353 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</div>
 			</main>
 
-			<footer class="dock">
-				<div class="dock-inner">
-					<Show when={tasks().length > 0}>
-						<details class="tasks" open={!isMobile()}>
-							<summary>
-								tasks — {tasksDone()} of {tasks().length} done
-							</summary>
-							<ul>
-								<For each={tasks()}>
-									{(task) => (
-										<li
-											classList={{
-												done: task.status === "completed",
-												active: task.status === "in_progress",
-											}}
-										>
-											{task.status === "completed" ? "☑" : task.status === "in_progress" ? "⧖" : "☐"}{" "}
-											{task.title}
-										</li>
-									)}
-								</For>
-							</ul>
-						</details>
+			<footer class="dock" classList={{ collapsed: bottomDockCollapsed() }}>
+				<div class="dock-collapse-row">
+					<button
+						type="button"
+						class="chrome-toggle"
+						title={bottomDockCollapsed() ? "show composer and controls" : "hide composer and controls"}
+						onClick={() => setBottomDockCollapsed(!bottomDockCollapsed())}
+					>
+						{bottomDockCollapsed() ? "compose ▴" : "compose ▾"}
+					</button>
+					<Show when={bottomDockCollapsed()}>
+						<span class="dock-collapsed-hint">
+							{showStopControls()
+								? "agent working — open controls to stop or steer"
+								: pendingMessageItems().length > 0
+									? `${pendingMessageItems().length} queued message(s)`
+									: "composer hidden for transcript reading"}
+						</span>
 					</Show>
+				</div>
+				<Show when={!bottomDockCollapsed()}>
+					<div class="dock-inner">
+						<Show when={tasks().length > 0}>
+							<details class="tasks" open={!isMobile()}>
+								<summary>
+									tasks — {tasksDone()} of {tasks().length} done
+								</summary>
+								<ul>
+									<For each={tasks()}>
+										{(task) => (
+											<li
+												classList={{
+													done: task.status === "completed",
+													active: task.status === "in_progress",
+												}}
+											>
+												{task.status === "completed" ? "☑" : task.status === "in_progress" ? "⧖" : "☐"}{" "}
+												{task.title}
+											</li>
+										)}
+									</For>
+								</ul>
+							</details>
+						</Show>
 
-					<Show when={liveAgents().length + doneAgents().length > 0}>
-						<div class="subagent-strip">
-							<span class="count">
-								⚡ {liveAgents().length} running · {doneAgents().length} done
-							</span>
-							<For each={[...liveAgents(), ...doneAgents()].slice(0, 4)}>
-								{(agent) => (
-									<button
-										type="button"
-										class="agent-chip"
-										title="view this subagent's session"
-										onClick={() =>
-											props.store.navigate({
-												screen: "subagent",
-												key: props.sessionKey,
-												agentId: agent.agentId,
-											})
-										}
-									>
-										<span class={agent.status === "running" ? "live" : "done"}>
-											{agent.status === "running" ? "●" : agent.status === "completed" ? "✓" : "✕"}
-										</span>
-										<span class="task">
-											{agent.agentType} — {agent.taskSummary}
-										</span>
-									</button>
-								)}
-							</For>
-						</div>
-					</Show>
-
-					<Show when={showStopControls() || (session()?.statusEntries.length ?? 0) > 0 || actionError()}>
-						<div class="status-line">
-							<Show when={streaming()}>
-								<span class="working">
-									● working{session()?.workingText ? ` — ${session()!.workingText}` : ""}
-									{elapsed() > 2 ? ` (${elapsed()}s)` : ""}
+						<Show when={liveAgents().length + doneAgents().length > 0}>
+							<div class="subagent-strip">
+								<span class="count">
+									⚡ {liveAgents().length} running · {doneAgents().length} done
 								</span>
-							</Show>
-							<For each={session()?.statusEntries ?? []}>
-								{(status) => (
-									<span class={status.tone === "info" ? "queued" : status.tone}>
-										{status.text}
-										<Show when={status.key === "compaction" || status.key === "retry"}>
-											<button
-												type="button"
-												class="btn btn-small btn-danger inline-stop"
-												onClick={() => abortStatus(status.key)}
-											>
-												stop
-											</button>
-										</Show>
-									</span>
-								)}
-							</For>
-							<Show when={actionError()}>
-								<span class="error">{actionError()}</span>
-							</Show>
-							<Show when={showStopControls()}>
-								<button type="button" class="btn btn-small btn-danger" disabled={stopping()} onClick={abort}>
-									{stopping() ? "stopping…" : "■ stop"}
-								</button>
-							</Show>
-						</div>
-					</Show>
-
-					<div class="composer">
-						<Show when={pendingMessageItems().length > 0}>
-							<div class="queued-message-row">
-								<For each={pendingMessageItems()}>
-									{(item) => (
-										<span class="queued-chip" title={item.text}>
-											<span class="queued-kind">{item.kind}</span>
-											{item.text}
-										</span>
-									)}
-								</For>
-								<button type="button" class="btn btn-small" onClick={restorePendingToComposer}>
-									restore to composer
-								</button>
-							</div>
-						</Show>
-						<Show when={fileAttachments().length > 0 || imageAttachments().length > 0}>
-							<div class="attachment-strip">
-								<For each={fileAttachments()}>
-									{(file, index) => (
-										<span class="attachment-file" title={file.path}>
-											<span>📎 {file.fileName}</span>
-											<span class="muted">{formatBytes(file.size)}</span>
-											<button
-												type="button"
-												aria-label="remove file attachment"
-												onClick={() =>
-													setFileAttachments((current) => current.filter((_, i) => i !== index()))
-												}
-											>
-												×
-											</button>
-										</span>
-									)}
-								</For>
-								<For each={imageAttachments()}>
-									{(image, index) => (
-										<span class="attachment-thumb" title={`${image.fileName} (${formatBytes(image.size)})`}>
-											<img src={`data:${image.mimeType};base64,${image.data}`} alt={image.fileName} />
-											<button
-												type="button"
-												aria-label="remove image"
-												onClick={() =>
-													setImageAttachments((current) => current.filter((_, i) => i !== index()))
-												}
-											>
-												×
-											</button>
-										</span>
-									)}
-								</For>
-							</div>
-						</Show>
-						<Show when={showCommandMenu()}>
-							<div class="command-popover" role="listbox" id="command-listbox" aria-label="slash commands">
-								<For each={commandMatches()}>
-									{(command, index) => (
+								<For each={[...liveAgents(), ...doneAgents()].slice(0, 4)}>
+									{(agent) => (
 										<button
 											type="button"
-											id={`command-option-${index()}`}
-											role="option"
-											aria-selected={commandSelection() === index()}
-											class="command-option"
-											classList={{ selected: commandSelection() === index() }}
-											onMouseEnter={() => setCommandSelection(index())}
-											onClick={() => acceptCommand(command)}
+											class="agent-chip"
+											title="view this subagent's session"
+											onClick={() =>
+												props.store.navigate({
+													screen: "subagent",
+													key: props.sessionKey,
+													agentId: agent.agentId,
+												})
+											}
 										>
-											<span class="command-name">/{command.name}</span>
-											<Show when={command.description}>
-												<span class="command-description">{command.description}</span>
-											</Show>
-											<span class="command-source">{command.source}</span>
+											<span class={agent.status === "running" ? "live" : "done"}>
+												{agent.status === "running" ? "●" : agent.status === "completed" ? "✓" : "✕"}
+											</span>
+											<span class="task">
+												{agent.agentType} — {agent.taskSummary}
+											</span>
 										</button>
 									)}
 								</For>
 							</div>
 						</Show>
-						<textarea
-							ref={composerRef}
-							placeholder={streaming() ? "Message dreb — sends as steer while it works…" : "Message dreb…"}
-							value={composerText()}
-							aria-controls={showCommandMenu() ? "command-listbox" : undefined}
-							aria-activedescendant={showCommandMenu() ? `command-option-${commandSelection()}` : undefined}
-							onPaste={(e) => {
-								const files = [...(e.clipboardData?.items ?? [])]
-									.filter((item) => item.type.startsWith("image/"))
-									.map((item) => item.getAsFile())
-									.filter((file): file is File => !!file);
-								if (files.length > 0) {
-									e.preventDefault();
-									void addImageFiles(files);
-								}
-							}}
-							onInput={(e) => {
-								setCommandMenuClosed(false);
-								setCommandSelection(0);
-								setHistoryIndex(undefined);
-								setComposerText(e.currentTarget.value);
-								autoGrowTextarea(e.currentTarget);
-							}}
-							onKeyDown={(e) => {
-								if (showCommandMenu()) {
-									if (e.key === "ArrowDown") {
+
+						<Show when={showStopControls() || (session()?.statusEntries.length ?? 0) > 0 || actionError()}>
+							<div class="status-line">
+								<Show when={streaming()}>
+									<span class="working">
+										● working{session()?.workingText ? ` — ${session()!.workingText}` : ""}
+										{elapsed() > 2 ? ` (${elapsed()}s)` : ""}
+									</span>
+								</Show>
+								<For each={session()?.statusEntries ?? []}>
+									{(status) => (
+										<span class={status.tone === "info" ? "queued" : status.tone}>
+											{status.text}
+											<Show when={status.key === "compaction" || status.key === "retry"}>
+												<button
+													type="button"
+													class="btn btn-small btn-danger inline-stop"
+													onClick={() => abortStatus(status.key)}
+												>
+													stop
+												</button>
+											</Show>
+										</span>
+									)}
+								</For>
+								<Show when={actionError()}>
+									<span class="error">{actionError()}</span>
+								</Show>
+								<Show when={showStopControls()}>
+									<button type="button" class="btn btn-small btn-danger" disabled={stopping()} onClick={abort}>
+										{stopping() ? "stopping…" : "■ stop"}
+									</button>
+								</Show>
+							</div>
+						</Show>
+
+						<div class="composer">
+							<Show when={pendingMessageItems().length > 0}>
+								<div class="queued-message-row">
+									<For each={pendingMessageItems()}>
+										{(item) => (
+											<span class="queued-chip" title={item.text}>
+												<span class="queued-kind">{item.kind}</span>
+												{item.text}
+											</span>
+										)}
+									</For>
+									<button type="button" class="btn btn-small" onClick={restorePendingToComposer}>
+										restore to composer
+									</button>
+								</div>
+							</Show>
+							<Show when={fileAttachments().length > 0 || imageAttachments().length > 0}>
+								<div class="attachment-strip">
+									<For each={fileAttachments()}>
+										{(file, index) => (
+											<span class="attachment-file" title={file.path}>
+												<span>📎 {file.fileName}</span>
+												<span class="muted">{formatBytes(file.size)}</span>
+												<button
+													type="button"
+													aria-label="remove file attachment"
+													onClick={() =>
+														setFileAttachments((current) => current.filter((_, i) => i !== index()))
+													}
+												>
+													×
+												</button>
+											</span>
+										)}
+									</For>
+									<For each={imageAttachments()}>
+										{(image, index) => (
+											<span
+												class="attachment-thumb"
+												title={`${image.fileName} (${formatBytes(image.size)})`}
+											>
+												<img src={`data:${image.mimeType};base64,${image.data}`} alt={image.fileName} />
+												<button
+													type="button"
+													aria-label="remove image"
+													onClick={() =>
+														setImageAttachments((current) => current.filter((_, i) => i !== index()))
+													}
+												>
+													×
+												</button>
+											</span>
+										)}
+									</For>
+								</div>
+							</Show>
+							<Show when={showCommandMenu()}>
+								<div class="command-popover" role="listbox" id="command-listbox" aria-label="slash commands">
+									<For each={commandMatches()}>
+										{(command, index) => (
+											<button
+												type="button"
+												id={`command-option-${index()}`}
+												role="option"
+												aria-selected={commandSelection() === index()}
+												class="command-option"
+												classList={{ selected: commandSelection() === index() }}
+												onMouseEnter={() => setCommandSelection(index())}
+												onClick={() => acceptCommand(command)}
+											>
+												<span class="command-name">/{command.name}</span>
+												<Show when={command.description}>
+													<span class="command-description">{command.description}</span>
+												</Show>
+												<span class="command-source">{command.source}</span>
+											</button>
+										)}
+									</For>
+								</div>
+							</Show>
+							<textarea
+								ref={composerRef}
+								placeholder={streaming() ? "Message dreb — sends as steer while it works…" : "Message dreb…"}
+								value={composerText()}
+								aria-controls={showCommandMenu() ? "command-listbox" : undefined}
+								aria-activedescendant={showCommandMenu() ? `command-option-${commandSelection()}` : undefined}
+								onPaste={(e) => {
+									const files = [...(e.clipboardData?.items ?? [])]
+										.filter((item) => item.type.startsWith("image/"))
+										.map((item) => item.getAsFile())
+										.filter((file): file is File => !!file);
+									if (files.length > 0) {
 										e.preventDefault();
-										setCommandSelection((commandSelection() + 1) % commandMatches().length);
-										return;
+										void addImageFiles(files);
 									}
-									if (e.key === "ArrowUp") {
-										e.preventDefault();
-										setCommandSelection(
-											(commandSelection() - 1 + commandMatches().length) % commandMatches().length,
-										);
-										return;
-									}
-									if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-										e.preventDefault();
-										const command = commandMatches()[commandSelection()];
-										if (command) acceptCommand(command);
-										return;
-									}
-									if (e.key === "Escape") {
-										e.preventDefault();
-										setCommandMenuClosed(true);
-										return;
-									}
-								}
-								if (
-									(e.key === "ArrowUp" || e.key === "ArrowDown") &&
-									(composerText() === "" || historyIndex() !== undefined)
-								) {
-									const history = composerHistory.get(props.sessionKey) ?? [];
-									if (history.length > 0) {
-										e.preventDefault();
+								}}
+								onInput={(e) => {
+									setCommandMenuClosed(false);
+									setCommandSelection(0);
+									setHistoryIndex(undefined);
+									setComposerText(e.currentTarget.value);
+									autoGrowTextarea(e.currentTarget);
+								}}
+								onKeyDown={(e) => {
+									if (showCommandMenu()) {
+										if (e.key === "ArrowDown") {
+											e.preventDefault();
+											setCommandSelection((commandSelection() + 1) % commandMatches().length);
+											return;
+										}
 										if (e.key === "ArrowUp") {
-											const next =
-												historyIndex() === undefined
-													? history.length - 1
-													: Math.max(0, historyIndex()! - 1);
-											setHistoryIndex(next);
-											setComposerText(history[next] ?? "");
-										} else if (historyIndex() !== undefined) {
-											const next = historyIndex()! + 1;
-											if (next >= history.length) {
-												setHistoryIndex(undefined);
-												setComposerText("");
-											} else {
-												setHistoryIndex(next);
-												setComposerText(history[next] ?? "");
-											}
+											e.preventDefault();
+											setCommandSelection(
+												(commandSelection() - 1 + commandMatches().length) % commandMatches().length,
+											);
+											return;
+										}
+										if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !isMobile())) {
+											e.preventDefault();
+											const command = commandMatches()[commandSelection()];
+											if (command) acceptCommand(command);
+											return;
+										}
+										if (e.key === "Escape") {
+											e.preventDefault();
+											setCommandMenuClosed(true);
+											return;
 										}
 									}
-									return;
-								}
-								if (e.key === "Enter" && !e.shiftKey) {
-									e.preventDefault();
-									send();
-								}
-							}}
-						/>
-						<div class="composer-row">
-							<input
-								ref={genericFileInputRef}
-								type="file"
-								multiple
-								class="hidden-file-input"
-								onChange={(e) => {
-									void addGenericFiles(e.currentTarget.files ?? []);
-									e.currentTarget.value = "";
+									if (
+										(e.key === "ArrowUp" || e.key === "ArrowDown") &&
+										(composerText() === "" || historyIndex() !== undefined)
+									) {
+										const history = composerHistory.get(props.sessionKey) ?? [];
+										if (history.length > 0) {
+											e.preventDefault();
+											if (e.key === "ArrowUp") {
+												const next =
+													historyIndex() === undefined
+														? history.length - 1
+														: Math.max(0, historyIndex()! - 1);
+												setHistoryIndex(next);
+												setComposerText(history[next] ?? "");
+											} else if (historyIndex() !== undefined) {
+												const next = historyIndex()! + 1;
+												if (next >= history.length) {
+													setHistoryIndex(undefined);
+													setComposerText("");
+												} else {
+													setHistoryIndex(next);
+													setComposerText(history[next] ?? "");
+												}
+											}
+										}
+										return;
+									}
+									if (e.key === "Enter" && !e.shiftKey && !isMobile()) {
+										e.preventDefault();
+										send();
+									}
 								}}
 							/>
-							<input
-								ref={imageFileInputRef}
-								type="file"
-								accept="image/*"
-								multiple
-								class="hidden-file-input"
-								onChange={(e) => {
-									void addImageFiles(e.currentTarget.files ?? []);
-									e.currentTarget.value = "";
-								}}
-							/>
-							<button
-								type="button"
-								class="btn btn-small"
-								title="attach file (uploads to workspace and sends path)"
-								onClick={() => genericFileInputRef?.click()}
-							>
-								📎 file
-							</button>
-							<button
-								type="button"
-								class="btn btn-small"
-								title="attach image inline"
-								onClick={() => imageFileInputRef?.click()}
-							>
-								🖼 photo
-							</button>
-							<Show when={streaming()}>
-								<span class="mode-toggle" role="radiogroup" aria-label="send mode">
-									<button
-										type="button"
-										classList={{ selected: sendMode() === "steer" }}
-										title="Deliver now — injected into the running turn"
-										onClick={() => setSendMode("steer")}
-									>
-										steer
-									</button>
-									<button
-										type="button"
-										classList={{ selected: sendMode() === "follow_up" }}
-										title="Queue — delivered after the agent finishes"
-										onClick={() => setSendMode("follow_up")}
-									>
-										follow-up
-									</button>
-								</span>
-							</Show>
-							<Show when={session()?.suggestedCommand}>
+							<div class="composer-row">
+								<input
+									ref={genericFileInputRef}
+									type="file"
+									multiple
+									class="hidden-file-input"
+									onChange={(e) => {
+										void addGenericFiles(e.currentTarget.files ?? []);
+										e.currentTarget.value = "";
+									}}
+								/>
+								<input
+									ref={imageFileInputRef}
+									type="file"
+									accept="image/*"
+									multiple
+									class="hidden-file-input"
+									onChange={(e) => {
+										void addImageFiles(e.currentTarget.files ?? []);
+										e.currentTarget.value = "";
+									}}
+								/>
 								<button
 									type="button"
-									class="ghost-suggest"
-									onClick={() => setComposerText(session()!.suggestedCommand!)}
+									class="btn btn-small"
+									title="attach file (uploads to workspace and sends path)"
+									onClick={() => genericFileInputRef?.click()}
 								>
-									suggested: <code>{session()!.suggestedCommand}</code> <span class="key">tap</span>
+									📎 file
 								</button>
-							</Show>
-							<button type="button" class="btn btn-primary btn-small send" onClick={send}>
-								send ↵
-							</button>
+								<button
+									type="button"
+									class="btn btn-small"
+									title="attach image inline"
+									onClick={() => imageFileInputRef?.click()}
+								>
+									🖼 photo
+								</button>
+								<Show when={streaming()}>
+									<span class="mode-toggle" role="radiogroup" aria-label="send mode">
+										<button
+											type="button"
+											classList={{ selected: sendMode() === "steer" }}
+											title="Deliver now — injected into the running turn"
+											onClick={() => setSendMode("steer")}
+										>
+											steer
+										</button>
+										<button
+											type="button"
+											classList={{ selected: sendMode() === "follow_up" }}
+											title="Queue — delivered after the agent finishes"
+											onClick={() => setSendMode("follow_up")}
+										>
+											follow-up
+										</button>
+									</span>
+								</Show>
+								<Show when={session()?.suggestedCommand}>
+									<button
+										type="button"
+										class="ghost-suggest"
+										onClick={() => setComposerText(session()!.suggestedCommand!)}
+									>
+										suggested: <code>{session()!.suggestedCommand}</code> <span class="key">tap</span>
+									</button>
+								</Show>
+								<button type="button" class="btn btn-primary btn-small send" onClick={send}>
+									send ↵
+								</button>
+							</div>
 						</div>
 					</div>
-				</div>
+				</Show>
 			</footer>
 
 			<Show when={session()?.uiRequests[0]}>

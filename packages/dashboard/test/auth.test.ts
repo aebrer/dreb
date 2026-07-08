@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	DashboardAuth,
@@ -8,6 +11,7 @@ import {
 	type TailscaleIdentity,
 	type TailscaleResolver,
 } from "../src/server/auth.js";
+import { FilePairingStorage, loadOrCreateDashboardSecret } from "../src/server/pairing-storage.js";
 
 class StubResolver implements TailscaleResolver {
 	constructor(private readonly map: Record<string, TailscaleIdentity | null> = {}) {}
@@ -191,6 +195,48 @@ describe("DashboardAuth — remote mode", () => {
 		expect(decision.allowed).toBe(true);
 		if (decision.allowed && decision.mode === "remote") {
 			expect(decision.identity.loginName).toBe("alice@example.com");
+		}
+	});
+
+	it("file-backed pairings keep authenticating after a dashboard restart", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "dreb-dashboard-auth-"));
+		try {
+			const pairingsPath = join(dir, "pairings.json");
+			const secretPath = join(dir, "secret");
+			const secret = loadOrCreateDashboardSecret(secretPath);
+			const first = makeAuth({
+				storage: new FilePairingStorage(pairingsPath),
+				secret,
+				now: () => 1_000_000,
+			});
+			const { token } = await first.pair(REMOTE, first.currentPairingCode().code);
+
+			const restartedSecret = loadOrCreateDashboardSecret(secretPath);
+			expect(restartedSecret.equals(secret)).toBe(true);
+			const restarted = makeAuth({
+				storage: new FilePairingStorage(pairingsPath),
+				secret: restartedSecret,
+				now: () => 1_000_000,
+			});
+			const decision = await restarted.authenticate({ ...REMOTE, deviceToken: token });
+			expect(decision.allowed).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("persistent dashboard secrets are unique per install", () => {
+		const a = mkdtempSync(join(tmpdir(), "dreb-dashboard-auth-a-"));
+		const b = mkdtempSync(join(tmpdir(), "dreb-dashboard-auth-b-"));
+		try {
+			const secretA = loadOrCreateDashboardSecret(join(a, "secret"));
+			const secretB = loadOrCreateDashboardSecret(join(b, "secret"));
+			expect(secretA).toHaveLength(32);
+			expect(secretB).toHaveLength(32);
+			expect(secretA.equals(secretB)).toBe(false);
+		} finally {
+			rmSync(a, { recursive: true, force: true });
+			rmSync(b, { recursive: true, force: true });
 		}
 	});
 

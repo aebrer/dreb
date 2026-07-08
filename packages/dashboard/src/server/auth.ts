@@ -164,7 +164,7 @@ export interface DashboardAuthOptions {
 	pairingTtlMs?: number;
 	resolver?: TailscaleResolver;
 	storage?: PairingStorage;
-	/** HMAC secret for device tokens. Generated per-instance when omitted. */
+	/** HMAC/TOTP secret for device tokens and pairing codes. Production passes a per-install persisted secret. */
 	secret?: Buffer;
 	/** Clock override for tests. */
 	now?: () => number;

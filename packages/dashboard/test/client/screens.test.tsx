@@ -203,6 +203,7 @@ afterEach(() => {
 	vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: false });
 	vi.mocked(api.dailyCost).mockResolvedValue({ cost: 0.42 });
 	vi.unstubAllGlobals();
+	Reflect.deleteProperty(window, "matchMedia");
 	vi.mocked(api.places).mockResolvedValue({ places: [{ label: "home", path: "/home/test" }] });
 	vi.mocked(api.upload).mockImplementation(async (_dir: string, file: File) => ({
 		path: `/home/test/project/.dreb-dashboard-uploads/${file.name}`,
@@ -227,6 +228,22 @@ function mount(element: () => any): HTMLElement {
 function makeStore() {
 	// createAppStore touches window.location.hash — jsdom provides it.
 	return createAppStore();
+}
+
+function stubMobile(matches = true) {
+	Object.defineProperty(window, "matchMedia", {
+		configurable: true,
+		value: vi.fn((query: string) => ({
+			matches,
+			media: query,
+			onchange: null,
+			addListener: vi.fn(),
+			removeListener: vi.fn(),
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+			dispatchEvent: vi.fn(),
+		})),
+	});
 }
 
 /** Build a populated session state to exercise entry rendering. */
@@ -450,6 +467,53 @@ describe("screen smoke tests", () => {
 		expect(el.querySelector(".session-bar .title")?.textContent).toBe("live rename");
 	});
 
+	it("session top and bottom chrome collapse with visible reopen hints", () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-collapse");
+		const fakeStore = {
+			...store,
+			sessions: { "k-collapse": session },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "k-collapse",
+						cwd: "/repo",
+						state: {
+							sessionId: "s1",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 0,
+							model: { provider: "test", id: "long-model" },
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-collapse" />);
+		expect(el.querySelector("textarea")).not.toBeNull();
+		expect(el.querySelector(".model-switcher")).not.toBeNull();
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("details ▴"))?.click();
+		expect(el.querySelector(".model-switcher")).toBeNull();
+		expect(el.textContent).toContain("details ▾");
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("compose ▾"))?.click();
+		expect(el.querySelector("textarea")).toBeNull();
+		expect(el.textContent).toContain("composer hidden for transcript reading");
+		expect(el.textContent).toContain("compose ▴");
+	});
+
 	it("subagent drill-in renders read-only with the fixed note and no composer", () => {
 		const store = makeStore() as any;
 		const session = populatedSession("k1");
@@ -523,6 +587,22 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("Why a PIN?");
 		expect(el.textContent).toContain("What pairing grants");
 		expect(el.textContent).toContain("alice@example.com");
+	});
+
+	it("pairing does not submit from the mobile Enter key", () => {
+		stubMobile(true);
+		vi.mocked(api.pair).mockClear();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			auth: () => ({ mode: "remote", needsPairing: true, identity: "alice@example.com" }),
+		};
+		const el = mount(() => <PairingScreen store={fakeStore} />);
+		const input = el.querySelector("#pairing-pin") as HTMLInputElement;
+		input.value = "123456";
+		input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		expect(api.pair).not.toHaveBeenCalled();
 	});
 });
 
@@ -802,6 +882,27 @@ describe("dashboard client regressions", () => {
 		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
 		expect(api.prompt).toHaveBeenCalledWith("k1", "/skill:review args");
+	});
+
+	it("composer Enter does not submit on mobile", async () => {
+		stubMobile(true);
+		vi.mocked(api.prompt).mockClear();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+
+		textarea.value = "line one";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+		expect(api.prompt).not.toHaveBeenCalled();
 	});
 
 	it("loaded context modal renders resources and empty sections", async () => {
