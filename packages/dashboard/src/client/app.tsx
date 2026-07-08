@@ -23,12 +23,57 @@ export function App(): JSX.Element {
 	onCleanup(() => store.stop());
 
 	// Browser tab badge: needs-attention marker in the title.
+	const notifiedAttention = new Set<string>();
 	createEffect(() => {
-		const attention =
-			Object.values(store.sessions).some((s) => s.needsAttention) ||
-			store.fleet().runtimes.some((r) => r.needsAttention);
-		const base = "dreb";
+		const sessionAttention = new Map<string, { name: string; reason: string }>();
+		for (const runtime of store.fleet().runtimes) {
+			if (runtime.needsAttention) {
+				sessionAttention.set(runtime.key, {
+					name: runtime.state.sessionName ?? runtime.state.sessionId.slice(0, 8),
+					reason: "needs attention",
+				});
+			}
+		}
+		for (const session of Object.values(store.sessions)) {
+			if (session.needsAttention) {
+				sessionAttention.set(session.key, {
+					name: session.sessionName ?? session.title ?? session.key,
+					reason: session.uiRequests[0]?.title
+						? `waiting for input — ${session.uiRequests[0].title}`
+						: (session.statusEntries.find((s) => s.tone === "error")?.text ?? "needs attention"),
+				});
+			}
+		}
+		const attention = sessionAttention.size > 0;
+		const route = store.route();
+		const currentSessionKey = route.screen === "session" || route.screen === "subagent" ? route.key : undefined;
+		const currentSession = currentSessionKey ? store.sessions[currentSessionKey] : undefined;
+		const currentRuntime = currentSessionKey
+			? store.fleet().runtimes.find((runtime) => runtime.key === currentSessionKey)
+			: undefined;
+		const displayName = currentSession?.title ?? currentSession?.sessionName ?? currentRuntime?.state.sessionName;
+		const base = displayName ? `${displayName} — dreb` : "dreb";
 		document.title = attention ? `◆ ${base}` : base;
+
+		for (const [key, item] of sessionAttention) {
+			if (notifiedAttention.has(key)) continue;
+			notifiedAttention.add(key);
+			if (
+				typeof Notification !== "undefined" &&
+				Notification.permission === "granted" &&
+				document.visibilityState !== "visible"
+			) {
+				const notification = new Notification(`dreb — ${item.name}`, { body: item.reason });
+				notification.onclick = () => {
+					window.focus();
+					store.navigate({ screen: "session", key });
+					notification.close();
+				};
+			}
+		}
+		for (const key of [...notifiedAttention]) {
+			if (!sessionAttention.has(key)) notifiedAttention.delete(key);
+		}
 	});
 
 	// All toasts across sessions, newest last.

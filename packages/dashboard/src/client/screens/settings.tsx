@@ -7,6 +7,7 @@ import { createResource, createSignal, For, type JSX, Show } from "solid-js";
 import type { SettingsDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { relativeTime, Topbar } from "../components/common.js";
+import { expandThinking, setExpandThinking } from "../state/preferences.js";
 import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -15,6 +16,9 @@ const QUEUE_MODES = ["all", "one-at-a-time"] as const;
 export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	const [error, setError] = createSignal<string>();
 	const [saved, setSaved] = createSignal(false);
+	const [notificationPermission, setNotificationPermission] = createSignal<NotificationPermission | "unsupported">(
+		typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+	);
 
 	const [settings, { mutate, refetch }] = createResource(async () => {
 		setError(undefined);
@@ -53,6 +57,11 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 			setError(err instanceof Error ? err.message : String(err));
 			await refetch();
 		}
+	}
+
+	async function requestNotifications() {
+		if (typeof Notification === "undefined") return;
+		setNotificationPermission(await Notification.requestPermission());
 	}
 
 	const auth = () => props.store.auth();
@@ -203,6 +212,53 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 						</>
 					)}
 				</Show>
+
+				<section class="settings-section">
+					<h2>dashboard</h2>
+					<div class="setting-row">
+						<span class="setting-label">
+							<span class="name">always expand thinking</span>
+							<span class="hint">this browser only — stored in localStorage, not the host settings file</span>
+						</span>
+						<span class="setting-control">
+							<label class="checkbox-control">
+								<input
+									type="checkbox"
+									checked={expandThinking()}
+									onChange={(e) => setExpandThinking(e.currentTarget.checked)}
+								/>
+								<span>open by default</span>
+							</label>
+						</span>
+					</div>
+					<div class="setting-row">
+						<span class="setting-label">
+							<span class="name">needs-attention notifications</span>
+							<span class="hint">
+								{notificationPermission() === "denied"
+									? "blocked by browser settings — re-enable notifications in site permissions"
+									: notificationPermission() === "unsupported"
+										? "browser notifications are unavailable in this environment"
+										: "show a browser notification when a hidden tab needs input"}
+							</span>
+						</span>
+						<span class="setting-control">
+							<label class="checkbox-control">
+								<input
+									type="checkbox"
+									checked={notificationPermission() === "granted"}
+									disabled={
+										notificationPermission() === "denied" || notificationPermission() === "unsupported"
+									}
+									onChange={(e) => {
+										if (e.currentTarget.checked) void requestNotifications();
+									}}
+								/>
+								<span>{notificationPermission() === "granted" ? "enabled" : "enable notifications"}</span>
+							</label>
+						</span>
+					</div>
+				</section>
 
 				<section class="settings-section">
 					<h2>devices</h2>

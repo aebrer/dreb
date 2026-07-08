@@ -16,11 +16,24 @@ function runtimeStatus(runtime: RuntimeInfoDto): "running" | "attention" | "idle
 	return "idle";
 }
 
+export function fleetGroupKey(cwd: string): string {
+	return cwd === "/tmp" || cwd.startsWith("/tmp/") ? "/tmp" : cwd;
+}
+
 function shortenPath(path: string): string {
 	return path.replace(/^\/home\/[^/]+/, "~");
 }
 
-function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.Element {
+function runtimeModelLabel(runtime: RuntimeInfoDto): string | undefined {
+	const model = runtime.state.model;
+	return model ? `${model.provider}/${model.id}` : undefined;
+}
+
+function runtimeCostLabel(runtime: RuntimeInfoDto): string | undefined {
+	return runtime.stats ? `$${runtime.stats.cost.toFixed(2)}` : undefined;
+}
+
+function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto; groupKey: string }): JSX.Element {
 	const status = () => runtimeStatus(props.runtime);
 	const session = () => props.store.sessions[props.runtime.key];
 	const liveAgents = () => props.runtime.backgroundAgents.filter((a) => a.status === "running");
@@ -32,13 +45,15 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 		const s = session();
 		if (s?.workingText) return `▸ ${s.workingText}`;
 		if (s?.suggestedCommand) return `suggested next: ${s.suggestedCommand}`;
-		return undefined;
+		return props.runtime.lastAssistantText;
 	};
 
 	return (
 		<article class="session-card" classList={{ attention: status() === "attention", error: !!session()?.lastError }}>
 			<div class="session-title">
-				<span class="name">{props.runtime.state.sessionName ?? props.runtime.state.sessionId.slice(0, 8)}</span>
+				<span class="name">
+					{session()?.sessionName ?? props.runtime.state.sessionName ?? props.runtime.state.sessionId.slice(0, 8)}
+				</span>
 				<Show when={session()?.lastError} fallback={<StatusChip status={status()} />}>
 					<StatusChip status="error" />
 				</Show>
@@ -69,18 +84,26 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 				</div>
 			</Show>
 			<div class="session-meta">
+				<Show when={props.runtime.cwd !== props.groupKey}>
+					<span title={props.runtime.cwd}>{shortenPath(props.runtime.cwd)}</span>
+					<span>·</span>
+				</Show>
 				<Show when={tasks().length > 0}>
 					<span>
 						tasks {tasksDone()}/{tasks().length}
 					</span>
 					<span>·</span>
 				</Show>
-				<Show when={props.runtime.state.model}>
-					<span>{props.runtime.state.model!.id}</span>
+				<Show when={runtimeModelLabel(props.runtime)}>
+					<span>{runtimeModelLabel(props.runtime)}</span>
 					<span>·</span>
 				</Show>
 				<Show when={ctx() && ctx()!.percent !== null}>
 					<span>ctx {ctx()!.percent!.toFixed(0)}%</span>
+					<span>·</span>
+				</Show>
+				<Show when={runtimeCostLabel(props.runtime)}>
+					<span>{runtimeCostLabel(props.runtime)}</span>
 					<span>·</span>
 				</Show>
 				<span>{props.runtime.state.messageCount} msgs</span>
@@ -202,16 +225,18 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 		const fleet = props.store.fleet();
 		const byProject = new Map<string, { runtimes: RuntimeInfoDto[]; disk: SessionInfoDto[] }>();
 		for (const runtime of fleet.runtimes) {
-			const group = byProject.get(runtime.cwd) ?? { runtimes: [], disk: [] };
+			const key = fleetGroupKey(runtime.cwd);
+			const group = byProject.get(key) ?? { runtimes: [], disk: [] };
 			group.runtimes.push(runtime);
-			byProject.set(runtime.cwd, group);
+			byProject.set(key, group);
 		}
 		const liveSessionFiles = new Set(fleet.runtimes.map((r) => r.state.sessionFile).filter(Boolean));
 		for (const session of fleet.diskSessions) {
 			if (liveSessionFiles.has(session.path)) continue; // already live
-			const group = byProject.get(session.cwd) ?? { runtimes: [], disk: [] };
+			const key = fleetGroupKey(session.cwd);
+			const group = byProject.get(key) ?? { runtimes: [], disk: [] };
 			group.disk.push(session);
-			byProject.set(session.cwd, group);
+			byProject.set(key, group);
 		}
 		// Attention-first sort within each group; groups with attention first.
 		const entries = [...byProject.entries()];
@@ -305,7 +330,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 								<Show when={group.runtimes.length > 0}>
 									<div class="session-grid">
 										<For each={group.runtimes}>
-											{(runtime) => <SessionCard store={props.store} runtime={runtime} />}
+											{(runtime) => <SessionCard store={props.store} runtime={runtime} groupKey={project} />}
 										</For>
 									</div>
 								</Show>

@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
-import type { AuthStatusDto, FleetDto } from "../shared/protocol.js";
+import type { AuthStatusDto, FleetDto, ImageAttachmentDto } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
 import { EventHub } from "./event-hub.js";
 import { defaultPlaces, FileApi } from "./files.js";
@@ -55,7 +55,7 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 
 	const app = express();
 	app.disable("x-powered-by");
-	app.use(express.json({ limit: "10mb" }));
+	app.use(express.json({ limit: "25mb" }));
 
 	// -- auth middleware (every route, fail-closed) ---------------------------
 	app.use((req: AuthedRequest, res: Response, next: NextFunction) => {
@@ -236,21 +236,66 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 		withRuntime(req, res, async (h) => ({ messages: await h.client.getMessages() }));
 	});
 
+	app.get("/api/runtimes/:key/pending", (req, res) => {
+		withRuntime(req, res, (h) => h.client.getPendingMessages());
+	});
+
+	app.post("/api/runtimes/:key/dequeue", (req, res) => {
+		withRuntime(req, res, (h) => h.client.clearPendingMessages());
+	});
+
+	function parseImages(body: unknown): ImageAttachmentDto[] | undefined | "invalid" {
+		const images = (body as { images?: unknown } | undefined)?.images;
+		if (images === undefined) return undefined;
+		if (!Array.isArray(images)) return "invalid";
+		const parsed: ImageAttachmentDto[] = [];
+		for (const image of images) {
+			if (
+				!image ||
+				typeof image !== "object" ||
+				typeof (image as { data?: unknown }).data !== "string" ||
+				typeof (image as { mimeType?: unknown }).mimeType !== "string"
+			) {
+				return "invalid";
+			}
+			parsed.push({ data: (image as ImageAttachmentDto).data, mimeType: (image as ImageAttachmentDto).mimeType });
+		}
+		return parsed;
+	}
+
 	app.post("/api/runtimes/:key/prompt", (req, res) => {
 		const { message, mode } = req.body ?? {};
 		if (typeof message !== "string" || message.length === 0) {
 			res.status(400).json({ error: "message is required" });
 			return;
 		}
+		const images = parseImages(req.body);
+		if (images === "invalid") {
+			res.status(400).json({ error: "images must be an array of {data, mimeType} objects" });
+			return;
+		}
+		const rpcImages = images?.map((image) => ({
+			type: "image" as const,
+			data: image.data,
+			mimeType: image.mimeType,
+		}));
 		withRuntime(req, res, async (h) => {
-			if (mode === "steer") await h.client.steer(message);
-			else if (mode === "follow_up") await h.client.followUp(message);
-			else await h.client.prompt(message);
+			if (mode === "steer") await h.client.steer(message, rpcImages);
+			else if (mode === "follow_up") await h.client.followUp(message, rpcImages);
+			else await h.client.prompt(message, rpcImages);
 		});
 	});
 
 	app.post("/api/runtimes/:key/abort", (req, res) => {
 		withRuntime(req, res, (h) => h.client.abort());
+	});
+
+	app.post("/api/runtimes/:key/abort-compaction", (req, res) => {
+		withRuntime(req, res, (h) => h.client.abortCompaction());
+	});
+
+	app.post("/api/runtimes/:key/abort-retry", (req, res) => {
+		withRuntime(req, res, (h) => h.client.abortRetry());
 	});
 
 	app.post("/api/runtimes/:key/model", (req, res) => {
@@ -291,6 +336,22 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 
 	app.get("/api/runtimes/:key/stats", (req, res) => {
 		withRuntime(req, res, (h) => h.client.getSessionStats());
+	});
+
+	app.get("/api/runtimes/:key/performance", (req, res) => {
+		withRuntime(req, res, (h) => h.client.getPerformanceStats());
+	});
+
+	app.get("/api/runtimes/:key/resources", (req, res) => {
+		withRuntime(req, res, (h) => h.client.getResources());
+	});
+
+	app.get("/api/runtimes/:key/commands", (req, res) => {
+		withRuntime(req, res, async (h) => ({ commands: await h.client.getCommands() }));
+	});
+
+	app.get("/api/runtimes/:key/branch", (req, res) => {
+		withRuntime(req, res, async (h) => ({ branch: await h.client.getGitBranch() }));
 	});
 
 	app.get("/api/runtimes/:key/fork-messages", (req, res) => {
@@ -372,6 +433,10 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 
 	app.get("/api/settings", (_req, res) => {
 		withAnyRuntime(res, (h) => h.client.getSettings());
+	});
+
+	app.get("/api/daily-cost", (_req, res) => {
+		withAnyRuntime(res, async (h) => ({ cost: await h.client.getDailyCost() }));
 	});
 
 	app.put("/api/settings", (req, res) => {

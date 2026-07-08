@@ -6,12 +6,18 @@
 import type {
 	AuthStatusDto,
 	BackgroundAgentDto,
+	CommandDto,
 	DirListingDto,
 	EventEnvelope,
 	FleetDto,
+	ImageAttachmentDto,
 	ModelInfoDto,
 	PairedDeviceDto,
+	PendingMessagesDto,
+	PerformanceStatsDto,
+	ResourcesDto,
 	RuntimeInfoDto,
+	SessionStatsDto,
 	SettingsDto,
 } from "../shared/protocol.js";
 
@@ -43,9 +49,13 @@ export const api = {
 	stopRuntime: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}`, { method: "DELETE" }),
 	runtime: (key: string) => request<RuntimeInfoDto>(`/api/runtimes/${key}`),
 	messages: (key: string) => request<{ messages: unknown[] }>(`/api/runtimes/${key}/messages`),
-	prompt: (key: string, message: string, mode?: "steer" | "follow_up") =>
-		request<{ ok: true }>(`/api/runtimes/${key}/prompt`, json({ message, mode })),
+	pending: (key: string) => request<PendingMessagesDto>(`/api/runtimes/${key}/pending`),
+	dequeue: (key: string) => request<PendingMessagesDto>(`/api/runtimes/${key}/dequeue`, { method: "POST" }),
+	prompt: (key: string, message: string, mode?: "steer" | "follow_up", images?: ImageAttachmentDto[]) =>
+		request<{ ok: true }>(`/api/runtimes/${key}/prompt`, json({ message, mode, images })),
 	abort: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}/abort`, { method: "POST" }),
+	abortCompaction: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}/abort-compaction`, { method: "POST" }),
+	abortRetry: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}/abort-retry`, { method: "POST" }),
 	setModel: (key: string, provider: string, modelId: string) =>
 		request<{ provider: string; id: string }>(`/api/runtimes/${key}/model`, json({ provider, modelId })),
 	models: (key: string) => request<{ models: ModelInfoDto[] }>(`/api/runtimes/${key}/models`),
@@ -53,7 +63,11 @@ export const api = {
 	compact: (key: string, instructions?: string) =>
 		request<unknown>(`/api/runtimes/${key}/compact`, json({ instructions })),
 	rename: (key: string, name: string) => request<{ ok: true }>(`/api/runtimes/${key}/name`, json({ name })),
-	stats: (key: string) => request<unknown>(`/api/runtimes/${key}/stats`),
+	stats: (key: string) => request<SessionStatsDto>(`/api/runtimes/${key}/stats`),
+	performance: (key: string) => request<PerformanceStatsDto>(`/api/runtimes/${key}/performance`),
+	resources: (key: string) => request<ResourcesDto>(`/api/runtimes/${key}/resources`),
+	commands: (key: string) => request<{ commands: CommandDto[] }>(`/api/runtimes/${key}/commands`),
+	branch: (key: string) => request<{ branch: string | null }>(`/api/runtimes/${key}/branch`),
 	forkMessages: (key: string) =>
 		request<{ messages: Array<{ entryId: string; text: string }> }>(`/api/runtimes/${key}/fork-messages`),
 	fork: (key: string, entryId: string) =>
@@ -79,6 +93,7 @@ export const api = {
 			body: JSON.stringify(settings),
 		}),
 	version: () => request<{ version: string }>("/api/version"),
+	dailyCost: () => request<{ cost: number }>("/api/daily-cost"),
 
 	listFiles: (path: string) => request<DirListingDto>(`/api/files?path=${encodeURIComponent(path)}`),
 	places: () => request<{ places: Array<{ label: string; path: string }> }>("/api/files/places"),

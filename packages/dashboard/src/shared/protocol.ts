@@ -38,9 +38,71 @@ export interface ContextUsageDto {
 	percent: number | null;
 }
 
+export interface ScopedModelDto {
+	provider: string;
+	id: string;
+	name?: string;
+	reasoning?: boolean;
+	thinkingLevel?: string;
+}
+
+export interface SessionStatsDto {
+	sessionFile?: string;
+	sessionId: string;
+	userMessages: number;
+	assistantMessages: number;
+	toolCalls: number;
+	toolResults: number;
+	totalMessages: number;
+	tokens: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total: number;
+	};
+	cost: number;
+	contextUsage?: ContextUsageDto;
+}
+
+export interface PerformanceStatsDto {
+	models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
+}
+
+export interface ResourcesDto {
+	contextFiles: Array<{ path: string }>;
+	skills: Array<{ name: string; description: string }>;
+	extensions: Array<{ name?: string; path: string }>;
+	promptTemplates: Array<{ name: string; description?: string }>;
+	systemPromptPresent: boolean;
+}
+
+export interface PendingMessagesDto {
+	steering: string[];
+	followUp: string[];
+}
+
+export interface ImageAttachmentDto {
+	data: string;
+	mimeType: string;
+}
+
+export interface CommandDto {
+	name: string;
+	description?: string;
+	source: "extension" | "prompt" | "skill";
+}
+
+export interface RuntimeStatsSummaryDto {
+	tokensTotal: number;
+	cost: number;
+}
+
 /** Live session state (mirrors RpcSessionState, model reduced to id fields). */
 export interface SessionStateDto {
 	model?: { provider: string; id: string; name?: string; reasoning?: boolean };
+	scopedModels?: ScopedModelDto[];
+	usingSubscription?: boolean;
 	thinkingLevel: string;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -62,10 +124,14 @@ export interface RuntimeInfoDto {
 	key: string;
 	cwd: string;
 	state: SessionStateDto;
+	/** Lean session stats for fleet cards; omitted when the runtime stats call fails. */
+	stats?: RuntimeStatsSummaryDto;
 	/** Background agents known to this runtime. */
 	backgroundAgents: BackgroundAgentDto[];
 	/** Server-derived needs-attention flag (extension UI pending, paused, error). */
 	needsAttention: boolean;
+	/** Last assistant text, truncated for fleet-card previews. */
+	lastAssistantText?: string;
 	/** Last activity timestamp (ISO). */
 	lastActivity: string;
 }

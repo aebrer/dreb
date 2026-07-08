@@ -10,7 +10,12 @@ import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RpcClient } from "@dreb/coding-agent/rpc";
-import type { BackgroundAgentDto, RuntimeInfoDto, SessionStateDto } from "../shared/protocol.js";
+import type {
+	BackgroundAgentDto,
+	RuntimeInfoDto,
+	RuntimeStatsSummaryDto,
+	SessionStateDto,
+} from "../shared/protocol.js";
 
 /** Resolve the absolute path to the dreb CLI (RpcClient defaults to a cwd-relative path). */
 export function resolveDrebCliPath(): string {
@@ -37,6 +42,7 @@ export interface RuntimePoolOptions {
 	baseArgs?: string[];
 	/** RpcClient factory override for tests. */
 	clientFactory?: (options: { cliPath: string; cwd: string; args: string[] }) => RpcClient;
+	logger?: (line: string) => void;
 }
 
 export class RuntimePool {
@@ -45,12 +51,14 @@ export class RuntimePool {
 	private readonly cliPath: string;
 	private readonly baseArgs: string[];
 	private readonly clientFactory: (options: { cliPath: string; cwd: string; args: string[] }) => RpcClient;
+	private readonly logger: (line: string) => void;
 
 	constructor(options: RuntimePoolOptions = {}) {
 		this.cliPath = options.cliPath ?? resolveDrebCliPath();
 		this.baseArgs = options.baseArgs ?? [];
 		this.clientFactory =
 			options.clientFactory ?? ((o) => new RpcClient({ cliPath: o.cliPath, cwd: o.cwd, args: o.args }));
+		this.logger = options.logger ?? ((line) => console.warn(`[dashboard] ${line}`));
 	}
 
 	/** Subscribe to events from every runtime, tagged with the runtime key. */
@@ -164,12 +172,32 @@ export class RuntimePool {
 	/** Snapshot a runtime for the fleet endpoint. */
 	async describe(handle: RuntimeHandle): Promise<RuntimeInfoDto> {
 		const state = (await handle.client.getState()) as unknown as SessionStateDto;
+		let stats: RuntimeStatsSummaryDto | undefined;
+		try {
+			const sessionStats = await handle.client.getSessionStats();
+			stats = { tokensTotal: sessionStats.tokens.total, cost: sessionStats.cost };
+		} catch (err) {
+			this.logger(
+				`runtime ${handle.key} stats unavailable for fleet card: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+		let lastAssistantText: string | undefined;
+		try {
+			const text = await handle.client.getLastAssistantText();
+			lastAssistantText = text ? text.slice(0, 200) : undefined;
+		} catch (err) {
+			this.logger(
+				`runtime ${handle.key} last assistant text unavailable for fleet card: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
 		return {
 			key: handle.key,
 			cwd: handle.cwd,
 			state,
+			stats,
 			backgroundAgents: [...handle.backgroundAgents.values()],
 			needsAttention: handle.attention.size > 0,
+			lastAssistantText,
 			lastActivity: new Date(handle.lastActivity).toISOString(),
 		};
 	}

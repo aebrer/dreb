@@ -12,5 +12,6 @@ export default defineConfig({
 	},
 	resolve: {
 		conditions: ["development", "browser"],
+		alias: [{ find: /^solid-js\/web$/, replacement: "solid-js/web/dist/web.js" }],
 	},
 });

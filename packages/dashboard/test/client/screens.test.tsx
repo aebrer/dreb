@@ -4,7 +4,7 @@
  * both empty state and populated state where meaningful (SPEC §9.11).
  */
 
-import { render } from "solid-js/web";
+import { render } from "solid-js/web/dist/web.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Mock the API module: screens fetch on mount; smoke tests must not hit a server.
@@ -14,6 +14,29 @@ vi.mock("../../src/client/api.js", () => ({
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
 		messages: vi.fn(async () => ({ messages: [] })),
 		models: vi.fn(async () => ({ models: [] })),
+		stats: vi.fn(async () => ({
+			sessionId: "s1",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 2,
+			tokens: { input: 1200, output: 45000, cacheRead: 0, cacheWrite: 12, total: 46212 },
+			cost: 0.42,
+		})),
+		performance: vi.fn(async () => ({ models: [] })),
+		resources: vi.fn(async () => ({
+			contextFiles: [],
+			skills: [],
+			extensions: [],
+			promptTemplates: [],
+			systemPromptPresent: false,
+		})),
+		commands: vi.fn(async () => ({ commands: [] })),
+		branch: vi.fn(async () => ({ branch: null })),
+		forkMessages: vi.fn(async () => ({ messages: [] })),
+		fork: vi.fn(async () => ({ text: "", cancelled: false })),
+		dailyCost: vi.fn(async () => ({ cost: 0.42 })),
 		settings: vi.fn(async () => ({ defaultProvider: "anthropic", defaultModel: "m1" })),
 		devices: vi.fn(async () => ({ devices: [] })),
 		version: vi.fn(async () => ({ version: "0.0.0-test" })),
@@ -28,18 +51,46 @@ vi.mock("../../src/client/api.js", () => ({
 		exportHtmlUrl: (key: string) => `/api/runtimes/${key}/export-html`,
 		downloadUrl: (path: string) => `/api/files/download?path=${path}`,
 		pair: vi.fn(async () => ({ device: { id: "d1" } })),
+		pending: vi.fn(async () => ({ steering: [], followUp: [] })),
+		dequeue: vi.fn(async () => ({ steering: [], followUp: [] })),
 		prompt: vi.fn(async () => ({})),
 		abort: vi.fn(async () => ({})),
+		abortCompaction: vi.fn(async () => ({})),
+		abortRetry: vi.fn(async () => ({})),
+		setModel: vi.fn(async () => ({ provider: "test", id: "m1" })),
+		setThinking: vi.fn(async () => ({})),
+		saveSettings: vi.fn(async (settings) => settings),
+		createRuntime: vi.fn(async (cwd: string) => ({
+			key: "new-key",
+			cwd,
+			state: {
+				sessionId: "new",
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			backgroundAgents: [],
+			needsAttention: false,
+			lastActivity: new Date().toISOString(),
+		})),
 	},
 	connectEvents: vi.fn(() => () => {}),
 }));
 
+import { api } from "../../src/client/api.js";
+import { Transcript } from "../../src/client/components/transcript.js";
 import { FilesScreen } from "../../src/client/screens/files.js";
-import { FleetScreen } from "../../src/client/screens/fleet.js";
+import { FleetScreen, fleetGroupKey } from "../../src/client/screens/fleet.js";
 import { PairingScreen } from "../../src/client/screens/pairing.js";
-import { SessionScreen } from "../../src/client/screens/session.js";
+import { formatTokens, SessionScreen } from "../../src/client/screens/session.js";
 import { SettingsScreen } from "../../src/client/screens/settings.js";
 import { SubagentScreen } from "../../src/client/screens/subagent.js";
+import { setExpandThinking } from "../../src/client/state/preferences.js";
 import { applySessionEvent, createSessionViewState, type SessionViewState } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
 
@@ -48,6 +99,43 @@ const disposers: Array<() => void> = [];
 afterEach(() => {
 	for (const dispose of disposers.splice(0)) dispose();
 	document.body.innerHTML = "";
+	setExpandThinking(false);
+	window.localStorage.clear();
+	vi.mocked(api.models).mockResolvedValue({ models: [] });
+	vi.mocked(api.stats).mockResolvedValue({
+		sessionId: "s1",
+		userMessages: 1,
+		assistantMessages: 1,
+		toolCalls: 0,
+		toolResults: 0,
+		totalMessages: 2,
+		tokens: { input: 1200, output: 45000, cacheRead: 0, cacheWrite: 12, total: 46212 },
+		cost: 0.42,
+	});
+	vi.mocked(api.performance).mockResolvedValue({ models: [] });
+	vi.mocked(api.resources).mockResolvedValue({
+		contextFiles: [],
+		skills: [],
+		extensions: [],
+		promptTemplates: [],
+		systemPromptPresent: false,
+	});
+	vi.mocked(api.commands).mockResolvedValue({ commands: [] });
+	vi.mocked(api.branch).mockResolvedValue({ branch: null });
+	vi.mocked(api.pending).mockResolvedValue({ steering: [], followUp: [] });
+	vi.mocked(api.dequeue).mockResolvedValue({ steering: [], followUp: [] });
+	vi.mocked(api.forkMessages).mockResolvedValue({ messages: [] });
+	vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: false });
+	vi.mocked(api.dailyCost).mockResolvedValue({ cost: 0.42 });
+	vi.unstubAllGlobals();
+	vi.mocked(api.places).mockResolvedValue({ places: [{ label: "home", path: "/home/test" }] });
+	vi.mocked(api.listFiles).mockResolvedValue({
+		path: "/home/test",
+		entries: [
+			{ name: "src", type: "dir", size: 0, modified: new Date().toISOString() },
+			{ name: "readme.md", type: "file", size: 1200, modified: new Date().toISOString() },
+		],
+	});
 });
 
 function mount(element: () => any): HTMLElement {
@@ -110,13 +198,16 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("No sessions yet");
 	});
 
-	it("session view renders with a populated transcript", () => {
+	it("session view renders with a populated transcript and session info bar", async () => {
+		vi.mocked(api.branch).mockResolvedValue({ branch: "feature/info" });
+		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 1.25 });
+		vi.mocked(api.performance).mockResolvedValue({
+			models: [{ provider: "test", modelId: "test-model", median: 41.8, mean: 43, count: 4 }],
+		});
 		const store = makeStore() as any;
 		// Inject session state directly (store internals sync from the reducer).
 		const session = populatedSession("k1");
-		store.sessions.k1 = undefined; // ensure key exists path
-		// createStore proxies: assign via the exposed setter path — simplest is
-		// rendering with the raw state injected through a wrapper store object.
+		// Render with the raw state injected through a wrapper store object.
 		const fakeStore = {
 			...store,
 			sessions: { k1: session },
@@ -124,7 +215,7 @@ describe("screen smoke tests", () => {
 				runtimes: [
 					{
 						key: "k1",
-						cwd: "/tmp",
+						cwd: "/home/test/software/dreb",
 						state: {
 							sessionId: "s1",
 							sessionName: "test session",
@@ -137,6 +228,7 @@ describe("screen smoke tests", () => {
 							messageCount: 3,
 							pendingMessageCount: 0,
 							model: { provider: "test", id: "test-model" },
+							usingSubscription: true,
 							contextUsage: { tokens: 50000, contextWindow: 200000, percent: 25 },
 						},
 						backgroundAgents: [],
@@ -149,6 +241,7 @@ describe("screen smoke tests", () => {
 			hydrateSession: async () => {},
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(el.textContent).toContain("hello world");
 		expect(el.textContent).toContain("edit");
 		expect(el.textContent).toContain("task one");
@@ -156,6 +249,11 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("follow-up");
 		expect(el.textContent).toContain("■ stop");
 		expect(el.textContent).toContain("ctx");
+		expect(el.textContent).toContain("~/software/dreb (feature/info) • test session");
+		expect(el.textContent).toContain("↑1.2k ↓45k W12");
+		expect(el.textContent).toContain("$0.420 (sub), today: $1.25");
+		expect(el.textContent).toContain("42 tok/s");
+		expect(el.textContent).toContain("test/test-model");
 		expect(el.textContent).toContain("scan things");
 		// Suggest-next chip
 		expect(el.textContent).toContain("/skill:test");
@@ -173,6 +271,43 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k2" />);
 		expect(el.textContent).not.toContain("■ stop");
 		expect(el.textContent).not.toContain("follow-up");
+	});
+
+	it("session header prefers live session_name_changed state", () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-live");
+		session.sessionName = "live rename";
+		const fakeStore = {
+			...store,
+			sessions: { "k-live": session },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "k-live",
+						cwd: "/repo",
+						state: {
+							sessionId: "s1",
+							sessionName: "stale name",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 0,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-live" />);
+		expect(el.querySelector(".session-bar .title")?.textContent).toBe("live rename");
 	});
 
 	it("subagent drill-in renders read-only with the fixed note and no composer", () => {
@@ -228,5 +363,672 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("Why a PIN?");
 		expect(el.textContent).toContain("What pairing grants");
 		expect(el.textContent).toContain("alice@example.com");
+	});
+});
+
+describe("dashboard client regressions", () => {
+	it("formats token counts like the TUI footer", () => {
+		expect(formatTokens(999)).toBe("999");
+		expect(formatTokens(1200)).toBe("1.2k");
+		expect(formatTokens(45000)).toBe("45k");
+		expect(formatTokens(1_200_000)).toBe("1.2M");
+		expect(formatTokens(12_000_000)).toBe("12M");
+	});
+
+	it("transcript groups assistant turns with following tool cards", () => {
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{ kind: "assistant", blocks: [{ kind: "text", text: "I'll inspect" }], streaming: false },
+					{
+						kind: "tool",
+						toolCallId: "t1",
+						toolName: "read",
+						args: { path: "/x" },
+						status: "done",
+						resultText: "body",
+						startedAt: Date.now(),
+					},
+					{ kind: "user", text: "thanks" },
+				]}
+			/>
+		));
+
+		const turns = el.querySelectorAll(".assistant-turn");
+		expect(turns).toHaveLength(1);
+		expect(turns[0]?.querySelector(".entry.assistant")?.textContent).toContain("I'll inspect");
+		expect(turns[0]?.querySelector("details.tool")?.textContent).toContain("read");
+		expect(turns[0]?.textContent).not.toContain("thanks");
+	});
+
+	it("renders assistant markdown and strips unsafe HTML", () => {
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{
+						kind: "assistant",
+						blocks: [
+							{
+								kind: "text",
+								text: "**bold**\n\n```ts\nconst x = 1;\n```\n\n<script>window.evil = true</script>",
+							},
+						],
+						streaming: false,
+					},
+				]}
+			/>
+		));
+
+		expect(el.querySelector("strong")?.textContent).toBe("bold");
+		expect(el.querySelector("pre code")?.textContent).toContain("const x = 1");
+		expect(el.querySelector("script")).toBeNull();
+	});
+
+	it("renders background-agent results as collapsed markdown cards, not user messages", () => {
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{
+						kind: "agent-result",
+						header: "Background agent bg1 (Explore) completed.",
+						text: "**complete**",
+						raw: "raw",
+					},
+				]}
+			/>
+		));
+
+		const card = el.querySelector(".agent-result-card");
+		const details = card?.querySelector("details") as HTMLDetailsElement | null;
+		expect(card?.textContent).toContain("background agent result");
+		expect(card?.textContent).toContain("Background agent bg1 (Explore) completed.");
+		expect(card?.querySelector("strong")?.textContent).toBe("complete");
+		expect(details?.open).toBe(false);
+		expect(card?.textContent).not.toContain("you");
+	});
+
+	it("transcript honors the always-expand-thinking browser preference", () => {
+		setExpandThinking(true);
+		const el = mount(() => (
+			<Transcript
+				entries={[{ kind: "assistant", blocks: [{ kind: "thinking", text: "ponder" }], streaming: false }]}
+			/>
+		));
+
+		expect((el.querySelector("details.thinking") as HTMLDetailsElement | null)?.open).toBe(true);
+	});
+
+	it("settings toggles the browser-local expand-thinking preference", async () => {
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const checkbox = el.querySelector(".checkbox-control input") as HTMLInputElement | null;
+		expect(checkbox).not.toBeNull();
+		expect(window.localStorage.getItem("dreb.dashboard.expandThinking")).toBeNull();
+
+		checkbox!.click();
+
+		expect(window.localStorage.getItem("dreb.dashboard.expandThinking")).toBe("true");
+		expect(checkbox!.checked).toBe(true);
+	});
+
+	it("settings requests browser notification permission from the dashboard toggle", async () => {
+		const fakeNotification = Object.assign(function Notification() {}, {
+			permission: "default" as NotificationPermission,
+			requestPermission: vi.fn(async () => {
+				fakeNotification.permission = "granted";
+				return "granted" as NotificationPermission;
+			}),
+		});
+		vi.stubGlobal("Notification", fakeNotification);
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const boxes = el.querySelectorAll(".checkbox-control input");
+		const notifications = boxes[1] as HTMLInputElement;
+
+		notifications.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(fakeNotification.requestPermission).toHaveBeenCalled();
+		expect(notifications.checked).toBe(true);
+	});
+
+	it("composer textarea auto-grows on input", () => {
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 144 });
+
+		textarea.value = "line 1\nline 2\nline 3";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+		expect(textarea.style.height).toBe("144px");
+		expect(textarea.style.overflowY).toBe("hidden");
+	});
+
+	it("slash command autocomplete filters and accepts without sending", async () => {
+		vi.mocked(api.commands).mockResolvedValue({
+			commands: [
+				{ name: "skill:review", description: "Review code", source: "skill" },
+				{ name: "plan", description: "Plan work", source: "prompt" },
+				{ name: "skill:write", description: "Write code", source: "skill" },
+			],
+		});
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+
+		textarea.value = "/";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		expect(el.querySelector('[role="listbox"]')?.textContent).toContain("/skill:review");
+		expect(el.querySelector('[role="listbox"]')?.textContent).toContain("/plan");
+
+		textarea.value = "/rev";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		expect(el.querySelector('[role="listbox"]')?.textContent).toContain("/skill:review");
+		expect(el.querySelector('[role="listbox"]')?.textContent).not.toContain("/plan");
+
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		expect(el.querySelector('[role="listbox"]')).toBeNull();
+		textarea.value = "/rev";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		expect(api.prompt).not.toHaveBeenCalled();
+		expect(textarea.value).toBe("/skill:review ");
+		expect(el.querySelector('[role="listbox"]')).toBeNull();
+	});
+
+	it("slash command composer sends raw slash text after arguments are entered", async () => {
+		vi.mocked(api.commands).mockResolvedValue({
+			commands: [{ name: "skill:review", description: "Review code", source: "skill" }],
+		});
+		vi.mocked(api.prompt).mockClear();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+
+		textarea.value = "/skill:review args";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+		expect(api.prompt).toHaveBeenCalledWith("k1", "/skill:review args");
+	});
+
+	it("loaded context modal renders resources and empty sections", async () => {
+		vi.mocked(api.resources).mockResolvedValueOnce({
+			contextFiles: [{ path: "/home/test/project/AGENTS.md" }],
+			skills: [{ name: "review", description: "Review code" }],
+			extensions: [{ name: "demo", path: "/tmp/ext.ts" }],
+			promptTemplates: [{ name: "plan", description: "Plan work" }],
+			systemPromptPresent: true,
+		});
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("loaded context"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("loaded context");
+		expect(el.textContent).toContain("~/project/AGENTS.md");
+		expect(el.textContent).toContain("review");
+		expect(el.textContent).toContain("Review code");
+		expect(el.textContent).toContain("demo");
+		expect(el.textContent).toContain("system prompt: custom");
+
+		vi.mocked(api.resources).mockResolvedValueOnce({
+			contextFiles: [],
+			skills: [],
+			extensions: [],
+			promptTemplates: [],
+			systemPromptPresent: false,
+		});
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("loaded context"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("none");
+	});
+
+	it("files lists the home place first even when places resolves asynchronously", async () => {
+		vi.mocked(api.places).mockImplementation(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			return { places: [{ label: "home", path: "/home/slow" }] };
+		});
+		vi.mocked(api.listFiles).mockResolvedValue({ path: "/home/slow", entries: [] });
+
+		const store = makeStore();
+		mount(() => <FilesScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(api.listFiles).toHaveBeenCalledWith("/home/slow");
+		expect(vi.mocked(api.listFiles).mock.calls.some(([target]) => target === "/")).toBe(false);
+	});
+
+	it("groups /tmp sessions under a single fleet project", () => {
+		expect(fleetGroupKey("/tmp")).toBe("/tmp");
+		expect(fleetGroupKey("/tmp/x")).toBe("/tmp");
+		expect(fleetGroupKey("/tmp/x/y")).toBe("/tmp");
+		expect(fleetGroupKey("/home/u/proj")).toBe("/home/u/proj");
+
+		const store = makeStore() as any;
+		const liveSession = createSessionViewState("a");
+		liveSession.sessionName = "live fleet name";
+		const runtime = (key: string, cwd: string) => ({
+			key,
+			cwd,
+			state: {
+				sessionId: key,
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 1,
+				pendingMessageCount: 0,
+				model: { provider: "github-copilot", id: "claude-fable-5" },
+			},
+			stats: { tokensTotal: 1545, cost: 0.42 },
+			backgroundAgents: [],
+			needsAttention: false,
+			lastActivity: new Date().toISOString(),
+		});
+		const fakeStore = {
+			...store,
+			sessions: { a: liveSession },
+			fleet: () => ({ runtimes: [runtime("a", "/tmp/a"), runtime("b", "/tmp/b")], diskSessions: [] }),
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		const headers = [...el.querySelectorAll(".group-head h2")].map((node) => node.textContent);
+
+		expect(headers).toEqual(["/tmp"]);
+		expect(el.querySelectorAll(".session-card")).toHaveLength(2);
+		expect(el.textContent).toContain("/tmp/a");
+		expect(el.textContent).toContain("/tmp/b");
+		expect(el.textContent).toContain("github-copilot/claude-fable-5");
+		expect(el.textContent).toContain("$0.42");
+		expect(el.textContent).toContain("live fleet name");
+	});
+
+	it("model selector groups by provider and marks the current same-id model", async () => {
+		vi.mocked(api.models).mockResolvedValue({
+			models: [
+				{
+					provider: "anthropic",
+					id: "claude-fable-5",
+					name: "Claude Fable",
+					contextWindow: 200000,
+					reasoning: true,
+				},
+				{
+					provider: "github-copilot",
+					id: "claude-fable-5",
+					name: "Claude Fable",
+					contextWindow: 200000,
+					reasoning: true,
+				},
+			],
+		});
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "k1",
+						cwd: "/repo",
+						state: {
+							sessionId: "s1",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 0,
+							model: { provider: "github-copilot", id: "claude-fable-5" },
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+
+		(el.querySelector(".model-switcher") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const headers = [...el.querySelectorAll(".model-provider-heading")].map((node) => node.textContent);
+		expect(headers).toEqual(["anthropic", "github-copilot"]);
+		expect(el.querySelectorAll(".model-row")).toHaveLength(2);
+		expect(el.querySelector(".model-row.current")?.textContent).toContain("github-copilot");
+		expect(el.querySelector(".model-row.current")?.textContent).toContain("✓");
+	});
+
+	it("queued messages render as chips and restore all text to the composer", async () => {
+		vi.mocked(api.pending).mockResolvedValue({ steering: ["steer one"], followUp: ["follow one"] });
+		vi.mocked(api.dequeue).mockResolvedValue({ steering: ["steer one"], followUp: ["follow one"] });
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { queued: createSessionViewState("queued") },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "queued",
+						cwd: "/repo",
+						state: {
+							sessionId: "s1",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 2,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+			refreshFleet: vi.fn(async () => {}),
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="queued" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("steer one");
+		expect(el.textContent).toContain("follow one");
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("restore"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.dequeue).toHaveBeenCalledWith("queued");
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("steer one\n\nfollow one");
+	});
+
+	it("composer history recalls sent prompts with arrow keys", async () => {
+		vi.mocked(api.prompt).mockClear();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { hist: createSessionViewState("hist") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="hist" />);
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "first prompt";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.prompt).toHaveBeenCalledWith("hist", "first prompt");
+		expect(textarea.value).toBe("");
+
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+		expect(textarea.value).toBe("first prompt");
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+		expect(textarea.value).toBe("");
+	});
+
+	it("status compaction and retry entries expose abort buttons", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("abort-status");
+		session.statusEntries = [
+			{ key: "compaction", text: "compacting context…", tone: "info" },
+			{ key: "retry", text: "retrying", tone: "warning" },
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "abort-status": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="abort-status" />);
+		const buttons = [...el.querySelectorAll(".status-line button")];
+		buttons[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		buttons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.abortCompaction).toHaveBeenCalledWith("abort-status");
+		expect(api.abortRetry).toHaveBeenCalledWith("abort-status");
+	});
+
+	it("transcript shows skill badges and copies raw user/assistant text", async () => {
+		const writeText = vi.fn(async () => {});
+		Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{ kind: "user", text: "/skill:review please" },
+					{
+						kind: "assistant",
+						blocks: [
+							{ kind: "thinking", text: "hidden" },
+							{ kind: "text", text: "visible answer" },
+						],
+						streaming: false,
+					},
+				]}
+			/>
+		));
+		expect(el.textContent).toContain("skill: review");
+		const buttons = [...el.querySelectorAll(".entry-action")];
+		(buttons[0] as HTMLButtonElement).click();
+		(buttons[1] as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(writeText).toHaveBeenNthCalledWith(1, "/skill:review please");
+		expect(writeText).toHaveBeenNthCalledWith(2, "visible answer");
+	});
+
+	it("bespoke tool cards render bash command lines and write bodies", () => {
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{
+						kind: "tool",
+						toolCallId: "b1",
+						toolName: "bash",
+						args: { command: "npm test" },
+						status: "done",
+						resultText: "passed",
+						startedAt: Date.now(),
+					},
+					{
+						kind: "tool",
+						toolCallId: "w1",
+						toolName: "write",
+						args: { path: "/tmp/a.txt", content: "written body" },
+						status: "done",
+						resultText: "",
+						startedAt: Date.now(),
+					},
+				]}
+			/>
+		));
+		expect(el.querySelector(".tool-command")?.textContent).toContain("npm test");
+		expect(el.textContent).toContain("passed");
+		expect(el.textContent).toContain("written body");
+	});
+
+	it("fork modal rewinds to a selected user message and prefills the composer", async () => {
+		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
+		vi.mocked(api.fork).mockResolvedValue({ text: "original prompt", cancelled: false });
+		const store = makeStore() as any;
+		const hydrateSession = vi.fn(async () => {});
+		const fakeStore = {
+			...store,
+			sessions: { fork: createSessionViewState("fork") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession,
+			refreshFleet: vi.fn(async () => {}),
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="fork" />);
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("original prompt");
+		(el.querySelector(".fork-message") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.fork).toHaveBeenCalledWith("fork", "u1");
+		expect(hydrateSession).toHaveBeenCalledWith("fork");
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("original prompt");
+	});
+
+	it("session stats popover shows the detailed stats breakdown", async () => {
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { stats: createSessionViewState("stats") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="stats" />);
+		(el.querySelector(".stats-trigger") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.stats).toHaveBeenCalledWith("stats");
+		expect(el.textContent).toContain("user messages");
+		expect(el.textContent).toContain("total tokens");
+		expect(el.textContent).toContain("$0.4200");
+	});
+
+	it("image file attachments are sent with the prompt", async () => {
+		vi.mocked(api.prompt).mockClear();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { image: createSessionViewState("image") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="image" />);
+		const input = el.querySelector('input[type="file"]') as HTMLInputElement;
+		const file = new File(["img"], "tiny.png", { type: "image/png" });
+		Object.defineProperty(input, "files", { configurable: true, value: [file] });
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "describe this";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.prompt).toHaveBeenCalledWith("image", "describe this", undefined, [
+			expect.objectContaining({ mimeType: "image/png", data: expect.any(String) }),
+		]);
+	});
+
+	it("fleet cards use lastAssistantText as a muted activity preview", () => {
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: {},
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "preview",
+						cwd: "/repo",
+						state: {
+							sessionId: "preview-session",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 1,
+							pendingMessageCount: 0,
+						},
+						stats: { tokensTotal: 1, cost: 0.01 },
+						backgroundAgents: [],
+						needsAttention: false,
+						lastAssistantText: "last assistant preview text",
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		expect(el.querySelector(".activity")?.textContent).toContain("last assistant preview text");
+	});
+
+	it("model selector defaults to scoped models when scopedModels are present", async () => {
+		vi.mocked(api.models).mockResolvedValue({
+			models: [{ provider: "anthropic", id: "all-only", name: "All Only", contextWindow: 1000, reasoning: false }],
+		});
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "k1",
+						cwd: "/repo",
+						state: {
+							sessionId: "s1",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 0,
+							model: { provider: "github-copilot", id: "scoped-model" },
+							scopedModels: [{ provider: "github-copilot", id: "scoped-model", name: "Scoped Model" }],
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+
+		(el.querySelector(".model-switcher") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("scoped");
+		expect(el.textContent).toContain("scoped-model");
+		expect(el.textContent).not.toContain("all-only");
 	});
 });

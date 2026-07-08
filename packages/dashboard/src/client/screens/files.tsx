@@ -39,8 +39,8 @@ export function FilesScreen(props: { store: AppStore; initialPath?: string }): J
 		async (p): Promise<DirListingDto> => {
 			setError(undefined);
 			if (!p) {
-				const all = places();
-				const home = all?.find((place) => place.label === "home");
+				const { places: all } = await api.places();
+				const home = all.find((place) => place.label === "home");
 				const target = home?.path ?? "/";
 				setPath(target);
 				return api.listFiles(target);

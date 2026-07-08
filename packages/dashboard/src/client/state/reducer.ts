@@ -20,6 +20,17 @@ export interface UserEntry {
 	timestamp?: number;
 }
 
+export interface AgentResultEntry {
+	kind: "agent-result";
+	/** Markdown body extracted from the background-agent completion wrapper. */
+	text: string;
+	/** Human-readable status line, e.g. "Background agent bg1 (Explore) completed." */
+	header?: string;
+	/** Original wrapped message text, retained for dedupe/debugging. */
+	raw: string;
+	timestamp?: number;
+}
+
 export interface AssistantBlock {
 	kind: "text" | "thinking";
 	text: string;
@@ -59,7 +70,7 @@ export interface CustomEntry {
 	text: string;
 }
 
-export type TranscriptEntry = UserEntry | AssistantEntry | ToolEntry | SummaryEntry | CustomEntry;
+export type TranscriptEntry = UserEntry | AgentResultEntry | AssistantEntry | ToolEntry | SummaryEntry | CustomEntry;
 
 // ---------------------------------------------------------------------------
 // Session state
@@ -107,6 +118,9 @@ export interface SessionViewState {
 	uiRequests: ExtensionUiRequest[];
 	toasts: Toast[];
 	widgets: { above: string[]; below: string[] };
+	/** Live AgentSession display name from session_name_changed events. */
+	sessionName?: string;
+	/** Extension UI title; distinct from the AgentSession display name. */
 	title?: string;
 	composerPrefill?: string;
 	needsAttention: boolean;
@@ -168,6 +182,30 @@ function contentToText(content: unknown): string {
 		.join("\n");
 }
 
+function parseBackgroundAgentResult(raw: string, timestamp?: number): AgentResultEntry | undefined {
+	const match = raw.match(/<background-agent-complete>\n?([\s\S]*?)\n?<\/background-agent-complete>/);
+	const inner = match?.[1]?.trim();
+	if (!inner) return undefined;
+	const lines = inner.split("\n");
+	const firstContentLine = lines.findIndex((line) => line.trim().length > 0);
+	let header: string | undefined;
+	let text = inner;
+	if (firstContentLine >= 0 && /^Background agent .+\.$/.test(lines[firstContentLine]?.trim() ?? "")) {
+		header = lines[firstContentLine]!.trim();
+		text =
+			lines
+				.slice(firstContentLine + 1)
+				.join("\n")
+				.trim() || header;
+	}
+	return { kind: "agent-result", text, header, raw, timestamp };
+}
+
+function userMessageToEntry(message: MessageLike): UserEntry | AgentResultEntry {
+	const text = contentToText(message.content);
+	return parseBackgroundAgentResult(text, message.timestamp) ?? { kind: "user", text, timestamp: message.timestamp };
+}
+
 /** Convert a full message list (get_messages) into transcript entries. */
 export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 	const entries: TranscriptEntry[] = [];
@@ -175,9 +213,20 @@ export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 
 	for (const message of messages) {
 		if (message.role === "user") {
-			entries.push({ kind: "user", text: contentToText(message.content), timestamp: message.timestamp });
+			entries.push(userMessageToEntry(message));
 		} else if (message.role === "assistant") {
-			const blocks: AssistantBlock[] = [];
+			let blocks: AssistantBlock[] = [];
+			const flushAssistant = () => {
+				if (blocks.length === 0) return;
+				entries.push({
+					kind: "assistant",
+					blocks,
+					model: message.model,
+					streaming: false,
+					timestamp: message.timestamp,
+				});
+				blocks = [];
+			};
 			if (Array.isArray(message.content)) {
 				for (const part of message.content as Array<Record<string, unknown>>) {
 					if (part.type === "text" && typeof part.text === "string") {
@@ -185,6 +234,7 @@ export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 					} else if (part.type === "thinking" && typeof part.thinking === "string") {
 						blocks.push({ kind: "thinking", text: part.thinking });
 					} else if (part.type === "toolCall") {
+						flushAssistant();
 						const call = part as { id?: string; name?: string; arguments?: unknown };
 						const entry: ToolEntry = {
 							kind: "tool",
@@ -200,15 +250,7 @@ export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 					}
 				}
 			}
-			if (blocks.length > 0) {
-				entries.push({
-					kind: "assistant",
-					blocks,
-					model: message.model,
-					streaming: false,
-					timestamp: message.timestamp,
-				});
-			}
+			flushAssistant();
 		} else if (message.role === "toolResult") {
 			const entry = toolEntries.get(String(message.toolCallId));
 			if (entry) {
@@ -286,7 +328,7 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 		case "message_start": {
 			const message = event.message as MessageLike | undefined;
 			if (message?.role === "user") {
-				state.entries.push({ kind: "user", text: contentToText(message.content), timestamp: message.timestamp });
+				state.entries.push(userMessageToEntry(message));
 			} else if (message?.role === "assistant") {
 				state.entries.push({
 					kind: "assistant",
@@ -340,9 +382,11 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 				// without a preceding message_start in some paths; dedupe by checking
 				// the last entry.
 				const last = state.entries[state.entries.length - 1];
-				const text = contentToText(message.content);
-				if (!(last?.kind === "user" && last.text === text)) {
-					state.entries.push({ kind: "user", text, timestamp: message.timestamp });
+				const entry = userMessageToEntry(message);
+				if (entry.kind === "agent-result") {
+					if (!(last?.kind === "agent-result" && last.raw === entry.raw)) state.entries.push(entry);
+				} else if (!(last?.kind === "user" && last.text === entry.text)) {
+					state.entries.push(entry);
 				}
 			}
 			break;
@@ -482,6 +526,10 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			state.suggestedCommand = String(event.command);
 			break;
 		}
+		case "session_name_changed": {
+			state.sessionName = String(event.name ?? "");
+			break;
+		}
 		case "background_agent_start": {
 			state.backgroundAgents[String(event.agentId)] = {
 				agentId: String(event.agentId),
@@ -539,15 +587,15 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 				});
 			} else if (method === "notify") {
 				toastCounter += 1;
-				const tone = (event.notificationType as "info" | "warning" | "error" | undefined) ?? "info";
+				const tone = (event.notifyType as "info" | "warning" | "error" | undefined) ?? "info";
 				state.toasts.push({ id: toastCounter, text: String(event.message ?? ""), tone });
 			} else if (method === "setStatus") {
 				const key = `ext:${event.statusKey ?? "default"}`;
 				state.statusEntries = state.statusEntries.filter((s) => s.key !== key);
-				if (event.text) state.statusEntries.push({ key, text: String(event.text), tone: "info" });
+				if (event.statusText) state.statusEntries.push({ key, text: String(event.statusText), tone: "info" });
 			} else if (method === "setWidget") {
-				const placement = event.placement === "below" ? "below" : "above";
-				state.widgets[placement] = Array.isArray(event.lines) ? (event.lines as string[]) : [];
+				const placement = event.widgetPlacement === "belowEditor" ? "below" : "above";
+				state.widgets[placement] = Array.isArray(event.widgetLines) ? (event.widgetLines as string[]) : [];
 			} else if (method === "setTitle") {
 				state.title = String(event.title ?? "");
 			} else if (method === "set_editor_text") {

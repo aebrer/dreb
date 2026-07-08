@@ -24,6 +24,12 @@ interface TestServerOptions {
 	deleteSession?: (path: string) => Promise<unknown>;
 }
 
+async function createTempProject(): Promise<string> {
+	const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
+	tempDirs.push(dir);
+	return dir;
+}
+
 async function startServer(options: TestServerOptions = {}) {
 	const clients: Array<ReturnType<typeof makeFakeClient>> = [];
 	const pool = new RuntimePool({
@@ -158,14 +164,31 @@ describe("dashboard server — fleet and runtimes", () => {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ message: "m1", mode: "steer" }),
 		});
-		expect(client.steer).toHaveBeenCalledWith("m1");
+		expect(client.steer).toHaveBeenCalledWith("m1", undefined);
 
 		await fetch(`${base}/api/runtimes/${key}/prompt`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ message: "m2", mode: "follow_up" }),
 		});
-		expect(client.followUp).toHaveBeenCalledWith("m2");
+		expect(client.followUp).toHaveBeenCalledWith("m2", undefined);
+
+		await fetch(`${base}/api/runtimes/${key}/prompt`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				message: "m3",
+				images: [{ data: "abc123", mimeType: "image/png" }],
+			}),
+		});
+		expect(client.prompt).toHaveBeenCalledWith("m3", [{ type: "image", data: "abc123", mimeType: "image/png" }]);
+
+		const badImages = await fetch(`${base}/api/runtimes/${key}/prompt`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ message: "bad", images: [{ data: 1, mimeType: "image/png" }] }),
+		});
+		expect(badImages.status).toBe(400);
 
 		const missing = await fetch(`${base}/api/runtimes/${key}/prompt`, {
 			method: "POST",
@@ -180,6 +203,87 @@ describe("dashboard server — fleet and runtimes", () => {
 		const { base } = await startServer();
 		const res = await fetch(`${base}/api/runtimes/nope`, { method: "GET" });
 		expect(res.status).toBe(404);
+	});
+
+	it("exposes dashboard RPC data routes", async () => {
+		const dir = await createTempProject();
+		const { base, clients } = await startServer();
+		const create = await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const { key } = (await create.json()) as { key: string };
+
+		await expect(fetch(`${base}/api/runtimes/${key}/performance`).then((r) => r.json())).resolves.toEqual({
+			models: [{ provider: "test", modelId: "m1", median: 42, mean: 43, count: 4 }],
+		});
+		await expect(fetch(`${base}/api/runtimes/${key}/resources`).then((r) => r.json())).resolves.toEqual({
+			contextFiles: [{ path: "/tmp/AGENTS.md" }],
+			skills: [{ name: "review", description: "Review code" }],
+			extensions: [{ name: "demo", path: "/tmp/ext.ts" }],
+			promptTemplates: [{ name: "plan", description: "Plan work" }],
+			systemPromptPresent: true,
+		});
+		await expect(fetch(`${base}/api/runtimes/${key}/commands`).then((r) => r.json())).resolves.toEqual({
+			commands: [
+				{ name: "skill:review", description: "Review code", source: "skill" },
+				{ name: "plan", description: "Plan work", source: "prompt" },
+			],
+		});
+		await expect(fetch(`${base}/api/runtimes/${key}/branch`).then((r) => r.json())).resolves.toEqual({
+			branch: "feature/test",
+		});
+		await expect(fetch(`${base}/api/runtimes/${key}/pending`).then((r) => r.json())).resolves.toEqual({
+			steering: ["queued steer"],
+			followUp: ["queued follow"],
+		});
+		await expect(
+			fetch(`${base}/api/runtimes/${key}/dequeue`, { method: "POST" }).then((r) => r.json()),
+		).resolves.toEqual({ steering: ["queued steer"], followUp: ["queued follow"] });
+		await expect(fetch(`${base}/api/daily-cost`).then((r) => r.json())).resolves.toEqual({ cost: 1.23 });
+		await expect(fetch(`${base}/api/runtimes/${key}/abort-compaction`, { method: "POST" })).resolves.toMatchObject({
+			status: 200,
+		});
+		await expect(fetch(`${base}/api/runtimes/${key}/abort-retry`, { method: "POST" })).resolves.toMatchObject({
+			status: 200,
+		});
+		expect(clients[0].getPerformanceStats).toHaveBeenCalled();
+		expect(clients[0].getResources).toHaveBeenCalled();
+		expect(clients[0].getCommands).toHaveBeenCalled();
+		expect(clients[0].getGitBranch).toHaveBeenCalled();
+		expect(clients[0].getPendingMessages).toHaveBeenCalled();
+		expect(clients[0].clearPendingMessages).toHaveBeenCalled();
+		expect(clients[0].abortCompaction).toHaveBeenCalled();
+		expect(clients[0].abortRetry).toHaveBeenCalled();
+		expect(clients[0].getDailyCost).toHaveBeenCalled();
+	});
+
+	it("protects dashboard RPC data routes with auth middleware", async () => {
+		const dir = await createTempProject();
+		const { base } = await startServer();
+		const create = await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const { key } = (await create.json()) as { key: string };
+		const paths = [
+			`/api/runtimes/${key}/performance`,
+			`/api/runtimes/${key}/resources`,
+			`/api/runtimes/${key}/commands`,
+			`/api/runtimes/${key}/branch`,
+			`/api/runtimes/${key}/pending`,
+			`/api/runtimes/${key}/dequeue`,
+			`/api/runtimes/${key}/abort-compaction`,
+			`/api/runtimes/${key}/abort-retry`,
+			"/api/daily-cost",
+		];
+
+		for (const path of paths) {
+			const res = await fetch(`${base}${path}`, { headers: { origin: "https://evil.example" } });
+			expect(res.status).toBe(403);
+		}
 	});
 });
 

@@ -5,7 +5,17 @@
  */
 
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
-import type { ModelInfoDto } from "../../shared/protocol.js";
+import type {
+	CommandDto,
+	ImageAttachmentDto,
+	ModelInfoDto,
+	PendingMessagesDto,
+	PerformanceStatsDto,
+	ResourcesDto,
+	ScopedModelDto,
+	SessionStateDto,
+	SessionStatsDto,
+} from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
@@ -13,6 +23,49 @@ import type { ExtensionUiRequest, SessionViewState } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const composerHistory = new Map<string, string[]>();
+
+type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
+type ModelScope = "scoped" | "all";
+
+function modelLabel(model: SessionStateDto["model"] | undefined): string {
+	return model ? `${model.provider}/${model.id}` : "—";
+}
+
+export function formatTokens(count: number): string {
+	if (count < 1000) return count.toString();
+	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+	if (count < 1000000) return `${Math.round(count / 1000)}k`;
+	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+	return `${Math.round(count / 1000000)}M`;
+}
+
+function shortenPath(path: string): string {
+	return path.replace(/^\/home\/[^/]+/, "~");
+}
+
+function modelMatchesQuery(model: ModelChoice, query: string): boolean {
+	return `${model.provider}/${model.id} ${model.name ?? ""}`.toLowerCase().includes(query);
+}
+
+function groupedModels(models: ModelChoice[]): Array<{ provider: string; models: ModelChoice[] }> {
+	const groups = new Map<string, ModelChoice[]>();
+	for (const model of models) {
+		const group = groups.get(model.provider) ?? [];
+		group.push(model);
+		groups.set(model.provider, group);
+	}
+	return [...groups.entries()].map(([provider, group]) => ({ provider, models: group }));
+}
+
+export function autoGrowTextarea(textarea: HTMLTextAreaElement): void {
+	textarea.style.height = "auto";
+	const maxHeight = Math.max(120, Math.floor((window.innerHeight || 800) * 0.4));
+	const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+	if (nextHeight > 0) textarea.style.height = `${nextHeight}px`;
+	textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+}
 
 function ExtensionUiModal(props: {
 	request: ExtensionUiRequest;
@@ -77,9 +130,71 @@ function ExtensionUiModal(props: {
 	);
 }
 
-function ModelSelectorModal(props: { sessionKey: string; onClose: () => void; onSelected: () => void }): JSX.Element {
+function LoadedContextModal(props: { resources?: ResourcesDto; error?: string; onClose: () => void }): JSX.Element {
+	const section = (title: string, items: JSX.Element[]) => (
+		<section class="context-section">
+			<h3>{title}</h3>
+			<Show when={items.length > 0} fallback={<p class="muted small">none</p>}>
+				<ul>{items}</ul>
+			</Show>
+		</section>
+	);
+
+	return (
+		<Modal title="loaded context" onDismiss={props.onClose}>
+			<Show when={props.error}>
+				<p class="pair-error">{props.error}</p>
+			</Show>
+			<Show when={props.resources} fallback={<p class="muted small">loading…</p>}>
+				{(resources) => (
+					<div class="context-modal-body">
+						{section(
+							"context files",
+							resources().contextFiles.map((file) => <li title={file.path}>{shortenPath(file.path)}</li>),
+						)}
+						{section(
+							"skills",
+							resources().skills.map((skill) => (
+								<li>
+									<span>{skill.name}</span>
+									<Show when={skill.description}>
+										<span class="muted"> — {skill.description}</span>
+									</Show>
+								</li>
+							)),
+						)}
+						{section(
+							"extensions",
+							resources().extensions.map((extension) => (
+								<li title={extension.path}>
+									<span>{extension.name ?? "extension"}</span>
+									<span class="muted"> — {shortenPath(extension.path)}</span>
+								</li>
+							)),
+						)}
+						{section(
+							"prompt templates",
+							resources().promptTemplates.map((template) => <li>{template.name}</li>),
+						)}
+						<Show when={resources().systemPromptPresent}>
+							<p class="muted small">system prompt: custom</p>
+						</Show>
+					</div>
+				)}
+			</Show>
+		</Modal>
+	);
+}
+
+function ModelSelectorModal(props: {
+	sessionKey: string;
+	state?: SessionStateDto;
+	onClose: () => void;
+	onSelected: () => void;
+}): JSX.Element {
 	const [models, setModels] = createSignal<ModelInfoDto[]>([]);
 	const [filter, setFilter] = createSignal("");
+	const [scope, setScope] = createSignal<ModelScope>((props.state?.scopedModels?.length ?? 0) > 0 ? "scoped" : "all");
 	const [error, setError] = createSignal<string>();
 
 	onMount(async () => {
@@ -91,13 +206,61 @@ function ModelSelectorModal(props: { sessionKey: string; onClose: () => void; on
 		}
 	});
 
-	const filtered = createMemo(() => {
+	const scopedModels = createMemo<ModelChoice[]>(() =>
+		(props.state?.scopedModels ?? []).map((model: ScopedModelDto) => ({
+			provider: model.provider,
+			id: model.id,
+			name: model.name,
+			reasoning: model.reasoning,
+		})),
+	);
+	const hasScoped = () => scopedModels().length > 0;
+	const activeModels = () => (scope() === "scoped" && hasScoped() ? scopedModels() : models());
+	const filteredGroups = createMemo(() => {
 		const q = filter().toLowerCase();
-		return models().filter((m) => `${m.provider}/${m.id} ${m.name}`.toLowerCase().includes(q));
+		return groupedModels(
+			activeModels()
+				.filter((model) => !q || modelMatchesQuery(model, q))
+				.slice(0, 100),
+		);
 	});
+	const isCurrent = (model: ModelChoice) =>
+		props.state?.model?.provider === model.provider && props.state?.model?.id === model.id;
+
+	async function selectModel(model: ModelChoice) {
+		try {
+			await api.setModel(props.sessionKey, model.provider, model.id);
+			props.onSelected();
+			props.onClose();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		}
+	}
 
 	return (
 		<Modal title="select model" onDismiss={props.onClose}>
+			<Show when={hasScoped()}>
+				<div class="model-scope-tabs" role="tablist" aria-label="model scope">
+					<button
+						type="button"
+						role="tab"
+						aria-selected={scope() === "scoped"}
+						classList={{ selected: scope() === "scoped" }}
+						onClick={() => setScope("scoped")}
+					>
+						scoped
+					</button>
+					<button
+						type="button"
+						role="tab"
+						aria-selected={scope() === "all"}
+						classList={{ selected: scope() === "all" }}
+						onClick={() => setScope("all")}
+					>
+						all
+					</button>
+				</div>
+			</Show>
 			<div class="field" style={{ "margin-bottom": "8px" }}>
 				<input
 					type="text"
@@ -109,26 +272,36 @@ function ModelSelectorModal(props: { sessionKey: string; onClose: () => void; on
 			<Show when={error()}>
 				<p class="pair-error">{error()}</p>
 			</Show>
-			<div class="recent-projects" style={{ "max-height": "300px" }}>
-				<For each={filtered().slice(0, 50)}>
-					{(model) => (
-						<button
-							type="button"
-							onClick={async () => {
-								try {
-									await api.setModel(props.sessionKey, model.provider, model.id);
-									props.onSelected();
-									props.onClose();
-								} catch (err) {
-									setError(err instanceof Error ? err.message : String(err));
-								}
-							}}
-						>
-							{model.provider}/{model.id}
-							{model.reasoning ? " ·think" : ""}
-						</button>
-					)}
-				</For>
+			<div class="model-list" style={{ "max-height": "320px" }}>
+				<Show when={filteredGroups().length > 0} fallback={<p class="muted small">No matching models.</p>}>
+					<For each={filteredGroups()}>
+						{(group) => (
+							<section class="model-provider-group">
+								<div class="model-provider-heading">{group.provider}</div>
+								<For each={group.models}>
+									{(model) => (
+										<button
+											type="button"
+											class="model-row"
+											classList={{ current: isCurrent(model) }}
+											onClick={() => selectModel(model)}
+										>
+											<span class="model-current">{isCurrent(model) ? "✓" : ""}</span>
+											<span class="model-id">{model.id}</span>
+											<Show when={model.name}>
+												<span class="model-name">{model.name}</span>
+											</Show>
+											<span class="model-provider-badge">{model.provider}</span>
+											<Show when={model.reasoning}>
+												<span class="model-reasoning">think</span>
+											</Show>
+										</button>
+									)}
+								</For>
+							</section>
+						)}
+					</For>
+				</Show>
 			</div>
 		</Modal>
 	);
@@ -144,17 +317,188 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [showOverflow, setShowOverflow] = createSignal(false);
 	const [showCompactModal, setShowCompactModal] = createSignal(false);
 	const [showRenameModal, setShowRenameModal] = createSignal(false);
+	const [showContextModal, setShowContextModal] = createSignal(false);
 	const [fallbackDismissed, setFallbackDismissed] = createSignal(false);
 	const [actionError, setActionError] = createSignal<string>();
 	const [elapsed, setElapsed] = createSignal(0);
+	const [stats, setStats] = createSignal<SessionStatsDto>();
+	const [performance, setPerformance] = createSignal<PerformanceStatsDto>();
+	const [branch, setBranch] = createSignal<string | null>();
+	const [dailyCost, setDailyCost] = createSignal<number>();
+	const [commands, setCommands] = createSignal<CommandDto[]>([]);
+	const [commandMenuClosed, setCommandMenuClosed] = createSignal(false);
+	const [commandSelection, setCommandSelection] = createSignal(0);
+	const [resources, setResources] = createSignal<ResourcesDto>();
+	const [resourcesError, setResourcesError] = createSignal<string>();
+	const [pendingMessages, setPendingMessages] = createSignal<PendingMessagesDto>({ steering: [], followUp: [] });
+	const [attachments, setAttachments] = createSignal<ImageAttachmentDto[]>([]);
+	const [historyIndex, setHistoryIndex] = createSignal<number>();
+	const [showForkModal, setShowForkModal] = createSignal(false);
+	const [forkMessages, setForkMessages] = createSignal<Array<{ entryId: string; text: string }>>([]);
+	const [forkError, setForkError] = createSignal<string>();
+	const [showStatsPopover, setShowStatsPopover] = createSignal(false);
+	const [statsPopoverError, setStatsPopoverError] = createSignal<string>();
 
 	let chatRef: HTMLDivElement | undefined;
+	let composerRef: HTMLTextAreaElement | undefined;
+	let fileInputRef: HTMLInputElement | undefined;
+	let statsPopoverRef: HTMLDivElement | undefined;
 	let autoScroll = true;
+	let disposed = false;
+
+	const streaming = () => session()?.streaming ?? false;
+
+	async function refreshRuntimeDetails(includeDailyCost = false) {
+		const [statsResult, performanceResult, branchResult] = await Promise.allSettled([
+			api.stats(props.sessionKey),
+			api.performance(props.sessionKey),
+			api.branch(props.sessionKey),
+		] as const);
+		const dailyCostResult = includeDailyCost ? await Promise.allSettled([api.dailyCost()] as const) : undefined;
+		if (disposed) return;
+		if (statsResult.status === "fulfilled") setStats(statsResult.value);
+		if (performanceResult.status === "fulfilled") setPerformance(performanceResult.value);
+		if (branchResult.status === "fulfilled") setBranch(branchResult.value.branch);
+		if (dailyCostResult?.[0]?.status === "fulfilled") setDailyCost(dailyCostResult[0].value.cost);
+		const rejected = [statsResult, performanceResult, branchResult, ...(dailyCostResult ?? [])].find(
+			(result) => result.status === "rejected",
+		);
+		if (rejected?.status === "rejected") {
+			setActionError(rejected.reason instanceof Error ? rejected.reason.message : String(rejected.reason));
+		}
+	}
+
+	async function fetchCommands() {
+		try {
+			const { commands } = await api.commands(props.sessionKey);
+			if (!disposed) setCommands(commands);
+		} catch (err) {
+			if (!disposed) setActionError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function openContextModal() {
+		setShowContextModal(true);
+		setResourcesError(undefined);
+		try {
+			setResources(await api.resources(props.sessionKey));
+		} catch (err) {
+			setResourcesError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function refreshPendingMessages() {
+		if ((runtime()?.state.pendingMessageCount ?? 0) <= 0) {
+			setPendingMessages({ steering: [], followUp: [] });
+			return;
+		}
+		try {
+			setPendingMessages(await api.pending(props.sessionKey));
+		} catch (err) {
+			setActionError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function restorePendingToComposer() {
+		try {
+			const cleared = await api.dequeue(props.sessionKey);
+			const text = [...cleared.steering, ...cleared.followUp].join("\n\n");
+			setPendingMessages({ steering: [], followUp: [] });
+			setComposerText(text);
+			await props.store.refreshFleet();
+			queueMicrotask(() => composerRef?.focus());
+		} catch (err) {
+			setActionError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	function attachmentFromFile(file: File): Promise<ImageAttachmentDto> {
+		if (!file.type.startsWith("image/")) throw new Error(`Not an image: ${file.name || file.type}`);
+		if (file.size > MAX_IMAGE_BYTES) throw new Error(`Image too large: ${file.name || file.type} exceeds 10MB`);
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onerror = () => reject(new Error(`Failed to read image: ${file.name || file.type}`));
+			reader.onload = () => {
+				const result = String(reader.result ?? "");
+				const comma = result.indexOf(",");
+				resolve({ data: comma >= 0 ? result.slice(comma + 1) : result, mimeType: file.type });
+			};
+			reader.readAsDataURL(file);
+		});
+	}
+
+	async function addImageFiles(files: Iterable<File>) {
+		try {
+			const next = await Promise.all([...files].map((file) => attachmentFromFile(file)));
+			setAttachments((current) => [...current, ...next]);
+		} catch (err) {
+			setActionError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function openForkModal() {
+		setShowForkModal(true);
+		setForkError(undefined);
+		setForkMessages([]);
+		try {
+			const { messages } = await api.forkMessages(props.sessionKey);
+			setForkMessages(messages);
+		} catch (err) {
+			setForkError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function selectForkMessage(entryId: string) {
+		setForkError(undefined);
+		try {
+			const result = await api.fork(props.sessionKey, entryId);
+			if (!result.cancelled) setComposerText(result.text);
+			await props.store.hydrateSession(props.sessionKey);
+			await props.store.refreshFleet();
+			setShowForkModal(false);
+		} catch (err) {
+			setForkError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function openStatsPopover() {
+		setShowStatsPopover(true);
+		setStatsPopoverError(undefined);
+		try {
+			setStats(await api.stats(props.sessionKey));
+		} catch (err) {
+			setStatsPopoverError(err instanceof Error ? err.message : String(err));
+		}
+	}
 
 	onMount(() => {
 		props.store.hydrateSession(props.sessionKey).catch((err) => {
 			setActionError(err instanceof Error ? err.message : String(err));
 		});
+		void refreshRuntimeDetails(true);
+		void fetchCommands();
+		void refreshPendingMessages();
+		const detailTimer = setInterval(() => void refreshRuntimeDetails(false), 5000);
+		onCleanup(() => {
+			disposed = true;
+			clearInterval(detailTimer);
+		});
+	});
+
+	const closeStatsPopover = (event: MouseEvent) => {
+		if (!showStatsPopover()) return;
+		const target = event.target as Node | null;
+		if (target && statsPopoverRef?.contains(target)) return;
+		setShowStatsPopover(false);
+	};
+	const closeStatsPopoverOnEscape = (event: KeyboardEvent) => {
+		if (event.key === "Escape") setShowStatsPopover(false);
+	};
+	document.addEventListener("mousedown", closeStatsPopover);
+	document.addEventListener("keydown", closeStatsPopoverOnEscape);
+	onCleanup(() => {
+		document.removeEventListener("mousedown", closeStatsPopover);
+		document.removeEventListener("keydown", closeStatsPopoverOnEscape);
 	});
 
 	// Elapsed timer for the status line.
@@ -170,25 +514,51 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		if (prefill) setComposerText(prefill);
 	});
 
+	createEffect(() => {
+		composerText();
+		if (composerRef) queueMicrotask(() => composerRef && autoGrowTextarea(composerRef));
+	});
+
 	// Auto-scroll on new entries unless the user scrolled up.
 	createEffect(() => {
 		session()?.entries.length;
 		if (autoScroll && chatRef) chatRef.scrollTop = chatRef.scrollHeight;
 	});
 
-	const streaming = () => session()?.streaming ?? false;
+	let wasStreaming = false;
+	createEffect(() => {
+		const nowStreaming = streaming();
+		if (wasStreaming && !nowStreaming) void refreshRuntimeDetails(true);
+		if (wasStreaming !== nowStreaming) void refreshPendingMessages();
+		wasStreaming = nowStreaming;
+	});
+
+	createEffect(() => {
+		const count = runtime()?.state.pendingMessageCount ?? 0;
+		if (count > 0) void refreshPendingMessages();
+		else setPendingMessages({ steering: [], followUp: [] });
+	});
 
 	async function send() {
 		const text = composerText().trim();
 		if (!text) return;
 		setActionError(undefined);
 		try {
+			const images = attachments().length > 0 ? attachments() : undefined;
 			if (streaming()) {
-				await api.prompt(props.sessionKey, text, sendMode());
+				await api.prompt(props.sessionKey, text, sendMode(), images);
+			} else if (images) {
+				await api.prompt(props.sessionKey, text, undefined, images);
 			} else {
 				await api.prompt(props.sessionKey, text);
 			}
+			const history = composerHistory.get(props.sessionKey) ?? [];
+			history.push(text);
+			composerHistory.set(props.sessionKey, history.slice(-100));
+			setHistoryIndex(undefined);
 			setComposerText("");
+			setAttachments([]);
+			void refreshPendingMessages();
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
 		}
@@ -202,12 +572,113 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
+	async function abortStatus(key: string) {
+		try {
+			if (key === "compaction") await api.abortCompaction(props.sessionKey);
+			else if (key === "retry") await api.abortRetry(props.sessionKey);
+		} catch (err) {
+			setActionError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	function setAllToolDetails(open: boolean) {
+		chatRef?.querySelectorAll<HTMLDetailsElement>("details.tool").forEach((detail) => {
+			detail.open = open;
+		});
+	}
+
 	const liveAgents = () => Object.values(session()?.backgroundAgents ?? {}).filter((a) => a.status === "running");
 	const doneAgents = () => Object.values(session()?.backgroundAgents ?? {}).filter((a) => a.status !== "running");
 	const tasks = () => session()?.tasks ?? [];
 	const tasksDone = () => tasks().filter((t) => t.status === "completed").length;
-	const ctx = () => runtime()?.state.contextUsage;
+	const ctx = () => runtime()?.state.contextUsage ?? stats()?.contextUsage;
 	const isMobile = () => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches;
+	const displaySessionName = () => session()?.sessionName ?? runtime()?.state.sessionName;
+	const headerTitle = () => displaySessionName() ?? session()?.title ?? props.sessionKey;
+	const cwdWithBranch = () => {
+		const cwd = runtime()?.cwd;
+		if (!cwd) return undefined;
+		const currentBranch = branch();
+		return `${shortenPath(cwd)}${currentBranch ? ` (${currentBranch})` : ""}`;
+	};
+	const infoLeft = () => {
+		const cwd = cwdWithBranch();
+		const name = displaySessionName();
+		if (cwd && name) return `${cwd} • ${name}`;
+		return cwd ?? name ?? "session";
+	};
+	const tokenSummary = () => {
+		const tokens = stats()?.tokens;
+		if (!tokens) return undefined;
+		const parts: string[] = [];
+		if (tokens.input) parts.push(`↑${formatTokens(tokens.input)}`);
+		if (tokens.output) parts.push(`↓${formatTokens(tokens.output)}`);
+		if (tokens.cacheRead) parts.push(`R${formatTokens(tokens.cacheRead)}`);
+		if (tokens.cacheWrite) parts.push(`W${formatTokens(tokens.cacheWrite)}`);
+		return parts.length > 0 ? parts.join(" ") : undefined;
+	};
+	const costSummary = () => {
+		const sessionCost = stats()?.cost ?? 0;
+		const usingSubscription = runtime()?.state.usingSubscription ?? false;
+		if (!sessionCost && !usingSubscription) return undefined;
+		let text = `$${sessionCost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
+		const today = dailyCost();
+		if (today !== undefined && today > sessionCost) text += `, today: $${today.toFixed(2)}`;
+		return text;
+	};
+	const contextSummary = () => {
+		const usage = ctx();
+		if (!usage) return undefined;
+		const percent = usage.percent === null ? "?" : `${usage.percent.toFixed(0)}%`;
+		return `ctx ${percent}/${formatTokens(usage.contextWindow)}`;
+	};
+	const tokPerSecond = () => {
+		const model = runtime()?.state.model;
+		if (!model) return undefined;
+		const rolling = performance()?.models.find(
+			(entry) => entry.provider === model.provider && entry.modelId === model.id,
+		);
+		if (!rolling || rolling.count < 3) return undefined;
+		return `${Math.round(rolling.median)} tok/s`;
+	};
+	const infoStats = () =>
+		[tokenSummary(), costSummary(), contextSummary(), tokPerSecond()].filter(Boolean) as string[];
+	const pendingMessageItems = () => [
+		...pendingMessages().steering.map((text) => ({ kind: "steer", text })),
+		...pendingMessages().followUp.map((text) => ({ kind: "follow-up", text })),
+	];
+	const commandQuery = () => {
+		const text = composerText();
+		if (commandMenuClosed() || !text.startsWith("/")) return undefined;
+		const query = text.slice(1);
+		if (/\s/.test(query)) return undefined;
+		return query.toLowerCase();
+	};
+	const commandMatches = createMemo(() => {
+		const query = commandQuery();
+		if (query === undefined) return [];
+		return commands()
+			.filter((command) => {
+				const name = command.name.toLowerCase();
+				return !query || name.startsWith(query) || name.includes(query);
+			})
+			.sort((a, b) => {
+				const aq = a.name.toLowerCase().startsWith(query) ? 0 : 1;
+				const bq = b.name.toLowerCase().startsWith(query) ? 0 : 1;
+				return aq - bq || a.name.localeCompare(b.name);
+			})
+			.slice(0, 8);
+	});
+	const showCommandMenu = () => commandMatches().length > 0;
+	const acceptCommand = (command: CommandDto) => {
+		setComposerText(`/${command.name} `);
+		setCommandMenuClosed(true);
+		queueMicrotask(() => composerRef?.focus());
+	};
+	createEffect(() => {
+		const length = commandMatches().length;
+		if (commandSelection() >= length) setCommandSelection(Math.max(0, length - 1));
+	});
 
 	return (
 		<div class="session-screen">
@@ -216,11 +687,15 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					<a class="back" href="#/">
 						← fleet
 					</a>
-					<span class="title">{runtime()?.state.sessionName ?? session()?.title ?? props.sessionKey}</span>
-					<span class="project">{runtime()?.cwd}</span>
+					<span class="title">{headerTitle()}</span>
+					<span class="project">{runtime()?.cwd ? shortenPath(runtime()!.cwd) : undefined}</span>
 					<span class="right">
-						<button type="button" class="switcher optional" onClick={() => setShowModelSelector(true)}>
-							<span class="label">model</span> {runtime()?.state.model?.id ?? "—"}
+						<button
+							type="button"
+							class="switcher optional model-switcher"
+							onClick={() => setShowModelSelector(true)}
+						>
+							<span class="label">model</span> <span class="value">{modelLabel(runtime()?.state.model)}</span>
 						</button>
 						<button
 							type="button"
@@ -249,6 +724,45 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						</button>
 					</span>
 				</div>
+				<div class="session-bar-inner session-info-bar">
+					<span class="session-info-left">{infoLeft()}</span>
+					<button type="button" class="session-info-right stats-trigger" onClick={openStatsPopover}>
+						<For each={infoStats()}>{(item) => <span>{item}</span>}</For>
+					</button>
+					<Show when={showStatsPopover()}>
+						<div class="stats-popover" ref={statsPopoverRef}>
+							<Show when={statsPopoverError()}>
+								<p class="pair-error">{statsPopoverError()}</p>
+							</Show>
+							<Show when={stats()} fallback={<p class="muted small">loading stats…</p>}>
+								{(s) => (
+									<div class="stats-grid">
+										<span>user messages</span>
+										<strong>{s().userMessages}</strong>
+										<span>assistant messages</span>
+										<strong>{s().assistantMessages}</strong>
+										<span>tool calls/results</span>
+										<strong>
+											{s().toolCalls}/{s().toolResults}
+										</strong>
+										<span>input/output</span>
+										<strong>
+											{formatTokens(s().tokens.input)} / {formatTokens(s().tokens.output)}
+										</strong>
+										<span>cache read/write</span>
+										<strong>
+											{formatTokens(s().tokens.cacheRead)} / {formatTokens(s().tokens.cacheWrite)}
+										</strong>
+										<span>total tokens</span>
+										<strong>{formatTokens(s().tokens.total)}</strong>
+										<span>cost</span>
+										<strong>${s().cost.toFixed(4)}</strong>
+									</div>
+								)}
+							</Show>
+						</div>
+					</Show>
+				</div>
 				<Show when={showOverflow()}>
 					<div class="session-bar-inner" style={{ "justify-content": "flex-end", gap: "8px" }}>
 						<a class="btn btn-small" href={api.exportHtmlUrl(props.sessionKey)}>
@@ -257,8 +771,20 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						<button type="button" class="btn btn-small" onClick={() => setShowCompactModal(true)}>
 							compact now
 						</button>
+						<button type="button" class="btn btn-small" onClick={() => setAllToolDetails(true)}>
+							expand tools
+						</button>
+						<button type="button" class="btn btn-small" onClick={() => setAllToolDetails(false)}>
+							collapse tools
+						</button>
 						<button type="button" class="btn btn-small" onClick={() => setShowRenameModal(true)}>
 							rename
+						</button>
+						<button type="button" class="btn btn-small" onClick={openForkModal}>
+							fork
+						</button>
+						<button type="button" class="btn btn-small" onClick={openContextModal}>
+							loaded context
 						</button>
 						<Show when={isMobile()}>
 							<button type="button" class="btn btn-small" onClick={() => setShowModelSelector(true)}>
@@ -362,7 +888,20 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 								</span>
 							</Show>
 							<For each={session()?.statusEntries ?? []}>
-								{(status) => <span class={status.tone === "info" ? "queued" : status.tone}>{status.text}</span>}
+								{(status) => (
+									<span class={status.tone === "info" ? "queued" : status.tone}>
+										{status.text}
+										<Show when={status.key === "compaction" || status.key === "retry"}>
+											<button
+												type="button"
+												class="btn btn-small btn-danger inline-stop"
+												onClick={() => abortStatus(status.key)}
+											>
+												stop
+											</button>
+										</Show>
+									</span>
+								)}
 							</For>
 							<Show when={actionError()}>
 								<span class="error">{actionError()}</span>
@@ -376,11 +915,139 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					</Show>
 
 					<div class="composer">
+						<Show when={pendingMessageItems().length > 0}>
+							<div class="queued-message-row">
+								<For each={pendingMessageItems()}>
+									{(item) => (
+										<span class="queued-chip" title={item.text}>
+											<span class="queued-kind">{item.kind}</span>
+											{item.text}
+										</span>
+									)}
+								</For>
+								<button type="button" class="btn btn-small" onClick={restorePendingToComposer}>
+									restore to composer
+								</button>
+							</div>
+						</Show>
+						<Show when={attachments().length > 0}>
+							<div class="attachment-strip">
+								<For each={attachments()}>
+									{(image, index) => (
+										<span class="attachment-thumb">
+											<img src={`data:${image.mimeType};base64,${image.data}`} alt="pending attachment" />
+											<button
+												type="button"
+												aria-label="remove image"
+												onClick={() => setAttachments((current) => current.filter((_, i) => i !== index()))}
+											>
+												×
+											</button>
+										</span>
+									)}
+								</For>
+							</div>
+						</Show>
+						<Show when={showCommandMenu()}>
+							<div class="command-popover" role="listbox" id="command-listbox" aria-label="slash commands">
+								<For each={commandMatches()}>
+									{(command, index) => (
+										<button
+											type="button"
+											id={`command-option-${index()}`}
+											role="option"
+											aria-selected={commandSelection() === index()}
+											class="command-option"
+											classList={{ selected: commandSelection() === index() }}
+											onMouseEnter={() => setCommandSelection(index())}
+											onClick={() => acceptCommand(command)}
+										>
+											<span class="command-name">/{command.name}</span>
+											<Show when={command.description}>
+												<span class="command-description">{command.description}</span>
+											</Show>
+											<span class="command-source">{command.source}</span>
+										</button>
+									)}
+								</For>
+							</div>
+						</Show>
 						<textarea
+							ref={composerRef}
 							placeholder={streaming() ? "Message dreb — sends as steer while it works…" : "Message dreb…"}
 							value={composerText()}
-							onInput={(e) => setComposerText(e.currentTarget.value)}
+							aria-controls={showCommandMenu() ? "command-listbox" : undefined}
+							aria-activedescendant={showCommandMenu() ? `command-option-${commandSelection()}` : undefined}
+							onPaste={(e) => {
+								const files = [...(e.clipboardData?.items ?? [])]
+									.filter((item) => item.type.startsWith("image/"))
+									.map((item) => item.getAsFile())
+									.filter((file): file is File => !!file);
+								if (files.length > 0) {
+									e.preventDefault();
+									void addImageFiles(files);
+								}
+							}}
+							onInput={(e) => {
+								setCommandMenuClosed(false);
+								setCommandSelection(0);
+								setHistoryIndex(undefined);
+								setComposerText(e.currentTarget.value);
+								autoGrowTextarea(e.currentTarget);
+							}}
 							onKeyDown={(e) => {
+								if (showCommandMenu()) {
+									if (e.key === "ArrowDown") {
+										e.preventDefault();
+										setCommandSelection((commandSelection() + 1) % commandMatches().length);
+										return;
+									}
+									if (e.key === "ArrowUp") {
+										e.preventDefault();
+										setCommandSelection(
+											(commandSelection() - 1 + commandMatches().length) % commandMatches().length,
+										);
+										return;
+									}
+									if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+										e.preventDefault();
+										const command = commandMatches()[commandSelection()];
+										if (command) acceptCommand(command);
+										return;
+									}
+									if (e.key === "Escape") {
+										e.preventDefault();
+										setCommandMenuClosed(true);
+										return;
+									}
+								}
+								if (
+									(e.key === "ArrowUp" || e.key === "ArrowDown") &&
+									(composerText() === "" || historyIndex() !== undefined)
+								) {
+									const history = composerHistory.get(props.sessionKey) ?? [];
+									if (history.length > 0) {
+										e.preventDefault();
+										if (e.key === "ArrowUp") {
+											const next =
+												historyIndex() === undefined
+													? history.length - 1
+													: Math.max(0, historyIndex()! - 1);
+											setHistoryIndex(next);
+											setComposerText(history[next] ?? "");
+										} else if (historyIndex() !== undefined) {
+											const next = historyIndex()! + 1;
+											if (next >= history.length) {
+												setHistoryIndex(undefined);
+												setComposerText("");
+											} else {
+												setHistoryIndex(next);
+												setComposerText(history[next] ?? "");
+											}
+										}
+									}
+									return;
+								}
 								if (e.key === "Enter" && !e.shiftKey) {
 									e.preventDefault();
 									send();
@@ -388,6 +1055,25 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							}}
 						/>
 						<div class="composer-row">
+							<input
+								ref={fileInputRef}
+								type="file"
+								accept="image/*"
+								multiple
+								class="hidden-file-input"
+								onChange={(e) => {
+									void addImageFiles(e.currentTarget.files ?? []);
+									e.currentTarget.value = "";
+								}}
+							/>
+							<button
+								type="button"
+								class="btn btn-small"
+								title="attach image"
+								onClick={() => fileInputRef?.click()}
+							>
+								📎
+							</button>
 							<Show when={streaming()}>
 								<span class="mode-toggle" role="radiogroup" aria-label="send mode">
 									<button
@@ -443,6 +1129,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			<Show when={showModelSelector()}>
 				<ModelSelectorModal
 					sessionKey={props.sessionKey}
+					state={runtime()?.state}
 					onClose={() => setShowModelSelector(false)}
 					onSelected={() => props.store.refreshFleet()}
 				/>
@@ -478,9 +1165,41 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</Modal>
 			</Show>
 
+			<Show when={showContextModal()}>
+				<LoadedContextModal
+					resources={resources()}
+					error={resourcesError()}
+					onClose={() => setShowContextModal(false)}
+				/>
+			</Show>
+
+			<Show when={showForkModal()}>
+				<Modal title="fork from message" onDismiss={() => setShowForkModal(false)}>
+					<Show when={forkError()}>
+						<p class="pair-error">{forkError()}</p>
+					</Show>
+					<Show when={forkMessages().length > 0} fallback={<p class="muted small">loading forkable messages…</p>}>
+						<div class="fork-message-list">
+							<For each={forkMessages()}>
+								{(message) => (
+									<button
+										type="button"
+										class="fork-message"
+										onClick={() => selectForkMessage(message.entryId)}
+									>
+										<span class="fork-entry-id">{message.entryId}</span>
+										<span>{message.text}</span>
+									</button>
+								)}
+							</For>
+						</div>
+					</Show>
+				</Modal>
+			</Show>
+
 			<Show when={showRenameModal()}>
 				<RenameModal
-					current={runtime()?.state.sessionName ?? ""}
+					current={displaySessionName() ?? ""}
 					onClose={() => setShowRenameModal(false)}
 					onRename={async (name) => {
 						try {

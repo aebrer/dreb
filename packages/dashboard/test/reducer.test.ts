@@ -29,7 +29,7 @@ describe("messagesToEntries — hydration", () => {
 			{ role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "file body" }] },
 		]);
 
-		expect(entries.map((e) => e.kind)).toEqual(["user", "tool", "assistant"]);
+		expect(entries.map((e) => e.kind)).toEqual(["user", "assistant", "tool"]);
 		const user = entries[0];
 		expect(user).toMatchObject({ kind: "user", text: "hello" });
 		const tool = entries.find((e) => e.kind === "tool");
@@ -41,6 +41,49 @@ describe("messagesToEntries — hydration", () => {
 				{ kind: "text", text: "hi there" },
 			],
 			model: "m1",
+		});
+	});
+
+	it("preserves assistant content order around tool calls", () => {
+		const entries = messagesToEntries([
+			{
+				role: "assistant",
+				model: "m1",
+				timestamp: 2,
+				content: [
+					{ type: "text", text: "before" },
+					{ type: "toolCall", id: "t1", name: "read", arguments: { path: "/x" } },
+					{ type: "text", text: "after" },
+				],
+			},
+		]);
+
+		expect(entries.map((e) => e.kind)).toEqual(["assistant", "tool", "assistant"]);
+		expect(entries[0]).toMatchObject({ kind: "assistant", blocks: [{ kind: "text", text: "before" }] });
+		expect(entries[1]).toMatchObject({ kind: "tool", toolCallId: "t1" });
+		expect(entries[2]).toMatchObject({ kind: "assistant", blocks: [{ kind: "text", text: "after" }] });
+	});
+
+	it("hydrates background-agent completion messages as agent-result entries", () => {
+		const entries = messagesToEntries([
+			{
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: "<background-agent-complete>\nBackground agent bg1 (Explore) completed.\n\n**done**\n</background-agent-complete>",
+					},
+				],
+				timestamp: 7,
+			},
+		]);
+
+		expect(entries).toHaveLength(1);
+		expect(entries[0]).toMatchObject({
+			kind: "agent-result",
+			header: "Background agent bg1 (Explore) completed.",
+			text: "**done**",
+			timestamp: 7,
 		});
 	});
 
@@ -119,6 +162,65 @@ describe("applySessionEvent — streaming lifecycle", () => {
 		});
 		const tail = state.entries[0];
 		expect(tail).toMatchObject({ kind: "assistant", blocks: [{ kind: "thinking", text: "pondering" }] });
+	});
+
+	it("keeps streamed assistant text before subsequent tool cards", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "message_update",
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+		});
+		applySessionEvent(state, {
+			type: "message_update",
+			assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "hmm" },
+		});
+		applySessionEvent(state, {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_start", contentIndex: 1 },
+		});
+		applySessionEvent(state, {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "I'll read it" },
+		});
+		applySessionEvent(state, {
+			type: "tool_execution_start",
+			toolCallId: "t1",
+			toolName: "read",
+			args: { path: "/x" },
+		});
+
+		expect(state.entries.map((e) => e.kind)).toEqual(["assistant", "tool"]);
+		expect(state.entries[0]).toMatchObject({
+			kind: "assistant",
+			blocks: [
+				{ kind: "thinking", text: "hmm" },
+				{ kind: "text", text: "I'll read it" },
+			],
+		});
+		expect(state.entries[1]).toMatchObject({ kind: "tool", toolCallId: "t1" });
+	});
+
+	it("renders live background-agent completion messages as agent-result entries", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "message_end",
+			message: {
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: "<background-agent-complete>\nBackground agent bg2 (Implement) completed.\n\nresult body\n</background-agent-complete>",
+					},
+				],
+			},
+		});
+
+		expect(state.entries).toHaveLength(1);
+		expect(state.entries[0]).toMatchObject({
+			kind: "agent-result",
+			header: "Background agent bg2 (Implement) completed.",
+			text: "result body",
+		});
 	});
 
 	it("tracks tool card lifecycle: start → update → end", () => {
@@ -202,6 +304,12 @@ describe("applySessionEvent — session-level events", () => {
 		expect(state.suggestedCommand).toBe("/skill:mach6-push");
 	});
 
+	it("session_name_changed updates the live session display name", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "session_name_changed", name: "renamed live" });
+		expect(state.sessionName).toBe("renamed live");
+	});
+
 	it("compaction produces a summary entry and clears the status line", () => {
 		const state = makeState();
 		applySessionEvent(state, { type: "auto_compaction_start", reason: "threshold" });
@@ -277,7 +385,7 @@ describe("applySessionEvent — extension UI", () => {
 			id: "n1",
 			method: "notify",
 			message: "heads up",
-			notificationType: "warning",
+			notifyType: "warning",
 		});
 		expect(state.toasts[0]).toMatchObject({ text: "heads up", tone: "warning" });
 
@@ -286,7 +394,7 @@ describe("applySessionEvent — extension UI", () => {
 			id: "s1",
 			method: "setStatus",
 			statusKey: "k",
-			text: "busy",
+			statusText: "busy",
 		});
 		expect(state.statusEntries.some((s) => s.key === "ext:k" && s.text === "busy")).toBe(true);
 		applySessionEvent(state, {
@@ -294,7 +402,7 @@ describe("applySessionEvent — extension UI", () => {
 			id: "s2",
 			method: "setStatus",
 			statusKey: "k",
-			text: undefined,
+			statusText: undefined,
 		});
 		expect(state.statusEntries.some((s) => s.key === "ext:k")).toBe(false);
 
@@ -302,8 +410,8 @@ describe("applySessionEvent — extension UI", () => {
 			type: "extension_ui_request",
 			id: "w1",
 			method: "setWidget",
-			placement: "above",
-			lines: ["l1"],
+			widgetPlacement: "aboveEditor",
+			widgetLines: ["l1"],
 		});
 		expect(state.widgets.above).toEqual(["l1"]);
 
