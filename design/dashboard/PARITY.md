@@ -34,9 +34,9 @@ TUI input idiom; the dashboard maps each command's *outcome* to a UI control.
 
 | Command | Disposition | Dashboard equivalent |
 |---|---|---|
-| `/settings` | ✅ dashboard | Settings tab (`mockups/settings.html`) via `get_settings`/`set_settings`, plus dashboard-local prefs (expand thinking, notification permission) and paired devices |
+| `/settings` | ✅ dashboard | Settings tab (`mockups/settings.html`) via `get_settings`/`set_settings`, provider-grouped default-model picker, image/behavior/transport defaults, per-agent fallback editor (`agentModels` + `list_agent_types`), dashboard-local prefs (expand thinking, notification permission), and paired devices |
 | `/model [search]` | ✅ dashboard | Model switcher in session bar (`mockups/session-view.html`), searchable provider-grouped selector modal with scoped/all tabs; `get_available_models` + `set_model` + `get_state.scopedModels` |
-| `/scoped-models` | 🔜 later | Needs settings-file keys beyond `set_settings`'s current surface; model switcher ships first, scoping UI follows |
+| `/scoped-models` | 🔜 later | Session-scoped model-pool editing remains future work; default model and per-agent fallback editing now ship in Settings |
 | `/export [path]` | ✅ dashboard | "export HTML" in session ⋯ overflow menu → `export_html`, served as download. JSONL export: ❌ out — `path` variant has no RPC surface; the session file itself is downloadable via Files |
 | `/import <path.jsonl>` | ❌ out | No RPC surface; import is a host-filesystem operation. Workaround: place file in sessions dir from Files tab, then resume |
 | `/copy` | ✅ dashboard | Per-message copy button (browser clipboard API); multi-select copy 🔜 later |
@@ -206,7 +206,8 @@ Commands the dashboard uses that have no single TUI-key equivalent:
 | `list_sessions`, `list_all_sessions`, `delete_session` | RPC-ready session inventory for clients; dashboard fleet uses server-side `SessionManager` injection so on-disk inventory works without a live runtime |
 | `get_tree`, `navigate_tree` | Tree screen (🔜 later, §1 `/tree` — RPC ready) |
 | `list_background_agents` | Subagent strip/fleet/session hydration (registry re-seeds `backgroundAgents` on drill-in, so strips survive browser reloads); live transcript arrives via `background_agent_event` relay, backfilled from the agent's on-disk session log (`/subagents/:agentId/messages`) |
-| `get_settings`, `set_settings` | Settings tab |
+| `get_settings`, `set_settings` | Settings tab: default model/thinking/queue/reliability plus image handling, skill commands, nested context, transport, hide-thinking, and `agentModels` edits with warnings surfaced |
+| `list_agent_types` | Agent model fallback editor rows |
 | `get_version` | Footer/settings version display |
 | `get_last_assistant_text` | Fleet card "last activity" previews |
 | `abort_compaction`, `abort_retry`, `abort_bash` | Status-line stop controls for compaction/retry and future shell passthrough |
@@ -215,9 +216,10 @@ Commands the dashboard uses that have no single TUI-key equivalent:
 **RPC gaps discovered:** the foundation-scope gaps are now closed: background
 agent registry exposure (`list_background_agents`), child event relay
 (`background_agent_event`), loaded resources, branch, daily cost, pending
-messages, and compaction abort all exist over RPC. Remaining non-blocking gaps:
-label-only tree entries without navigation (§3); scoped-models/settings keys
-beyond the current `set_settings` whitelist (§1); session import (§1); tok/s
-trend delta (footer shows rolling median only). File browse/upload/download is
-served by the dashboard server itself (host-wide, canonicalized paths), not by
-agent RPC — deliberate, see SPEC.md §6.
+messages, compaction abort, settings-key parity (`get_settings`/`set_settings`),
+and agent definition discovery (`list_agent_types`) all exist over RPC.
+Remaining non-blocking gaps: label-only tree entries without navigation (§3);
+session-scoped model-pool editing (§1); session import (§1); tok/s trend delta
+(footer shows rolling median only). File browse/upload/download is served by the
+dashboard server itself (host-wide, canonicalized paths), not by agent RPC —
+deliberate, see SPEC.md §6.

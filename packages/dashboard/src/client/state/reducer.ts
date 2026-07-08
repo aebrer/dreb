@@ -442,6 +442,7 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			state.workingText = "working";
 			state.workingSince = Date.now();
 			state.lastError = undefined;
+			state.suggestedCommand = undefined;
 			// New turn resolves prior blocking UI requests server-side.
 			state.uiRequests = [];
 			break;
@@ -613,6 +614,11 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 	}
 
 	updateAttention(state);
+}
+
+/** Dismiss a toast notification. */
+export function dismissToast(state: SessionViewState, id: number): void {
+	state.toasts = state.toasts.filter((toast) => toast.id !== id);
 }
 
 /** Dismiss a resolved/answered UI request. */

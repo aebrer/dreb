@@ -25,6 +25,8 @@ vi.mock("../../src/client/api.js", () => ({
 			messages: [],
 		})),
 		models: vi.fn(async () => ({ models: [] })),
+		settingsModels: vi.fn(async () => ({ models: [] })),
+		agentTypes: vi.fn(async () => ({ agentTypes: [] })),
 		stats: vi.fn(async () => ({
 			sessionId: "s1",
 			userMessages: 1,
@@ -93,7 +95,7 @@ vi.mock("../../src/client/api.js", () => ({
 	connectEvents: vi.fn(() => () => {}),
 }));
 
-import { api } from "../../src/client/api.js";
+import { api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
 import { Transcript } from "../../src/client/components/transcript.js";
 import { FilesScreen } from "../../src/client/screens/files.js";
 import { FleetScreen, fleetGroupKey } from "../../src/client/screens/fleet.js";
@@ -102,7 +104,12 @@ import { formatTokens, SessionScreen } from "../../src/client/screens/session.js
 import { SettingsScreen } from "../../src/client/screens/settings.js";
 import { SubagentScreen } from "../../src/client/screens/subagent.js";
 import { setExpandThinking } from "../../src/client/state/preferences.js";
-import { applySessionEvent, createSessionViewState, type SessionViewState } from "../../src/client/state/reducer.js";
+import {
+	applySessionEvent,
+	createSessionViewState,
+	type SessionViewState,
+	type ToolEntry,
+} from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
 
 const disposers: Array<() => void> = [];
@@ -112,7 +119,14 @@ afterEach(() => {
 	document.body.innerHTML = "";
 	setExpandThinking(false);
 	window.localStorage.clear();
+	vi.mocked(connectEvents).mockImplementation(() => () => {});
 	vi.mocked(api.models).mockResolvedValue({ models: [] });
+	vi.mocked(api.settingsModels).mockResolvedValue({ models: [] });
+	vi.mocked(api.agentTypes).mockResolvedValue({ agentTypes: [] });
+	vi.mocked(api.settings).mockResolvedValue({ defaultProvider: "anthropic", defaultModel: "m1" });
+	vi.mocked(api.saveSettings).mockImplementation(async (settings) => settings);
+	vi.mocked(api.devices).mockResolvedValue({ devices: [] });
+	vi.mocked(api.version).mockResolvedValue({ version: "0.0.0-test" });
 	vi.mocked(api.stats).mockResolvedValue({
 		sessionId: "s1",
 		userMessages: 1,
@@ -200,6 +214,65 @@ function populatedSession(key: string): SessionViewState {
 	});
 	return state;
 }
+
+function toolEntryFromEvents(params: {
+	toolName: string;
+	args?: Record<string, unknown>;
+	resultText?: string;
+	details?: unknown;
+	isError?: boolean;
+}): ToolEntry {
+	const state = createSessionViewState(`tool-${params.toolName}`);
+	const toolCallId = `t-${params.toolName}-${state.entries.length}`;
+	applySessionEvent(state, {
+		type: "tool_execution_start",
+		toolCallId,
+		toolName: params.toolName,
+		args: params.args ?? {},
+	});
+	applySessionEvent(state, {
+		type: "tool_execution_end",
+		toolCallId,
+		toolName: params.toolName,
+		result: {
+			content: [{ type: "text", text: params.resultText ?? "" }],
+			details: params.details,
+		},
+		isError: params.isError ?? false,
+	});
+	const entry = state.entries.find(
+		(item): item is ToolEntry => item.kind === "tool" && item.toolCallId === toolCallId,
+	);
+	if (!entry) throw new Error(`missing tool entry for ${params.toolName}`);
+	return entry;
+}
+
+describe("app store integration", () => {
+	it("dismissToast removes reducer toast and does not resurrect after later sync", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+
+		await store.start();
+		if (!captured) throw new Error("connectEvents was not called");
+
+		captured.onEnvelope({ seq: 1, key: "k1", event: { type: "extension_error", error: "boom" } });
+		expect(store.sessions.k1?.toasts).toHaveLength(1);
+		const toast = store.sessions.k1?.toasts[0];
+		expect(toast).toMatchObject({ text: "extension error: boom", tone: "error" });
+		if (!toast) throw new Error("toast was not created");
+
+		store.dismissToast(toast.id);
+		expect(store.sessions.k1?.toasts).toHaveLength(0);
+
+		captured.onEnvelope({ seq: 2, key: "k1", event: { type: "agent_start" } });
+		expect(store.sessions.k1?.toasts).toHaveLength(0);
+		expect(store.sessions.k1?.toasts.some((item) => item.id === toast.id)).toBe(false);
+	});
+});
 
 describe("screen smoke tests", () => {
 	it("fleet renders (empty state)", () => {
@@ -363,6 +436,26 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("devices");
 	});
 
+	it("settings renders expanded default rows and agent model defaults", async () => {
+		vi.mocked(api.agentTypes).mockResolvedValue({
+			agentTypes: [{ name: "Explore", description: "Explore the codebase" }],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("auto-resize images");
+		expect(el.textContent).toContain("block images");
+		expect(el.textContent).toContain("skill slash commands");
+		expect(el.textContent).toContain("auto-load nested context");
+		expect(el.textContent).toContain("hide thinking blocks");
+		expect(el.textContent).toContain("transport");
+		expect(el.textContent).toContain("agent models");
+		expect(el.textContent).toContain("Explore");
+		expect(el.textContent).toContain("default");
+		expect(el.textContent).toContain("TUI-only settings");
+	});
+
 	it("pairing renders the PIN flow with both security copy blocks", () => {
 		const store = makeStore() as any;
 		const fakeStore = {
@@ -503,6 +596,75 @@ describe("dashboard client regressions", () => {
 
 		expect(fakeNotification.requestPermission).toHaveBeenCalled();
 		expect(notifications.checked).toBe(true);
+	});
+
+	it("settings default-model picker saves provider and model", async () => {
+		vi.mocked(api.settingsModels).mockResolvedValue({
+			models: [
+				{ provider: "anthropic", id: "claude-test", name: "Claude Test", contextWindow: 200000, reasoning: true },
+			],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		(el.querySelector(".model-picker-button") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.querySelector(".model-provider-heading")?.textContent).toBe("anthropic");
+
+		(el.querySelector(".model-row") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.saveSettings).toHaveBeenCalledWith({ defaultProvider: "anthropic", defaultModel: "claude-test" });
+	});
+
+	it("settings agent-model editor adds a model override", async () => {
+		vi.mocked(api.agentTypes).mockResolvedValue({
+			agentTypes: [{ name: "Explore", description: "Explore the codebase" }],
+		});
+		vi.mocked(api.settingsModels).mockResolvedValue({
+			models: [
+				{ provider: "github-copilot", id: "gpt-test", name: "GPT Test", contextWindow: 128000, reasoning: false },
+			],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		(el.querySelector(".agent-model-edit") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const add = [...el.querySelectorAll("button")].find((button) => button.textContent?.includes("add model"));
+		(add as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		(el.querySelector(".model-row") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			agentModels: { Explore: ["github-copilot/gpt-test"] },
+		});
+	});
+
+	it("settings renders warnings returned from saveSettings", async () => {
+		vi.mocked(api.settingsModels).mockResolvedValue({
+			models: [{ provider: "test", id: "m2", name: "Model Two", contextWindow: 32000, reasoning: false }],
+		});
+		vi.mocked(api.saveSettings).mockResolvedValue({
+			defaultProvider: "test",
+			defaultModel: "m2",
+			warnings: ["Project settings shadow a global agentModels entry"],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		(el.querySelector(".model-picker-button") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		(el.querySelector(".model-row") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector(".settings-warning")?.textContent).toContain(
+			"Project settings shadow a global agentModels entry",
+		);
 	});
 
 	it("composer textarea auto-grows on input", () => {
@@ -1239,10 +1401,16 @@ describe("dashboard client regressions", () => {
 						kind: "tool",
 						toolCallId: "t2",
 						toolName: "suggest_next",
-						args: { command: "/skill:mach6-push" },
+						args: {
+							command: "/skill:mach6-push",
+							summary: `Fixed *all* the bugs. ${"Detail sentence repeated for length. ".repeat(3)}`,
+						},
 						status: "done",
 						resultText: "Suggestion registered: /skill:mach6-push",
-						details: { suggestion: "/skill:mach6-push", summary: "Fixed *all* the bugs" },
+						details: {
+							suggestion: "/skill:mach6-push",
+							summary: `Fixed *all* the bugs. ${"Detail sentence repeated for length. ".repeat(3)}`,
+						},
 						startedAt: Date.now(),
 					},
 				]}
@@ -1257,5 +1425,97 @@ describe("dashboard client regressions", () => {
 		expect(results[1]?.querySelector(".markdown-body em")?.textContent).toBe("all");
 		expect(results[1]?.textContent).toContain("/skill:mach6-push");
 		expect(results[1]?.textContent).not.toContain("Suggestion registered");
+		// The summary renders exactly once — no duplicate via the generic
+		// long-string input-section fallback.
+		const card = el.querySelectorAll("details.tool")[1]!;
+		expect(card.querySelectorAll(".tool-input").length).toBe(0);
+	});
+
+	it("edit tool cards render details.diff instead of the acknowledgement", () => {
+		const edit = toolEntryFromEvents({
+			toolName: "edit",
+			args: { path: "/tmp/file.ts" },
+			resultText: "Successfully replaced text in /tmp/file.ts.",
+			details: { diff: "+123 added line\n-45 removed line\n 12 context" },
+		});
+		const el = mount(() => <Transcript entries={[edit]} />);
+
+		expect(el.querySelector(".diff-add")?.textContent).toBe("+123 added line");
+		expect(el.querySelector(".diff-del")?.textContent).toBe("-45 removed line");
+		expect(el.textContent).toContain(" 12 context");
+		expect(el.textContent).not.toContain("Successfully replaced text");
+	});
+
+	it("edit tool cards fall back to resultText when no diff details are present", () => {
+		const edit = toolEntryFromEvents({
+			toolName: "edit",
+			args: { path: "/tmp/file.ts" },
+			resultText: "Successfully replaced text in /tmp/file.ts.",
+		});
+		const el = mount(() => <Transcript entries={[edit]} />);
+
+		expect(el.querySelector(".diff-add")).toBeNull();
+		expect(el.querySelector(".diff-del")).toBeNull();
+		expect(el.querySelector(".tool-result pre")?.textContent).toBe("Successfully replaced text in /tmp/file.ts.");
+	});
+
+	it("read tool results are syntax-highlighted by file extension", () => {
+		const read = toolEntryFromEvents({
+			toolName: "read",
+			args: { path: "/tmp/example.ts" },
+			resultText: "export const answer = 42;\nfunction call() { return answer; }",
+		});
+		const el = mount(() => <Transcript entries={[read]} />);
+		const code = el.querySelector(".tool-result code.hljs");
+
+		expect(code).not.toBeNull();
+		expect(code?.innerHTML).toContain("<span");
+		expect(code?.textContent).toContain("export const answer = 42");
+	});
+
+	it("completed legible tool cards are open by default but completed bash is collapsed", () => {
+		const entries = [
+			toolEntryFromEvents({ toolName: "read", args: { path: "/tmp/a.ts" }, resultText: "const a = 1;" }),
+			toolEntryFromEvents({
+				toolName: "edit",
+				args: { path: "/tmp/a.ts" },
+				resultText: "Successfully replaced text in /tmp/a.ts.",
+				details: { diff: "+1 const a = 2;" },
+			}),
+			toolEntryFromEvents({
+				toolName: "write",
+				args: { path: "/tmp/b.ts", content: "export const b = 2;" },
+				resultText: "Wrote /tmp/b.ts.",
+			}),
+			toolEntryFromEvents({
+				toolName: "suggest_next",
+				args: { command: "/skill:mach6-push" },
+				resultText: "Suggestion registered: /skill:mach6-push",
+				details: { suggestion: "/skill:mach6-push", summary: "Fixed **everything**" },
+			}),
+			toolEntryFromEvents({ toolName: "bash", args: { command: "echo done" }, resultText: "done" }),
+		];
+		const el = mount(() => <Transcript entries={entries} />);
+		const tools = Array.from(el.querySelectorAll("details.tool")) as HTMLDetailsElement[];
+
+		expect(tools.slice(0, 4).every((tool) => tool.open && tool.hasAttribute("open"))).toBe(true);
+		expect(tools[4]?.open).toBe(false);
+		expect(tools[4]?.hasAttribute("open")).toBe(false);
+	});
+
+	it("suggest_next completed card shows markdown summary and command without interaction", () => {
+		const suggestNext = toolEntryFromEvents({
+			toolName: "suggest_next",
+			args: { command: "/skill:mach6-push" },
+			resultText: "Suggestion registered: /skill:mach6-push",
+			details: { suggestion: "/skill:mach6-push", summary: "Fixed *all* maintainer bugs" },
+		});
+		const el = mount(() => <Transcript entries={[suggestNext]} />);
+		const tool = el.querySelector("details.tool") as HTMLDetailsElement | null;
+
+		expect(tool?.open).toBe(true);
+		expect(tool?.querySelector(".markdown-body em")?.textContent).toBe("all");
+		expect(tool?.querySelector(".suggested-command code")?.textContent).toBe("/skill:mach6-push");
+		expect(tool?.textContent).not.toContain("Suggestion registered");
 	});
 });

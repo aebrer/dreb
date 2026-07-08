@@ -4,6 +4,7 @@
  */
 
 import type {
+	AgentTypeDto,
 	AuthStatusDto,
 	BackgroundAgentDto,
 	CommandDto,
@@ -19,6 +20,7 @@ import type {
 	RuntimeInfoDto,
 	SessionStatsDto,
 	SettingsDto,
+	SettingsSaveResultDto,
 } from "../shared/protocol.js";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -91,11 +93,13 @@ export const api = {
 
 	settings: () => request<SettingsDto>("/api/settings"),
 	saveSettings: (settings: SettingsDto) =>
-		request<SettingsDto>("/api/settings", {
+		request<SettingsSaveResultDto>("/api/settings", {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify(settings),
 		}),
+	settingsModels: () => request<{ models: ModelInfoDto[] }>("/api/settings/models"),
+	agentTypes: () => request<{ agentTypes: AgentTypeDto[] }>("/api/settings/agent-types"),
 	version: () => request<{ version: string }>("/api/version"),
 	dailyCost: () => request<{ cost: number }>("/api/daily-cost"),
 

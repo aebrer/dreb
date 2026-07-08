@@ -12,6 +12,7 @@ import {
 	applyEnvelope,
 	createDashboardState,
 	createSessionViewState,
+	dismissToast as dismissReducerToast,
 	messagesToEntries,
 	type SessionViewState,
 } from "./reducer.js";
@@ -132,6 +133,15 @@ export function createAppStore() {
 		disconnect?.();
 	}
 
+	function dismissToast(id: number): void {
+		for (const [key, session] of reducerState.sessions) {
+			if (!session.toasts.some((toast) => toast.id === id)) continue;
+			dismissReducerToast(session, id);
+			syncSession(key);
+			return;
+		}
+	}
+
 	return {
 		sessions,
 		/** Per-session revision counters — bump on every applied envelope (autoscroll dependency). */
@@ -144,6 +154,7 @@ export function createAppStore() {
 		connected,
 		start,
 		stop,
+		dismissToast,
 		/**
 		 * Hydrate a session from the server (on drill-in): transcript from
 		 * get_messages + background-agent registry from list_background_agents.

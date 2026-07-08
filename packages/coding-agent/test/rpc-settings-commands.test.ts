@@ -6,7 +6,7 @@ import type { Model } from "@dreb/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { RpcClient } from "../src/modes/rpc/rpc-client.js";
-import { getSettingsForRpc, setSettingsForRpc } from "../src/modes/rpc/rpc-mode.js";
+import { getSettingsForRpc, listAgentTypesForRpc, setSettingsForRpc } from "../src/modes/rpc/rpc-mode.js";
 import type { RpcSettingsSnapshot } from "../src/modes/rpc/rpc-types.js";
 
 const tempDirs: string[] = [];
@@ -44,6 +44,13 @@ describe("getSettingsForRpc", () => {
 			followUpMode: "one-at-a-time",
 			compactionEnabled: true,
 			retryEnabled: true,
+			imageAutoResize: true,
+			blockImages: false,
+			enableSkillCommands: true,
+			autoLoadNestedContext: true,
+			transport: "sse",
+			hideThinkingBlock: false,
+			agentModels: {},
 		});
 	});
 
@@ -56,6 +63,12 @@ describe("getSettingsForRpc", () => {
 			followUpMode: "all",
 			compaction: { enabled: false },
 			retry: { enabled: false },
+			images: { autoResize: false, blockImages: true },
+			enableSkillCommands: false,
+			context: { autoLoadNested: false },
+			transport: "websocket",
+			hideThinkingBlock: true,
+			agentModels: { models: { Explore: ["anthropic/sonnet", "openai/gpt-5"] } },
 		});
 
 		expect(getSettingsForRpc(manager)).toEqual({
@@ -66,6 +79,13 @@ describe("getSettingsForRpc", () => {
 			followUpMode: "all",
 			compactionEnabled: false,
 			retryEnabled: false,
+			imageAutoResize: false,
+			blockImages: true,
+			enableSkillCommands: false,
+			autoLoadNestedContext: false,
+			transport: "websocket",
+			hideThinkingBlock: true,
+			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
 		});
 	});
 });
@@ -123,7 +143,15 @@ describe("setSettingsForRpc validation", () => {
 		expect(result.error).toContain("all, one-at-a-time");
 	});
 
-	it.each(["compactionEnabled", "retryEnabled"] as const)("rejects a non-boolean %s", async (key) => {
+	it.each([
+		"compactionEnabled",
+		"retryEnabled",
+		"imageAutoResize",
+		"blockImages",
+		"enableSkillCommands",
+		"autoLoadNestedContext",
+		"hideThinkingBlock",
+	] as const)("rejects a non-boolean %s", async (key) => {
 		const manager = SettingsManager.inMemory();
 		const result = await setSettingsForRpc(manager, stubRegistry([]), { [key]: "yes" } as never);
 
@@ -131,6 +159,50 @@ describe("setSettingsForRpc validation", () => {
 		if (result.ok) throw new Error("unreachable");
 		expect(result.error).toContain(`Invalid ${key}`);
 		expect(result.error).toContain("Must be a boolean");
+	});
+
+	it("rejects an invalid transport, listing valid values", async () => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), { transport: "http" as never });
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain('Invalid transport: "http"');
+		expect(result.error).toContain("sse, websocket, auto");
+	});
+
+	it("rejects an agentModels value that is not a plain object", async () => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), { agentModels: [] as never });
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("Invalid agentModels");
+		expect(result.error).toContain("plain object");
+	});
+
+	it("rejects an agentModels entry whose value is not an array, naming the agent", async () => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), {
+			agentModels: { Explore: "anthropic/sonnet" } as never,
+		});
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain('agentModels["Explore"]');
+		expect(result.error).toContain("array of non-empty strings");
+	});
+
+	it("rejects an agentModels entry with a non-string model, naming the agent", async () => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), {
+			agentModels: { Explore: ["anthropic/sonnet", 42] } as never,
+		});
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain('agentModels["Explore"]');
+		expect(result.error).toContain("array of non-empty strings");
 	});
 
 	it("rejects a provider without a model (and vice versa)", async () => {
@@ -164,15 +236,17 @@ describe("setSettingsForRpc validation", () => {
 	});
 
 	it("applies nothing when any field is invalid (atomicity)", async () => {
-		const manager = SettingsManager.inMemory({ retry: { enabled: true } });
+		const manager = SettingsManager.inMemory({ retry: { enabled: true }, images: { autoResize: true } });
 		const result = await setSettingsForRpc(manager, stubRegistry([]), {
 			retryEnabled: false, // valid
+			imageAutoResize: false, // valid
 			steeringMode: "bogus" as never, // invalid
 		});
 
 		expect(result.ok).toBe(false);
-		// The valid field must NOT have been applied.
+		// The valid fields must NOT have been applied.
 		expect(manager.getRetryEnabled()).toBe(true);
+		expect(manager.getImageAutoResize()).toBe(true);
 	});
 });
 
@@ -187,6 +261,13 @@ describe("setSettingsForRpc writes", () => {
 			followUpMode: "all",
 			compactionEnabled: false,
 			retryEnabled: false,
+			imageAutoResize: false,
+			blockImages: true,
+			enableSkillCommands: false,
+			autoLoadNestedContext: false,
+			transport: "auto",
+			hideThinkingBlock: true,
+			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
 		});
 
 		expect(result.ok).toBe(true);
@@ -199,9 +280,68 @@ describe("setSettingsForRpc writes", () => {
 			followUpMode: "all",
 			compactionEnabled: false,
 			retryEnabled: false,
+			imageAutoResize: false,
+			blockImages: true,
+			enableSkillCommands: false,
+			autoLoadNestedContext: false,
+			transport: "auto",
+			hideThinkingBlock: true,
+			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
 		});
 		// Reflected in subsequent reads.
 		expect(getSettingsForRpc(manager)).toEqual(result.settings);
+	});
+
+	it("writes and removes agent model fallback lists", async () => {
+		const manager = SettingsManager.inMemory();
+
+		const setResult = await setSettingsForRpc(manager, stubRegistry([]), {
+			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
+		});
+		expect(setResult.ok).toBe(true);
+		if (!setResult.ok) throw new Error("unreachable");
+		expect(setResult.settings.agentModels).toEqual({ Explore: ["anthropic/sonnet", "openai/gpt-5"] });
+		expect(getSettingsForRpc(manager).agentModels).toEqual({ Explore: ["anthropic/sonnet", "openai/gpt-5"] });
+
+		const removeResult = await setSettingsForRpc(manager, stubRegistry([]), {
+			agentModels: { Explore: [] },
+		});
+		expect(removeResult.ok).toBe(true);
+		if (!removeResult.ok) throw new Error("unreachable");
+		expect(removeResult.settings.agentModels).toEqual({});
+		expect(getSettingsForRpc(manager).agentModels).toEqual({});
+	});
+
+	it("warns when project agentModels override shadows a global write while still persisting the global change", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		mkdirSync(join(projectDir, ".dreb"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			join(projectDir, ".dreb", "settings.json"),
+			JSON.stringify({ agentModels: { models: { Explore: ["project/model"] } } }),
+			"utf8",
+		);
+
+		const manager = SettingsManager.create(projectDir, agentDir);
+		const result = await setSettingsForRpc(manager, stubRegistry([]), {
+			agentModels: { Explore: ["global/model"], "Code Reviewer": ["global/reviewer"] },
+		});
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("unreachable");
+		expect(result.warnings).toEqual([
+			'A project-level agentModels override for "Explore" (.dreb/settings.json) takes precedence — this change to global settings will have no effect. Edit the project settings file to change it.',
+		]);
+		expect(result.settings.agentModels).toEqual({
+			Explore: ["project/model"],
+			"Code Reviewer": ["global/reviewer"],
+		});
+
+		const rawGlobal = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"));
+		expect(rawGlobal.agentModels.models.Explore).toEqual(["global/model"]);
+		expect(rawGlobal.agentModels.models["Code Reviewer"]).toEqual(["global/reviewer"]);
 	});
 
 	it("persists to disk and is visible to a fresh SettingsManager (fresh-runtime simulation)", async () => {
@@ -217,6 +357,13 @@ describe("setSettingsForRpc writes", () => {
 			defaultModel: "claude-sonnet-4-5",
 			defaultThinkingLevel: "medium",
 			retryEnabled: false,
+			imageAutoResize: false,
+			blockImages: true,
+			enableSkillCommands: false,
+			autoLoadNestedContext: false,
+			transport: "websocket",
+			hideThinkingBlock: true,
+			agentModels: { Explore: ["anthropic/sonnet"] },
 		});
 		expect(result.ok).toBe(true);
 
@@ -226,6 +373,13 @@ describe("setSettingsForRpc writes", () => {
 		expect(raw.defaultModel).toBe("claude-sonnet-4-5");
 		expect(raw.defaultThinkingLevel).toBe("medium");
 		expect(raw.retry.enabled).toBe(false);
+		expect(raw.images.autoResize).toBe(false);
+		expect(raw.images.blockImages).toBe(true);
+		expect(raw.enableSkillCommands).toBe(false);
+		expect(raw.context.autoLoadNested).toBe(false);
+		expect(raw.transport).toBe("websocket");
+		expect(raw.hideThinkingBlock).toBe(true);
+		expect(raw.agentModels.models.Explore).toEqual(["anthropic/sonnet"]);
 
 		// A fresh manager over the same dirs (fresh runtime) reads the same state.
 		const fresh = SettingsManager.create(projectDir, agentDir);
@@ -351,6 +505,32 @@ describe("setSettingsForRpc writes", () => {
 	});
 });
 
+describe("listAgentTypesForRpc", () => {
+	it("discovers package and project agent types sorted by name", async () => {
+		const cwd = await createTempDir();
+		const agentsDir = join(cwd, ".dreb", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "test-agent.md"),
+			`---
+name: Test Agent
+description: Project-local test agent
+---
+
+You are a test agent.
+`,
+			"utf8",
+		);
+
+		const agentTypes = listAgentTypesForRpc(cwd);
+		const names = agentTypes.map((agent) => agent.name);
+
+		expect(agentTypes).toContainEqual({ name: "Test Agent", description: "Project-local test agent" });
+		expect(agentTypes).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Explore" })]));
+		expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+	});
+});
+
 describe("RpcClient settings methods", () => {
 	const snapshot: RpcSettingsSnapshot = {
 		defaultProvider: "anthropic",
@@ -360,6 +540,13 @@ describe("RpcClient settings methods", () => {
 		followUpMode: "one-at-a-time",
 		compactionEnabled: true,
 		retryEnabled: true,
+		imageAutoResize: true,
+		blockImages: false,
+		enableSkillCommands: true,
+		autoLoadNestedContext: true,
+		transport: "sse",
+		hideThinkingBlock: false,
+		agentModels: {},
 	};
 
 	it("getSettings sends the get_settings command and unwraps the snapshot", async () => {
@@ -391,6 +578,24 @@ describe("RpcClient settings methods", () => {
 		expect(client.send).toHaveBeenCalledWith({ type: "set_settings", settings: { retryEnabled: false } });
 	});
 
+	it("setSettings passes through warnings from the server", async () => {
+		const client = new RpcClient() as any;
+		const warnings = [
+			'A project-level agentModels override for "Explore" (.dreb/settings.json) takes precedence — this change to global settings will have no effect. Edit the project settings file to change it.',
+		];
+		client.send = vi.fn().mockResolvedValue({
+			type: "response",
+			command: "set_settings",
+			success: true,
+			data: { ...snapshot, warnings },
+		});
+
+		await expect(client.setSettings({ agentModels: { Explore: ["global/model"] } })).resolves.toEqual({
+			...snapshot,
+			warnings,
+		});
+	});
+
 	it("setSettings rejects with the RPC error message on failure", async () => {
 		const client = new RpcClient() as any;
 		client.send = vi.fn().mockResolvedValue({
@@ -401,5 +606,22 @@ describe("RpcClient settings methods", () => {
 		});
 
 		await expect(client.setSettings({ bogus: true } as never)).rejects.toThrow("Unknown settings key(s): bogus");
+	});
+
+	it("listAgentTypes sends the list_agent_types command and unwraps agent types", async () => {
+		const client = new RpcClient() as any;
+		const agentTypes = [
+			{ name: "Explore", description: "Explore the codebase" },
+			{ name: "Test Agent", description: "Project-local test agent" },
+		];
+		client.send = vi.fn().mockResolvedValue({
+			type: "response",
+			command: "list_agent_types",
+			success: true,
+			data: { agentTypes },
+		});
+
+		await expect(client.listAgentTypes()).resolves.toEqual(agentTypes);
+		expect(client.send).toHaveBeenCalledWith({ type: "list_agent_types" });
 	});
 });

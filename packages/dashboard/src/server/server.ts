@@ -448,6 +448,14 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 		withAnyRuntime(res, (h) => h.client.getSettings());
 	});
 
+	app.get("/api/settings/models", (_req, res) => {
+		withAnyRuntime(res, async (h) => ({ models: await h.client.getAvailableModels() }));
+	});
+
+	app.get("/api/settings/agent-types", (_req, res) => {
+		withAnyRuntime(res, async (h) => ({ agentTypes: await h.client.listAgentTypes() }));
+	});
+
 	app.get("/api/daily-cost", (_req, res) => {
 		withAnyRuntime(res, async (h) => ({ cost: await h.client.getDailyCost() }));
 	});

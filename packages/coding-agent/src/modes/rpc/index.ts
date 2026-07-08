@@ -8,6 +8,7 @@
 export type { ModelInfo, RpcClientOptions, RpcEventListener } from "./rpc-client.js";
 export { RpcClient } from "./rpc-client.js";
 export type {
+	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcCommandType,
@@ -16,6 +17,7 @@ export type {
 	RpcResponse,
 	RpcSessionInfo,
 	RpcSessionState,
+	RpcSettingsSetResult,
 	RpcSettingsSnapshot,
 	RpcSettingsUpdate,
 	RpcSlashCommand,

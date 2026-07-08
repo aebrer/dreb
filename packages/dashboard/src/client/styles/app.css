@@ -6,6 +6,32 @@
  * the mockup CSS (design/dashboard/mockups/*.html) as the contract.
  */
 
+:root {
+	--syntax-comment: #008000;
+	--syntax-keyword: #0000ff;
+	--syntax-string: #a31515;
+	--syntax-number: #098658;
+	--syntax-function: #795e26;
+	--syntax-type: #267f99;
+	--syntax-variable: #001080;
+	--syntax-operator: #000000;
+	--syntax-punctuation: #000000;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--syntax-comment: #6a9955;
+		--syntax-keyword: #569cd6;
+		--syntax-string: #ce9178;
+		--syntax-number: #b5cea8;
+		--syntax-function: #dcdcaa;
+		--syntax-type: #4ec9b0;
+		--syntax-variable: #9cdcfe;
+		--syntax-operator: #d4d4d4;
+		--syntax-punctuation: #d4d4d4;
+	}
+}
+
 /* ------------------------------------------------------------- app shell */
 
 #root {
@@ -690,6 +716,78 @@ details.thinking .thinking-body {
 	border: none;
 	padding: 0;
 	font-size: var(--fs-small);
+}
+
+.tool .tool-result pre,
+.tool .tool-input pre {
+	max-height: 340px;
+	overflow-y: auto;
+}
+
+.hljs {
+	background: transparent;
+	color: var(--text);
+}
+
+.hljs-comment,
+.hljs-quote {
+	color: var(--syntax-comment);
+}
+
+.hljs-keyword,
+.hljs-selector-tag {
+	color: var(--syntax-keyword);
+}
+
+.hljs-number,
+.hljs-literal {
+	color: var(--syntax-number);
+}
+
+.hljs-string,
+.hljs-doctag {
+	color: var(--syntax-string);
+}
+
+.hljs-function,
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+	color: var(--syntax-function);
+}
+
+.hljs-type,
+.hljs-class,
+.hljs-title.class_,
+.hljs-built_in {
+	color: var(--syntax-type);
+}
+
+.hljs-attr,
+.hljs-variable,
+.hljs-variable.language_,
+.hljs-params,
+.hljs-property {
+	color: var(--syntax-variable);
+}
+
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-meta .hljs-string {
+	color: var(--syntax-keyword);
+}
+
+.hljs-operator {
+	color: var(--syntax-operator);
+}
+
+.hljs-punctuation {
+	color: var(--syntax-punctuation);
+}
+
+.hljs-subst {
+	color: var(--text);
 }
 
 .diff-add {
@@ -1382,6 +1480,97 @@ details.thinking .thinking-body {
 	white-space: pre-wrap;
 }
 
+.settings-warning {
+	border: 1px solid var(--status-attention);
+	border-radius: var(--radius);
+	color: var(--status-attention);
+	padding: var(--space-2) var(--space-3);
+	font-size: var(--fs-secondary);
+	margin-bottom: var(--space-4);
+	white-space: pre-wrap;
+}
+
+.model-picker-button {
+	max-width: 320px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-model-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto;
+	gap: var(--space-3);
+	align-items: start;
+	padding: var(--space-2) 0;
+	border-bottom: var(--hairline);
+}
+
+.agent-model-summary {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.agent-model-name {
+	font-size: var(--fs-secondary);
+	font-weight: 600;
+}
+
+.agent-model-description {
+	color: var(--muted);
+	font-size: var(--fs-small);
+}
+
+.agent-model-fallbacks {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+	min-width: 0;
+}
+
+.agent-model-chip {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	color: var(--muted);
+	font-size: var(--fs-small);
+	padding: 0 var(--space-1);
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-model-editor {
+	grid-column: 1 / -1;
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: var(--space-2);
+}
+
+.agent-model-entry {
+	display: flex;
+	justify-content: space-between;
+	gap: var(--space-2);
+	align-items: center;
+	font-size: var(--fs-secondary);
+}
+
+.agent-model-entry-actions {
+	display: flex;
+	gap: var(--space-1);
+	flex-shrink: 0;
+}
+
+.settings-footnote {
+	margin-top: calc(-1 * var(--space-3));
+	margin-bottom: var(--space-5);
+}
+
 .device-row {
 	display: flex;
 	align-items: center;
@@ -1751,6 +1940,19 @@ details.thinking .thinking-body {
 
 	.setting-control {
 		align-self: flex-end;
+	}
+
+	.agent-model-row {
+		grid-template-columns: 1fr;
+	}
+
+	.agent-model-edit {
+		justify-self: start;
+	}
+
+	.agent-model-entry {
+		align-items: flex-start;
+		flex-direction: column;
 	}
 
 	.head-actions .btn {

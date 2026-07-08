@@ -298,6 +298,36 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[0].getDailyCost).toHaveBeenCalled();
 	});
 
+	it("GET /api/settings/models and /api/settings/agent-types use any live runtime", async () => {
+		const dir = await createTempProject();
+		const { base, clients } = await startServer();
+		await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+
+		await expect(fetch(`${base}/api/settings/models`).then((r) => r.json())).resolves.toEqual({
+			models: [{ provider: "test", id: "m1", name: "Test Model", contextWindow: 200000, reasoning: false }],
+		});
+		await expect(fetch(`${base}/api/settings/agent-types`).then((r) => r.json())).resolves.toEqual({
+			agentTypes: [{ name: "Explore", description: "Explore the codebase" }],
+		});
+		expect(clients[0].getAvailableModels).toHaveBeenCalled();
+		expect(clients[0].listAgentTypes).toHaveBeenCalled();
+	});
+
+	it("settings model metadata endpoints return 503 when no runtime is live", async () => {
+		const { base } = await startServer();
+		const models = await fetch(`${base}/api/settings/models`);
+		const agentTypes = await fetch(`${base}/api/settings/agent-types`);
+
+		expect(models.status).toBe(503);
+		expect(agentTypes.status).toBe(503);
+		await expect(models.json()).resolves.toMatchObject({ error: expect.stringContaining("No live runtime") });
+		await expect(agentTypes.json()).resolves.toMatchObject({ error: expect.stringContaining("No live runtime") });
+	});
+
 	it("protects dashboard RPC data routes with auth middleware", async () => {
 		const dir = await createTempProject();
 		const { base } = await startServer();
@@ -316,6 +346,8 @@ describe("dashboard server — fleet and runtimes", () => {
 			`/api/runtimes/${key}/dequeue`,
 			`/api/runtimes/${key}/abort-compaction`,
 			`/api/runtimes/${key}/abort-retry`,
+			"/api/settings/models",
+			"/api/settings/agent-types",
 			"/api/daily-cost",
 		];
 

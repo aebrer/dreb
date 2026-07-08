@@ -195,7 +195,16 @@ export interface SettingsDto {
 	followUpMode?: "all" | "one-at-a-time";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
+	imageAutoResize?: boolean;
+	blockImages?: boolean;
+	enableSkillCommands?: boolean;
+	autoLoadNestedContext?: boolean;
+	transport?: "sse" | "websocket" | "auto";
+	hideThinkingBlock?: boolean;
+	agentModels?: Record<string, string[]>;
 }
+
+export type SettingsSaveResultDto = SettingsDto & { warnings?: string[] };
 
 /** Available model entry (mirrors ModelInfo). */
 export interface ModelInfoDto {
@@ -204,4 +213,10 @@ export interface ModelInfoDto {
 	name: string;
 	contextWindow: number;
 	reasoning: boolean;
+}
+
+/** Agent definition metadata (mirrors RpcAgentTypeInfo). */
+export interface AgentTypeDto {
+	name: string;
+	description: string;
 }

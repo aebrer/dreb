@@ -4,6 +4,7 @@ import {
 	applySessionEvent,
 	createDashboardState,
 	createSessionViewState,
+	dismissToast,
 	messagesToEntries,
 	resolveUiRequest,
 } from "../src/client/state/reducer.js";
@@ -304,6 +305,15 @@ describe("applySessionEvent — session-level events", () => {
 		expect(state.suggestedCommand).toBe("/skill:mach6-push");
 	});
 
+	it("agent_start clears suggestedCommand", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "suggest_next", command: "/skill:mach6-push" });
+		expect(state.suggestedCommand).toBe("/skill:mach6-push");
+
+		applySessionEvent(state, { type: "agent_start" });
+		expect(state.suggestedCommand).toBeUndefined();
+	});
+
 	it("session_name_changed updates the live session display name", () => {
 		const state = makeState();
 		applySessionEvent(state, { type: "session_name_changed", name: "renamed live" });
@@ -431,6 +441,19 @@ describe("applySessionEvent — extension UI", () => {
 			error: "kaboom",
 		});
 		expect(state.toasts.some((t) => t.tone === "error" && t.text.includes("kaboom"))).toBe(true);
+	});
+
+	it("dismissToast removes only the matching toast", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "extension_error", extensionPath: "/x.ts", event: "tool_call", error: "one" });
+		applySessionEvent(state, { type: "extension_error", extensionPath: "/x.ts", event: "tool_call", error: "two" });
+		const [first, second] = state.toasts;
+		expect(first).toBeDefined();
+		expect(second).toBeDefined();
+
+		dismissToast(state, first!.id);
+		expect(state.toasts).toHaveLength(1);
+		expect(state.toasts[0]).toMatchObject({ id: second!.id, text: expect.stringContaining("two") });
 	});
 });
 

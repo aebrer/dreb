@@ -6,6 +6,7 @@
  */
 
 import DOMPurify from "dompurify";
+import hljs from "highlight.js/lib/common";
 import { marked } from "marked";
 import { createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
 import { expandThinking } from "../state/preferences.js";
@@ -14,6 +15,69 @@ import type { AgentResultEntry, AssistantEntry, ToolEntry, TranscriptEntry } fro
 function renderMarkdown(text: string): string {
 	const html = marked.parse(text, { async: false }) as string;
 	return DOMPurify.sanitize(html);
+}
+
+function getLanguageFromPath(filePath: unknown): string | undefined {
+	if (typeof filePath !== "string" || !filePath) return undefined;
+	const name = filePath.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+	const ext = name.includes(".") ? name.split(".").pop() : name;
+	const extToLang: Record<string, string> = {
+		ts: "typescript",
+		tsx: "typescript",
+		js: "javascript",
+		jsx: "javascript",
+		mjs: "javascript",
+		cjs: "javascript",
+		py: "python",
+		rb: "ruby",
+		rs: "rust",
+		go: "go",
+		java: "java",
+		c: "c",
+		h: "c",
+		cpp: "cpp",
+		cc: "cpp",
+		cxx: "cpp",
+		hpp: "cpp",
+		cs: "csharp",
+		php: "php",
+		sh: "bash",
+		bash: "bash",
+		zsh: "bash",
+		sql: "sql",
+		html: "html",
+		css: "css",
+		scss: "scss",
+		json: "json",
+		yaml: "yaml",
+		yml: "yaml",
+		xml: "xml",
+		md: "markdown",
+		dockerfile: "dockerfile",
+	};
+	return ext ? extToLang[ext] : undefined;
+}
+
+function toolPath(args: Record<string, unknown> | undefined): unknown {
+	return args?.path ?? args?.file_path;
+}
+
+function highlightedHtml(text: string, language: string | undefined): string | undefined {
+	if (!language || !hljs.getLanguage(language)) return undefined;
+	return DOMPurify.sanitize(hljs.highlight(text, { language, ignoreIllegals: true }).value);
+}
+
+function HighlightedPre(props: { text: string; language?: string }): JSX.Element {
+	const html = () => highlightedHtml(props.text, props.language);
+	return (
+		<Show when={html()} fallback={<pre>{props.text}</pre>}>
+			{(safeHtml) => (
+				<pre>
+					<code class="hljs" innerHTML={safeHtml()} />
+				</pre>
+			)}
+		</Show>
+	);
 }
 
 function toolArgSummary(entry: ToolEntry): string {
@@ -95,7 +159,14 @@ function toolStatus(entry: ToolEntry): { text: string; cls: string } {
 const MARKDOWN_RESULT_TOOLS = new Set(["subagent", "skill", "web_fetch"]);
 
 /** Args rendered as full-input sections in the expanded card body, per tool. */
-function toolInputSections(entry: ToolEntry): Array<{ label: string; text: string; markdown?: boolean }> {
+interface ToolInputSection {
+	label: string;
+	text: string;
+	markdown?: boolean;
+	language?: string;
+}
+
+function toolInputSections(entry: ToolEntry): ToolInputSection[] {
 	const args = entry.args as Record<string, unknown> | undefined;
 	if (!args || typeof args !== "object") return [];
 	switch (entry.toolName) {
@@ -106,14 +177,16 @@ function toolInputSections(entry: ToolEntry): Array<{ label: string; text: strin
 		case "ls":
 		case "edit":
 			return []; // path is fully visible in the summary; edit's diff result carries the change
+		case "suggest_next":
+			return []; // summary + command render via the details-driven result body
 		case "write":
 			// While running the full content IS the body (no result yet); after
 			// completion the result replaces it, so surface the input here.
 			return entry.resultText && typeof args.content === "string"
-				? [{ label: "content", text: String(args.content) }]
+				? [{ label: "content", text: String(args.content), language: getLanguageFromPath(toolPath(args)) }]
 				: [];
 		case "subagent": {
-			const sections: Array<{ label: string; text: string; markdown?: boolean }> = [];
+			const sections: ToolInputSection[] = [];
 			if (typeof args.task === "string") sections.push({ label: "task", text: args.task, markdown: true });
 			if (Array.isArray(args.tasks)) {
 				(args.tasks as Array<Record<string, unknown>>).forEach((task, i) => {
@@ -139,7 +212,7 @@ function toolInputSections(entry: ToolEntry): Array<{ label: string; text: strin
 		}
 		default: {
 			// Generic: every string arg longer than the summary can show, in full.
-			const sections: Array<{ label: string; text: string }> = [];
+			const sections: ToolInputSection[] = [];
 			for (const [key, value] of Object.entries(args)) {
 				const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
 				if (text && text.length > 80) sections.push({ label: key, text });
@@ -165,24 +238,37 @@ function DiffBody(props: { text: string }): JSX.Element {
 	);
 }
 
+const LEGIBLE_OPEN_TOOLS = new Set(["read", "edit", "write", "suggest_next"]);
+
+function editDiffText(entry: ToolEntry): string | undefined {
+	if (entry.toolName !== "edit") return undefined;
+	const diff = (entry.details as { diff?: unknown } | undefined)?.diff;
+	return typeof diff === "string" ? diff : undefined;
+}
+
 function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 	const status = () => toolStatus(props.entry);
-	const isDiff = () => props.entry.toolName === "edit";
 	const args = () => props.entry.args as Record<string, unknown> | undefined;
 	const suggestDetails = () => {
 		if (props.entry.toolName !== "suggest_next") return undefined;
 		return props.entry.details as { suggestion?: string; summary?: string } | undefined;
 	};
+	const diffText = () => editDiffText(props.entry);
 	const bodyText = () => {
 		if (props.entry.toolName === "write" && !props.entry.resultText && typeof args()?.content === "string") {
 			return String(args()?.content);
 		}
 		return props.entry.resultText;
 	};
+	const bodyLanguage = () => {
+		if (props.entry.toolName === "read") return getLanguageFromPath(toolPath(args()));
+		if (props.entry.toolName === "write" && !props.entry.resultText) return getLanguageFromPath(toolPath(args()));
+		return undefined;
+	};
 	const bodyIsMarkdown = () => MARKDOWN_RESULT_TOOLS.has(props.entry.toolName) && props.entry.status !== "error";
 	const inputSections = () => toolInputSections(props.entry);
 	return (
-		<details class="tool" open={props.entry.status === "running"}>
+		<details class="tool" open={LEGIBLE_OPEN_TOOLS.has(props.entry.toolName) || props.entry.status === "running"}>
 			<summary>
 				<span class="tool-name">{props.entry.toolName}</span>
 				<span class="tool-arg">{toolArgSummary(props.entry)}</span>
@@ -197,7 +283,10 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 				{(section) => (
 					<div class="tool-input">
 						<span class="tool-input-label">{section.label}</span>
-						<Show when={section.markdown} fallback={<pre>{section.text}</pre>}>
+						<Show
+							when={section.markdown}
+							fallback={<HighlightedPre text={section.text} language={section.language} />}
+						>
 							<div class="markdown-body" innerHTML={renderMarkdown(section.text)} />
 						</Show>
 					</div>
@@ -216,12 +305,16 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 						</div>
 					)}
 				</Match>
+				<Match when={diffText()}>
+					{(diff) => (
+						<div class="tool-result">
+							<DiffBody text={diff()} />
+						</div>
+					)}
+				</Match>
 				<Match when={bodyText()}>
 					<div class="tool-result">
-						<Switch fallback={<pre>{bodyText()}</pre>}>
-							<Match when={isDiff()}>
-								<DiffBody text={bodyText()} />
-							</Match>
+						<Switch fallback={<HighlightedPre text={bodyText()} language={bodyLanguage()} />}>
 							<Match when={bodyIsMarkdown()}>
 								<div class="markdown-body" innerHTML={renderMarkdown(bodyText())} />
 							</Match>

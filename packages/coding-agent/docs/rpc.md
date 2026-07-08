@@ -1066,6 +1066,39 @@ Response:
 }
 ```
 
+#### list_agent_types
+
+List discoverable subagent types for the current session working directory. This includes package-bundled agents, user-level agents, and project-level agents in `.dreb/agents/*.md`. Results are sorted by `name`.
+
+```json
+{"type": "list_agent_types"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "list_agent_types",
+  "success": true,
+  "data": {
+    "agentTypes": [
+      {
+        "name": "code-reviewer",
+        "description": "Reviews code changes for correctness, idiomatic patterns, and maintainability"
+      },
+      {
+        "name": "Explore",
+        "description": "Codebase and web exploration — find files, search code, search the web, answer questions. Read-only."
+      }
+    ]
+  }
+}
+```
+
+Each agent type has:
+- `name`: Agent type name to use as an `agentModels` key.
+- `description`: Human-readable description from the agent frontmatter.
+
 ### Session Tree
 
 Sessions are append-only trees: editing/retrying a message or navigating back creates a branch rather than discarding entries. These commands expose tree inspection and navigation — the scriptable equivalent of the TUI's `/tree` selector.
@@ -1188,7 +1221,7 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 Persistent default settings, backed by the settings file (see [settings.md](settings.md)). These are distinct from live session state:
 
-- **Persistent defaults** (`get_settings` / `set_settings`): the values stored in `settings.json` that seed fresh runtimes — default provider/model, default thinking level, queue modes, compaction/retry toggles. Writing them does **not** change the running session.
+- **Persistent defaults** (`get_settings` / `set_settings`): the values stored in `settings.json` that seed fresh runtimes — default provider/model, default thinking level, queue modes, compaction/retry/image/context/skill/thinking-display/transport toggles, and per-agent model fallback lists. Writing them does **not** change the running session.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
 
 A dashboard settings tab typically reads both: `get_state` for what's active now, `get_settings` for what the next startup will use.
@@ -1214,12 +1247,21 @@ Response:
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
-    "retryEnabled": true
+    "retryEnabled": true,
+    "imageAutoResize": true,
+    "blockImages": false,
+    "enableSkillCommands": true,
+    "autoLoadNestedContext": true,
+    "transport": "sse",
+    "hideThinkingBlock": false,
+    "agentModels": {
+      "Explore": ["anthropic/sonnet", "openai/gpt-5"]
+    }
   }
 }
 ```
 
-`defaultProvider`, `defaultModel`, and `defaultThinkingLevel` are absent if never set.
+`defaultProvider`, `defaultModel`, and `defaultThinkingLevel` are absent if never set. `agentModels` is the merged global + project view; project entries win per agent name.
 
 #### set_settings
 
@@ -1235,7 +1277,23 @@ Setting the default model (both keys required together, validated against availa
 {"type": "set_settings", "settings": {"defaultProvider": "anthropic", "defaultModel": "claude-sonnet-4-5"}}
 ```
 
-Response is the full settings snapshot after the write (same shape as `get_settings`):
+Setting per-agent model fallback lists:
+
+```json
+{
+  "type": "set_settings",
+  "settings": {
+    "agentModels": {
+      "Explore": ["anthropic/sonnet", "openai/gpt-5"],
+      "code-reviewer": []
+    }
+  }
+}
+```
+
+For `agentModels`, a non-empty array writes the global fallback list for that agent. An empty array removes the global entry, so that agent uses its agent-definition default unless a project-level override exists.
+
+Response is the full settings snapshot after the write (same shape as `get_settings`), plus `warnings` when the write was accepted but a project-level override shadows part of it:
 
 ```json
 {
@@ -1249,7 +1307,42 @@ Response is the full settings snapshot after the write (same shape as `get_setti
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
-    "retryEnabled": false
+    "retryEnabled": false,
+    "imageAutoResize": true,
+    "blockImages": false,
+    "enableSkillCommands": true,
+    "autoLoadNestedContext": true,
+    "transport": "sse",
+    "hideThinkingBlock": false,
+    "agentModels": {}
+  }
+}
+```
+
+Project-shadow warning example (the global write still lands, but the returned merged `agentModels.Explore` remains the project value until `.dreb/settings.json` is edited):
+
+```json
+{
+  "type": "response",
+  "command": "set_settings",
+  "success": true,
+  "data": {
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "compactionEnabled": true,
+    "retryEnabled": true,
+    "imageAutoResize": true,
+    "blockImages": false,
+    "enableSkillCommands": true,
+    "autoLoadNestedContext": true,
+    "transport": "sse",
+    "hideThinkingBlock": false,
+    "agentModels": {
+      "Explore": ["project/model"]
+    },
+    "warnings": [
+      "A project-level agentModels override for \"Explore\" (.dreb/settings.json) takes precedence — this change to global settings will have no effect. Edit the project settings file to change it."
+    ]
   }
 }
 ```
@@ -1264,13 +1357,23 @@ Valid keys and values:
 | `followUpMode` | `"all"`, `"one-at-a-time"` |
 | `compactionEnabled` | boolean |
 | `retryEnabled` | boolean |
+| `imageAutoResize` | boolean |
+| `blockImages` | boolean |
+| `enableSkillCommands` | boolean |
+| `autoLoadNestedContext` | boolean |
+| `transport` | `"sse"`, `"websocket"`, `"auto"` |
+| `hideThinkingBlock` | boolean |
+| `agentModels` | Plain object mapping agent names to arrays of non-empty model id strings; empty arrays remove the global entry for that agent |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
 
 - Missing/empty payload: `set_settings requires at least one setting to change`
 - Unknown key: `Unknown settings key(s): ...`
 - Invalid enum value: `Invalid defaultThinkingLevel: "extreme". Valid values: off, minimal, low, medium, high, xhigh`
+- Invalid transport: `Invalid transport: "http". Valid values: sse, websocket, auto`
 - Non-boolean toggle: `Invalid retryEnabled: "yes". Must be a boolean`
+- Invalid `agentModels` object: `Invalid agentModels: must be a plain object mapping agent names to model fallback arrays`
+- Invalid `agentModels` entry (the offending agent key is named): `Invalid agentModels["Explore"]: expected an array of non-empty strings`
 - Provider without model (or vice versa): `defaultProvider and defaultModel must be set together`
 - Unavailable model: `Model not found: provider/model-id`
 - Corrupt settings file: `Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)` — without this guard the write would silently no-op

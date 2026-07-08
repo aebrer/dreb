@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
-import type { ImageContent, Model } from "@dreb/ai";
+import type { ImageContent, Model, Transport } from "@dreb/ai";
 import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
@@ -98,6 +98,7 @@ export type RpcCommand =
 
 	// Background agents
 	| { id?: string; type: "list_background_agents" }
+	| { id?: string; type: "list_agent_types" }
 
 	// Settings (persistent defaults)
 	| { id?: string; type: "get_settings" }
@@ -347,10 +348,17 @@ export type RpcResponse =
 			success: true;
 			data: { agents: RpcBackgroundAgentInfo[] };
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "list_agent_types";
+			success: true;
+			data: { agentTypes: RpcAgentTypeInfo[] };
+	  }
 
 	// Settings
 	| { id?: string; type: "response"; command: "get_settings"; success: true; data: RpcSettingsSnapshot }
-	| { id?: string; type: "response"; command: "set_settings"; success: true; data: RpcSettingsSnapshot }
+	| { id?: string; type: "response"; command: "set_settings"; success: true; data: RpcSettingsSetResult }
 
 	// Version
 	| { id?: string; type: "response"; command: "get_version"; success: true; data: { version: string } }
@@ -400,6 +408,14 @@ export interface RpcBackgroundAgentInfo {
 	sessionFile?: string;
 	/** Working directory the agent runs in */
 	cwd?: string;
+}
+
+/** Agent type metadata returned by list_agent_types */
+export interface RpcAgentTypeInfo {
+	/** Agent type name, e.g. "Explore" */
+	name: string;
+	/** Human-readable description from the agent frontmatter */
+	description: string;
 }
 
 /** Serializable session tree node returned by get_tree. Stable DTO — no raw entry payloads. */
@@ -452,7 +468,24 @@ export interface RpcSettingsSnapshot {
 	compactionEnabled: boolean;
 	/** Whether automatic retry on transient errors is enabled */
 	retryEnabled: boolean;
+	/** Whether image inputs are automatically resized before sending to providers */
+	imageAutoResize?: boolean;
+	/** Whether image inputs are blocked from being sent to providers */
+	blockImages?: boolean;
+	/** Whether skills are registered as slash commands */
+	enableSkillCommands?: boolean;
+	/** Whether nested AGENTS.md/CLAUDE.md context auto-loads when tools enter subdirectories */
+	autoLoadNestedContext?: boolean;
+	/** Preferred model transport */
+	transport?: Transport;
+	/** Whether raw thinking blocks are hidden in rendered transcripts */
+	hideThinkingBlock?: boolean;
+	/** Per-agent model fallback lists, merged global + project with project entries winning */
+	agentModels?: Record<string, string[]>;
 }
+
+/** Settings snapshot returned by `set_settings`; warnings are present for loud shadowing notices. */
+export type RpcSettingsSetResult = RpcSettingsSnapshot & { warnings?: string[] };
 
 /**
  * Partial update payload for `set_settings`. All fields optional, but at least one
@@ -467,6 +500,13 @@ export interface RpcSettingsUpdate {
 	followUpMode?: "all" | "one-at-a-time";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
+	imageAutoResize?: boolean;
+	blockImages?: boolean;
+	enableSkillCommands?: boolean;
+	autoLoadNestedContext?: boolean;
+	transport?: Transport;
+	hideThinkingBlock?: boolean;
+	agentModels?: Record<string, string[]>;
 }
 
 // ============================================================================

@@ -105,17 +105,7 @@ export function App(): JSX.Element {
 					<PairingScreen store={store} />
 				</Match>
 			</Switch>
-			<ToastRegion
-				toasts={allToasts()}
-				onDismiss={(id) => {
-					// Toasts live in reducer state; drop by mutating through the store's
-					// session sync (dismissal is cosmetic — no server round-trip).
-					for (const session of Object.values(store.sessions)) {
-						const index = session.toasts.findIndex((t) => t.id === id);
-						if (index !== -1) session.toasts.splice(index, 1);
-					}
-				}}
-			/>
+			<ToastRegion toasts={allToasts()} onDismiss={(id) => store.dismissToast(id)} />
 		</>
 	);
 }

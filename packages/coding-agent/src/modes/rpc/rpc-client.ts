@@ -12,6 +12,7 @@ import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
+	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcExtensionUIResponse,
@@ -20,6 +21,7 @@ import type {
 	RpcResponse,
 	RpcSessionInfo,
 	RpcSessionState,
+	RpcSettingsSetResult,
 	RpcSettingsSnapshot,
 	RpcSettingsUpdate,
 	RpcSlashCommand,
@@ -632,6 +634,14 @@ export class RpcClient {
 	}
 
 	/**
+	 * List discoverable subagent types for the server's current working directory.
+	 */
+	async listAgentTypes(): Promise<RpcAgentTypeInfo[]> {
+		const response = await this.send({ type: "list_agent_types" });
+		return this.getData<{ agentTypes: RpcAgentTypeInfo[] }>(response).agentTypes;
+	}
+
+	/**
 	 * Answer an extension UI request (select/confirm/input/editor) previously
 	 * received as an `extension_ui_request` event. Fire-and-forget: the server
 	 * does not send a response to this message.
@@ -665,11 +675,12 @@ export class RpcClient {
 	 * Update persistent default settings. Validates the whole payload before applying
 	 * anything (atomic: on any invalid field, nothing changes). Does NOT touch live
 	 * session state — use setModel/setThinkingLevel/etc. for that.
-	 * Returns the full settings snapshot after the write.
+	 * Returns the full settings snapshot after the write, plus any loud warnings
+	 * (for example project-level agent model overrides shadowing global writes).
 	 */
-	async setSettings(settings: RpcSettingsUpdate): Promise<RpcSettingsSnapshot> {
+	async setSettings(settings: RpcSettingsUpdate): Promise<RpcSettingsSetResult> {
 		const response = await this.send({ type: "set_settings", settings });
-		return this.getData<RpcSettingsSnapshot>(response);
+		return this.getData<RpcSettingsSetResult>(response);
 	}
 
 	// =========================================================================

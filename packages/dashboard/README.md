@@ -44,9 +44,11 @@ Open `http://127.0.0.1:5343`.
   agent.
 - **Files** — host-wide browse with places shortcuts, upload (collision
   prompts before overwrite), download, new-folder, "new session here".
-- **Settings** — persistent defaults (model, thinking, queue modes,
-  compaction/retry), dashboard-local preferences (thinking expansion and
-  notification permission), and paired-devices management.
+- **Settings** — persistent defaults (provider-grouped model dropdown,
+  thinking, queue modes, image handling, skill commands, nested context,
+  transport, hide-thinking, compaction/retry), per-agent model fallback editor,
+  dashboard-local preferences (thinking expansion and notification permission),
+  and paired-devices management.
 - **Pairing** — remote first-login PIN flow.
 
 ## Security model — exactly two modes

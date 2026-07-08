@@ -3,19 +3,127 @@
  * shown verbatim) + paired-devices management + version footer.
  */
 
-import { createResource, createSignal, For, type JSX, Show } from "solid-js";
-import type { SettingsDto } from "../../shared/protocol.js";
+import { createMemo, createResource, createSignal, For, type JSX, Show } from "solid-js";
+import type { AgentTypeDto, ModelInfoDto, SettingsDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
-import { relativeTime, Topbar } from "../components/common.js";
+import { Modal, relativeTime, Topbar } from "../components/common.js";
 import { expandThinking, setExpandThinking } from "../state/preferences.js";
 import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
+const TRANSPORTS = ["sse", "websocket", "auto"] as const;
+
+type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
+type ModelPickerTarget = { kind: "default" } | { kind: "agent"; agentName: string };
+
+function modelKey(model: Pick<ModelInfoDto, "provider" | "id">): string {
+	return `${model.provider}/${model.id}`;
+}
+
+function defaultModelLabel(settings: SettingsDto): string {
+	return settings.defaultProvider && settings.defaultModel
+		? `${settings.defaultProvider}/${settings.defaultModel}`
+		: "choose model…";
+}
+
+function modelMatchesQuery(model: ModelChoice, query: string): boolean {
+	return `${model.provider}/${model.id} ${model.name ?? ""}`.toLowerCase().includes(query);
+}
+
+function groupedModels(models: ModelChoice[]): Array<{ provider: string; models: ModelChoice[] }> {
+	const groups = new Map<string, ModelChoice[]>();
+	for (const model of models) {
+		const group = groups.get(model.provider) ?? [];
+		group.push(model);
+		groups.set(model.provider, group);
+	}
+	return [...groups.entries()].map(([provider, group]) => ({ provider, models: group }));
+}
+
+function moveItem<T>(items: T[], index: number, delta: -1 | 1): T[] {
+	const target = index + delta;
+	if (target < 0 || target >= items.length) return items;
+	const next = [...items];
+	[next[index], next[target]] = [next[target]!, next[index]!];
+	return next;
+}
+
+function OnOffSelect(props: { value: boolean; onChange: (value: boolean) => void }): JSX.Element {
+	return (
+		<select value={props.value ? "on" : "off"} onChange={(e) => props.onChange(e.currentTarget.value === "on")}>
+			<option value="on">on</option>
+			<option value="off">off</option>
+		</select>
+	);
+}
+
+function ModelPickerModal(props: {
+	title: string;
+	models: ModelInfoDto[];
+	selected?: string[];
+	onClose: () => void;
+	onPick: (model: ModelInfoDto) => void;
+}): JSX.Element {
+	const [filter, setFilter] = createSignal("");
+	const selected = () => new Set(props.selected ?? []);
+	const filteredGroups = createMemo(() => {
+		const q = filter().toLowerCase();
+		return groupedModels(props.models.filter((model) => !q || modelMatchesQuery(model, q)).slice(0, 100));
+	});
+	const isCurrent = (model: ModelInfoDto) => selected().has(modelKey(model));
+
+	return (
+		<Modal title={props.title} onDismiss={props.onClose}>
+			<div class="field" style={{ "margin-bottom": "8px" }}>
+				<input
+					type="text"
+					placeholder="search models…"
+					value={filter()}
+					onInput={(e) => setFilter(e.currentTarget.value)}
+				/>
+			</div>
+			<div class="model-list" style={{ "max-height": "320px" }}>
+				<Show when={filteredGroups().length > 0} fallback={<p class="muted small">No matching models.</p>}>
+					<For each={filteredGroups()}>
+						{(group) => (
+							<section class="model-provider-group">
+								<div class="model-provider-heading">{group.provider}</div>
+								<For each={group.models}>
+									{(model) => (
+										<button
+											type="button"
+											class="model-row"
+											classList={{ current: isCurrent(model) }}
+											onClick={() => props.onPick(model)}
+										>
+											<span class="model-current">{isCurrent(model) ? "✓" : ""}</span>
+											<span class="model-id">{model.id}</span>
+											<Show when={model.name}>
+												<span class="model-name">{model.name}</span>
+											</Show>
+											<span class="model-provider-badge">{model.provider}</span>
+											<Show when={model.reasoning}>
+												<span class="model-reasoning">think</span>
+											</Show>
+										</button>
+									)}
+								</For>
+							</section>
+						)}
+					</For>
+				</Show>
+			</div>
+		</Modal>
+	);
+}
 
 export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	const [error, setError] = createSignal<string>();
+	const [warnings, setWarnings] = createSignal<string[]>([]);
 	const [saved, setSaved] = createSignal(false);
+	const [modelPickerTarget, setModelPickerTarget] = createSignal<ModelPickerTarget>();
+	const [editingAgent, setEditingAgent] = createSignal<string>();
 	const [notificationPermission, setNotificationPermission] = createSignal<NotificationPermission | "unsupported">(
 		typeof Notification === "undefined" ? "unsupported" : Notification.permission,
 	);
@@ -27,6 +135,26 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
 			return undefined;
+		}
+	});
+
+	const [availableModels] = createResource(settings, async () => {
+		try {
+			const { models } = await api.settingsModels();
+			return models;
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+			return [];
+		}
+	});
+
+	const [agentTypes] = createResource(settings, async () => {
+		try {
+			const { agentTypes } = await api.agentTypes();
+			return agentTypes;
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+			return [];
 		}
 	});
 
@@ -46,10 +174,12 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 
 	async function save(update: Partial<SettingsDto>) {
 		setError(undefined);
+		setWarnings([]);
 		setSaved(false);
 		try {
 			const next = await api.saveSettings(update);
 			mutate(next);
+			setWarnings(next.warnings ?? []);
 			setSaved(true);
 			setTimeout(() => setSaved(false), 2000);
 		} catch (err) {
@@ -57,6 +187,14 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 			setError(err instanceof Error ? err.message : String(err));
 			await refetch();
 		}
+	}
+
+	async function saveAgentModels(agentName: string, nextList: string[]) {
+		await save({ agentModels: { [agentName]: nextList } });
+	}
+
+	function currentAgentModels(agentName: string): string[] {
+		return settings()?.agentModels?.[agentName] ?? [];
 	}
 
 	async function requestNotifications() {
@@ -78,6 +216,11 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 
 				<Show when={error()}>
 					<div class="settings-error">{error()}</div>
+				</Show>
+				<Show when={warnings().length > 0}>
+					<div class="settings-warning">
+						<For each={warnings()}>{(warning) => <div>{warning}</div>}</For>
+					</div>
 				</Show>
 				<Show when={saved()}>
 					<p class="muted small" style={{ "margin-bottom": "16px" }}>
@@ -101,27 +244,13 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										<span class="hint">used by new sessions; validated against configured providers</span>
 									</span>
 									<span class="setting-control">
-										<input
-											type="text"
-											value={
-												current().defaultProvider && current().defaultModel
-													? `${current().defaultProvider}/${current().defaultModel}`
-													: ""
-											}
-											placeholder="provider/model-id"
-											onChange={(e) => {
-												const value = e.currentTarget.value.trim();
-												const slash = value.indexOf("/");
-												if (slash === -1) {
-													setError(`"${value}" is not provider/model-id format`);
-													return;
-												}
-												save({
-													defaultProvider: value.slice(0, slash),
-													defaultModel: value.slice(slash + 1),
-												});
-											}}
-										/>
+										<button
+											type="button"
+											class="btn btn-small model-picker-button"
+											onClick={() => setModelPickerTarget({ kind: "default" })}
+										>
+											{defaultModelLabel(current())}
+										</button>
 									</span>
 								</div>
 								<div class="setting-row">
@@ -136,6 +265,166 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										>
 											<For each={THINKING_LEVELS}>{(level) => <option value={level}>{level}</option>}</For>
 										</select>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">transport</span>
+										<span class="hint">preferred model transport for new sessions</span>
+									</span>
+									<span class="setting-control">
+										<select
+											value={current().transport ?? "sse"}
+											onChange={(e) =>
+												save({ transport: e.currentTarget.value as "sse" | "websocket" | "auto" })
+											}
+										>
+											<For each={[...TRANSPORTS]}>
+												{(transport) => <option value={transport}>{transport}</option>}
+											</For>
+										</select>
+									</span>
+								</div>
+							</section>
+
+							<section class="settings-section">
+								<h2>agent models</h2>
+								<p class="muted small" style={{ "margin-bottom": "8px" }}>
+									Per-agent fallback lists. First available model wins; empty lists revert to the default
+									model.
+								</p>
+								<Show
+									when={(agentTypes() ?? []).length > 0}
+									fallback={<p class="muted small">No agent definitions found.</p>}
+								>
+									<For each={agentTypes() ?? []}>
+										{(agent: AgentTypeDto) => {
+											const fallbackList = () => current().agentModels?.[agent.name] ?? [];
+											return (
+												<div class="agent-model-row">
+													<div class="agent-model-summary">
+														<span class="agent-model-name">{agent.name}</span>
+														<span class="agent-model-description">{agent.description}</span>
+													</div>
+													<div class="agent-model-fallbacks">
+														<Show
+															when={fallbackList().length > 0}
+															fallback={<span class="muted small">default</span>}
+														>
+															<For each={fallbackList()}>
+																{(entry, index) => (
+																	<span class="agent-model-chip">
+																		{index() + 1}. {entry}
+																	</span>
+																)}
+															</For>
+														</Show>
+													</div>
+													<button
+														type="button"
+														class="btn btn-small agent-model-edit"
+														onClick={() =>
+															setEditingAgent(editingAgent() === agent.name ? undefined : agent.name)
+														}
+													>
+														{editingAgent() === agent.name ? "done" : "edit"}
+													</button>
+													<Show when={editingAgent() === agent.name}>
+														<div class="agent-model-editor">
+															<Show
+																when={fallbackList().length > 0}
+																fallback={<p class="muted small">Using the default model.</p>}
+															>
+																<For each={fallbackList()}>
+																	{(entry, index) => (
+																		<div class="agent-model-entry">
+																			<span>{entry}</span>
+																			<div class="agent-model-entry-actions">
+																				<button
+																					type="button"
+																					class="btn btn-small"
+																					disabled={index() === 0}
+																					onClick={() =>
+																						void saveAgentModels(
+																							agent.name,
+																							moveItem(fallbackList(), index(), -1),
+																						)
+																					}
+																				>
+																					↑
+																				</button>
+																				<button
+																					type="button"
+																					class="btn btn-small"
+																					disabled={index() === fallbackList().length - 1}
+																					onClick={() =>
+																						void saveAgentModels(
+																							agent.name,
+																							moveItem(fallbackList(), index(), 1),
+																						)
+																					}
+																				>
+																					↓
+																				</button>
+																				<button
+																					type="button"
+																					class="btn btn-small"
+																					onClick={() =>
+																						void saveAgentModels(
+																							agent.name,
+																							fallbackList().filter((_, i) => i !== index()),
+																						)
+																					}
+																				>
+																					×
+																				</button>
+																			</div>
+																		</div>
+																	)}
+																</For>
+															</Show>
+															<button
+																type="button"
+																class="btn btn-small"
+																onClick={() =>
+																	setModelPickerTarget({ kind: "agent", agentName: agent.name })
+																}
+															>
+																add model…
+															</button>
+														</div>
+													</Show>
+												</div>
+											);
+										}}
+									</For>
+								</Show>
+							</section>
+
+							<section class="settings-section">
+								<h2>images</h2>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">auto-resize images</span>
+										<span class="hint">resize image inputs before sending them to providers</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().imageAutoResize !== false}
+											onChange={(value) => save({ imageAutoResize: value })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">block images</span>
+										<span class="hint">prevent image inputs from being sent to providers</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().blockImages === true}
+											onChange={(value) => save({ blockImages: value })}
+										/>
 									</span>
 								</div>
 							</section>
@@ -177,6 +466,46 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 							</section>
 
 							<section class="settings-section">
+								<h2>behavior</h2>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">skill slash commands</span>
+										<span class="hint">register skills as slash commands in new sessions</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().enableSkillCommands !== false}
+											onChange={(value) => save({ enableSkillCommands: value })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">auto-load nested context</span>
+										<span class="hint">load nested AGENTS.md/CLAUDE.md when tools enter subdirectories</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().autoLoadNestedContext !== false}
+											onChange={(value) => save({ autoLoadNestedContext: value })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">hide thinking blocks</span>
+										<span class="hint">hide raw thinking blocks in rendered transcripts</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().hideThinkingBlock === true}
+											onChange={(value) => save({ hideThinkingBlock: value })}
+										/>
+									</span>
+								</div>
+							</section>
+
+							<section class="settings-section">
 								<h2>reliability</h2>
 								<div class="setting-row">
 									<span class="setting-label">
@@ -184,13 +513,10 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										<span class="hint">summarize old context when the window fills</span>
 									</span>
 									<span class="setting-control">
-										<select
-											value={current().compactionEnabled === false ? "off" : "on"}
-											onChange={(e) => save({ compactionEnabled: e.currentTarget.value === "on" })}
-										>
-											<option value="on">on</option>
-											<option value="off">off</option>
-										</select>
+										<OnOffSelect
+											value={current().compactionEnabled !== false}
+											onChange={(value) => save({ compactionEnabled: value })}
+										/>
 									</span>
 								</div>
 								<div class="setting-row">
@@ -199,16 +525,17 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										<span class="hint">retry transient stream errors (rate limits, 5xx)</span>
 									</span>
 									<span class="setting-control">
-										<select
-											value={current().retryEnabled === false ? "off" : "on"}
-											onChange={(e) => save({ retryEnabled: e.currentTarget.value === "on" })}
-										>
-											<option value="on">on</option>
-											<option value="off">off</option>
-										</select>
+										<OnOffSelect
+											value={current().retryEnabled !== false}
+											onChange={(value) => save({ retryEnabled: value })}
+										/>
 									</span>
 								</div>
 							</section>
+
+							<p class="muted small settings-footnote">
+								TUI-only settings (theme, cursor, editor) are managed in the terminal /settings menu.
+							</p>
 						</>
 					)}
 				</Show>
@@ -300,6 +627,34 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 
 				<footer>dreb{version() ? ` v${version()}` : ""} · dashboard</footer>
 			</main>
+			<Show when={modelPickerTarget()}>
+				{(target) => (
+					<ModelPickerModal
+						title={target().kind === "default" ? "select default model" : `add model for ${target().agentName}`}
+						models={availableModels() ?? []}
+						selected={
+							target().kind === "default"
+								? settings()?.defaultProvider && settings()?.defaultModel
+									? [`${settings()!.defaultProvider}/${settings()!.defaultModel}`]
+									: []
+								: currentAgentModels(target().agentName)
+						}
+						onClose={() => setModelPickerTarget(undefined)}
+						onPick={(model) => {
+							const active = target();
+							setModelPickerTarget(undefined);
+							if (active.kind === "default") {
+								void save({ defaultProvider: model.provider, defaultModel: model.id });
+								return;
+							}
+							const entry = modelKey(model);
+							const currentList = currentAgentModels(active.agentName);
+							if (currentList.includes(entry)) return;
+							void saveAgentModels(active.agentName, [...currentList, entry]);
+						}}
+					/>
+				)}
+			</Show>
 		</div>
 	);
 }
