@@ -12,27 +12,42 @@
  */
 
 import * as crypto from "node:crypto";
+import { basename } from "node:path";
 import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../../cli/args.js";
 import { VERSION } from "../../config.js";
 import type { AgentSession } from "../../core/agent-session.js";
+import { DailyCostTracker } from "../../core/daily-cost-tracker.js";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
 	ExtensionWidgetOptions,
 } from "../../core/extensions/index.js";
+import { getGitBranch } from "../../core/git-branch.js";
 import type { ModelRegistry } from "../../core/model-registry.js";
 import { parseModelPattern } from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
-import type { SettingsManager } from "../../core/settings-manager.js";
+import type { SettingsManager, TransportSetting } from "../../core/settings-manager.js";
+import { TabTitleGenerator } from "../../core/tab-title.js";
+import {
+	type BackgroundAgentInfo,
+	discoverAgentTypes,
+	getBackgroundAgents,
+	rehydrateBackgroundAgentsFromDisk,
+} from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
+	RpcAgentTypeInfo,
+	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
+	RpcPendingMessages,
+	RpcResources,
 	RpcResponse,
+	RpcScopedModel,
 	RpcSessionInfo,
 	RpcSessionState,
 	RpcSettingsSnapshot,
@@ -74,6 +89,78 @@ export function getPerformanceStatsData(session: Pick<AgentSession, "getPerforma
 	return { models: tracker.getAllRollingAverages() };
 }
 
+export function getScopedModelsForRpc(session: Pick<AgentSession, "scopedModels">): RpcScopedModel[] {
+	return session.scopedModels.map(({ model, thinkingLevel }) => ({
+		provider: model.provider,
+		id: model.id,
+		name: model.name,
+		reasoning: model.reasoning,
+		thinkingLevel,
+	}));
+}
+
+export function getResourcesForRpc(
+	session: Pick<AgentSession, "resourceLoader" | "getFilteredSkills" | "promptTemplates">,
+): RpcResources {
+	const extensionsResult = session.resourceLoader.getExtensions();
+	return {
+		contextFiles: session.resourceLoader.getAgentsFiles().agentsFiles.map((file) => ({ path: file.path })),
+		skills: session.getFilteredSkills().map((skill) => ({ name: skill.name, description: skill.description })),
+		extensions: extensionsResult.extensions.map((extension) => ({
+			path: extension.path,
+			name: extension.sourceInfo.source || basename(extension.path),
+		})),
+		promptTemplates: session.promptTemplates.map((template) => ({
+			name: template.name,
+			description: template.description,
+		})),
+		systemPromptPresent:
+			session.resourceLoader.getSystemPrompt() !== undefined ||
+			session.resourceLoader.getAppendSystemPrompt().length > 0,
+	};
+}
+
+export function getPendingMessagesForRpc(
+	session: Pick<
+		AgentSession,
+		"getSteeringMessages" | "getFollowUpMessages" | "getSteeringMessagePayloads" | "getFollowUpMessagePayloads"
+	>,
+): RpcPendingMessages {
+	return {
+		steering: [...session.getSteeringMessages()],
+		followUp: [...session.getFollowUpMessages()],
+		steeringMessages: session.getSteeringMessagePayloads().map((message) => ({
+			text: message.text,
+			images: message.images ? [...message.images] : undefined,
+		})),
+		followUpMessages: session.getFollowUpMessagePayloads().map((message) => ({
+			text: message.text,
+			images: message.images ? [...message.images] : undefined,
+		})),
+	};
+}
+
+export function getStateForRpc(session: AgentSession, modelFallbackMessage?: string): RpcSessionState {
+	return {
+		model: session.model,
+		scopedModels: getScopedModelsForRpc(session),
+		usingSubscription: session.model ? session.modelRegistry.isUsingOAuth(session.model) : false,
+		thinkingLevel: session.thinkingLevel,
+		isStreaming: session.isStreaming,
+		isCompacting: session.isCompacting,
+		steeringMode: session.steeringMode,
+		followUpMode: session.followUpMode,
+		sessionFile: session.sessionFile,
+		sessionId: session.sessionId,
+		sessionName: session.sessionName,
+		autoCompactionEnabled: session.autoCompactionEnabled,
+		messageCount: session.messages.length,
+		pendingMessageCount: session.pendingMessageCount,
+		contextUsage: session.getContextUsage(),
+		modelFallbackMessage,
+	};
+}
+
 /**
  * Handle the `delete_session` RPC command: wires the active session into the core
  * {@link SessionManager.deleteSession} guard and maps the result to a discriminated
@@ -103,6 +190,30 @@ export async function listAllSessionsForRpc(): Promise<RpcSessionInfo[]> {
 	return sessions.map(toRpcSessionInfo);
 }
 
+/**
+ * Map a {@link BackgroundAgentInfo} registry entry to the RPC DTO, converting the
+ * epoch-ms timestamp to an ISO string. Shared shape guard for `list_background_agents`.
+ */
+export function toRpcBackgroundAgentInfo(a: Readonly<BackgroundAgentInfo>): RpcBackgroundAgentInfo {
+	return {
+		agentId: a.agentId,
+		agentType: a.agentType,
+		taskSummary: a.taskSummary,
+		startedAt: new Date(a.startedAt).toISOString(),
+		status: a.status,
+		sessionDir: a.sessionDir,
+		sessionFile: a.sessionFile,
+		cwd: a.cwd,
+	};
+}
+
+/** Discover available subagent types for RPC clients, sorted by display name. */
+export function listAgentTypesForRpc(cwd: string): RpcAgentTypeInfo[] {
+	return [...discoverAgentTypes(cwd).values()]
+		.map(({ name, description }) => ({ name, description }))
+		.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** The slice of SettingsManager the settings RPC handlers need. */
 type SettingsReader = Pick<
 	SettingsManager,
@@ -113,6 +224,13 @@ type SettingsReader = Pick<
 	| "getFollowUpMode"
 	| "getCompactionEnabled"
 	| "getRetryEnabled"
+	| "getImageAutoResize"
+	| "getBlockImages"
+	| "getEnableSkillCommands"
+	| "getAutoLoadNestedContext"
+	| "getTransport"
+	| "getHideThinkingBlock"
+	| "getAgentModels"
 >;
 
 type SettingsWriter = SettingsReader &
@@ -124,6 +242,15 @@ type SettingsWriter = SettingsReader &
 		| "setFollowUpMode"
 		| "setCompactionEnabled"
 		| "setRetryEnabled"
+		| "setImageAutoResize"
+		| "setBlockImages"
+		| "setEnableSkillCommands"
+		| "setAutoLoadNestedContext"
+		| "setTransport"
+		| "setHideThinkingBlock"
+		| "setAgentModelsForAgent"
+		| "removeAgentModelsForAgent"
+		| "hasProjectAgentModelOverride"
 		| "hasGlobalSettingsLoadError"
 		| "flush"
 		| "drainErrors"
@@ -145,6 +272,13 @@ export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsS
 		followUpMode: settingsManager.getFollowUpMode(),
 		compactionEnabled: settingsManager.getCompactionEnabled(),
 		retryEnabled: settingsManager.getRetryEnabled(),
+		imageAutoResize: settingsManager.getImageAutoResize(),
+		blockImages: settingsManager.getBlockImages(),
+		enableSkillCommands: settingsManager.getEnableSkillCommands(),
+		autoLoadNestedContext: settingsManager.getAutoLoadNestedContext(),
+		transport: settingsManager.getTransport(),
+		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
+		agentModels: settingsManager.getAgentModels(),
 	};
 }
 
@@ -156,9 +290,50 @@ const SETTINGS_UPDATE_KEYS = [
 	"followUpMode",
 	"compactionEnabled",
 	"retryEnabled",
+	"imageAutoResize",
+	"blockImages",
+	"enableSkillCommands",
+	"autoLoadNestedContext",
+	"transport",
+	"hideThinkingBlock",
+	"agentModels",
 ] as const;
 
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
+const TRANSPORT_SETTINGS = ["sse", "websocket", "auto"] as const satisfies readonly TransportSetting[];
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const proto = Object.getPrototypeOf(value);
+	return proto === Object.prototype || proto === null;
+}
+
+function validateAgentModels(value: unknown): { ok: true } | { ok: false; error: string } {
+	if (!isPlainObject(value)) {
+		return {
+			ok: false,
+			error: "Invalid agentModels: must be a plain object mapping agent names to model fallback arrays",
+		};
+	}
+	for (const [agentName, models] of Object.entries(value)) {
+		if (!Array.isArray(models)) {
+			return {
+				ok: false,
+				error: `Invalid agentModels[${JSON.stringify(agentName)}]: expected an array of non-empty strings`,
+			};
+		}
+		const invalidModel = models.find((model) => typeof model !== "string" || model.trim().length === 0);
+		if (invalidModel !== undefined) {
+			return {
+				ok: false,
+				error: `Invalid agentModels[${JSON.stringify(agentName)}]: expected an array of non-empty strings`,
+			};
+		}
+	}
+	return { ok: true };
+}
 
 /**
  * Simple promise-based mutex that serializes settings writes. RPC commands are dispatched
@@ -209,7 +384,7 @@ export async function setSettingsForRpc(
 	settingsManager: SettingsWriter,
 	modelRegistry: Pick<ModelRegistry, "getAvailable">,
 	update: RpcSettingsUpdate | undefined,
-): Promise<{ ok: true; settings: RpcSettingsSnapshot } | { ok: false; error: string }> {
+): Promise<{ ok: true; settings: RpcSettingsSnapshot; warnings?: string[] } | { ok: false; error: string }> {
 	// --- Validate everything first; apply nothing on any failure ---
 	if (update === undefined || update === null || typeof update !== "object" || Array.isArray(update)) {
 		return { ok: false, error: "set_settings requires a settings object" };
@@ -247,10 +422,37 @@ export async function setSettingsForRpc(
 		}
 	}
 
-	for (const key of ["compactionEnabled", "retryEnabled"] as const) {
+	for (const key of [
+		"compactionEnabled",
+		"retryEnabled",
+		"imageAutoResize",
+		"blockImages",
+		"enableSkillCommands",
+		"autoLoadNestedContext",
+		"hideThinkingBlock",
+	] as const) {
 		const value = update[key];
 		if (value !== undefined && typeof value !== "boolean") {
 			return { ok: false, error: `Invalid ${key}: ${JSON.stringify(value)}. Must be a boolean` };
+		}
+	}
+
+	if (update.transport !== undefined) {
+		if (
+			typeof update.transport !== "string" ||
+			!(TRANSPORT_SETTINGS as readonly string[]).includes(update.transport)
+		) {
+			return {
+				ok: false,
+				error: `Invalid transport: ${JSON.stringify(update.transport)}. Valid values: ${TRANSPORT_SETTINGS.join(", ")}`,
+			};
+		}
+	}
+
+	if (update.agentModels !== undefined) {
+		const validation = validateAgentModels(update.agentModels);
+		if (!validation.ok) {
+			return validation;
 		}
 	}
 
@@ -314,6 +516,42 @@ export async function setSettingsForRpc(
 		if (update.retryEnabled !== undefined) {
 			settingsManager.setRetryEnabled(update.retryEnabled);
 		}
+		if (update.imageAutoResize !== undefined) {
+			settingsManager.setImageAutoResize(update.imageAutoResize);
+		}
+		if (update.blockImages !== undefined) {
+			settingsManager.setBlockImages(update.blockImages);
+		}
+		if (update.enableSkillCommands !== undefined) {
+			settingsManager.setEnableSkillCommands(update.enableSkillCommands);
+		}
+		if (update.autoLoadNestedContext !== undefined) {
+			settingsManager.setAutoLoadNestedContext(update.autoLoadNestedContext);
+		}
+		if (update.transport !== undefined) {
+			settingsManager.setTransport(update.transport);
+		}
+		if (update.hideThinkingBlock !== undefined) {
+			settingsManager.setHideThinkingBlock(update.hideThinkingBlock);
+		}
+
+		const warnings: string[] = [];
+		if (update.agentModels !== undefined) {
+			for (const [agentName, models] of Object.entries(update.agentModels)) {
+				if (settingsManager.hasProjectAgentModelOverride(agentName)) {
+					warnings.push(
+						`A project-level agentModels override for ${JSON.stringify(agentName)} (.dreb/settings.json) ` +
+							"takes precedence — this change to global settings will have no effect. " +
+							"Edit the project settings file to change it.",
+					);
+				}
+				if (models.length > 0) {
+					settingsManager.setAgentModelsForAgent(agentName, models);
+				} else {
+					settingsManager.removeAgentModelsForAgent(agentName);
+				}
+			}
+		}
 
 		// Ensure durability and surface write errors instead of losing them.
 		await settingsManager.flush();
@@ -323,7 +561,9 @@ export async function setSettingsForRpc(
 			return { ok: false as const, error: `Failed to persist settings: ${detail}` };
 		}
 
-		return { ok: true as const, settings: getSettingsForRpc(settingsManager) };
+		return warnings.length > 0
+			? { ok: true as const, settings: getSettingsForRpc(settingsManager), warnings }
+			: { ok: true as const, settings: getSettingsForRpc(settingsManager) };
 	});
 }
 
@@ -494,6 +734,15 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		return { id, type: "response", command, success: false, error: message };
 	};
 
+	if (session.sessionFile && session.messages.length > 0) {
+		const rehydratedCount = rehydrateBackgroundAgentsFromDisk(session.sessionFile);
+		if (rehydratedCount > 0) {
+			console.error(
+				`[rpc] Rehydrated ${rehydratedCount} background subagent${rehydratedCount === 1 ? "" : "s"} from disk`,
+			);
+		}
+	}
+
 	// Pending extension UI requests waiting for response
 	const pendingExtensionRequests = new Map<
 		string,
@@ -502,6 +751,8 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 
 	// Shutdown request flag
 	let shutdownRequested = false;
+	let dailyCostTracker: DailyCostTracker | undefined;
+	let dailyCostTrackerPrimed = false;
 
 	/** Helper for dialog methods with signal/timeout support */
 	function createDialogPromise<T>(
@@ -744,8 +995,55 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		},
 	});
 
+	const getDailyCost = async (): Promise<number> => {
+		dailyCostTracker ??= new DailyCostTracker();
+		if (!dailyCostTrackerPrimed) {
+			await dailyCostTracker.refresh();
+			dailyCostTrackerPrimed = true;
+		}
+		return dailyCostTracker.getDailyCost();
+	};
+
+	const cwd = session.sessionManager.getCwd();
+	const tabTitleSettings = session.settingsManager.getTabTitleSettings();
+	const tabTitleGenerator =
+		!session.sessionName && tabTitleSettings?.enabled !== false
+			? new TabTitleGenerator(tabTitleSettings, {
+					setTitle: () => {},
+					setSessionName: (name) => {
+						if (!session.sessionName) {
+							session.setSessionName(name);
+						}
+					},
+					getMessages: () => session.messages,
+					getModel: () => session.model,
+					getModelRegistry: () => session.modelRegistry,
+					getProvider: () => session.model?.provider,
+					getAgentModelsOverride: (name) => session.settingsManager.getAgentModelsForAgent(name),
+					getBranch: () => getGitBranch(cwd),
+					getRepo: () => basename(cwd),
+					getCwd: () => cwd,
+					onError: (err) => {
+						console.error(
+							`[rpc] Tab title auto-generation failed: ${err instanceof Error ? err.message : String(err)}`,
+						);
+					},
+				})
+			: undefined;
+
 	// Output all agent events as JSON
 	session.subscribe((event) => {
+		if (tabTitleGenerator && !session.sessionName) {
+			if (event.type === "tool_execution_end") {
+				tabTitleGenerator.onToolEnd({
+					toolName: event.toolName,
+					isError: event.isError,
+					result: event.result,
+				});
+			} else if (event.type === "message_end") {
+				tabTitleGenerator.onMessageEnd(event.message);
+			}
+		}
 		output(event);
 	});
 
@@ -800,22 +1098,19 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			// =================================================================
 
 			case "get_state": {
-				const state: RpcSessionState = {
-					model: session.model,
-					thinkingLevel: session.thinkingLevel,
-					isStreaming: session.isStreaming,
-					isCompacting: session.isCompacting,
-					steeringMode: session.steeringMode,
-					followUpMode: session.followUpMode,
-					sessionFile: session.sessionFile,
-					sessionId: session.sessionId,
-					sessionName: session.sessionName,
-					autoCompactionEnabled: session.autoCompactionEnabled,
-					messageCount: session.messages.length,
-					pendingMessageCount: session.pendingMessageCount,
-					modelFallbackMessage,
-				};
-				return success(id, "get_state", state);
+				return success(id, "get_state", getStateForRpc(session, modelFallbackMessage));
+			}
+
+			case "get_resources": {
+				return success(id, "get_resources", getResourcesForRpc(session));
+			}
+
+			case "get_git_branch": {
+				return success(id, "get_git_branch", { branch: getGitBranch(session.sessionManager.getCwd()) });
+			}
+
+			case "get_daily_cost": {
+				return success(id, "get_daily_cost", { cost: await getDailyCost() });
 			}
 
 			// =================================================================
@@ -923,6 +1218,14 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "set_follow_up_mode");
 			}
 
+			case "get_pending_messages": {
+				return success(id, "get_pending_messages", getPendingMessagesForRpc(session));
+			}
+
+			case "clear_pending_messages": {
+				return success(id, "clear_pending_messages", session.clearQueue());
+			}
+
 			// =================================================================
 			// Compaction
 			// =================================================================
@@ -935,6 +1238,11 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			case "set_auto_compaction": {
 				session.setAutoCompactionEnabled(command.enabled);
 				return success(id, "set_auto_compaction");
+			}
+
+			case "abort_compaction": {
+				session.abortCompaction();
+				return success(id, "abort_compaction");
 			}
 
 			// =================================================================
@@ -1066,6 +1374,22 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			// =================================================================
+			// Background agents
+			// =================================================================
+
+			case "list_background_agents": {
+				return success(id, "list_background_agents", {
+					agents: getBackgroundAgents().map(toRpcBackgroundAgentInfo),
+				});
+			}
+
+			case "list_agent_types": {
+				return success(id, "list_agent_types", {
+					agentTypes: listAgentTypesForRpc(session.sessionManager.getCwd()),
+				});
+			}
+
+			// =================================================================
 			// Settings (persistent defaults)
 			// =================================================================
 
@@ -1078,7 +1402,13 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				if (!result.ok) {
 					return error(id, "set_settings", result.error);
 				}
-				return success(id, "set_settings", result.settings);
+				return success(
+					id,
+					"set_settings",
+					result.warnings && result.warnings.length > 0
+						? { ...result.settings, warnings: result.warnings }
+						: result.settings,
+				);
 			}
 
 			// =================================================================
@@ -1141,6 +1471,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			await currentRunner.emit({ type: "session_shutdown" });
 		}
 
+		dailyCostTracker?.dispose();
 		detachInput();
 		process.stdin.pause();
 		process.exit(0);

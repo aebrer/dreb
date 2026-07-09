@@ -1,0 +1,13 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"lib": ["ES2024", "DOM", "DOM.Iterable"],
+		"jsx": "preserve",
+		"jsxImportSource": "solid-js",
+		"types": []
+	},
+	"include": ["src/client/**/*.ts", "src/client/**/*.tsx", "src/shared/**/*.ts"]
+}

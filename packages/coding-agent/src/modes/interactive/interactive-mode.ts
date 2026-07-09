@@ -71,6 +71,7 @@ import { type SessionContext, SessionManager } from "../../core/session-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import { restoreStderr, type StderrCallback, takeOverStderr } from "../../core/stderr-guard.js";
+import { TabTitleGenerator } from "../../core/tab-title.js";
 import { resolveThinkingDisplay } from "../../core/thinking.js";
 import { resolveToCwd } from "../../core/tools/path-utils.js";
 import { abortBackgroundAgents, discoverAgentTypes, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
@@ -116,7 +117,6 @@ import { ToolExecutionComponent } from "./components/tool-execution.js";
 import { TreeSelectorComponent } from "./components/tree-selector.js";
 import { UserMessageComponent } from "./components/user-message.js";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.js";
-import { TabTitleGenerator } from "./tab-title.js";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -713,7 +713,7 @@ export class InteractiveMode {
 		this.tabTitleGenerator = new TabTitleGenerator(settings, {
 			setTitle: (title) => this.ui.terminal.setTitle(title),
 			setSessionName: (name) => {
-				this.sessionManager.appendSessionInfo(name);
+				this.session.setSessionName(name);
 			},
 			getMessages: () => this.session.state.messages,
 			getModel: () => this.session.model,

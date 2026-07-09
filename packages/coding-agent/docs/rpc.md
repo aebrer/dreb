@@ -6,10 +6,10 @@ RPC mode enables headless operation of the coding agent via a JSON protocol over
 
 ### Running the agent child as a specific OS user
 
-When using the `RpcClient` from `@dreb/coding-agent`, `RpcClientOptions` accepts optional `uid` and `gid` fields. When set, they are forwarded directly to `child_process.spawn`, so the agent child (and every subprocess it spawns, including `bash`) runs under that OS user/group. When unset they are omitted entirely, leaving spawn behavior unchanged.
+When using the `RpcClient` from `@dreb/coding-agent/rpc`, `RpcClientOptions` accepts optional `uid` and `gid` fields. When set, they are forwarded directly to `child_process.spawn`, so the agent child (and every subprocess it spawns, including `bash`) runs under that OS user/group. When unset they are omitted entirely, leaving spawn behavior unchanged.
 
 ```ts
-import { RpcClient } from "@dreb/coding-agent";
+import { RpcClient } from "@dreb/coding-agent/rpc";
 
 // Parent must hold CAP_SETUID / CAP_SETGID (e.g. run as root) for this to succeed.
 const client = new RpcClient({ cwd: "/srv/users/alice", uid: 4001, gid: 4001 });
@@ -187,6 +187,10 @@ Response:
   "success": true,
   "data": {
     "model": {...},
+    "scopedModels": [
+      {"provider": "anthropic", "id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5", "reasoning": true, "thinkingLevel": "high"}
+    ],
+    "usingSubscription": false,
     "thinkingLevel": "medium",
     "isStreaming": false,
     "isCompacting": false,
@@ -197,12 +201,79 @@ Response:
     "sessionName": "my-feature-work",
     "autoCompactionEnabled": true,
     "messageCount": 5,
-    "pendingMessageCount": 0
+    "pendingMessageCount": 0,
+    "contextUsage": {
+      "tokens": 60000,
+      "contextWindow": 200000,
+      "percent": 30
+    }
   }
 }
 ```
 
-The `model` field is a full [Model](#model) object or `null`. The `sessionName` field is the display name set via `set_session_name`, or omitted if not set.
+The `model` field is a full [Model](#model) object or `null`. `scopedModels` is the runtime model scope (from settings `enabledModels` / CLI `--models`) in the same order used by model cycling; it is an empty array when no scope is active. `usingSubscription` is true when the active model is using OAuth subscription credentials, matching the TUI footer's `(sub)` cost indicator. The `sessionName` field is the display name set via `set_session_name` or auto-naming, or omitted if not set.
+
+`contextUsage` carries the same numbers the TUI footer shows, computed by the session itself — clients must render these rather than deriving their own estimate. `tokens` and `percent` are `null` when usage is unknown (right after compaction, before the next LLM response). The whole field is omitted when no model is set or the model has no context window.
+
+#### get_resources
+
+Get loaded resource metadata for the current session. This returns paths/names/descriptions only — it does not include context file contents, prompt bodies, skill bodies, or system prompt text.
+
+```json
+{"type": "get_resources"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_resources",
+  "success": true,
+  "data": {
+    "contextFiles": [{"path": "/repo/AGENTS.md"}],
+    "skills": [{"name": "review-code", "description": "Review code"}],
+    "extensions": [{"name": "my-extension", "path": "/repo/.dreb/extensions/my-extension.ts"}],
+    "promptTemplates": [{"name": "plan", "description": "Create an implementation plan"}],
+    "systemPromptPresent": true
+  }
+}
+```
+
+#### get_git_branch
+
+Get the current git branch for the session cwd. Returns `null` outside a git repository and `"detached"` for detached HEAD.
+
+```json
+{"type": "get_git_branch"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_git_branch",
+  "success": true,
+  "data": {"branch": "feature/dashboard"}
+}
+```
+
+#### get_daily_cost
+
+Get the same-day aggregate cost across all session files. The RPC process scans once on first call so the first response is current, then returns the cached value (refreshed periodically by the tracker).
+
+```json
+{"type": "get_daily_cost"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_daily_cost",
+  "success": true,
+  "data": {"cost": 1.23}
+}
+```
 
 #### get_messages
 
@@ -242,6 +313,29 @@ Response contains the full [Model](#model) object:
   "success": true,
   "data": {...}
 }
+```
+
+#### resolve_model
+
+Resolve a model pattern using the same matching rules as the interactive `/model` command, without switching the current session. Returns `null` if no model matches; a warning may be included when the match required fallback behavior.
+
+```json
+{"type": "resolve_model", "pattern": "sonnet"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "resolve_model",
+  "success": true,
+  "data": {"model": {...}, "warning": "matched provider/model-id"}
+}
+```
+
+If no model matches:
+```json
+{"type": "response", "command": "resolve_model", "success": true, "data": null}
 ```
 
 #### cycle_model
@@ -285,6 +379,46 @@ Response contains an array of full [Model](#model) objects:
   "data": {
     "models": [...]
   }
+}
+```
+
+### Buddy
+
+Buddy commands run inside the agent process so provider credentials never leave the RPC child. They are exposed for clients that choose to render the terminal companion; most non-terminal clients can ignore them.
+
+#### buddy_hatch
+
+Create or load the current buddy state.
+
+```json
+{"type": "buddy_hatch"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "buddy_hatch",
+  "success": true,
+  "data": {"state": {...}}
+}
+```
+
+#### buddy_reroll
+
+Reroll buddy appearance/state.
+
+```json
+{"type": "buddy_reroll"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "buddy_reroll",
+  "success": true,
+  "data": {"state": {...}}
 }
 ```
 
@@ -361,6 +495,32 @@ Response:
 {"type": "response", "command": "set_follow_up_mode", "success": true}
 ```
 
+#### get_pending_messages
+
+Return queued steering and follow-up messages without clearing them. `steering` and `followUp` are the text-only compatibility view; `steeringMessages` and `followUpMessages` include inline image attachments for clients that need to restore queued multimodal turns.
+
+```json
+{"type": "get_pending_messages"}
+```
+
+Response:
+```json
+{"type": "response", "command": "get_pending_messages", "success": true, "data": {"steering": ["steer text"], "followUp": ["follow-up text"], "steeringMessages": [{"text": "steer text", "images": [{"type": "image", "data": "...", "mimeType": "image/png"}]}], "followUpMessages": [{"text": "follow-up text"}]}}
+```
+
+#### clear_pending_messages
+
+Clear queued steering and follow-up messages, returning the cleared payloads. This mirrors the TUI restore-to-editor flow; multimodal clients should use `steeringMessages`/`followUpMessages` so inline images are not lost.
+
+```json
+{"type": "clear_pending_messages"}
+```
+
+Response:
+```json
+{"type": "response", "command": "clear_pending_messages", "success": true, "data": {"steering": ["steer text"], "followUp": ["follow-up text"], "steeringMessages": [{"text": "steer text", "images": [{"type": "image", "data": "...", "mimeType": "image/png"}]}], "followUpMessages": [{"text": "follow-up text"}]}}
+```
+
 ### Compaction
 
 #### compact
@@ -402,6 +562,19 @@ Enable or disable automatic compaction when context is nearly full.
 Response:
 ```json
 {"type": "response", "command": "set_auto_compaction", "success": true}
+```
+
+#### abort_compaction
+
+Abort an in-progress manual or automatic compaction.
+
+```json
+{"type": "abort_compaction"}
+```
+
+Response:
+```json
+{"type": "response", "command": "abort_compaction", "success": true}
 ```
 
 ### Retry
@@ -742,7 +915,7 @@ Response:
 }
 ```
 
-The current session name is available via `get_state` in the `sessionName` field.
+The current session name is available via `get_state` in the `sessionName` field. Successful renames also emit a `session_name_changed` event.
 
 ### Commands
 
@@ -860,6 +1033,71 @@ Response:
 ```
 
 Each session has the same fields as `list_sessions`.
+
+### Background Agents
+
+#### list_background_agents
+
+List background subagents tracked by this process's registry — running and recently completed (finished entries are pruned after ~5 minutes). `sessionDir` is known from launch; `sessionFile` appears once the child process exits. Live transcripts are delivered via `background_agent_event` events (see Events), not by reading these paths.
+
+```json
+{"type": "list_background_agents"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "list_background_agents",
+  "success": true,
+  "data": {
+    "agents": [
+      {
+        "agentId": "a1b2c3d4e5f6",
+        "agentType": "Explore",
+        "taskSummary": "Explore task 1/2",
+        "startedAt": "2026-07-07T12:00:00.000Z",
+        "status": "running",
+        "sessionDir": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6",
+        "cwd": "/home/user/project"
+      }
+    ]
+  }
+}
+```
+
+#### list_agent_types
+
+List discoverable subagent types for the current session working directory. This includes package-bundled agents, user-level agents, and project-level agents in `.dreb/agents/*.md`. Results are sorted by `name`.
+
+```json
+{"type": "list_agent_types"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "list_agent_types",
+  "success": true,
+  "data": {
+    "agentTypes": [
+      {
+        "name": "code-reviewer",
+        "description": "Reviews code changes for correctness, idiomatic patterns, and maintainability"
+      },
+      {
+        "name": "Explore",
+        "description": "Codebase and web exploration — find files, search code, search the web, answer questions. Read-only."
+      }
+    ]
+  }
+}
+```
+
+Each agent type has:
+- `name`: Agent type name to use as an `agentModels` key.
+- `description`: Human-readable description from the agent frontmatter.
 
 ### Session Tree
 
@@ -983,7 +1221,7 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 Persistent default settings, backed by the settings file (see [settings.md](settings.md)). These are distinct from live session state:
 
-- **Persistent defaults** (`get_settings` / `set_settings`): the values stored in `settings.json` that seed fresh runtimes — default provider/model, default thinking level, queue modes, compaction/retry toggles. Writing them does **not** change the running session.
+- **Persistent defaults** (`get_settings` / `set_settings`): the values stored in `settings.json` that seed fresh runtimes — default provider/model, default thinking level, queue modes, compaction/retry/image/context/skill/thinking-display/transport toggles, and per-agent model fallback lists. Writing them does **not** change the running session.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
 
 A dashboard settings tab typically reads both: `get_state` for what's active now, `get_settings` for what the next startup will use.
@@ -1009,12 +1247,21 @@ Response:
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
-    "retryEnabled": true
+    "retryEnabled": true,
+    "imageAutoResize": true,
+    "blockImages": false,
+    "enableSkillCommands": true,
+    "autoLoadNestedContext": true,
+    "transport": "sse",
+    "hideThinkingBlock": false,
+    "agentModels": {
+      "Explore": ["anthropic/sonnet", "openai/gpt-5"]
+    }
   }
 }
 ```
 
-`defaultProvider`, `defaultModel`, and `defaultThinkingLevel` are absent if never set.
+`defaultProvider`, `defaultModel`, and `defaultThinkingLevel` are absent if never set. `agentModels` is the merged global + project view; project entries win per agent name.
 
 #### set_settings
 
@@ -1030,7 +1277,23 @@ Setting the default model (both keys required together, validated against availa
 {"type": "set_settings", "settings": {"defaultProvider": "anthropic", "defaultModel": "claude-sonnet-4-5"}}
 ```
 
-Response is the full settings snapshot after the write (same shape as `get_settings`):
+Setting per-agent model fallback lists:
+
+```json
+{
+  "type": "set_settings",
+  "settings": {
+    "agentModels": {
+      "Explore": ["anthropic/sonnet", "openai/gpt-5"],
+      "code-reviewer": []
+    }
+  }
+}
+```
+
+For `agentModels`, a non-empty array writes the global fallback list for that agent. An empty array removes the global entry, so that agent uses its agent-definition default unless a project-level override exists.
+
+Response is the full settings snapshot after the write (same shape as `get_settings`), plus `warnings` when the write was accepted but a project-level override shadows part of it:
 
 ```json
 {
@@ -1044,7 +1307,42 @@ Response is the full settings snapshot after the write (same shape as `get_setti
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
-    "retryEnabled": false
+    "retryEnabled": false,
+    "imageAutoResize": true,
+    "blockImages": false,
+    "enableSkillCommands": true,
+    "autoLoadNestedContext": true,
+    "transport": "sse",
+    "hideThinkingBlock": false,
+    "agentModels": {}
+  }
+}
+```
+
+Project-shadow warning example (the global write still lands, but the returned merged `agentModels.Explore` remains the project value until `.dreb/settings.json` is edited):
+
+```json
+{
+  "type": "response",
+  "command": "set_settings",
+  "success": true,
+  "data": {
+    "steeringMode": "one-at-a-time",
+    "followUpMode": "one-at-a-time",
+    "compactionEnabled": true,
+    "retryEnabled": true,
+    "imageAutoResize": true,
+    "blockImages": false,
+    "enableSkillCommands": true,
+    "autoLoadNestedContext": true,
+    "transport": "sse",
+    "hideThinkingBlock": false,
+    "agentModels": {
+      "Explore": ["project/model"]
+    },
+    "warnings": [
+      "A project-level agentModels override for \"Explore\" (.dreb/settings.json) takes precedence — this change to global settings will have no effect. Edit the project settings file to change it."
+    ]
   }
 }
 ```
@@ -1059,13 +1357,23 @@ Valid keys and values:
 | `followUpMode` | `"all"`, `"one-at-a-time"` |
 | `compactionEnabled` | boolean |
 | `retryEnabled` | boolean |
+| `imageAutoResize` | boolean |
+| `blockImages` | boolean |
+| `enableSkillCommands` | boolean |
+| `autoLoadNestedContext` | boolean |
+| `transport` | `"sse"`, `"websocket"`, `"auto"` |
+| `hideThinkingBlock` | boolean |
+| `agentModels` | Plain object mapping agent names to arrays of non-empty model id strings; empty arrays remove the global entry for that agent |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
 
 - Missing/empty payload: `set_settings requires at least one setting to change`
 - Unknown key: `Unknown settings key(s): ...`
 - Invalid enum value: `Invalid defaultThinkingLevel: "extreme". Valid values: off, minimal, low, medium, high, xhigh`
+- Invalid transport: `Invalid transport: "http". Valid values: sse, websocket, auto`
 - Non-boolean toggle: `Invalid retryEnabled: "yes". Must be a boolean`
+- Invalid `agentModels` object: `Invalid agentModels: must be a plain object mapping agent names to model fallback arrays`
+- Invalid `agentModels` entry (the offending agent key is named): `Invalid agentModels["Explore"]: expected an array of non-empty strings`
 - Provider without model (or vice versa): `defaultProvider and defaultModel must be set together`
 - Unavailable model: `Model not found: provider/model-id`
 - Corrupt settings file: `Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)` — without this guard the write would silently no-op
@@ -1111,11 +1419,23 @@ Events are streamed to stdout as JSON lines during agent operation. Events do NO
 | `tool_execution_start` | Tool begins execution |
 | `tool_execution_update` | Tool execution progress (streaming output) |
 | `tool_execution_end` | Tool completes |
+| `stream_retry` | Stream dropped mid-turn; retrying (partial output discarded) |
+| `length_retry` | Response hit the token limit; retrying with a larger budget |
 | `auto_compaction_start` | Auto-compaction begins |
 | `auto_compaction_end` | Auto-compaction completes |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
+| `background_agent_start` | Background subagent launched (includes `sessionDir`) |
+| `background_agent_end` | Background subagent finished (includes `sessionFile` when known) |
+| `background_agent_event` | Relayed event from a background subagent's own stream |
+| `parent_paused_for_background_agents` | Parent paused waiting on background agents |
+| `session_name_changed` | Session display name changed (manual rename, extension rename, or auto-title) |
+| `tasks_update` | Session task list replaced (see the `tasks_update` tool) |
+| `suggest_next` | Agent suggested a next command |
 | `extension_error` | Extension threw an error |
+
+Treat the event union as open — dispatch on `type` and ignore unknown values
+rather than validating against a closed list; new event types may be added.
 
 ### agent_start
 
@@ -1307,6 +1627,55 @@ On final failure (max retries exceeded):
   "success": false,
   "attempt": 3,
   "finalError": "529 overloaded_error: Overloaded"
+}
+```
+
+### background_agent_start / background_agent_end / background_agent_event
+
+Lifecycle and live-observability events for background subagents (the `subagent` tool's background mode).
+
+`background_agent_start` fires at launch. `sessionDir` is the directory the child will write its session JSONL into (per-launch, known before spawn):
+
+```json
+{
+  "type": "background_agent_start",
+  "agentId": "a1b2c3d4e5f6",
+  "agentType": "Explore",
+  "taskSummary": "Explore task 1/2",
+  "sessionDir": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6"
+}
+```
+
+`background_agent_end` fires after the result is delivered to the parent agent. `sessionFile` is the child's session JSONL path when one was written:
+
+```json
+{
+  "type": "background_agent_end",
+  "agentId": "a1b2c3d4e5f6",
+  "agentType": "Explore",
+  "success": true,
+  "sessionFile": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6/2026-07-07T12-00-00-000Z_uuid.jsonl"
+}
+```
+
+`background_agent_event` relays every JSONL event the child process emits (the same event union documented here, plus the initial session header), verbatim, tagged with the child's `agentId`. This is the live-transcript transport for observers like the dashboard — no session-file tailing needed. Streaming children emit `message_update` deltas at high frequency; consumers that fan events out further (e.g. over a network) should batch or throttle:
+
+```json
+{
+  "type": "background_agent_event",
+  "agentId": "a1b2c3d4e5f6",
+  "event": {"type": "tool_execution_start", "toolName": "read", "args": {"path": "src/index.ts"}}
+}
+```
+
+`parent_paused_for_background_agents` fires when the parent agent pauses because its background-agent turn guardrail was hit while agents are still running:
+
+```json
+{
+  "type": "parent_paused_for_background_agents",
+  "runningAgentCount": 2,
+  "turnsUsed": 10,
+  "turnLimit": 10
 }
 ```
 

@@ -6,10 +6,11 @@
  */
 
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
-import type { ImageContent, Model } from "@dreb/ai";
+import type { ImageContent, Model, Transport } from "@dreb/ai";
 import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
+import type { ContextUsage } from "../../core/extensions/types.js";
 import type { SessionEntry } from "../../core/session-manager.js";
 import type { SourceInfo } from "../../core/source-info.js";
 
@@ -27,6 +28,9 @@ export type RpcCommand =
 
 	// State
 	| { id?: string; type: "get_state" }
+	| { id?: string; type: "get_resources" }
+	| { id?: string; type: "get_git_branch" }
+	| { id?: string; type: "get_daily_cost" }
 
 	// Model
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
@@ -45,10 +49,13 @@ export type RpcCommand =
 	// Queue modes
 	| { id?: string; type: "set_steering_mode"; mode: "all" | "one-at-a-time" }
 	| { id?: string; type: "set_follow_up_mode"; mode: "all" | "one-at-a-time" }
+	| { id?: string; type: "get_pending_messages" }
+	| { id?: string; type: "clear_pending_messages" }
 
 	// Compaction
 	| { id?: string; type: "compact"; customInstructions?: string }
 	| { id?: string; type: "set_auto_compaction"; enabled: boolean }
+	| { id?: string; type: "abort_compaction" }
 
 	// Retry
 	| { id?: string; type: "set_auto_retry"; enabled: boolean }
@@ -89,6 +96,10 @@ export type RpcCommand =
 	| { id?: string; type: "list_sessions" }
 	| { id?: string; type: "list_all_sessions" }
 
+	// Background agents
+	| { id?: string; type: "list_background_agents" }
+	| { id?: string; type: "list_agent_types" }
+
 	// Settings (persistent defaults)
 	| { id?: string; type: "get_settings" }
 	| { id?: string; type: "set_settings"; settings: RpcSettingsUpdate }
@@ -112,12 +123,46 @@ export interface RpcSlashCommand {
 	sourceInfo: SourceInfo;
 }
 
+export interface RpcScopedModel {
+	provider: string;
+	id: string;
+	name?: string;
+	reasoning?: boolean;
+	thinkingLevel?: string;
+}
+
+export interface RpcResources {
+	contextFiles: Array<{ path: string }>;
+	skills: Array<{ name: string; description: string }>;
+	extensions: Array<{ name?: string; path: string }>;
+	promptTemplates: Array<{ name: string; description?: string }>;
+	systemPromptPresent: boolean;
+}
+
+export interface RpcQueuedMessage {
+	text: string;
+	images?: ImageContent[];
+}
+
+export interface RpcPendingMessages {
+	/** Text-only compatibility view for existing clients. */
+	steering: string[];
+	/** Text-only compatibility view for existing clients. */
+	followUp: string[];
+	/** Full queued payloads, including inline image attachments. */
+	steeringMessages?: RpcQueuedMessage[];
+	/** Full queued payloads, including inline image attachments. */
+	followUpMessages?: RpcQueuedMessage[];
+}
+
 // ============================================================================
 // RPC State
 // ============================================================================
 
 export interface RpcSessionState {
 	model?: Model<any>;
+	scopedModels: RpcScopedModel[];
+	usingSubscription: boolean;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -129,6 +174,13 @@ export interface RpcSessionState {
 	autoCompactionEnabled: boolean;
 	messageCount: number;
 	pendingMessageCount: number;
+	/**
+	 * Context window usage computed by the session — the exact numbers the TUI footer
+	 * renders (AgentSession.getContextUsage()). `tokens`/`percent` are null when usage
+	 * is unknown (e.g. right after compaction, before the next LLM response). Undefined
+	 * when no model is set or the model has no context window.
+	 */
+	contextUsage?: ContextUsage;
 	/** Non-empty when the model was changed from the user's saved preference
 	 *  (e.g. saved model unavailable after restart). */
 	modelFallbackMessage?: string;
@@ -149,6 +201,9 @@ export type RpcResponse =
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
+	| { id?: string; type: "response"; command: "get_resources"; success: true; data: RpcResources }
+	| { id?: string; type: "response"; command: "get_git_branch"; success: true; data: { branch: string | null } }
+	| { id?: string; type: "response"; command: "get_daily_cost"; success: true; data: { cost: number } }
 
 	// Model
 	| {
@@ -209,10 +264,13 @@ export type RpcResponse =
 	// Queue modes
 	| { id?: string; type: "response"; command: "set_steering_mode"; success: true }
 	| { id?: string; type: "response"; command: "set_follow_up_mode"; success: true }
+	| { id?: string; type: "response"; command: "get_pending_messages"; success: true; data: RpcPendingMessages }
+	| { id?: string; type: "response"; command: "clear_pending_messages"; success: true; data: RpcPendingMessages }
 
 	// Compaction
 	| { id?: string; type: "response"; command: "compact"; success: true; data: CompactionResult }
 	| { id?: string; type: "response"; command: "set_auto_compaction"; success: true }
+	| { id?: string; type: "response"; command: "abort_compaction"; success: true }
 
 	// Retry
 	| { id?: string; type: "response"; command: "set_auto_retry"; success: true }
@@ -293,9 +351,25 @@ export type RpcResponse =
 			data: { sessions: RpcSessionInfo[] };
 	  }
 
+	// Background agents
+	| {
+			id?: string;
+			type: "response";
+			command: "list_background_agents";
+			success: true;
+			data: { agents: RpcBackgroundAgentInfo[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "list_agent_types";
+			success: true;
+			data: { agentTypes: RpcAgentTypeInfo[] };
+	  }
+
 	// Settings
 	| { id?: string; type: "response"; command: "get_settings"; success: true; data: RpcSettingsSnapshot }
-	| { id?: string; type: "response"; command: "set_settings"; success: true; data: RpcSettingsSnapshot }
+	| { id?: string; type: "response"; command: "set_settings"; success: true; data: RpcSettingsSetResult }
 
 	// Version
 	| { id?: string; type: "response"; command: "get_version"; success: true; data: { version: string } }
@@ -325,6 +399,34 @@ export interface RpcSessionInfo {
 	messageCount: number;
 	/** First user message text */
 	firstMessage: string;
+}
+
+/** Background agent metadata returned by list_background_agents */
+export interface RpcBackgroundAgentInfo {
+	/** Registry ID (hex) used in background_agent_* events */
+	agentId: string;
+	/** Agent type name (e.g. "Explore") */
+	agentType: string;
+	/** Short human-readable task label */
+	taskSummary: string;
+	/** ISO timestamp of launch */
+	startedAt: string;
+	/** Lifecycle status */
+	status: "running" | "completed" | "failed";
+	/** Directory containing the agent's session JSONL file (known at spawn time) */
+	sessionDir?: string;
+	/** Path to the agent's session JSONL file (available after the child exits) */
+	sessionFile?: string;
+	/** Working directory the agent runs in */
+	cwd?: string;
+}
+
+/** Agent type metadata returned by list_agent_types */
+export interface RpcAgentTypeInfo {
+	/** Agent type name, e.g. "Explore" */
+	name: string;
+	/** Human-readable description from the agent frontmatter */
+	description: string;
 }
 
 /** Serializable session tree node returned by get_tree. Stable DTO — no raw entry payloads. */
@@ -377,7 +479,24 @@ export interface RpcSettingsSnapshot {
 	compactionEnabled: boolean;
 	/** Whether automatic retry on transient errors is enabled */
 	retryEnabled: boolean;
+	/** Whether image inputs are automatically resized before sending to providers */
+	imageAutoResize?: boolean;
+	/** Whether image inputs are blocked from being sent to providers */
+	blockImages?: boolean;
+	/** Whether skills are registered as slash commands */
+	enableSkillCommands?: boolean;
+	/** Whether nested AGENTS.md/CLAUDE.md context auto-loads when tools enter subdirectories */
+	autoLoadNestedContext?: boolean;
+	/** Preferred model transport */
+	transport?: Transport;
+	/** Whether raw thinking blocks are hidden in rendered transcripts */
+	hideThinkingBlock?: boolean;
+	/** Per-agent model fallback lists, merged global + project with project entries winning */
+	agentModels?: Record<string, string[]>;
 }
+
+/** Settings snapshot returned by `set_settings`; warnings are present for loud shadowing notices. */
+export type RpcSettingsSetResult = RpcSettingsSnapshot & { warnings?: string[] };
 
 /**
  * Partial update payload for `set_settings`. All fields optional, but at least one
@@ -392,6 +511,13 @@ export interface RpcSettingsUpdate {
 	followUpMode?: "all" | "one-at-a-time";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
+	imageAutoResize?: boolean;
+	blockImages?: boolean;
+	enableSkillCommands?: boolean;
+	autoLoadNestedContext?: boolean;
+	transport?: Transport;
+	hideThinkingBlock?: boolean;
+	agentModels?: Record<string, string[]>;
 }
 
 // ============================================================================

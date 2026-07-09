@@ -12,14 +12,14 @@
 	"scripts": {
 		"clean": "npm run clean --workspaces",
 		"sync-version": "bash scripts/sync-version.sh",
-		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../semantic-search && npm run build && cd ../coding-agent && npm run build && cd ../telegram && npm run build",
+		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../semantic-search && npm run build && cd ../coding-agent && npm run build && cd ../telegram && npm run build && cd ../dashboard && npm run build",
 		"dev": "concurrently --names \"ai,agent,coding-agent,tui\" --prefix-colors \"cyan,yellow,red,magenta\" \"cd packages/ai && npm run dev\" \"cd packages/agent && npm run dev\" \"cd packages/coding-agent && npm run dev\" \"cd packages/tui && npm run dev\"",
 		"check": "npm run verify-git-hooks && npm run verify-engines && biome check --write --error-on-warnings . && tsgo --noEmit",
 		"verify-git-hooks": "node scripts/verify-git-hooks.js",
 		"verify-workspace-links": "node scripts/verify-workspace-links.js",
 		"verify-engines": "node scripts/verify-engines.js",
 		"test": "npm run test --workspaces --if-present",
-		"coverage": "vitest --config vitest.workspace.ts --run --coverage --coverage.reporter=json-summary --coverage.reporter=text-summary",
+		"coverage": "vitest --run --coverage --coverage.reporter=json-summary --coverage.reporter=text-summary",
 		"prepare": "husky"
 	},
 	"devDependencies": {
@@ -39,7 +39,7 @@
 		"node": "22.x"
 	},
 	"packageManager": "npm@11.5.1",
-	"version": "2.34.4",
+	"version": "2.35.0",
 	"dependencies": {
 		"@dreb/coding-agent": "*",
 		"@mariozechner/jiti": "^2.6.5",

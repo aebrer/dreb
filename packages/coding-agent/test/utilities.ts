@@ -207,7 +207,10 @@ export async function createTestExtensionsResult(
 export interface CreateTestResourceLoaderOptions {
 	extensionsResult?: LoadExtensionsResult;
 	skills?: import("../src/core/skills.js").Skill[];
+	prompts?: import("../src/core/prompt-templates.js").PromptTemplate[];
 	agentsFiles?: Array<{ path: string; content: string }>;
+	systemPrompt?: string;
+	appendSystemPrompt?: string[];
 }
 
 export function createTestResourceLoader(options: CreateTestResourceLoaderOptions = {}): ResourceLoader {
@@ -221,7 +224,7 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 	return {
 		getExtensions: () => extensionsResult,
 		getSkills: () => ({ skills: options.skills ?? [], diagnostics: [] }),
-		getPrompts: () => ({ prompts: [], diagnostics: [] }),
+		getPrompts: () => ({ prompts: options.prompts ?? [], diagnostics: [] }),
 		getThemes: () => ({ themes: [], diagnostics: [] }),
 		getContextDiagnostics: () => [],
 		getAgentsFiles: () => ({ agentsFiles }),
@@ -233,8 +236,8 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 			dreamLastRun: null,
 		}),
 		refreshDreamLastRun: () => {},
-		getSystemPrompt: () => undefined,
-		getAppendSystemPrompt: () => [],
+		getSystemPrompt: () => options.systemPrompt,
+		getAppendSystemPrompt: () => options.appendSystemPrompt ?? [],
 		extendResources: () => {},
 		reload: async () => {},
 	};
@@ -258,7 +261,9 @@ export function createTestSession(options: TestSessionOptions = {}): TestSession
 		},
 	});
 
-	const sessionManager = options.inMemory ? SessionManager.inMemory() : SessionManager.create(tempDir);
+	const sessionManager = options.inMemory
+		? SessionManager.inMemory()
+		: SessionManager.create(tempDir, join(tempDir, "sessions"));
 	const settingsManager = SettingsManager.create(tempDir, tempDir);
 
 	if (options.settingsOverrides) {

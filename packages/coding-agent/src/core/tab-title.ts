@@ -3,7 +3,8 @@
  * number of tool calls. Uses a lightweight single-shot LLM call to produce a
  * concise ≤30 character title, then sets it via the terminal's OSC 0 escape.
  *
- * Fires at most once per session. Failures are swallowed silently.
+ * Fires at most once per session. Final failures are reported through the
+ * optional onError hook while preserving fire-and-forget behavior.
  */
 
 import { readFileSync } from "node:fs";
@@ -11,11 +12,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Api, Context, Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
-import { CONFIG_DIR_NAME, getPackageDir } from "../../config.js";
-import { labelMessageEnd, labelToolEnd, RollingContextBuffer } from "../../core/context-buffer.js";
-import type { ModelRegistry } from "../../core/model-registry.js";
-import type { TabTitleSettings } from "../../core/settings-manager.js";
-import { parseAgentFrontmatter, resolveModelForSubagentSpawn } from "../../core/tools/subagent.js";
+import { CONFIG_DIR_NAME, getPackageDir } from "../config.js";
+import { labelMessageEnd, labelToolEnd, RollingContextBuffer } from "./context-buffer.js";
+import type { ModelRegistry } from "./model-registry.js";
+import type { TabTitleSettings } from "./settings-manager.js";
+import { parseAgentFrontmatter, resolveModelForSubagentSpawn } from "./tools/subagent.js";
 
 const DEFAULT_TRIGGER_AFTER = 9;
 const MAX_TITLE_LENGTH = 30;
@@ -58,6 +59,8 @@ export interface TabTitleDeps {
 	getRepo?: () => string | undefined;
 	/** Current working directory, or undefined. */
 	getCwd?: () => string | undefined;
+	/** Report final title-generation failures without breaking fire-and-forget callers. */
+	onError?: (err: unknown) => void;
 }
 
 export class TabTitleGenerator {
@@ -93,8 +96,8 @@ export class TabTitleGenerator {
 		this.toolCallCount++;
 		if (this.toolCallCount >= this.threshold) {
 			this.fired = true;
-			// Fire-and-forget — never surfaces errors to the user
-			this.generateTitle().catch(() => {});
+			// Fire-and-forget — report final failures without throwing into the event stream.
+			this.generateTitle().catch((err) => this.reportError(err));
 		}
 	}
 
@@ -123,9 +126,6 @@ export class TabTitleGenerator {
 		const model = await this.resolveModel(signal);
 		if (!model) return;
 
-		const registry = this.deps.getModelRegistry();
-		const apiKey = await registry.getApiKey(model);
-
 		const userContext = this.buildContext();
 		if (!userContext) return;
 
@@ -134,17 +134,48 @@ export class TabTitleGenerator {
 			messages: [{ role: "user", content: userContext, timestamp: Date.now() }],
 		};
 
-		const response = await completeSimple(model, context, {
-			apiKey,
-			maxRetryDelayMs: 0,
-			signal,
-		});
-
+		const response = await this.completeWithParentFallback(model, context, signal);
 		const title = this.sanitizeTitle(response);
 		if (title) {
 			this.deps.setTitle(`dreb - ${title}`);
 			this.deps.setSessionName?.(title);
 		}
+	}
+
+	private async completeWithParentFallback(
+		model: Model<Api>,
+		context: Context,
+		signal: AbortSignal,
+	): Promise<unknown> {
+		const primaryErrorPrefix = `Tab title generation failed with model ${this.formatModel(model)}`;
+		try {
+			return await this.completeWithModel(model, context, signal);
+		} catch (primaryErr) {
+			const parentModel = this.deps.getModel();
+			if (!parentModel || this.isSameModel(model, parentModel)) {
+				throw new Error(`${primaryErrorPrefix}: ${this.formatError(primaryErr)}`, { cause: primaryErr });
+			}
+
+			try {
+				return await this.completeWithModel(parentModel, context, signal);
+			} catch (parentErr) {
+				throw new Error(
+					`${primaryErrorPrefix}: ${this.formatError(primaryErr)}. ` +
+						`Parent fallback ${this.formatModel(parentModel)} also failed: ${this.formatError(parentErr)}`,
+					{ cause: parentErr },
+				);
+			}
+		}
+	}
+
+	private async completeWithModel(model: Model<Api>, context: Context, signal: AbortSignal): Promise<unknown> {
+		const registry = this.deps.getModelRegistry();
+		const apiKey = await registry.getApiKey(model);
+		return completeSimple(model, context, {
+			apiKey,
+			maxRetryDelayMs: 0,
+			signal,
+		});
 	}
 
 	private async resolveModel(signal?: AbortSignal): Promise<Model<Api> | undefined> {
@@ -164,15 +195,37 @@ export class TabTitleGenerator {
 				"[tab-title]",
 			);
 			if (resolution.ok) {
-				// Find the resolved model in registry
-				const available = registry.getAvailable();
-				const found = available.find((m) => m.id === resolution.modelId);
+				const found = resolution.provider
+					? registry.find(resolution.provider, resolution.modelId)
+					: registry.getAvailable().find((m) => m.id === resolution.modelId);
 				if (found) return found;
 			}
 		}
 
 		// Fall back to parent session model
 		return parentModel;
+	}
+
+	private isSameModel(a: Model<Api>, b: Model<Api>): boolean {
+		return a.id === b.id && a.provider === b.provider;
+	}
+
+	private formatModel(model: Model<Api>): string {
+		return `${model.provider}/${model.id}`;
+	}
+
+	private formatError(err: unknown): string {
+		if (err instanceof Error) return err.message;
+		if (typeof err === "string") return err;
+		return String(err);
+	}
+
+	private reportError(err: unknown): void {
+		const reportedError =
+			err instanceof Error
+				? err
+				: new Error(`Tab title generation failed: ${this.formatError(err)}`, { cause: err });
+		this.deps.onError?.(reportedError);
 	}
 
 	private getExploreAgentModels(): string | string[] | undefined {

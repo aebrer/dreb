@@ -1,0 +1,864 @@
+/**
+ * Settings tab — persistent defaults via get/set_settings (validation errors
+ * shown verbatim) + paired-devices management + version footer.
+ */
+
+import { createMemo, createResource, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import type { AgentTypeDto, ModelInfoDto, PairingCodeDto, SettingsDto } from "../../shared/protocol.js";
+import { api } from "../api.js";
+import { Modal, relativeTime, Topbar } from "../components/common.js";
+import {
+	expandThinking,
+	isToolAutoOpen,
+	setExpandThinking,
+	setToolAutoExpand,
+	TOOL_AUTO_EXPAND_TOOLS,
+} from "../state/preferences.js";
+import type { AppStore } from "../state/store.js";
+
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const QUEUE_MODES = ["all", "one-at-a-time"] as const;
+const TRANSPORTS = ["sse", "websocket", "auto"] as const;
+
+type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
+type ModelPickerTarget = { kind: "default" } | { kind: "agent"; agentName: string };
+
+function modelKey(model: Pick<ModelInfoDto, "provider" | "id">): string {
+	return `${model.provider}/${model.id}`;
+}
+
+function modelTitle(model: Pick<ModelInfoDto, "provider" | "id"> & { name?: string }): string {
+	const id = modelKey(model);
+	return model.name ? `${id} — ${model.name}` : id;
+}
+
+function defaultModelLabel(settings: SettingsDto): string {
+	return settings.defaultProvider && settings.defaultModel
+		? `${settings.defaultProvider}/${settings.defaultModel}`
+		: "choose model…";
+}
+
+function modelMatchesQuery(model: ModelChoice, query: string): boolean {
+	return `${model.provider}/${model.id} ${model.name ?? ""}`.toLowerCase().includes(query);
+}
+
+function groupedModels(models: ModelChoice[]): Array<{ provider: string; models: ModelChoice[] }> {
+	const groups = new Map<string, ModelChoice[]>();
+	for (const model of models) {
+		const group = groups.get(model.provider) ?? [];
+		group.push(model);
+		groups.set(model.provider, group);
+	}
+	return [...groups.entries()].map(([provider, group]) => ({ provider, models: group }));
+}
+
+function moveItem<T>(items: T[], index: number, delta: -1 | 1): T[] {
+	const target = index + delta;
+	if (target < 0 || target >= items.length) return items;
+	const next = [...items];
+	[next[index], next[target]] = [next[target]!, next[index]!];
+	return next;
+}
+
+function OnOffSelect(props: { value: boolean; onChange: (value: boolean) => void }): JSX.Element {
+	return (
+		<select value={props.value ? "on" : "off"} onChange={(e) => props.onChange(e.currentTarget.value === "on")}>
+			<option value="on">on</option>
+			<option value="off">off</option>
+		</select>
+	);
+}
+
+function ModelPickerModal(props: {
+	title: string;
+	models: ModelChoice[];
+	selected?: string[];
+	onClose: () => void;
+	onPick: (model: ModelChoice) => void;
+}): JSX.Element {
+	const [filter, setFilter] = createSignal("");
+	const selected = () => new Set(props.selected ?? []);
+	const filteredGroups = createMemo(() => {
+		const q = filter().toLowerCase();
+		return groupedModels(props.models.filter((model) => !q || modelMatchesQuery(model, q)).slice(0, 100));
+	});
+	const isCurrent = (model: ModelChoice) => selected().has(modelKey(model));
+
+	return (
+		<Modal title={props.title} onDismiss={props.onClose} class="model-picker-modal">
+			<div class="field" style={{ "margin-bottom": "8px" }}>
+				<input
+					type="text"
+					placeholder="search models…"
+					value={filter()}
+					onInput={(e) => setFilter(e.currentTarget.value)}
+				/>
+			</div>
+			<div class="model-list" style={{ "max-height": "320px" }}>
+				<Show when={filteredGroups().length > 0} fallback={<p class="muted small">No matching models.</p>}>
+					<For each={filteredGroups()}>
+						{(group) => (
+							<section class="model-provider-group">
+								<div class="model-provider-heading">{group.provider}</div>
+								<For each={group.models}>
+									{(model) => (
+										<button
+											type="button"
+											class="model-row"
+											classList={{ current: isCurrent(model) }}
+											title={modelTitle(model)}
+											onClick={() => props.onPick(model)}
+										>
+											<span class="model-current">{isCurrent(model) ? "✓" : ""}</span>
+											<span class="model-id">{model.id}</span>
+											<Show when={model.name}>
+												<span class="model-name">{model.name}</span>
+											</Show>
+											<span class="model-provider-badge">{model.provider}</span>
+											<Show when={model.reasoning}>
+												<span class="model-reasoning">think</span>
+											</Show>
+										</button>
+									)}
+								</For>
+							</section>
+						)}
+					</For>
+				</Show>
+			</div>
+		</Modal>
+	);
+}
+
+export function SettingsScreen(props: { store: AppStore }): JSX.Element {
+	const [error, setError] = createSignal<string>();
+	const [warnings, setWarnings] = createSignal<string[]>([]);
+	const [saved, setSaved] = createSignal(false);
+	const [modelPickerTarget, setModelPickerTarget] = createSignal<ModelPickerTarget>();
+	const [editingAgent, setEditingAgent] = createSignal<string>();
+	const [agentContextCwd, setAgentContextCwd] = createSignal<string>();
+	const [notificationPermission, setNotificationPermission] = createSignal<NotificationPermission | "unsupported">(
+		typeof Notification === "undefined" ? "unsupported" : Notification.permission,
+	);
+
+	const [settings, { mutate, refetch }] = createResource(async () => {
+		setError(undefined);
+		try {
+			return await api.settings();
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+			return undefined;
+		}
+	});
+
+	const [availableModels] = createResource(settings, async () => {
+		try {
+			const { models } = await api.settingsModels();
+			return models;
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+			return [];
+		}
+	});
+
+	const agentProjectRoots = createMemo(() => {
+		const roots = new Set<string>();
+		for (const runtime of props.store.fleet().runtimes) roots.add(runtime.cwd);
+		for (const session of props.store.fleet().diskSessions) roots.add(session.cwd);
+		return [...roots].sort((a, b) => a.localeCompare(b));
+	});
+
+	const [agentTypes] = createResource(
+		() => ({ settings: settings(), cwd: agentContextCwd() }),
+		async ({ cwd }) => {
+			if (!settings()) return [];
+			try {
+				const { agentTypes } = await api.agentTypes(cwd);
+				return agentTypes;
+			} catch (err) {
+				setError(err instanceof Error ? err.message : String(err));
+				return [];
+			}
+		},
+	);
+
+	const [devices, { refetch: refetchDevices }] = createResource(async () => {
+		const { devices } = await api.devices();
+		return devices;
+	});
+
+	const [pairingCode, setPairingCode] = createSignal<PairingCodeDto>();
+	let pairingCodeTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function clearPairingCodeTimer() {
+		if (pairingCodeTimer) clearTimeout(pairingCodeTimer);
+		pairingCodeTimer = undefined;
+	}
+
+	function schedulePairingCodeRefresh(expiresInMs: number | undefined) {
+		clearPairingCodeTimer();
+		const delay = Math.max(250, expiresInMs ?? 30_000) + 100;
+		pairingCodeTimer = setTimeout(() => void refreshPairingCode(), delay);
+	}
+
+	async function refreshPairingCode() {
+		try {
+			const next = await api.pairingCode();
+			if (!next.enabled || !next.code) {
+				setPairingCode(undefined);
+				clearPairingCodeTimer();
+				return;
+			}
+			setPairingCode(next);
+			schedulePairingCodeRefresh(next.expiresInMs);
+		} catch (err) {
+			console.warn("pairing code unavailable", err);
+			setPairingCode(undefined);
+			clearPairingCodeTimer();
+		}
+	}
+
+	const [version] = createResource(async () => {
+		try {
+			const { version } = await api.version();
+			return version;
+		} catch {
+			return undefined; // no live runtime — version unavailable, footer shows dashboard only
+		}
+	});
+
+	const [serverInfo] = createResource(async () => {
+		try {
+			return await api.serverInfo();
+		} catch {
+			return undefined;
+		}
+	});
+	const [showRestartConfirm, setShowRestartConfirm] = createSignal(false);
+	const [restarting, setRestarting] = createSignal(false);
+	const [restartError, setRestartError] = createSignal<string>();
+
+	async function restartServer() {
+		setRestartError(undefined);
+		setRestarting(true);
+		try {
+			await api.restartServer();
+			// The server exits and (under a supervisor) respawns; the SSE stream drops
+			// and reconnects. Nothing more to do client-side.
+		} catch (err) {
+			setRestartError(err instanceof Error ? err.message : String(err));
+			setRestarting(false);
+		}
+	}
+
+	async function save(update: Partial<SettingsDto>) {
+		setError(undefined);
+		setWarnings([]);
+		setSaved(false);
+		try {
+			const next = await api.saveSettings(update);
+			mutate(next);
+			setWarnings(next.warnings ?? []);
+			setSaved(true);
+			setTimeout(() => setSaved(false), 2000);
+		} catch (err) {
+			// RPC validation errors surface verbatim — no silent retry.
+			setError(err instanceof Error ? err.message : String(err));
+			await refetch();
+		}
+	}
+
+	async function saveAgentModels(agentName: string, nextList: string[]) {
+		await save({ agentModels: { [agentName]: nextList } });
+	}
+
+	function currentAgentModels(agentName: string): string[] {
+		return settings()?.agentModels?.[agentName] ?? [];
+	}
+
+	async function requestNotifications() {
+		if (typeof Notification === "undefined") return;
+		setNotificationPermission(await Notification.requestPermission());
+	}
+
+	onMount(() => void refreshPairingCode());
+	onCleanup(clearPairingCodeTimer);
+
+	const auth = () => props.store.auth();
+
+	return (
+		<div class="screen-fill">
+			<Topbar store={props.store} active="settings" />
+			<main class="container settings-wrap">
+				<h1>settings</h1>
+				<p class="settings-intro">
+					Defaults for new sessions. Live sessions keep their current values — change those from the session view.
+					Writes go to the global settings file on the host.
+				</p>
+
+				<Show when={error()}>
+					<div class="settings-error">{error()}</div>
+				</Show>
+				<Show when={warnings().length > 0}>
+					<div class="settings-warning">
+						<For each={warnings()}>{(warning) => <div>{warning}</div>}</For>
+					</div>
+				</Show>
+				<Show when={saved()}>
+					<p class="muted small" style={{ "margin-bottom": "16px" }}>
+						✓ saved
+					</p>
+				</Show>
+
+				<Show
+					when={settings()}
+					fallback={
+						<p class="muted">
+							{error() ? "Settings could not be loaded — see the error above." : "Loading settings…"}
+						</p>
+					}
+				>
+					{(current) => (
+						<>
+							<section class="settings-section">
+								<h2>model</h2>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">default model</span>
+										<span class="hint">used by new sessions; validated against configured providers</span>
+									</span>
+									<span class="setting-control">
+										<button
+											type="button"
+											class="btn btn-small model-picker-button"
+											onClick={() => setModelPickerTarget({ kind: "default" })}
+										>
+											{defaultModelLabel(current())}
+										</button>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">default thinking level</span>
+										<span class="hint">{THINKING_LEVELS.join(" · ")}</span>
+									</span>
+									<span class="setting-control">
+										<select
+											value={current().defaultThinkingLevel ?? "off"}
+											onChange={(e) => save({ defaultThinkingLevel: e.currentTarget.value })}
+										>
+											<For each={THINKING_LEVELS}>{(level) => <option value={level}>{level}</option>}</For>
+										</select>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">transport</span>
+										<span class="hint">preferred model transport for new sessions</span>
+									</span>
+									<span class="setting-control">
+										<select
+											value={current().transport ?? "sse"}
+											onChange={(e) =>
+												save({ transport: e.currentTarget.value as "sse" | "websocket" | "auto" })
+											}
+										>
+											<For each={[...TRANSPORTS]}>
+												{(transport) => <option value={transport}>{transport}</option>}
+											</For>
+										</select>
+									</span>
+								</div>
+							</section>
+
+							<section class="settings-section">
+								<h2>agent models</h2>
+								<p class="muted small" style={{ "margin-bottom": "8px" }}>
+									Per-agent fallback lists. First available model wins; empty lists revert to the default
+									model. Agent definitions are loaded from an explicit project context so project-local agents
+									do not depend on which runtime opened first.
+								</p>
+								<Show when={agentProjectRoots().length > 0}>
+									<div class="setting-row agent-context-row">
+										<span class="setting-label">
+											<span class="name">agent definition context</span>
+											<span class="hint">choose a project to include its .dreb/agents definitions</span>
+										</span>
+										<span class="setting-control">
+											<select
+												value={agentContextCwd() ?? ""}
+												onChange={(e) => setAgentContextCwd(e.currentTarget.value || undefined)}
+											>
+												<option value="">global/home only</option>
+												<For each={agentProjectRoots()}>{(cwd) => <option value={cwd}>{cwd}</option>}</For>
+											</select>
+										</span>
+									</div>
+								</Show>
+								<Show
+									when={(agentTypes() ?? []).length > 0}
+									fallback={<p class="muted small">No agent definitions found.</p>}
+								>
+									<For each={agentTypes() ?? []}>
+										{(agent: AgentTypeDto) => {
+											const fallbackList = () => current().agentModels?.[agent.name] ?? [];
+											return (
+												<div class="agent-model-row">
+													<div class="agent-model-summary">
+														<span class="agent-model-name">{agent.name}</span>
+														<span class="agent-model-description">{agent.description}</span>
+													</div>
+													<div class="agent-model-fallbacks">
+														<Show
+															when={fallbackList().length > 0}
+															fallback={<span class="muted small">default</span>}
+														>
+															<For each={fallbackList()}>
+																{(entry, index) => (
+																	<span class="agent-model-chip">
+																		{index() + 1}. {entry}
+																	</span>
+																)}
+															</For>
+														</Show>
+													</div>
+													<button
+														type="button"
+														class="btn btn-small agent-model-edit"
+														onClick={() =>
+															setEditingAgent(editingAgent() === agent.name ? undefined : agent.name)
+														}
+													>
+														{editingAgent() === agent.name ? "done" : "edit"}
+													</button>
+													<Show when={editingAgent() === agent.name}>
+														<div class="agent-model-editor">
+															<Show
+																when={fallbackList().length > 0}
+																fallback={<p class="muted small">Using the default model.</p>}
+															>
+																<For each={fallbackList()}>
+																	{(entry, index) => (
+																		<div class="agent-model-entry">
+																			<span>{entry}</span>
+																			<div class="agent-model-entry-actions">
+																				<button
+																					type="button"
+																					class="btn btn-small"
+																					disabled={index() === 0}
+																					onClick={() =>
+																						void saveAgentModels(
+																							agent.name,
+																							moveItem(fallbackList(), index(), -1),
+																						)
+																					}
+																				>
+																					↑
+																				</button>
+																				<button
+																					type="button"
+																					class="btn btn-small"
+																					disabled={index() === fallbackList().length - 1}
+																					onClick={() =>
+																						void saveAgentModels(
+																							agent.name,
+																							moveItem(fallbackList(), index(), 1),
+																						)
+																					}
+																				>
+																					↓
+																				</button>
+																				<button
+																					type="button"
+																					class="btn btn-small"
+																					onClick={() =>
+																						void saveAgentModels(
+																							agent.name,
+																							fallbackList().filter((_, i) => i !== index()),
+																						)
+																					}
+																				>
+																					×
+																				</button>
+																			</div>
+																		</div>
+																	)}
+																</For>
+															</Show>
+															<button
+																type="button"
+																class="btn btn-small"
+																onClick={() =>
+																	setModelPickerTarget({ kind: "agent", agentName: agent.name })
+																}
+															>
+																add model…
+															</button>
+														</div>
+													</Show>
+												</div>
+											);
+										}}
+									</For>
+								</Show>
+							</section>
+
+							<section class="settings-section">
+								<h2>images</h2>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">auto-resize images</span>
+										<span class="hint">resize image inputs before sending them to providers</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().imageAutoResize !== false}
+											onChange={(value) => save({ imageAutoResize: value })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">block images</span>
+										<span class="hint">prevent image inputs from being sent to providers</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().blockImages === true}
+											onChange={(value) => save({ blockImages: value })}
+										/>
+									</span>
+								</div>
+							</section>
+
+							<section class="settings-section">
+								<h2>queueing</h2>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">steering delivery</span>
+										<span class="hint">deliver queued steers all at once, or one per turn</span>
+									</span>
+									<span class="setting-control">
+										<select
+											value={current().steeringMode ?? "all"}
+											onChange={(e) =>
+												save({ steeringMode: e.currentTarget.value as "all" | "one-at-a-time" })
+											}
+										>
+											<For each={[...QUEUE_MODES]}>{(mode) => <option value={mode}>{mode}</option>}</For>
+										</select>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">follow-up delivery</span>
+										<span class="hint">deliver queued follow-ups all at once, or one per turn</span>
+									</span>
+									<span class="setting-control">
+										<select
+											value={current().followUpMode ?? "all"}
+											onChange={(e) =>
+												save({ followUpMode: e.currentTarget.value as "all" | "one-at-a-time" })
+											}
+										>
+											<For each={[...QUEUE_MODES]}>{(mode) => <option value={mode}>{mode}</option>}</For>
+										</select>
+									</span>
+								</div>
+							</section>
+
+							<section class="settings-section">
+								<h2>behavior</h2>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">skill slash commands</span>
+										<span class="hint">register skills as slash commands in new sessions</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().enableSkillCommands !== false}
+											onChange={(value) => save({ enableSkillCommands: value })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">auto-load nested context</span>
+										<span class="hint">load nested AGENTS.md/CLAUDE.md when tools enter subdirectories</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().autoLoadNestedContext !== false}
+											onChange={(value) => save({ autoLoadNestedContext: value })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">hide thinking blocks</span>
+										<span class="hint">hide raw thinking blocks in rendered transcripts</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().hideThinkingBlock === true}
+											onChange={(value) => save({ hideThinkingBlock: value })}
+										/>
+									</span>
+								</div>
+							</section>
+
+							<section class="settings-section">
+								<h2>reliability</h2>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">auto-compaction</span>
+										<span class="hint">summarize old context when the window fills</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().compactionEnabled !== false}
+											onChange={(value) => save({ compactionEnabled: value })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">auto-retry</span>
+										<span class="hint">retry transient stream errors (rate limits, 5xx)</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().retryEnabled !== false}
+											onChange={(value) => save({ retryEnabled: value })}
+										/>
+									</span>
+								</div>
+							</section>
+
+							<p class="muted small settings-footnote">
+								TUI-only settings (theme, cursor, editor) are managed in the terminal /settings menu.
+							</p>
+						</>
+					)}
+				</Show>
+
+				<section class="settings-section">
+					<h2>dashboard</h2>
+					<div class="setting-row">
+						<span class="setting-label">
+							<span class="name">always expand thinking</span>
+							<span class="hint">this browser only — stored in localStorage, not the host settings file</span>
+						</span>
+						<span class="setting-control">
+							<label class="checkbox-control">
+								<input
+									id="pref-expand-thinking"
+									type="checkbox"
+									checked={expandThinking()}
+									onChange={(e) => setExpandThinking(e.currentTarget.checked)}
+								/>
+								<span>open by default</span>
+							</label>
+						</span>
+					</div>
+					<div class="setting-row">
+						<span class="setting-label">
+							<span class="name">auto-expand tool cards</span>
+							<span class="hint">this browser only — stored in localStorage, not the host settings file</span>
+						</span>
+						<span class="setting-control" style={{ display: "grid", gap: "6px" }}>
+							<For each={TOOL_AUTO_EXPAND_TOOLS}>
+								{(toolName) => (
+									<label class="checkbox-control">
+										<input
+											id={`pref-tool-expand-${toolName}`}
+											type="checkbox"
+											checked={isToolAutoOpen(toolName)}
+											onChange={(e) => setToolAutoExpand(toolName, e.currentTarget.checked)}
+										/>
+										<span>{toolName}</span>
+									</label>
+								)}
+							</For>
+						</span>
+					</div>
+					<div class="setting-row">
+						<span class="setting-label">
+							<span class="name">needs-attention notifications</span>
+							<span class="hint">
+								{notificationPermission() === "denied"
+									? "blocked by browser settings — re-enable notifications in site permissions"
+									: notificationPermission() === "unsupported"
+										? "browser notifications are unavailable in this environment"
+										: "show a browser notification when a hidden tab needs input"}
+							</span>
+						</span>
+						<span class="setting-control">
+							<label class="checkbox-control">
+								<input
+									id="pref-notifications"
+									type="checkbox"
+									checked={notificationPermission() === "granted"}
+									disabled={
+										notificationPermission() === "denied" || notificationPermission() === "unsupported"
+									}
+									onChange={(e) => {
+										if (e.currentTarget.checked) void requestNotifications();
+									}}
+								/>
+								<span>{notificationPermission() === "granted" ? "enabled" : "enable notifications"}</span>
+							</label>
+						</span>
+					</div>
+					<div class="setting-row">
+						<span class="setting-label">
+							<span class="name">restart dashboard service</span>
+							<span class="hint">
+								{serverInfo()?.supervised
+									? "restarts the server process (a supervisor respawns it with the latest build) — kills all running sessions"
+									: "exits the server process — only auto-restarts if run under a supervisor (systemd, pm2, …); otherwise the dashboard goes down. kills all running sessions"}
+							</span>
+						</span>
+						<span class="setting-control">
+							<button
+								type="button"
+								class="btn btn-small btn-danger"
+								disabled={restarting()}
+								onClick={() => setShowRestartConfirm(true)}
+							>
+								{restarting() ? "restarting…" : "restart"}
+							</button>
+						</span>
+					</div>
+					<Show when={restartError()}>
+						<div class="settings-error">{restartError()}</div>
+					</Show>
+				</section>
+
+				<section class="settings-section">
+					<h2>devices</h2>
+					<div class="device-row">
+						<span>
+							this machine <span class="this-device">{auth()?.mode === "local" ? "local" : "host"}</span>
+						</span>
+						<span class="meta">local · always allowed</span>
+					</div>
+					<Show when={pairingCode()?.enabled && pairingCode()?.code}>
+						<div class="setting-row">
+							<span class="setting-label">
+								<span class="name">pairing code</span>
+								<span class="hint">new devices enter this in the pairing screen; it rotates every 30s</span>
+							</span>
+							<span class="setting-control">
+								<code style={{ "font-size": "var(--fs-h2)", "letter-spacing": "0.08em" }}>
+									{pairingCode()!.code}
+								</code>
+							</span>
+						</div>
+					</Show>
+					<For each={devices() ?? []}>
+						{(device) => (
+							<div class="device-row">
+								<span>{device.device ?? device.id}</span>
+								<span class="meta">
+									{device.identity} · paired {relativeTime(device.createdAt)}
+								</span>
+								<span class="actions">
+									<button
+										type="button"
+										class="btn btn-small btn-danger"
+										onClick={async () => {
+											await api.unpair(device.id);
+											await refetchDevices();
+										}}
+									>
+										unpair
+									</button>
+								</span>
+							</div>
+						)}
+					</For>
+					<Show when={(devices() ?? []).length === 0}>
+						<p class="muted small" style={{ "padding-top": "8px" }}>
+							No remote devices paired. Launch with <code>--remote --allow &lt;identity&gt;</code> to enable
+							Tailscale access.
+						</p>
+					</Show>
+				</section>
+
+				<footer>
+					dreb
+					{serverInfo()?.version ? ` v${serverInfo()!.version}` : version() ? ` v${version()}` : ""} · dashboard
+					<Show when={serverInfo()?.startedAt}> · server build, up {relativeTime(serverInfo()!.startedAt)}</Show>
+				</footer>
+			</main>
+			<Show when={showRestartConfirm()}>
+				<Modal
+					title="restart dashboard service?"
+					onDismiss={() => setShowRestartConfirm(false)}
+					actions={
+						<>
+							<button type="button" class="btn btn-small" onClick={() => setShowRestartConfirm(false)}>
+								cancel
+							</button>
+							<button
+								type="button"
+								class="btn btn-small btn-danger"
+								onClick={() => {
+									setShowRestartConfirm(false);
+									void restartServer();
+								}}
+							>
+								restart
+							</button>
+						</>
+					}
+				>
+					<p>
+						This exits the dashboard server process and terminates <strong>all running sessions</strong>.
+						{serverInfo()?.supervised
+							? " A supervisor is detected — the server should respawn automatically with the latest build."
+							: " No supervisor was detected — the dashboard will NOT come back on its own; you'll need to relaunch it manually."}
+					</p>
+				</Modal>
+			</Show>
+			<Show when={modelPickerTarget()}>
+				{(target) => {
+					const pickerTitle = () => {
+						const active = target();
+						return active.kind === "default" ? "select default model" : `add model for ${active.agentName}`;
+					};
+					const selectedKeys = () => {
+						const active = target();
+						if (active.kind === "default") {
+							return settings()?.defaultProvider && settings()?.defaultModel
+								? [`${settings()!.defaultProvider}/${settings()!.defaultModel}`]
+								: [];
+						}
+						return currentAgentModels(active.agentName);
+					};
+					return (
+						<ModelPickerModal
+							title={pickerTitle()}
+							models={availableModels() ?? []}
+							selected={selectedKeys()}
+							onClose={() => setModelPickerTarget(undefined)}
+							onPick={(model) => {
+								const active = target();
+								setModelPickerTarget(undefined);
+								if (active.kind === "default") {
+									void save({ defaultProvider: model.provider, defaultModel: model.id });
+									return;
+								}
+								const entry = modelKey(model);
+								const currentList = currentAgentModels(active.agentName);
+								if (currentList.includes(entry)) return;
+								void saveAgentModels(active.agentName, [...currentList, entry]);
+							}}
+						/>
+					);
+				}}
+			</Show>
+		</div>
+	);
+}

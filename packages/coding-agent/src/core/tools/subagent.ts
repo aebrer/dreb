@@ -1,8 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { closeSync, type Dirent, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
 import { type Api, type AssistantMessage, type Context, completeSimple, type Model } from "@dreb/ai";
 import { Text } from "@dreb/tui";
@@ -191,6 +191,70 @@ function findDrebBinary(): string {
 	return DREB_SCRIPT;
 }
 
+/**
+ * Sinks for the child process's JSONL stdout stream. Extracted so the line
+ * handling is unit-testable without spawning a real child process.
+ */
+export interface ChildLineSinks {
+	/** Called with every successfully parsed JSONL event (including the session header). */
+	onEvent?: (event: Record<string, unknown>) => void;
+	/** Called with each complete assistant message (`message_end`). */
+	onAssistantMessage: (message: { role: string; content: any[] }) => void;
+	/** Called with human-readable progress lines (tool start/end). */
+	onProgress?: (text: string) => void;
+	/** Called when the child reports its resolved model (`agent_start`). */
+	onModel: (modelId: string) => void;
+	/** Called with lines that failed to parse as JSON (often real startup errors). */
+	onPlainLine: (line: string) => void;
+	/** Mutable holder for the last tool name, shared across lines for progress text. */
+	toolNameRef: { current: string };
+}
+
+/**
+ * Handle one line of a subagent child's JSONL stdout. Parses the line and
+ * dispatches to the sinks: full-event relay, assistant-message collection,
+ * tool progress, resolved model, and non-JSON passthrough.
+ */
+export function handleChildJsonlLine(line: string, sinks: ChildLineSinks): void {
+	if (!line.trim()) return;
+	// Separate JSON.parse from event handling so only parse failures
+	// are caught as non-JSON lines — errors in handling propagate normally
+	let event: any;
+	try {
+		event = JSON.parse(line);
+	} catch {
+		// Capture non-JSON lines — on failure these often contain the real error
+		// (e.g. startup errors printed before JSONL mode begins)
+		sinks.onPlainLine(line.trim());
+		if (line.trim().startsWith("{")) {
+			log.warn(`[subagent] Failed to parse JSONL event: ${line.slice(0, 200)}`);
+		}
+		return;
+	}
+	if (event === null || typeof event !== "object") {
+		// Valid JSON but not an event object (e.g. a bare string or number) — treat
+		// like a plain line so diagnostic content is preserved.
+		sinks.onPlainLine(line.trim());
+		return;
+	}
+	if (typeof event.type === "string") {
+		sinks.onEvent?.(event);
+	}
+	if (event.type === "agent_start" && event.model) {
+		sinks.onModel(event.model.id);
+	}
+	if (event.type === "message_end" && event.message?.role === "assistant") {
+		sinks.onAssistantMessage(event.message);
+	}
+	if (event.type === "tool_execution_start" && sinks.onProgress) {
+		sinks.toolNameRef.current = event.toolName || "";
+		sinks.onProgress(`Using ${sinks.toolNameRef.current}...`);
+	}
+	if (event.type === "tool_execution_end" && sinks.onProgress) {
+		sinks.onProgress(`${sinks.toolNameRef.current} done`);
+	}
+}
+
 async function spawnSubagent(
 	agentConfig: AgentTypeConfig,
 	task: string,
@@ -200,6 +264,7 @@ async function spawnSubagent(
 	parentProvider?: string,
 	sessionDir?: string,
 	parentSessionFile?: string,
+	onChildEvent?: (event: Record<string, unknown>) => void,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
 	log.debug(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
@@ -284,7 +349,7 @@ async function spawnSubagent(
 		let stderrSize = 0;
 		const MAX_STDERR_BYTES = 8192;
 		const plainStdoutLines: string[] = [];
-		let lastToolName = "";
+		const toolNameRef = { current: "" };
 		let resolvedModel: string | undefined;
 
 		// Drain stderr concurrently to avoid pipe deadlock (capped to prevent OOM from verbose subagents)
@@ -305,34 +370,16 @@ async function spawnSubagent(
 				log.warn(`[subagent] stdout stream error (agent=${agentConfig.name}): ${err.message}`);
 			});
 			attachJsonlLineReader(proc.stdout, (line) => {
-				if (!line.trim()) return;
-				// Separate JSON.parse from event handling so only parse failures
-				// are caught as non-JSON lines — errors in handling propagate normally
-				let event: any;
-				try {
-					event = JSON.parse(line);
-				} catch {
-					// Capture non-JSON lines — on failure these often contain the real error
-					// (e.g. startup errors printed before JSONL mode begins)
-					plainStdoutLines.push(line.trim());
-					if (line.trim().startsWith("{")) {
-						log.warn(`[subagent] Failed to parse JSONL event: ${line.slice(0, 200)}`);
-					}
-					return;
-				}
-				if (event.type === "agent_start" && event.model) {
-					resolvedModel = event.model.id;
-				}
-				if (event.type === "message_end" && event.message?.role === "assistant") {
-					collectedMessages.push(event.message);
-				}
-				if (event.type === "tool_execution_start" && onProgress) {
-					lastToolName = event.toolName || "";
-					onProgress(`Using ${lastToolName}...`);
-				}
-				if (event.type === "tool_execution_end" && onProgress) {
-					onProgress(`${lastToolName} done`);
-				}
+				handleChildJsonlLine(line, {
+					onEvent: onChildEvent,
+					onAssistantMessage: (message) => collectedMessages.push(message),
+					onProgress,
+					onModel: (modelId) => {
+						resolvedModel = modelId;
+					},
+					onPlainLine: (plain) => plainStdoutLines.push(plain),
+					toolNameRef,
+				});
 			});
 		}
 
@@ -446,39 +493,107 @@ async function spawnSubagent(
 // Session file discovery and cleanup
 // ---------------------------------------------------------------------------
 
+interface SessionFileCandidate {
+	path: string;
+	mtime: number;
+}
+
+const STEP_SESSION_DIR_RE = /^step-(\d+)$/;
+
+function findNewestJsonlFileInDir(dir: string): SessionFileCandidate | undefined {
+	let best: SessionFileCandidate | undefined;
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		if (!entry.name.endsWith(".jsonl")) continue;
+		if (entry.isDirectory()) continue;
+		const fullPath = join(dir, entry.name);
+		try {
+			const mtime = statSync(fullPath).mtime.getTime();
+			if (!best || mtime > best.mtime) best = { path: fullPath, mtime };
+		} catch (err) {
+			if (isExpectedFilesystemError(err)) continue;
+			throw err;
+		}
+	}
+	return best;
+}
+
+function discoverStepSessionFileCandidates(sessionDir: string): SessionFileCandidate[] {
+	const steps: Array<{ name: string; index: number }> = [];
+	for (const entry of readdirSync(sessionDir, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const match = STEP_SESSION_DIR_RE.exec(entry.name);
+		if (!match) continue;
+		steps.push({ name: entry.name, index: Number(match[1]) });
+	}
+	steps.sort((a, b) => a.index - b.index || a.name.localeCompare(b.name));
+
+	const files: SessionFileCandidate[] = [];
+	for (const step of steps) {
+		try {
+			const candidate = findNewestJsonlFileInDir(join(sessionDir, step.name));
+			if (candidate) files.push(candidate);
+		} catch (err) {
+			if (isExpectedFilesystemError(err)) continue;
+			throw err;
+		}
+	}
+	return files;
+}
+
+/**
+ * Find session JSONL files for a subagent session directory.
+ *
+ * Normal subagents write one .jsonl directly under sessionDir, so this returns
+ * the most recently modified flat file. Chain-mode subagents register the chain
+ * root as sessionDir but write each step under step-N/, so when no flat file is
+ * present this recurses one level into step-* directories and returns one file
+ * per step in numeric step order.
+ */
+export function discoverSessionFiles(sessionDir: string, agentName: string): string[] {
+	try {
+		if (!existsSync(sessionDir)) return [];
+		const flatFile = findNewestJsonlFileInDir(sessionDir);
+		if (flatFile) {
+			log.debug(`[subagent] session file: ${flatFile.path} (agent=${agentName})`);
+			return [flatFile.path];
+		}
+
+		const stepFiles = discoverStepSessionFileCandidates(sessionDir);
+		if (stepFiles.length > 0) {
+			log.debug(
+				`[subagent] chain session files: ${stepFiles.map((file) => file.path).join(", ")} (agent=${agentName})`,
+			);
+			return stepFiles.map((file) => file.path);
+		}
+	} catch (err) {
+		if (!isExpectedFilesystemError(err)) throw err;
+		log.warn(
+			`[subagent] failed to discover session file (agent=${agentName}): ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+	return [];
+}
+
 /**
  * Find the most recently modified .jsonl file in a session directory.
  * Returns the full path, or undefined if no session file was written
  * (e.g., subagent was killed before the first assistant message).
  */
 export function discoverSessionFile(sessionDir: string, agentName: string): string | undefined {
-	try {
-		if (!existsSync(sessionDir)) return undefined;
-		const files = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
-		if (files.length === 0) return undefined;
-		// Pick the most recently modified file (typically there's only one per subagent dir)
-		let best: { path: string; mtime: number } | undefined;
-		for (const f of files) {
-			try {
-				const fullPath = join(sessionDir, f);
-				const mtime = statSync(fullPath).mtime.getTime();
-				if (!best || mtime > best.mtime) {
-					best = { path: fullPath, mtime };
-				}
-			} catch {
-				// File disappeared or is a bad symlink — skip it, keep any valid candidate
-			}
+	const files = discoverSessionFiles(sessionDir, agentName);
+	if (files.length <= 1) return files[0];
+
+	let best: SessionFileCandidate | undefined;
+	for (const file of files) {
+		try {
+			const candidate = { path: file, mtime: statSync(file).mtime.getTime() };
+			if (!best || candidate.mtime > best.mtime) best = candidate;
+		} catch (err) {
+			if (isExpectedFilesystemError(err)) continue;
+			throw err;
 		}
-		if (best) {
-			log.debug(`[subagent] session file: ${best.path} (agent=${agentName})`);
-			return best.path;
-		}
-	} catch (err) {
-		log.warn(
-			`[subagent] failed to discover session file (agent=${agentName}): ${err instanceof Error ? err.message : String(err)}`,
-		);
 	}
-	return undefined;
+	return best?.path;
 }
 
 // ---------------------------------------------------------------------------
@@ -854,6 +969,7 @@ export async function executeSingle(
 	parentModel?: string,
 	agentModels?: string[],
 	parentSessionFile?: string,
+	onChildEvent?: (event: Record<string, unknown>) => void,
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -924,6 +1040,7 @@ export async function executeSingle(
 		resolvedProvider,
 		sessionDir,
 		parentSessionFile,
+		onChildEvent,
 	);
 	result.output = prependModelFallbackSummary(result.output, skippedModels, result.model ?? usedModel);
 	if (warning) {
@@ -946,6 +1063,7 @@ async function executeChain(
 	parentModel?: string,
 	getAgentModelsForAgentFn?: (name: string) => string[] | undefined,
 	parentSessionFile?: string,
+	onChildEvent?: (event: Record<string, unknown>) => void,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -1000,6 +1118,7 @@ async function executeChain(
 			parentModel,
 			stepMach6Models,
 			parentSessionFile,
+			onChildEvent,
 		);
 		results.push(result);
 
@@ -1030,10 +1149,285 @@ export interface BackgroundAgentInfo {
 	taskSummary: string;
 	startedAt: number;
 	status: "running" | "completed" | "failed";
+	/** Directory containing the agent's session JSONL file (known at spawn time). */
+	sessionDir?: string;
+	/** Path to the agent's session JSONL file (discovered when the child exits). */
+	sessionFile?: string;
+	/** Working directory the agent runs in. */
+	cwd?: string;
 }
 
 const backgroundAgentRegistry = new Map<string, BackgroundAgentInfo>();
 const backgroundAbortControllers = new Map<string, AbortController>();
+
+const REHYDRATED_AGENT_ID_PREFIX = "rehydrated-";
+const HEADER_READ_CHUNK_BYTES = 8192;
+const MAX_HEADER_READ_BYTES = 256 * 1024;
+const METADATA_READ_BYTES = 256 * 1024;
+const TAIL_READ_BYTES = 64 * 1024;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isExpectedFilesystemError(err: unknown): boolean {
+	return typeof (err as NodeJS.ErrnoException | undefined)?.code === "string";
+}
+
+function parseJsonlLine(line: string): Record<string, unknown> | undefined {
+	try {
+		const parsed = JSON.parse(line);
+		return isRecord(parsed) ? parsed : undefined;
+	} catch (err) {
+		if (err instanceof SyntaxError) return undefined;
+		throw err;
+	}
+}
+
+function readFirstNonEmptyLine(filePath: string): string | undefined {
+	let fd: number | undefined;
+	try {
+		fd = openSync(filePath, "r");
+		const chunk = Buffer.alloc(HEADER_READ_CHUNK_BYTES);
+		let buffered = "";
+		let bytesReadTotal = 0;
+
+		while (bytesReadTotal < MAX_HEADER_READ_BYTES) {
+			const bytesRead = readSync(fd, chunk, 0, Math.min(chunk.length, MAX_HEADER_READ_BYTES - bytesReadTotal), null);
+			if (bytesRead === 0) break;
+			bytesReadTotal += bytesRead;
+			buffered += chunk.toString("utf8", 0, bytesRead);
+
+			const lines = buffered.split(/\r?\n/);
+			const completeLines = buffered.endsWith("\n") || buffered.endsWith("\r") ? lines : lines.slice(0, -1);
+			for (const line of completeLines) {
+				if (line.trim()) return line;
+			}
+			buffered = lines.at(-1) ?? "";
+		}
+
+		return buffered.trim() ? buffered : undefined;
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return undefined;
+		throw err;
+	} finally {
+		if (fd !== undefined) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Best-effort observability: close errors are filesystem cleanup noise.
+			}
+		}
+	}
+}
+
+function readFileSlice(filePath: string, start: number, length: number): string | undefined {
+	let fd: number | undefined;
+	try {
+		fd = openSync(filePath, "r");
+		const buffer = Buffer.alloc(length);
+		const bytesRead = readSync(fd, buffer, 0, length, start);
+		return buffer.toString("utf8", 0, bytesRead);
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return undefined;
+		throw err;
+	} finally {
+		if (fd !== undefined) {
+			try {
+				closeSync(fd);
+			} catch {
+				// Best-effort observability: close errors are filesystem cleanup noise.
+			}
+		}
+	}
+}
+
+function readFileStart(filePath: string, maxBytes: number): string | undefined {
+	let size = maxBytes;
+	try {
+		size = Math.min(statSync(filePath).size, maxBytes);
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return undefined;
+		throw err;
+	}
+	return readFileSlice(filePath, 0, size);
+}
+
+function readFileTail(filePath: string, maxBytes: number): string | undefined {
+	let start = 0;
+	let length = maxBytes;
+	try {
+		const size = statSync(filePath).size;
+		start = Math.max(0, size - maxBytes);
+		length = size - start;
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return undefined;
+		throw err;
+	}
+	return readFileSlice(filePath, start, length);
+}
+
+function parseSessionHeader(sessionFile: string): Record<string, unknown> | undefined {
+	const headerLine = readFirstNonEmptyLine(sessionFile);
+	if (!headerLine) return undefined;
+	return parseJsonlLine(headerLine);
+}
+
+function comparablePath(pathValue: string): string {
+	const resolved = resolve(pathValue);
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function parentSessionMatches(recordedParentSession: string, parentSessionFile: string): boolean {
+	if (recordedParentSession === parentSessionFile) return true;
+	if (comparablePath(recordedParentSession) === comparablePath(parentSessionFile)) return true;
+
+	// Older/foreign invocations may disagree about absolute vs relative roots, but
+	// dreb session filenames include a timestamp and UUID. A basename match is a
+	// safe final fallback for recovering observability across process boundaries.
+	return basename(recordedParentSession) === basename(parentSessionFile);
+}
+
+function extractTextFromContent(content: unknown): string | undefined {
+	if (typeof content === "string") return content.trim() || undefined;
+	if (!Array.isArray(content)) return undefined;
+
+	const parts: string[] = [];
+	for (const item of content) {
+		if (!isRecord(item)) continue;
+		if (item.type === "text" && typeof item.text === "string" && item.text.trim()) {
+			parts.push(item.text.trim());
+		}
+	}
+	const text = parts.join("\n").trim();
+	return text || undefined;
+}
+
+function truncateTaskSummary(text: string): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized;
+}
+
+function findFirstUserMessageSummary(sessionFile: string): string | undefined {
+	const head = readFileStart(sessionFile, METADATA_READ_BYTES);
+	if (!head) return undefined;
+
+	for (const line of head.split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		const entry = parseJsonlLine(line);
+		if (entry?.type !== "message" || !isRecord(entry.message)) continue;
+		if (entry.message.role !== "user") continue;
+		const text = extractTextFromContent(entry.message.content);
+		if (text) return truncateTaskSummary(text);
+	}
+	return undefined;
+}
+
+function inferCompletedSessionStatus(sessionFile: string): "completed" | "failed" {
+	const tail = readFileTail(sessionFile, TAIL_READ_BYTES);
+	if (!tail) return "completed";
+
+	const lines = tail.split(/\r?\n/).reverse();
+	for (const line of lines) {
+		if (!line.trim()) continue;
+		const entry = parseJsonlLine(line);
+		if (entry?.type !== "message" || !isRecord(entry.message)) continue;
+		if (entry.message.role !== "assistant") continue;
+
+		const stopReason = entry.message.stopReason;
+		return stopReason === "error" || stopReason === "aborted" ? "failed" : "completed";
+	}
+	return "completed";
+}
+
+function parseStartedAt(header: Record<string, unknown>, sessionFile: string): number {
+	if (typeof header.timestamp === "string") {
+		const timestamp = Date.parse(header.timestamp);
+		if (Number.isFinite(timestamp)) return timestamp;
+	}
+
+	try {
+		return statSync(sessionFile).mtime.getTime();
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return Date.now();
+		throw err;
+	}
+}
+
+function hasRegisteredSession(sessionDir: string, sessionFile: string): boolean {
+	const comparableSessionDir = comparablePath(sessionDir);
+	const comparableSessionFile = comparablePath(sessionFile);
+	for (const agent of backgroundAgentRegistry.values()) {
+		if (agent.sessionDir && comparablePath(agent.sessionDir) === comparableSessionDir) return true;
+		if (agent.sessionFile && comparablePath(agent.sessionFile) === comparableSessionFile) return true;
+	}
+	return false;
+}
+
+/**
+ * Best-effort recovery for completed background subagents after a dashboard/RPC
+ * process resumes an existing parent session. Live background-agent state is an
+ * in-memory registry, while child sessions are durable JSONL files under the
+ * subagent sessions directory.
+ *
+ * Returns the number of newly registered agents. Expected filesystem and JSONL
+ * parse failures are skipped; unexpected programming errors are allowed to throw.
+ */
+export function rehydrateBackgroundAgentsFromDisk(
+	parentSessionFile: string | undefined,
+	subagentSessionsBase = getSubagentSessionsDir(),
+): number {
+	if (!parentSessionFile) return 0;
+
+	let entries: Dirent[];
+	try {
+		entries = readdirSync(subagentSessionsBase, { withFileTypes: true });
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return 0;
+		throw err;
+	}
+
+	let registered = 0;
+	for (const entry of entries) {
+		if (!entry.isDirectory()) continue;
+
+		const sessionDir = join(subagentSessionsBase, entry.name);
+		const sessionFiles = discoverSessionFiles(sessionDir, entry.name);
+		if (sessionFiles.length === 0) continue;
+
+		let sessionFile: string | undefined;
+		let header: Record<string, unknown> | undefined;
+		for (const candidateFile of sessionFiles) {
+			const candidateHeader = parseSessionHeader(candidateFile);
+			if (candidateHeader?.type !== "session" || typeof candidateHeader.parentSession !== "string") continue;
+			if (!parentSessionMatches(candidateHeader.parentSession, parentSessionFile)) continue;
+			sessionFile = candidateFile;
+			header = candidateHeader;
+			break;
+		}
+		if (!sessionFile || !header) continue;
+
+		const agentId = `${REHYDRATED_AGENT_ID_PREFIX}${entry.name}`;
+		if (backgroundAgentRegistry.has(agentId) || hasRegisteredSession(sessionDir, sessionFile)) continue;
+
+		const statusFile = sessionFiles[sessionFiles.length - 1] ?? sessionFile;
+		const agentType = typeof header.agentType === "string" && header.agentType.trim() ? header.agentType : "agent";
+		const taskSummary = findFirstUserMessageSummary(sessionFile) ?? `${agentType} (${entry.name})`;
+		backgroundAgentRegistry.set(agentId, {
+			agentId,
+			agentType,
+			taskSummary,
+			startedAt: parseStartedAt(header, sessionFile),
+			status: inferCompletedSessionStatus(statusFile),
+			sessionDir,
+			sessionFile,
+			cwd: typeof header.cwd === "string" ? header.cwd : undefined,
+		});
+		registered++;
+	}
+
+	return registered;
+}
 
 /** Get a snapshot of all tracked background agents (running and recently completed). Returns readonly clones. */
 export function getBackgroundAgents(): readonly Readonly<BackgroundAgentInfo>[] {
@@ -1070,9 +1464,15 @@ export function pruneBackgroundAgents(maxAgeMs = 5 * 60 * 1000): void {
 
 export interface SubagentToolOptions {
 	/** Called when a background subagent starts. Used by TUI to show status indicators. */
-	onBackgroundStart?: (agentId: string, agentType: string, taskSummary: string) => void;
+	onBackgroundStart?: (agentId: string, agentType: string, taskSummary: string, sessionDir?: string) => void;
 	/** Called when a background subagent completes with its result. `cancelled` is true if the user aborted it. */
 	onBackgroundComplete?: (agentId: string, result: SubagentResult, cancelled: boolean) => void;
+	/**
+	 * Called with every JSONL event a background child process emits, tagged with the
+	 * child's agentId. Enables live observability relays (e.g. the dashboard) without
+	 * tailing session files. Chain steps share the chain's agentId.
+	 */
+	onBackgroundEvent?: (agentId: string, event: Record<string, unknown>) => void;
 	/** Parent session's current provider (e.g. "anthropic"). Called at each invocation to get the live value after mid-session model switches. */
 	parentProvider?: () => string | undefined;
 	/** Parent session's current model ID. Used as a final fallback when all subagent-configured models fail to resolve. Called at each invocation for fresh value. */
@@ -1247,6 +1647,7 @@ export function createSubagentToolDefinition(
 ): ToolDefinition<typeof subagentSchema, SubagentToolDetails | undefined> {
 	const onBackgroundStart = options?.onBackgroundStart;
 	const onBackgroundComplete = options?.onBackgroundComplete;
+	const onBackgroundEvent = options?.onBackgroundEvent;
 	const getParentProvider = options?.parentProvider ?? (() => undefined);
 	const getParentModel = options?.parentModel ?? (() => undefined);
 	const getParentSessionFile = options?.parentSessionFile ?? (() => undefined);
@@ -1332,12 +1733,19 @@ export function createSubagentToolDefinition(
 				 * Shared lifecycle for all background launches: generates agent ID,
 				 * sets up registry/abort/notification, gates on the concurrency
 				 * semaphore, and handles errors. The caller provides the actual
-				 * work via `runFn(signal)` which must return a SubagentResult.
+				 * work via `runFn(signal, onChildEvent)` which must return a
+				 * SubagentResult; `onChildEvent` (when defined) must be forwarded to
+				 * the spawn so the child's JSONL events reach the relay.
 				 */
 				const launchBackgroundLifecycle = (
 					agentName: string,
 					taskSummary: string,
-					runFn: (signal: AbortSignal) => Promise<SubagentResult>,
+					sessionDir: string,
+					agentCwd: string,
+					runFn: (
+						signal: AbortSignal,
+						onChildEvent?: (event: Record<string, unknown>) => void,
+					) => Promise<SubagentResult>,
 				): string => {
 					const agentId = generateAgentId();
 					const bgAbort = new AbortController();
@@ -1347,9 +1755,25 @@ export function createSubagentToolDefinition(
 						taskSummary,
 						startedAt: Date.now(),
 						status: "running",
+						sessionDir,
+						cwd: agentCwd,
 					});
 					backgroundAbortControllers.set(agentId, bgAbort);
-					onBackgroundStart?.(agentId, agentName, taskSummary);
+					onBackgroundStart?.(agentId, agentName, taskSummary, sessionDir);
+
+					// Relay child JSONL events tagged with this agent's ID. Guarded so a
+					// throwing relay listener can never kill the stdout reader.
+					const onChildEvent = onBackgroundEvent
+						? (event: Record<string, unknown>) => {
+								try {
+									onBackgroundEvent(agentId, event);
+								} catch (err) {
+									log.warn(
+										`[subagent] onBackgroundEvent threw for agent ${agentId}: ${err instanceof Error ? err.message : String(err)}`,
+									);
+								}
+							}
+						: undefined;
 
 					const bgSignal = bgAbort.signal;
 
@@ -1366,9 +1790,10 @@ export function createSubagentToolDefinition(
 					const run = async () => {
 						await bgAcquire();
 						try {
-							const result = await runFn(bgSignal);
+							const result = await runFn(bgSignal, onChildEvent);
 							const entry = backgroundAgentRegistry.get(agentId);
 							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
+							if (entry && result.sessionFile) entry.sessionFile = result.sessionFile;
 							backgroundAbortControllers.delete(agentId);
 							safeNotify(result);
 						} catch (err) {
@@ -1431,7 +1856,7 @@ export function createSubagentToolDefinition(
 					const sessionId = generateAgentId();
 					const sessionDir = join(subagentSessionsBase, sessionId);
 					const agentModels = getAgentModelsForAgent?.(agentName || DEFAULT_AGENT);
-					return launchBackgroundLifecycle(agentName, taskLabel, (signal) =>
+					return launchBackgroundLifecycle(agentName, taskLabel, sessionDir, resolvedCwd, (signal, onChildEvent) =>
 						executeSingle(
 							agents,
 							agentName === DEFAULT_AGENT ? undefined : agentName,
@@ -1446,6 +1871,7 @@ export function createSubagentToolDefinition(
 							getParentModel(),
 							agentModels,
 							getParentSessionFile(),
+							onChildEvent,
 						),
 					);
 				};
@@ -1523,39 +1949,46 @@ export function createSubagentToolDefinition(
 					const chainSteps = params.chain!;
 
 					const chainSessionDir = join(subagentSessionsBase, `chain-${generateAgentId()}`);
-					const agentId = launchBackgroundLifecycle(agentName, taskSummary, async (signal) => {
-						const results = await executeChain(
-							agents,
-							chainSteps,
-							cwd,
-							signal,
-							undefined,
-							getParentProvider(),
-							modelRegistry,
-							chainSessionDir,
-							params.agent,
-							params.model,
-							getParentModel(),
-							getAgentModelsForAgent,
-							getParentSessionFile(),
-						);
-						const resultText = results
-							.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
-							.join("\n\n---\n\n");
-						const failed = results.filter((r) => r.exitCode !== 0);
-						// Per-step session logs are already embedded in resultText via formatSingleResult
-						return {
-							agent: agentName,
-							task: taskSummary,
-							exitCode: failed.length > 0 ? 1 : 0,
-							output: resultText,
-							stderr: "",
-							errorMessage:
-								failed.length > 0
-									? `Chain stopped at step ${results.length} of ${chainSteps.length}: ${results[results.length - 1]?.errorMessage}`
-									: null,
-						};
-					});
+					const agentId = launchBackgroundLifecycle(
+						agentName,
+						taskSummary,
+						chainSessionDir,
+						cwd,
+						async (signal, onChildEvent) => {
+							const results = await executeChain(
+								agents,
+								chainSteps,
+								cwd,
+								signal,
+								undefined,
+								getParentProvider(),
+								modelRegistry,
+								chainSessionDir,
+								params.agent,
+								params.model,
+								getParentModel(),
+								getAgentModelsForAgent,
+								getParentSessionFile(),
+								onChildEvent,
+							);
+							const resultText = results
+								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
+								.join("\n\n---\n\n");
+							const failed = results.filter((r) => r.exitCode !== 0);
+							// Per-step session logs are already embedded in resultText via formatSingleResult
+							return {
+								agent: agentName,
+								task: taskSummary,
+								exitCode: failed.length > 0 ? 1 : 0,
+								output: resultText,
+								stderr: "",
+								errorMessage:
+									failed.length > 0
+										? `Chain stopped at step ${results.length} of ${chainSteps.length}: ${results[results.length - 1]?.errorMessage}`
+										: null,
+							};
+						},
+					);
 
 					return {
 						content: [

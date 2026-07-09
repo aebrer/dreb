@@ -74,7 +74,6 @@ export class AgentBridge {
 		await this.client.start();
 
 		// Subscribe to events and forward to listeners
-		// Cast: RpcClient types events as AgentEvent but actually forwards all AgentSessionEvent types
 		this.client.onEvent((event) => {
 			this.handleEvent(event as RpcEvent);
 		});

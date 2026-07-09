@@ -5,9 +5,11 @@
  *   import { RpcClient } from "@dreb/coding-agent/rpc";
  */
 
-export type { ModelInfo, RpcClientOptions, RpcEventListener } from "./rpc-client.js";
+export type { ModelInfo, RpcClientOptions, RpcEventListener, RpcExitInfo, RpcExitListener } from "./rpc-client.js";
 export { RpcClient } from "./rpc-client.js";
 export type {
+	RpcAgentTypeInfo,
+	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcCommandType,
 	RpcExtensionUIRequest,
@@ -15,6 +17,7 @@ export type {
 	RpcResponse,
 	RpcSessionInfo,
 	RpcSessionState,
+	RpcSettingsSetResult,
 	RpcSettingsSnapshot,
 	RpcSettingsUpdate,
 	RpcSlashCommand,

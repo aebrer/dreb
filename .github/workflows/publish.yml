@@ -84,3 +84,13 @@ jobs:
           else
             npm publish
           fi
+
+      - name: Publish @dreb/dashboard
+        working-directory: packages/dashboard
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view @dreb/dashboard@$VERSION version >/dev/null 2>&1; then
+            echo "::warning::@dreb/dashboard@$VERSION already published, skipping"
+          else
+            npm publish
+          fi

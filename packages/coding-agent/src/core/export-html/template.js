@@ -1154,7 +1154,7 @@
                 html += `<div class="assistant-text markdown-content">${safeMarkedParse(block.text)}</div>`;
               } else if (block.type === 'thinking' && block.thinking.trim()) {
                 html += `<div class="thinking-block">
-                  <div class="thinking-text">${escapeHtml(block.thinking)}</div>
+                  <div class="thinking-text markdown-content">${safeMarkedParse(block.thinking)}</div>
                   <div class="thinking-collapsed">Thinking ...</div>
                 </div>`;
               }

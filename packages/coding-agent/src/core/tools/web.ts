@@ -70,6 +70,22 @@ const FETCH_HEADERS = {
 	Accept: "text/html,application/xhtml+xml,text/plain,application/pdf",
 };
 
+function fetchSignal(signal?: AbortSignal): AbortSignal {
+	const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+	return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+}
+
+function isAbortOrCancelError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	return error.name === "AbortError" || /\b(cancelled|canceled)\b/i.test(error.message);
+}
+
+function isCallerAbort(error: unknown, signal?: AbortSignal): boolean {
+	if (isAbortOrCancelError(error)) return true;
+	if (!signal?.aborted) return false;
+	return error === signal.reason;
+}
+
 // Block fetches to private/internal networks to prevent SSRF
 const BLOCKED_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
 
@@ -100,7 +116,7 @@ function buildResponse(response: Response): Promise<{ body: string | Buffer; con
 	return response.text().then((text) => ({ body: text, contentType: ct }));
 }
 
-async function httpFetch(url: string): Promise<{ body: string | Buffer; contentType: string }> {
+async function httpFetch(url: string, signal?: AbortSignal): Promise<{ body: string | Buffer; contentType: string }> {
 	const originalHost = new URL(url).hostname;
 	if (isPrivateHost(originalHost)) {
 		throw new Error(`Blocked: ${originalHost} is a private/internal address`);
@@ -114,7 +130,7 @@ async function httpFetch(url: string): Promise<{ body: string | Buffer; contentT
 			method: "GET",
 			headers: FETCH_HEADERS,
 			redirect: "manual",
-			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+			signal: fetchSignal(signal),
 		});
 
 		if (response.status >= 300 && response.status < 400) {
@@ -202,7 +218,7 @@ interface SearchResult {
 	snippet: string;
 }
 
-async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
+async function searchDuckDuckGo(query: string, signal?: AbortSignal): Promise<SearchResult[]> {
 	const encodedQuery = encodeURIComponent(query);
 	const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodedQuery}`, {
 		method: "GET",
@@ -211,7 +227,7 @@ async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
 			Accept: "text/html",
 		},
 		redirect: "follow",
-		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+		signal: fetchSignal(signal),
 	});
 	if (!response.ok) {
 		throw new Error(`DuckDuckGo search failed: HTTP ${response.status}`);
@@ -246,12 +262,12 @@ async function searchDuckDuckGo(query: string): Promise<SearchResult[]> {
 	return results;
 }
 
-async function searchSearXNG(query: string, baseUrl: string): Promise<SearchResult[]> {
+async function searchSearXNG(query: string, baseUrl: string, signal?: AbortSignal): Promise<SearchResult[]> {
 	const encodedQuery = encodeURIComponent(query);
 	const response = await fetch(`${baseUrl}/search?q=${encodedQuery}&format=json`, {
 		method: "GET",
 		headers: { Accept: "application/json" },
-		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+		signal: fetchSignal(signal),
 	});
 	if (!response.ok) {
 		throw new Error(`SearXNG search failed: HTTP ${response.status}`);
@@ -264,7 +280,7 @@ async function searchSearXNG(query: string, baseUrl: string): Promise<SearchResu
 	}));
 }
 
-async function searchBrave(query: string, apiKey: string): Promise<SearchResult[]> {
+async function searchBrave(query: string, apiKey: string, signal?: AbortSignal): Promise<SearchResult[]> {
 	const encodedQuery = encodeURIComponent(query);
 	const response = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodedQuery}`, {
 		method: "GET",
@@ -272,7 +288,7 @@ async function searchBrave(query: string, apiKey: string): Promise<SearchResult[
 			Accept: "application/json",
 			"X-Subscription-Token": apiKey,
 		},
-		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+		signal: fetchSignal(signal),
 	});
 	if (!response.ok) {
 		throw new Error(`Brave search failed: HTTP ${response.status}`);
@@ -373,17 +389,19 @@ function getSearchQueue(): WebSearchQueue {
 	return new WebSearchQueue({ rateLimitMs: getSearchConfig().rateLimitMs });
 }
 
-export async function executeSearch(query: string): Promise<SearchResult[]> {
+export async function executeSearch(query: string, signal?: AbortSignal): Promise<SearchResult[]> {
+	if (signal?.aborted) throw new Error("Search cancelled (aborted)");
 	return getSearchQueue().enqueue(async () => {
+		if (signal?.aborted) throw new Error("Search cancelled (aborted)");
 		const config = getSearchConfig();
 		switch (config.backend) {
 			case "searxng":
-				return searchSearXNG(query, config.searxngUrl!);
+				return searchSearXNG(query, config.searxngUrl!, signal);
 			case "brave":
 				if (!config.braveApiKey) throw new Error("DREB_BRAVE_API_KEY not set");
-				return searchBrave(query, config.braveApiKey);
+				return searchBrave(query, config.braveApiKey, signal);
 			default:
-				return searchDuckDuckGo(query);
+				return searchDuckDuckGo(query, signal);
 		}
 	});
 }
@@ -435,11 +453,23 @@ export function createWebSearchToolDefinition(
 			"Search the web. Returns titles, URLs, and snippets. Configure backend via DREB_SEARCH_BACKEND env var (ddg, searxng, brave).",
 		promptSnippet: "Search the web for information",
 		parameters: webSearchSchema,
-		async execute(_toolCallId, { query }: { query: string }) {
+		async execute(_toolCallId, { query }: { query: string }, signal?: AbortSignal, _onUpdate?, _ctx?) {
+			if (signal?.aborted) {
+				return {
+					content: [{ type: "text", text: `Search cancelled for "${query}" (aborted).` }],
+					details: undefined,
+				};
+			}
 			let results: SearchResult[];
 			try {
-				results = await executeSearch(query);
+				results = await executeSearch(query, signal);
 			} catch (error) {
+				if (isCallerAbort(error, signal)) {
+					return {
+						content: [{ type: "text", text: `Search cancelled for "${query}" (aborted).` }],
+						details: undefined,
+					};
+				}
 				const msg = error instanceof Error ? error.message : String(error);
 				return {
 					content: [{ type: "text", text: `Search failed for "${query}": ${msg}` }],
@@ -587,7 +617,13 @@ export function createWebFetchToolDefinition(
 		description: `Fetch a URL and return its text content. Extracts readable text from HTML pages. Supports PDF text extraction. Content truncated to ~${Math.round(MAX_CONTENT_LENGTH / 1024)}KB. Results cached for 15 minutes. GitHub URLs are redirected to guidance for the \`gh\` CLI or a local clone instead of being fetched.`,
 		promptSnippet: "Fetch a URL and extract its text content",
 		parameters: webFetchSchema,
-		async execute(_toolCallId, { url }: { url: string }) {
+		async execute(_toolCallId, { url }: { url: string }, signal?: AbortSignal, _onUpdate?, _ctx?) {
+			if (signal?.aborted) {
+				return {
+					content: [{ type: "text", text: `Fetch cancelled for ${url} (aborted).` }],
+					details: undefined,
+				};
+			}
 			// Validate URL
 			let parsed: URL;
 			try {
@@ -634,10 +670,16 @@ export function createWebFetchToolDefinition(
 			let body: string | Buffer;
 			let contentType: string;
 			try {
-				const result = await httpFetch(url);
+				const result = await httpFetch(url, signal);
 				body = result.body;
 				contentType = result.contentType;
 			} catch (error) {
+				if (isCallerAbort(error, signal)) {
+					return {
+						content: [{ type: "text", text: `Fetch cancelled for ${url} (aborted).` }],
+						details: undefined,
+					};
+				}
 				const msg = error instanceof Error ? error.message : String(error);
 				return {
 					content: [{ type: "text", text: `Failed to fetch ${url}: ${msg}` }],
