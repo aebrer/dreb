@@ -22,6 +22,8 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const PAIRING_CODE_STEP_MS = 30_000;
+const DEFAULT_PAIRING_MAX_ATTEMPTS = 5;
+const DEFAULT_PAIRING_LOCKOUT_MS = 60_000;
 
 // ---------------------------------------------------------------------------
 // Address / Host helpers
@@ -166,6 +168,12 @@ export interface DashboardAuthOptions {
 	storage?: PairingStorage;
 	/** HMAC/TOTP secret for device tokens and pairing codes. Production passes a per-install persisted secret. */
 	secret?: Buffer;
+	/** Failed PIN attempts before temporary lockout. Default 5. */
+	pairingMaxAttempts?: number;
+	/** Temporary lockout duration after too many failed PIN attempts. Default 60s. */
+	pairingLockoutMs?: number;
+	/** Security/audit log sink for repeated failed pairing attempts. */
+	logger?: (line: string) => void;
 	/** Clock override for tests. */
 	now?: () => number;
 }
@@ -205,7 +213,12 @@ export class DashboardAuth {
 	private readonly resolver: TailscaleResolver;
 	private readonly storage: PairingStorage;
 	private readonly secret: Buffer;
+	private readonly pairingMaxAttempts: number;
+	private readonly pairingLockoutMs: number;
+	private readonly logger: (line: string) => void;
 	private readonly now: () => number;
+	private pairingMutation: Promise<void> = Promise.resolve();
+	private readonly pairingFailures = new Map<string, { count: number; lockedUntil?: number }>();
 
 	constructor(options: DashboardAuthOptions = {}) {
 		this.remoteEnabled = options.remoteEnabled ?? false;
@@ -214,6 +227,9 @@ export class DashboardAuth {
 		this.resolver = options.resolver ?? new TailscaleStatusResolver();
 		this.storage = options.storage ?? new MemoryPairingStorage();
 		this.secret = options.secret ?? randomBytes(32);
+		this.pairingMaxAttempts = options.pairingMaxAttempts ?? DEFAULT_PAIRING_MAX_ATTEMPTS;
+		this.pairingLockoutMs = options.pairingLockoutMs ?? DEFAULT_PAIRING_LOCKOUT_MS;
+		this.logger = options.logger ?? (() => {});
 		this.now = options.now ?? Date.now;
 	}
 
@@ -254,6 +270,53 @@ export class DashboardAuth {
 			if (timingSafeEqualStr(code, this.pairingCodeForWindow(candidateWindow))) return true;
 		}
 		return false;
+	}
+
+	private pairingFailureKey(identity: TailscaleIdentity, remoteAddress: string | undefined): string {
+		return `${identity.loginName}|${normalizeAddress(remoteAddress)}`;
+	}
+
+	private assertPairingNotLocked(key: string): void {
+		const failure = this.pairingFailures.get(key);
+		if (!failure?.lockedUntil) return;
+		if (failure.lockedUntil > this.now()) {
+			throw Object.assign(new Error("Too many incorrect pairing attempts; try again later"), { status: 429 });
+		}
+		this.pairingFailures.delete(key);
+	}
+
+	private recordPairingFailure(key: string, identity: TailscaleIdentity): never {
+		const current = this.pairingFailures.get(key);
+		const count = (current?.count ?? 0) + 1;
+		if (count >= this.pairingMaxAttempts) {
+			const lockedUntil = this.now() + this.pairingLockoutMs;
+			this.pairingFailures.set(key, { count, lockedUntil });
+			this.logger(
+				`pairing locked after ${count} failed attempts for ${identity.loginName} until ${new Date(lockedUntil).toISOString()}`,
+			);
+			throw Object.assign(new Error("Too many incorrect pairing attempts; try again later"), { status: 429 });
+		}
+		this.pairingFailures.set(key, { count, lockedUntil: current?.lockedUntil });
+		if (count > 1) this.logger(`pairing failed attempt ${count} for ${identity.loginName}`);
+		throw Object.assign(new Error("Incorrect pairing code"), { status: 401 });
+	}
+
+	private clearPairingFailures(key: string): void {
+		this.pairingFailures.delete(key);
+	}
+
+	private async withPairingMutation<T>(fn: () => Promise<T>): Promise<T> {
+		const previous = this.pairingMutation;
+		let release!: () => void;
+		this.pairingMutation = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await previous;
+		try {
+			return await fn();
+		} finally {
+			release();
+		}
 	}
 
 	/**
@@ -345,51 +408,62 @@ export class DashboardAuth {
 		if (!identity || this.allowedIdentities.size === 0 || !this.allowedIdentities.has(identity.loginName)) {
 			throw Object.assign(new Error("Identity is not on the dashboard allowlist"), { status: 403 });
 		}
+		const failureKey = this.pairingFailureKey(identity, info.remoteAddress);
+		this.assertPairingNotLocked(failureKey);
 		if (!this.isValidPairingCode(code)) {
-			throw Object.assign(new Error("Incorrect pairing code"), { status: 401 });
+			this.recordPairingFailure(failureKey, identity);
 		}
 
-		const token = randomBytes(32).toString("base64url");
-		const nowMs = this.now();
-		const device: PairedDevice = {
-			id: randomBytes(8).toString("hex"),
-			identity: identity.loginName,
-			device: identity.device,
-			createdAt: new Date(nowMs).toISOString(),
-			expiresAt: new Date(nowMs + this.pairingTtlMs).toISOString(),
-		};
-		const pairings = await this.loadLive();
-		pairings.push({ ...device, tokenHmac: this.hmac(token) });
-		await this.storage.save(pairings);
-		return { token, device };
+		return this.withPairingMutation(async () => {
+			const token = randomBytes(32).toString("base64url");
+			const nowMs = this.now();
+			const device: PairedDevice = {
+				id: randomBytes(8).toString("hex"),
+				identity: identity.loginName,
+				device: identity.device,
+				createdAt: new Date(nowMs).toISOString(),
+				expiresAt: new Date(nowMs + this.pairingTtlMs).toISOString(),
+			};
+			const pairings = await this.loadLive();
+			pairings.push({ ...device, tokenHmac: this.hmac(token) });
+			await this.storage.save(pairings);
+			this.clearPairingFailures(failureKey);
+			return { token, device };
+		});
 	}
 
 	/** List paired devices (live only). */
 	async listDevices(): Promise<PairedDevice[]> {
-		return (await this.loadLive()).map(({ tokenHmac: _tokenHmac, ...device }) => device);
+		return this.withPairingMutation(async () =>
+			(await this.loadLive()).map(({ tokenHmac: _tokenHmac, ...device }) => device),
+		);
 	}
 
 	/** Remove a paired device by id. Returns true when something was removed. */
 	async unpair(deviceId: string): Promise<boolean> {
-		const pairings = await this.loadLive();
-		const remaining = pairings.filter((p) => p.id !== deviceId);
-		if (remaining.length === pairings.length) return false;
-		await this.storage.save(remaining);
-		return true;
+		return this.withPairingMutation(async () => {
+			const pairings = await this.loadLive();
+			const remaining = pairings.filter((p) => p.id !== deviceId);
+			if (remaining.length === pairings.length) return false;
+			await this.storage.save(remaining);
+			return true;
+		});
 	}
 
 	private async isPaired(identity: TailscaleIdentity, token: string): Promise<boolean> {
 		const tokenHmac = this.hmac(token);
-		const live = await this.loadLive();
-		return live.some((p) => p.identity === identity.loginName && timingSafeEqualStr(p.tokenHmac, tokenHmac));
+		return this.withPairingMutation(async () => {
+			const live = await this.loadLive();
+			return live.some((p) => p.identity === identity.loginName && timingSafeEqualStr(p.tokenHmac, tokenHmac));
+		});
 	}
 
-	/** Load pairings, dropping (and persisting the removal of) expired entries. */
-	private async loadLive(): Promise<StoredPairing[]> {
+	/** Load pairings, dropping (and persisting the removal of) expired entries. Caller must hold pairingMutation. */
+	private async loadLive(saveExpiredRemoval = true): Promise<StoredPairing[]> {
 		const all = await this.storage.load();
 		const nowMs = this.now();
 		const live = all.filter((p) => new Date(p.expiresAt).getTime() > nowMs);
-		if (live.length !== all.length) await this.storage.save(live);
+		if (saveExpiredRemoval && live.length !== all.length) await this.storage.save(live);
 		return live;
 	}
 }

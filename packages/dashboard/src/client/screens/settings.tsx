@@ -136,6 +136,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	const [saved, setSaved] = createSignal(false);
 	const [modelPickerTarget, setModelPickerTarget] = createSignal<ModelPickerTarget>();
 	const [editingAgent, setEditingAgent] = createSignal<string>();
+	const [agentContextCwd, setAgentContextCwd] = createSignal<string>();
 	const [notificationPermission, setNotificationPermission] = createSignal<NotificationPermission | "unsupported">(
 		typeof Notification === "undefined" ? "unsupported" : Notification.permission,
 	);
@@ -160,15 +161,26 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		}
 	});
 
-	const [agentTypes] = createResource(settings, async () => {
-		try {
-			const { agentTypes } = await api.agentTypes();
-			return agentTypes;
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-			return [];
-		}
+	const agentProjectRoots = createMemo(() => {
+		const roots = new Set<string>();
+		for (const runtime of props.store.fleet().runtimes) roots.add(runtime.cwd);
+		for (const session of props.store.fleet().diskSessions) roots.add(session.cwd);
+		return [...roots].sort((a, b) => a.localeCompare(b));
 	});
+
+	const [agentTypes] = createResource(
+		() => ({ settings: settings(), cwd: agentContextCwd() }),
+		async ({ cwd }) => {
+			if (!settings()) return [];
+			try {
+				const { agentTypes } = await api.agentTypes(cwd);
+				return agentTypes;
+			} catch (err) {
+				setError(err instanceof Error ? err.message : String(err));
+				return [];
+			}
+		},
+	);
 
 	const [devices, { refetch: refetchDevices }] = createResource(async () => {
 		const { devices } = await api.devices();
@@ -363,8 +375,26 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 								<h2>agent models</h2>
 								<p class="muted small" style={{ "margin-bottom": "8px" }}>
 									Per-agent fallback lists. First available model wins; empty lists revert to the default
-									model.
+									model. Agent definitions are loaded from an explicit project context so project-local agents
+									do not depend on which runtime opened first.
 								</p>
+								<Show when={agentProjectRoots().length > 0}>
+									<div class="setting-row agent-context-row">
+										<span class="setting-label">
+											<span class="name">agent definition context</span>
+											<span class="hint">choose a project to include its .dreb/agents definitions</span>
+										</span>
+										<span class="setting-control">
+											<select
+												value={agentContextCwd() ?? ""}
+												onChange={(e) => setAgentContextCwd(e.currentTarget.value || undefined)}
+											>
+												<option value="">global/home only</option>
+												<For each={agentProjectRoots()}>{(cwd) => <option value={cwd}>{cwd}</option>}</For>
+											</select>
+										</span>
+									</div>
+								</Show>
 								<Show
 									when={(agentTypes() ?? []).length > 0}
 									fallback={<p class="muted small">No agent definitions found.</p>}

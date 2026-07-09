@@ -77,14 +77,25 @@ export interface ResourcesDto {
 	systemPromptPresent: boolean;
 }
 
-export interface PendingMessagesDto {
-	steering: string[];
-	followUp: string[];
-}
-
 export interface ImageAttachmentDto {
 	data: string;
 	mimeType: string;
+}
+
+export interface QueuedMessageDto {
+	text: string;
+	images?: ImageAttachmentDto[];
+}
+
+export interface PendingMessagesDto {
+	/** Text-only compatibility view. */
+	steering: string[];
+	/** Text-only compatibility view. */
+	followUp: string[];
+	/** Full queued payloads, including inline image attachments. */
+	steeringMessages?: QueuedMessageDto[];
+	/** Full queued payloads, including inline image attachments. */
+	followUpMessages?: QueuedMessageDto[];
 }
 
 export interface CommandDto {

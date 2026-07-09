@@ -247,6 +247,23 @@ describe("DashboardAuth — remote mode", () => {
 		await expect(auth.pair(REMOTE, wrong)).rejects.toThrow(/Incorrect pairing code/);
 	});
 
+	it("locks out repeated incorrect pairing attempts and logs them", async () => {
+		const logs: string[] = [];
+		const auth = makeAuth({
+			now: () => 1_000_000,
+			pairingMaxAttempts: 2,
+			pairingLockoutMs: 60_000,
+			logger: (line) => logs.push(line),
+		});
+		const valid = auth.currentPairingCode().code;
+		const wrong = valid === "000000" ? "000001" : "000000";
+
+		await expect(auth.pair(REMOTE, wrong)).rejects.toMatchObject({ status: 401 });
+		await expect(auth.pair(REMOTE, wrong)).rejects.toMatchObject({ status: 429 });
+		await expect(auth.pair(REMOTE, valid)).rejects.toMatchObject({ status: 429 });
+		expect(logs.join("\n")).toContain("pairing locked");
+	});
+
 	it("accepts pairing codes from the adjacent clock-skew windows", async () => {
 		let now = 1_000_000;
 		const auth = makeAuth({ now: () => now });

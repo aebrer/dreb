@@ -64,8 +64,8 @@ export class RuntimePool {
 	 * agent-type endpoints when no user session is live. Kept out of `runtimes`
 	 * (and therefore out of the fleet) so it never shows as a session card.
 	 */
-	private utility?: RuntimeHandle;
-	private utilityPromise?: Promise<RuntimeHandle>;
+	private readonly utilities = new Map<string, RuntimeHandle>();
+	private readonly utilityPromises = new Map<string, Promise<RuntimeHandle>>();
 
 	constructor(options: RuntimePoolOptions = {}) {
 		this.cliPath = options.cliPath ?? resolveDrebCliPath();
@@ -129,17 +129,16 @@ export class RuntimePool {
 	 * This is what lets the settings page — models, agent types, defaults — work
 	 * with zero sessions open, instead of 503-ing.
 	 */
-	async ensureUtilityRuntime(): Promise<RuntimeHandle> {
-		const existing = this.runtimes.values().next().value as RuntimeHandle | undefined;
+	async ensureUtilityRuntime(cwd = homedir()): Promise<RuntimeHandle> {
+		const existing = this.utilities.get(cwd);
 		if (existing) return existing;
-		if (this.utility) return this.utility;
-		if (!this.utilityPromise) {
-			this.utilityPromise = (async () => {
-				const cwd = homedir();
+		let promise = this.utilityPromises.get(cwd);
+		if (!promise) {
+			promise = (async () => {
 				const args = ["--ui", "dashboard", ...this.baseArgs];
 				const client = this.clientFactory({ cliPath: this.cliPath, cwd, args });
 				const handle: RuntimeHandle = {
-					key: "utility",
+					key: `utility:${cwd}`,
 					cwd,
 					client,
 					createdAt: Date.now(),
@@ -148,26 +147,25 @@ export class RuntimePool {
 					backgroundAgents: new Map(),
 				};
 				await client.start();
-				this.utility = handle;
+				this.utilities.set(cwd, handle);
 				return handle;
 			})().catch((err) => {
 				// Allow a retry on the next request instead of caching the failure.
-				this.utilityPromise = undefined;
+				this.utilityPromises.delete(cwd);
 				throw err;
 			});
+			this.utilityPromises.set(cwd, promise);
 		}
-		return this.utilityPromise;
+		return promise;
 	}
 
 	async stopAll(): Promise<void> {
 		const keys = [...this.runtimes.keys()];
 		await Promise.allSettled(keys.map((k) => this.stop(k)));
-		if (this.utility) {
-			const utility = this.utility;
-			this.utility = undefined;
-			this.utilityPromise = undefined;
-			await utility.client.stop().catch(() => {});
-		}
+		const utilities = [...this.utilities.values()];
+		this.utilities.clear();
+		this.utilityPromises.clear();
+		await Promise.allSettled(utilities.map((utility) => utility.client.stop()));
 	}
 
 	private handleEvent(handle: RuntimeHandle, event: Record<string, unknown>): void {

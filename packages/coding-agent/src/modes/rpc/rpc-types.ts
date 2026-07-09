@@ -139,9 +139,20 @@ export interface RpcResources {
 	systemPromptPresent: boolean;
 }
 
+export interface RpcQueuedMessage {
+	text: string;
+	images?: ImageContent[];
+}
+
 export interface RpcPendingMessages {
+	/** Text-only compatibility view for existing clients. */
 	steering: string[];
+	/** Text-only compatibility view for existing clients. */
 	followUp: string[];
+	/** Full queued payloads, including inline image attachments. */
+	steeringMessages?: RpcQueuedMessage[];
+	/** Full queued payloads, including inline image attachments. */
+	followUpMessages?: RpcQueuedMessage[];
 }
 
 // ============================================================================

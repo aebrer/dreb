@@ -308,8 +308,14 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 					</button>
 				</div>
 
+				<Show when={props.store.fleetError()}>
+					<div class="settings-error" role="alert">
+						Fleet could not be loaded: {props.store.fleetError()}
+					</div>
+				</Show>
+
 				<Show
-					when={liveRuntimes().length > 0 || diskGroups().length > 0}
+					when={liveRuntimes().length > 0 || diskGroups().length > 0 || props.store.fleetError()}
 					fallback={
 						<div class="empty-state">
 							<p>No sessions yet.</p>

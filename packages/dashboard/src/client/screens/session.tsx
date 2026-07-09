@@ -474,15 +474,31 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
+	function queuedImageSize(data: string): number {
+		return Math.floor((data.length * 3) / 4);
+	}
+
 	async function restorePendingToComposer() {
 		try {
 			const cleared = await api.dequeue(props.sessionKey);
-			const queuedText = [...cleared.steering, ...cleared.followUp].join("\n\n");
-			setPendingMessages({ steering: [], followUp: [] });
+			const queuedMessages = [
+				...(cleared.steeringMessages ?? cleared.steering.map((text) => ({ text }))),
+				...(cleared.followUpMessages ?? cleared.followUp.map((text) => ({ text }))),
+			];
+			const queuedText = queuedMessages.map((message) => message.text).join("\n\n");
+			const queuedImages = queuedMessages.flatMap((message, messageIndex) =>
+				(message.images ?? []).map((image, imageIndex) => ({
+					...image,
+					fileName: `queued-image-${messageIndex + 1}-${imageIndex + 1}`,
+					size: queuedImageSize(image.data),
+				})),
+			);
+			setPendingMessages({ steering: [], followUp: [], steeringMessages: [], followUpMessages: [] });
 			// TUI parity: prepend the dequeued messages to whatever is already typed
 			// rather than clobbering the composer.
 			const current = composerText();
 			setComposerText([queuedText, current].filter((t) => t.trim()).join("\n\n"));
+			if (queuedImages.length > 0) setImageAttachments((currentImages) => [...queuedImages, ...currentImages]);
 			await props.store.refreshFleet();
 			queueMicrotask(() => composerRef?.focus());
 		} catch (err) {
@@ -832,8 +848,18 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const infoStats = () =>
 		[tokenSummary(), costSummary(), contextSummary(), tokPerSecond()].filter(Boolean) as string[];
 	const pendingMessageItems = () => [
-		...pendingMessages().steering.map((text) => ({ kind: "steer", text })),
-		...pendingMessages().followUp.map((text) => ({ kind: "follow-up", text })),
+		...(pendingMessages().steeringMessages ?? pendingMessages().steering.map((text) => ({ text }))).map(
+			(message) => ({
+				kind: "steer",
+				text: message.images?.length ? `${message.text} (${message.images.length} image(s))` : message.text,
+			}),
+		),
+		...(pendingMessages().followUpMessages ?? pendingMessages().followUp.map((text) => ({ text }))).map(
+			(message) => ({
+				kind: "follow-up",
+				text: message.images?.length ? `${message.text} (${message.images.length} image(s))` : message.text,
+			}),
+		),
 	];
 	const commandQuery = () => {
 		const text = composerText();

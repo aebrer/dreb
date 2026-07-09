@@ -464,12 +464,17 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 	});
 
 	// -- settings ------------------------------------------------------------------
-	// Settings are process-global persistent defaults. They route through any live
-	// runtime; when no user session exists the pool spins up a hidden utility
-	// runtime so the settings page works with zero sessions open (never 503s).
-	function withAnyRuntime(res: Response, fn: (h: NonNullable<ReturnType<RuntimePool["get"]>>) => Promise<unknown>) {
+	// Settings are process-global persistent defaults. They route through hidden
+	// utility runtimes instead of whichever user session happened to open first.
+	// Agent-definition discovery is cwd-sensitive, so callers may pass an explicit
+	// project cwd for endpoints that need project-local .dreb/agents.
+	function withAnyRuntime(
+		res: Response,
+		fn: (h: NonNullable<ReturnType<RuntimePool["get"]>>) => Promise<unknown>,
+		cwd?: string,
+	) {
 		pool
-			.ensureUtilityRuntime()
+			.ensureUtilityRuntime(cwd)
 			.then((handle) => fn(handle))
 			.then((data) => res.json(data ?? { ok: true }))
 			.catch((err) => {
@@ -485,8 +490,13 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 		withAnyRuntime(res, async (h) => ({ models: await h.client.getAvailableModels() }));
 	});
 
-	app.get("/api/settings/agent-types", (_req, res) => {
-		withAnyRuntime(res, async (h) => ({ agentTypes: await h.client.listAgentTypes() }));
+	app.get("/api/settings/agent-types", (req, res) => {
+		const cwd = typeof req.query.cwd === "string" && req.query.cwd.trim() ? req.query.cwd : undefined;
+		if (cwd && !existsSync(cwd)) {
+			res.status(400).json({ error: `cwd does not exist: ${cwd}` });
+			return;
+		}
+		withAnyRuntime(res, async (h) => ({ agentTypes: await h.client.listAgentTypes() }), cwd);
 	});
 
 	app.get("/api/daily-cost", (_req, res) => {

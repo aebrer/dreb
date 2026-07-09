@@ -80,9 +80,16 @@ describe("RPC dashboard state/resources DTOs", () => {
 		const pending = getPendingMessagesForRpc({
 			getSteeringMessages: () => ["steer one", "steer two"],
 			getFollowUpMessages: () => ["follow one"],
+			getSteeringMessagePayloads: () => [{ text: "steer one" }, { text: "steer two" }],
+			getFollowUpMessagePayloads: () => [{ text: "follow one" }],
 		} as never);
 
-		expect(pending).toEqual({ steering: ["steer one", "steer two"], followUp: ["follow one"] });
+		expect(pending).toEqual({
+			steering: ["steer one", "steer two"],
+			followUp: ["follow one"],
+			steeringMessages: [{ text: "steer one" }, { text: "steer two" }],
+			followUpMessages: [{ text: "follow one" }],
+		});
 	});
 
 	it("returns lean loaded resource metadata without file contents", () => {

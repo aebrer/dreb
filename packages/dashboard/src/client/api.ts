@@ -116,7 +116,10 @@ export const api = {
 			body: JSON.stringify(settings),
 		}),
 	settingsModels: () => request<{ models: ModelInfoDto[] }>("/api/settings/models"),
-	agentTypes: () => request<{ agentTypes: AgentTypeDto[] }>("/api/settings/agent-types"),
+	agentTypes: (cwd?: string) =>
+		request<{ agentTypes: AgentTypeDto[] }>(
+			cwd ? `/api/settings/agent-types?cwd=${encodeURIComponent(cwd)}` : "/api/settings/agent-types",
+		),
 	version: () => request<{ version: string }>("/api/version"),
 	serverInfo: () =>
 		request<{ version: string | null; startedAt: string; supervised: boolean; restartable: boolean }>(

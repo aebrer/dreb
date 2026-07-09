@@ -541,9 +541,12 @@ body,
 }
 
 .markdown-body {
-	display: flex;
-	flex-direction: column;
-	gap: var(--space-2);
+	color: var(--text);
+}
+
+.markdown-body,
+.markdown-body * {
+	-webkit-text-fill-color: currentColor;
 }
 
 .markdown-body p,
@@ -2120,6 +2123,25 @@ details.thinking .thinking-body {
 	.agent-model-entry {
 		align-items: flex-start;
 		flex-direction: column;
+	}
+
+	.subagent-strip {
+		align-items: stretch;
+		gap: var(--space-2);
+	}
+
+	.subagent-strip .subagent-toggle {
+		flex: 0 0 auto;
+		min-height: 32px;
+	}
+
+	.subagent-strip .count,
+	.subagent-strip .collapsed-hint {
+		white-space: normal;
+	}
+
+	.subagent-strip .agent-chip {
+		max-width: 100%;
 	}
 
 	.head-actions .btn {

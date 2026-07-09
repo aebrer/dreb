@@ -99,6 +99,7 @@ async function main(): Promise<void> {
 		allowedIdentities: args.allow,
 		storage: new FilePairingStorage(join(agentDir, "dashboard-pairings.json")),
 		secret: loadOrCreateDashboardSecret(join(agentDir, "dashboard-auth-secret")),
+		logger: (line) => console.warn(`[dashboard-auth] ${line}`),
 	});
 	const pool = new RuntimePool();
 

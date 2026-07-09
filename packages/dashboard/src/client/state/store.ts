@@ -66,6 +66,7 @@ export function createAppStore() {
 	const [revisions, setRevisions] = createStore<Record<string, number>>({});
 	const [route, setRouteSignal] = createSignal<Route>(parseHash());
 	const [fleet, setFleet] = createSignal<FleetDto>({ runtimes: [], diskSessions: [] });
+	const [fleetError, setFleetError] = createSignal<string>();
 	const [auth, setAuth] = createSignal<(AuthStatusDto & { needsPairing?: boolean; error?: string }) | undefined>();
 	const [connected, setConnected] = createSignal(false);
 
@@ -86,7 +87,13 @@ export function createAppStore() {
 	}
 
 	async function refreshFleet(): Promise<void> {
-		setFleet(await api.fleet());
+		try {
+			setFleet(await api.fleet());
+			setFleetError(undefined);
+		} catch (err) {
+			setFleetError(err instanceof Error ? err.message : String(err));
+			throw err;
+		}
 	}
 
 	function handleEnvelope(envelope: EventEnvelope): void {
@@ -139,10 +146,8 @@ export function createAppStore() {
 				identity: err?.body?.identity,
 				error: err?.message,
 			});
-			if (err?.body?.needsPairing) {
-				navigate({ screen: "pairing" });
-				return;
-			}
+			navigate({ screen: "pairing" });
+			return;
 		}
 		await refreshFleet().catch(() => {});
 		disconnect = connectEvents({
@@ -248,6 +253,7 @@ export function createAppStore() {
 		route,
 		navigate,
 		fleet,
+		fleetError,
 		refreshFleet,
 		auth,
 		connected,

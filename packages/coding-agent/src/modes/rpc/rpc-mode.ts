@@ -121,11 +121,22 @@ export function getResourcesForRpc(
 }
 
 export function getPendingMessagesForRpc(
-	session: Pick<AgentSession, "getSteeringMessages" | "getFollowUpMessages">,
+	session: Pick<
+		AgentSession,
+		"getSteeringMessages" | "getFollowUpMessages" | "getSteeringMessagePayloads" | "getFollowUpMessagePayloads"
+	>,
 ): RpcPendingMessages {
 	return {
 		steering: [...session.getSteeringMessages()],
 		followUp: [...session.getFollowUpMessages()],
+		steeringMessages: session.getSteeringMessagePayloads().map((message) => ({
+			text: message.text,
+			images: message.images ? [...message.images] : undefined,
+		})),
+		followUpMessages: session.getFollowUpMessagePayloads().map((message) => ({
+			text: message.text,
+			images: message.images ? [...message.images] : undefined,
+		})),
 	};
 }
 

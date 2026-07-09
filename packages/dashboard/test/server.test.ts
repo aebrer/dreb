@@ -412,10 +412,10 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[0].clearPendingMessages).toHaveBeenCalled();
 		expect(clients[0].abortCompaction).toHaveBeenCalled();
 		expect(clients[0].abortRetry).toHaveBeenCalled();
-		expect(clients[0].getDailyCost).toHaveBeenCalled();
+		expect(clients[1].getDailyCost).toHaveBeenCalled();
 	});
 
-	it("GET /api/settings/models and /api/settings/agent-types use any live runtime", async () => {
+	it("GET /api/settings/models and /api/settings/agent-types use a stable utility runtime", async () => {
 		const dir = await createTempProject();
 		const { base, clients } = await startServer();
 		await fetch(`${base}/api/runtimes`, {
@@ -430,8 +430,10 @@ describe("dashboard server — fleet and runtimes", () => {
 		await expect(fetch(`${base}/api/settings/agent-types`).then((r) => r.json())).resolves.toEqual({
 			agentTypes: [{ name: "Explore", description: "Explore the codebase" }],
 		});
-		expect(clients[0].getAvailableModels).toHaveBeenCalled();
-		expect(clients[0].listAgentTypes).toHaveBeenCalled();
+		expect(clients[0].getAvailableModels).not.toHaveBeenCalled();
+		expect(clients[0].listAgentTypes).not.toHaveBeenCalled();
+		expect(clients[1].getAvailableModels).toHaveBeenCalled();
+		expect(clients[1].listAgentTypes).toHaveBeenCalled();
 	});
 
 	it("settings model metadata endpoints use a utility runtime when no user runtime is live", async () => {

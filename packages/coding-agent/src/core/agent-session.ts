@@ -271,9 +271,9 @@ export class AgentSession {
 	private _agentEventQueue: Promise<void> = Promise.resolve();
 
 	/** Tracks pending steering messages for UI display. Removed when delivered. */
-	private _steeringMessages: string[] = [];
+	private _steeringMessages: Array<{ text: string; images?: ImageContent[] }> = [];
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
-	private _followUpMessages: string[] = [];
+	private _followUpMessages: Array<{ text: string; images?: ImageContent[] }> = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 
@@ -967,12 +967,12 @@ export class AgentSession {
 			const messageText = this._getUserMessageText(event.message);
 			if (messageText) {
 				// Check steering queue first
-				const steeringIndex = this._steeringMessages.indexOf(messageText);
+				const steeringIndex = this._steeringMessages.findIndex((message) => message.text === messageText);
 				if (steeringIndex !== -1) {
 					this._steeringMessages.splice(steeringIndex, 1);
 				} else {
 					// Check follow-up queue
-					const followUpIndex = this._followUpMessages.indexOf(messageText);
+					const followUpIndex = this._followUpMessages.findIndex((message) => message.text === messageText);
 					if (followUpIndex !== -1) {
 						this._followUpMessages.splice(followUpIndex, 1);
 					}
@@ -1724,7 +1724,7 @@ export class AgentSession {
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
 	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
-		this._steeringMessages.push(text);
+		this._steeringMessages.push({ text, images: images ? [...images] : undefined });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
@@ -1740,7 +1740,7 @@ export class AgentSession {
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
 	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
-		this._followUpMessages.push(text);
+		this._followUpMessages.push({ text, images: images ? [...images] : undefined });
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
@@ -1861,13 +1861,26 @@ export class AgentSession {
 	 * Useful for restoring to editor when user aborts.
 	 * @returns Object with steering and followUp arrays
 	 */
-	clearQueue(): { steering: string[]; followUp: string[] } {
-		const steering = [...this._steeringMessages];
-		const followUp = [...this._followUpMessages];
+	clearQueue(): {
+		steering: string[];
+		followUp: string[];
+		steeringMessages: Array<{ text: string; images?: ImageContent[] }>;
+		followUpMessages: Array<{ text: string; images?: ImageContent[] }>;
+	} {
+		const steeringMessages = this._steeringMessages.map((message) => ({
+			text: message.text,
+			images: message.images ? [...message.images] : undefined,
+		}));
+		const followUpMessages = this._followUpMessages.map((message) => ({
+			text: message.text,
+			images: message.images ? [...message.images] : undefined,
+		}));
+		const steering = steeringMessages.map((message) => message.text);
+		const followUp = followUpMessages.map((message) => message.text);
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this.agent.clearAllQueues();
-		return { steering, followUp };
+		return { steering, followUp, steeringMessages, followUpMessages };
 	}
 
 	/** Number of pending messages (includes both steering and follow-up) */
@@ -1875,13 +1888,23 @@ export class AgentSession {
 		return this._steeringMessages.length + this._followUpMessages.length;
 	}
 
-	/** Get pending steering messages (read-only) */
+	/** Get pending steering message text (read-only compatibility view). */
 	getSteeringMessages(): readonly string[] {
+		return this._steeringMessages.map((message) => message.text);
+	}
+
+	/** Get pending follow-up message text (read-only compatibility view). */
+	getFollowUpMessages(): readonly string[] {
+		return this._followUpMessages.map((message) => message.text);
+	}
+
+	/** Get full pending steering payloads, including inline image attachments. */
+	getSteeringMessagePayloads(): readonly { text: string; images?: ImageContent[] }[] {
 		return this._steeringMessages;
 	}
 
-	/** Get pending follow-up messages (read-only) */
-	getFollowUpMessages(): readonly string[] {
+	/** Get full pending follow-up payloads, including inline image attachments. */
+	getFollowUpMessagePayloads(): readonly { text: string; images?: ImageContent[] }[] {
 		return this._followUpMessages;
 	}
 

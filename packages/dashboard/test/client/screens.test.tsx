@@ -53,6 +53,7 @@ vi.mock("../../src/client/api.js", () => ({
 		dailyCost: vi.fn(async () => ({ cost: 0.42 })),
 		settings: vi.fn(async () => ({ defaultProvider: "anthropic", defaultModel: "m1" })),
 		devices: vi.fn(async () => ({ devices: [] })),
+		unpair: vi.fn(async () => ({ ok: true })),
 		pairingCode: vi.fn(async () => ({ enabled: false })),
 		version: vi.fn(async () => ({ version: "0.0.0-test" })),
 		serverInfo: vi.fn(async () => ({
@@ -105,6 +106,7 @@ vi.mock("../../src/client/api.js", () => ({
 		setModel: vi.fn(async () => ({ provider: "test", id: "m1" })),
 		setThinking: vi.fn(async () => ({})),
 		saveSettings: vi.fn(async (settings) => settings),
+		deleteSession: vi.fn(async () => ({ ok: true })),
 		createRuntime: vi.fn(async (cwd: string) => ({
 			key: "new-key",
 			cwd,
@@ -172,12 +174,35 @@ afterEach(() => {
 	setExpandThinking(false);
 	window.localStorage.clear();
 	vi.mocked(connectEvents).mockImplementation(() => () => {});
+	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
+	vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
 	vi.mocked(api.models).mockResolvedValue({ models: [] });
 	vi.mocked(api.settingsModels).mockResolvedValue({ models: [] });
 	vi.mocked(api.agentTypes).mockResolvedValue({ agentTypes: [] });
 	vi.mocked(api.settings).mockResolvedValue({ defaultProvider: "anthropic", defaultModel: "m1" });
 	vi.mocked(api.saveSettings).mockImplementation(async (settings) => settings);
+	vi.mocked(api.deleteSession).mockResolvedValue({ ok: true });
+	vi.mocked(api.createRuntime).mockImplementation(async (cwd: string) => ({
+		key: "new-key",
+		cwd,
+		state: {
+			sessionId: "new",
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "all",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		},
+		backgroundAgents: [],
+		needsAttention: false,
+		createdAt: new Date().toISOString(),
+		lastActivity: new Date().toISOString(),
+	}));
 	vi.mocked(api.devices).mockResolvedValue({ devices: [] });
+	vi.mocked(api.unpair).mockResolvedValue({ ok: true });
 	vi.mocked(api.version).mockResolvedValue({ version: "0.0.0-test" });
 	vi.mocked(api.stats).mockResolvedValue({
 		sessionId: "s1",
@@ -199,6 +224,14 @@ afterEach(() => {
 	});
 	vi.mocked(api.commands).mockResolvedValue({ commands: [] });
 	vi.mocked(api.branch).mockResolvedValue({ branch: null });
+	vi.mocked(api.pair).mockResolvedValue({
+		device: {
+			id: "d1",
+			identity: "alice@example.com",
+			createdAt: new Date().toISOString(),
+			expiresAt: new Date().toISOString(),
+		},
+	});
 	vi.mocked(api.pending).mockResolvedValue({ steering: [], followUp: [] });
 	vi.mocked(api.dequeue).mockResolvedValue({ steering: [], followUp: [] });
 	vi.mocked(api.forkMessages).mockResolvedValue({ messages: [] });
@@ -680,6 +713,49 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("alice@example.com");
 	});
 
+	it("pairing submits a 6-digit PIN and returns to fleet", async () => {
+		vi.mocked(api.pair).mockClear();
+		const store = makeStore() as any;
+		const start = vi.fn(async () => {});
+		const navigate = vi.fn();
+		const fakeStore = {
+			...store,
+			start,
+			navigate,
+			auth: () => ({ mode: "remote", needsPairing: true, identity: "alice@example.com" }),
+		};
+		const el = mount(() => <PairingScreen store={fakeStore} />);
+		const input = el.querySelector("#pairing-pin") as HTMLInputElement;
+		input.value = "123456";
+		input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		(el.querySelector(".pair-actions .btn") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.pair).toHaveBeenCalledWith("123456");
+		expect(start).toHaveBeenCalled();
+		expect(navigate).toHaveBeenCalledWith({ screen: "fleet" });
+	});
+
+	it("pairing shows an error when the PIN is rejected", async () => {
+		vi.mocked(api.pair).mockRejectedValueOnce(new Error("Incorrect pairing code"));
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			start: vi.fn(async () => {}),
+			navigate: vi.fn(),
+			auth: () => ({ mode: "remote", needsPairing: true, identity: "alice@example.com" }),
+		};
+		const el = mount(() => <PairingScreen store={fakeStore} />);
+		const input = el.querySelector("#pairing-pin") as HTMLInputElement;
+		input.value = "000000";
+		input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		(el.querySelector(".pair-actions .btn") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector(".pair-error")?.textContent).toContain("Incorrect pairing code");
+		expect(fakeStore.start).not.toHaveBeenCalled();
+	});
+
 	it("pairing does not submit from the mobile Enter key", () => {
 		stubMobile(true);
 		vi.mocked(api.pair).mockClear();
@@ -698,6 +774,30 @@ describe("screen smoke tests", () => {
 });
 
 describe("dashboard client regressions", () => {
+	it("routes denied identities to the pairing denial screen without starting fleet or SSE", async () => {
+		vi.mocked(api.auth).mockRejectedValueOnce(
+			Object.assign(new Error('Tailscale identity "mallory@example.com" is not on the dashboard allowlist'), {
+				status: 403,
+				body: { needsPairing: false, identity: "mallory@example.com" },
+			}),
+		);
+		vi.mocked(api.fleet).mockClear();
+		vi.mocked(connectEvents).mockClear();
+		const store = makeStore();
+
+		await store.start();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(window.location.hash).toBe("#/pairing");
+		expect(store.auth()).toMatchObject({
+			needsPairing: false,
+			identity: "mallory@example.com",
+			error: expect.stringContaining("mallory@example.com"),
+		});
+		expect(api.fleet).not.toHaveBeenCalled();
+		expect(connectEvents).not.toHaveBeenCalled();
+	});
+
 	it("formats token counts like the TUI footer", () => {
 		expect(formatTokens(999)).toBe("999");
 		expect(formatTokens(1200)).toBe("1.2k");
@@ -733,6 +833,7 @@ describe("dashboard client regressions", () => {
 	});
 
 	it("renders assistant markdown and strips unsafe HTML", () => {
+		const htmlComment = ["<", "!--", "provider separator", "--", ">"].join("");
 		const el = mount(() => (
 			<Transcript
 				entries={[
@@ -741,7 +842,7 @@ describe("dashboard client regressions", () => {
 						blocks: [
 							{
 								kind: "text",
-								text: "**bold**\n\n```ts\nconst x = 1;\n```\n\n<script>window.evil = true</script>",
+								text: `**bold**\n\n${htmlComment}\n\nvisible after comment\n\n\`\`\`ts\nconst x = 1;\n\`\`\`\n\n<script>window.evil = true</script>`,
 							},
 						],
 						streaming: false,
@@ -751,8 +852,10 @@ describe("dashboard client regressions", () => {
 		));
 
 		expect(el.querySelector("strong")?.textContent).toBe("bold");
+		expect(el.textContent).toContain("visible after comment");
 		expect(el.querySelector("pre code")?.textContent).toContain("const x = 1");
 		expect(el.querySelector("script")).toBeNull();
+		expect(el.textContent).not.toContain(htmlComment);
 	});
 
 	it("renders background-agent results as collapsed markdown cards, not user messages", () => {
@@ -789,6 +892,26 @@ describe("dashboard client regressions", () => {
 		expect((el.querySelector("details.thinking") as HTMLDetailsElement | null)?.open).toBe(true);
 	});
 
+	it("transcript renders thinking markdown and hides HTML-comment separators", () => {
+		const htmlComment = ["<", "!--", "provider separator", "--", ">"].join("");
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{
+						kind: "assistant",
+						blocks: [{ kind: "thinking", text: `**Before**\n\n${htmlComment}\n\nafter` }],
+						streaming: false,
+					},
+				]}
+			/>
+		));
+
+		const body = el.querySelector(".thinking-body");
+		expect(body?.querySelector("strong")?.textContent).toBe("Before");
+		expect(body?.textContent?.replace(/\n{2,}/g, "\n\n")).toBe("Before\n\nafter\n");
+		expect(body?.textContent).not.toContain(htmlComment);
+	});
+
 	it("settings toggles the browser-local expand-thinking preference", async () => {
 		const store = makeStore();
 		const el = mount(() => <SettingsScreen store={store} />);
@@ -822,6 +945,53 @@ describe("dashboard client regressions", () => {
 
 		expect(fakeNotification.requestPermission).toHaveBeenCalled();
 		expect(notifications.checked).toBe(true);
+	});
+
+	it("settings refreshes pairing code and unpairs devices", async () => {
+		vi.mocked(api.pairingCode).mockResolvedValue({ enabled: true, code: "123456", expiresInMs: 30_000 });
+		vi.mocked(api.devices).mockClear();
+		vi.mocked(api.devices).mockResolvedValue({
+			devices: [
+				{
+					id: "device-1",
+					identity: "alice@example.com",
+					device: "phone",
+					createdAt: new Date().toISOString(),
+					expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+				},
+			],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.pairingCode).toHaveBeenCalled();
+		expect(el.textContent).toContain("123456");
+		const unpair = [...el.querySelectorAll(".device-row .btn-danger")].find(
+			(button) => button.textContent === "unpair",
+		) as HTMLButtonElement;
+		unpair.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.unpair).toHaveBeenCalledWith("device-1");
+		expect(api.devices).toHaveBeenCalledTimes(2);
+	});
+
+	it("settings restart control confirms before calling the API", async () => {
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const restart = [...el.querySelectorAll("button")].find(
+			(button) => button.textContent === "restart",
+		) as HTMLButtonElement;
+		restart.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.restartServer).not.toHaveBeenCalled();
+		const confirm = [...el.querySelectorAll(".modal .btn-danger")].at(-1) as HTMLButtonElement;
+		confirm.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.restartServer).toHaveBeenCalled();
 	});
 
 	it("settings default-model picker saves provider and model", async () => {
@@ -869,6 +1039,36 @@ describe("dashboard client regressions", () => {
 		expect(api.saveSettings).toHaveBeenCalledWith({
 			agentModels: { Explore: ["github-copilot/gpt-test"] },
 		});
+	});
+
+	it("settings loads agent definitions for an explicit project context", async () => {
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			fleet: () => ({
+				runtimes: [],
+				diskSessions: [
+					{
+						path: "/sessions/project.jsonl",
+						id: "project",
+						cwd: "/repo/project",
+						name: "project",
+						created: new Date().toISOString(),
+						modified: new Date().toISOString(),
+						messageCount: 1,
+						firstMessage: "hello",
+					},
+				],
+			}),
+		};
+		const el = mount(() => <SettingsScreen store={fakeStore} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const context = el.querySelector(".agent-context-row select") as HTMLSelectElement;
+		context.value = "/repo/project";
+		context.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.agentTypes).toHaveBeenCalledWith("/repo/project");
 	});
 
 	it("settings renders warnings returned from saveSettings", async () => {
@@ -1114,6 +1314,85 @@ describe("dashboard client regressions", () => {
 		expect(el.textContent).toContain("live fleet name");
 	});
 
+	it("fleet resumes disk sessions with their session path", async () => {
+		const store = makeStore() as any;
+		const refreshFleet = vi.fn(async () => {});
+		const navigate = vi.fn();
+		const fakeStore = {
+			...store,
+			refreshFleet,
+			navigate,
+			fleet: () => ({
+				runtimes: [],
+				diskSessions: [
+					{
+						path: "/sessions/resume.jsonl",
+						id: "resume",
+						cwd: "/repo",
+						name: "resume me",
+						created: new Date().toISOString(),
+						modified: new Date().toISOString(),
+						messageCount: 3,
+						firstMessage: "hello",
+					},
+				],
+			}),
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		(el.querySelector(".disk-row .actions .btn") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.createRuntime).toHaveBeenCalledWith("/repo", { sessionPath: "/sessions/resume.jsonl" });
+		expect(refreshFleet).toHaveBeenCalled();
+		expect(navigate).toHaveBeenCalledWith({ screen: "session", key: "new-key" });
+	});
+
+	it("fleet deletes disk sessions and refreshes", async () => {
+		const store = makeStore() as any;
+		const refreshFleet = vi.fn(async () => {});
+		const fakeStore = {
+			...store,
+			refreshFleet,
+			fleet: () => ({
+				runtimes: [],
+				diskSessions: [
+					{
+						path: "/sessions/delete.jsonl",
+						id: "delete",
+						cwd: "/repo",
+						name: "delete me",
+						created: new Date().toISOString(),
+						modified: new Date().toISOString(),
+						messageCount: 3,
+						firstMessage: "hello",
+					},
+				],
+			}),
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		const rowButtons = [...el.querySelectorAll(".disk-row .actions .btn")] as HTMLButtonElement[];
+		rowButtons.find((button) => button.textContent === "delete")?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const modalButtons = [...el.querySelectorAll(".modal .btn-danger")] as HTMLButtonElement[];
+		modalButtons.at(-1)?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.deleteSession).toHaveBeenCalledWith("/sessions/delete.jsonl");
+		expect(refreshFleet).toHaveBeenCalled();
+	});
+
+	it("fleet shows load errors instead of the empty state", () => {
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			fleetError: () => "server down",
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		expect(el.textContent).toContain("Fleet could not be loaded: server down");
+		expect(el.textContent).not.toContain("No sessions yet");
+	});
+
 	it("fleet shows live sessions first and collapses past sessions to three rows with an expand toggle", () => {
 		const store = makeStore() as any;
 		const diskSession = (id: string, modified: string) => ({
@@ -1241,9 +1520,19 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector(".model-row.current")?.textContent).toContain("✓");
 	});
 
-	it("queued messages render as chips and restore all text to the composer", async () => {
-		vi.mocked(api.pending).mockResolvedValue({ steering: ["steer one"], followUp: ["follow one"] });
-		vi.mocked(api.dequeue).mockResolvedValue({ steering: ["steer one"], followUp: ["follow one"] });
+	it("queued messages render as chips and restore text plus inline images to the composer", async () => {
+		vi.mocked(api.pending).mockResolvedValue({
+			steering: ["steer one"],
+			followUp: ["follow one"],
+			steeringMessages: [{ text: "steer one", images: [{ data: "aGVsbG8=", mimeType: "image/png" }] }],
+			followUpMessages: [{ text: "follow one" }],
+		});
+		vi.mocked(api.dequeue).mockResolvedValue({
+			steering: ["steer one"],
+			followUp: ["follow one"],
+			steeringMessages: [{ text: "steer one", images: [{ data: "aGVsbG8=", mimeType: "image/png" }] }],
+			followUpMessages: [{ text: "follow one" }],
+		});
 		const store = makeStore() as any;
 		const fakeStore = {
 			...store,
@@ -1285,6 +1574,7 @@ describe("dashboard client regressions", () => {
 
 		expect(api.dequeue).toHaveBeenCalledWith("queued");
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("steer one\n\nfollow one");
+		expect(el.querySelector(".attachment-thumb img")?.getAttribute("src")).toBe("data:image/png;base64,aGVsbG8=");
 	});
 
 	it("composer history recalls sent prompts with arrow keys", async () => {

@@ -497,7 +497,7 @@ Response:
 
 #### get_pending_messages
 
-Return queued steering and follow-up messages without clearing them.
+Return queued steering and follow-up messages without clearing them. `steering` and `followUp` are the text-only compatibility view; `steeringMessages` and `followUpMessages` include inline image attachments for clients that need to restore queued multimodal turns.
 
 ```json
 {"type": "get_pending_messages"}
@@ -505,12 +505,12 @@ Return queued steering and follow-up messages without clearing them.
 
 Response:
 ```json
-{"type": "response", "command": "get_pending_messages", "success": true, "data": {"steering": ["steer text"], "followUp": ["follow-up text"]}}
+{"type": "response", "command": "get_pending_messages", "success": true, "data": {"steering": ["steer text"], "followUp": ["follow-up text"], "steeringMessages": [{"text": "steer text", "images": [{"type": "image", "data": "...", "mimeType": "image/png"}]}], "followUpMessages": [{"text": "follow-up text"}]}}
 ```
 
 #### clear_pending_messages
 
-Clear queued steering and follow-up messages, returning the cleared text. This mirrors the TUI restore-to-editor flow.
+Clear queued steering and follow-up messages, returning the cleared payloads. This mirrors the TUI restore-to-editor flow; multimodal clients should use `steeringMessages`/`followUpMessages` so inline images are not lost.
 
 ```json
 {"type": "clear_pending_messages"}
@@ -518,7 +518,7 @@ Clear queued steering and follow-up messages, returning the cleared text. This m
 
 Response:
 ```json
-{"type": "response", "command": "clear_pending_messages", "success": true, "data": {"steering": ["steer text"], "followUp": ["follow-up text"]}}
+{"type": "response", "command": "clear_pending_messages", "success": true, "data": {"steering": ["steer text"], "followUp": ["follow-up text"], "steeringMessages": [{"text": "steer text", "images": [{"type": "image", "data": "...", "mimeType": "image/png"}]}], "followUpMessages": [{"text": "follow-up text"}]}}
 ```
 
 ### Compaction

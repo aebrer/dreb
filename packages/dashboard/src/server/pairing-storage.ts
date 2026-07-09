@@ -4,8 +4,8 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 interface StoredPairing {
 	id: string;
@@ -67,8 +67,16 @@ export class FilePairingStorage {
 	}
 
 	async save(pairings: StoredPairing[]): Promise<void> {
-		mkdirSync(dirname(this.path), { recursive: true });
+		const dir = dirname(this.path);
+		mkdirSync(dir, { recursive: true });
 		const file: PairingFile = { version: 1, pairings };
-		writeFileSync(this.path, `${JSON.stringify(file, null, "\t")}\n`, { mode: 0o600 });
+		const tmp = join(dir, `.${basename(this.path)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+		try {
+			writeFileSync(tmp, `${JSON.stringify(file, null, "\t")}\n`, { mode: 0o600, flag: "wx" });
+			renameSync(tmp, this.path);
+		} catch (err) {
+			rmSync(tmp, { force: true });
+			throw err;
+		}
 	}
 }

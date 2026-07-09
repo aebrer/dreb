@@ -425,7 +425,7 @@ function AssistantBlockView(props: { entry: AssistantEntry; who: string }): JSX.
 					>
 						<details class="thinking" open={expandThinking()}>
 							<summary>thinking</summary>
-							<div class="thinking-body">{block.text}</div>
+							<div class="thinking-body markdown-body" innerHTML={renderMarkdown(block.text)} />
 						</details>
 					</Show>
 				)}
