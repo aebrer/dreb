@@ -3,6 +3,9 @@ name: Publish to npm
 on:
   release:
     types: [published]
+  # Manual retry path: a failed publish run can be re-executed from master
+  # (publish steps skip versions that are already on npm, so retries are safe).
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -18,12 +21,19 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # Install and build with the stock npm bundled with Node 22 (npm 10.x) —
+      # the same toolchain the CI check/test jobs use and the one that generated
+      # package-lock.json. npm 11.5.1's `npm ci` silently skips platform-specific
+      # optional dependencies that the lockfile marks `optional: true, peer: true`
+      # (e.g. @rollup/rollup-linux-x64-gnu), which breaks the vite build.
+      - run: npm ci
+      - run: npm run build
+      # Trusted publishing (OIDC provenance) requires npm >= 11.5.1 — upgrade
+      # only for the publish steps, after install/build are done.
       - name: Upgrade npm for trusted publishing
         run: |
           npm install -g npm@11.5.1
           npm --version
-      - run: npm ci
-      - run: npm run build
 
       - name: Publish @dreb/tui
         working-directory: packages/tui

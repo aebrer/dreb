@@ -16,7 +16,8 @@ This builds all packages in dependency order: tui → ai → agent → semantic-
 
 - **Node:** `22.x` (enforced via `engines.node` in every workspace `package.json`, plus `.nvmrc` / `.node-version`). The Node 22 line bundles npm 10.x — that's what local dev and the CI `check`/`test` jobs run, and what generated the committed `package-lock.json`.
 - **`packageManager` pin:** the root `package.json` pins `packageManager: npm@11.5.1`. This deliberately matches the version the **publish** workflow (`.github/workflows/publish.yml`) upgrades to, because npm trusted publishing (OIDC provenance) requires npm ≥ 11.5.1. Keep these two in lockstep: if you bump one, bump the other.
-- **Why the npm 10 (dev) vs npm 11.5.1 (publish) split is safe:** the publish job installs with `npm ci`, which is **read-only** on `package-lock.json` — it installs exactly what is committed and never re-resolves the dependency graph. So building or publishing under npm 11.5.1 cannot mutate or re-churn a lockfile generated under npm 10.x. Lockfile changes only ever come from an intentional `npm install`.
+- **Publish workflow ordering matters:** the publish job runs `npm ci` + `npm run build` on the stock npm 10.x bundled with Node 22, and only *then* upgrades to npm 11.5.1 for the `npm publish` steps. Running `npm ci` under npm 11.5.1 silently skips platform-specific optional dependencies that the lockfile marks `optional: true, peer: true` (e.g. `@rollup/rollup-linux-x64-gnu`, needed by vite/rollup for the dashboard build), which breaks the build. Do not move the npm upgrade above install/build.
+- **Why the npm 10 (dev/install) vs npm 11.5.1 (publish-only) split is safe:** `npm publish` does not touch `package-lock.json`, and installs always run under npm 10.x — the same toolchain that generated the committed lockfile. Lockfile changes only ever come from an intentional `npm install`.
 
 ## Monorepo Structure
 
