@@ -195,14 +195,17 @@ export function createAppStore() {
 	 * after a browser reload (reducer state is per-page, but the runtime
 	 * keeps running server-side).
 	 */
-	async function hydrateSession(key: string): Promise<void> {
+	async function hydrateSession(key: string, signal?: AbortSignal): Promise<void> {
 		const hydrationRevision = currentRevision(key);
 		const [messagesResult, agentsResult, runtimeResult] = await Promise.allSettled([
-			api.messages(key),
-			api.backgroundAgents(key),
-			api.runtime(key),
+			api.messages(key, signal),
+			api.backgroundAgents(key, signal),
+			api.runtime(key, signal),
 		] as const);
-		if (currentRevision(key) === hydrationRevision) {
+		// An aborted hydration (screen unmounted) must not create or touch
+		// session state — without this guard the all-rejected mutation below
+		// would still create a stub session and bump its revision.
+		if (!signal?.aborted && currentRevision(key) === hydrationRevision) {
 			mutateSession(key, (session) => {
 				if (messagesResult.status === "fulfilled") {
 					session.entries = messagesToEntries(messagesResult.value.messages as any[]);
@@ -243,9 +246,9 @@ export function createAppStore() {
 	 * `background_agent_event` relays only exist for the page that was open
 	 * when they streamed — after a reload this is the only data source.
 	 */
-	async function hydrateSubagent(key: string, agentId: string): Promise<void> {
+	async function hydrateSubagent(key: string, agentId: string, signal?: AbortSignal): Promise<void> {
 		const hydrationRevision = currentRevision(key);
-		const { agent, messages } = await api.subagentMessages(key, agentId);
+		const { agent, messages } = await api.subagentMessages(key, agentId, signal);
 		if (currentRevision(key) !== hydrationRevision) return;
 		mutateSession(key, (session) => {
 			session.backgroundAgents[agentId] = agent;

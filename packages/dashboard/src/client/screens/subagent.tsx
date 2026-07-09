@@ -5,9 +5,11 @@
  * the parent controls this agent.
  */
 
-import { createEffect, createMemo, createSignal, type JSX, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { StatusChip } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
+import { isAbortError } from "../errors.js";
+import { createCoalescedBottomScroller } from "../scrolling.js";
 import type { AppStore } from "../state/store.js";
 
 export function SubagentScreen(props: { store: AppStore; sessionKey: string; agentId: string }): JSX.Element {
@@ -20,20 +22,29 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 
 	let chatRef: HTMLDivElement | undefined;
 	let autoScroll = true;
+	const chatAtBottom = () => !chatRef || chatRef.scrollTop + chatRef.clientHeight >= chatRef.scrollHeight - 40;
+	const bottomScroller = createCoalescedBottomScroller({
+		element: () => chatRef,
+		shouldScroll: () => autoScroll,
+	});
 
 	onMount(() => {
+		const hydration = new AbortController();
 		// Hydrate from the on-disk session log: after a reload the live relay
 		// state is gone, and even mid-run the log carries everything so far.
-		props.store.hydrateSubagent(props.sessionKey, props.agentId).catch((err) => {
+		props.store.hydrateSubagent(props.sessionKey, props.agentId, hydration.signal).catch((err) => {
+			if (hydration.signal.aborted && isAbortError(err)) return;
 			setHydrateError(err instanceof Error ? err.message : String(err));
 		});
+		onCleanup(() => hydration.abort());
 	});
 
 	// Stick-to-bottom autoscroll during streaming (revision bumps per envelope).
 	createEffect(() => {
 		props.store.revisions[props.sessionKey];
-		if (autoScroll && chatRef) chatRef.scrollTop = chatRef.scrollHeight;
+		if (autoScroll) bottomScroller.request();
 	});
+	onCleanup(() => bottomScroller.cancel());
 
 	return (
 		<div class="session-screen">
@@ -61,8 +72,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 				class="chat"
 				ref={chatRef}
 				onScroll={() => {
-					if (!chatRef) return;
-					autoScroll = chatRef.scrollTop + chatRef.clientHeight >= chatRef.scrollHeight - 40;
+					autoScroll = chatAtBottom();
 				}}
 			>
 				<div class="chat-inner">

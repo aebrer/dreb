@@ -180,6 +180,37 @@ afterEach(() => {
 	vi.mocked(connectEvents).mockImplementation(() => () => {});
 	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
 	vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
+	vi.mocked(api.messages).mockResolvedValue({ messages: [] });
+	vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
+	vi.mocked(api.runtime).mockImplementation(async (key: string) => ({
+		key,
+		cwd: "/home/test/project",
+		state: {
+			sessionId: key,
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "all",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		},
+		backgroundAgents: [],
+		needsAttention: false,
+		createdAt: new Date().toISOString(),
+		lastActivity: new Date().toISOString(),
+	}));
+	vi.mocked(api.subagentMessages).mockResolvedValue({
+		agent: {
+			agentId: "bg1",
+			agentType: "Explore",
+			taskSummary: "scan things",
+			startedAt: new Date().toISOString(),
+			status: "completed",
+		},
+		messages: [],
+	});
 	vi.mocked(api.models).mockResolvedValue({ models: [] });
 	vi.mocked(api.settingsModels).mockResolvedValue({ models: [] });
 	vi.mocked(api.agentTypes).mockResolvedValue({ agentTypes: [] });
@@ -258,10 +289,15 @@ afterEach(() => {
 });
 
 function mount(element: () => any): HTMLElement {
+	const { container, dispose } = mountDisposable(element);
+	disposers.push(dispose);
+	return container;
+}
+
+function mountDisposable(element: () => any): { container: HTMLElement; dispose: () => void } {
 	const container = document.createElement("div");
 	document.body.appendChild(container);
-	disposers.push(render(element, container));
-	return container;
+	return { container, dispose: render(element, container) };
 }
 
 function makeStore() {
@@ -282,6 +318,28 @@ function stubMobile(matches = true) {
 			removeEventListener: vi.fn(),
 			dispatchEvent: vi.fn(),
 		})),
+	});
+}
+
+function stubObjectUrls() {
+	let nextUrl = 0;
+	const createObjectURL = vi.fn(() => `blob:mock-${++nextUrl}`);
+	const revokeObjectURL = vi.fn();
+	Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+	Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+	return { createObjectURL, revokeObjectURL };
+}
+
+function sizedImage(name: string, size: number): File {
+	const file = new File(["x"], name, { type: "image/png" });
+	Object.defineProperty(file, "size", { configurable: true, value: size });
+	return file;
+}
+
+function rejectOnAbort<T>(signal: AbortSignal | undefined): Promise<T> {
+	return new Promise<T>((_, reject) => {
+		if (!signal) throw new Error("expected AbortSignal");
+		signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
 	});
 }
 
@@ -410,7 +468,7 @@ describe("app store integration", () => {
 		captured.onResync?.();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(api.messages).toHaveBeenCalledWith("k-resync");
+		expect(api.messages).toHaveBeenCalledWith("k-resync", undefined);
 		expect(store.sessions["k-resync"]?.entries[0]?.kind).toBe("assistant");
 	});
 
@@ -667,6 +725,54 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("subagent says hi");
 		expect(el.textContent).toContain("subagents can't be steered yet");
 		expect(el.querySelector("textarea")).toBeNull(); // no composer
+	});
+
+	it("session hydration aborts on unmount without surfacing an error", async () => {
+		let capturedSignal: AbortSignal | undefined;
+		vi.mocked(api.messages).mockImplementation((_key: string, signal?: AbortSignal) => {
+			capturedSignal = signal;
+			return rejectOnAbort(signal);
+		});
+		vi.mocked(api.backgroundAgents).mockImplementation((_key: string, signal?: AbortSignal) => rejectOnAbort(signal));
+		vi.mocked(api.runtime).mockImplementation((_key: string, signal?: AbortSignal) => rejectOnAbort(signal));
+		const store = makeStore();
+		const { container, dispose } = mountDisposable(() => <SessionScreen store={store} sessionKey="abort-session" />);
+
+		dispose();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(capturedSignal?.aborted).toBe(true);
+		expect(container.textContent).not.toContain("Abort");
+		expect(container.querySelector(".error")).toBeNull();
+	});
+
+	it("subagent hydration aborts on unmount without surfacing an error", async () => {
+		let capturedSignal: AbortSignal | undefined;
+		vi.mocked(api.subagentMessages).mockImplementation((_key: string, _agentId: string, signal?: AbortSignal) => {
+			capturedSignal = signal;
+			return rejectOnAbort(signal);
+		});
+		const store = makeStore();
+		const { container, dispose } = mountDisposable(() => (
+			<SubagentScreen store={store} sessionKey="abort-session" agentId="bg1" />
+		));
+
+		dispose();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(capturedSignal?.aborted).toBe(true);
+		expect(container.textContent).not.toContain("Abort");
+		expect(container.querySelector(".pair-error")).toBeNull();
+	});
+
+	it("genuine session hydration failures still surface as action errors", async () => {
+		vi.mocked(api.messages).mockRejectedValueOnce(new Error("hydrate exploded"));
+		const store = makeStore();
+		const el = mount(() => <SessionScreen store={store} sessionKey="bad-hydrate" />);
+
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("hydrate exploded");
 	});
 
 	it("files renders places, table, and the fixed warning copy", async () => {
@@ -1677,6 +1783,7 @@ describe("dashboard client regressions", () => {
 	});
 
 	it("queued messages render as chips and restore text plus inline images to the composer", async () => {
+		const urls = stubObjectUrls();
 		vi.mocked(api.pending).mockResolvedValue({
 			steering: ["steer one"],
 			followUp: ["follow one"],
@@ -1730,7 +1837,9 @@ describe("dashboard client regressions", () => {
 
 		expect(api.dequeue).toHaveBeenCalledWith("queued");
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("steer one\n\nfollow one");
-		expect(el.querySelector(".attachment-thumb img")?.getAttribute("src")).toBe("data:image/png;base64,aGVsbG8=");
+		expect(el.querySelector(".attachment-thumb img")?.getAttribute("src")).toBe("blob:mock-1");
+		expect(urls.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+		expect((urls.createObjectURL.mock.calls[0]?.[0] as Blob).size).toBe(5);
 	});
 
 	it("composer history recalls sent prompts with arrow keys", async () => {
@@ -1847,23 +1956,32 @@ describe("dashboard client regressions", () => {
 			resultText,
 			startedAt: Date.now(),
 		});
-		const [entries, setEntries] = createSignal([bashEntry("line 1")]);
+		const entry = bashEntry("line 1");
+		const [entries, setEntries] = createSignal([entry]);
 		const el = mount(() => <Transcript entries={entries()} />);
-		const pre = el.querySelector(".tool-result pre") as HTMLPreElement;
-		Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
-		Object.defineProperty(pre, "scrollHeight", { configurable: true, get: () => scrollHeight });
+		let pre = el.querySelector(".tool-result pre") as HTMLPreElement;
+		const refreshPre = () => {
+			pre = el.querySelector(".tool-result pre") as HTMLPreElement;
+			Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
+			Object.defineProperty(pre, "scrollHeight", { configurable: true, get: () => scrollHeight });
+		};
+		refreshPre();
 
 		pre.scrollTop = 200;
 		pre.dispatchEvent(new Event("scroll"));
 		scrollHeight = 600;
-		setEntries([bashEntry("line 1\n".repeat(80))]);
+		entry.resultText = "line 1\n".repeat(80);
+		setEntries([entry]);
+		refreshPre();
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(pre.scrollTop).toBe(600);
 
 		pre.scrollTop = 100;
 		pre.dispatchEvent(new Event("scroll"));
 		scrollHeight = 900;
-		setEntries([bashEntry("line 1\n".repeat(120))]);
+		entry.resultText = "line 1\n".repeat(120);
+		setEntries([entry]);
+		refreshPre();
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(pre.scrollTop).toBe(100);
 	});
@@ -1910,7 +2028,61 @@ describe("dashboard client regressions", () => {
 		expect(el.textContent).toContain("$0.4200");
 	});
 
-	it("image file attachments are sent with the prompt", async () => {
+	it("rejects image batches over the aggregate cap without adding previews", async () => {
+		const urls = stubObjectUrls();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { image: createSessionViewState("image") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="image" />);
+		const input = el.querySelector('input[accept="image/*"]') as HTMLInputElement;
+		Object.defineProperty(input, "files", {
+			configurable: true,
+			value: [
+				sizedImage("one.png", 9 * 1024 * 1024),
+				sizedImage("two.png", 9 * 1024 * 1024),
+				sizedImage("three.png", 9 * 1024 * 1024),
+			],
+		});
+
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("total inline images exceed 25MB");
+		expect(el.querySelector(".attachment-thumb")).toBeNull();
+		expect(urls.createObjectURL).not.toHaveBeenCalled();
+	});
+
+	it("removing an image attachment revokes its preview URL", async () => {
+		const urls = stubObjectUrls();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { image: createSessionViewState("image") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="image" />);
+		const input = el.querySelector('input[accept="image/*"]') as HTMLInputElement;
+		Object.defineProperty(input, "files", {
+			configurable: true,
+			value: [new File(["img"], "tiny.png", { type: "image/png" })],
+		});
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector(".attachment-thumb img")?.getAttribute("src")).toBe("blob:mock-1");
+		(el.querySelector('button[aria-label="remove image"]') as HTMLButtonElement).click();
+
+		expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:mock-1");
+		expect(el.querySelector(".attachment-thumb")).toBeNull();
+	});
+
+	it("image file attachments are sent with the prompt, then revoked and cleared", async () => {
+		const urls = stubObjectUrls();
 		vi.mocked(api.prompt).mockClear();
 		const store = makeStore() as any;
 		const fakeStore = {
@@ -1925,6 +2097,7 @@ describe("dashboard client regressions", () => {
 		Object.defineProperty(input, "files", { configurable: true, value: [file] });
 		input.dispatchEvent(new Event("change", { bubbles: true }));
 		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(el.querySelector(".attachment-thumb img")?.getAttribute("src")).toBe("blob:mock-1");
 		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
 		textarea.value = "describe this";
 		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -1934,9 +2107,11 @@ describe("dashboard client regressions", () => {
 			"image",
 			expect.stringContaining("Attached images included inline with this turn"),
 			undefined,
-			[expect.objectContaining({ mimeType: "image/png", data: expect.any(String) })],
+			[{ mimeType: "image/png", data: "aW1n" }],
 		);
 		expect(vi.mocked(api.prompt).mock.calls[0]?.[1]).toContain("tiny.png");
+		expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:mock-1");
+		expect(el.querySelector(".attachment-thumb")).toBeNull();
 	});
 
 	it("generic file attachments upload to the workspace and send paths, not inline file contents", async () => {
@@ -2108,7 +2283,7 @@ describe("dashboard client regressions", () => {
 		const el = mount(() => <SubagentScreen store={store} sessionKey="k-reload" agentId="bg9" />);
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
-		expect(api.subagentMessages).toHaveBeenCalledWith("k-reload", "bg9");
+		expect(api.subagentMessages).toHaveBeenCalledWith("k-reload", "bg9", expect.any(AbortSignal));
 		expect(el.textContent).toContain("found the answer on disk");
 		expect(el.textContent).toContain("hydrated task");
 	});

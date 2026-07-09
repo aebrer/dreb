@@ -9,6 +9,7 @@ import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { marked } from "marked";
 import { createEffect, createMemo, createSignal, For, type JSX, Match, onCleanup, Show, Switch } from "solid-js";
+import { createCoalescedBottomScroller } from "../scrolling.js";
 import { expandThinking, isToolAutoOpen } from "../state/preferences.js";
 import type { AgentResultEntry, AssistantEntry, ToolEntry, TranscriptEntry } from "../state/reducer.js";
 
@@ -141,6 +142,10 @@ function HighlightedPre(props: {
 	);
 	const html = createMemo(() => highlightedHtml(text(), props.language));
 	const atBottom = () => !preRef || preRef.scrollTop + preRef.clientHeight >= preRef.scrollHeight - 24;
+	const bottomScroller = createCoalescedBottomScroller({
+		element: () => preRef,
+		shouldScroll: () => stickToBottom && !userScrolling,
+	});
 	const releaseUserScrollSoon = () => {
 		if (userScrollTimer) clearTimeout(userScrollTimer);
 		userScrollTimer = setTimeout(() => {
@@ -148,22 +153,16 @@ function HighlightedPre(props: {
 			stickToBottom = atBottom();
 		}, 250);
 	};
-	const scrollToBottomAfterLayout = () => {
-		requestAnimationFrame(() => {
-			requestAnimationFrame(() => {
-				if (preRef && stickToBottom && !userScrolling) preRef.scrollTop = preRef.scrollHeight;
-			});
-		});
-	};
 
 	createEffect(() => {
 		text();
 		props.language;
 		if (!props.autoScroll || !stickToBottom || userScrolling) return;
-		scrollToBottomAfterLayout();
+		bottomScroller.request();
 	});
 	onCleanup(() => {
 		if (userScrollTimer) clearTimeout(userScrollTimer);
+		bottomScroller.cancel();
 	});
 
 	return (

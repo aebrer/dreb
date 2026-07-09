@@ -19,6 +19,8 @@ import type {
 import { api } from "../api.js";
 import { Modal } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
+import { isAbortError } from "../errors.js";
+import { createCoalescedBottomScroller } from "../scrolling.js";
 import {
 	addComposerHistoryEntry,
 	getComposerDraft,
@@ -30,14 +32,18 @@ import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_BYTES = 25 * 1024 * 1024;
 const UPLOAD_DIR_NAME = ".dreb-dashboard-uploads";
 
 type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
 type ModelScope = "scoped" | "all";
 
-interface PendingImageAttachment extends ImageAttachmentDto {
+interface PendingImageAttachment {
+	blob: Blob;
+	mimeType: string;
 	fileName: string;
 	size: number;
+	previewUrl: string;
 }
 
 interface UploadedFileAttachment {
@@ -411,6 +417,10 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	// (a mid-turn refresh or a paused-on-subagents parent must not hide it).
 	const showStopControls = () => streaming() || compacting() || parentPaused() || anyLiveAgent();
 	const chatAtBottom = () => !chatRef || chatRef.scrollTop + chatRef.clientHeight >= chatRef.scrollHeight - 40;
+	const bottomScroller = createCoalescedBottomScroller({
+		element: () => chatRef,
+		shouldScroll: () => autoScroll && !userScrollingTranscript,
+	});
 	function releaseTranscriptScrollSoon(): void {
 		if (userScrollTimer) clearTimeout(userScrollTimer);
 		userScrollTimer = setTimeout(() => {
@@ -419,11 +429,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}, 250);
 	}
 	function scrollChatToBottomAfterLayout(): void {
-		requestAnimationFrame(() => {
-			requestAnimationFrame(() => {
-				if (autoScroll && !userScrollingTranscript && chatRef) chatRef.scrollTop = chatRef.scrollHeight;
-			});
-		});
+		bottomScroller.request();
 	}
 
 	async function refreshRuntimeDetails(includeDailyCost = false) {
@@ -476,11 +482,71 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
-	function queuedImageSize(data: string): number {
-		return Math.floor((data.length * 3) / 4);
+	function bytesFromBase64(data: string): Uint8Array {
+		const binary = atob(data);
+		return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+	}
+
+	function bytesToBase64(bytes: Uint8Array): string {
+		let binary = "";
+		const chunkSize = 0x8000;
+		for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+			binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+		}
+		return btoa(binary);
+	}
+
+	async function blobToBase64(blob: Blob): Promise<string> {
+		return bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
+	}
+
+	function revokeImageAttachment(image: PendingImageAttachment): void {
+		URL.revokeObjectURL(image.previewUrl);
+	}
+
+	function clearImageAttachments(): void {
+		for (const image of imageAttachments()) revokeImageAttachment(image);
+		setImageAttachments([]);
+	}
+
+	function removeImageAttachment(indexToRemove: number): void {
+		setImageAttachments((current) => {
+			const removed = current[indexToRemove];
+			if (removed) revokeImageAttachment(removed);
+			return current.filter((_, index) => index !== indexToRemove);
+		});
+	}
+
+	function assertTotalImageBytes(extraBytes: number): void {
+		const currentBytes = imageAttachments().reduce((sum, image) => sum + image.size, 0);
+		if (currentBytes + extraBytes > MAX_TOTAL_IMAGE_BYTES) {
+			throw new Error("Images too large: total inline images exceed 25MB");
+		}
+	}
+
+	function imageAttachmentFromBlob(blob: Blob, mimeType: string, fileName: string): PendingImageAttachment {
+		return {
+			blob,
+			mimeType,
+			fileName,
+			size: blob.size,
+			previewUrl: URL.createObjectURL(blob),
+		};
+	}
+
+	function imageAttachmentFromQueuedImage(
+		image: ImageAttachmentDto,
+		messageIndex: number,
+		imageIndex: number,
+	): PendingImageAttachment {
+		const bytes = bytesFromBase64(image.data);
+		const blob = new Blob([bytes], { type: image.mimeType });
+		return imageAttachmentFromBlob(blob, image.mimeType, `queued-image-${messageIndex + 1}-${imageIndex + 1}`);
 	}
 
 	async function restorePendingToComposer() {
+		const queuedImages: PendingImageAttachment[] = [];
+		let imagesCommitted = false;
 		try {
 			const cleared = await api.dequeue(props.sessionKey);
 			const queuedMessages = [
@@ -488,51 +554,51 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				...(cleared.followUpMessages ?? cleared.followUp.map((text) => ({ text }))),
 			];
 			const queuedText = queuedMessages.map((message) => message.text).join("\n\n");
-			const queuedImages = queuedMessages.flatMap((message, messageIndex) =>
-				(message.images ?? []).map((image, imageIndex) => ({
-					...image,
-					fileName: `queued-image-${messageIndex + 1}-${imageIndex + 1}`,
-					size: queuedImageSize(image.data),
-				})),
-			);
+			for (const [messageIndex, message] of queuedMessages.entries()) {
+				for (const [imageIndex, image] of (message.images ?? []).entries()) {
+					queuedImages.push(imageAttachmentFromQueuedImage(image, messageIndex, imageIndex));
+				}
+			}
+			assertTotalImageBytes(queuedImages.reduce((sum, image) => sum + image.size, 0));
 			setPendingMessages({ steering: [], followUp: [], steeringMessages: [], followUpMessages: [] });
 			// TUI parity: prepend the dequeued messages to whatever is already typed
 			// rather than clobbering the composer.
 			const current = composerText();
 			setComposerText([queuedText, current].filter((t) => t.trim()).join("\n\n"));
-			if (queuedImages.length > 0) setImageAttachments((currentImages) => [...queuedImages, ...currentImages]);
+			if (queuedImages.length > 0) {
+				setImageAttachments((currentImages) => [...queuedImages, ...currentImages]);
+				imagesCommitted = true;
+			}
 			await props.store.refreshFleet();
 			queueMicrotask(() => composerRef?.focus());
 		} catch (err) {
+			if (!imagesCommitted) {
+				for (const image of queuedImages) revokeImageAttachment(image);
+			}
 			setActionError(err instanceof Error ? err.message : String(err));
 		}
 	}
 
-	function imageAttachmentFromFile(file: File): Promise<PendingImageAttachment> {
+	function imageAttachmentFromFile(file: File): PendingImageAttachment {
 		if (!file.type.startsWith("image/")) throw new Error(`Not an image: ${file.name || file.type}`);
 		if (file.size > MAX_IMAGE_BYTES) throw new Error(`Image too large: ${file.name || file.type} exceeds 10MB`);
-		return new Promise((resolve, reject) => {
-			const reader = new FileReader();
-			reader.onerror = () => reject(new Error(`Failed to read image: ${file.name || file.type}`));
-			reader.onload = () => {
-				const result = String(reader.result ?? "");
-				const comma = result.indexOf(",");
-				resolve({
-					data: comma >= 0 ? result.slice(comma + 1) : result,
-					mimeType: file.type,
-					fileName: file.name || "image",
-					size: file.size,
-				});
-			};
-			reader.readAsDataURL(file);
-		});
+		return imageAttachmentFromBlob(file, file.type, file.name || "image");
 	}
 
 	async function addImageFiles(files: Iterable<File>) {
+		const selected = [...files];
+		if (selected.length === 0) return;
+		const next: PendingImageAttachment[] = [];
 		try {
-			const next = await Promise.all([...files].map((file) => imageAttachmentFromFile(file)));
+			for (const file of selected) {
+				if (!file.type.startsWith("image/")) throw new Error(`Not an image: ${file.name || file.type}`);
+				if (file.size > MAX_IMAGE_BYTES) throw new Error(`Image too large: ${file.name || file.type} exceeds 10MB`);
+			}
+			assertTotalImageBytes(selected.reduce((sum, file) => sum + file.size, 0));
+			for (const file of selected) next.push(imageAttachmentFromFile(file));
 			setImageAttachments((current) => [...current, ...next]);
 		} catch (err) {
+			for (const image of next) revokeImageAttachment(image);
 			setActionError(err instanceof Error ? err.message : String(err));
 		}
 	}
@@ -612,7 +678,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	}
 
 	onMount(() => {
-		props.store.hydrateSession(props.sessionKey).catch((err) => {
+		const hydration = new AbortController();
+		props.store.hydrateSession(props.sessionKey, hydration.signal).catch((err) => {
+			if (hydration.signal.aborted && isAbortError(err)) return;
 			setActionError(err instanceof Error ? err.message : String(err));
 		});
 		void refreshRuntimeDetails(true);
@@ -621,6 +689,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		const detailTimer = setInterval(() => void refreshRuntimeDetails(false), 5000);
 		onCleanup(() => {
 			disposed = true;
+			hydration.abort();
 			clearInterval(detailTimer);
 		});
 	});
@@ -649,6 +718,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	onCleanup(() => {
 		clearInterval(timer);
 		if (userScrollTimer) clearTimeout(userScrollTimer);
+		bottomScroller.cancel();
+		clearImageAttachments();
 	});
 
 	// Composer prefill from set_editor_text / fork.
@@ -725,9 +796,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		const promptText = promptWithAttachmentList(text || "Please review the attached item(s). ");
 		setActionError(undefined);
 		try {
+			const pendingImages = imageAttachments();
 			const images =
-				imageAttachments().length > 0
-					? imageAttachments().map(({ data, mimeType }) => ({ data, mimeType }))
+				pendingImages.length > 0
+					? await Promise.all(
+							pendingImages.map(async ({ blob, mimeType }) => ({ data: await blobToBase64(blob), mimeType })),
+						)
 					: undefined;
 			if (streaming()) {
 				await api.prompt(props.sessionKey, promptText, sendMode(), images);
@@ -739,7 +813,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			addComposerHistoryEntry(props.sessionKey, promptText);
 			setHistoryIndex(undefined);
 			setComposerText("");
-			setImageAttachments([]);
+			clearImageAttachments();
 			setFileAttachments([]);
 			void refreshPendingMessages();
 		} catch (err) {
@@ -1253,13 +1327,11 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 												class="attachment-thumb"
 												title={`${image.fileName} (${formatBytes(image.size)})`}
 											>
-												<img src={`data:${image.mimeType};base64,${image.data}`} alt={image.fileName} />
+												<img src={image.previewUrl} alt={image.fileName} />
 												<button
 													type="button"
 													aria-label="remove image"
-													onClick={() =>
-														setImageAttachments((current) => current.filter((_, i) => i !== index()))
-													}
+													onClick={() => removeImageAttachment(index())}
 												>
 													×
 												</button>

@@ -66,8 +66,9 @@ export const api = {
 	createRuntime: (cwd: string, opts: { sessionPath?: string; firstPrompt?: string } = {}) =>
 		request<RuntimeInfoDto>("/api/runtimes", json({ cwd, ...opts })),
 	stopRuntime: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}`, { method: "DELETE" }),
-	runtime: (key: string) => request<RuntimeInfoDto>(`/api/runtimes/${key}`),
-	messages: (key: string) => request<{ messages: unknown[] }>(`/api/runtimes/${key}/messages`),
+	runtime: (key: string, signal?: AbortSignal) => request<RuntimeInfoDto>(`/api/runtimes/${key}`, { signal }),
+	messages: (key: string, signal?: AbortSignal) =>
+		request<{ messages: unknown[] }>(`/api/runtimes/${key}/messages`, { signal }),
 	pending: (key: string) => request<PendingMessagesDto>(`/api/runtimes/${key}/pending`),
 	dequeue: (key: string) => request<PendingMessagesDto>(`/api/runtimes/${key}/dequeue`, { method: "POST" }),
 	prompt: (key: string, message: string, mode?: "steer" | "follow_up", images?: ImageAttachmentDto[]) =>
@@ -91,11 +92,12 @@ export const api = {
 		request<{ messages: Array<{ entryId: string; text: string }> }>(`/api/runtimes/${key}/fork-messages`),
 	fork: (key: string, entryId: string) =>
 		request<{ text: string; cancelled: boolean }>(`/api/runtimes/${key}/fork`, json({ entryId })),
-	backgroundAgents: (key: string) =>
-		request<{ agents: BackgroundAgentDto[] }>(`/api/runtimes/${key}/background-agents`),
-	subagentMessages: (key: string, agentId: string) =>
+	backgroundAgents: (key: string, signal?: AbortSignal) =>
+		request<{ agents: BackgroundAgentDto[] }>(`/api/runtimes/${key}/background-agents`, { signal }),
+	subagentMessages: (key: string, agentId: string, signal?: AbortSignal) =>
 		request<{ agent: BackgroundAgentDto; messages: unknown[] }>(
 			`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/messages`,
+			{ signal },
 		),
 	extensionUiResponse: (key: string, response: Record<string, unknown>) =>
 		request<{ ok: true }>(`/api/runtimes/${key}/extension-ui-response`, json(response)),
