@@ -363,6 +363,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [showOverflow, setShowOverflow] = createSignal(false);
 	const [topChromeCollapsed, setTopChromeCollapsed] = createSignal(false);
 	const [bottomDockCollapsed, setBottomDockCollapsed] = createSignal(false);
+	const [subagentPanelCollapsed, setSubagentPanelCollapsed] = createSignal(false);
 	const [showCompactModal, setShowCompactModal] = createSignal(false);
 	const [showRenameModal, setShowRenameModal] = createSignal(false);
 	const [showContextModal, setShowContextModal] = createSignal(false);
@@ -394,6 +395,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	let imageFileInputRef: HTMLInputElement | undefined;
 	let statsPopoverRef: HTMLDivElement | undefined;
 	let autoScroll = true;
+	let userScrollingTranscript = false;
+	let userScrollTimer: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
 
 	const streaming = () => session()?.streaming ?? false;
@@ -405,6 +408,21 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	// halts all of these; the dashboard stop button must reach the same states
 	// (a mid-turn refresh or a paused-on-subagents parent must not hide it).
 	const showStopControls = () => streaming() || compacting() || parentPaused() || anyLiveAgent();
+	const chatAtBottom = () => !chatRef || chatRef.scrollTop + chatRef.clientHeight >= chatRef.scrollHeight - 40;
+	function releaseTranscriptScrollSoon(): void {
+		if (userScrollTimer) clearTimeout(userScrollTimer);
+		userScrollTimer = setTimeout(() => {
+			userScrollingTranscript = false;
+			autoScroll = chatAtBottom();
+		}, 250);
+	}
+	function scrollChatToBottomAfterLayout(): void {
+		requestAnimationFrame(() => {
+			requestAnimationFrame(() => {
+				if (autoScroll && !userScrollingTranscript && chatRef) chatRef.scrollTop = chatRef.scrollHeight;
+			});
+		});
+	}
 
 	async function refreshRuntimeDetails(includeDailyCost = false) {
 		const [statsResult, performanceResult, branchResult] = await Promise.allSettled([
@@ -610,7 +628,10 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		const since = session()?.workingSince;
 		setElapsed(since ? Math.floor((Date.now() - since) / 1000) : 0);
 	}, 1000);
-	onCleanup(() => clearInterval(timer));
+	onCleanup(() => {
+		clearInterval(timer);
+		if (userScrollTimer) clearTimeout(userScrollTimer);
+	});
 
 	// Composer prefill from set_editor_text / fork.
 	createEffect(() => {
@@ -629,7 +650,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	createEffect(() => {
 		props.store.revisions[props.sessionKey];
 		session()?.entries.length;
-		if (autoScroll && chatRef) chatRef.scrollTop = chatRef.scrollHeight;
+		if (autoScroll && !userScrollingTranscript) scrollChatToBottomAfterLayout();
 	});
 
 	let wasStreaming = false;
@@ -1017,9 +1038,19 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			<main
 				class="chat"
 				ref={chatRef}
+				onWheel={() => {
+					userScrollingTranscript = true;
+					releaseTranscriptScrollSoon();
+				}}
+				onTouchStart={() => {
+					userScrollingTranscript = true;
+				}}
+				onTouchEnd={() => {
+					userScrollingTranscript = false;
+					autoScroll = chatAtBottom();
+				}}
 				onScroll={() => {
-					if (!chatRef) return;
-					autoScroll = chatRef.scrollTop + chatRef.clientHeight >= chatRef.scrollHeight - 40;
+					autoScroll = chatAtBottom();
 				}}
 			>
 				<div class="chat-inner">
@@ -1077,33 +1108,46 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						</Show>
 
 						<Show when={liveAgents().length + doneAgents().length > 0}>
-							<div class="subagent-strip">
+							<div class="subagent-strip" classList={{ collapsed: subagentPanelCollapsed() }}>
+								<button
+									type="button"
+									class="subagent-toggle"
+									title={subagentPanelCollapsed() ? "show subagents" : "hide subagents"}
+									onClick={() => setSubagentPanelCollapsed(!subagentPanelCollapsed())}
+								>
+									{subagentPanelCollapsed() ? "subagents ▴" : "subagents ▾"}
+								</button>
 								<span class="count">
 									⚡ {liveAgents().length} running · {doneAgents().length} done
 								</span>
-								<For each={[...liveAgents(), ...doneAgents()].slice(0, 4)}>
-									{(agent) => (
-										<button
-											type="button"
-											class="agent-chip"
-											title="view this subagent's session"
-											onClick={() =>
-												props.store.navigate({
-													screen: "subagent",
-													key: props.sessionKey,
-													agentId: agent.agentId,
-												})
-											}
-										>
-											<span class={agent.status === "running" ? "live" : "done"}>
-												{agent.status === "running" ? "●" : agent.status === "completed" ? "✓" : "✕"}
-											</span>
-											<span class="task">
-												{agent.agentType} — {agent.taskSummary}
-											</span>
-										</button>
-									)}
-								</For>
+								<Show when={subagentPanelCollapsed()}>
+									<span class="collapsed-hint">subagent panel hidden</span>
+								</Show>
+								<Show when={!subagentPanelCollapsed()}>
+									<For each={[...liveAgents(), ...doneAgents()].slice(0, 4)}>
+										{(agent) => (
+											<button
+												type="button"
+												class="agent-chip"
+												title="view this subagent's session"
+												onClick={() =>
+													props.store.navigate({
+														screen: "subagent",
+														key: props.sessionKey,
+														agentId: agent.agentId,
+													})
+												}
+											>
+												<span class={agent.status === "running" ? "live" : "done"}>
+													{agent.status === "running" ? "●" : agent.status === "completed" ? "✓" : "✕"}
+												</span>
+												<span class="task">
+													{agent.agentType} — {agent.taskSummary}
+												</span>
+											</button>
+										)}
+									</For>
+								</Show>
 							</div>
 						</Show>
 

@@ -1000,10 +1000,30 @@ details.thinking .thinking-body {
 	flex-wrap: wrap;
 }
 
-.subagent-strip .count {
+.subagent-strip .count,
+.subagent-strip .collapsed-hint {
 	color: var(--muted);
 	font-size: var(--fs-small);
 	white-space: nowrap;
+}
+
+.subagent-strip .subagent-toggle {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	font-family: inherit;
+	font-size: var(--fs-small);
+	padding: 1px var(--space-2);
+	cursor: pointer;
+}
+
+.subagent-strip .subagent-toggle:hover {
+	border-color: var(--text);
+}
+
+.subagent-strip.collapsed {
+	padding-block: var(--space-1);
 }
 
 .subagent-strip .agent-chip {

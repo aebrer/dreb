@@ -371,6 +371,48 @@ describe("app store integration", () => {
 		expect(api.messages).toHaveBeenCalledWith("k-resync");
 		expect(store.sessions["k-resync"]?.entries[0]?.kind).toBe("assistant");
 	});
+
+	it("touch scrolling the transcript suspends stick-to-bottom while streaming", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		if (!captured) throw new Error("connectEvents was not called");
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-scroll" />);
+		captured.onEnvelope({ seq: 1, key: "k-scroll", event: { type: "agent_start" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const chat = el.querySelector(".chat") as HTMLElement;
+		let scrollHeight = 500;
+		Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+		Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+		chat.scrollTop = 400;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		chat.dispatchEvent(new Event("touchstart", { bubbles: true }));
+		scrollHeight = 900;
+		captured.onEnvelope({
+			seq: 2,
+			key: "k-scroll",
+			event: { type: "tool_execution_start", toolCallId: "b1", toolName: "bash", args: { command: "yes" } },
+		});
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(chat.scrollTop).toBe(400);
+
+		chat.scrollTop = 200;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+		chat.dispatchEvent(new Event("touchend", { bubbles: true }));
+		scrollHeight = 1200;
+		captured.onEnvelope({
+			seq: 3,
+			key: "k-scroll",
+			event: { type: "tool_execution_update", toolCallId: "b1", content: "new output" },
+		});
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(chat.scrollTop).toBe(200);
+	});
 });
 
 describe("screen smoke tests", () => {
@@ -540,6 +582,27 @@ describe("screen smoke tests", () => {
 		expect(el.querySelector("textarea")).toBeNull();
 		expect(el.textContent).toContain("composer hidden for transcript reading");
 		expect(el.textContent).toContain("compose ▴");
+	});
+
+	it("in-session subagent panel collapses without hiding the count", () => {
+		const store = makeStore() as any;
+		const session = populatedSession("k-subpanel");
+		const fakeStore = {
+			...store,
+			sessions: { "k-subpanel": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-subpanel" />);
+		expect(el.textContent).toContain("scan things");
+		const toggle = [...el.querySelectorAll("button")].find((button) => button.textContent?.includes("subagents ▾"));
+		expect(toggle).toBeDefined();
+		(toggle as HTMLButtonElement).click();
+
+		expect(el.textContent).toContain("subagents ▴");
+		expect(el.textContent).toContain("1 running · 0 done");
+		expect(el.textContent).toContain("subagent panel hidden");
+		expect(el.textContent).not.toContain("scan things");
 	});
 
 	it("subagent drill-in renders read-only with the fixed note and no composer", () => {
@@ -1348,14 +1411,14 @@ describe("dashboard client regressions", () => {
 		pre.dispatchEvent(new Event("scroll"));
 		scrollHeight = 600;
 		setEntries([bashEntry("line 1\n".repeat(80))]);
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(pre.scrollTop).toBe(600);
 
 		pre.scrollTop = 100;
 		pre.dispatchEvent(new Event("scroll"));
 		scrollHeight = 900;
 		setEntries([bashEntry("line 1\n".repeat(120))]);
-		await new Promise((resolve) => setTimeout(resolve, 0));
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(pre.scrollTop).toBe(100);
 	});
 
