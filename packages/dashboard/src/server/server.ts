@@ -75,16 +75,23 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 			.then((decision) => {
 				req.authDecision = decision;
 				if (decision.allowed) return next();
-				if (decision.needsPairing) {
-					// The pairing endpoints must be reachable by allowed-but-unpaired identities.
-					if (req.path === "/api/pair" || req.path === "/api/auth") return next();
-					// Let the SPA shell + static assets load so the client-side pairing
-					// screen can render. No data exposure: every /api/* data route below
-					// stays fail-closed — only non-API GETs (the app shell) are allowed.
+				const canRenderAuthScreen = decision.needsPairing || Boolean(decision.identity);
+				if (canRenderAuthScreen) {
+					// The auth/pairing endpoints must be reachable by allowed-but-unpaired
+					// identities, and /api/auth must also be reachable by rejected
+					// Tailscale identities so the SPA denial screen can name them.
+					if (req.path === "/api/auth" || (decision.needsPairing && req.path === "/api/pair")) return next();
+					// Let the SPA shell + static assets load so the client-side pairing or
+					// denial screen can render. No data exposure: every /api/* data route
+					// below stays fail-closed — only non-API GETs (the app shell) are allowed.
 					if (req.method === "GET" && !req.path.startsWith("/api/")) return next();
 				}
 				log(`denied ${req.method} ${req.path}: ${decision.reason}`);
-				res.status(decision.status).json({ error: decision.reason, needsPairing: decision.needsPairing ?? false });
+				res.status(decision.status).json({
+					error: decision.reason,
+					needsPairing: decision.needsPairing ?? false,
+					identity: decision.identity?.loginName,
+				});
 			})
 			.catch((err) => {
 				// authenticate() already catches internally; this is belt-and-suspenders.
@@ -545,24 +552,39 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 	});
 
 	app.post("/api/files/upload", (req, res) => {
-		const dir = typeof req.query.dir === "string" ? req.query.dir : "";
-		const name = typeof req.query.name === "string" ? req.query.name : "";
-		const overwrite = req.query.overwrite === "true";
-		files
-			.prepareUpload(dir, name, overwrite)
-			.then(
-				({ path, stream }) =>
-					new Promise<void>((resolve, reject) => {
-						req.pipe(stream);
-						stream.on("finish", () => {
-							res.json({ path });
-							resolve();
-						});
-						stream.on("error", reject);
-						req.on("error", reject);
-					}),
-			)
-			.catch((err) => res.status(err?.status ?? 500).json({ error: String(err?.message ?? err) }));
+		(async () => {
+			const dir = typeof req.query.dir === "string" ? req.query.dir : "";
+			const name = typeof req.query.name === "string" ? req.query.name : "";
+			const overwrite = req.query.overwrite === "true";
+			const upload = await files.prepareUpload(dir, name, overwrite);
+			try {
+				await new Promise<void>((resolve, reject) => {
+					let settled = false;
+					const fail = (err: unknown) => {
+						if (settled) return;
+						settled = true;
+						upload.stream.destroy();
+						reject(err);
+					};
+					req.pipe(upload.stream);
+					upload.stream.on("finish", () => {
+						if (settled) return;
+						settled = true;
+						resolve();
+					});
+					upload.stream.on("error", fail);
+					req.on("error", fail);
+					req.on("aborted", () => fail(Object.assign(new Error("Upload aborted"), { status: 499 })));
+				});
+				await upload.commit();
+				res.json({ path: upload.path });
+			} catch (err) {
+				await upload.cleanup();
+				throw err;
+			}
+		})().catch((err) => {
+			if (!res.headersSent) res.status(err?.status ?? 500).json({ error: String(err?.message ?? err) });
+		});
 	});
 
 	app.post("/api/files/mkdir", (req, res) => {

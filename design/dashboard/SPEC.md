@@ -289,8 +289,9 @@ with the auth layer proven.
    event pipeline from pooled RPC runtimes; canonicalized host-wide file
    endpoints (browse, download, upload, mkdir).
 2. Fleet overview: live cards + on-disk inventory (`list_all_sessions`),
-   resume/delete/new, needs-attention sort + badge, per-session subagent
-   counts and live lines.
+   resume/delete/new, deterministic live-card order by project path then
+   session start time, needs-attention badge, per-session subagent counts and
+   live lines.
 3. Session view: transcript with the full §PARITY 4 entry-type coverage
    (generic fallbacks acceptable for exotic tool bodies), streaming render,
    composer with steer/follow-up/abort, tasks panel, suggest-next chip,
@@ -375,8 +376,9 @@ under rapid extension requests.
    pairing + device cookies, fail-closed on every auth path. No third mode exists.
 2. **Fleet:** groups by project; live cards show status chip (glyph+color),
    activity line, live subagents, tasks progress, ctx%, model, last-activity;
-   needs-attention sorts first and badges the tab; on-disk inventory lists,
-   resumes, and deletes sessions across projects.
+   live cards sort deterministically by project path then session start time;
+   needs-attention badges the tab; on-disk inventory lists, resumes, and
+   deletes sessions across projects.
 3. **Session view:** renders every §PARITY 4 ✅ entry type; streams live;
    composer implements steer/follow-up exactly as §5 defines them; ■ stop
    appears only while streaming and aborts; queued messages are visible and

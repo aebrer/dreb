@@ -17,7 +17,8 @@ npm install -g @dreb/dashboard
 # local-only (default): binds 127.0.0.1, no auth needed
 dreb-dashboard
 
-# or via the dreb CLI
+# If you installed the main dreb CLI (@dreb/coding-agent), the same server is
+# also available through:
 dreb dashboard
 ```
 
@@ -26,9 +27,9 @@ Open `http://127.0.0.1:5343`.
 ## Screens
 
 - **Fleet** (home) — live-first: every live session in one grid at the top
-  (needs-attention sorts first; each card shows its project path, status chip,
-  current activity, live subagents, task progress, ctx%, model, cost,
-  last-assistant preview). Below, past sessions grouped by project — three
+  (stable order by project path, then session start time; each card shows its
+  project path, status chip, current activity, live subagents, task progress,
+  ctx%, model, cost, last-assistant preview). Below, past sessions grouped by project — three
   compact rows each with an "all N on disk" expander — with resume/delete.
   `+ new session` anywhere.
 - **Session view** — full chat parity: markdown streaming transcript, tool

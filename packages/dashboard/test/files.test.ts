@@ -1,4 +1,4 @@
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -106,13 +106,31 @@ describe("FileApi", () => {
 		await writeFile(join(dir, "exists.txt"), "old");
 		const { api } = makeApi();
 		await expect(api.prepareUpload(dir, "exists.txt", false)).rejects.toMatchObject({ status: 409 });
-		const { path, stream } = await api.prepareUpload(dir, "exists.txt", true);
+		const { path, stream, commit } = await api.prepareUpload(dir, "exists.txt", true);
 		expect(path).toBe(join(dir, "exists.txt"));
 		await new Promise<void>((resolve, reject) => {
 			stream.on("finish", () => resolve());
 			stream.on("error", reject);
 			stream.end("new");
 		});
+		await commit();
+		expect(await readFile(join(dir, "exists.txt"), "utf8")).toBe("new");
+	});
+
+	it("upload commit refuses a no-overwrite race and removes the temp file", async () => {
+		const dir = await makeTempDir();
+		const { api } = makeApi();
+		const { stream, commit } = await api.prepareUpload(dir, "race.txt", false);
+		await new Promise<void>((resolve, reject) => {
+			stream.on("finish", () => resolve());
+			stream.on("error", reject);
+			stream.end("uploaded");
+		});
+		await writeFile(join(dir, "race.txt"), "winner");
+
+		await expect(commit()).rejects.toMatchObject({ status: 409 });
+		expect(await readFile(join(dir, "race.txt"), "utf8")).toBe("winner");
+		expect((await readdir(dir)).filter((name) => name.startsWith(".dreb-upload-"))).toEqual([]);
 	});
 
 	it("upload rejects path-like file names", async () => {

@@ -143,7 +143,7 @@ export const api = {
 export interface EventStreamHandlers {
 	onEnvelope: (envelope: EventEnvelope) => void;
 	onStatusChange?: (connected: boolean) => void;
-	/** Buffer gap — full state refetch required. */
+	/** Buffer gap/server restart — full state refetch required. */
 	onResync?: () => void;
 }
 
@@ -170,8 +170,8 @@ export function connectEvents(handlers: EventStreamHandlers): () => void {
 			} catch {
 				return; // not an envelope (comment/keepalive frames don't reach onmessage anyway)
 			}
-			if (envelope.event?.type === "dashboard_resync") handlers.onResync?.();
 			handlers.onEnvelope(envelope);
+			if (envelope.event?.type === "dashboard_resync") handlers.onResync?.();
 		};
 		source.onerror = () => {
 			handlers.onStatusChange?.(false);

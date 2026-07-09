@@ -4,6 +4,7 @@
  * both empty state and populated state where meaningful (SPEC §9.11).
  */
 
+import { createSignal } from "solid-js";
 import { render } from "solid-js/web/dist/web.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -167,6 +168,7 @@ beforeEach(() => {
 afterEach(() => {
 	for (const dispose of disposers.splice(0)) dispose();
 	document.body.innerHTML = "";
+	window.location.hash = "#/";
 	setExpandThinking(false);
 	window.localStorage.clear();
 	vi.mocked(connectEvents).mockImplementation(() => () => {});
@@ -342,6 +344,32 @@ describe("app store integration", () => {
 		captured.onEnvelope({ seq: 2, key: "k1", event: { type: "agent_start" } });
 		expect(store.sessions.k1?.toasts).toHaveLength(0);
 		expect(store.sessions.k1?.toasts.some((item) => item.id === toast.id)).toBe(false);
+	});
+
+	it("dashboard_resync rehydrates the active session route", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		vi.mocked(api.messages).mockResolvedValue({
+			messages: [{ role: "assistant", content: [{ type: "text", text: "fresh transcript" }] }],
+		});
+		vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
+		window.location.hash = "#/session/k-resync";
+		const store = makeStore();
+
+		await store.start();
+		if (!captured) throw new Error("connectEvents was not called");
+		captured.onEnvelope({ seq: 1, key: "k-resync", event: { type: "agent_start" } });
+		expect(store.sessions["k-resync"]?.streaming).toBe(true);
+
+		captured.onEnvelope({ seq: 2, key: "", event: { type: "dashboard_resync", reason: "buffer_gap" } });
+		captured.onResync?.();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(api.messages).toHaveBeenCalledWith("k-resync");
+		expect(store.sessions["k-resync"]?.entries[0]?.kind).toBe("assistant");
 	});
 });
 
@@ -1297,6 +1325,38 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector(".tool-command")?.textContent).toContain("npm test");
 		expect(el.textContent).toContain("passed");
 		expect(el.textContent).toContain("written body");
+	});
+
+	it("bash tool output sticks to the bottom while streaming unless the user scrolls up", async () => {
+		let scrollHeight = 300;
+		const bashEntry = (resultText: string) => ({
+			kind: "tool" as const,
+			toolCallId: "b-stream",
+			toolName: "bash",
+			args: { command: "for i in {1..100}; do echo $i; done" },
+			status: "running" as const,
+			resultText,
+			startedAt: Date.now(),
+		});
+		const [entries, setEntries] = createSignal([bashEntry("line 1")]);
+		const el = mount(() => <Transcript entries={entries()} />);
+		const pre = el.querySelector(".tool-result pre") as HTMLPreElement;
+		Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
+		Object.defineProperty(pre, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+		pre.scrollTop = 200;
+		pre.dispatchEvent(new Event("scroll"));
+		scrollHeight = 600;
+		setEntries([bashEntry("line 1\n".repeat(80))]);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(pre.scrollTop).toBe(600);
+
+		pre.scrollTop = 100;
+		pre.dispatchEvent(new Event("scroll"));
+		scrollHeight = 900;
+		setEntries([bashEntry("line 1\n".repeat(120))]);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(pre.scrollTop).toBe(100);
 	});
 
 	it("fork modal rewinds to a selected user message and prefills the composer", async () => {

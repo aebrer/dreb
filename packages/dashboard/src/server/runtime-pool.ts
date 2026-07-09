@@ -35,6 +35,10 @@ export interface RuntimeHandle {
 	lastActivity: number;
 	/** Needs-attention sources, keyed so they can be cleared independently. */
 	attention: Map<string, string>;
+	/** Last runtime-level error, persisted server-side so fleet refreshes stay honest. */
+	error?: string;
+	/** Last known state, used to keep failed runtime cards renderable. */
+	lastState?: SessionStateDto;
 	/** Background agents seen via events (agentId → latest info). */
 	backgroundAgents: Map<string, BackgroundAgentDto>;
 }
@@ -105,6 +109,7 @@ export class RuntimePool {
 		};
 		client.onEvent((event) => this.handleEvent(handle, event as unknown as Record<string, unknown>));
 		await client.start();
+		await this.seedBackgroundAgents(handle);
 		this.runtimes.set(key, handle);
 		return handle;
 	}
@@ -187,6 +192,8 @@ export class RuntimePool {
 			}
 			handle.attention.delete("paused");
 			handle.attention.delete("suggest");
+			handle.attention.delete("error");
+			handle.error = undefined;
 		}
 		if (type === "suggest_next") {
 			// suggest_next as the ending action = "your move": mark needs-attention
@@ -198,6 +205,12 @@ export class RuntimePool {
 		}
 		if (type === "agent_end") {
 			handle.attention.delete("paused");
+		}
+		if (type === "auto_retry_end" && event.success === false && event.finalError) {
+			this.recordRuntimeError(handle, String(event.finalError));
+		}
+		if (type === "auto_compaction_end" && event.errorMessage) {
+			this.recordRuntimeError(handle, String(event.errorMessage));
 		}
 
 		// Track background agents from lifecycle events.
@@ -228,9 +241,59 @@ export class RuntimePool {
 		}
 	}
 
+	private recordRuntimeError(handle: RuntimeHandle, message: string): void {
+		handle.error = message;
+		handle.attention.set("error", message);
+	}
+
+	private fallbackState(handle: RuntimeHandle): SessionStateDto {
+		return {
+			sessionId: handle.lastState?.sessionId ?? handle.key,
+			sessionName: handle.lastState?.sessionName,
+			thinkingLevel: handle.lastState?.thinkingLevel ?? "off",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: handle.lastState?.steeringMode ?? "all",
+			followUpMode: handle.lastState?.followUpMode ?? "all",
+			sessionFile: handle.lastState?.sessionFile,
+			autoCompactionEnabled: handle.lastState?.autoCompactionEnabled ?? false,
+			messageCount: handle.lastState?.messageCount ?? 0,
+			pendingMessageCount: handle.lastState?.pendingMessageCount ?? 0,
+			contextUsage: handle.lastState?.contextUsage,
+			model: handle.lastState?.model,
+			modelFallbackMessage: handle.lastState?.modelFallbackMessage,
+		};
+	}
+
+	private async seedBackgroundAgents(handle: RuntimeHandle): Promise<void> {
+		try {
+			const agents = (await handle.client.listBackgroundAgents()) as unknown as BackgroundAgentDto[];
+			for (const agent of agents) {
+				handle.backgroundAgents.set(agent.agentId, agent);
+			}
+		} catch (err) {
+			this.logger(
+				`runtime ${handle.key} background-agent registry unavailable: ${err instanceof Error ? err.message : String(err)}`,
+			);
+		}
+	}
+
 	/** Snapshot a runtime for the fleet endpoint. */
 	async describe(handle: RuntimeHandle): Promise<RuntimeInfoDto> {
-		const state = (await handle.client.getState()) as unknown as SessionStateDto;
+		let state: SessionStateDto;
+		try {
+			state = (await handle.client.getState()) as unknown as SessionStateDto;
+			handle.lastState = state;
+			if (handle.error?.startsWith("RPC process")) {
+				handle.error = undefined;
+				handle.attention.delete("error");
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.recordRuntimeError(handle, message);
+			this.logger(`runtime ${handle.key} state unavailable for fleet card: ${message}`);
+			state = this.fallbackState(handle);
+		}
 		let stats: RuntimeStatsSummaryDto | undefined;
 		try {
 			const sessionStats = await handle.client.getSessionStats();
@@ -256,6 +319,7 @@ export class RuntimePool {
 			stats,
 			backgroundAgents: [...handle.backgroundAgents.values()],
 			needsAttention: handle.attention.size > 0,
+			error: handle.error,
 			lastAssistantText,
 			createdAt: new Date(handle.createdAt).toISOString(),
 			lastActivity: new Date(handle.lastActivity).toISOString(),

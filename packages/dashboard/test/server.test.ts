@@ -22,6 +22,7 @@ interface TestServerOptions {
 	auth?: DashboardAuth;
 	listAllSessions?: () => Promise<unknown[]>;
 	deleteSession?: (path: string) => Promise<unknown>;
+	staticDir?: string;
 }
 
 async function createTempProject(): Promise<string> {
@@ -45,6 +46,7 @@ async function startServer(options: TestServerOptions = {}) {
 		pool,
 		listAllSessions: options.listAllSessions ?? (async () => []),
 		deleteSession: options.deleteSession ?? (async () => ({ method: "trash" })),
+		staticDir: options.staticDir,
 		logger: () => {},
 	});
 	const server = await new Promise<Server>((resolve) => {
@@ -97,6 +99,35 @@ describe("dashboard server — auth middleware", () => {
 		const { base } = await startServer();
 		const res = await fetch(`${base}/api/fleet`, { headers: { origin: "https://evil.example" } });
 		expect(res.status).toBe(403);
+	});
+
+	it("lets rejected Tailscale identities load the SPA denial screen and /api/auth identity", async () => {
+		const staticDir = await mkdtemp(join(tmpdir(), "dreb-dash-static-"));
+		tempDirs.push(staticDir);
+		await writeFile(join(staticDir, "index.html"), "<main>dashboard shell</main>");
+		const auth = new DashboardAuth();
+		vi.spyOn(auth, "authenticate").mockResolvedValue({
+			allowed: false,
+			status: 403,
+			reason: 'Tailscale identity "mallory@example.com" is not on the dashboard allowlist',
+			identity: { loginName: "mallory@example.com", device: "phone" },
+		});
+		const { base } = await startServer({ auth, staticDir });
+
+		const shell = await fetch(`${base}/`);
+		expect(shell.status).toBe(200);
+		expect(await shell.text()).toContain("dashboard shell");
+
+		const status = await fetch(`${base}/api/auth`);
+		expect(status.status).toBe(403);
+		await expect(status.json()).resolves.toMatchObject({
+			error: expect.stringContaining("mallory@example.com"),
+			identity: "mallory@example.com",
+			needsPairing: false,
+		});
+
+		const data = await fetch(`${base}/api/fleet`);
+		expect(data.status).toBe(403);
 	});
 });
 

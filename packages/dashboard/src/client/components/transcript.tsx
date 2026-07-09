@@ -8,7 +8,7 @@
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { marked } from "marked";
-import { createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
+import { createEffect, createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
 import { expandThinking, isToolAutoOpen } from "../state/preferences.js";
 import type { AgentResultEntry, AssistantEntry, ToolEntry, TranscriptEntry } from "../state/reducer.js";
 
@@ -67,16 +67,32 @@ function highlightedHtml(text: string, language: string | undefined): string | u
 	return DOMPurify.sanitize(hljs.highlight(text, { language, ignoreIllegals: true }).value);
 }
 
-function HighlightedPre(props: { text: string; language?: string }): JSX.Element {
+function HighlightedPre(props: { text: string; language?: string; autoScroll?: boolean }): JSX.Element {
+	let preRef: HTMLPreElement | undefined;
+	let stickToBottom = true;
 	const html = () => highlightedHtml(props.text, props.language);
+	const atBottom = () => !preRef || preRef.scrollTop + preRef.clientHeight >= preRef.scrollHeight - 24;
+
+	createEffect(() => {
+		props.text;
+		props.language;
+		if (!props.autoScroll || !stickToBottom) return;
+		queueMicrotask(() => {
+			if (preRef) preRef.scrollTop = preRef.scrollHeight;
+		});
+	});
+
 	return (
-		<Show when={html()} fallback={<pre>{props.text}</pre>}>
-			{(safeHtml) => (
-				<pre>
-					<code class="hljs" innerHTML={safeHtml()} />
-				</pre>
-			)}
-		</Show>
+		<pre
+			ref={preRef}
+			onScroll={() => {
+				if (props.autoScroll) stickToBottom = atBottom();
+			}}
+		>
+			<Show when={html()} fallback={props.text}>
+				{(safeHtml) => <code class="hljs" innerHTML={safeHtml()} />}
+			</Show>
+		</pre>
 	);
 }
 
@@ -264,6 +280,7 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 		return undefined;
 	};
 	const bodyIsMarkdown = () => MARKDOWN_RESULT_TOOLS.has(props.entry.toolName) && props.entry.status !== "error";
+	const isBash = () => props.entry.toolName === "bash" || props.entry.toolName === "bash (user)";
 	const inputSections = () => toolInputSections(props.entry);
 	return (
 		<details class="tool" open={isToolAutoOpen(props.entry.toolName) || props.entry.status === "running"}>
@@ -312,7 +329,9 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 				</Match>
 				<Match when={bodyText()}>
 					<div class="tool-result">
-						<Switch fallback={<HighlightedPre text={bodyText()} language={bodyLanguage()} />}>
+						<Switch
+							fallback={<HighlightedPre text={bodyText()} language={bodyLanguage()} autoScroll={isBash()} />}
+						>
 							<Match when={bodyIsMarkdown()}>
 								<div class="markdown-body" innerHTML={renderMarkdown(bodyText())} />
 							</Match>

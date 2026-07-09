@@ -8,12 +8,20 @@
  * real absolute path, and server-side logging of every operation.
  */
 
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readdir, realpath, rename, stat } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { link, mkdir, open, readdir, realpath, rename, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
+import type { Writable } from "node:stream";
 import type { DirListingDto, FileEntryDto } from "../shared/protocol.js";
 
 export type FileOpLogger = (operation: string, path: string, detail?: string) => void;
+
+function assertValidChildName(name: string, label: string): void {
+	if (!name || name.includes("/") || name.includes("\\") || name.includes("\0") || name === "." || name === "..") {
+		throw Object.assign(new Error(`Invalid ${label}: ${name}`), { status: 400 });
+	}
+}
 
 /**
  * Canonicalize a client-supplied path. Throws (status 400) on anything
@@ -122,18 +130,13 @@ export class FileApi {
 		rawDir: string,
 		fileName: string,
 		overwrite: boolean,
-	): Promise<{ path: string; stream: NodeJS.WritableStream }> {
+	): Promise<{ path: string; stream: Writable; commit: () => Promise<void>; cleanup: () => Promise<void> }> {
 		const dir = await canonicalizePath(rawDir, { mustExist: true });
 		const dirInfo = await stat(dir);
 		if (!dirInfo.isDirectory()) {
 			throw Object.assign(new Error(`Upload target is not a directory: ${dir}`), { status: 400 });
 		}
-		if (!fileName || fileName.includes("/") || fileName.includes("\\") || fileName.includes("\0")) {
-			throw Object.assign(new Error(`Invalid upload file name: ${fileName}`), { status: 400 });
-		}
-		if (fileName === "." || fileName === "..") {
-			throw Object.assign(new Error(`Invalid upload file name: ${fileName}`), { status: 400 });
-		}
+		assertValidChildName(fileName, "upload file name");
 		const path = join(dir, fileName);
 		let exists = false;
 		try {
@@ -145,14 +148,42 @@ export class FileApi {
 		if (exists && !overwrite) {
 			throw Object.assign(new Error(`File exists: ${path}`), { status: 409 });
 		}
-		this.log("upload", path, exists ? "overwrite" : "create");
-		return { path, stream: createWriteStream(path) };
+
+		const tempPath = join(dir, `.dreb-upload-${process.pid}-${Date.now()}-${randomBytes(6).toString("hex")}.tmp`);
+		const file = await open(tempPath, "wx");
+		const stream = file.createWriteStream({ autoClose: true });
+		let committed = false;
+		const cleanup = async () => {
+			if (committed) return;
+			await unlink(tempPath).catch(() => {});
+		};
+		const commit = async () => {
+			try {
+				if (overwrite) {
+					await rename(tempPath, path);
+				} else {
+					// Atomic no-overwrite publish: hard-link into the final name and fail
+					// with EEXIST if another writer won the race after the early stat().
+					await link(tempPath, path).catch((err: NodeJS.ErrnoException) => {
+						if (err.code === "EEXIST") {
+							throw Object.assign(new Error(`File exists: ${path}`), { status: 409, cause: err });
+						}
+						throw err;
+					});
+					await unlink(tempPath);
+				}
+				committed = true;
+				this.log("upload", path, exists ? "overwrite" : "create");
+			} catch (err) {
+				await cleanup();
+				throw err;
+			}
+		};
+		return { path, stream, commit, cleanup };
 	}
 
 	async mkdir(rawDir: string, name: string): Promise<string> {
-		if (!name || name.includes("/") || name.includes("\\") || name.includes("\0") || name === "." || name === "..") {
-			throw Object.assign(new Error(`Invalid folder name: ${name}`), { status: 400 });
-		}
+		assertValidChildName(name, "folder name");
 		const parent = await canonicalizePath(rawDir, { mustExist: true });
 		const path = join(parent, name);
 		await mkdir(path);
@@ -161,16 +192,7 @@ export class FileApi {
 	}
 
 	async renameEntry(rawPath: string, newName: string): Promise<string> {
-		if (
-			!newName ||
-			newName.includes("/") ||
-			newName.includes("\\") ||
-			newName.includes("\0") ||
-			newName === "." ||
-			newName === ".."
-		) {
-			throw Object.assign(new Error(`Invalid name: ${newName}`), { status: 400 });
-		}
+		assertValidChildName(newName, "name");
 		const path = await canonicalizePath(rawPath, { mustExist: true });
 		const target = join(dirname(path), newName);
 		try {

@@ -11,6 +11,7 @@ import { Modal, relativeTime, StatusChip, Topbar } from "../components/common.js
 import type { AppStore } from "../state/store.js";
 
 function runtimeStatus(runtime: RuntimeInfoDto): "running" | "attention" | "idle" | "error" {
+	if (runtime.error) return "error";
 	if (runtime.needsAttention) return "attention";
 	if (runtime.state.isStreaming || runtime.state.isCompacting) return "running";
 	return "idle";
@@ -51,7 +52,10 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 	};
 
 	return (
-		<article class="session-card" classList={{ attention: status() === "attention", error: !!session()?.lastError }}>
+		<article
+			class="session-card"
+			classList={{ attention: status() === "attention", error: status() === "error" || !!session()?.lastError }}
+		>
 			<div class="session-title">
 				<span class="name">
 					{session()?.sessionName ?? props.runtime.state.sessionName ?? props.runtime.state.sessionId.slice(0, 8)}
@@ -68,8 +72,8 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 					{session()?.uiRequests[0] ? `waiting for input — ${session()!.uiRequests[0].title}` : "needs attention"}
 				</p>
 			</Show>
-			<Show when={session()?.lastError}>
-				<p class="error-reason">{session()!.lastError}</p>
+			<Show when={props.runtime.error ?? session()?.lastError}>
+				<p class="error-reason">{props.runtime.error ?? session()!.lastError}</p>
 			</Show>
 			<Show when={activity()}>
 				<p class="activity">{activity()}</p>

@@ -42,17 +42,23 @@ export class EventHub {
 	 * Attach a client. When `lastEventId` is provided, buffered events after it
 	 * are replayed first. Returns a detach function.
 	 *
-	 * When the requested id has already been evicted from the buffer, a
+	 * When the requested id has already been evicted from the buffer, or belongs
+	 * to an older server instance whose sequence is no longer present, a
 	 * `dashboard_resync` event is sent first — the client must refetch state
 	 * because the gap cannot be replayed.
 	 */
 	attach(client: SseClient, lastEventId?: number): () => void {
 		if (lastEventId !== undefined) {
 			const oldest = this.buffer[0]?.seq;
-			if (oldest !== undefined && lastEventId < oldest - 1) {
+			const newest = this.buffer[this.buffer.length - 1]?.seq;
+			if (oldest === undefined || newest === undefined || lastEventId < oldest - 1 || lastEventId > newest) {
 				this.seq += 1;
 				client.write(
-					formatSseFrame({ seq: this.seq, key: "", event: { type: "dashboard_resync", reason: "buffer_gap" } }),
+					formatSseFrame({
+						seq: this.seq,
+						key: "",
+						event: { type: "dashboard_resync", reason: oldest === undefined ? "empty_buffer" : "buffer_gap" },
+					}),
 				);
 			}
 			for (const envelope of this.buffer) {

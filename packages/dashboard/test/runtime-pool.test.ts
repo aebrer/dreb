@@ -188,6 +188,58 @@ describe("RuntimePool", () => {
 		expect(info.lastAssistantText).toHaveLength(200);
 	});
 
+	it("create() seeds background agents from the RPC registry", async () => {
+		const { pool, clients } = makePool();
+		const handlePromise = pool.create("/tmp");
+		const client = clients[0];
+		vi.mocked(client.listBackgroundAgents).mockResolvedValue([
+			{
+				agentId: "rehydrated",
+				agentType: "Explore",
+				taskSummary: "from disk",
+				startedAt: new Date().toISOString(),
+				status: "completed",
+			},
+		] as any);
+		const handle = await handlePromise;
+
+		expect(handle.backgroundAgents.get("rehydrated")?.taskSummary).toBe("from disk");
+	});
+
+	it("describe() reports runtime errors instead of throwing when state is unavailable", async () => {
+		const logs: string[] = [];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			logger: (line) => logs.push(line),
+			clientFactory: () => {
+				const client = makeFakeClient();
+				vi.mocked(client.getState).mockRejectedValue(new Error("RPC process exited"));
+				vi.mocked(client.getSessionStats).mockRejectedValue(new Error("dead"));
+				vi.mocked(client.getLastAssistantText).mockRejectedValue(new Error("dead"));
+				return client;
+			},
+		});
+		const handle = await pool.create("/tmp");
+
+		const info = await pool.describe(handle);
+
+		expect(info.error).toContain("RPC process exited");
+		expect(info.needsAttention).toBe(true);
+		expect(info.state.isStreaming).toBe(false);
+		expect(logs.join("\n")).toContain("state unavailable");
+	});
+
+	it("describe() persists terminal retry errors across fleet refreshes", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+		clients[0].emit({ type: "auto_retry_end", success: false, finalError: "provider unavailable" });
+
+		const info = await pool.describe(handle);
+
+		expect(info.error).toBe("provider unavailable");
+		expect(info.needsAttention).toBe(true);
+	});
+
 	it("describe() logs and omits stats when the stats call fails", async () => {
 		const logs: string[] = [];
 		const clients: Array<ReturnType<typeof makeFakeClient>> = [];

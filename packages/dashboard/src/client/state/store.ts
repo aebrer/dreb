@@ -91,6 +91,10 @@ export function createAppStore() {
 
 	function handleEnvelope(envelope: EventEnvelope): void {
 		const session = applyEnvelope(reducerState, envelope);
+		if (envelope.event?.type === "dashboard_resync") {
+			setSessions(reconcile({}));
+			setRevisions(reconcile({}));
+		}
 		if (session) syncSession(session.key);
 		// Fleet-affecting events refresh the overview lazily.
 		const type = envelope.event?.type as string | undefined;
@@ -103,6 +107,22 @@ export function createAppStore() {
 			refreshFleet().catch(() => {
 				// Fleet refresh failing is non-fatal; next event retries.
 			});
+		}
+	}
+
+	async function resyncFromServer(): Promise<void> {
+		await refreshFleet().catch(() => {});
+		const current = route();
+		try {
+			if (current.screen === "session") {
+				await hydrateSession(current.key);
+			} else if (current.screen === "subagent") {
+				await hydrateSession(current.key);
+				await hydrateSubagent(current.key, current.agentId);
+			}
+		} catch {
+			// Hydration failures surface when the user opens the route; keep the
+			// reconnect path from throwing out of the EventSource callback.
 		}
 	}
 
@@ -129,7 +149,7 @@ export function createAppStore() {
 			onEnvelope: handleEnvelope,
 			onStatusChange: setConnected,
 			onResync: () => {
-				refreshFleet().catch(() => {});
+				resyncFromServer().catch(() => {});
 			},
 		});
 	}
@@ -147,6 +167,80 @@ export function createAppStore() {
 		}
 	}
 
+	/**
+	 * Hydrate a session from the server (on drill-in): transcript from
+	 * get_messages + background-agent registry from list_background_agents.
+	 * The registry seed is what makes subagent drill-ins reachable again
+	 * after a browser reload (reducer state is per-page, but the runtime
+	 * keeps running server-side).
+	 */
+	async function hydrateSession(key: string): Promise<void> {
+		const [messagesResult, agentsResult, runtimeResult] = await Promise.allSettled([
+			api.messages(key),
+			api.backgroundAgents(key),
+			api.runtime(key),
+		] as const);
+		let session = reducerState.sessions.get(key);
+		if (!session) {
+			session = createSessionViewState(key);
+			reducerState.sessions.set(key, session);
+		}
+		if (messagesResult.status === "fulfilled") {
+			session.entries = messagesToEntries(messagesResult.value.messages as any[]);
+		}
+		if (agentsResult.status === "fulfilled") {
+			for (const agent of agentsResult.value.agents) {
+				session.backgroundAgents[agent.agentId] = agent;
+			}
+		}
+		// Seed live turn state from the runtime so a mid-turn browser refresh
+		// still shows stop/working UI. Without this, `streaming` only becomes
+		// true via a future agent_start SSE event — after a refresh that event
+		// is in the past, leaving the stop button and status line missing while
+		// the agent is visibly running.
+		if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
+			const state = runtimeResult.value.state;
+			session.streaming = state.isStreaming;
+			session.compacting = state.isCompacting;
+			if (state.isStreaming && !session.workingSince) {
+				session.workingSince = Date.now();
+				session.workingText = session.workingText ?? "working";
+			} else if (!state.isStreaming) {
+				session.workingSince = undefined;
+			}
+		}
+		syncSession(key);
+		// Loud failure: apply what succeeded above, then surface the error.
+		const failed = [messagesResult, agentsResult, runtimeResult].find((result) => result.status === "rejected");
+		if (failed?.status === "rejected") {
+			throw failed.reason instanceof Error ? failed.reason : new Error(String(failed.reason));
+		}
+	}
+
+	/**
+	 * Hydrate a subagent transcript from its on-disk session log. Live
+	 * `background_agent_event` relays only exist for the page that was open
+	 * when they streamed — after a reload this is the only data source.
+	 */
+	async function hydrateSubagent(key: string, agentId: string): Promise<void> {
+		const { agent, messages } = await api.subagentMessages(key, agentId);
+		let session = reducerState.sessions.get(key);
+		if (!session) {
+			session = createSessionViewState(key);
+			reducerState.sessions.set(key, session);
+		}
+		session.backgroundAgents[agentId] = agent;
+		let sub = session.subagents[agentId];
+		if (!sub) {
+			sub = { agentId, entries: [], streaming: agent.status === "running" };
+			session.subagents[agentId] = sub;
+		}
+		// Never clobber richer live state with an empty disk snapshot.
+		if (messages.length > 0) sub.entries = messagesToEntries(messages as any[]);
+		sub.streaming = agent.status === "running";
+		syncSession(key);
+	}
+
 	return {
 		sessions,
 		/** Per-session revision counters — bump on every applied envelope (autoscroll dependency). */
@@ -160,78 +254,8 @@ export function createAppStore() {
 		start,
 		stop,
 		dismissToast,
-		/**
-		 * Hydrate a session from the server (on drill-in): transcript from
-		 * get_messages + background-agent registry from list_background_agents.
-		 * The registry seed is what makes subagent drill-ins reachable again
-		 * after a browser reload (reducer state is per-page, but the runtime
-		 * keeps running server-side).
-		 */
-		async hydrateSession(key: string): Promise<void> {
-			const [messagesResult, agentsResult, runtimeResult] = await Promise.allSettled([
-				api.messages(key),
-				api.backgroundAgents(key),
-				api.runtime(key),
-			] as const);
-			let session = reducerState.sessions.get(key);
-			if (!session) {
-				session = createSessionViewState(key);
-				reducerState.sessions.set(key, session);
-			}
-			if (messagesResult.status === "fulfilled") {
-				session.entries = messagesToEntries(messagesResult.value.messages as any[]);
-			}
-			if (agentsResult.status === "fulfilled") {
-				for (const agent of agentsResult.value.agents) {
-					session.backgroundAgents[agent.agentId] = agent;
-				}
-			}
-			// Seed live turn state from the runtime so a mid-turn browser refresh
-			// still shows stop/working UI. Without this, `streaming` only becomes
-			// true via a future agent_start SSE event — after a refresh that event
-			// is in the past, leaving the stop button and status line missing while
-			// the agent is visibly running.
-			if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
-				const state = runtimeResult.value.state;
-				session.streaming = state.isStreaming;
-				session.compacting = state.isCompacting;
-				if (state.isStreaming && !session.workingSince) {
-					session.workingSince = Date.now();
-					session.workingText = session.workingText ?? "working";
-				} else if (!state.isStreaming) {
-					session.workingSince = undefined;
-				}
-			}
-			syncSession(key);
-			// Loud failure: apply what succeeded above, then surface the error.
-			const failed = [messagesResult, agentsResult, runtimeResult].find((result) => result.status === "rejected");
-			if (failed?.status === "rejected") {
-				throw failed.reason instanceof Error ? failed.reason : new Error(String(failed.reason));
-			}
-		},
-		/**
-		 * Hydrate a subagent transcript from its on-disk session log. Live
-		 * `background_agent_event` relays only exist for the page that was open
-		 * when they streamed — after a reload this is the only data source.
-		 */
-		async hydrateSubagent(key: string, agentId: string): Promise<void> {
-			const { agent, messages } = await api.subagentMessages(key, agentId);
-			let session = reducerState.sessions.get(key);
-			if (!session) {
-				session = createSessionViewState(key);
-				reducerState.sessions.set(key, session);
-			}
-			session.backgroundAgents[agentId] = agent;
-			let sub = session.subagents[agentId];
-			if (!sub) {
-				sub = { agentId, entries: [], streaming: agent.status === "running" };
-				session.subagents[agentId] = sub;
-			}
-			// Never clobber richer live state with an empty disk snapshot.
-			if (messages.length > 0) sub.entries = messagesToEntries(messages as any[]);
-			sub.streaming = agent.status === "running";
-			syncSession(key);
-		},
+		hydrateSession,
+		hydrateSubagent,
 	};
 }
 

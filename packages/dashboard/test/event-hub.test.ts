@@ -53,6 +53,21 @@ describe("EventHub", () => {
 		expect(envelopes()[0].event.type).toBe("dashboard_resync");
 	});
 
+	it("sends dashboard_resync when reconnecting with a prior id to an empty buffer", () => {
+		const hub = new EventHub();
+		const { client, envelopes } = collectClient();
+		hub.attach(client, 42);
+		expect(envelopes()[0].event).toMatchObject({ type: "dashboard_resync", reason: "empty_buffer" });
+	});
+
+	it("sends dashboard_resync when Last-Event-ID is ahead of the current buffer", () => {
+		const hub = new EventHub();
+		hub.publish("k", { type: "one" });
+		const { client, envelopes } = collectClient();
+		hub.attach(client, 999);
+		expect(envelopes()[0].event.type).toBe("dashboard_resync");
+	});
+
 	it("detached clients stop receiving", () => {
 		const hub = new EventHub();
 		const { client, envelopes } = collectClient();

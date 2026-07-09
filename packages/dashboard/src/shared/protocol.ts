@@ -130,6 +130,8 @@ export interface RuntimeInfoDto {
 	backgroundAgents: BackgroundAgentDto[];
 	/** Server-derived needs-attention flag (extension UI pending, paused, error). */
 	needsAttention: boolean;
+	/** Runtime-level error that should survive browser reloads. */
+	error?: string;
 	/** Last assistant text, truncated for fleet-card previews. */
 	lastAssistantText?: string;
 	/** Session start timestamp (ISO) — stable tiebreak for deterministic fleet ordering. */
