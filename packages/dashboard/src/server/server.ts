@@ -13,6 +13,7 @@ import { basename, join } from "node:path";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
 import type { AuthStatusDto, FleetDto, ImageAttachmentDto, PairingCodeDto } from "../shared/protocol.js";
+import { MAX_PROMPT_BODY_BYTES } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
 import { EventHub } from "./event-hub.js";
 import { defaultPlaces, FileApi } from "./files.js";
@@ -62,7 +63,7 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 
 	const app = express();
 	app.disable("x-powered-by");
-	app.use(express.json({ limit: "25mb" }));
+	app.use(express.json({ limit: MAX_PROMPT_BODY_BYTES }));
 
 	// -- auth middleware (every route, fail-closed) ---------------------------
 	app.use((req: AuthedRequest, res: Response, next: NextFunction) => {

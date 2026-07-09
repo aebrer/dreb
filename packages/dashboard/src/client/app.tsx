@@ -78,9 +78,10 @@ export function App(): JSX.Element {
 
 	// All toasts across sessions, newest last.
 	const allToasts = () =>
-		Object.values(store.sessions)
-			.flatMap((s) => s.toasts.map((t) => ({ ...t, sessionKey: s.key })))
-			.slice(-5);
+		[
+			...Object.values(store.sessions).flatMap((s) => s.toasts.map((t) => ({ ...t, sessionKey: s.key }))),
+			...store.notices(),
+		].slice(-5);
 
 	return (
 		<>

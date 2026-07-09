@@ -662,6 +662,65 @@ describe("dashboard server — SSE", () => {
 			fast?.destroy();
 		}
 	});
+
+	it("keeps SSE clients connected when transient backpressure stays under the buffer ceiling", async () => {
+		const dir = await createTempProject();
+		const logs: string[] = [];
+		const { base, clients } = await startServer({ logger: (line) => logs.push(line) });
+		await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+
+		const originalWrite = ServerResponse.prototype.write as (this: ServerResponse, ...args: any[]) => boolean;
+		const eventResponses: ServerResponse[] = [];
+		const writeCounts = new WeakMap<ServerResponse, number>();
+		const backpressuredWrites: string[] = [];
+		const writeSpy = vi.spyOn(ServerResponse.prototype, "write").mockImplementation(function (
+			this: ServerResponse,
+			...args: any[]
+		) {
+			const responseReq = (this as ServerResponse & { req?: IncomingMessage }).req;
+			if (responseReq?.url?.startsWith("/api/events")) {
+				if (!eventResponses.includes(this)) eventResponses.push(this);
+				writeCounts.set(this, (writeCounts.get(this) ?? 0) + 1);
+				const accepted = originalWrite.apply(this, args);
+				if (this === eventResponses[0] && typeof args[0] === "string" && args[0].startsWith("id: ")) {
+					Object.defineProperty(this, "writableLength", {
+						value: MAX_SSE_BUFFERED_BYTES,
+						configurable: true,
+					});
+					backpressuredWrites.push(args[0]);
+					return false;
+				}
+				return accepted;
+			}
+			return originalWrite.apply(this, args);
+		});
+		let connection: RawSseConnection | undefined;
+		try {
+			connection = await openRawSse(base);
+			await waitUntil(() => eventResponses.length === 1 && connection!.body().includes(":ok"));
+
+			clients[0].emit({ type: "agent_start" });
+
+			await waitUntil(() => connection!.body().includes("agent_start") && backpressuredWrites.length === 1);
+			expect(eventResponses[0].destroyed).toBe(false);
+			const writeCountAfterFirstEvent = writeCounts.get(eventResponses[0]) ?? 0;
+
+			clients[0].emit({ type: "agent_end" });
+
+			await waitUntil(() => connection!.body().includes("agent_end") && backpressuredWrites.length === 2);
+			expect(writeCounts.get(eventResponses[0])).toBeGreaterThan(writeCountAfterFirstEvent);
+			expect(eventResponses[0].destroyed).toBe(false);
+			expect(logs.join("\n")).not.toContain("buffer exceeded");
+			expect(logs.join("\n")).not.toContain("backpressure");
+		} finally {
+			writeSpy.mockRestore();
+			connection?.destroy();
+		}
+	});
 });
 
 describe("dashboard server — lifecycle and disk sessions", () => {

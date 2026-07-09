@@ -8,7 +8,11 @@
  * entries are append-only; streaming updates mutate the last entry in place.
  */
 
-import type { BackgroundAgentDto, ContextUsageDto } from "../../shared/protocol.js";
+import {
+	type BackgroundAgentDto,
+	type ContextUsageDto,
+	MAX_COMPLETED_BACKGROUND_AGENTS,
+} from "../../shared/protocol.js";
 
 // ---------------------------------------------------------------------------
 // Transcript entry model
@@ -291,7 +295,7 @@ let toastCounter = 0;
 // The UI renders only the newest few global toasts; keep a bounded per-session
 // backing list so older, undismissable notifications do not accumulate forever.
 const MAX_TOASTS = 20;
-export const MAX_COMPLETED_BACKGROUND_AGENTS = 20;
+export { MAX_COMPLETED_BACKGROUND_AGENTS };
 
 function capToasts(state: SessionViewState): void {
 	const extra = state.toasts.length - MAX_TOASTS;

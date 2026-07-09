@@ -11,11 +11,12 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RpcClient, type RpcExitInfo } from "@dreb/coding-agent/rpc";
-import type {
-	BackgroundAgentDto,
-	RuntimeInfoDto,
-	RuntimeStatsSummaryDto,
-	SessionStateDto,
+import {
+	type BackgroundAgentDto,
+	MAX_COMPLETED_BACKGROUND_AGENTS,
+	type RuntimeInfoDto,
+	type RuntimeStatsSummaryDto,
+	type SessionStateDto,
 } from "../shared/protocol.js";
 
 /** Resolve the absolute path to the dreb CLI (RpcClient defaults to a cwd-relative path). */
@@ -31,7 +32,7 @@ function formatRpcExit(info: RpcExitInfo): string {
 
 export type RuntimeEventListener = (key: string, event: Record<string, unknown>) => void;
 
-export const MAX_COMPLETED_BACKGROUND_AGENTS = 20;
+export { MAX_COMPLETED_BACKGROUND_AGENTS };
 
 export interface RuntimeHandle {
 	key: string;

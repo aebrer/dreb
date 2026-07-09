@@ -31,6 +31,26 @@ export interface BackgroundAgentDto {
 	cwd?: string;
 }
 
+/**
+ * Shared eviction cap for completed/failed background agents. The server
+ * prunes its registry to this bound and the client applies the same cap as
+ * defense-in-depth — the two sides must agree on how many completed agents
+ * survive, so the constant lives here.
+ */
+export const MAX_COMPLETED_BACKGROUND_AGENTS = 20;
+
+/** Maximum JSON prompt request body accepted by the dashboard server. */
+export const MAX_PROMPT_BODY_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Inline images are base64-encoded inside the JSON prompt body. Base64 expands
+ * raw bytes by 4/3, so a 25 MiB body can carry at most floor(25 MiB * 3/4) =
+ * 18.75 MiB of raw image data before JSON syntax and prompt text. Reserve the
+ * remaining 0.75 MiB for that overhead and advertise an 18 MiB aggregate raw
+ * image budget to the browser.
+ */
+export const MAX_TOTAL_IMAGE_BYTES = Math.floor((MAX_PROMPT_BODY_BYTES * 3) / 4) - 768 * 1024;
+
 /** Context usage (mirrors ContextUsage — the numbers the TUI footer shows). */
 export interface ContextUsageDto {
 	tokens: number | null;

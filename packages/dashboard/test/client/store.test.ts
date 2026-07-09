@@ -39,6 +39,17 @@ function deferred<T>() {
 	return { promise, resolve, reject };
 }
 
+function abortError(): DOMException {
+	return new DOMException("Aborted", "AbortError");
+}
+
+function rejectAfterAbort<T>(signal: AbortSignal | undefined): Promise<T> {
+	return new Promise<T>((_, reject) => {
+		if (!signal) throw new Error("expected AbortSignal");
+		signal.addEventListener("abort", () => reject(abortError()), { once: true });
+	});
+}
+
 function runtimeSnapshot(key: string, streaming: boolean): RuntimeInfoDto {
 	return {
 		key,
@@ -166,7 +177,32 @@ describe("app store SSE sync", () => {
 		expect(key in store.revisions).toBe(false);
 		expect(getComposerDraft(key)).toBeUndefined();
 		expect(getComposerHistory(key)).toEqual([]);
+		expect(store.notices()).toEqual([]);
 		expect(api.fleet).toHaveBeenCalledTimes(2);
+	});
+
+	it("runtime_removed redirects the actively viewed session to fleet with a notice", async () => {
+		window.location.hash = "#/session/removed-session";
+		const store = await makeStartedStore();
+
+		emit("removed-session", { type: "runtime_removed" });
+
+		expect(window.location.hash).toBe("#/");
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: "session removed-session was stopped", tone: "warning" }),
+		]);
+	});
+
+	it("runtime_removed redirects an actively viewed subagent when its parent session stops", async () => {
+		window.location.hash = "#/session/parent-session/subagent/bg1";
+		const store = await makeStartedStore();
+
+		emit("parent-session", { type: "runtime_removed" });
+
+		expect(window.location.hash).toBe("#/");
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: "session parent-session was stopped", tone: "warning" }),
+		]);
 	});
 
 	it("applies streaming text deltas without replacing stable entry identities", async () => {
@@ -270,6 +306,92 @@ describe("app store hydration", () => {
 			blocks: [{ kind: "text", text: "live SSE text" }],
 		});
 		expect(JSON.stringify(session?.entries)).not.toContain("stale snapshot");
+	});
+
+	it("does not create a stub session when aborted hydration calls reject", async () => {
+		const key = "abort-hydrate";
+		vi.mocked(api.messages).mockImplementationOnce((_key: string, signal?: AbortSignal) => rejectAfterAbort(signal));
+		vi.mocked(api.backgroundAgents).mockImplementationOnce((_key: string, signal?: AbortSignal) =>
+			rejectAfterAbort(signal),
+		);
+		vi.mocked(api.runtime).mockImplementationOnce((_key: string, signal?: AbortSignal) => rejectAfterAbort(signal));
+		const store = createAppStore();
+		const controller = new AbortController();
+
+		const hydrate = store.hydrateSession(key, controller.signal).catch(() => undefined);
+		controller.abort();
+		await hydrate;
+
+		expect(store.sessions[key]).toBeUndefined();
+		expect(store.revisions[key]).toBeUndefined();
+		expect(key in store.sessions).toBe(false);
+		expect(key in store.revisions).toBe(false);
+	});
+
+	it("surfaces genuine hydration rejections when the request was not aborted", async () => {
+		vi.mocked(api.messages).mockRejectedValueOnce(new Error("messages failed"));
+		vi.mocked(api.backgroundAgents).mockRejectedValueOnce(new Error("agents failed"));
+		vi.mocked(api.runtime).mockRejectedValueOnce(new Error("runtime failed"));
+		const store = createAppStore();
+
+		await expect(store.hydrateSession("bad-hydrate")).rejects.toThrow("messages failed");
+	});
+
+	it("does not let a runtime_removed generation bump recreate a deleted session after hydration resolves", async () => {
+		const messages = deferred<{ messages: unknown[] }>();
+		const agents = deferred<{ agents: BackgroundAgentDto[] }>();
+		const runtime = deferred<RuntimeInfoDto>();
+		vi.mocked(api.messages).mockReturnValueOnce(messages.promise);
+		vi.mocked(api.backgroundAgents).mockReturnValueOnce(agents.promise);
+		vi.mocked(api.runtime).mockReturnValueOnce(runtime.promise);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("removed-mid-flight");
+		emit("removed-mid-flight", { type: "runtime_removed" });
+		messages.resolve({ messages: [{ role: "assistant", content: [{ type: "text", text: "phantom" }] }] });
+		agents.resolve({ agents: [] });
+		runtime.resolve(runtimeSnapshot("removed-mid-flight", false));
+		await hydrate;
+
+		expect(store.sessions["removed-mid-flight"]).toBeUndefined();
+		expect("removed-mid-flight" in store.sessions).toBe(false);
+	});
+
+	it("does not let dashboard_resync recreate a cleared session after hydration resolves", async () => {
+		const messages = deferred<{ messages: unknown[] }>();
+		const agents = deferred<{ agents: BackgroundAgentDto[] }>();
+		const runtime = deferred<RuntimeInfoDto>();
+		vi.mocked(api.messages).mockReturnValueOnce(messages.promise);
+		vi.mocked(api.backgroundAgents).mockReturnValueOnce(agents.promise);
+		vi.mocked(api.runtime).mockReturnValueOnce(runtime.promise);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("resync-mid-flight");
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		messages.resolve({ messages: [{ role: "assistant", content: [{ type: "text", text: "phantom" }] }] });
+		agents.resolve({ agents: [] });
+		runtime.resolve(runtimeSnapshot("resync-mid-flight", false));
+		await hydrate;
+
+		expect(store.sessions["resync-mid-flight"]).toBeUndefined();
+		expect("resync-mid-flight" in store.sessions).toBe(false);
+	});
+
+	it("does not let runtime_removed recreate a deleted session through stale subagent hydration", async () => {
+		const snapshot = deferred<{ agent: BackgroundAgentDto; messages: unknown[] }>();
+		vi.mocked(api.subagentMessages).mockReturnValueOnce(snapshot.promise);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSubagent("removed-parent", "bg1");
+		emit("removed-parent", { type: "runtime_removed" });
+		snapshot.resolve({
+			agent: agentSnapshot("bg1", "completed"),
+			messages: [{ role: "assistant", content: [{ type: "text", text: "phantom child" }] }],
+		});
+		await hydrate;
+
+		expect(store.sessions["removed-parent"]).toBeUndefined();
+		expect("removed-parent" in store.sessions).toBe(false);
 	});
 
 	it("does not let a stale subagent REST snapshot clobber newer live SSE state", async () => {

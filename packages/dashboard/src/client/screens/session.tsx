@@ -11,11 +11,13 @@ import type {
 	ModelInfoDto,
 	PendingMessagesDto,
 	PerformanceStatsDto,
+	QueuedMessageDto,
 	ResourcesDto,
 	ScopedModelDto,
 	SessionStateDto,
 	SessionStatsDto,
 } from "../../shared/protocol.js";
+import { MAX_TOTAL_IMAGE_BYTES } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
@@ -32,7 +34,6 @@ import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const MAX_TOTAL_IMAGE_BYTES = 25 * 1024 * 1024;
 const UPLOAD_DIR_NAME = ".dreb-dashboard-uploads";
 
 type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
@@ -482,7 +483,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
-	function bytesFromBase64(data: string): Uint8Array {
+	function bytesFromBase64(data: string): Uint8Array<ArrayBuffer> {
 		const binary = atob(data);
 		return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 	}
@@ -520,7 +521,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	function assertTotalImageBytes(extraBytes: number): void {
 		const currentBytes = imageAttachments().reduce((sum, image) => sum + image.size, 0);
 		if (currentBytes + extraBytes > MAX_TOTAL_IMAGE_BYTES) {
-			throw new Error("Images too large: total inline images exceed 25MB");
+			throw new Error(`Images too large: total inline images exceed ${formatBytes(MAX_TOTAL_IMAGE_BYTES)}`);
 		}
 	}
 
@@ -544,37 +545,71 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		return imageAttachmentFromBlob(blob, image.mimeType, `queued-image-${messageIndex + 1}-${imageIndex + 1}`);
 	}
 
+	function queuedMessagesFromPending(pending: PendingMessagesDto): QueuedMessageDto[] {
+		return [
+			...(pending.steeringMessages ?? pending.steering.map((text): QueuedMessageDto => ({ text }))),
+			...(pending.followUpMessages ?? pending.followUp.map((text): QueuedMessageDto => ({ text }))),
+		];
+	}
+
+	function imageAttachmentsFromQueuedMessages(queuedMessages: QueuedMessageDto[]): PendingImageAttachment[] {
+		const images: PendingImageAttachment[] = [];
+		for (const [messageIndex, message] of queuedMessages.entries()) {
+			for (const [imageIndex, image] of (message.images ?? []).entries()) {
+				images.push(imageAttachmentFromQueuedImage(image, messageIndex, imageIndex));
+			}
+		}
+		return images;
+	}
+
+	function revokeImageAttachments(images: PendingImageAttachment[]): void {
+		for (const image of images) revokeImageAttachment(image);
+	}
+
+	function restoreQueuedText(queuedMessages: QueuedMessageDto[]): void {
+		const queuedText = queuedMessages.map((message) => message.text).join("\n\n");
+		// TUI parity: prepend the dequeued messages to whatever is already typed
+		// rather than clobbering the composer.
+		const current = composerText();
+		setComposerText([queuedText, current].filter((t) => t.trim()).join("\n\n"));
+	}
+
 	async function restorePendingToComposer() {
-		const queuedImages: PendingImageAttachment[] = [];
+		const preflightImages: PendingImageAttachment[] = [];
+		try {
+			const snapshot = await api.pending(props.sessionKey);
+			preflightImages.push(...imageAttachmentsFromQueuedMessages(queuedMessagesFromPending(snapshot)));
+			assertTotalImageBytes(preflightImages.reduce((sum, image) => sum + image.size, 0));
+		} catch (err) {
+			revokeImageAttachments(preflightImages);
+			setActionError(err instanceof Error ? err.message : String(err));
+			return;
+		}
+		revokeImageAttachments(preflightImages);
+
+		const dequeuedImages: PendingImageAttachment[] = [];
 		let imagesCommitted = false;
 		try {
 			const cleared = await api.dequeue(props.sessionKey);
-			const queuedMessages = [
-				...(cleared.steeringMessages ?? cleared.steering.map((text) => ({ text }))),
-				...(cleared.followUpMessages ?? cleared.followUp.map((text) => ({ text }))),
-			];
-			const queuedText = queuedMessages.map((message) => message.text).join("\n\n");
-			for (const [messageIndex, message] of queuedMessages.entries()) {
-				for (const [imageIndex, image] of (message.images ?? []).entries()) {
-					queuedImages.push(imageAttachmentFromQueuedImage(image, messageIndex, imageIndex));
-				}
-			}
-			assertTotalImageBytes(queuedImages.reduce((sum, image) => sum + image.size, 0));
+			const queuedMessages = queuedMessagesFromPending(cleared);
 			setPendingMessages({ steering: [], followUp: [], steeringMessages: [], followUpMessages: [] });
-			// TUI parity: prepend the dequeued messages to whatever is already typed
-			// rather than clobbering the composer.
-			const current = composerText();
-			setComposerText([queuedText, current].filter((t) => t.trim()).join("\n\n"));
-			if (queuedImages.length > 0) {
-				setImageAttachments((currentImages) => [...queuedImages, ...currentImages]);
+			restoreQueuedText(queuedMessages);
+			try {
+				dequeuedImages.push(...imageAttachmentsFromQueuedMessages(queuedMessages));
+				assertTotalImageBytes(dequeuedImages.reduce((sum, image) => sum + image.size, 0));
+			} catch (err) {
+				throw new Error(
+					`Queued image restore failed after restoring text: ${err instanceof Error ? err.message : String(err)}`,
+				);
+			}
+			if (dequeuedImages.length > 0) {
+				setImageAttachments((currentImages) => [...dequeuedImages, ...currentImages]);
 				imagesCommitted = true;
 			}
 			await props.store.refreshFleet();
 			queueMicrotask(() => composerRef?.focus());
 		} catch (err) {
-			if (!imagesCommitted) {
-				for (const image of queuedImages) revokeImageAttachment(image);
-			}
+			if (!imagesCommitted) revokeImageAttachments(dequeuedImages);
 			setActionError(err instanceof Error ? err.message : String(err));
 		}
 	}
@@ -922,18 +957,18 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const infoStats = () =>
 		[tokenSummary(), costSummary(), contextSummary(), tokPerSecond()].filter(Boolean) as string[];
 	const pendingMessageItems = () => [
-		...(pendingMessages().steeringMessages ?? pendingMessages().steering.map((text) => ({ text }))).map(
-			(message) => ({
-				kind: "steer",
-				text: message.images?.length ? `${message.text} (${message.images.length} image(s))` : message.text,
-			}),
-		),
-		...(pendingMessages().followUpMessages ?? pendingMessages().followUp.map((text) => ({ text }))).map(
-			(message) => ({
-				kind: "follow-up",
-				text: message.images?.length ? `${message.text} (${message.images.length} image(s))` : message.text,
-			}),
-		),
+		...(
+			pendingMessages().steeringMessages ?? pendingMessages().steering.map((text): QueuedMessageDto => ({ text }))
+		).map((message) => ({
+			kind: "steer",
+			text: message.images?.length ? `${message.text} (${message.images.length} image(s))` : message.text,
+		})),
+		...(
+			pendingMessages().followUpMessages ?? pendingMessages().followUp.map((text): QueuedMessageDto => ({ text }))
+		).map((message) => ({
+			kind: "follow-up",
+			text: message.images?.length ? `${message.text} (${message.images.length} image(s))` : message.text,
+		})),
 	];
 	const commandQuery = () => {
 		const text = composerText();

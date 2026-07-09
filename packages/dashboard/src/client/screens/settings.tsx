@@ -71,10 +71,10 @@ function OnOffSelect(props: { value: boolean; onChange: (value: boolean) => void
 
 function ModelPickerModal(props: {
 	title: string;
-	models: ModelInfoDto[];
+	models: ModelChoice[];
 	selected?: string[];
 	onClose: () => void;
-	onPick: (model: ModelInfoDto) => void;
+	onPick: (model: ModelChoice) => void;
 }): JSX.Element {
 	const [filter, setFilter] = createSignal("");
 	const selected = () => new Set(props.selected ?? []);
@@ -82,7 +82,7 @@ function ModelPickerModal(props: {
 		const q = filter().toLowerCase();
 		return groupedModels(props.models.filter((model) => !q || modelMatchesQuery(model, q)).slice(0, 100));
 	});
-	const isCurrent = (model: ModelInfoDto) => selected().has(modelKey(model));
+	const isCurrent = (model: ModelChoice) => selected().has(modelKey(model));
 
 	return (
 		<Modal title={props.title} onDismiss={props.onClose} class="model-picker-modal">
@@ -823,32 +823,41 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 				</Modal>
 			</Show>
 			<Show when={modelPickerTarget()}>
-				{(target) => (
-					<ModelPickerModal
-						title={target().kind === "default" ? "select default model" : `add model for ${target().agentName}`}
-						models={availableModels() ?? []}
-						selected={
-							target().kind === "default"
-								? settings()?.defaultProvider && settings()?.defaultModel
-									? [`${settings()!.defaultProvider}/${settings()!.defaultModel}`]
-									: []
-								: currentAgentModels(target().agentName)
+				{(target) => {
+					const pickerTitle = () => {
+						const active = target();
+						return active.kind === "default" ? "select default model" : `add model for ${active.agentName}`;
+					};
+					const selectedKeys = () => {
+						const active = target();
+						if (active.kind === "default") {
+							return settings()?.defaultProvider && settings()?.defaultModel
+								? [`${settings()!.defaultProvider}/${settings()!.defaultModel}`]
+								: [];
 						}
-						onClose={() => setModelPickerTarget(undefined)}
-						onPick={(model) => {
-							const active = target();
-							setModelPickerTarget(undefined);
-							if (active.kind === "default") {
-								void save({ defaultProvider: model.provider, defaultModel: model.id });
-								return;
-							}
-							const entry = modelKey(model);
-							const currentList = currentAgentModels(active.agentName);
-							if (currentList.includes(entry)) return;
-							void saveAgentModels(active.agentName, [...currentList, entry]);
-						}}
-					/>
-				)}
+						return currentAgentModels(active.agentName);
+					};
+					return (
+						<ModelPickerModal
+							title={pickerTitle()}
+							models={availableModels() ?? []}
+							selected={selectedKeys()}
+							onClose={() => setModelPickerTarget(undefined)}
+							onPick={(model) => {
+								const active = target();
+								setModelPickerTarget(undefined);
+								if (active.kind === "default") {
+									void save({ defaultProvider: model.provider, defaultModel: model.id });
+									return;
+								}
+								const entry = modelKey(model);
+								const currentList = currentAgentModels(active.agentName);
+								if (currentList.includes(entry)) return;
+								void saveAgentModels(active.agentName, [...currentList, entry]);
+							}}
+						/>
+					);
+				}}
 			</Show>
 		</div>
 	);

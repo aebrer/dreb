@@ -16,6 +16,7 @@ import {
 	dismissToast as dismissReducerToast,
 	messagesToEntries,
 	type SessionViewState,
+	type Toast,
 } from "./reducer.js";
 
 export type Route =
@@ -56,6 +57,14 @@ export function routeToHash(route: Route): string {
 	}
 }
 
+const MAX_NOTICES = 20;
+
+interface HydrationGuardToken {
+	revision: number;
+	generation: number;
+	epoch: number;
+}
+
 export function createAppStore() {
 	// sessions: reactive source of truth; reducer mutations are applied through
 	// Solid's produce so text deltas touch only the mutated leaf.
@@ -69,6 +78,10 @@ export function createAppStore() {
 	const [fleetError, setFleetError] = createSignal<string>();
 	const [auth, setAuth] = createSignal<(AuthStatusDto & { needsPairing?: boolean; error?: string }) | undefined>();
 	const [connected, setConnected] = createSignal(false);
+	const [notices, setNotices] = createSignal<Toast[]>([]);
+	const hydrationGenerations = new Map<string, number>();
+	let hydrationEpoch = 0;
+	let noticeCounter = 0;
 
 	window.addEventListener("hashchange", () => setRouteSignal(parseHash()));
 
@@ -78,6 +91,30 @@ export function createAppStore() {
 
 	function currentRevision(key: string): number {
 		return revisions[key] ?? 0;
+	}
+
+	function currentHydrationGeneration(key: string): number {
+		return hydrationGenerations.get(key) ?? 0;
+	}
+
+	function bumpHydrationGeneration(key: string): void {
+		hydrationGenerations.set(key, currentHydrationGeneration(key) + 1);
+	}
+
+	function captureHydrationGuard(key: string): HydrationGuardToken {
+		return {
+			revision: currentRevision(key),
+			generation: currentHydrationGeneration(key),
+			epoch: hydrationEpoch,
+		};
+	}
+
+	function hydrationGuardMatches(key: string, guard: HydrationGuardToken): boolean {
+		return (
+			currentRevision(key) === guard.revision &&
+			currentHydrationGeneration(key) === guard.generation &&
+			hydrationEpoch === guard.epoch
+		);
 	}
 
 	function bumpRevision(key: string): void {
@@ -95,9 +132,20 @@ export function createAppStore() {
 	}
 
 	function deleteSessionState(key: string): void {
+		bumpHydrationGeneration(key);
 		setSessions(key, undefined!);
 		setRevisions(key, undefined!);
 		evictComposerMemory(key);
+	}
+
+	function routedSessionKey(): string | undefined {
+		const current = parseHash();
+		return current.screen === "session" || current.screen === "subagent" ? current.key : undefined;
+	}
+
+	function pushNotice(text: string, tone: Toast["tone"] = "info"): void {
+		noticeCounter -= 1;
+		setNotices((current) => [...current, { id: noticeCounter, text, tone }].slice(-MAX_NOTICES));
 	}
 
 	async function refreshFleet(): Promise<void> {
@@ -113,10 +161,18 @@ export function createAppStore() {
 	function handleEnvelope(envelope: EventEnvelope): void {
 		const type = envelope.event?.type as string | undefined;
 		if (type === "dashboard_resync") {
+			hydrationEpoch += 1;
 			setSessions(reconcile({}));
 			setRevisions(reconcile({}));
 		} else if (type === "runtime_removed") {
-			if (envelope.key) deleteSessionState(envelope.key);
+			if (envelope.key) {
+				const wasViewingRemovedRuntime = routedSessionKey() === envelope.key;
+				deleteSessionState(envelope.key);
+				if (wasViewingRemovedRuntime) {
+					pushNotice(`session ${envelope.key} was stopped`, "warning");
+					navigate({ screen: "fleet" });
+				}
+			}
 		} else if (envelope.key) {
 			mutateSession(envelope.key, (session) => applySessionEvent(session, envelope.event));
 		}
@@ -181,6 +237,10 @@ export function createAppStore() {
 	}
 
 	function dismissToast(id: number): void {
+		if (notices().some((toast) => toast.id === id)) {
+			setNotices((current) => current.filter((toast) => toast.id !== id));
+			return;
+		}
 		for (const [key, session] of Object.entries(sessions)) {
 			if (!session.toasts.some((toast) => toast.id === id)) continue;
 			mutateSession(key, (draft) => dismissReducerToast(draft, id));
@@ -196,7 +256,7 @@ export function createAppStore() {
 	 * keeps running server-side).
 	 */
 	async function hydrateSession(key: string, signal?: AbortSignal): Promise<void> {
-		const hydrationRevision = currentRevision(key);
+		const hydrationGuard = captureHydrationGuard(key);
 		const [messagesResult, agentsResult, runtimeResult] = await Promise.allSettled([
 			api.messages(key, signal),
 			api.backgroundAgents(key, signal),
@@ -205,7 +265,7 @@ export function createAppStore() {
 		// An aborted hydration (screen unmounted) must not create or touch
 		// session state — without this guard the all-rejected mutation below
 		// would still create a stub session and bump its revision.
-		if (!signal?.aborted && currentRevision(key) === hydrationRevision) {
+		if (!signal?.aborted && hydrationGuardMatches(key, hydrationGuard)) {
 			mutateSession(key, (session) => {
 				if (messagesResult.status === "fulfilled") {
 					session.entries = messagesToEntries(messagesResult.value.messages as any[]);
@@ -247,9 +307,9 @@ export function createAppStore() {
 	 * when they streamed — after a reload this is the only data source.
 	 */
 	async function hydrateSubagent(key: string, agentId: string, signal?: AbortSignal): Promise<void> {
-		const hydrationRevision = currentRevision(key);
+		const hydrationGuard = captureHydrationGuard(key);
 		const { agent, messages } = await api.subagentMessages(key, agentId, signal);
-		if (currentRevision(key) !== hydrationRevision) return;
+		if (signal?.aborted || !hydrationGuardMatches(key, hydrationGuard)) return;
 		mutateSession(key, (session) => {
 			session.backgroundAgents[agentId] = agent;
 			let sub = session.subagents[agentId];
@@ -274,6 +334,7 @@ export function createAppStore() {
 		refreshFleet,
 		auth,
 		connected,
+		notices,
 		start,
 		stop,
 		dismissToast,

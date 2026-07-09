@@ -149,6 +149,7 @@ import {
 	type TranscriptEntry,
 } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
+import { MAX_TOTAL_IMAGE_BYTES } from "../../src/shared/protocol.js";
 
 const disposers: Array<() => void> = [];
 
@@ -334,6 +335,10 @@ function sizedImage(name: string, size: number): File {
 	const file = new File(["x"], name, { type: "image/png" });
 	Object.defineProperty(file, "size", { configurable: true, value: size });
 	return file;
+}
+
+function maxTotalImageBytesLabel(): string {
+	return `${(MAX_TOTAL_IMAGE_BYTES / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function rejectOnAbort<T>(signal: AbortSignal | undefined): Promise<T> {
@@ -990,6 +995,75 @@ describe("dashboard client regressions", () => {
 
 		setDetailsOpen(tools[0]!, false);
 		expect(tools[0]?.querySelector(".tool-result")).toBeNull();
+	});
+
+	it("keeps running non-auto-open tool cards open when the user tries to close them", () => {
+		const runningTool: ToolEntry = {
+			kind: "tool",
+			toolCallId: "search-running-lock",
+			toolName: "web_search",
+			args: { query: "streaming" },
+			status: "running",
+			resultText: "partial result body",
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[runningTool]} />);
+		const tool = el.querySelector("details.tool") as HTMLDetailsElement;
+
+		expect(tool.open).toBe(true);
+		setDetailsOpen(tool, false);
+
+		expect(tool.open).toBe(true);
+		expect(tool.querySelector(".tool-result")?.textContent).toContain("partial result body");
+	});
+
+	it("collapses a running non-auto-open tool back to its completed default", async () => {
+		const [entries, setEntries] = createStore<ToolEntry[]>([
+			{
+				kind: "tool",
+				toolCallId: "search-running-done",
+				toolName: "web_search",
+				args: { query: "streaming" },
+				status: "running",
+				resultText: "partial result body",
+				startedAt: Date.now(),
+			},
+		]);
+		const el = mount(() => <Transcript entries={entries} />);
+		const tool = el.querySelector("details.tool") as HTMLDetailsElement;
+		expect(tool.open).toBe(true);
+
+		setEntries(0, "status", "done");
+		setEntries(0, "resultText", "finished result body");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(tool.open).toBe(false);
+		expect(tool.querySelector(".tool-result")).toBeNull();
+	});
+
+	it("preserves a user's open choice for a completed non-auto-open tool across entry updates", async () => {
+		const [entries, setEntries] = createStore<ToolEntry[]>([
+			{
+				kind: "tool",
+				toolCallId: "search-user-open",
+				toolName: "web_search",
+				args: { query: "done" },
+				status: "done",
+				resultText: "initial result body",
+				startedAt: Date.now(),
+			},
+		]);
+		const el = mount(() => <Transcript entries={entries} />);
+		const tool = el.querySelector("details.tool") as HTMLDetailsElement;
+		expect(tool.open).toBe(false);
+
+		setDetailsOpen(tool, true);
+		expect(tool.open).toBe(true);
+		setEntries(0, "resultText", "updated result body");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(tool.open).toBe(true);
+		expect(tool.querySelector(".tool-result")?.textContent).toContain("updated result body");
 	});
 
 	it("transcript windows long histories with a show-earlier affordance", () => {
@@ -1831,15 +1905,83 @@ describe("dashboard client regressions", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(el.textContent).toContain("steer one");
 		expect(el.textContent).toContain("follow one");
+		vi.mocked(api.pending).mockClear();
+		vi.mocked(api.dequeue).mockClear();
 
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("restore"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
+		expect(api.pending).toHaveBeenCalledWith("queued");
 		expect(api.dequeue).toHaveBeenCalledWith("queued");
+		expect(vi.mocked(api.pending).mock.invocationCallOrder[0]!).toBeLessThan(
+			vi.mocked(api.dequeue).mock.invocationCallOrder[0]!,
+		);
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("steer one\n\nfollow one");
-		expect(el.querySelector(".attachment-thumb img")?.getAttribute("src")).toBe("blob:mock-1");
+		expect(el.querySelector(".attachment-thumb img")?.getAttribute("src")).toBe("blob:mock-2");
 		expect(urls.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
 		expect((urls.createObjectURL.mock.calls[0]?.[0] as Blob).size).toBe(5);
+		expect((urls.createObjectURL.mock.calls[1]?.[0] as Blob).size).toBe(5);
+		expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:mock-1");
+	});
+
+	it("restore rejects queued images over the aggregate cap without dequeuing", async () => {
+		const urls = stubObjectUrls();
+		const overBudgetQueuedImage = { data: "A".repeat(13 * 1024 * 1024), mimeType: "image/png" };
+		vi.mocked(api.pending).mockResolvedValue({
+			steering: ["oversized queued images"],
+			followUp: [],
+			steeringMessages: [
+				{ text: "oversized queued images", images: [overBudgetQueuedImage, overBudgetQueuedImage] },
+			],
+			followUpMessages: [],
+		});
+		vi.mocked(api.dequeue).mockResolvedValue({ steering: [], followUp: [] });
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { queued: createSessionViewState("queued") },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "queued",
+						cwd: "/repo",
+						state: {
+							sessionId: "s1",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 1,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+			refreshFleet: vi.fn(async () => {}),
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="queued" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		vi.mocked(api.pending).mockClear();
+		vi.mocked(api.dequeue).mockClear();
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("restore"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain(`total inline images exceed ${maxTotalImageBytesLabel()}`);
+		expect(el.querySelector(".attachment-thumb")).toBeNull();
+		expect(urls.createObjectURL).toHaveBeenCalledTimes(2);
+		expect(urls.revokeObjectURL).toHaveBeenCalledTimes(2);
+		expect(urls.revokeObjectURL).toHaveBeenNthCalledWith(1, "blob:mock-1");
+		expect(urls.revokeObjectURL).toHaveBeenNthCalledWith(2, "blob:mock-2");
+		expect(api.dequeue).not.toHaveBeenCalled();
 	});
 
 	it("composer history recalls sent prompts with arrow keys", async () => {
@@ -2051,7 +2193,7 @@ describe("dashboard client regressions", () => {
 		input.dispatchEvent(new Event("change", { bubbles: true }));
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
-		expect(el.textContent).toContain("total inline images exceed 25MB");
+		expect(el.textContent).toContain(`total inline images exceed ${maxTotalImageBytesLabel()}`);
 		expect(el.querySelector(".attachment-thumb")).toBeNull();
 		expect(urls.createObjectURL).not.toHaveBeenCalled();
 	});
