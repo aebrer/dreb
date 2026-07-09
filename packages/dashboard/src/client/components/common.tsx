@@ -119,7 +119,7 @@ export function ToastRegion(props: { toasts: Toast[]; onDismiss: (id: number) =>
 	);
 }
 
-/** Relative time like the mockups: "2m ago", "6d ago". */
+/** Relative time: "2m ago", "6d ago". */
 export function relativeTime(iso: string | number | undefined): string {
 	if (!iso) return "";
 	const then = typeof iso === "number" ? iso : Date.parse(iso);

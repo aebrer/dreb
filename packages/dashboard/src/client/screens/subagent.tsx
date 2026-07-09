@@ -1,7 +1,7 @@
 /**
  * Subagent drill-in — read-only live view of a background agent's transcript
  * via the event relay, hydrated from the agent's on-disk session log so the
- * view survives browser reloads. No composer (SPEC §5a): a fixed note explains
+ * view survives browser reloads. No composer: a fixed note explains
  * the parent controls this agent.
  */
 

@@ -1,6 +1,6 @@
 /**
  * Pairing screen — remote first-login. Identity echo, pairing-code entry with
- * the two verbatim security copy blocks (SPEC §6). Shown outside the tab structure.
+ * the two verbatim security copy blocks. Shown outside the tab structure.
  */
 
 import { createSignal, type JSX, Show } from "solid-js";

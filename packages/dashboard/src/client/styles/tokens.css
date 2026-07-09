@@ -18,7 +18,7 @@
  *
  * Dark-mode note: the dashboard MVP is fixed light/dark (this file).
  * TUI-theme-following CSS variables (getResolvedThemeColors bridge in
- * core/export-html) are deliberately later work — see SPEC.md.
+ * core/export-html) are deliberately later work.
  */
 
 /* ---------------------------------------------------------------- tokens */

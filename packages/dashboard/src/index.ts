@@ -2,7 +2,7 @@
 /**
  * dreb-dashboard — launch the dreb web dashboard server.
  *
- * Modes (SPEC.md §6 — exactly two, no LAN mode):
+ * Modes (exactly two, no LAN mode):
  *   default        loopback bind (127.0.0.1), no auth, no Tailscale needed
  *   --remote       requires Tailscale; binds all interfaces but every request
  *                  passes identity allowlist + pairing code + device cookies

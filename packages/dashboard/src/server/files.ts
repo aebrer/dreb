@@ -1,7 +1,7 @@
 /**
  * Host-wide file API — browse, download, upload, mkdir.
  *
- * The dashboard is a trusted-operator surface (SPEC.md §6): a paired device
+ * The dashboard is a trusted-operator surface: a paired device
  * already equals terminal access, so there is no project jail. Path handling
  * still canonicalizes and rejects confusion tricks so the *API* cannot be
  * abused: percent-decode checks, null-byte rejection, symlink resolution to a

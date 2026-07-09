@@ -139,9 +139,9 @@ Browser dashboard (SolidJS + Vite, tokens.css design system)
 - **Auto-naming** runs in the shared `AgentSession` layer, so dashboard-created
   RPC sessions get the same LLM-generated session names as the TUI and update
   live via `session_name_changed`.
-- **Design source**: `design/dashboard/` (SPEC.md, PARITY.md, tokens.css,
-  mockups). tokens.css is adopted unmodified; a unit test enforces
-  byte-equality.
+- **Visual language**: `tokens.css` (`packages/dashboard/src/client/styles/`),
+  the dashboard's design system — IBM Plex Mono, light + dark via
+  `prefers-color-scheme`.
 
 ## Limitations (deliberate, sequenced later)
 
@@ -150,5 +150,3 @@ Browser dashboard (SolidJS + Vite, tokens.css design system)
 - No shell passthrough from the browser.
 - No subagent steering (the drill-in view is read-only).
 - Fixed light/dark via `prefers-color-scheme` — no TUI-theme following.
-
-See `design/dashboard/PARITY.md` for the full TUI-parity disposition table.

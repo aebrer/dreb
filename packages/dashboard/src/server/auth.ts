@@ -1,5 +1,5 @@
 /**
- * Dashboard auth — exactly two modes (SPEC.md §6):
+ * Dashboard auth — exactly two modes (this file is the authority):
  *
  * Mode A — local-only (default): the server binds loopback only. Requests are
  * additionally checked for loopback source address AND an allowlisted Host

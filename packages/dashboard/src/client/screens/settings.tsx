@@ -262,7 +262,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 			setSaved(true);
 			setTimeout(() => setSaved(false), 2000);
 		} catch (err) {
-			// RPC validation errors surface verbatim — no silent retry (SPEC §3).
+			// RPC validation errors surface verbatim — no silent retry.
 			setError(err instanceof Error ? err.message : String(err));
 			await refetch();
 		}

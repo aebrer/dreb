@@ -1,9 +1,8 @@
 /*
  * dreb dashboard — screen-specific styles.
  *
- * tokens.css is the design system and is adopted UNMODIFIED (SPEC §9.9); this
- * file only extends it with layout for the app shell and screens, following
- * the mockup CSS (design/dashboard/mockups/*.html) as the contract.
+ * tokens.css is the design system and is adopted UNMODIFIED; this
+ * file only extends it with layout for the app shell and screens.
  */
 
 :root {

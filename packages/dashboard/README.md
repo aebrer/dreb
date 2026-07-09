@@ -108,9 +108,9 @@ Browser (SolidJS, hash-routed SPA)
 - Background subagent transcripts arrive over the same pipe via the
   `background_agent_event` relay (see `docs/rpc.md` in
   `@dreb/coding-agent`) — no session-file tailing.
-- The visual language is `tokens.css` from the accepted design
-  (`design/dashboard/` in the repo), adopted unmodified and enforced by a
-  byte-equality test.
+- The visual language is `tokens.css` (`src/client/styles/tokens.css`),
+  the dashboard's design system, adopted unmodified from the accepted
+  design phase.
 
 ## Development
 

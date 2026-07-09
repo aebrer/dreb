@@ -254,8 +254,8 @@ export class RuntimePool {
 		handle.lastActivity = Date.now();
 		const type = event.type as string;
 
-		// Track needs-attention sources (SPEC §1: extension UI requests, parent
-		// paused, error states).
+		// Track needs-attention sources: extension UI requests, parent
+		// paused, error states.
 		if (type === "extension_ui_request") {
 			const method = event.method as string;
 			if (method === "select" || method === "confirm" || method === "input" || method === "editor") {

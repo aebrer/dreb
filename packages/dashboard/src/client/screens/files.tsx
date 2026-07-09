@@ -1,7 +1,7 @@
 /**
  * Files tab — host-wide browse with places shortcuts, breadcrumbs to /,
  * new-folder, download, drop-zone upload with collision prompt, "new session
- * here". Warning copy is fixed on the screen (SPEC §6), not a toast.
+ * here". Warning copy is fixed on the screen, not a toast.
  */
 
 import { createResource, createSignal, For, type JSX, Show } from "solid-js";

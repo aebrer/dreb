@@ -2,7 +2,7 @@
  * Dashboard HTTP server — Express app wiring auth, the runtime pool, the SSE
  * hub, and the file API into the REST surface the browser client consumes.
  *
- * Bind address discipline (SPEC.md §6): local mode binds 127.0.0.1 only. The
+ * Bind address discipline: local mode binds 127.0.0.1 only. The
  * caller decides the bind address; `createDashboardServer` never listens by
  * itself. Remote mode still passes every request through DashboardAuth.
  */

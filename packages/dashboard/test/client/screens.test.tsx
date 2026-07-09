@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * Screen smoke tests — every shipped screen renders without throwing, with
- * both empty state and populated state where meaningful (SPEC §9.11).
+ * both empty state and populated state where meaningful.
  */
 
 import { marked } from "marked";
