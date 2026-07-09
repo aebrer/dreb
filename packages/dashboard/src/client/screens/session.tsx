@@ -19,16 +19,18 @@ import type {
 import { api } from "../api.js";
 import { Modal } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
+import {
+	addComposerHistoryEntry,
+	getComposerDraft,
+	getComposerHistory,
+	setComposerDraft,
+} from "../state/composer-memory.js";
 import type { ExtensionUiRequest, SessionViewState } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const UPLOAD_DIR_NAME = ".dreb-dashboard-uploads";
-const composerHistory = new Map<string, string[]>();
-// Per-session composer drafts — unsent text survives fleet→session navigation
-// for as long as the tab lives (module scope). Keyed by runtime key.
-const composerDrafts = new Map<string, string>();
 
 type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
 type ModelScope = "scoped" | "all";
@@ -355,7 +357,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const session = (): SessionViewState | undefined => props.store.sessions[props.sessionKey];
 	const runtime = createMemo(() => props.store.fleet().runtimes.find((r) => r.key === props.sessionKey));
 
-	const [composerText, setComposerText] = createSignal(composerDrafts.get(props.sessionKey) ?? "");
+	const [composerText, setComposerText] = createSignal(getComposerDraft(props.sessionKey) ?? "");
 	const [sendMode, setSendMode] = createSignal<"steer" | "follow_up">("steer");
 	const [stopping, setStopping] = createSignal(false);
 	const [stoppingRuntime, setStoppingRuntime] = createSignal(false);
@@ -687,7 +689,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 
 	// Persist the composer draft per session so navigating away and back keeps it.
 	createEffect(() => {
-		composerDrafts.set(props.sessionKey, composerText());
+		setComposerDraft(props.sessionKey, composerText());
 	});
 
 	function promptWithAttachmentList(text: string): string {
@@ -734,9 +736,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			} else {
 				await api.prompt(props.sessionKey, promptText);
 			}
-			const history = composerHistory.get(props.sessionKey) ?? [];
-			history.push(promptText);
-			composerHistory.set(props.sessionKey, history.slice(-100));
+			addComposerHistoryEntry(props.sessionKey, promptText);
 			setHistoryIndex(undefined);
 			setComposerText("");
 			setImageAttachments([]);
@@ -1345,7 +1345,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 										(e.key === "ArrowUp" || e.key === "ArrowDown") &&
 										(composerText() === "" || historyIndex() !== undefined)
 									) {
-										const history = composerHistory.get(props.sessionKey) ?? [];
+										const history = getComposerHistory(props.sessionKey);
 										if (history.length > 0) {
 											e.preventDefault();
 											if (e.key === "ArrowUp") {

@@ -288,6 +288,33 @@ export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 
 let toastCounter = 0;
 
+// The UI renders only the newest few global toasts; keep a bounded per-session
+// backing list so older, undismissable notifications do not accumulate forever.
+const MAX_TOASTS = 20;
+export const MAX_COMPLETED_BACKGROUND_AGENTS = 20;
+
+function capToasts(state: SessionViewState): void {
+	const extra = state.toasts.length - MAX_TOASTS;
+	if (extra > 0) state.toasts.splice(0, extra);
+}
+
+function startedAtTime(agent: BackgroundAgentDto): number {
+	const time = Date.parse(agent.startedAt);
+	return Number.isFinite(time) ? time : 0;
+}
+
+export function capBackgroundAgents(state: SessionViewState): void {
+	const completed = Object.values(state.backgroundAgents)
+		.filter((agent) => agent.status !== "running")
+		.sort((a, b) => startedAtTime(a) - startedAtTime(b) || a.agentId.localeCompare(b.agentId));
+	const evictCount = completed.length - MAX_COMPLETED_BACKGROUND_AGENTS;
+	if (evictCount <= 0) return;
+	for (const agent of completed.slice(0, evictCount)) {
+		delete state.backgroundAgents[agent.agentId];
+		delete state.subagents[agent.agentId];
+	}
+}
+
 /** Derive needs-attention from current state. */
 function updateAttention(state: SessionViewState): void {
 	state.needsAttention =
@@ -555,6 +582,7 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			}
 			const sub = state.subagents[String(event.agentId)];
 			if (sub) sub.streaming = false;
+			capBackgroundAgents(state);
 			break;
 		}
 		case "background_agent_event": {
@@ -595,6 +623,7 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 				toastCounter += 1;
 				const tone = (event.notifyType as "info" | "warning" | "error" | undefined) ?? "info";
 				state.toasts.push({ id: toastCounter, text: String(event.message ?? ""), tone });
+				capToasts(state);
 			} else if (method === "setStatus") {
 				const key = `ext:${event.statusKey ?? "default"}`;
 				state.statusEntries = state.statusEntries.filter((s) => s.key !== key);
@@ -612,6 +641,7 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 		case "extension_error": {
 			toastCounter += 1;
 			state.toasts.push({ id: toastCounter, text: `extension error: ${event.error}`, tone: "error" });
+			capToasts(state);
 			break;
 		}
 		default:

@@ -31,6 +31,8 @@ function formatRpcExit(info: RpcExitInfo): string {
 
 export type RuntimeEventListener = (key: string, event: Record<string, unknown>) => void;
 
+export const MAX_COMPLETED_BACKGROUND_AGENTS = 20;
+
 export interface RuntimeHandle {
 	key: string;
 	cwd: string;
@@ -154,6 +156,7 @@ export class RuntimePool {
 	async stop(key: string): Promise<boolean> {
 		const handle = this.runtimes.get(key);
 		if (!handle) return false;
+		this.handleEvent(handle, { type: "runtime_removed" });
 		this.runtimes.delete(key);
 		await handle.client.stop();
 		return true;
@@ -305,6 +308,7 @@ export class RuntimePool {
 			if (existing) {
 				existing.status = event.success ? "completed" : "failed";
 				existing.sessionFile = (event.sessionFile as string | undefined) ?? existing.sessionFile;
+				this.pruneCompletedBackgroundAgents(handle);
 			}
 		}
 
@@ -320,6 +324,21 @@ export class RuntimePool {
 	private recordRuntimeError(handle: RuntimeHandle, message: string): void {
 		handle.error = message;
 		handle.attention.set("error", message);
+	}
+
+	private pruneCompletedBackgroundAgents(handle: RuntimeHandle): void {
+		const evictable = [...handle.backgroundAgents.values()]
+			.map((agent, index) => {
+				const startedAtMs = Date.parse(agent.startedAt);
+				return { agent, index, startedAtMs: Number.isFinite(startedAtMs) ? startedAtMs : 0 };
+			})
+			.filter(({ agent }) => agent.status !== "running")
+			.sort((a, b) => a.startedAtMs - b.startedAtMs || a.index - b.index);
+		const excess = evictable.length - MAX_COMPLETED_BACKGROUND_AGENTS;
+		if (excess <= 0) return;
+		for (const { agent } of evictable.slice(0, excess)) {
+			handle.backgroundAgents.delete(agent.agentId);
+		}
 	}
 
 	private fallbackState(handle: RuntimeHandle): SessionStateDto {
@@ -347,6 +366,7 @@ export class RuntimePool {
 			for (const agent of agents) {
 				handle.backgroundAgents.set(agent.agentId, agent);
 			}
+			this.pruneCompletedBackgroundAgents(handle);
 		} catch (err) {
 			this.logger(
 				`runtime ${handle.key} background-agent registry unavailable: ${err instanceof Error ? err.message : String(err)}`,

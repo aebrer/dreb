@@ -8,8 +8,10 @@ import { createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import type { AuthStatusDto, EventEnvelope, FleetDto } from "../../shared/protocol.js";
 import { api, connectEvents } from "../api.js";
+import { evictComposerMemory } from "./composer-memory.js";
 import {
 	applySessionEvent,
+	capBackgroundAgents,
 	createSessionViewState,
 	dismissToast as dismissReducerToast,
 	messagesToEntries,
@@ -92,6 +94,12 @@ export function createAppStore() {
 		bumpRevision(key);
 	}
 
+	function deleteSessionState(key: string): void {
+		setSessions(key, undefined!);
+		setRevisions(key, undefined!);
+		evictComposerMemory(key);
+	}
+
 	async function refreshFleet(): Promise<void> {
 		try {
 			setFleet(await api.fleet());
@@ -103,19 +111,22 @@ export function createAppStore() {
 	}
 
 	function handleEnvelope(envelope: EventEnvelope): void {
-		if (envelope.event?.type === "dashboard_resync") {
+		const type = envelope.event?.type as string | undefined;
+		if (type === "dashboard_resync") {
 			setSessions(reconcile({}));
 			setRevisions(reconcile({}));
+		} else if (type === "runtime_removed") {
+			if (envelope.key) deleteSessionState(envelope.key);
 		} else if (envelope.key) {
 			mutateSession(envelope.key, (session) => applySessionEvent(session, envelope.event));
 		}
 		// Fleet-affecting events refresh the overview lazily.
-		const type = envelope.event?.type as string | undefined;
 		if (
 			type === "agent_start" ||
 			type === "agent_end" ||
 			type === "background_agent_start" ||
-			type === "background_agent_end"
+			type === "background_agent_end" ||
+			type === "runtime_removed"
 		) {
 			refreshFleet().catch(() => {
 				// Fleet refresh failing is non-fatal; next event retries.
@@ -200,6 +211,7 @@ export function createAppStore() {
 					for (const agent of agentsResult.value.agents) {
 						session.backgroundAgents[agent.agentId] = agent;
 					}
+					capBackgroundAgents(session);
 				}
 				// Seed live turn state from the runtime so a mid-turn browser refresh
 				// still shows stop/working UI. Without this, `streaming` only becomes

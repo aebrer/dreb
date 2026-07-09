@@ -3,12 +3,24 @@ import {
 	applySessionEvent,
 	createSessionViewState,
 	dismissToast,
+	MAX_COMPLETED_BACKGROUND_AGENTS,
 	messagesToEntries,
 	resolveUiRequest,
 } from "../src/client/state/reducer.js";
+import type { BackgroundAgentDto } from "../src/shared/protocol.js";
 
 function makeState() {
 	return createSessionViewState("k1");
+}
+
+function backgroundAgent(agentId: string, startedAt: string, status: BackgroundAgentDto["status"]): BackgroundAgentDto {
+	return {
+		agentId,
+		agentType: "Explore",
+		taskSummary: `task ${agentId}`,
+		startedAt,
+		status,
+	};
 }
 
 describe("messagesToEntries — hydration", () => {
@@ -488,6 +500,33 @@ describe("applySessionEvent — extension UI", () => {
 		expect(state.composerPrefill).toBe("prefill");
 	});
 
+	it("caps toasts to the newest 20 entries", () => {
+		const state = makeState();
+		for (let i = 0; i < 25; i++) {
+			applySessionEvent(state, {
+				type: "extension_ui_request",
+				id: `n${i}`,
+				method: "notify",
+				message: `toast-${i}`,
+			});
+		}
+
+		expect(state.toasts).toHaveLength(20);
+		expect(state.toasts[0]).toMatchObject({ text: "toast-5" });
+		expect(state.toasts.at(-1)).toMatchObject({ text: "toast-24" });
+
+		applySessionEvent(state, {
+			type: "extension_error",
+			extensionPath: "/x.ts",
+			event: "tool_call",
+			error: "final",
+		});
+
+		expect(state.toasts).toHaveLength(20);
+		expect(state.toasts[0]).toMatchObject({ text: "toast-6" });
+		expect(state.toasts.at(-1)).toMatchObject({ text: "extension error: final", tone: "error" });
+	});
+
 	it("extension_error produces an error toast", () => {
 		const state = makeState();
 		applySessionEvent(state, {
@@ -553,5 +592,45 @@ describe("applySessionEvent — subagent relay", () => {
 		applySessionEvent(state, { type: "background_agent_end", agentId: "bg1", agentType: "Explore", success: true });
 		expect(state.backgroundAgents.bg1?.status).toBe("completed");
 		expect(state.subagents.bg1?.streaming).toBe(false);
+	});
+
+	it("caps completed background agents and evicts their subagent transcripts while preserving running agents", () => {
+		const state = makeState();
+		for (let i = 0; i <= MAX_COMPLETED_BACKGROUND_AGENTS; i++) {
+			const agentId = `done-${i.toString().padStart(2, "0")}`;
+			state.backgroundAgents[agentId] = backgroundAgent(agentId, new Date(i * 1000).toISOString(), "completed");
+			state.subagents[agentId] = { agentId, entries: [{ kind: "user", text: `transcript ${i}` }], streaming: false };
+		}
+		state.backgroundAgents["running-old"] = backgroundAgent("running-old", new Date(0).toISOString(), "running");
+		state.subagents["running-old"] = {
+			agentId: "running-old",
+			entries: [{ kind: "user", text: "live" }],
+			streaming: true,
+		};
+		state.backgroundAgents["ending-new"] = backgroundAgent(
+			"ending-new",
+			new Date((MAX_COMPLETED_BACKGROUND_AGENTS + 2) * 1000).toISOString(),
+			"running",
+		);
+		state.subagents["ending-new"] = {
+			agentId: "ending-new",
+			entries: [{ kind: "user", text: "ending" }],
+			streaming: true,
+		};
+
+		applySessionEvent(state, { type: "background_agent_end", agentId: "ending-new", success: true });
+
+		const completed = Object.values(state.backgroundAgents).filter((agent) => agent.status !== "running");
+		expect(completed).toHaveLength(MAX_COMPLETED_BACKGROUND_AGENTS);
+		expect(state.backgroundAgents["done-00"]).toBeUndefined();
+		expect(state.backgroundAgents["done-01"]).toBeUndefined();
+		expect(state.subagents["done-00"]).toBeUndefined();
+		expect(state.subagents["done-01"]).toBeUndefined();
+		expect(state.backgroundAgents["done-02"]).toBeDefined();
+		expect(state.subagents["done-02"]).toBeDefined();
+		expect(state.backgroundAgents["running-old"]?.status).toBe("running");
+		expect(state.subagents["running-old"]?.streaming).toBe(true);
+		expect(state.backgroundAgents["ending-new"]?.status).toBe("completed");
+		expect(state.subagents["ending-new"]?.streaming).toBe(false);
 	});
 });

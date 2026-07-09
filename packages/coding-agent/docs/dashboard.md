@@ -130,7 +130,10 @@ Browser dashboard (SolidJS + Vite, tokens.css design system)
 
 - **SSE catch-up**: events carry sequence IDs; reconnects replay from
   `Last-Event-ID` against a bounded buffer, falling back to a full state
-  refetch when the gap is too old.
+  refetch when the gap is too old. Slow clients whose server-side write
+  buffer exceeds a bound are disconnected (loudly logged) and recover via
+  the same reconnect path. Deleting a runtime publishes `runtime_removed`
+  so browsers evict that session's transcript state.
 - **ctx%** comes from the session itself (`get_state.contextUsage` — the same
   numbers the TUI footer shows), never client-side estimates.
 - **Auto-naming** runs in the shared `AgentSession` layer, so dashboard-created

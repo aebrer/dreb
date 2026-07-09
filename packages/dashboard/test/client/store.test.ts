@@ -16,6 +16,14 @@ vi.mock("../../src/client/api.js", () => ({
 }));
 
 import { api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
+import {
+	addComposerHistoryEntry,
+	evictComposerMemory,
+	getComposerDraft,
+	getComposerHistory,
+	setComposerDraft,
+} from "../../src/client/state/composer-memory.js";
+import { MAX_COMPLETED_BACKGROUND_AGENTS } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
 
 let eventHandlers: EventStreamHandlers | undefined;
@@ -53,12 +61,12 @@ function runtimeSnapshot(key: string, streaming: boolean): RuntimeInfoDto {
 	};
 }
 
-function agentSnapshot(agentId: string, status: BackgroundAgentDto["status"]): BackgroundAgentDto {
+function agentSnapshot(agentId: string, status: BackgroundAgentDto["status"], startedAtMs = 0): BackgroundAgentDto {
 	return {
 		agentId,
 		agentType: "Explore",
 		taskSummary: "scan things",
-		startedAt: new Date(0).toISOString(),
+		startedAt: new Date(startedAtMs).toISOString(),
 		status,
 	};
 }
@@ -93,7 +101,26 @@ beforeEach(() => {
 
 afterEach(() => {
 	window.location.hash = "#/";
+	for (const key of ["s1", "composer-round-trip", "removed-session"]) evictComposerMemory(key);
 	vi.clearAllMocks();
+});
+
+describe("composer memory", () => {
+	it("sets and evicts per-session draft and history", () => {
+		const key = "composer-round-trip";
+
+		setComposerDraft(key, "draft text");
+		addComposerHistoryEntry(key, "first prompt");
+		addComposerHistoryEntry(key, "second prompt");
+
+		expect(getComposerDraft(key)).toBe("draft text");
+		expect(getComposerHistory(key)).toEqual(["first prompt", "second prompt"]);
+
+		evictComposerMemory(key);
+
+		expect(getComposerDraft(key)).toBeUndefined();
+		expect(getComposerHistory(key)).toEqual([]);
+	});
 });
 
 describe("app store SSE sync", () => {
@@ -117,6 +144,29 @@ describe("app store SSE sync", () => {
 		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
 		expect(store.sessions.a).toBeUndefined();
 		expect(store.revisions.a).toBeUndefined();
+	});
+
+	it("runtime_removed deletes session state, revision state, composer memory, and refreshes fleet", async () => {
+		const store = await makeStartedStore();
+		const key = "removed-session";
+
+		emit(key, { type: "message_start", message: { role: "user", content: "hello" } });
+		setComposerDraft(key, "draft text");
+		addComposerHistoryEntry(key, "history text");
+		expect(store.sessions[key]).toBeDefined();
+		expect(store.revisions[key]).toBeDefined();
+		expect(getComposerDraft(key)).toBe("draft text");
+		expect(getComposerHistory(key)).toEqual(["history text"]);
+
+		emit(key, { type: "runtime_removed" });
+
+		expect(store.sessions[key]).toBeUndefined();
+		expect(store.revisions[key]).toBeUndefined();
+		expect(key in store.sessions).toBe(false);
+		expect(key in store.revisions).toBe(false);
+		expect(getComposerDraft(key)).toBeUndefined();
+		expect(getComposerHistory(key)).toEqual([]);
+		expect(api.fleet).toHaveBeenCalledTimes(2);
 	});
 
 	it("applies streaming text deltas without replacing stable entry identities", async () => {
@@ -168,6 +218,25 @@ describe("app store hydration", () => {
 		});
 		expect(store.sessions.s1?.streaming).toBe(true);
 		expect(store.sessions.s1?.workingSince).toEqual(expect.any(Number));
+	});
+
+	it("caps completed background agents when hydrating the session registry", async () => {
+		const agents: BackgroundAgentDto[] = [];
+		for (let i = 0; i < 25; i++) agents.push(agentSnapshot(`done-${i}`, "completed", i * 1000));
+		agents.push(agentSnapshot("running-old", "running", 0));
+		vi.mocked(api.backgroundAgents).mockResolvedValue({ agents });
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		const completed = Object.values(store.sessions.s1?.backgroundAgents ?? {}).filter(
+			(agent) => agent.status !== "running",
+		);
+		expect(completed).toHaveLength(MAX_COMPLETED_BACKGROUND_AGENTS);
+		expect(store.sessions.s1?.backgroundAgents["done-0"]).toBeUndefined();
+		expect(store.sessions.s1?.backgroundAgents["done-4"]).toBeUndefined();
+		expect(store.sessions.s1?.backgroundAgents["done-5"]).toBeDefined();
+		expect(store.sessions.s1?.backgroundAgents["running-old"]?.status).toBe("running");
 	});
 
 	it("does not let a stale session REST snapshot clobber newer live SSE state", async () => {

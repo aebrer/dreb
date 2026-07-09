@@ -35,6 +35,7 @@ export interface DashboardServerOptions {
 }
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
+export const MAX_SSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 
 /** Parse the device cookie from a Cookie header. */
 export function parseDeviceCookie(cookieHeader: string | undefined): string | undefined {
@@ -189,13 +190,27 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 			"cache-control": "no-cache",
 			connection: "keep-alive",
 		});
-		res.write(":ok\n\n");
+
+		const guardedWrite = (chunk: string, context: string): boolean => {
+			if (res.destroyed || res.writableEnded) return false;
+			const accepted = res.write(chunk);
+			if (!accepted && res.writableLength > MAX_SSE_BUFFERED_BYTES) {
+				log(
+					`SSE client buffer exceeded ${MAX_SSE_BUFFERED_BYTES} bytes during ${context} (${res.writableLength} bytes queued); destroying connection`,
+				);
+				res.destroy();
+				return false;
+			}
+			return true;
+		};
+
+		if (!guardedWrite(":ok\n\n", "initial handshake")) return;
 		const lastIdRaw = req.headers["last-event-id"] ?? req.query.lastEventId;
 		const lastEventId =
 			typeof lastIdRaw === "string" && /^\d+$/.test(lastIdRaw) ? Number.parseInt(lastIdRaw, 10) : undefined;
-		const detach = hub.attach({ write: (chunk) => res.write(chunk) }, lastEventId);
+		const detach = hub.attach({ write: (chunk) => guardedWrite(chunk, "event fanout") }, lastEventId);
 		const keepAlive = setInterval(() => {
-			res.write(":ka\n\n");
+			guardedWrite(":ka\n\n", "keepalive");
 		}, 25_000);
 		req.on("close", () => {
 			clearInterval(keepAlive);

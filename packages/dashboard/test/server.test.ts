@@ -1,11 +1,11 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import type { Server } from "node:http";
+import { type IncomingMessage, request, type Server, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
 import { RuntimePool } from "../src/server/runtime-pool.js";
-import { createDashboardServer, parseDeviceCookie } from "../src/server/server.js";
+import { createDashboardServer, MAX_SSE_BUFFERED_BYTES, parseDeviceCookie } from "../src/server/server.js";
 import { makeFakeClient } from "./runtime-pool.test.js";
 
 const servers: Server[] = [];
@@ -24,12 +24,45 @@ interface TestServerOptions {
 	deleteSession?: (path: string) => Promise<unknown>;
 	staticDir?: string;
 	onRestart?: () => void;
+	logger?: (line: string) => void;
 }
 
 async function createTempProject(): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
 	tempDirs.push(dir);
 	return dir;
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (predicate()) return;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	expect(predicate()).toBe(true);
+}
+
+interface RawSseConnection {
+	body: () => string;
+	closed: Promise<void>;
+	destroy: () => void;
+}
+
+async function openRawSse(base: string): Promise<RawSseConnection> {
+	const url = new URL("/api/events", base);
+	return new Promise((resolve, reject) => {
+		const req = request(url, (res) => {
+			let body = "";
+			res.setEncoding("utf8");
+			res.on("data", (chunk) => {
+				body += chunk;
+			});
+			const closed = new Promise<void>((resolveClosed) => res.on("close", resolveClosed));
+			resolve({ body: () => body, closed, destroy: () => req.destroy() });
+		});
+		req.on("error", reject);
+		req.end();
+	});
 }
 
 async function startServer(options: TestServerOptions = {}) {
@@ -49,7 +82,7 @@ async function startServer(options: TestServerOptions = {}) {
 		deleteSession: options.deleteSession ?? (async () => ({ method: "trash" })),
 		staticDir: options.staticDir,
 		onRestart: options.onRestart,
-		logger: () => {},
+		logger: options.logger ?? (() => {}),
 	});
 	const server = await new Promise<Server>((resolve) => {
 		const s = app.listen(0, "127.0.0.1", () => resolve(s));
@@ -71,7 +104,6 @@ describe("dashboard server — auth middleware", () => {
 	it("rejects requests with a foreign Host header (DNS rebinding)", async () => {
 		const { base } = await startServer();
 		// fetch/undici forbids overriding Host — use a raw http request.
-		const { request } = await import("node:http");
 		const url = new URL(base);
 		const result = await new Promise<{ status: number; body: string }>((resolve, reject) => {
 			const req = request(
@@ -564,6 +596,71 @@ describe("dashboard server — SSE", () => {
 		await reader.cancel();
 		expect(buffer).toContain("agent_start");
 		expect(buffer).toMatch(/id: \d+/);
+	});
+
+	it("destroys over-buffered SSE clients and detaches them while other clients keep receiving events", async () => {
+		const dir = await createTempProject();
+		const logs: string[] = [];
+		const { base, clients } = await startServer({ logger: (line) => logs.push(line) });
+		await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+
+		const originalWrite = ServerResponse.prototype.write as (this: ServerResponse, ...args: any[]) => boolean;
+		const eventResponses: ServerResponse[] = [];
+		const writeCounts = new WeakMap<ServerResponse, number>();
+		const writeSpy = vi.spyOn(ServerResponse.prototype, "write").mockImplementation(function (
+			this: ServerResponse,
+			...args: any[]
+		) {
+			const responseReq = (this as ServerResponse & { req?: IncomingMessage }).req;
+			if (responseReq?.url?.startsWith("/api/events")) {
+				if (!eventResponses.includes(this)) eventResponses.push(this);
+				writeCounts.set(this, (writeCounts.get(this) ?? 0) + 1);
+				const accepted = originalWrite.apply(this, args);
+				if (this === eventResponses[0] && typeof args[0] === "string" && args[0].startsWith("id: ")) {
+					Object.defineProperty(this, "writableLength", {
+						value: MAX_SSE_BUFFERED_BYTES + 1,
+						configurable: true,
+					});
+					return false;
+				}
+				return accepted;
+			}
+			return originalWrite.apply(this, args);
+		});
+		let slow: RawSseConnection | undefined;
+		let fast: RawSseConnection | undefined;
+		try {
+			slow = await openRawSse(base);
+			fast = await openRawSse(base);
+			await waitUntil(
+				() => eventResponses.length === 2 && slow!.body().includes(":ok") && fast!.body().includes(":ok"),
+			);
+
+			clients[0].emit({ type: "agent_start" });
+
+			await waitUntil(() => fast!.body().includes("agent_start"));
+			await Promise.race([
+				slow.closed,
+				new Promise((_resolve, reject) => setTimeout(() => reject(new Error("slow SSE did not close")), 1000)),
+			]);
+			const slowWriteCountAfterDestroy = writeCounts.get(eventResponses[0]) ?? 0;
+
+			clients[0].emit({ type: "agent_end" });
+
+			await waitUntil(() => fast!.body().includes("agent_end"));
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			expect(writeCounts.get(eventResponses[0])).toBe(slowWriteCountAfterDestroy);
+			expect(logs.join("\n")).toContain("SSE client buffer exceeded");
+			expect(logs.join("\n")).toContain(String(MAX_SSE_BUFFERED_BYTES));
+		} finally {
+			writeSpy.mockRestore();
+			slow?.destroy();
+			fast?.destroy();
+		}
 	});
 });
 

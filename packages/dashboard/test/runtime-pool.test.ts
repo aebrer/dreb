@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import type { RpcClient } from "@dreb/coding-agent/rpc";
 import { describe, expect, it, vi } from "vitest";
 import { EventHub } from "../src/server/event-hub.js";
-import { RuntimePool } from "../src/server/runtime-pool.js";
+import { MAX_COMPLETED_BACKGROUND_AGENTS, RuntimePool } from "../src/server/runtime-pool.js";
 
 /** Minimal fake RpcClient: event emitter + spied lifecycle methods. */
 // biome-ignore lint/suspicious/noExportsInTest: shared with server.test.ts
@@ -152,6 +152,21 @@ describe("RuntimePool", () => {
 		expect(clients[1].stop).toHaveBeenCalled();
 		expect(clients[2].stop).toHaveBeenCalled();
 		expect(pool.list()).toHaveLength(0);
+	});
+
+	it("stop() publishes runtime_removed but stopAll() does not", async () => {
+		const { pool } = makePool();
+		const seen: Array<[string, Record<string, unknown>]> = [];
+		pool.onEvent((key, event) => seen.push([key, event]));
+		const stopped = await pool.create("/tmp/stopped");
+		await pool.create("/tmp/shutdown");
+
+		expect(await pool.stop(stopped.key)).toBe(true);
+		expect(seen).toEqual([[stopped.key, { type: "runtime_removed" }]]);
+
+		seen.length = 0;
+		await pool.stopAll();
+		expect(seen).toEqual([]);
 	});
 
 	it("stopAll() stops in-flight runtime startup and does not register it", async () => {
@@ -324,6 +339,46 @@ describe("RuntimePool", () => {
 		expect(handle.backgroundAgents.get("bg1")?.sessionFile).toBe("/s/bg1.jsonl");
 	});
 
+	it("caps completed background agents from lifecycle events while preserving running agents", async () => {
+		vi.useFakeTimers();
+		try {
+			const { pool, clients } = makePool();
+			const handle = await pool.create("/tmp");
+			clients[0].emit({
+				type: "background_agent_start",
+				agentId: "running-oldest",
+				agentType: "Explore",
+				taskSummary: "still running",
+			});
+
+			for (let i = 0; i < MAX_COMPLETED_BACKGROUND_AGENTS + 5; i += 1) {
+				vi.setSystemTime(new Date(Date.UTC(2026, 0, 1, 0, 0, i)));
+				clients[0].emit({
+					type: "background_agent_start",
+					agentId: `done-${i}`,
+					agentType: "Explore",
+					taskSummary: `task ${i}`,
+				});
+				clients[0].emit({ type: "background_agent_end", agentId: `done-${i}`, success: true });
+			}
+
+			const completed = [...handle.backgroundAgents.values()].filter((agent) => agent.status !== "running");
+			expect(handle.backgroundAgents.get("running-oldest")?.status).toBe("running");
+			expect(completed.map((agent) => agent.agentId)).toEqual(
+				Array.from({ length: MAX_COMPLETED_BACKGROUND_AGENTS }, (_, i) => `done-${i + 5}`),
+			);
+
+			const info = await pool.describe(handle);
+			expect(info.backgroundAgents).toHaveLength(MAX_COMPLETED_BACKGROUND_AGENTS + 1);
+			expect(info.backgroundAgents.some((agent) => agent.agentId === "running-oldest")).toBe(true);
+			expect(
+				info.backgroundAgents.filter((agent) => agent.status !== "running").map((agent) => agent.agentId),
+			).toEqual(Array.from({ length: MAX_COMPLETED_BACKGROUND_AGENTS }, (_, i) => `done-${i + 5}`));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("describe() reports state, agents, and attention", async () => {
 		const { pool, clients } = makePool();
 		const handle = await pool.create("/tmp");
@@ -363,6 +418,42 @@ describe("RuntimePool", () => {
 		const handle = await handlePromise;
 
 		expect(handle.backgroundAgents.get("rehydrated")?.taskSummary).toBe("from disk");
+	});
+
+	it("create() caps seeded completed background agents while preserving running agents", async () => {
+		const seeded = [
+			{
+				agentId: "seed-running",
+				agentType: "Explore",
+				taskSummary: "still running",
+				startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 0)).toISOString(),
+				status: "running",
+			},
+			...Array.from({ length: MAX_COMPLETED_BACKGROUND_AGENTS + 3 }, (_, i) => ({
+				agentId: `seed-done-${i}`,
+				agentType: "Explore",
+				taskSummary: `seeded ${i}`,
+				startedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i + 1)).toISOString(),
+				status: "completed",
+			})),
+		];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			clientFactory: () => {
+				const client = makeFakeClient();
+				vi.mocked(client.listBackgroundAgents).mockResolvedValue(seeded as any);
+				return client;
+			},
+		});
+
+		const handle = await pool.create("/tmp");
+		const info = await pool.describe(handle);
+
+		expect(handle.backgroundAgents.has("seed-running")).toBe(true);
+		expect(info.backgroundAgents).toHaveLength(MAX_COMPLETED_BACKGROUND_AGENTS + 1);
+		expect(info.backgroundAgents.filter((agent) => agent.status !== "running").map((agent) => agent.agentId)).toEqual(
+			Array.from({ length: MAX_COMPLETED_BACKGROUND_AGENTS }, (_, i) => `seed-done-${i + 3}`),
+		);
 	});
 
 	it("describe() reports runtime errors instead of throwing when state is unavailable", async () => {

@@ -101,7 +101,10 @@ Browser (SolidJS, hash-routed SPA)
 
 - Events stream over a single SSE connection carrying `{seq, key, event}`
   envelopes; reconnects catch up via `Last-Event-ID` against a bounded ring
-  buffer (a gap triggers a `dashboard_resync` + full refetch).
+  buffer (a gap triggers a `dashboard_resync` + full refetch). Deleting a
+  runtime publishes a synthetic `runtime_removed` event so clients evict that
+  session's state. Clients that stop draining the stream past a bounded
+  write buffer are disconnected and rely on reconnect catch-up.
 - Background subagent transcripts arrive over the same pipe via the
   `background_agent_event` relay (see `docs/rpc.md` in
   `@dreb/coding-agent`) — no session-file tailing.

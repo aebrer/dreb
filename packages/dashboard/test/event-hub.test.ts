@@ -92,6 +92,17 @@ describe("EventHub", () => {
 		expect(envelopes()).toHaveLength(1);
 	});
 
+	it("leaves write-return handling to transport-specific clients", () => {
+		const hub = new EventHub();
+		const falseReturning = { write: vi.fn(() => false) };
+		const { client, envelopes } = collectClient();
+		hub.attach(falseReturning);
+		hub.attach(client);
+		hub.publish("k", { type: "one" });
+		expect(falseReturning.write).toHaveBeenCalledTimes(1);
+		expect(envelopes()).toHaveLength(1);
+	});
+
 	it("formatSseFrame emits id and single-line JSON data", () => {
 		const frame = formatSseFrame({ seq: 7, key: "k", event: { type: "x", text: "a\nb" } });
 		expect(frame.startsWith("id: 7\n")).toBe(true);
