@@ -8,7 +8,7 @@
 npm run build
 ```
 
-This builds all packages in dependency order: tui → ai → agent → semantic-search → coding-agent → telegram.
+This builds all packages in dependency order: tui → ai → agent → semantic-search → coding-agent → telegram → dashboard.
 
 `npm run build` is a **pure compile step** — it does not bump versions or touch `package-lock.json`. Version syncing is a separate, explicit release operation (`npm run sync-version`); see Release Protocol below. CI enforces this: a build that mutates `package-lock.json` fails the lint/type-check job.
 
@@ -25,6 +25,8 @@ This builds all packages in dependency order: tui → ai → agent → semantic-
 - `packages/coding-agent` — CLI tool, tools, model resolution, TUI
 - `packages/tui` — Terminal UI components
 - `packages/telegram` — Telegram bot integration
+- `packages/semantic-search` — Semantic codebase search engine + MCP server
+- `packages/dashboard` — Web dashboard (Express server + SolidJS client over RPC)
 
 ## Workspace Link Safety
 
