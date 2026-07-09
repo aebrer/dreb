@@ -9,7 +9,6 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { createReadStream } from "node:fs";
 import { link, mkdir, open, readdir, realpath, rename, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import type { Writable } from "node:stream";
@@ -118,10 +117,6 @@ export class FileApi {
 		return { path, size: info.size };
 	}
 
-	createDownloadStream(path: string): NodeJS.ReadableStream {
-		return createReadStream(path);
-	}
-
 	/**
 	 * Upload into a directory. Refuses to overwrite unless `overwrite` is set —
 	 * the collision surfaces as 409 so the client can prompt.
@@ -189,21 +184,6 @@ export class FileApi {
 		await mkdir(path);
 		this.log("mkdir", path);
 		return path;
-	}
-
-	async renameEntry(rawPath: string, newName: string): Promise<string> {
-		assertValidChildName(newName, "name");
-		const path = await canonicalizePath(rawPath, { mustExist: true });
-		const target = join(dirname(path), newName);
-		try {
-			await stat(target);
-			throw Object.assign(new Error(`Target exists: ${target}`), { status: 409 });
-		} catch (err) {
-			if ((err as { status?: number }).status === 409) throw err;
-		}
-		await rename(path, target);
-		this.log("rename", path, `-> ${target}`);
-		return target;
 	}
 }
 

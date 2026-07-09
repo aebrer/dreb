@@ -284,6 +284,28 @@ describe("applySessionEvent — streaming lifecycle", () => {
 		expect(state.entries).toHaveLength(0);
 		expect(state.statusEntries.some((s) => s.key === "retry" && s.tone === "warning")).toBe(true);
 	});
+
+	it("length_retry discards the streaming tail and shows a warning", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "agent_start" });
+		applySessionEvent(state, {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+		});
+		applySessionEvent(state, {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "partial tok" },
+		});
+		expect(state.entries).toHaveLength(1);
+
+		applySessionEvent(state, { type: "length_retry", attempt: 2, maxAttempts: 4 });
+		expect(state.entries).toHaveLength(0);
+		expect(state.statusEntries).toContainEqual({
+			key: "retry",
+			text: "response truncated, retrying with larger budget (2/4)",
+			tone: "warning",
+		});
+	});
 });
 
 describe("applySessionEvent — session-level events", () => {
@@ -332,6 +354,42 @@ describe("applySessionEvent — session-level events", () => {
 		});
 		expect(state.compacting).toBe(false);
 		expect(state.entries[0]).toMatchObject({ kind: "summary", label: "compaction", tokensBefore: 52410 });
+	});
+
+	it("compaction errors surface an error status entry", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "auto_compaction_start", reason: "threshold" });
+
+		applySessionEvent(state, {
+			type: "auto_compaction_end",
+			errorMessage: "summarizer failed",
+			aborted: false,
+			willRetry: false,
+		});
+
+		expect(state.compacting).toBe(false);
+		expect(state.statusEntries).toContainEqual({
+			key: "compaction-error",
+			text: "summarizer failed",
+			tone: "error",
+		});
+		expect(state.needsAttention).toBe(true);
+	});
+
+	it("aborted compaction does not append a summary entry", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "auto_compaction_start", reason: "manual" });
+
+		applySessionEvent(state, {
+			type: "auto_compaction_end",
+			result: { tokensBefore: 1234, summary: "should not render" },
+			aborted: true,
+			willRetry: false,
+		});
+
+		expect(state.compacting).toBe(false);
+		expect(state.entries).toHaveLength(0);
+		expect(state.statusEntries.some((s) => s.key === "compaction")).toBe(false);
 	});
 
 	it("auto_retry failure surfaces an error status and lastError", () => {

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { RpcClient } from "@dreb/coding-agent/rpc";
 import { describe, expect, it, vi } from "vitest";
+import { EventHub } from "../src/server/event-hub.js";
 import { RuntimePool } from "../src/server/runtime-pool.js";
 
 /** Minimal fake RpcClient: event emitter + spied lifecycle methods. */
@@ -13,6 +14,10 @@ export function makeFakeClient() {
 		onEvent: vi.fn((listener: (event: unknown) => void) => {
 			emitter.on("event", listener);
 			return () => emitter.off("event", listener);
+		}),
+		onExit: vi.fn((listener: (info: unknown) => void) => {
+			emitter.on("exit", listener);
+			return () => emitter.off("exit", listener);
 		}),
 		getState: vi.fn(async () => ({
 			sessionId: "s1",
@@ -83,8 +88,22 @@ export function makeFakeClient() {
 		abortCompaction: vi.fn(async () => {}),
 		abortRetry: vi.fn(async () => {}),
 		emit: (event: Record<string, unknown>) => emitter.emit("event", event),
+		emitExit: (info: Record<string, unknown>) => emitter.emit("exit", info),
 	};
-	return client as unknown as RpcClient & { emit: (e: Record<string, unknown>) => void };
+	return client as unknown as RpcClient & {
+		emit: (e: Record<string, unknown>) => void;
+		emitExit: (e: Record<string, unknown>) => void;
+	};
+}
+
+function deferred<T = void>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
 }
 
 function makePool() {
@@ -118,6 +137,146 @@ describe("RuntimePool", () => {
 		expect(clients[0].stop).toHaveBeenCalled();
 		expect(pool.list()).toHaveLength(0);
 		expect(await pool.stop(handle.key)).toBe(false);
+	});
+
+	it("stopAll() stops session runtimes and utility runtimes", async () => {
+		const { pool, clients } = makePool();
+		await pool.create("/tmp/a");
+		await pool.create("/tmp/b");
+		await pool.ensureUtilityRuntime("/tmp/utility");
+
+		await pool.stopAll();
+
+		expect(clients).toHaveLength(3);
+		expect(clients[0].stop).toHaveBeenCalled();
+		expect(clients[1].stop).toHaveBeenCalled();
+		expect(clients[2].stop).toHaveBeenCalled();
+		expect(pool.list()).toHaveLength(0);
+	});
+
+	it("stopAll() stops in-flight runtime startup and does not register it", async () => {
+		const start = deferred<void>();
+		const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			clientFactory: () => {
+				const client = makeFakeClient();
+				vi.mocked(client.start).mockReturnValue(start.promise);
+				clients.push(client);
+				return client;
+			},
+		});
+		const createPromise = pool.create("/tmp/slow");
+
+		const stopPromise = pool.stopAll();
+		expect(clients[0].stop).toHaveBeenCalled();
+		start.resolve();
+
+		await expect(createPromise).rejects.toThrow(/closing/i);
+		await stopPromise;
+		expect(pool.list()).toHaveLength(0);
+	});
+
+	it("stopAll() stops in-flight utility startup and does not cache it", async () => {
+		const start = deferred<void>();
+		const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			clientFactory: () => {
+				const client = makeFakeClient();
+				vi.mocked(client.start).mockReturnValue(start.promise);
+				clients.push(client);
+				return client;
+			},
+		});
+		const utilityPromise = pool.ensureUtilityRuntime("/tmp/utility");
+
+		const stopPromise = pool.stopAll();
+		expect(clients[0].stop).toHaveBeenCalled();
+		start.resolve();
+
+		await expect(utilityPromise).rejects.toThrow(/closing/i);
+		await stopPromise;
+		expect(pool.list()).toHaveLength(0);
+	});
+
+	it("ensureUtilityRuntime() retries after a startup failure", async () => {
+		const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+		let first = true;
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			clientFactory: () => {
+				const client = makeFakeClient();
+				if (first) {
+					first = false;
+					vi.mocked(client.start).mockRejectedValueOnce(new Error("start failed"));
+				}
+				clients.push(client);
+				return client;
+			},
+		});
+
+		await expect(pool.ensureUtilityRuntime("/tmp/utility")).rejects.toThrow("start failed");
+		const handle = await pool.ensureUtilityRuntime("/tmp/utility");
+
+		expect(clients).toHaveLength(2);
+		expect(handle.client).toBe(clients[1]);
+	});
+
+	it("ensureUtilityRuntime() deduplicates concurrent starts for the same cwd", async () => {
+		const start = deferred<void>();
+		const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			clientFactory: () => {
+				const client = makeFakeClient();
+				vi.mocked(client.start).mockReturnValue(start.promise);
+				clients.push(client);
+				return client;
+			},
+		});
+		const first = pool.ensureUtilityRuntime("/tmp/utility");
+		const second = pool.ensureUtilityRuntime("/tmp/utility");
+		start.resolve();
+
+		const firstHandle = await first;
+		await expect(second).resolves.toBe(firstHandle);
+		expect(clients).toHaveLength(1);
+	});
+
+	it("publishes a terminal event and records a runtime error when the RPC child exits", async () => {
+		const logs: string[] = [];
+		const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			logger: (line) => logs.push(line),
+			clientFactory: () => {
+				const client = makeFakeClient();
+				clients.push(client);
+				return client;
+			},
+		});
+		const hub = new EventHub();
+		const envelopes: ReturnType<EventHub["publish"]>[] = [];
+		pool.onEvent((key, event) => envelopes.push(hub.publish(key, event)));
+		const handle = await pool.create("/tmp");
+
+		clients[0].emitExit({ code: 137, signal: "SIGKILL" });
+
+		expect(handle.error).toBe("RPC process exited (code 137, signal SIGKILL)");
+		expect(handle.attention.get("error")).toBe(handle.error);
+		expect(envelopes).toHaveLength(1);
+		expect(envelopes[0]).toMatchObject({
+			seq: 1,
+			key: handle.key,
+			event: {
+				type: "agent_end",
+				messages: [],
+				aborted: true,
+				errorMessage: "RPC process exited (code 137, signal SIGKILL)",
+			},
+		});
+		expect(logs.join("\n")).toContain("RPC process exited");
 	});
 
 	it("tags events with the runtime key", async () => {

@@ -6,19 +6,12 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-
-interface StoredPairing {
-	id: string;
-	identity: string;
-	device?: string;
-	createdAt: string;
-	expiresAt: string;
-	tokenHmac: string;
-}
+import type { PairingState, StoredPairing } from "./auth.js";
 
 interface PairingFile {
 	version: 1;
 	pairings: StoredPairing[];
+	consumedPairingWindows?: number[];
 }
 
 /**
@@ -51,25 +44,36 @@ export function loadOrCreateDashboardSecret(path: string): Buffer {
 export class FilePairingStorage {
 	constructor(private readonly path: string) {}
 
-	async load(): Promise<StoredPairing[]> {
+	async load(): Promise<PairingState> {
 		let raw: string;
 		try {
 			raw = readFileSync(this.path, "utf8");
 		} catch (err) {
-			if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+			if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+				return { pairings: [], consumedPairingWindows: [] };
+			}
 			throw err;
 		}
 		const parsed = JSON.parse(raw) as PairingFile;
-		if (parsed.version !== 1 || !Array.isArray(parsed.pairings)) {
+		if (
+			parsed.version !== 1 ||
+			!Array.isArray(parsed.pairings) ||
+			(parsed.consumedPairingWindows !== undefined &&
+				(!Array.isArray(parsed.consumedPairingWindows) ||
+					!parsed.consumedPairingWindows.every((window) => Number.isSafeInteger(window))))
+		) {
 			throw new Error(`Unrecognized pairing file format at ${this.path}`);
 		}
-		return parsed.pairings;
+		return {
+			pairings: parsed.pairings,
+			consumedPairingWindows: parsed.consumedPairingWindows ?? [],
+		};
 	}
 
-	async save(pairings: StoredPairing[]): Promise<void> {
+	async save(state: PairingState): Promise<void> {
 		const dir = dirname(this.path);
 		mkdirSync(dir, { recursive: true });
-		const file: PairingFile = { version: 1, pairings };
+		const file: PairingFile = { version: 1, ...state };
 		const tmp = join(dir, `.${basename(this.path)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
 		try {
 			writeFileSync(tmp, `${JSON.stringify(file, null, "\t")}\n`, { mode: 0o600, flag: "wx" });

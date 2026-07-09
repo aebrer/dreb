@@ -160,4 +160,34 @@ describe("RpcClient spawn failure handling", () => {
 
 		await expect(pending).rejects.toThrow(/exited with code 1/i);
 	});
+
+	test("onExit notifies subscribers when the child exits", async () => {
+		const child = makeFakeChild();
+		vi.mocked(spawn).mockReturnValue(child);
+
+		const client = new RpcClient({ cliPath: "dist/cli.js" });
+		const seen: unknown[] = [];
+		client.onExit((info) => seen.push(info));
+		await client.start();
+
+		child.exitCode = 7;
+		child.emit("exit", 7, "SIGTERM");
+
+		expect(seen).toEqual([{ code: 7, signal: "SIGTERM" }]);
+	});
+
+	test("onExit notifies subscribers when the child emits an 'error'", async () => {
+		const child = makeFakeChild();
+		vi.mocked(spawn).mockReturnValue(child);
+
+		const client = new RpcClient({ cliPath: "dist/cli.js" });
+		const seen: unknown[] = [];
+		client.onExit((info) => seen.push(info));
+		await client.start();
+
+		const error = new Error("spawn boom");
+		child.emit("error", error);
+
+		expect(seen).toEqual([{ error }]);
+	});
 });

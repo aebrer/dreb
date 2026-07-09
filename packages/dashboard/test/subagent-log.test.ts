@@ -1,8 +1,12 @@
-import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverSubagentSessionFile, readSubagentMessages } from "../src/server/subagent-log.js";
+import {
+	discoverSubagentSessionFile,
+	discoverSubagentStepSessionFiles,
+	readSubagentMessages,
+} from "../src/server/subagent-log.js";
 
 const tempDirs: string[] = [];
 
@@ -41,6 +45,23 @@ describe("discoverSubagentSessionFile", () => {
 		await utimes(oldFile, past, past);
 		expect(discoverSubagentSessionFile(dir)).toBe(newFile);
 	});
+
+	it("finds chain step logs under step subdirectories", async () => {
+		const dir = await makeDir();
+		const step1Dir = join(dir, "step-1");
+		const step2Dir = join(dir, "step-2");
+		await mkdir(step1Dir, { recursive: true });
+		await mkdir(step2Dir, { recursive: true });
+		const step1File = join(step1Dir, "step-1.jsonl");
+		const step2File = join(step2Dir, "step-2.jsonl");
+		await writeFile(step1File, "{}");
+		await writeFile(step2File, "{}");
+		const past = new Date(Date.now() - 60_000);
+		await utimes(step1File, past, past);
+
+		expect(discoverSubagentStepSessionFiles(dir)).toEqual([step1File, step2File]);
+		expect(discoverSubagentSessionFile(dir)).toBe(step2File);
+	});
 });
 
 describe("readSubagentMessages", () => {
@@ -73,5 +94,30 @@ describe("readSubagentMessages", () => {
 		await writeFile(join(dir, "live.jsonl"), line({ type: "message", id: "1", message }));
 
 		expect(readSubagentMessages({ sessionDir: dir })).toEqual([message]);
+	});
+
+	it("concatenates chain step logs in numeric step order", async () => {
+		const dir = await makeDir();
+		const step1Dir = join(dir, "step-1");
+		const step2Dir = join(dir, "step-2");
+		const step10Dir = join(dir, "step-10");
+		await mkdir(step10Dir, { recursive: true });
+		await mkdir(step2Dir, { recursive: true });
+		await mkdir(step1Dir, { recursive: true });
+		const step1File = join(step1Dir, "step-1.jsonl");
+		const step2File = join(step2Dir, "step-2.jsonl");
+		const step10File = join(step10Dir, "step-10.jsonl");
+		const step1Message = { role: "assistant", content: [{ type: "text", text: "one" }] };
+		const step2Message = { role: "assistant", content: [{ type: "text", text: "two" }] };
+		const step10Message = { role: "assistant", content: [{ type: "text", text: "ten" }] };
+		await writeFile(step10File, line({ type: "message", id: "10", message: step10Message }));
+		await writeFile(step2File, line({ type: "message", id: "2", message: step2Message }));
+		await writeFile(step1File, `${line({ type: "message", id: "1", message: step1Message })}{ partial tail`);
+
+		expect(readSubagentMessages({ sessionDir: dir, sessionFile: step1File })).toEqual([
+			step1Message,
+			step2Message,
+			step10Message,
+		]);
 	});
 });

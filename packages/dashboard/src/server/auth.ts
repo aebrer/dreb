@@ -136,24 +136,35 @@ export interface PairedDevice {
 	expiresAt: string;
 }
 
-interface StoredPairing extends PairedDevice {
+export interface StoredPairing extends PairedDevice {
 	/** HMAC of the device token (raw token never stored). */
 	tokenHmac: string;
 }
 
+export interface PairingState {
+	pairings: StoredPairing[];
+	consumedPairingWindows: number[];
+}
+
 export interface PairingStorage {
-	load(): Promise<StoredPairing[]>;
-	save(pairings: StoredPairing[]): Promise<void>;
+	load(): Promise<PairingState>;
+	save(state: PairingState): Promise<void>;
 }
 
 /** In-memory storage — used in tests and as the base for the file store. */
 export class MemoryPairingStorage implements PairingStorage {
-	private pairings: StoredPairing[] = [];
-	async load(): Promise<StoredPairing[]> {
-		return [...this.pairings];
+	private state: PairingState = { pairings: [], consumedPairingWindows: [] };
+	async load(): Promise<PairingState> {
+		return {
+			pairings: [...this.state.pairings],
+			consumedPairingWindows: [...this.state.consumedPairingWindows],
+		};
 	}
-	async save(pairings: StoredPairing[]): Promise<void> {
-		this.pairings = [...pairings];
+	async save(state: PairingState): Promise<void> {
+		this.state = {
+			pairings: [...state.pairings],
+			consumedPairingWindows: [...state.consumedPairingWindows],
+		};
 	}
 }
 
@@ -262,14 +273,29 @@ export class DashboardAuth {
 		return { code: this.pairingCodeForWindow(window), expiresInMs };
 	}
 
-	private isValidPairingCode(code: string): boolean {
-		if (!/^\d{6}$/.test(code)) return false;
-		const window = Math.floor(this.now() / PAIRING_CODE_STEP_MS);
+	private currentPairingWindow(): number {
+		return Math.floor(this.now() / PAIRING_CODE_STEP_MS);
+	}
+
+	private matchingPairingCodeWindow(code: string): number | undefined {
+		if (!/^\d{6}$/.test(code)) return undefined;
+		const window = this.currentPairingWindow();
 		for (const candidateWindow of [window - 1, window, window + 1]) {
 			if (candidateWindow < 0) continue;
-			if (timingSafeEqualStr(code, this.pairingCodeForWindow(candidateWindow))) return true;
+			if (timingSafeEqualStr(code, this.pairingCodeForWindow(candidateWindow))) return candidateWindow;
 		}
-		return false;
+		return undefined;
+	}
+
+	private pruneConsumedPairingWindows(windows: Iterable<number>): number[] {
+		const minimumAcceptedWindow = Math.max(0, this.currentPairingWindow() - 1);
+		return [
+			...new Set([...windows].filter((window) => Number.isSafeInteger(window) && window >= minimumAcceptedWindow)),
+		].sort((a, b) => a - b);
+	}
+
+	private samePairingWindows(a: number[], b: number[]): boolean {
+		return a.length === b.length && a.every((window, index) => window === b[index]);
 	}
 
 	private pairingFailureKey(identity: TailscaleIdentity, remoteAddress: string | undefined): string {
@@ -410,11 +436,14 @@ export class DashboardAuth {
 		}
 		const failureKey = this.pairingFailureKey(identity, info.remoteAddress);
 		this.assertPairingNotLocked(failureKey);
-		if (!this.isValidPairingCode(code)) {
-			this.recordPairingFailure(failureKey, identity);
-		}
 
 		return this.withPairingMutation(async () => {
+			const state = await this.loadLiveState();
+			const matchedWindow = this.matchingPairingCodeWindow(code);
+			if (matchedWindow === undefined || state.consumedPairingWindows.includes(matchedWindow)) {
+				this.recordPairingFailure(failureKey, identity);
+			}
+
 			const token = randomBytes(32).toString("base64url");
 			const nowMs = this.now();
 			const device: PairedDevice = {
@@ -424,9 +453,12 @@ export class DashboardAuth {
 				createdAt: new Date(nowMs).toISOString(),
 				expiresAt: new Date(nowMs + this.pairingTtlMs).toISOString(),
 			};
-			const pairings = await this.loadLive();
-			pairings.push({ ...device, tokenHmac: this.hmac(token) });
-			await this.storage.save(pairings);
+			const pairings = [...state.pairings, { ...device, tokenHmac: this.hmac(token) }];
+			const consumedPairingWindows = this.pruneConsumedPairingWindows([
+				...state.consumedPairingWindows,
+				matchedWindow,
+			]);
+			await this.storage.save({ pairings, consumedPairingWindows });
 			this.clearPairingFailures(failureKey);
 			return { token, device };
 		});
@@ -442,10 +474,10 @@ export class DashboardAuth {
 	/** Remove a paired device by id. Returns true when something was removed. */
 	async unpair(deviceId: string): Promise<boolean> {
 		return this.withPairingMutation(async () => {
-			const pairings = await this.loadLive();
-			const remaining = pairings.filter((p) => p.id !== deviceId);
-			if (remaining.length === pairings.length) return false;
-			await this.storage.save(remaining);
+			const state = await this.loadLiveState();
+			const remaining = state.pairings.filter((p) => p.id !== deviceId);
+			if (remaining.length === state.pairings.length) return false;
+			await this.storage.save({ ...state, pairings: remaining });
 			return true;
 		});
 	}
@@ -460,10 +492,22 @@ export class DashboardAuth {
 
 	/** Load pairings, dropping (and persisting the removal of) expired entries. Caller must hold pairingMutation. */
 	private async loadLive(saveExpiredRemoval = true): Promise<StoredPairing[]> {
-		const all = await this.storage.load();
+		return (await this.loadLiveState(saveExpiredRemoval)).pairings;
+	}
+
+	/** Load pairing state, dropping expired devices and consumed PIN windows that can no longer match. */
+	private async loadLiveState(savePrunedState = true): Promise<PairingState> {
+		const state = await this.storage.load();
 		const nowMs = this.now();
-		const live = all.filter((p) => new Date(p.expiresAt).getTime() > nowMs);
-		if (saveExpiredRemoval && live.length !== all.length) await this.storage.save(live);
-		return live;
+		const pairings = state.pairings.filter((p) => new Date(p.expiresAt).getTime() > nowMs);
+		const consumedPairingWindows = this.pruneConsumedPairingWindows(state.consumedPairingWindows);
+		if (
+			savePrunedState &&
+			(pairings.length !== state.pairings.length ||
+				!this.samePairingWindows(consumedPairingWindows, state.consumedPairingWindows))
+		) {
+			await this.storage.save({ pairings, consumedPairingWindows });
+		}
+		return { pairings, consumedPairingWindows };
 	}
 }

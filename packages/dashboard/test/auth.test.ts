@@ -198,6 +198,22 @@ describe("DashboardAuth — remote mode", () => {
 		}
 	});
 
+	it("rejects reusing a pairing code but accepts a fresh code after rotation", async () => {
+		let now = 1_000_000;
+		const auth = makeAuth({ now: () => now });
+		const { code } = auth.currentPairingCode();
+
+		await expect(auth.pair(REMOTE, code)).resolves.toMatchObject({
+			device: { identity: "alice@example.com" },
+		});
+		await expect(auth.pair(REMOTE, code)).rejects.toMatchObject({ status: 401 });
+
+		now += 30_000;
+		await expect(auth.pair(REMOTE, auth.currentPairingCode().code)).resolves.toMatchObject({
+			device: { identity: "alice@example.com" },
+		});
+	});
+
 	it("file-backed pairings keep authenticating after a dashboard restart", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "dreb-dashboard-auth-"));
 		try {
@@ -220,6 +236,33 @@ describe("DashboardAuth — remote mode", () => {
 			});
 			const decision = await restarted.authenticate({ ...REMOTE, deviceToken: token });
 			expect(decision.allowed).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("file-backed consumed pairing codes cannot be reused after a dashboard restart", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "dreb-dashboard-auth-"));
+		try {
+			const pairingsPath = join(dir, "pairings.json");
+			const secretPath = join(dir, "secret");
+			const secret = loadOrCreateDashboardSecret(secretPath);
+			const first = makeAuth({
+				storage: new FilePairingStorage(pairingsPath),
+				secret,
+				now: () => 1_000_000,
+			});
+			const code = first.currentPairingCode().code;
+			await expect(first.pair(REMOTE, code)).resolves.toMatchObject({
+				device: { identity: "alice@example.com" },
+			});
+
+			const restarted = makeAuth({
+				storage: new FilePairingStorage(pairingsPath),
+				secret: loadOrCreateDashboardSecret(secretPath),
+				now: () => 1_000_000,
+			});
+			await expect(restarted.pair(REMOTE, code)).rejects.toMatchObject({ status: 401 });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -261,6 +304,23 @@ describe("DashboardAuth — remote mode", () => {
 		await expect(auth.pair(REMOTE, wrong)).rejects.toMatchObject({ status: 401 });
 		await expect(auth.pair(REMOTE, wrong)).rejects.toMatchObject({ status: 429 });
 		await expect(auth.pair(REMOTE, valid)).rejects.toMatchObject({ status: 429 });
+		expect(logs.join("\n")).toContain("pairing locked");
+	});
+
+	it("counts reusing a consumed pairing code toward lockout", async () => {
+		const logs: string[] = [];
+		const auth = makeAuth({
+			now: () => 1_000_000,
+			pairingMaxAttempts: 2,
+			pairingLockoutMs: 60_000,
+			logger: (line) => logs.push(line),
+		});
+		const code = auth.currentPairingCode().code;
+
+		await auth.pair(REMOTE, code);
+		await expect(auth.pair(REMOTE, code)).rejects.toMatchObject({ status: 401 });
+		await expect(auth.pair(REMOTE, code)).rejects.toMatchObject({ status: 429 });
+		await expect(auth.pair(REMOTE, auth.currentPairingCode().code)).rejects.toMatchObject({ status: 429 });
 		expect(logs.join("\n")).toContain("pairing locked");
 	});
 

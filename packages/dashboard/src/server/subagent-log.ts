@@ -20,26 +20,119 @@ export interface SubagentLogSource {
 	sessionDir?: string;
 }
 
-/**
- * Find the most recently modified .jsonl in a session directory. Parity with
- * discoverSessionFile in @dreb/coding-agent's subagent tool (not exported
- * there); each subagent gets a dedicated directory, so "newest .jsonl" is
- * unambiguous in practice.
- */
-export function discoverSubagentSessionFile(sessionDir: string): string | undefined {
-	if (!existsSync(sessionDir)) return undefined;
-	let best: { path: string; mtime: number } | undefined;
-	for (const name of readdirSync(sessionDir)) {
-		if (!name.endsWith(".jsonl")) continue;
+interface SessionFileCandidate {
+	path: string;
+	mtime: number;
+}
+
+const STEP_SESSION_DIR_RE = /^step-(\d+)$/;
+
+function isExpectedFilesystemError(err: unknown): boolean {
+	return typeof (err as NodeJS.ErrnoException | undefined)?.code === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function findNewestJsonlFileInDir(dir: string): SessionFileCandidate | undefined {
+	let best: SessionFileCandidate | undefined;
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		if (!entry.name.endsWith(".jsonl")) continue;
+		if (entry.isDirectory()) continue;
+		const path = join(dir, entry.name);
 		try {
-			const path = join(sessionDir, name);
 			const mtime = statSync(path).mtime.getTime();
 			if (!best || mtime > best.mtime) best = { path, mtime };
-		} catch {
-			// File disappeared between readdir and stat — skip it.
+		} catch (err) {
+			if (isExpectedFilesystemError(err)) continue;
+			throw err;
 		}
 	}
-	return best?.path;
+	return best;
+}
+
+function discoverStepSessionFileCandidates(sessionDir: string): SessionFileCandidate[] {
+	const steps: Array<{ name: string; index: number }> = [];
+	for (const entry of readdirSync(sessionDir, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const match = STEP_SESSION_DIR_RE.exec(entry.name);
+		if (!match) continue;
+		steps.push({ name: entry.name, index: Number(match[1]) });
+	}
+	steps.sort((a, b) => a.index - b.index || a.name.localeCompare(b.name));
+
+	const files: SessionFileCandidate[] = [];
+	for (const step of steps) {
+		try {
+			const candidate = findNewestJsonlFileInDir(join(sessionDir, step.name));
+			if (candidate) files.push(candidate);
+		} catch (err) {
+			if (isExpectedFilesystemError(err)) continue;
+			throw err;
+		}
+	}
+	return files;
+}
+
+/**
+ * Find chain step session JSONLs under step-N/ directories, ordered by numeric
+ * step index. Returns an empty list for missing/non-chain directories.
+ */
+export function discoverSubagentStepSessionFiles(sessionDir: string): string[] {
+	try {
+		if (!existsSync(sessionDir)) return [];
+		return discoverStepSessionFileCandidates(sessionDir).map((file) => file.path);
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return [];
+		throw err;
+	}
+}
+
+/**
+ * Find the most recently modified .jsonl in a session directory. Parity with
+ * discoverSessionFile in @dreb/coding-agent's subagent tool. Normal subagents
+ * write directly under sessionDir; chain-mode subagents register the chain root
+ * but write per-step logs under step-N/ subdirectories.
+ */
+export function discoverSubagentSessionFile(sessionDir: string): string | undefined {
+	try {
+		if (!existsSync(sessionDir)) return undefined;
+		const flatFile = findNewestJsonlFileInDir(sessionDir);
+		if (flatFile) return flatFile.path;
+
+		let best: SessionFileCandidate | undefined;
+		for (const file of discoverStepSessionFileCandidates(sessionDir)) {
+			if (!best || file.mtime > best.mtime) best = file;
+		}
+		return best?.path;
+	} catch (err) {
+		if (isExpectedFilesystemError(err)) return undefined;
+		throw err;
+	}
+}
+
+function readMessagesFromFile(file: string): unknown[] {
+	const messages: unknown[] = [];
+	for (const line of readFileSync(file, "utf8").split("\n")) {
+		if (!line.trim()) continue;
+		try {
+			const entry = JSON.parse(line);
+			if (isRecord(entry) && entry.type === "message" && entry.message) messages.push(entry.message);
+		} catch (err) {
+			if (err instanceof SyntaxError) continue;
+			throw err;
+		}
+	}
+	return messages;
+}
+
+function discoverMessageFiles(source: SubagentLogSource): string[] {
+	const stepFiles = source.sessionDir ? discoverSubagentStepSessionFiles(source.sessionDir) : [];
+	if (stepFiles.length > 0) return stepFiles;
+	if (source.sessionFile) return existsSync(source.sessionFile) ? [source.sessionFile] : [];
+	const file = source.sessionDir ? discoverSubagentSessionFile(source.sessionDir) : undefined;
+	return file ? [file] : [];
 }
 
 /**
@@ -47,24 +140,16 @@ export function discoverSubagentSessionFile(sessionDir: string): string | undefi
  *
  * Subagent sessions are single-shot and linear (no branching/compaction), so
  * a straight scan of `type: "message"` entries reconstructs the transcript.
- * Malformed lines are skipped (the tail line can be mid-write).
+ * Chain-mode subagents write one linear log per step; those step logs are
+ * concatenated in numeric step order. Malformed lines are skipped (the tail
+ * line can be mid-write).
  *
  * @throws when no session file can be located — callers surface this loudly.
  */
 export function readSubagentMessages(source: SubagentLogSource): unknown[] {
-	const file = source.sessionFile ?? (source.sessionDir ? discoverSubagentSessionFile(source.sessionDir) : undefined);
-	if (!file || !existsSync(file)) {
+	const files = discoverMessageFiles(source);
+	if (files.length === 0) {
 		throw new Error("No session log found for this agent — it may not have produced output yet");
 	}
-	const messages: unknown[] = [];
-	for (const line of readFileSync(file, "utf8").split("\n")) {
-		if (!line.trim()) continue;
-		try {
-			const entry = JSON.parse(line) as { type?: string; message?: unknown };
-			if (entry.type === "message" && entry.message) messages.push(entry.message);
-		} catch {
-			// Skip malformed/partial lines (the child may be mid-append).
-		}
-	}
-	return messages;
+	return files.flatMap((file) => readMessagesFromFile(file));
 }

@@ -23,6 +23,7 @@ interface TestServerOptions {
 	listAllSessions?: () => Promise<unknown[]>;
 	deleteSession?: (path: string) => Promise<unknown>;
 	staticDir?: string;
+	onRestart?: () => void;
 }
 
 async function createTempProject(): Promise<string> {
@@ -47,6 +48,7 @@ async function startServer(options: TestServerOptions = {}) {
 		listAllSessions: options.listAllSessions ?? (async () => []),
 		deleteSession: options.deleteSession ?? (async () => ({ method: "trash" })),
 		staticDir: options.staticDir,
+		onRestart: options.onRestart,
 		logger: () => {},
 	});
 	const server = await new Promise<Server>((resolve) => {
@@ -175,6 +177,51 @@ describe("dashboard server — pairing code", () => {
 
 		expect(res.status).toBe(403);
 		await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("host machine") });
+	});
+
+	it("POST /api/pair sets an HttpOnly strict device cookie without Secure", async () => {
+		const auth = new DashboardAuth();
+		const device = {
+			id: "device-1",
+			identity: "alice@example.com",
+			device: "phone",
+			createdAt: "2030-12-01T00:00:00.000Z",
+			expiresAt: "2031-01-01T00:00:00.000Z",
+		};
+		const pair = vi.spyOn(auth, "pair").mockResolvedValue({ token: "token-value", device });
+		const { base } = await startServer({ auth });
+
+		const res = await fetch(`${base}/api/pair`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ pin: "123456" }),
+		});
+
+		expect(res.status).toBe(200);
+		expect(pair).toHaveBeenCalledWith(expect.objectContaining({ deviceToken: undefined }), "123456");
+		await expect(res.json()).resolves.toEqual({ device });
+		const setCookie = res.headers.get("set-cookie");
+		expect(setCookie).toContain("dreb_dashboard_device=token-value");
+		expect(setCookie).toContain("HttpOnly");
+		expect(setCookie).toContain("SameSite=Strict");
+		expect(setCookie).toContain(`Expires=${new Date(device.expiresAt).toUTCString()}`);
+		// Intentionally not Secure: Tailscale terminates encryption on the tailnet.
+		expect(setCookie).not.toContain("Secure");
+	});
+
+	it("POST /api/pair propagates auth.pair status failures", async () => {
+		const auth = new DashboardAuth();
+		vi.spyOn(auth, "pair").mockRejectedValue(Object.assign(new Error("invalid or expired PIN"), { status: 429 }));
+		const { base } = await startServer({ auth });
+
+		const res = await fetch(`${base}/api/pair`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ pin: "000000" }),
+		});
+
+		expect(res.status).toBe(429);
+		await expect(res.json()).resolves.toEqual({ error: "invalid or expired PIN" });
 	});
 });
 
@@ -517,6 +564,63 @@ describe("dashboard server — SSE", () => {
 		await reader.cancel();
 		expect(buffer).toContain("agent_start");
 		expect(buffer).toMatch(/id: \d+/);
+	});
+});
+
+describe("dashboard server — lifecycle and disk sessions", () => {
+	it("POST /api/server/restart reports unavailable without a restart hook", async () => {
+		const { base } = await startServer();
+
+		const res = await fetch(`${base}/api/server/restart`, { method: "POST" });
+
+		expect(res.status).toBe(501);
+		await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("Restart is unavailable") });
+	});
+
+	it("POST /api/server/restart responds before invoking the restart hook", async () => {
+		const onRestart = vi.fn();
+		const { base } = await startServer({ onRestart });
+
+		const res = await fetch(`${base}/api/server/restart`, { method: "POST" });
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({ ok: true, restarting: true });
+		expect(onRestart).not.toHaveBeenCalled();
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(onRestart).toHaveBeenCalledTimes(1);
+	});
+
+	it("DELETE /api/sessions requires a path", async () => {
+		const deleteSession = vi.fn(async () => ({ ok: true }));
+		const { base } = await startServer({ deleteSession });
+
+		const missing = await fetch(`${base}/api/sessions`, { method: "DELETE" });
+		expect(missing.status).toBe(400);
+		await expect(missing.json()).resolves.toEqual({ error: "path is required" });
+
+		const empty = await fetch(`${base}/api/sessions`, {
+			method: "DELETE",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: "" }),
+		});
+		expect(empty.status).toBe(400);
+		await expect(empty.json()).resolves.toEqual({ error: "path is required" });
+		expect(deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("DELETE /api/sessions forwards valid paths to deleteSession", async () => {
+		const deleteSession = vi.fn(async () => ({ method: "trash", path: "/sessions/one.jsonl" }));
+		const { base } = await startServer({ deleteSession });
+
+		const res = await fetch(`${base}/api/sessions`, {
+			method: "DELETE",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: "/sessions/one.jsonl" }),
+		});
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({ method: "trash", path: "/sessions/one.jsonl" });
+		expect(deleteSession).toHaveBeenCalledWith("/sessions/one.jsonl");
 	});
 });
 

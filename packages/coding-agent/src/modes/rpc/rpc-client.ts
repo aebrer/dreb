@@ -87,6 +87,12 @@ export interface ModelInfo {
  */
 export type RpcEventListener = (event: AgentSessionEvent) => void;
 
+export type RpcExitInfo =
+	| { code: number | null; signal: NodeJS.Signals | null; error?: undefined }
+	| { code?: undefined; signal?: undefined; error: Error };
+
+export type RpcExitListener = (info: RpcExitInfo) => void;
+
 // ============================================================================
 // RPC Client
 // ============================================================================
@@ -95,6 +101,7 @@ export class RpcClient {
 	private process: ChildProcess | null = null;
 	private stopReadingStdout: (() => void) | null = null;
 	private eventListeners: RpcEventListener[] = [];
+	private exitListeners = new Set<RpcExitListener>();
 	private pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
 		new Map();
 	private requestId = 0;
@@ -150,6 +157,7 @@ export class RpcClient {
 			// Guard: skip if this handler belongs to an old, already-stopped process
 			if (this.process !== procRef) return;
 			this.failPendingRequests(`RPC process exited with code ${code}, signal ${signal}`);
+			this.notifyExitListeners({ code, signal });
 		});
 
 		// Spawn failures surface asynchronously as an 'error' event rather than a
@@ -163,6 +171,7 @@ export class RpcClient {
 			if (this.process !== procRef) return;
 			this.spawnError = err;
 			this.failPendingRequests(`RPC process failed to spawn: ${err.message}`);
+			this.notifyExitListeners({ error: err });
 		});
 
 		// Set up strict JSONL reader for stdout.
@@ -247,6 +256,16 @@ export class RpcClient {
 			if (index !== -1) {
 				this.eventListeners.splice(index, 1);
 			}
+		};
+	}
+
+	/**
+	 * Subscribe to child process death/spawn-failure notifications.
+	 */
+	onExit(listener: RpcExitListener): () => void {
+		this.exitListeners.add(listener);
+		return () => {
+			this.exitListeners.delete(listener);
 		};
 	}
 
@@ -754,6 +773,12 @@ export class RpcClient {
 			pending.reject(new Error(message));
 		}
 		this.pendingRequests.clear();
+	}
+
+	private notifyExitListeners(info: RpcExitInfo): void {
+		for (const listener of this.exitListeners) {
+			listener(info);
+		}
 	}
 
 	private handleLine(line: string): void {

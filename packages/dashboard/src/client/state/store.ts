@@ -76,13 +76,17 @@ export function createAppStore() {
 		window.location.hash = routeToHash(next);
 	}
 
+	function currentRevision(key: string): number {
+		return revisions[key] ?? 0;
+	}
+
 	function syncSession(key: string): void {
 		const session = reducerState.sessions.get(key);
 		if (session) {
 			// Clone: reconcile diffs the plain tree into the store so Solid updates
 			// only the changed paths.
 			setSessions(key, reconcile(structuredClone(session)));
-			setRevisions(key, (revisions[key] ?? 0) + 1);
+			setRevisions(key, currentRevision(key) + 1);
 		}
 	}
 
@@ -180,41 +184,44 @@ export function createAppStore() {
 	 * keeps running server-side).
 	 */
 	async function hydrateSession(key: string): Promise<void> {
+		const hydrationRevision = currentRevision(key);
 		const [messagesResult, agentsResult, runtimeResult] = await Promise.allSettled([
 			api.messages(key),
 			api.backgroundAgents(key),
 			api.runtime(key),
 		] as const);
-		let session = reducerState.sessions.get(key);
-		if (!session) {
-			session = createSessionViewState(key);
-			reducerState.sessions.set(key, session);
-		}
-		if (messagesResult.status === "fulfilled") {
-			session.entries = messagesToEntries(messagesResult.value.messages as any[]);
-		}
-		if (agentsResult.status === "fulfilled") {
-			for (const agent of agentsResult.value.agents) {
-				session.backgroundAgents[agent.agentId] = agent;
+		if (currentRevision(key) === hydrationRevision) {
+			let session = reducerState.sessions.get(key);
+			if (!session) {
+				session = createSessionViewState(key);
+				reducerState.sessions.set(key, session);
 			}
-		}
-		// Seed live turn state from the runtime so a mid-turn browser refresh
-		// still shows stop/working UI. Without this, `streaming` only becomes
-		// true via a future agent_start SSE event — after a refresh that event
-		// is in the past, leaving the stop button and status line missing while
-		// the agent is visibly running.
-		if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
-			const state = runtimeResult.value.state;
-			session.streaming = state.isStreaming;
-			session.compacting = state.isCompacting;
-			if (state.isStreaming && !session.workingSince) {
-				session.workingSince = Date.now();
-				session.workingText = session.workingText ?? "working";
-			} else if (!state.isStreaming) {
-				session.workingSince = undefined;
+			if (messagesResult.status === "fulfilled") {
+				session.entries = messagesToEntries(messagesResult.value.messages as any[]);
 			}
+			if (agentsResult.status === "fulfilled") {
+				for (const agent of agentsResult.value.agents) {
+					session.backgroundAgents[agent.agentId] = agent;
+				}
+			}
+			// Seed live turn state from the runtime so a mid-turn browser refresh
+			// still shows stop/working UI. Without this, `streaming` only becomes
+			// true via a future agent_start SSE event — after a refresh that event
+			// is in the past, leaving the stop button and status line missing while
+			// the agent is visibly running.
+			if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
+				const state = runtimeResult.value.state;
+				session.streaming = state.isStreaming;
+				session.compacting = state.isCompacting;
+				if (state.isStreaming && !session.workingSince) {
+					session.workingSince = Date.now();
+					session.workingText = session.workingText ?? "working";
+				} else if (!state.isStreaming) {
+					session.workingSince = undefined;
+				}
+			}
+			syncSession(key);
 		}
-		syncSession(key);
 		// Loud failure: apply what succeeded above, then surface the error.
 		const failed = [messagesResult, agentsResult, runtimeResult].find((result) => result.status === "rejected");
 		if (failed?.status === "rejected") {
@@ -228,7 +235,9 @@ export function createAppStore() {
 	 * when they streamed — after a reload this is the only data source.
 	 */
 	async function hydrateSubagent(key: string, agentId: string): Promise<void> {
+		const hydrationRevision = currentRevision(key);
 		const { agent, messages } = await api.subagentMessages(key, agentId);
+		if (currentRevision(key) !== hydrationRevision) return;
 		let session = reducerState.sessions.get(key);
 		if (!session) {
 			session = createSessionViewState(key);

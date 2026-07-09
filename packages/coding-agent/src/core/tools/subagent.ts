@@ -493,39 +493,107 @@ async function spawnSubagent(
 // Session file discovery and cleanup
 // ---------------------------------------------------------------------------
 
+interface SessionFileCandidate {
+	path: string;
+	mtime: number;
+}
+
+const STEP_SESSION_DIR_RE = /^step-(\d+)$/;
+
+function findNewestJsonlFileInDir(dir: string): SessionFileCandidate | undefined {
+	let best: SessionFileCandidate | undefined;
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		if (!entry.name.endsWith(".jsonl")) continue;
+		if (entry.isDirectory()) continue;
+		const fullPath = join(dir, entry.name);
+		try {
+			const mtime = statSync(fullPath).mtime.getTime();
+			if (!best || mtime > best.mtime) best = { path: fullPath, mtime };
+		} catch (err) {
+			if (isExpectedFilesystemError(err)) continue;
+			throw err;
+		}
+	}
+	return best;
+}
+
+function discoverStepSessionFileCandidates(sessionDir: string): SessionFileCandidate[] {
+	const steps: Array<{ name: string; index: number }> = [];
+	for (const entry of readdirSync(sessionDir, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const match = STEP_SESSION_DIR_RE.exec(entry.name);
+		if (!match) continue;
+		steps.push({ name: entry.name, index: Number(match[1]) });
+	}
+	steps.sort((a, b) => a.index - b.index || a.name.localeCompare(b.name));
+
+	const files: SessionFileCandidate[] = [];
+	for (const step of steps) {
+		try {
+			const candidate = findNewestJsonlFileInDir(join(sessionDir, step.name));
+			if (candidate) files.push(candidate);
+		} catch (err) {
+			if (isExpectedFilesystemError(err)) continue;
+			throw err;
+		}
+	}
+	return files;
+}
+
+/**
+ * Find session JSONL files for a subagent session directory.
+ *
+ * Normal subagents write one .jsonl directly under sessionDir, so this returns
+ * the most recently modified flat file. Chain-mode subagents register the chain
+ * root as sessionDir but write each step under step-N/, so when no flat file is
+ * present this recurses one level into step-* directories and returns one file
+ * per step in numeric step order.
+ */
+export function discoverSessionFiles(sessionDir: string, agentName: string): string[] {
+	try {
+		if (!existsSync(sessionDir)) return [];
+		const flatFile = findNewestJsonlFileInDir(sessionDir);
+		if (flatFile) {
+			log.debug(`[subagent] session file: ${flatFile.path} (agent=${agentName})`);
+			return [flatFile.path];
+		}
+
+		const stepFiles = discoverStepSessionFileCandidates(sessionDir);
+		if (stepFiles.length > 0) {
+			log.debug(
+				`[subagent] chain session files: ${stepFiles.map((file) => file.path).join(", ")} (agent=${agentName})`,
+			);
+			return stepFiles.map((file) => file.path);
+		}
+	} catch (err) {
+		if (!isExpectedFilesystemError(err)) throw err;
+		log.warn(
+			`[subagent] failed to discover session file (agent=${agentName}): ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
+	return [];
+}
+
 /**
  * Find the most recently modified .jsonl file in a session directory.
  * Returns the full path, or undefined if no session file was written
  * (e.g., subagent was killed before the first assistant message).
  */
 export function discoverSessionFile(sessionDir: string, agentName: string): string | undefined {
-	try {
-		if (!existsSync(sessionDir)) return undefined;
-		const files = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
-		if (files.length === 0) return undefined;
-		// Pick the most recently modified file (typically there's only one per subagent dir)
-		let best: { path: string; mtime: number } | undefined;
-		for (const f of files) {
-			try {
-				const fullPath = join(sessionDir, f);
-				const mtime = statSync(fullPath).mtime.getTime();
-				if (!best || mtime > best.mtime) {
-					best = { path: fullPath, mtime };
-				}
-			} catch {
-				// File disappeared or is a bad symlink — skip it, keep any valid candidate
-			}
+	const files = discoverSessionFiles(sessionDir, agentName);
+	if (files.length <= 1) return files[0];
+
+	let best: SessionFileCandidate | undefined;
+	for (const file of files) {
+		try {
+			const candidate = { path: file, mtime: statSync(file).mtime.getTime() };
+			if (!best || candidate.mtime > best.mtime) best = candidate;
+		} catch (err) {
+			if (isExpectedFilesystemError(err)) continue;
+			throw err;
 		}
-		if (best) {
-			log.debug(`[subagent] session file: ${best.path} (agent=${agentName})`);
-			return best.path;
-		}
-	} catch (err) {
-		log.warn(
-			`[subagent] failed to discover session file (agent=${agentName}): ${err instanceof Error ? err.message : String(err)}`,
-		);
 	}
-	return undefined;
+	return best?.path;
 }
 
 // ---------------------------------------------------------------------------
@@ -1324,16 +1392,25 @@ export function rehydrateBackgroundAgentsFromDisk(
 		if (!entry.isDirectory()) continue;
 
 		const sessionDir = join(subagentSessionsBase, entry.name);
-		const sessionFile = discoverSessionFile(sessionDir, entry.name);
-		if (!sessionFile) continue;
+		const sessionFiles = discoverSessionFiles(sessionDir, entry.name);
+		if (sessionFiles.length === 0) continue;
 
-		const header = parseSessionHeader(sessionFile);
-		if (header?.type !== "session" || typeof header.parentSession !== "string") continue;
-		if (!parentSessionMatches(header.parentSession, parentSessionFile)) continue;
+		let sessionFile: string | undefined;
+		let header: Record<string, unknown> | undefined;
+		for (const candidateFile of sessionFiles) {
+			const candidateHeader = parseSessionHeader(candidateFile);
+			if (candidateHeader?.type !== "session" || typeof candidateHeader.parentSession !== "string") continue;
+			if (!parentSessionMatches(candidateHeader.parentSession, parentSessionFile)) continue;
+			sessionFile = candidateFile;
+			header = candidateHeader;
+			break;
+		}
+		if (!sessionFile || !header) continue;
 
 		const agentId = `${REHYDRATED_AGENT_ID_PREFIX}${entry.name}`;
 		if (backgroundAgentRegistry.has(agentId) || hasRegisteredSession(sessionDir, sessionFile)) continue;
 
+		const statusFile = sessionFiles[sessionFiles.length - 1] ?? sessionFile;
 		const agentType = typeof header.agentType === "string" && header.agentType.trim() ? header.agentType : "agent";
 		const taskSummary = findFirstUserMessageSummary(sessionFile) ?? `${agentType} (${entry.name})`;
 		backgroundAgentRegistry.set(agentId, {
@@ -1341,7 +1418,7 @@ export function rehydrateBackgroundAgentsFromDisk(
 			agentType,
 			taskSummary,
 			startedAt: parseStartedAt(header, sessionFile),
-			status: inferCompletedSessionStatus(sessionFile),
+			status: inferCompletedSessionStatus(statusFile),
 			sessionDir,
 			sessionFile,
 			cwd: typeof header.cwd === "string" ? header.cwd : undefined,

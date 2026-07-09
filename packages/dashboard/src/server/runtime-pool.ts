@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RpcClient } from "@dreb/coding-agent/rpc";
+import { RpcClient, type RpcExitInfo } from "@dreb/coding-agent/rpc";
 import type {
 	BackgroundAgentDto,
 	RuntimeInfoDto,
@@ -22,6 +22,11 @@ import type {
 export function resolveDrebCliPath(): string {
 	const resolved = import.meta.resolve("@dreb/coding-agent");
 	return join(dirname(fileURLToPath(resolved)), "cli.js");
+}
+
+function formatRpcExit(info: RpcExitInfo): string {
+	if (info.error) return `RPC process failed: ${info.error.message}`;
+	return `RPC process exited (code ${info.code}, signal ${info.signal})`;
 }
 
 export type RuntimeEventListener = (key: string, event: Record<string, unknown>) => void;
@@ -66,6 +71,10 @@ export class RuntimePool {
 	 */
 	private readonly utilities = new Map<string, RuntimeHandle>();
 	private readonly utilityPromises = new Map<string, Promise<RuntimeHandle>>();
+	private readonly starting = new Set<RuntimeHandle>();
+	private readonly startupPromises = new Set<Promise<unknown>>();
+	private readonly exitedHandles = new WeakSet<RuntimeHandle>();
+	private closing = false;
 
 	constructor(options: RuntimePoolOptions = {}) {
 		this.cliPath = options.cliPath ?? resolveDrebCliPath();
@@ -94,6 +103,7 @@ export class RuntimePool {
 
 	/** Spawn a new runtime in `cwd`, optionally opening an existing session file. */
 	async create(cwd: string, sessionPath?: string): Promise<RuntimeHandle> {
+		if (this.closing) throw new Error("Runtime pool is closing");
 		const key = randomBytes(6).toString("hex");
 		const args = ["--ui", "dashboard", ...this.baseArgs];
 		if (sessionPath) args.push("--session", sessionPath);
@@ -108,10 +118,36 @@ export class RuntimePool {
 			backgroundAgents: new Map(),
 		};
 		client.onEvent((event) => this.handleEvent(handle, event as unknown as Record<string, unknown>));
-		await client.start();
-		await this.seedBackgroundAgents(handle);
-		this.runtimes.set(key, handle);
-		return handle;
+		client.onExit((info) => this.handleRuntimeExit(handle, info));
+
+		const startup = this.startSessionRuntime(handle);
+		this.startupPromises.add(startup);
+		try {
+			return await startup;
+		} finally {
+			this.startupPromises.delete(startup);
+		}
+	}
+
+	private async startSessionRuntime(handle: RuntimeHandle): Promise<RuntimeHandle> {
+		this.starting.add(handle);
+		try {
+			if (this.closing) throw new Error("Runtime pool is closing");
+			await handle.client.start();
+			if (this.closing) {
+				await handle.client.stop();
+				throw new Error("Runtime pool is closing");
+			}
+			await this.seedBackgroundAgents(handle);
+			if (this.closing) {
+				await handle.client.stop();
+				throw new Error("Runtime pool is closing");
+			}
+			this.runtimes.set(handle.key, handle);
+			return handle;
+		} finally {
+			this.starting.delete(handle);
+		}
 	}
 
 	/** Stop a runtime and remove it from the pool. */
@@ -130,42 +166,84 @@ export class RuntimePool {
 	 * with zero sessions open, instead of 503-ing.
 	 */
 	async ensureUtilityRuntime(cwd = homedir()): Promise<RuntimeHandle> {
+		if (this.closing) throw new Error("Runtime pool is closing");
 		const existing = this.utilities.get(cwd);
 		if (existing) return existing;
 		let promise = this.utilityPromises.get(cwd);
 		if (!promise) {
-			promise = (async () => {
-				const args = ["--ui", "dashboard", ...this.baseArgs];
-				const client = this.clientFactory({ cliPath: this.cliPath, cwd, args });
-				const handle: RuntimeHandle = {
-					key: `utility:${cwd}`,
-					cwd,
-					client,
-					createdAt: Date.now(),
-					lastActivity: Date.now(),
-					attention: new Map(),
-					backgroundAgents: new Map(),
-				};
-				await client.start();
-				this.utilities.set(cwd, handle);
-				return handle;
-			})().catch((err) => {
-				// Allow a retry on the next request instead of caching the failure.
-				this.utilityPromises.delete(cwd);
-				throw err;
-			});
+			const args = ["--ui", "dashboard", ...this.baseArgs];
+			const client = this.clientFactory({ cliPath: this.cliPath, cwd, args });
+			const handle: RuntimeHandle = {
+				key: `utility:${cwd}`,
+				cwd,
+				client,
+				createdAt: Date.now(),
+				lastActivity: Date.now(),
+				attention: new Map(),
+				backgroundAgents: new Map(),
+			};
+			const startup = this.startUtilityRuntime(cwd, handle);
+			this.startupPromises.add(startup);
+			promise = startup
+				.catch((err) => {
+					// Allow a retry on the next request instead of caching the failure.
+					this.utilityPromises.delete(cwd);
+					throw err;
+				})
+				.finally(() => {
+					this.startupPromises.delete(startup);
+				});
 			this.utilityPromises.set(cwd, promise);
 		}
 		return promise;
 	}
 
+	private async startUtilityRuntime(cwd: string, handle: RuntimeHandle): Promise<RuntimeHandle> {
+		this.starting.add(handle);
+		try {
+			if (this.closing) throw new Error("Runtime pool is closing");
+			await handle.client.start();
+			if (this.closing) {
+				await handle.client.stop();
+				throw new Error("Runtime pool is closing");
+			}
+			this.utilities.set(cwd, handle);
+			return handle;
+		} finally {
+			this.starting.delete(handle);
+		}
+	}
+
 	async stopAll(): Promise<void> {
-		const keys = [...this.runtimes.keys()];
-		await Promise.allSettled(keys.map((k) => this.stop(k)));
-		const utilities = [...this.utilities.values()];
+		this.closing = true;
+		const handles = new Set<RuntimeHandle>([
+			...this.runtimes.values(),
+			...this.utilities.values(),
+			...this.starting.values(),
+		]);
+		const startupPromises = new Set<Promise<unknown>>([...this.startupPromises, ...this.utilityPromises.values()]);
+		this.runtimes.clear();
 		this.utilities.clear();
 		this.utilityPromises.clear();
-		await Promise.allSettled(utilities.map((utility) => utility.client.stop()));
+		await Promise.allSettled([...handles].map((handle) => handle.client.stop()));
+		await Promise.allSettled([...startupPromises]);
+	}
+
+	private handleRuntimeExit(handle: RuntimeHandle, info: RpcExitInfo): void {
+		if (this.closing || this.exitedHandles.has(handle) || !this.isLiveHandle(handle)) return;
+		this.exitedHandles.add(handle);
+		const message = formatRpcExit(info);
+		this.recordRuntimeError(handle, message);
+		this.logger(`runtime ${handle.key} ${message}`);
+		this.handleEvent(handle, { type: "agent_end", messages: [], aborted: true, errorMessage: message });
+	}
+
+	private isLiveHandle(handle: RuntimeHandle): boolean {
+		return (
+			this.runtimes.get(handle.key) === handle ||
+			this.utilities.get(handle.cwd) === handle ||
+			this.starting.has(handle)
+		);
 	}
 
 	private handleEvent(handle: RuntimeHandle, event: Record<string, unknown>): void {

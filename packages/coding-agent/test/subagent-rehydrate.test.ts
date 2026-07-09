@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
+	discoverSessionFile,
 	getBackgroundAgents,
 	pruneBackgroundAgents,
 	rehydrateBackgroundAgentsFromDisk,
@@ -83,6 +84,76 @@ describe("rehydrateBackgroundAgentsFromDisk", () => {
 			status: "completed",
 			sessionDir: childDir,
 			sessionFile: childSessionFile,
+			cwd: tempDir,
+		});
+	});
+
+	test("registers a chain session from step subdirectories and uses the last step status", () => {
+		const chainDir = join(subagentSessionsBase, "chain-abc123");
+		const step1Dir = join(chainDir, "step-1");
+		const step2Dir = join(chainDir, "step-2");
+		mkdirSync(step1Dir, { recursive: true });
+		mkdirSync(step2Dir, { recursive: true });
+		const step1SessionFile = join(step1Dir, "step-1.jsonl");
+		const step2SessionFile = join(step2Dir, "step-2.jsonl");
+		writeJsonl(step1SessionFile, [
+			{
+				type: "session",
+				version: 3,
+				id: "chain-abc123-step-1",
+				timestamp: "2026-01-02T03:05:00.000Z",
+				cwd: tempDir,
+				parentSession: parentSessionFile,
+				agentType: "Explore",
+			},
+			{
+				type: "message",
+				id: "user-1",
+				parentId: null,
+				timestamp: "2026-01-02T03:05:01.000Z",
+				message: { role: "user", content: "Run chain step one" },
+			},
+			{
+				type: "message",
+				id: "assistant-1",
+				parentId: "user-1",
+				timestamp: "2026-01-02T03:05:02.000Z",
+				message: { role: "assistant", content: [{ type: "text", text: "Step one done" }], stopReason: "stop" },
+			},
+		]);
+		writeJsonl(step2SessionFile, [
+			{
+				type: "session",
+				version: 3,
+				id: "chain-abc123-step-2",
+				timestamp: "2026-01-02T03:06:00.000Z",
+				cwd: tempDir,
+				parentSession: parentSessionFile,
+				agentType: "Review",
+			},
+			{
+				type: "message",
+				id: "assistant-2",
+				parentId: null,
+				timestamp: "2026-01-02T03:06:02.000Z",
+				message: { role: "assistant", content: [{ type: "text", text: "Step two failed" }], stopReason: "error" },
+			},
+		]);
+
+		expect(discoverSessionFile(chainDir, "chain-abc123")).toBeDefined();
+
+		const count = rehydrateBackgroundAgentsFromDisk(parentSessionFile, subagentSessionsBase);
+
+		expect(count).toBe(1);
+		const agent = getBackgroundAgents().find((candidate) => candidate.sessionDir === chainDir);
+		expect(agent).toBeDefined();
+		expect(agent).toMatchObject({
+			agentId: "rehydrated-chain-abc123",
+			agentType: "Explore",
+			taskSummary: "Run chain step one",
+			status: "failed",
+			sessionDir: chainDir,
+			sessionFile: step1SessionFile,
 			cwd: tempDir,
 		});
 	});
