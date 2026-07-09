@@ -96,6 +96,62 @@ afterEach(() => {
 	vi.clearAllMocks();
 });
 
+describe("app store SSE sync", () => {
+	it("creates per-key session state lazily and routes events", async () => {
+		const store = await makeStartedStore();
+
+		emit("a", { type: "agent_start" });
+		emit("b", { type: "agent_start" });
+		emit("a", { type: "agent_end", messages: [] });
+
+		expect(store.sessions.a?.streaming).toBe(false);
+		expect(store.sessions.b?.streaming).toBe(true);
+	});
+
+	it("dashboard_resync clears all session state (caller rehydrates)", async () => {
+		const store = await makeStartedStore();
+
+		emit("a", { type: "agent_start" });
+		expect(store.sessions.a).toBeDefined();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		expect(store.sessions.a).toBeUndefined();
+		expect(store.revisions.a).toBeUndefined();
+	});
+
+	it("applies streaming text deltas without replacing stable entry identities", async () => {
+		const store = await makeStartedStore();
+
+		emit("s1", { type: "agent_start" });
+		emit("s1", { type: "message_start", message: { role: "user", content: "hello" } });
+		emit("s1", { type: "message_update", assistantMessageEvent: { type: "text_start", contentIndex: 0 } });
+		emit("s1", {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "first" },
+		});
+		const session = store.sessions.s1;
+		if (!session) throw new Error("session was not created");
+		const entriesBefore = session.entries;
+		const userBefore = entriesBefore[0];
+		const assistantBefore = entriesBefore[1];
+		const revisionBefore = store.revisions.s1;
+
+		emit("s1", {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: " second" },
+		});
+
+		expect(store.sessions.s1?.entries).toBe(entriesBefore);
+		expect(store.sessions.s1?.entries[0]).toBe(userBefore);
+		expect(store.sessions.s1?.entries[1]).toBe(assistantBefore);
+		expect(store.sessions.s1?.entries[1]).toMatchObject({
+			kind: "assistant",
+			blocks: [{ kind: "text", text: "first second" }],
+		});
+		expect(store.revisions.s1).toBe((revisionBefore ?? 0) + 1);
+	});
+});
+
 describe("app store hydration", () => {
 	it("hydrates the initial session snapshot when no live revision changes", async () => {
 		vi.mocked(api.messages).mockResolvedValue({

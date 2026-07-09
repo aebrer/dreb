@@ -4,7 +4,9 @@
  * both empty state and populated state where meaningful (SPEC §9.11).
  */
 
+import { marked } from "marked";
 import { createSignal } from "solid-js";
+import { createStore } from "solid-js/store";
 import { render } from "solid-js/web/dist/web.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -131,7 +133,7 @@ vi.mock("../../src/client/api.js", () => ({
 }));
 
 import { api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
-import { Transcript } from "../../src/client/components/transcript.js";
+import { TRANSCRIPT_WINDOW_SIZE, Transcript, transcriptRenderItems } from "../../src/client/components/transcript.js";
 import { FilesScreen } from "../../src/client/screens/files.js";
 import { FleetScreen, fleetGroupKey } from "../../src/client/screens/fleet.js";
 import { PairingScreen } from "../../src/client/screens/pairing.js";
@@ -144,6 +146,7 @@ import {
 	createSessionViewState,
 	type SessionViewState,
 	type ToolEntry,
+	type TranscriptEntry,
 } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
 
@@ -168,6 +171,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.useRealTimers();
 	for (const dispose of disposers.splice(0)) dispose();
 	document.body.innerHTML = "";
 	window.location.hash = "#/";
@@ -319,6 +323,11 @@ function populatedSession(key: string): SessionViewState {
 		sessionDir: "/dir",
 	});
 	return state;
+}
+
+function setDetailsOpen(details: HTMLDetailsElement, open: boolean): void {
+	details.open = open;
+	details.dispatchEvent(new Event("toggle"));
 }
 
 function toolEntryFromEvents(params: {
@@ -804,6 +813,153 @@ describe("dashboard client regressions", () => {
 		expect(formatTokens(45000)).toBe("45k");
 		expect(formatTokens(1_200_000)).toBe("1.2M");
 		expect(formatTokens(12_000_000)).toBe("12M");
+	});
+
+	it("transcript render item wrappers stay stable for unchanged rows", () => {
+		const entries: Parameters<typeof transcriptRenderItems>[0] = [
+			{ kind: "user", text: "first prompt" },
+			{ kind: "assistant", blocks: [{ kind: "text", text: "I'll inspect" }], streaming: true },
+			{
+				kind: "tool",
+				toolCallId: "t1",
+				toolName: "read",
+				args: { path: "/x" },
+				status: "done",
+				resultText: "body",
+				startedAt: Date.now(),
+			},
+			{ kind: "user", text: "second prompt" },
+			{ kind: "assistant", blocks: [{ kind: "text", text: "working" }], streaming: true },
+		];
+		const firstItems = transcriptRenderItems(entries);
+
+		entries.push({
+			kind: "tool",
+			toolCallId: "t2",
+			toolName: "bash",
+			args: { command: "pwd" },
+			status: "running",
+			resultText: "",
+			startedAt: Date.now(),
+		});
+		const nextItems = transcriptRenderItems(entries, firstItems);
+
+		expect(nextItems).toHaveLength(firstItems.length);
+		expect(nextItems[0]).toBe(firstItems[0]);
+		expect(nextItems[1]).toBe(firstItems[1]);
+		expect(nextItems[2]).toBe(firstItems[2]);
+		expect(nextItems[3]).not.toBe(firstItems[3]);
+		expect(nextItems[3]).toMatchObject({ kind: "assistant-turn", entries: [entries[4], entries[5]] });
+	});
+
+	it("tool card bodies mount lazily and running tools stay mounted", () => {
+		const doneTool: ToolEntry = {
+			kind: "tool",
+			toolCallId: "search-done",
+			toolName: "web_search",
+			args: { query: "solid details lazy body" },
+			status: "done",
+			resultText: "finished result body",
+			startedAt: Date.now(),
+		};
+		const runningTool: ToolEntry = {
+			kind: "tool",
+			toolCallId: "search-running",
+			toolName: "web_search",
+			args: { query: "streaming" },
+			status: "running",
+			resultText: "partial result body",
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[doneTool, runningTool]} />);
+		const tools = el.querySelectorAll("details.tool") as NodeListOf<HTMLDetailsElement>;
+
+		expect(tools[0]?.open).toBe(false);
+		expect(tools[0]?.querySelector(".tool-result")).toBeNull();
+		expect(tools[1]?.open).toBe(true);
+		expect(tools[1]?.querySelector(".tool-result")?.textContent).toContain("partial result body");
+
+		setDetailsOpen(tools[0]!, true);
+		expect(tools[0]?.querySelector(".tool-result")?.textContent).toContain("finished result body");
+
+		setDetailsOpen(tools[0]!, false);
+		expect(tools[0]?.querySelector(".tool-result")).toBeNull();
+	});
+
+	it("transcript windows long histories with a show-earlier affordance", () => {
+		const longEntries: TranscriptEntry[] = Array.from({ length: TRANSCRIPT_WINDOW_SIZE + 1 }, (_, index) => ({
+			kind: "user",
+			text: `entry-${index.toString().padStart(3, "0")}`,
+		}));
+		const longEl = mount(() => <Transcript entries={longEntries} />);
+
+		expect(longEl.querySelectorAll(".entry.user")).toHaveLength(TRANSCRIPT_WINDOW_SIZE);
+		expect(longEl.textContent).not.toContain("entry-000");
+		expect(longEl.textContent).toContain(`entry-${TRANSCRIPT_WINDOW_SIZE.toString().padStart(3, "0")}`);
+		const showEarlier = longEl.querySelector(".transcript-window-control button") as HTMLButtonElement;
+		expect(showEarlier?.textContent).toContain("show earlier");
+
+		showEarlier.click();
+		expect(longEl.querySelectorAll(".entry.user")).toHaveLength(TRANSCRIPT_WINDOW_SIZE + 1);
+		expect(longEl.textContent).toContain("entry-000");
+		expect(longEl.querySelector(".transcript-window-control button")).toBeNull();
+
+		const shortEntries: TranscriptEntry[] = Array.from({ length: TRANSCRIPT_WINDOW_SIZE }, (_, index) => ({
+			kind: "user",
+			text: `short-${index.toString().padStart(3, "0")}`,
+		}));
+		const shortEl = mount(() => <Transcript entries={shortEntries} />);
+		expect(shortEl.querySelectorAll(".entry.user")).toHaveLength(TRANSCRIPT_WINDOW_SIZE);
+		expect(shortEl.querySelector(".transcript-window-control button")).toBeNull();
+	});
+
+	it("throttles streaming assistant markdown and flushes the final complete text", async () => {
+		vi.useFakeTimers();
+		const parseSpy = vi.spyOn(marked, "parse");
+		const [entries, setEntries] = createStore<TranscriptEntry[]>([
+			{ kind: "assistant", blocks: [{ kind: "text", text: "start" }], streaming: true },
+		]);
+		const el = mount(() => <Transcript entries={entries} />);
+		const afterMountCalls = parseSpy.mock.calls.length;
+
+		setEntries(0, "blocks", 0, "text", "start **one**");
+		setEntries(0, "blocks", 0, "text", "start **two**");
+		setEntries(0, "blocks", 0, "text", "start **three**");
+		expect(parseSpy.mock.calls.length).toBe(afterMountCalls);
+
+		await vi.advanceTimersByTimeAsync(149);
+		expect(parseSpy.mock.calls.length).toBe(afterMountCalls);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(parseSpy.mock.calls.length).toBe(afterMountCalls + 1);
+		expect(el.querySelector("strong")?.textContent).toBe("three");
+
+		setEntries(0, "blocks", 0, "text", "final **complete** text");
+		setEntries(0, "streaming", false);
+		expect(parseSpy.mock.calls.length).toBe(afterMountCalls + 2);
+		expect(el.querySelector("strong")?.textContent).toBe("complete");
+		expect(el.textContent).toContain("final complete text");
+	});
+
+	it("truncates oversized tool results until the user opts into full output", () => {
+		const fullText = `START-${"x".repeat(205 * 1024)}-TAIL`;
+		const read: ToolEntry = {
+			kind: "tool",
+			toolCallId: "read-big",
+			toolName: "read",
+			args: { path: "/tmp/big.txt" },
+			status: "done",
+			resultText: fullText,
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[read]} />);
+
+		expect(el.querySelector(".tool-output-truncated")?.textContent).toContain("output truncated");
+		expect(el.textContent).toContain("-TAIL");
+		expect(el.textContent).not.toContain("START-");
+
+		(el.querySelector(".tool-output-truncated button") as HTMLButtonElement).click();
+		expect(el.textContent).toContain("START-");
+		expect(el.querySelector(".tool-output-truncated")).toBeNull();
 	});
 
 	it("transcript groups assistant turns with following tool cards", () => {
@@ -2012,6 +2168,9 @@ describe("dashboard client regressions", () => {
 			/>
 		));
 
+		for (const details of el.querySelectorAll("details.tool") as NodeListOf<HTMLDetailsElement>) {
+			setDetailsOpen(details, true);
+		}
 		const inputs = el.querySelectorAll(".tool-input");
 		expect(inputs.length).toBe(2);
 		// Subagent task renders as markdown (list), in full.
@@ -2054,6 +2213,7 @@ describe("dashboard client regressions", () => {
 			/>
 		));
 
+		setDetailsOpen(el.querySelector("details.tool") as HTMLDetailsElement, true);
 		const results = el.querySelectorAll(".tool-result");
 		// Subagent completion report: markdown headers/bold, not <pre>.
 		expect(results[0]?.querySelector(".markdown-body h2")?.textContent).toBe("Agent: Explore");

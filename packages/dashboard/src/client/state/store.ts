@@ -1,16 +1,15 @@
 /**
  * App store — Solid reactive wrapper around the pure reducer. The reducer
- * mutates plain objects; this store clones the touched session into a signal
- * map so components re-render per-session, not per-token-globally.
+ * mutates plain objects; this store uses the Solid store as the source of
+ * truth and applies reducer mutations through produce for fine-grained updates.
  */
 
 import { createSignal } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import type { AuthStatusDto, EventEnvelope, FleetDto } from "../../shared/protocol.js";
 import { api, connectEvents } from "../api.js";
 import {
-	applyEnvelope,
-	createDashboardState,
+	applySessionEvent,
 	createSessionViewState,
 	dismissToast as dismissReducerToast,
 	messagesToEntries,
@@ -56,11 +55,10 @@ export function routeToHash(route: Route): string {
 }
 
 export function createAppStore() {
-	const reducerState = createDashboardState();
-
-	// sessions: reactive mirror of reducer session states (cloned on change)
+	// sessions: reactive source of truth; reducer mutations are applied through
+	// Solid's produce so text deltas touch only the mutated leaf.
 	const [sessions, setSessions] = createStore<Record<string, SessionViewState>>({});
-	// Per-session monotonic revision — bumped on EVERY synced envelope, including
+	// Per-session monotonic revision — bumped on EVERY applied envelope, including
 	// in-place streaming mutations that don't change entries.length. Autoscroll
 	// effects subscribe to this (entries.length alone misses text deltas).
 	const [revisions, setRevisions] = createStore<Record<string, number>>({});
@@ -80,14 +78,18 @@ export function createAppStore() {
 		return revisions[key] ?? 0;
 	}
 
-	function syncSession(key: string): void {
-		const session = reducerState.sessions.get(key);
-		if (session) {
-			// Clone: reconcile diffs the plain tree into the store so Solid updates
-			// only the changed paths.
-			setSessions(key, reconcile(structuredClone(session)));
-			setRevisions(key, currentRevision(key) + 1);
-		}
+	function bumpRevision(key: string): void {
+		setRevisions(key, currentRevision(key) + 1);
+	}
+
+	function ensureSession(key: string): void {
+		if (!sessions[key]) setSessions(key, createSessionViewState(key));
+	}
+
+	function mutateSession(key: string, mutator: (session: SessionViewState) => void): void {
+		ensureSession(key);
+		setSessions(key, produce(mutator));
+		bumpRevision(key);
 	}
 
 	async function refreshFleet(): Promise<void> {
@@ -101,12 +103,12 @@ export function createAppStore() {
 	}
 
 	function handleEnvelope(envelope: EventEnvelope): void {
-		const session = applyEnvelope(reducerState, envelope);
 		if (envelope.event?.type === "dashboard_resync") {
 			setSessions(reconcile({}));
 			setRevisions(reconcile({}));
+		} else if (envelope.key) {
+			mutateSession(envelope.key, (session) => applySessionEvent(session, envelope.event));
 		}
-		if (session) syncSession(session.key);
 		// Fleet-affecting events refresh the overview lazily.
 		const type = envelope.event?.type as string | undefined;
 		if (
@@ -168,10 +170,9 @@ export function createAppStore() {
 	}
 
 	function dismissToast(id: number): void {
-		for (const [key, session] of reducerState.sessions) {
+		for (const [key, session] of Object.entries(sessions)) {
 			if (!session.toasts.some((toast) => toast.id === id)) continue;
-			dismissReducerToast(session, id);
-			syncSession(key);
+			mutateSession(key, (draft) => dismissReducerToast(draft, id));
 			return;
 		}
 	}
@@ -191,36 +192,32 @@ export function createAppStore() {
 			api.runtime(key),
 		] as const);
 		if (currentRevision(key) === hydrationRevision) {
-			let session = reducerState.sessions.get(key);
-			if (!session) {
-				session = createSessionViewState(key);
-				reducerState.sessions.set(key, session);
-			}
-			if (messagesResult.status === "fulfilled") {
-				session.entries = messagesToEntries(messagesResult.value.messages as any[]);
-			}
-			if (agentsResult.status === "fulfilled") {
-				for (const agent of agentsResult.value.agents) {
-					session.backgroundAgents[agent.agentId] = agent;
+			mutateSession(key, (session) => {
+				if (messagesResult.status === "fulfilled") {
+					session.entries = messagesToEntries(messagesResult.value.messages as any[]);
 				}
-			}
-			// Seed live turn state from the runtime so a mid-turn browser refresh
-			// still shows stop/working UI. Without this, `streaming` only becomes
-			// true via a future agent_start SSE event — after a refresh that event
-			// is in the past, leaving the stop button and status line missing while
-			// the agent is visibly running.
-			if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
-				const state = runtimeResult.value.state;
-				session.streaming = state.isStreaming;
-				session.compacting = state.isCompacting;
-				if (state.isStreaming && !session.workingSince) {
-					session.workingSince = Date.now();
-					session.workingText = session.workingText ?? "working";
-				} else if (!state.isStreaming) {
-					session.workingSince = undefined;
+				if (agentsResult.status === "fulfilled") {
+					for (const agent of agentsResult.value.agents) {
+						session.backgroundAgents[agent.agentId] = agent;
+					}
 				}
-			}
-			syncSession(key);
+				// Seed live turn state from the runtime so a mid-turn browser refresh
+				// still shows stop/working UI. Without this, `streaming` only becomes
+				// true via a future agent_start SSE event — after a refresh that event
+				// is in the past, leaving the stop button and status line missing while
+				// the agent is visibly running.
+				if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
+					const state = runtimeResult.value.state;
+					session.streaming = state.isStreaming;
+					session.compacting = state.isCompacting;
+					if (state.isStreaming && !session.workingSince) {
+						session.workingSince = Date.now();
+						session.workingText = session.workingText ?? "working";
+					} else if (!state.isStreaming) {
+						session.workingSince = undefined;
+					}
+				}
+			});
 		}
 		// Loud failure: apply what succeeded above, then surface the error.
 		const failed = [messagesResult, agentsResult, runtimeResult].find((result) => result.status === "rejected");
@@ -238,21 +235,17 @@ export function createAppStore() {
 		const hydrationRevision = currentRevision(key);
 		const { agent, messages } = await api.subagentMessages(key, agentId);
 		if (currentRevision(key) !== hydrationRevision) return;
-		let session = reducerState.sessions.get(key);
-		if (!session) {
-			session = createSessionViewState(key);
-			reducerState.sessions.set(key, session);
-		}
-		session.backgroundAgents[agentId] = agent;
-		let sub = session.subagents[agentId];
-		if (!sub) {
-			sub = { agentId, entries: [], streaming: agent.status === "running" };
-			session.subagents[agentId] = sub;
-		}
-		// Never clobber richer live state with an empty disk snapshot.
-		if (messages.length > 0) sub.entries = messagesToEntries(messages as any[]);
-		sub.streaming = agent.status === "running";
-		syncSession(key);
+		mutateSession(key, (session) => {
+			session.backgroundAgents[agentId] = agent;
+			let sub = session.subagents[agentId];
+			if (!sub) {
+				sub = { agentId, entries: [], streaming: agent.status === "running" };
+				session.subagents[agentId] = sub;
+			}
+			// Never clobber richer live state with an empty disk snapshot.
+			if (messages.length > 0) sub.entries = messagesToEntries(messages as any[]);
+			sub.streaming = agent.status === "running";
+		});
 	}
 
 	return {

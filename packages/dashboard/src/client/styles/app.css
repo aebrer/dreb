@@ -755,6 +755,17 @@ details.thinking .thinking-body {
 	overflow-x: auto;
 }
 
+.tool-output-truncated,
+.transcript-window-control {
+	color: var(--muted);
+	font-size: var(--fs-small);
+	margin-bottom: var(--space-2);
+}
+
+.transcript-window-control {
+	text-align: center;
+}
+
 .tool .tool-command + .tool-result,
 .tool .tool-input + .tool-result {
 	border-top: none;

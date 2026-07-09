@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	applyEnvelope,
 	applySessionEvent,
-	createDashboardState,
 	createSessionViewState,
 	dismissToast,
 	messagesToEntries,
@@ -555,24 +553,5 @@ describe("applySessionEvent — subagent relay", () => {
 		applySessionEvent(state, { type: "background_agent_end", agentId: "bg1", agentType: "Explore", success: true });
 		expect(state.backgroundAgents.bg1?.status).toBe("completed");
 		expect(state.subagents.bg1?.streaming).toBe(false);
-	});
-});
-
-describe("applyEnvelope — multi-session dispatch", () => {
-	it("creates per-key session state lazily and routes events", () => {
-		const dashboard = createDashboardState();
-		applyEnvelope(dashboard, { seq: 1, key: "a", event: { type: "agent_start" } });
-		applyEnvelope(dashboard, { seq: 2, key: "b", event: { type: "agent_start" } });
-		applyEnvelope(dashboard, { seq: 3, key: "a", event: { type: "agent_end", messages: [] } });
-
-		expect(dashboard.sessions.get("a")?.streaming).toBe(false);
-		expect(dashboard.sessions.get("b")?.streaming).toBe(true);
-	});
-
-	it("dashboard_resync clears all session state (caller rehydrates)", () => {
-		const dashboard = createDashboardState();
-		applyEnvelope(dashboard, { seq: 1, key: "a", event: { type: "agent_start" } });
-		applyEnvelope(dashboard, { seq: 2, key: "", event: { type: "dashboard_resync", reason: "buffer_gap" } });
-		expect(dashboard.sessions.size).toBe(0);
 	});
 });

@@ -8,13 +8,71 @@
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { marked } from "marked";
-import { createEffect, createSignal, For, type JSX, Match, onCleanup, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, For, type JSX, Match, onCleanup, Show, Switch } from "solid-js";
 import { expandThinking, isToolAutoOpen } from "../state/preferences.js";
 import type { AgentResultEntry, AssistantEntry, ToolEntry, TranscriptEntry } from "../state/reducer.js";
+
+const STREAM_RENDER_THROTTLE_MS = 150;
+export const TRANSCRIPT_WINDOW_SIZE = 150;
+const LARGE_TOOL_OUTPUT_LIMIT = 200 * 1024;
 
 function renderMarkdown(text: string): string {
 	const html = marked.parse(text, { async: false }) as string;
 	return DOMPurify.sanitize(html);
+}
+
+function throttledString(
+	source: () => string,
+	active: () => boolean,
+	delayMs = STREAM_RENDER_THROTTLE_MS,
+): () => string {
+	const [value, setValue] = createSignal(source());
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let pending = source();
+
+	const clearTimer = () => {
+		if (timer) clearTimeout(timer);
+		timer = undefined;
+	};
+
+	createEffect(() => {
+		const next = source();
+		const shouldThrottle = active();
+		pending = next;
+		if (!shouldThrottle) {
+			clearTimer();
+			setValue(next);
+			return;
+		}
+		if (timer) return;
+		timer = setTimeout(() => {
+			timer = undefined;
+			setValue(pending);
+		}, delayMs);
+	});
+
+	onCleanup(clearTimer);
+	return value;
+}
+
+function formatOutputSize(bytes: number): string {
+	const kib = bytes / 1024;
+	if (kib < 1024) return `${Math.round(kib)} KB`;
+	return `${(kib / 1024).toFixed(1)} MB`;
+}
+
+function MarkdownBody(props: {
+	text: string;
+	class?: string;
+	classList?: Record<string, boolean | undefined>;
+	throttle?: boolean;
+}): JSX.Element {
+	const text = throttledString(
+		() => props.text,
+		() => props.throttle === true,
+	);
+	const html = createMemo(() => renderMarkdown(text()));
+	return <div class={props.class ?? "markdown-body"} classList={props.classList} innerHTML={html()} />;
 }
 
 function getLanguageFromPath(filePath: unknown): string | undefined {
@@ -67,12 +125,21 @@ function highlightedHtml(text: string, language: string | undefined): string | u
 	return DOMPurify.sanitize(hljs.highlight(text, { language, ignoreIllegals: true }).value);
 }
 
-function HighlightedPre(props: { text: string; language?: string; autoScroll?: boolean }): JSX.Element {
+function HighlightedPre(props: {
+	text: string;
+	language?: string;
+	autoScroll?: boolean;
+	throttle?: boolean;
+}): JSX.Element {
 	let preRef: HTMLPreElement | undefined;
 	let stickToBottom = true;
 	let userScrolling = false;
 	let userScrollTimer: ReturnType<typeof setTimeout> | undefined;
-	const html = () => highlightedHtml(props.text, props.language);
+	const text = throttledString(
+		() => props.text,
+		() => props.throttle === true,
+	);
+	const html = createMemo(() => highlightedHtml(text(), props.language));
 	const atBottom = () => !preRef || preRef.scrollTop + preRef.clientHeight >= preRef.scrollHeight - 24;
 	const releaseUserScrollSoon = () => {
 		if (userScrollTimer) clearTimeout(userScrollTimer);
@@ -90,7 +157,7 @@ function HighlightedPre(props: { text: string; language?: string; autoScroll?: b
 	};
 
 	createEffect(() => {
-		props.text;
+		text();
 		props.language;
 		if (!props.autoScroll || !stickToBottom || userScrolling) return;
 		scrollToBottomAfterLayout();
@@ -119,7 +186,7 @@ function HighlightedPre(props: { text: string; language?: string; autoScroll?: b
 				if (props.autoScroll) stickToBottom = atBottom();
 			}}
 		>
-			<Show when={html()} fallback={props.text}>
+			<Show when={html()} fallback={text()}>
 				{(safeHtml) => <code class="hljs" innerHTML={safeHtml()} />}
 			</Show>
 		</pre>
@@ -290,6 +357,47 @@ function editDiffText(entry: ToolEntry): string | undefined {
 	return typeof diff === "string" ? diff : undefined;
 }
 
+function ToolResultBody(props: {
+	text: string;
+	language?: string;
+	markdown: boolean;
+	autoScroll?: boolean;
+	throttle?: boolean;
+}): JSX.Element {
+	const [showFull, setShowFull] = createSignal(false);
+	const isOversized = () => props.text.length > LARGE_TOOL_OUTPUT_LIMIT;
+	createEffect(() => {
+		if (!isOversized()) setShowFull(false);
+	});
+	const visibleText = () => (isOversized() && !showFull() ? props.text.slice(-LARGE_TOOL_OUTPUT_LIMIT) : props.text);
+	return (
+		<>
+			<Show when={isOversized() && !showFull()}>
+				<div class="tool-output-truncated">
+					output truncated — showing last {formatOutputSize(LARGE_TOOL_OUTPUT_LIMIT)} of{" "}
+					{formatOutputSize(props.text.length)}.{" "}
+					<button type="button" class="entry-action" onClick={() => setShowFull(true)}>
+						show full ({formatOutputSize(props.text.length)})
+					</button>
+				</div>
+			</Show>
+			<Show
+				when={props.markdown}
+				fallback={
+					<HighlightedPre
+						text={visibleText()}
+						language={props.language}
+						autoScroll={props.autoScroll}
+						throttle={props.throttle}
+					/>
+				}
+			>
+				<MarkdownBody text={visibleText()} throttle={props.throttle} />
+			</Show>
+		</>
+	);
+}
+
 function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 	const status = () => toolStatus(props.entry);
 	const args = () => props.entry.args as Record<string, unknown> | undefined;
@@ -312,63 +420,123 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 	const bodyIsMarkdown = () => MARKDOWN_RESULT_TOOLS.has(props.entry.toolName) && props.entry.status !== "error";
 	const isBash = () => props.entry.toolName === "bash" || props.entry.toolName === "bash (user)";
 	const inputSections = () => toolInputSections(props.entry);
+	const autoOpen = () => isToolAutoOpen(props.entry.toolName);
+	const [open, setOpen] = createSignal(autoOpen() || props.entry.status === "running");
+	let wasRunning = props.entry.status === "running";
+	let userToggled = false;
+	let suppressToggle = false;
+	let suppressTimer: ReturnType<typeof setTimeout> | undefined;
+	const setProgrammaticOpen = (next: boolean) => {
+		if (open() === next) return;
+		suppressToggle = true;
+		setOpen(next);
+		if (suppressTimer) clearTimeout(suppressTimer);
+		suppressTimer = setTimeout(() => {
+			suppressToggle = false;
+			suppressTimer = undefined;
+		}, 0);
+	};
+	createEffect(() => {
+		const running = props.entry.status === "running";
+		const shouldAutoOpen = autoOpen();
+		if (running) {
+			userToggled = false;
+			setProgrammaticOpen(true);
+		} else if (wasRunning) {
+			userToggled = false;
+			setProgrammaticOpen(shouldAutoOpen);
+		} else if (!userToggled) {
+			setProgrammaticOpen(shouldAutoOpen);
+		}
+		wasRunning = running;
+	});
+	onCleanup(() => {
+		if (suppressTimer) clearTimeout(suppressTimer);
+	});
 	return (
-		<details class="tool" open={isToolAutoOpen(props.entry.toolName) || props.entry.status === "running"}>
+		<details
+			class="tool"
+			open={open()}
+			onToggle={(event) => {
+				const next = event.currentTarget.open;
+				if (suppressToggle) {
+					setOpen(next);
+					return;
+				}
+				if (props.entry.status === "running" && !next) {
+					suppressToggle = true;
+					event.currentTarget.open = true;
+					setOpen(true);
+					if (suppressTimer) clearTimeout(suppressTimer);
+					suppressTimer = setTimeout(() => {
+						suppressToggle = false;
+						suppressTimer = undefined;
+					}, 0);
+					return;
+				}
+				userToggled = true;
+				setOpen(next);
+			}}
+		>
 			<summary>
 				<span class="tool-name">{props.entry.toolName}</span>
 				<span class="tool-arg">{toolArgSummary(props.entry)}</span>
 				<span class={`tool-status ${status().cls}`}>{status().text}</span>
 			</summary>
-			<Show when={props.entry.toolName === "bash" || props.entry.toolName === "bash (user)"}>
-				<div class="tool-command">
-					<code>{String(args()?.command ?? "")}</code>
-				</div>
-			</Show>
-			<For each={inputSections()}>
-				{(section) => (
-					<div class="tool-input">
-						<span class="tool-input-label">{section.label}</span>
-						<Show
-							when={section.markdown}
-							fallback={<HighlightedPre text={section.text} language={section.language} />}
-						>
-							<div class="markdown-body" innerHTML={renderMarkdown(section.text)} />
-						</Show>
+			<Show when={open()}>
+				<Show when={props.entry.toolName === "bash" || props.entry.toolName === "bash (user)"}>
+					<div class="tool-command">
+						<code>{String(args()?.command ?? "")}</code>
 					</div>
-				)}
-			</For>
-			<Switch>
-				<Match when={suggestDetails()}>
-					{(details) => (
-						<div class="tool-result">
-							<Show when={details().summary}>
-								<div class="markdown-body" innerHTML={renderMarkdown(details().summary!)} />
+				</Show>
+				<For each={inputSections()}>
+					{(section) => (
+						<div class="tool-input">
+							<span class="tool-input-label">{section.label}</span>
+							<Show
+								when={section.markdown}
+								fallback={<HighlightedPre text={section.text} language={section.language} />}
+							>
+								<MarkdownBody text={section.text} />
 							</Show>
-							<p class="suggested-command">
-								→ <code>{details().suggestion}</code>
-							</p>
 						</div>
 					)}
-				</Match>
-				<Match when={diffText()}>
-					{(diff) => (
-						<div class="tool-result">
-							<DiffBody text={diff()} />
-						</div>
-					)}
-				</Match>
-				<Match when={bodyText()}>
-					<div class="tool-result">
-						<Switch
-							fallback={<HighlightedPre text={bodyText()} language={bodyLanguage()} autoScroll={isBash()} />}
-						>
-							<Match when={bodyIsMarkdown()}>
-								<div class="markdown-body" innerHTML={renderMarkdown(bodyText())} />
-							</Match>
-						</Switch>
-					</div>
-				</Match>
-			</Switch>
+				</For>
+				<Switch>
+					<Match when={suggestDetails()}>
+						{(details) => (
+							<div class="tool-result">
+								<Show when={details().summary}>
+									<MarkdownBody text={details().summary!} />
+								</Show>
+								<p class="suggested-command">
+									→ <code>{details().suggestion}</code>
+								</p>
+							</div>
+						)}
+					</Match>
+					<Match when={diffText()}>
+						{(diff) => (
+							<div class="tool-result">
+								<DiffBody text={diff()} />
+							</div>
+						)}
+					</Match>
+					<Match when={bodyText()}>
+						{(text) => (
+							<div class="tool-result">
+								<ToolResultBody
+									text={text()}
+									language={bodyLanguage()}
+									markdown={bodyIsMarkdown()}
+									autoScroll={isBash()}
+									throttle={props.entry.status === "running"}
+								/>
+							</div>
+						)}
+					</Match>
+				</Switch>
+			</Show>
 		</details>
 	);
 }
@@ -413,19 +581,23 @@ function AssistantBlockView(props: { entry: AssistantEntry; who: string }): JSX.
 						when={block.kind === "thinking"}
 						fallback={
 							<div class="entry-body">
-								<div
-									class="markdown-body"
+								<MarkdownBody
+									text={block.text}
 									classList={{
 										"streaming-cursor": props.entry.streaming && index() === props.entry.blocks.length - 1,
 									}}
-									innerHTML={renderMarkdown(block.text)}
+									throttle={props.entry.streaming}
 								/>
 							</div>
 						}
 					>
 						<details class="thinking" open={expandThinking()}>
 							<summary>thinking</summary>
-							<div class="thinking-body markdown-body" innerHTML={renderMarkdown(block.text)} />
+							<MarkdownBody
+								text={block.text}
+								class="thinking-body markdown-body"
+								throttle={props.entry.streaming}
+							/>
 						</details>
 					</Show>
 				)}
@@ -434,11 +606,32 @@ function AssistantBlockView(props: { entry: AssistantEntry; who: string }): JSX.
 	);
 }
 
-type TranscriptRenderItem =
+export type TranscriptRenderItem =
 	| { kind: "assistant-turn"; entries: Array<AssistantEntry | ToolEntry> }
 	| { kind: "entry"; entry: TranscriptEntry };
 
-function transcriptRenderItems(entries: TranscriptEntry[]): TranscriptRenderItem[] {
+function canReuseEntryItem(
+	item: TranscriptRenderItem | undefined,
+	entry: TranscriptEntry,
+): item is TranscriptRenderItem {
+	return item?.kind === "entry" && item.entry === entry;
+}
+
+function canReuseAssistantTurn(
+	item: TranscriptRenderItem | undefined,
+	entries: Array<AssistantEntry | ToolEntry>,
+): item is TranscriptRenderItem {
+	return (
+		item?.kind === "assistant-turn" &&
+		item.entries.length === entries.length &&
+		item.entries.every((entry, index) => entry === entries[index])
+	);
+}
+
+export function transcriptRenderItems(
+	entries: TranscriptEntry[],
+	previous: TranscriptRenderItem[] = [],
+): TranscriptRenderItem[] {
 	const items: TranscriptRenderItem[] = [];
 	let index = 0;
 	while (index < entries.length) {
@@ -450,10 +643,18 @@ function transcriptRenderItems(entries: TranscriptEntry[]): TranscriptRenderItem
 				turnEntries.push(entries[index] as ToolEntry);
 				index += 1;
 			}
-			items.push({ kind: "assistant-turn", entries: turnEntries });
+			const previousItem = previous[items.length];
+			items.push(
+				canReuseAssistantTurn(previousItem, turnEntries)
+					? previousItem
+					: { kind: "assistant-turn", entries: turnEntries },
+			);
 			continue;
 		}
-		if (entry) items.push({ kind: "entry", entry });
+		if (entry) {
+			const previousItem = previous[items.length];
+			items.push(canReuseEntryItem(previousItem, entry) ? previousItem : { kind: "entry", entry });
+		}
 		index += 1;
 	}
 	return items;
@@ -523,37 +724,74 @@ function AgentResultCard(props: { entry: AgentResultEntry }): JSX.Element {
 						<span class="agent-result-header">{props.entry.header}</span>
 					</Show>
 				</summary>
-				<div class="entry-body markdown-body" innerHTML={renderMarkdown(props.entry.text)} />
+				<MarkdownBody text={props.entry.text} class="entry-body markdown-body" />
 			</details>
 		</div>
 	);
 }
 
-export function Transcript(props: { entries: TranscriptEntry[]; who?: string; userLabel?: string }): JSX.Element {
+export function Transcript(props: {
+	entries: TranscriptEntry[];
+	who?: string;
+	userLabel?: string;
+	resetKey?: unknown;
+}): JSX.Element {
 	const who = () => props.who ?? "dreb";
 	const userLabel = () => props.userLabel ?? "you";
+	const renderItems = createMemo<TranscriptRenderItem[]>((previous) => transcriptRenderItems(props.entries, previous));
+	const [visibleCount, setVisibleCount] = createSignal(TRANSCRIPT_WINDOW_SIZE);
+	let lastResetKey: unknown;
+	createEffect(() => {
+		const resetKey = props.resetKey ?? props.entries;
+		if (resetKey === lastResetKey) return;
+		lastResetKey = resetKey;
+		setVisibleCount(TRANSCRIPT_WINDOW_SIZE);
+	});
+	const visibleItems = createMemo(() => {
+		const items = renderItems();
+		const count = visibleCount();
+		return items.length > count ? items.slice(-count) : items;
+	});
+	const hiddenCount = () => Math.max(0, renderItems().length - visibleItems().length);
 	return (
-		<For each={transcriptRenderItems(props.entries)}>
-			{(item) => (
-				<Switch>
-					<Match when={item.kind === "assistant-turn"}>
-						<div class="assistant-turn" data-testid="assistant-turn">
-							<For
-								each={(item as { kind: "assistant-turn"; entries: Array<AssistantEntry | ToolEntry> }).entries}
-							>
-								{(entry) => <EntryView entry={entry} who={who()} userLabel={userLabel()} />}
-							</For>
-						</div>
-					</Match>
-					<Match when={item.kind === "entry"}>
-						<EntryView
-							entry={(item as { kind: "entry"; entry: TranscriptEntry }).entry}
-							who={who()}
-							userLabel={userLabel()}
-						/>
-					</Match>
-				</Switch>
-			)}
-		</For>
+		<>
+			<Show when={hiddenCount() > 0}>
+				<div class="transcript-window-control">
+					<button
+						type="button"
+						class="btn btn-small"
+						onClick={() =>
+							setVisibleCount(Math.min(renderItems().length, visibleCount() + TRANSCRIPT_WINDOW_SIZE))
+						}
+					>
+						show earlier {Math.min(TRANSCRIPT_WINDOW_SIZE, hiddenCount())} ({hiddenCount()} hidden)
+					</button>
+				</div>
+			</Show>
+			<For each={visibleItems()}>
+				{(item) => (
+					<Switch>
+						<Match when={item.kind === "assistant-turn"}>
+							<div class="assistant-turn" data-testid="assistant-turn">
+								<For
+									each={
+										(item as { kind: "assistant-turn"; entries: Array<AssistantEntry | ToolEntry> }).entries
+									}
+								>
+									{(entry) => <EntryView entry={entry} who={who()} userLabel={userLabel()} />}
+								</For>
+							</div>
+						</Match>
+						<Match when={item.kind === "entry"}>
+							<EntryView
+								entry={(item as { kind: "entry"; entry: TranscriptEntry }).entry}
+								who={who()}
+								userLabel={userLabel()}
+							/>
+						</Match>
+					</Switch>
+				)}
+			</For>
+		</>
 	);
 }

@@ -1,14 +1,14 @@
 /**
- * Event reducer — pure TypeScript state machine turning the SSE envelope
- * stream into per-session render state. No DOM, no framework: unit-testable in
- * plain node. The Solid layer wraps this in a store and re-renders from the
- * mutation callbacks.
+ * Event reducer — pure TypeScript state machine turning agent session events
+ * into per-session render state. No DOM, no framework: unit-testable in
+ * plain node. The Solid layer (store.ts) owns the session map and applies
+ * these mutations through `produce` for fine-grained reactive updates.
  *
  * Transcript model (structural reference: core/export-html renderEntry):
  * entries are append-only; streaming updates mutate the last entry in place.
  */
 
-import type { BackgroundAgentDto, ContextUsageDto, EventEnvelope } from "../../shared/protocol.js";
+import type { BackgroundAgentDto, ContextUsageDto } from "../../shared/protocol.js";
 
 // ---------------------------------------------------------------------------
 // Transcript entry model
@@ -630,33 +630,4 @@ export function dismissToast(state: SessionViewState, id: number): void {
 export function resolveUiRequest(state: SessionViewState, id: string): void {
 	state.uiRequests = state.uiRequests.filter((r) => r.id !== id);
 	updateAttention(state);
-}
-
-// ---------------------------------------------------------------------------
-// Multi-session dashboard state
-// ---------------------------------------------------------------------------
-
-export interface DashboardState {
-	sessions: Map<string, SessionViewState>;
-}
-
-export function createDashboardState(): DashboardState {
-	return { sessions: new Map() };
-}
-
-/** Apply an SSE envelope; creates session state lazily. */
-export function applyEnvelope(state: DashboardState, envelope: EventEnvelope): SessionViewState | undefined {
-	if (envelope.event?.type === "dashboard_resync") {
-		// Buffer gap — caller must rehydrate from REST; reducer just clears.
-		state.sessions.clear();
-		return undefined;
-	}
-	if (!envelope.key) return undefined;
-	let session = state.sessions.get(envelope.key);
-	if (!session) {
-		session = createSessionViewState(envelope.key);
-		state.sessions.set(envelope.key, session);
-	}
-	applySessionEvent(session, envelope.event);
-	return session;
 }
