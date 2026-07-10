@@ -45,6 +45,13 @@ const JWT_CLAIM_PATH = "https://api.openai.com/auth" as const;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
+const CODEX_COMPATIBILITY_VERSION = "0.144.0";
+const RESPONSES_LITE_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
+const RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
+const RESPONSES_LITE_CLIENT_METADATA = "ws_request_header_x_openai_internal_codex_responses_lite";
+const CODEX_LITE_SESSION_TTL_MS = 30 * 60 * 1000;
+const CODEX_LITE_MAX_SESSIONS = 1000;
+const codexLiteSessionIds = new Map<string, { sessionId: string; lastUsedAt: number }>();
 
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 	"completed",
@@ -80,7 +87,7 @@ interface RequestBody {
 	tool_choice?: "auto";
 	parallel_tool_calls?: boolean;
 	temperature?: number;
-	reasoning?: { effort?: string; summary?: string };
+	reasoning?: { effort?: string; summary?: string; context?: "all_turns" };
 	text?: { verbosity?: string };
 	include?: string[];
 	prompt_cache_key?: string;
@@ -152,21 +159,42 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 
 			const accountId = extractAccountId(apiKey);
 			let body = buildRequestBody(model, context, options);
+			const websocketRequestId = options?.sessionId || createCodexRequestId();
+			const usesResponsesLite = isResponsesLiteModel(model.id);
+			const transport = options?.transport || "sse";
+			const liteSessionId = usesResponsesLite
+				? options?.sessionId
+					? getCodexLiteSessionId(options.sessionId)
+					: createUuidV7()
+				: undefined;
+
+			if (usesResponsesLite) {
+				body = prepareResponsesLiteRequest(body, liteSessionId!);
+			}
 			const nextBody = await options?.onPayload?.(body, model);
 			if (nextBody !== undefined) {
 				body = nextBody as RequestBody;
 			}
-			const websocketRequestId = options?.sessionId || createCodexRequestId();
-			const sseHeaders = buildSSEHeaders(model.headers, options?.headers, accountId, apiKey, options?.sessionId);
+			if (usesResponsesLite) {
+				validateResponsesLiteRequest(body, liteSessionId!);
+			}
+			const sseHeaders = buildSSEHeaders(
+				model.headers,
+				options?.headers,
+				accountId,
+				apiKey,
+				options?.sessionId,
+				liteSessionId,
+			);
 			const websocketHeaders = buildWebSocketHeaders(
 				model.headers,
 				options?.headers,
 				accountId,
 				apiKey,
 				websocketRequestId,
+				liteSessionId,
 			);
 			const bodyJson = JSON.stringify(body);
-			const transport = options?.transport || "sse";
 
 			if (transport !== "sse") {
 				let websocketStarted = false;
@@ -354,6 +382,158 @@ function buildRequestBody(
 	}
 
 	return body;
+}
+
+function isResponsesLiteModel(modelId: string): boolean {
+	const id = modelId.includes("/") ? modelId.split("/").pop()! : modelId;
+	return RESPONSES_LITE_MODELS.has(id);
+}
+
+function getCodexLiteSessionId(sourceSessionId: string): string {
+	const now = Date.now();
+	for (const [key, entry] of codexLiteSessionIds) {
+		if (now - entry.lastUsedAt > CODEX_LITE_SESSION_TTL_MS) {
+			codexLiteSessionIds.delete(key);
+		}
+	}
+
+	const existing = codexLiteSessionIds.get(sourceSessionId);
+	if (existing) {
+		existing.lastUsedAt = now;
+		codexLiteSessionIds.delete(sourceSessionId);
+		codexLiteSessionIds.set(sourceSessionId, existing);
+		return existing.sessionId;
+	}
+
+	while (codexLiteSessionIds.size >= CODEX_LITE_MAX_SESSIONS) {
+		const oldestKey = codexLiteSessionIds.keys().next().value;
+		if (oldestKey === undefined) break;
+		codexLiteSessionIds.delete(oldestKey);
+	}
+
+	const sessionId = createUuidV7();
+	codexLiteSessionIds.set(sourceSessionId, { sessionId, lastUsedAt: now });
+	return sessionId;
+}
+
+function createUuidV7(): string {
+	const timestamp = Date.now().toString(16).padStart(12, "0").slice(-12);
+	const random = new Uint8Array(10);
+	if (typeof globalThis.crypto?.getRandomValues === "function") {
+		globalThis.crypto.getRandomValues(random);
+	} else {
+		for (let index = 0; index < random.length; index++) {
+			random[index] = Math.floor(Math.random() * 256);
+		}
+	}
+	const randomHex = Array.from(random, (byte) => byte.toString(16).padStart(2, "0")).join("");
+	const variant = (8 + (Number.parseInt(randomHex[3]!, 16) & 0x3)).toString(16);
+	return `${timestamp.slice(0, 8)}-${timestamp.slice(8)}-7${randomHex.slice(0, 3)}-${variant}${randomHex.slice(4, 7)}-${randomHex.slice(7, 19)}`;
+}
+
+function prepareResponsesLiteRequest(body: RequestBody, sessionId: string): RequestBody {
+	if (!Array.isArray(body.input)) {
+		throw new Error("Responses Lite requires an input array");
+	}
+	if (body.tools !== undefined && !Array.isArray(body.tools)) {
+		throw new Error("Responses Lite requires a tools array");
+	}
+	if (body.instructions !== undefined && typeof body.instructions !== "string") {
+		throw new Error("Responses Lite requires string instructions");
+	}
+
+	const developerItems: unknown[] = [{ type: "additional_tools", role: "developer", tools: body.tools ?? [] }];
+	if (body.instructions) {
+		developerItems.push({
+			type: "message",
+			role: "developer",
+			content: [{ type: "input_text", text: body.instructions }],
+		});
+	}
+
+	const input = [...developerItems, ...(body.input ?? [])] as ResponseInput;
+	stripInputImageDetails(input);
+	const { tools: _tools, instructions: _instructions, reasoning, ...request } = body;
+	return {
+		...request,
+		input,
+		tool_choice: "auto",
+		parallel_tool_calls: false,
+		prompt_cache_key: sessionId,
+		reasoning: { ...reasoning, context: "all_turns" },
+	};
+}
+
+function validateResponsesLiteRequest(body: RequestBody, sessionId: string): void {
+	if (!body || typeof body !== "object" || Array.isArray(body)) {
+		throw new Error("Responses Lite onPayload must return an object payload");
+	}
+
+	const payload = body as Record<string, unknown>;
+	if (Object.hasOwn(payload, "instructions")) {
+		throw new Error("Responses Lite does not support top-level instructions");
+	}
+	if (Object.hasOwn(payload, "tools")) {
+		throw new Error("Responses Lite does not support top-level tools");
+	}
+	if (!Array.isArray(payload.input)) {
+		throw new Error("Responses Lite requires an input array");
+	}
+	if (payload.tool_choice !== "auto") {
+		throw new Error("Responses Lite requires tool_choice to be auto");
+	}
+	if (payload.parallel_tool_calls !== false) {
+		throw new Error("Responses Lite requires parallel_tool_calls to be false");
+	}
+	if (payload.prompt_cache_key !== sessionId) {
+		throw new Error("Responses Lite requires prompt_cache_key to match its session ID");
+	}
+	if (
+		!payload.reasoning ||
+		typeof payload.reasoning !== "object" ||
+		Array.isArray(payload.reasoning) ||
+		(payload.reasoning as Record<string, unknown>).context !== "all_turns"
+	) {
+		throw new Error("Responses Lite requires reasoning.context to be all_turns");
+	}
+
+	const additionalTools = payload.input[0];
+	if (
+		!additionalTools ||
+		typeof additionalTools !== "object" ||
+		Array.isArray(additionalTools) ||
+		(additionalTools as Record<string, unknown>).type !== "additional_tools" ||
+		(additionalTools as Record<string, unknown>).role !== "developer" ||
+		!Array.isArray((additionalTools as Record<string, unknown>).tools)
+	) {
+		throw new Error("Responses Lite requires a developer additional_tools input item");
+	}
+	if (containsInputImageDetail(payload.input)) {
+		throw new Error("Responses Lite does not support input_image detail");
+	}
+}
+
+function stripInputImageDetails(value: unknown): void {
+	if (Array.isArray(value)) {
+		for (const item of value) stripInputImageDetails(item);
+		return;
+	}
+	if (!value || typeof value !== "object") return;
+
+	const record = value as Record<string, unknown>;
+	if (record.type === "input_image") {
+		delete record.detail;
+	}
+	for (const nested of Object.values(record)) stripInputImageDetails(nested);
+}
+
+function containsInputImageDetail(value: unknown): boolean {
+	if (Array.isArray(value)) return value.some(containsInputImageDetail);
+	if (!value || typeof value !== "object") return false;
+
+	const record = value as Record<string, unknown>;
+	if (record.type === "input_image" && Object.hasOwn(record, "detail")) return true;
+	return Object.values(record).some(containsInputImageDetail);
 }
 
 function clampReasoningEffort(modelId: string, effort: string): string {
@@ -932,6 +1112,19 @@ function buildCachedWebSocketRequestBody(entry: CachedWebSocketConnection, body:
 	};
 }
 
+function addResponsesLiteWebSocketMetadata(body: RequestBody): RequestBody {
+	const clientMetadata = body.client_metadata;
+	return {
+		...body,
+		client_metadata: {
+			...(clientMetadata && typeof clientMetadata === "object" && !Array.isArray(clientMetadata)
+				? clientMetadata
+				: {}),
+			[RESPONSES_LITE_CLIENT_METADATA]: "true",
+		},
+	};
+}
+
 async function processWebSocketStream(
 	url: string,
 	body: RequestBody,
@@ -942,12 +1135,16 @@ async function processWebSocketStream(
 	onStart: () => void,
 	options?: OpenAICodexResponsesOptions,
 ): Promise<void> {
-	const { socket, entry, release } = await acquireWebSocket(url, headers, options?.sessionId, options?.signal);
+	const cacheSessionId = options?.sessionId
+		? `${isResponsesLiteModel(model.id) ? "responses-lite" : "legacy"}:${options.sessionId}`
+		: undefined;
+	const { socket, entry, release } = await acquireWebSocket(url, headers, cacheSessionId, options?.signal);
 	let keepConnection = true;
 	const fullBody = body;
 	const requestBody = entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
+	const wireBody = isResponsesLiteModel(model.id) ? addResponsesLiteWebSocketMetadata(requestBody) : requestBody;
 	try {
-		socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
+		socket.send(JSON.stringify({ type: "response.create", ...wireBody }));
 		onStart();
 		stream.push({ type: "start", partial: output });
 		await processResponsesStream(
@@ -1114,13 +1311,19 @@ function buildSSEHeaders(
 	accountId: string,
 	token: string,
 	sessionId?: string,
+	liteSessionId?: string,
 ): Headers {
 	const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
 	headers.set("OpenAI-Beta", "responses=experimental");
 	headers.set("accept", "text/event-stream");
 	headers.set("content-type", "application/json");
 
-	if (sessionId) {
+	if (liteSessionId) {
+		headers.set("session-id", liteSessionId);
+		headers.set("x-session-affinity", liteSessionId);
+		headers.set("version", CODEX_COMPATIBILITY_VERSION);
+		headers.set(RESPONSES_LITE_HEADER, "true");
+	} else if (sessionId) {
 		headers.set("session_id", sessionId);
 	}
 
@@ -1133,6 +1336,7 @@ function buildWebSocketHeaders(
 	accountId: string,
 	token: string,
 	requestId: string,
+	liteSessionId?: string,
 ): Headers {
 	const headers = buildBaseCodexHeaders(initHeaders, additionalHeaders, accountId, token);
 	headers.delete("accept");
@@ -1141,6 +1345,13 @@ function buildWebSocketHeaders(
 	headers.delete("openai-beta");
 	headers.set("OpenAI-Beta", OPENAI_BETA_RESPONSES_WEBSOCKETS);
 	headers.set("x-client-request-id", requestId);
-	headers.set("session_id", requestId);
+	if (liteSessionId) {
+		headers.set("session-id", liteSessionId);
+		headers.set("x-session-affinity", liteSessionId);
+		headers.set("version", CODEX_COMPATIBILITY_VERSION);
+		headers.set(RESPONSES_LITE_HEADER, "true");
+	} else {
+		headers.set("session_id", requestId);
+	}
 	return headers;
 }

@@ -185,6 +185,183 @@ describe("openai-codex streaming", () => {
 		expect(sawDone).toBe(true);
 	});
 
+	it("exposes final GPT-5.6 Responses Lite SSE payloads to onPayload", async () => {
+		const token = mockToken();
+		let requestHeaders: Headers | undefined;
+		let requestBody: Record<string, unknown> | undefined;
+		global.fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				requestHeaders = new Headers(init?.headers);
+				requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return new Response(buildSSEPayload({ status: "completed" }), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.6-luna",
+			name: "GPT-5.6 Luna",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 372000,
+			maxTokens: 128000,
+		};
+		const context: Context = {
+			systemPrompt: "Original instructions",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const onPayload = vi.fn((payload: unknown) => {
+			const litePayload = payload as Record<string, unknown>;
+			expect(litePayload).toMatchObject({
+				model: "gpt-5.6-luna",
+				tool_choice: "auto",
+				parallel_tool_calls: false,
+				reasoning: { context: "all_turns" },
+			});
+			expect(litePayload.instructions).toBeUndefined();
+			expect(litePayload.tools).toBeUndefined();
+			expect(litePayload.input).toEqual([
+				{ type: "additional_tools", role: "developer", tools: [] },
+				{
+					type: "message",
+					role: "developer",
+					content: [{ type: "input_text", text: "Original instructions" }],
+				},
+				{
+					role: "user",
+					content: [{ type: "input_text", text: "Say hello" }],
+				},
+			]);
+			return { ...litePayload, text: { verbosity: "high" } };
+		});
+		await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			sessionId: "dreb-session",
+			onPayload,
+		}).result();
+
+		expect(onPayload).toHaveBeenCalledOnce();
+
+		expect(requestHeaders?.get("version")).toBe("0.144.0");
+		expect(requestHeaders?.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		const sessionId = requestHeaders?.get("session-id");
+		expect(sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(requestHeaders?.get("x-session-affinity")).toBe(sessionId);
+		expect(requestHeaders?.get("session_id")).toBeNull();
+		expect(requestBody).toMatchObject({
+			model: "gpt-5.6-luna",
+			prompt_cache_key: sessionId,
+			tool_choice: "auto",
+			parallel_tool_calls: false,
+			reasoning: { context: "all_turns" },
+			text: { verbosity: "high" },
+		});
+		expect(requestBody?.tools).toBeUndefined();
+		expect(requestBody?.instructions).toBeUndefined();
+		expect(requestBody?.input).toEqual([
+			{ type: "additional_tools", role: "developer", tools: [] },
+			{
+				type: "message",
+				role: "developer",
+				content: [{ type: "input_text", text: "Original instructions" }],
+			},
+			{
+				role: "user",
+				content: [{ type: "input_text", text: "Say hello" }],
+			},
+		]);
+	});
+
+	it("rejects onPayload callbacks that reintroduce unsupported Lite fields", async () => {
+		const fetchMock = vi.fn();
+		global.fetch = fetchMock as typeof fetch;
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.6-luna",
+			name: "GPT-5.6 Luna",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 372000,
+			maxTokens: 128000,
+		};
+
+		const result = await streamOpenAICodexResponses(
+			model,
+			{ messages: [{ role: "user", content: "Hello", timestamp: Date.now() }] },
+			{
+				apiKey: mockToken(),
+				onPayload: (payload) => ({ ...(payload as Record<string, unknown>), instructions: "unsupported" }),
+			},
+		).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Responses Lite does not support top-level instructions");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("leaves legacy GPT-5.5 SSE requests unchanged", async () => {
+		const token = mockToken();
+		let requestHeaders: Headers | undefined;
+		let requestBody: Record<string, unknown> | undefined;
+		const payload = {
+			model: "gpt-5.5",
+			input: [{ role: "user", content: [{ type: "input_text", text: "Hello" }] }],
+			instructions: "Be concise.",
+			tools: [],
+			parallel_tool_calls: true,
+			prompt_cache_key: "legacy-session",
+			reasoning: { effort: "medium", summary: "auto" },
+			stream: true,
+		};
+		global.fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				requestHeaders = new Headers(init?.headers);
+				requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return new Response(buildSSEPayload({ status: "completed" }), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.5",
+			name: "GPT-5.5",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		await streamOpenAICodexResponses(
+			model,
+			{ messages: [{ role: "user", content: "Hello", timestamp: Date.now() }] },
+			{ apiKey: token, sessionId: "legacy-session", onPayload: () => payload },
+		).result();
+
+		expect(requestHeaders?.get("session_id")).toBe("legacy-session");
+		expect(requestHeaders?.get("version")).toBeNull();
+		expect(requestHeaders?.get("x-openai-internal-codex-responses-lite")).toBeNull();
+		expect(requestBody).toEqual(payload);
+	});
+
 	it("reports truncated SSE responses with a retryable stream-drop message", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
