@@ -880,6 +880,31 @@ async function generateModels() {
 		});
 	}
 
+	// Add GPT-5.6 (Sol/Terra/Luna) fallbacks until models.dev includes them.
+	// Specs from the OpenAI GA announcement (July 9, 2026); raw API context is
+	// 1.05M (Sol) / 1.1M (Terra, Luna).
+	const gpt56Fallbacks = [
+		{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 }, contextWindow: 1050000 },
+		{ id: "gpt-5.6-terra", name: "GPT-5.6 Terra", cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }, contextWindow: 1100000 },
+		{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 }, contextWindow: 1100000 },
+	] as const;
+	for (const fallback of gpt56Fallbacks) {
+		if (!allModels.some((m) => m.provider === "openai" && m.id === fallback.id)) {
+			allModels.push({
+				id: fallback.id,
+				name: fallback.name,
+				api: "openai-responses",
+				baseUrl: "https://api.openai.com/v1",
+				provider: "openai",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { ...fallback.cost },
+				contextWindow: fallback.contextWindow,
+				maxTokens: 128000,
+			});
+		}
+	}
+
 	const minimaxDirectSupportedIds = new Set(["MiniMax-M2.7", "MiniMax-M2.7-highspeed"]);
 
 	for (const candidate of allModels) {
@@ -904,11 +929,11 @@ async function generateModels() {
 
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
-	// Most Codex models use the observed 272k ChatGPT-auth server limit. GPT-5.5
-	// is documented for Codex with a larger 400k context window.
+	// Most Codex models use the observed 272k ChatGPT-auth server limit. GPT-5.5+
+	// are documented for Codex with a larger 400k context window.
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	const CODEX_CONTEXT = 272000;
-	const CODEX_GPT_55_CONTEXT = 400000;
+	const CODEX_LARGE_CONTEXT = 400000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
 		{
@@ -992,7 +1017,43 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-			contextWindow: CODEX_GPT_55_CONTEXT,
+			contextWindow: CODEX_LARGE_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.6-sol",
+			name: "GPT-5.6 Sol",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+			contextWindow: CODEX_LARGE_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.6-terra",
+			name: "GPT-5.6 Terra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+			contextWindow: CODEX_LARGE_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.6-luna",
+			name: "GPT-5.6 Luna",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 },
+			contextWindow: CODEX_LARGE_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
