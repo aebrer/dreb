@@ -140,7 +140,9 @@ export function resolveTargetDir(
 /** Safe realpath that falls back to the input on error. */
 function safeRealpath(p: string): string {
 	try {
-		return realpathSync(p);
+		// .native canonicalizes filename case on case-insensitive filesystems
+		// (macOS), which the JS implementation does not.
+		return realpathSync.native(p);
 	} catch {
 		return p;
 	}

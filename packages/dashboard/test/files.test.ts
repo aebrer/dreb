@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +7,9 @@ import { canonicalizePath, FileApi } from "../src/server/files.js";
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-	const dir = await mkdtemp(join(tmpdir(), "dreb-dash-files-"));
+	// realpath: macOS tmpdir() returns /var/... which symlinks to /private/var,
+	// while FileApi resolves paths via realpath — compare like with like.
+	const dir = await realpath(await mkdtemp(join(tmpdir(), "dreb-dash-files-")));
 	tempDirs.push(dir);
 	return dir;
 }

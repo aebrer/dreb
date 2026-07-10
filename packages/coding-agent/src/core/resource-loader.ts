@@ -110,7 +110,9 @@ export function loadContextFilesFromDir(
 			// resolve to the same inode.
 			let realPath: string;
 			try {
-				realPath = realpathSync(filePath);
+				// .native canonicalizes filename case on case-insensitive
+				// filesystems (macOS), which the JS implementation does not.
+				realPath = realpathSync.native(filePath);
 			} catch {
 				realPath = filePath;
 			}
