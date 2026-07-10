@@ -132,7 +132,12 @@ export function createShutdown(deps: ShutdownDeps): (message: string, exitCode: 
 		deps.clearReloadTimer();
 		for (const watcher of deps.watchers) watcher.close();
 		deps.closeServer();
-		deps.stopAll().finally(() => deps.exit(exitCode));
+		void deps
+			.stopAll()
+			.catch((err) => {
+				deps.log(`shutdown teardown failed: ${err instanceof Error ? err.message : String(err)}`);
+			})
+			.finally(() => deps.exit(exitCode));
 	};
 }
 

@@ -111,7 +111,7 @@ describe("dashboard shutdown helper — createShutdown", () => {
 
 		beginShutdown("restart requested — exiting for supervisor to respawn", 1);
 		beginShutdown("shutting down…", 0);
-		await Promise.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(log).toHaveBeenCalledTimes(1);
 		expect(log).toHaveBeenCalledWith("restart requested — exiting for supervisor to respawn");
@@ -119,6 +119,30 @@ describe("dashboard shutdown helper — createShutdown", () => {
 		expect(watchers[0].close).toHaveBeenCalledTimes(1);
 		expect(watchers[1].close).toHaveBeenCalledTimes(1);
 		expect(closeServer).toHaveBeenCalledTimes(1);
+		expect(stopAll).toHaveBeenCalledTimes(1);
+		expect(exit).toHaveBeenCalledTimes(1);
+		expect(exit).toHaveBeenCalledWith(1);
+	});
+
+	it("still exits when pool teardown rejects", async () => {
+		const log = vi.fn();
+		const clearReloadTimer = vi.fn();
+		const watchers = [{ close: vi.fn() }];
+		const closeServer = vi.fn();
+		const stopAll = vi.fn(() => Promise.reject(new Error("pool teardown failed")));
+		const exit = vi.fn();
+		const beginShutdown = createShutdown({
+			log,
+			clearReloadTimer,
+			watchers,
+			closeServer,
+			stopAll,
+			exit,
+		});
+
+		beginShutdown("shutting down…", 1);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
 		expect(stopAll).toHaveBeenCalledTimes(1);
 		expect(exit).toHaveBeenCalledTimes(1);
 		expect(exit).toHaveBeenCalledWith(1);
@@ -240,6 +264,50 @@ describe("dashboard native TLS hot reload helpers", () => {
 
 		expect(warn).toHaveBeenCalledTimes(1);
 		expect(warn).toHaveBeenCalledWith("tls cert watch error: watch exploded");
+	});
+
+	it("warns when cert watch setup throws and returns a usable controller", () => {
+		const warn = vi.fn();
+		const watchDirectory = vi.fn((_directory: string, _listener: WatchListener) => {
+			throw new Error("ENOENT");
+		});
+
+		const controller = createTlsWatchers({
+			certPath: "/tls/cert.pem",
+			keyPath: "/tls/key.pem",
+			watchDirectory,
+			reloadTls: vi.fn(),
+			warn,
+		});
+
+		expect(watchDirectory).toHaveBeenCalledTimes(1);
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn).toHaveBeenCalledWith(expect.stringMatching(/tls cert watch setup failed for \/tls: ENOENT/));
+		expect(controller.watchers).toEqual([]);
+		expect(() => controller.clearReloadTimer()).not.toThrow();
+	});
+
+	it("watches split cert and key directories independently", () => {
+		vi.useFakeTimers();
+		const harness = createWatchHarness();
+		const reloadTls = vi.fn();
+		const controller = createTlsWatchers({
+			certPath: "/certs/cert.pem",
+			keyPath: "/keys/key.pem",
+			watchDirectory: harness.watchDirectory,
+			reloadTls,
+			warn: vi.fn(),
+		});
+
+		expect(harness.watchDirectory).toHaveBeenCalledTimes(2);
+		expect(harness.watchDirectory).toHaveBeenNthCalledWith(1, "/certs", expect.any(Function));
+		expect(harness.watchDirectory).toHaveBeenNthCalledWith(2, "/keys", expect.any(Function));
+		expect(controller.watchers).toHaveLength(2);
+
+		harness.emit("/keys", "change", "key.pem");
+		vi.advanceTimersByTime(500);
+
+		expect(reloadTls).toHaveBeenCalledTimes(1);
 	});
 
 	it("clears a pending reload timer when the controller is released", () => {

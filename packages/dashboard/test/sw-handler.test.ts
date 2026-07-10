@@ -127,6 +127,17 @@ describe("sw notificationclick handler", () => {
 		expect(close).toHaveBeenCalledTimes(1);
 	});
 
+	it("A1b: focuses an open client without sessionKey and does not navigate", async () => {
+		const env = loadSW();
+		const focus = vi.fn(async () => {});
+		const postMessage = vi.fn();
+		await clickNotification(env, undefined, [{ focus, postMessage }]);
+
+		expect(focus).toHaveBeenCalledTimes(1);
+		expect(postMessage).not.toHaveBeenCalled();
+		expect(env.self.clients.openWindow).not.toHaveBeenCalled();
+	});
+
 	it("A2: with no open client, openWindow is called with the encoded session URL", async () => {
 		const env = loadSW();
 		await clickNotification(env, "a b/1", []);

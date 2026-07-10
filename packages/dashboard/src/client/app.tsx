@@ -14,6 +14,20 @@ import { SubagentScreen } from "./screens/subagent.js";
 import { resolveUiRequest } from "./state/reducer.js";
 import { createAppStore } from "./state/store.js";
 
+const SERVICE_WORKER_READY_TIMEOUT_MS = 5000;
+
+function serviceWorkerReadyWithTimeout(ready: Promise<ServiceWorkerRegistration>): Promise<ServiceWorkerRegistration> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([
+		ready,
+		new Promise<never>((_, reject) => {
+			timeout = setTimeout(() => reject(new Error("service worker not ready")), SERVICE_WORKER_READY_TIMEOUT_MS);
+		}),
+	]).finally(() => {
+		if (timeout) clearTimeout(timeout);
+	});
+}
+
 export function App(): JSX.Element {
 	const store = createAppStore();
 
@@ -48,7 +62,12 @@ export function App(): JSX.Element {
 	onCleanup(() => store.stop());
 
 	// Browser tab badge: needs-attention marker in the title.
+	const pendingAttention = new Set<string>();
 	const notifiedAttention = new Set<string>();
+	const hasCurrentAttention = (key: string): boolean => {
+		const runtime = store.fleet().runtimes.find((item) => item.key === key);
+		return Boolean(runtime?.needsAttention || store.sessions[key]?.needsAttention);
+	};
 	createEffect(() => {
 		const sessionAttention = new Map<string, { name: string; reason: string }>();
 		for (const runtime of store.fleet().runtimes) {
@@ -81,23 +100,25 @@ export function App(): JSX.Element {
 		document.title = attention ? `◆ ${base}` : base;
 
 		for (const [key, item] of sessionAttention) {
-			if (notifiedAttention.has(key)) continue;
+			if (notifiedAttention.has(key) || pendingAttention.has(key)) continue;
 			// Notifications through the service worker (registration.showNotification)
 			// — the only path that works on Android Chrome (which removed the page
 			// Notification constructor) and on iOS (installed PWA only). Gated exactly
 			// as before: permission granted + page hidden. Click handling lives in the
 			// SW (notificationclick): it focuses/open a client and posts a navigate
 			// message (handled below). The in-tab ◆ badge above is the no-SW fallback.
-			// Mark the key as notified ONLY after showNotification succeeds, so a
-			// rejected notification (e.g. permission revoked mid-flight, SW unregistered)
-			// can be retried on the next effect run instead of being silently dropped.
+			// Track in-flight dispatches separately from successful notifications: a
+			// pending key prevents duplicate callbacks on a slow/non-activating SW,
+			// failures clear pending for retry, and successes become notified only while
+			// the session still needs attention.
 			if (
 				typeof Notification !== "undefined" &&
 				Notification.permission === "granted" &&
 				document.visibilityState !== "visible" &&
 				"serviceWorker" in navigator
 			) {
-				navigator.serviceWorker.ready
+				pendingAttention.add(key);
+				serviceWorkerReadyWithTimeout(navigator.serviceWorker.ready)
 					.then((reg) =>
 						reg.showNotification(`dreb — ${item.name}`, {
 							body: item.reason,
@@ -105,12 +126,22 @@ export function App(): JSX.Element {
 							data: { sessionKey: key },
 						}),
 					)
-					.then(() => notifiedAttention.add(key))
-					.catch((err) => console.warn("dashboard: showNotification failed", err));
+					.then(() => {
+						pendingAttention.delete(key);
+						if (hasCurrentAttention(key)) notifiedAttention.add(key);
+						else notifiedAttention.delete(key);
+					})
+					.catch((err) => {
+						pendingAttention.delete(key);
+						console.warn("dashboard: showNotification failed", err);
+					});
 			}
 		}
 		for (const key of [...notifiedAttention]) {
 			if (!sessionAttention.has(key)) notifiedAttention.delete(key);
+		}
+		for (const key of [...pendingAttention]) {
+			if (!sessionAttention.has(key)) pendingAttention.delete(key);
 		}
 	});
 

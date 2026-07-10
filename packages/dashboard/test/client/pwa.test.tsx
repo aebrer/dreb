@@ -316,6 +316,55 @@ describe("PWA client — notification dispatch gating", () => {
 		expect(opts?.data?.sessionKey).toBe("att-1");
 	});
 
+	it("fires for store.sessions UI requests with the request title as the reason", async () => {
+		setPermission("granted");
+		setHidden(true);
+		const stream = captureEnvelopeHandler();
+		await mountAppAndFlush();
+
+		stream.push({ seq: 1, key: "sess-ui", event: { type: "session_name_changed", name: "Review Session" } });
+		stream.push({
+			seq: 2,
+			key: "sess-ui",
+			event: { type: "extension_ui_request", id: "req-1", method: "confirm", title: "Approve deploy" },
+		});
+		await flushEffects();
+
+		expect(document.title).toContain("◆");
+		expect(showNotification).toHaveBeenCalledWith(
+			"dreb — Review Session",
+			expect.objectContaining({
+				body: "waiting for input — Approve deploy",
+				tag: "sess-ui",
+				data: { sessionKey: "sess-ui" },
+			}),
+		);
+	});
+
+	it("fires for store.sessions error status entries with the error text as the reason", async () => {
+		setPermission("granted");
+		setHidden(true);
+		const stream = captureEnvelopeHandler();
+		await mountAppAndFlush();
+
+		stream.push({ seq: 1, key: "sess-error", event: { type: "session_name_changed", name: "Error Session" } });
+		stream.push({
+			seq: 2,
+			key: "sess-error",
+			event: { type: "auto_retry_end", success: false, finalError: "model failed hard" },
+		});
+		await flushEffects();
+
+		expect(showNotification).toHaveBeenCalledWith(
+			"dreb — Error Session",
+			expect.objectContaining({
+				body: "model failed hard",
+				tag: "sess-error",
+				data: { sessionKey: "sess-error" },
+			}),
+		);
+	});
+
 	it("does NOT fire when permission is not granted", async () => {
 		setPermission("default");
 		setHidden(true);
