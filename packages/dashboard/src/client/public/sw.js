@@ -79,8 +79,14 @@ self.addEventListener("fetch", (event) => {
 		event.respondWith(
 			fetch(req)
 				.then((res) => {
-					const copy = res.clone();
-					caches.open(SHELL_CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
+					// Only cache a successful navigation. A transient 4xx/5xx would
+					// otherwise be stored as the offline shell and served on the next
+					// disconnected visit, showing a broken cached error page instead of
+					// the graceful 503 fallback below.
+					if (res && res.ok) {
+						const copy = res.clone();
+						caches.open(SHELL_CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
+					}
 					return res;
 				})
 				.catch(() =>
@@ -124,15 +130,25 @@ self.addEventListener("notificationclick", (event) => {
 					if (sessionKey) client.postMessage({ type: "navigate-session", sessionKey });
 					return;
 				}
-				// No open dashboard — open one. The client reads a pending-navigation
-				// hint from sessionStorage on load (see app.tsx).
+				// No open dashboard — open one, routed to the session by the URL
+				// hash. The fresh client parses window.location.hash on load
+				// (see state/store.ts parseHash()); there is no sessionStorage
+				// handoff. The hash encodes the session so a page opened without
+				// an existing client still lands on the right route.
 				await self.clients.openWindow(url);
 			} catch (err) {
 				// focus()/postMessage() can reject (e.g. client closed mid-focus).
 				// The notification is already closed above, so without a fallback a
 				// rejection would leave the user with no visible action.
 				console.warn("[sw] notificationclick handler failed:", err);
-				await self.clients.openWindow(url);
+				try {
+					await self.clients.openWindow(url);
+				} catch (fallbackErr) {
+					// Total failure (e.g. popup blocked in a restricted context): the
+					// notification is gone and no window opened. Surface a loud error
+					// rather than silently swallowing it — there's no other signal.
+					console.error("[sw] notificationclick openWindow fallback failed:", fallbackErr);
+				}
 			}
 		})(),
 	);

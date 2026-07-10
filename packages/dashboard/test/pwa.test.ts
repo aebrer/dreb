@@ -152,6 +152,13 @@ describe("dashboard PWA — manifest + service worker serving", () => {
 		const manifest = JSON.parse(manifestBody) as Record<string, unknown>;
 		expect(manifest.display).toBe("standalone");
 		expect((manifest.icons as Array<Record<string, unknown>>).length).toBeGreaterThan(0);
+		// Theme colors derive from tokens.css --bg (light #ffffff / dark #000000).
+		// Regression guard: a prior review found background_color was a hardcoded
+		// magenta that appeared nowhere in tokens.css; assert both fields stay
+		// token-derived so a splash-screen color drift is caught here, not on a
+		// user's device.
+		expect(manifest.theme_color).toBe("#ffffff");
+		expect(manifest.background_color).toBe("#ffffff");
 		// Version baked by the build as a concrete string, not left as the placeholder.
 		expect(swBody).toMatch(/SW_CACHE_VERSION = "[\w.-]+"/);
 		expect(swBody).not.toContain("__SW_VERSION__");

@@ -227,7 +227,13 @@ async function main(): Promise<void> {
 		for (const dir of new Set([dirname(args.cert!), dirname(args.key!)])) {
 			try {
 				const watcher = watch(dir, (_event, filename) => {
-					if (filename !== certBase && filename !== keyBase) return;
+					// `fs.watch` directory events on macOS (FSEvents) frequently fire
+					// with `filename === null`; a strict `!== certBase` filter would
+					// reject it and renewals would silently never reload on macOS. When
+					// filename is null, fall through and reload anyway — `reloadTls` is
+					// idempotent and debounced, so a spurious reload just re-reads the
+					// same files. On Linux (inotify) the basename is carried reliably.
+					if (filename != null && filename !== certBase && filename !== keyBase) return;
 					if (reloadTimer) clearTimeout(reloadTimer);
 					reloadTimer = setTimeout(reloadTls, 500);
 				});

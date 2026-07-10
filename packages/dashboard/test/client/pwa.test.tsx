@@ -135,6 +135,28 @@ function setHidden(hidden: boolean): void {
 	});
 }
 
+function makeRuntime(key: string, needsAttention = false) {
+	return {
+		key,
+		cwd: "/tmp/p",
+		state: {
+			sessionId: key,
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "all",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		},
+		backgroundAgents: [],
+		needsAttention,
+		createdAt: new Date().toISOString(),
+		lastActivity: new Date().toISOString(),
+	};
+}
+
 /** Mount <App> and flush Solid effects + the SW.ready microtask chain. */
 async function mountAppAndFlush(): Promise<void> {
 	const root = document.createElement("div");
@@ -157,6 +179,16 @@ describe("PWA client — service worker registration", () => {
 		delete (navigator as { serviceWorker?: unknown }).serviceWorker;
 		await expect(mountAppAndFlush()).resolves.toBeUndefined();
 	});
+
+	it("logs and keeps the dashboard usable when SW registration rejects", async () => {
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		registerSpy.mockRejectedValueOnce(new Error("registration failed"));
+
+		await expect(mountAppAndFlush()).resolves.toBeUndefined();
+
+		expect(warnSpy).toHaveBeenCalledWith("dashboard: service worker registration failed", expect.any(Error));
+		warnSpy.mockRestore();
+	});
 });
 
 describe("PWA client — navigate-session SW→app message bridge", () => {
@@ -166,7 +198,11 @@ describe("PWA client — navigate-session SW→app message bridge", () => {
 		expect(addSpy).toHaveBeenCalledWith("message", expect.any(Function));
 	});
 
-	it("navigates the store to the session screen on a navigate-session message", async () => {
+	it("navigates the store to the session screen on a navigate-session message for a known session", async () => {
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [makeRuntime("test-123")],
+			diskSessions: [],
+		});
 		await mountAppAndFlush();
 		expect(swMessageHandlers.length).toBeGreaterThan(0);
 		const handler = swMessageHandlers[swMessageHandlers.length - 1];
@@ -175,6 +211,14 @@ describe("PWA client — navigate-session SW→app message bridge", () => {
 		// `#/session/<key>` (see state/store.ts routeToHash); the hashchange
 		// listener then updates the route signal.
 		expect(window.location.hash).toBe("#/session/test-123");
+	});
+
+	it("routes to fleet instead of a blank session view when the navigate-session key is stale", async () => {
+		window.location.hash = "#/settings";
+		await mountAppAndFlush();
+		const handler = swMessageHandlers[swMessageHandlers.length - 1];
+		handler(new MessageEvent("message", { data: { type: "navigate-session", sessionKey: "deleted-456" } }));
+		expect(window.location.hash).toBe("#/");
 	});
 
 	it("ignores messages that are not navigate-session events", async () => {
@@ -190,31 +234,12 @@ describe("PWA client — navigate-session SW→app message bridge", () => {
 describe("PWA client — notification dispatch gating", () => {
 	async function seedNeedsAttention(): Promise<void> {
 		// Replace the fleet with a single runtime that needs attention so the
-		// notification effect has something to fire on.
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [
-				{
-					key: "att-1",
-					cwd: "/tmp/p",
-					state: {
-						sessionId: "att-1",
-						thinkingLevel: "off",
-						isStreaming: false,
-						isCompacting: false,
-						steeringMode: "all",
-						followUpMode: "all",
-						autoCompactionEnabled: true,
-						messageCount: 0,
-						pendingMessageCount: 0,
-					},
-					backgroundAgents: [],
-					needsAttention: true,
-					createdAt: new Date().toISOString(),
-					lastActivity: new Date().toISOString(),
-				},
-			],
+		// notification effect has something to fire on. Use a fresh object on each
+		// api.fleet() call so later forced refreshes can re-trigger Solid effects.
+		vi.mocked(api.fleet).mockImplementation(async () => ({
+			runtimes: [makeRuntime("att-1", true)],
 			diskSessions: [],
-		});
+		}));
 		vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
 	}
 
@@ -265,5 +290,30 @@ describe("PWA client — notification dispatch gating", () => {
 		// Re-flush effects — the same key should not produce a second notification.
 		await new Promise((r) => setTimeout(r, 10));
 		expect(showNotification).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries a needs-attention notification after showNotification rejects", async () => {
+		setPermission("granted");
+		setHidden(true);
+		await seedNeedsAttention();
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		showNotification.mockRejectedValueOnce(new Error("permission revoked mid-flight"));
+		showNotification.mockResolvedValueOnce(undefined);
+
+		await mountAppAndFlush();
+		expect(showNotification).toHaveBeenCalledTimes(1);
+		// First attempt rejected and must NOT mark the key as notified; force a
+		// reactive rerun with the same attention key by changing the route (the
+		// notification effect depends on store.route()). If the key had been added
+		// before the rejection, this second run would skip the retry.
+		window.location.hash = "#/settings";
+		window.dispatchEvent(new HashChangeEvent("hashchange"));
+		await Promise.resolve();
+		await Promise.resolve();
+		await new Promise((r) => setTimeout(r, 0));
+
+		expect(showNotification).toHaveBeenCalledTimes(2);
+		expect(warnSpy).toHaveBeenCalledWith("dashboard: showNotification failed", expect.any(Error));
+		warnSpy.mockRestore();
 	});
 });

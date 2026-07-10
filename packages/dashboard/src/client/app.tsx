@@ -26,7 +26,14 @@ export function App(): JSX.Element {
 		if ("serviceWorker" in navigator) {
 			navigator.serviceWorker.addEventListener("message", (event) => {
 				if (event.data?.type === "navigate-session" && typeof event.data.sessionKey === "string") {
-					store.navigate({ screen: "session", key: event.data.sessionKey });
+					const key = event.data.sessionKey;
+					// Validate the session still exists before routing to it. A
+					// notification can be clicked after its session was deleted/stopped
+					// (the SW carries the stale key in notification.data); navigating
+					// blindly lands on a blank session view with no signal the session
+					// is gone. Fall back to fleet for a stale key.
+					const known = Boolean(store.sessions[key]) || store.fleet().runtimes.some((r) => r.key === key);
+					store.navigate(known ? { screen: "session", key } : { screen: "fleet" });
 				}
 			});
 			// Register the SW for notifications + installability. Stable root-relative
