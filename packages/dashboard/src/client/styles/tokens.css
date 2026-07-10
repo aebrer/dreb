@@ -101,6 +101,40 @@ select {
 	color: inherit;
 }
 
+/* ------------------------------------------------------------- scrollbars */
+
+/* Thin, hairline scrollbars that follow the token palette, so they adapt to
+   dark mode automatically via the prefers-color-scheme token overrides — no
+   new color literals. Firefox / standards via scrollbar-*; Chromium / WebKit
+   via ::-webkit-scrollbar*. Hover swaps the thumb color and nothing moves,
+   mirroring the hover rule used everywhere else. No shadows or gradients. */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: var(--radius);
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background: var(--muted);
+}
+
+::-webkit-scrollbar-corner {
+	background: transparent;
+}
+
 /* ------------------------------------------------------------------ base */
 
 body {
