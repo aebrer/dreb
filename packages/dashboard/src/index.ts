@@ -11,7 +11,9 @@
  *   dreb-dashboard [--port 5343] [--remote --allow me@example.com [--allow ...]]
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, watch } from "node:fs";
+import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,10 +37,13 @@ interface CliArgs {
 	remote: boolean;
 	allow: string[];
 	help: boolean;
+	https: boolean;
+	cert?: string;
+	key?: string;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
-	const args: CliArgs = { port: DEFAULT_PORT, remote: false, allow: [], help: false };
+	const args: CliArgs = { port: DEFAULT_PORT, remote: false, allow: [], help: false, https: false };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--port") {
@@ -54,6 +59,16 @@ export function parseArgs(argv: string[]): CliArgs {
 			const value = argv[++i];
 			if (!value) throw new Error("--allow requires an identity (Tailscale login name)");
 			args.allow.push(value);
+		} else if (arg === "--https") {
+			args.https = true;
+		} else if (arg === "--cert") {
+			const value = argv[++i];
+			if (!value) throw new Error("--cert requires a path to a PEM certificate file");
+			args.cert = value;
+		} else if (arg === "--key") {
+			const value = argv[++i];
+			if (!value) throw new Error("--key requires a path to a PEM private key file");
+			args.key = value;
 		} else if (arg === "--help" || arg === "-h") {
 			args.help = true;
 		} else {
@@ -62,6 +77,14 @@ export function parseArgs(argv: string[]): CliArgs {
 	}
 	if (args.remote && args.allow.length === 0) {
 		throw new Error("--remote requires at least one --allow <tailscale-login> (empty allowlist denies everyone)");
+	}
+	// Native TLS. `https` is opt-in; it requires cert AND key (no silent
+	// fallback to plain HTTP). The dashboard terminates TLS itself — no reverse
+	// proxy, no auth-model change. `req.socket.remoteAddress` stays the real
+	// tailnet IP, so identity resolution + allowlist + pairing keep working.
+	if (args.https) {
+		if (!args.cert) throw new Error("--https requires --cert <path>");
+		if (!args.key) throw new Error("--https requires --key <path>");
 	}
 	return args;
 }
@@ -76,6 +99,16 @@ Options:
                       flag the server binds 127.0.0.1 only — no LAN access.
   --allow <identity>  Tailscale login name allowed to pair (repeatable;
                       required with --remote)
+  --https             Terminate TLS on the dashboard itself (native TLS). No
+                      reverse proxy, no auth-model change. Requires --cert
+                      and --key. Mainly for --remote (loopback is already a
+                      secure context): use 'tailscale cert' files for a
+                      tailnet hostname so mobile PWAs + notifications work.
+                      NOTE: with --https the server speaks TLS only, so the
+                      host's plain-http local tab (http://127.0.0.1) stops
+                      working — use the tailnet hostname (https://...) there.
+  --cert <path>       PEM certificate file (required with --https)
+  --key <path>        PEM private key file (required with --https)
   --help              Show this help
 `;
 
@@ -119,7 +152,7 @@ async function main(): Promise<void> {
 	// Restart hook: exit non-zero so a supervisor (systemd Restart=on-failure,
 	// etc.) respawns the process with the freshly-built dist. Assigned the http
 	// server below via a mutable holder so the closure can close it first.
-	let httpServer: ReturnType<typeof app.listen> | undefined;
+	let httpServer: HttpServer | HttpsServer | undefined;
 	const onRestart = () => {
 		console.log("restart requested — exiting for supervisor to respawn");
 		httpServer?.close();
@@ -142,8 +175,56 @@ async function main(): Promise<void> {
 	});
 
 	const host = args.remote ? "0.0.0.0" : "127.0.0.1";
-	const server = app.listen(args.port, host, () => {
-		console.log(`dreb dashboard listening on http://${host === "0.0.0.0" ? "<tailscale-ip>" : host}:${args.port}`);
+	const scheme = args.https ? "https" : "http";
+
+	// Native TLS: the dashboard terminates TLS itself (no reverse proxy). The
+	// auth model is unchanged — `req.socket.remoteAddress` is still the real
+	// tailnet IP, so Tailscale identity resolution + allowlist + pairing keep
+	// working. Local mode never sets --https (loopback is already a secure
+	// context), but it's allowed if the operator wants it.
+	let server: HttpServer | HttpsServer;
+	if (args.https && args.cert && args.key) {
+		let tlsOptions: { cert: string; key: string };
+		try {
+			tlsOptions = {
+				cert: readFileSync(args.cert, "utf-8"),
+				key: readFileSync(args.key, "utf-8"),
+			};
+		} catch (err) {
+			console.error(`error: failed to read TLS cert/key: ${err instanceof Error ? err.message : String(err)}`);
+			process.exit(1);
+		}
+		const httpsServer = createHttpsServer(tlsOptions, app);
+		// Hot-reload the cert on file change (zero-downtime renewal — e.g. a
+		// systemd timer rewrites the `tailscale cert` files daily). New
+		// connections pick up the new cert; existing ones finish on the old.
+		const reloadTls = () => {
+			try {
+				httpsServer.setSecureContext({
+					cert: readFileSync(args.cert!, "utf-8"),
+					key: readFileSync(args.key!, "utf-8"),
+				});
+				console.log("tls certificate reloaded");
+			} catch (err) {
+				console.warn(`tls reload failed (keeping old cert): ${err instanceof Error ? err.message : String(err)}`);
+			}
+		};
+		// Debounce: cert + key are often rewritten in quick succession.
+		let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+		for (const file of [args.cert, args.key]) {
+			watch(file!, () => {
+				if (reloadTimer) clearTimeout(reloadTimer);
+				reloadTimer = setTimeout(reloadTls, 500);
+			});
+		}
+		server = httpsServer;
+	} else {
+		server = createHttpServer(app);
+	}
+	server.listen(args.port, host, () => {
+		console.log(
+			`dreb dashboard listening on ${scheme}://${host === "0.0.0.0" ? "<tailscale-ip>" : host}:${args.port}`,
+		);
 		if (args.remote) {
 			console.log(`remote mode: allowed identities = ${args.allow.join(", ")}`);
 			const { code, expiresInMs } = auth.currentPairingCode();
@@ -153,6 +234,9 @@ async function main(): Promise<void> {
 			console.log("new devices enter this code; see it live in dashboard Settings on the host machine");
 		} else {
 			console.log("local mode: loopback only — use --remote for Tailscale access");
+		}
+		if (args.https) {
+			console.log("tls: native HTTPS enabled (cert + key hot-reload on file change)");
 		}
 	});
 	httpServer = server;

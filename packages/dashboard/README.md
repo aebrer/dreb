@@ -20,6 +20,10 @@ dreb-dashboard
 # If you installed the main dreb CLI (@dreb/coding-agent), the same server is
 # also available through:
 dreb dashboard
+
+# remote over Tailscale with HTTPS (mobile PWA + notifications)
+dreb dashboard --remote --allow you@example.com \
+  --https --cert /path/cert.pem --key /path/key.pem
 ```
 
 Open `http://127.0.0.1:5343`.
@@ -90,6 +94,25 @@ badge works without permission.
 | `--port <n>` | Port (default 5343) |
 | `--remote` | Enable remote mode (requires Tailscale) |
 | `--allow <identity>` | Tailscale login name allowed to pair (repeatable, required with `--remote`) |
+| `--https` | Terminate TLS on the dashboard itself (native TLS, no reverse proxy, no auth-model change). Requires `--cert` and `--key`. Mainly for `--remote` (loopback is already a secure context); use `tailscale cert` files for a tailnet hostname so mobile PWAs + notifications work. Note: with `--https` the server speaks TLS only, so the host's plain-HTTP local tab (`http://127.0.0.1`) stops working — use the tailnet hostname (`https://…`) there. |
+| `--cert <path>` | PEM certificate file (required with `--https`; hot-reloaded on file change) |
+| `--key <path>` | PEM private key file (required with `--https`; hot-reloaded on file change) |
+
+## PWA + mobile notifications
+
+The dashboard is an **installable PWA** — web app manifest, service worker, and
+icon set. Install to the home screen on Android Chrome and iOS Safari 16.4+ for
+a standalone, no-URL-bar app.
+
+Needs-attention notifications go through the **service worker**
+(`registration.showNotification`) — the only path that works on Android Chrome
+(which removed the page `Notification` constructor) and on iOS (installed PWA
+only, 16.4+). The tab-title `◆` badge is the in-tab fallback. Notifications
+require a **secure context** — `localhost`/`127.0.0.1` already qualifies, so
+local-mode works with no setup. For remote access over the tailnet, enable
+native TLS (`--https --cert --key`) with `tailscale cert` files; the auth model
+is unchanged (the peer address stays the real tailnet IP). See
+`packages/coding-agent/docs/dashboard.md` for the full setup walkthrough.
 
 ## Architecture
 

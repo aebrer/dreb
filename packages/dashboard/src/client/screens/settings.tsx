@@ -137,9 +137,23 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	const [modelPickerTarget, setModelPickerTarget] = createSignal<ModelPickerTarget>();
 	const [editingAgent, setEditingAgent] = createSignal<string>();
 	const [agentContextCwd, setAgentContextCwd] = createSignal<string>();
-	const [notificationPermission, setNotificationPermission] = createSignal<NotificationPermission | "unsupported">(
-		typeof Notification === "undefined" ? "unsupported" : Notification.permission,
-	);
+	const [notificationPermission, setNotificationPermission] = createSignal<
+		NotificationPermission | "unsupported" | "ios-install"
+	>(() => {
+		if (typeof Notification === "undefined") {
+			// iOS Safari exposes no Notification API in a browser tab — only the
+			// installed PWA (Add to Home Screen) gets one (iOS 16.4+). Show the
+			// install prerequisite instead of a bare "unsupported" so the user
+			// knows what to do rather than thinking their device can't do it.
+			const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+			const isStandalone =
+				(navigator as { standalone?: boolean }).standalone === true ||
+				window.matchMedia?.("(display-mode: standalone)").matches === true;
+			if (isIOS && !isStandalone) return "ios-install";
+			return "unsupported";
+		}
+		return Notification.permission;
+	});
 
 	const [settings, { mutate, refetch }] = createResource(async () => {
 		setError(undefined);
@@ -688,9 +702,11 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 							<span class="hint">
 								{notificationPermission() === "denied"
 									? "blocked by browser settings — re-enable notifications in site permissions"
-									: notificationPermission() === "unsupported"
-										? "browser notifications are unavailable in this environment"
-										: "show a browser notification when a hidden tab needs input"}
+									: notificationPermission() === "ios-install"
+										? "iOS notifications need the installed PWA — tap Share → Add to Home Screen, then open dreb from the home screen icon"
+										: notificationPermission() === "unsupported"
+											? "browser notifications are unavailable in this environment"
+											: "show a notification when the tab needs input (Android/desktop need the app installed on mobile; works over HTTPS or localhost)"}
 							</span>
 						</span>
 						<span class="setting-control">
@@ -700,7 +716,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 									type="checkbox"
 									checked={notificationPermission() === "granted"}
 									disabled={
-										notificationPermission() === "denied" || notificationPermission() === "unsupported"
+										notificationPermission() === "denied" ||
+										notificationPermission() === "unsupported" ||
+										notificationPermission() === "ios-install"
 									}
 									onChange={(e) => {
 										if (e.currentTarget.checked) void requestNotifications();

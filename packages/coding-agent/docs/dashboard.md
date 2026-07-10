@@ -18,6 +18,10 @@ dreb dashboard [--port 5343]
 
 # or directly
 dreb-dashboard [--port 5343]
+
+# remote over Tailscale with HTTPS (PWA + notifications on mobile)
+dreb dashboard --remote --allow you@example.com \
+  --https --cert /path/cert.pem --key /path/key.pem
 ```
 
 If `@dreb/dashboard` is not installed, `dreb dashboard` fails loudly with
@@ -94,10 +98,108 @@ When the agent is idle, send is a plain prompt.
 
 ## Notifications
 
-The settings tab exposes a browser-local permission toggle for needs-attention
-notifications. When permission is granted, a hidden dashboard tab sends a
-browser notification when a session newly needs input; all browsers still get a
-`◆` tab-title badge fallback.
+Needs-attention notifications are delivered through a **service worker**
+(`registration.showNotification()`), not the page-context `Notification`
+constructor — the constructor was removed from Android Chrome (throws
+`Illegal constructor`) and is absent from iOS Safari entirely. The service
+worker handles `notificationclick`: it focuses an open dashboard client and
+navigates to the session that needs attention, or opens one. All browsers still
+get a `◆` tab-title badge fallback when the tab is hidden.
+
+The settings tab exposes a browser-local permission toggle. Gating is unchanged:
+notifications fire only when permission is granted **and** the tab is hidden.
+
+**iOS:** notifications exist only in the **installed PWA** (Add to Home Screen,
+iOS 16.4+) — a plain Safari tab has no Notification API regardless of HTTPS.
+The settings copy explains the install prerequisite when it detects an
+un-installed iOS Safari session. (Note: iOS 17.4+ in the EU dropped standalone
+PWA support — installed PWAs open as Safari tabs and push is unavailable there.)
+
+## Installable PWA + secure context
+
+The dashboard ships a web app manifest (`display: standalone`, theme/background
+colors, icon set), an apple-touch-icon, and service worker registration, so it
+is **installable to the home screen** on Android Chrome and iOS Safari 16.4+ —
+no URL bar, app-like presence, and (on iOS) the only context where
+notifications work.
+
+Service workers and the Notifications API require a **secure context**: HTTPS,
+or `localhost`/`127.0.0.1`. Local mode (`http://127.0.0.1:<port>`) already
+qualifies — install and notifications work with no TLS setup. **Remote mode
+over the tailnet is plain HTTP**, which is not a secure context, so the service
+worker will not register and notifications are unavailable until you enable
+HTTPS. See [Native TLS](#native-tls-remote-https) below.
+
+## Native TLS (remote HTTPS)
+
+For PWA install + notifications from a phone over the tailnet, the dashboard
+terminates TLS itself using certificate files from
+[`tailscale cert`](https://tailscale.com/docs/how-to/set-up-https-certificates)
+(no reverse proxy, **no auth-model change**):
+
+```bash
+dreb dashboard --remote --allow you@example.com \
+  --https --cert /etc/dreb/cert.pem --key /etc/dreb/key.pem
+```
+
+Because the dashboard terminates TLS directly, `req.socket.remoteAddress` is
+still the phone's real tailnet IP — Tailscale identity resolution, the
+allowlist, and pairing all keep working exactly as in plain-HTTP remote mode.
+There is no header trust, no proxy, no weakening of the auth model.
+
+### One-time cert setup with `tailscale cert`
+
+```bash
+# Enable HTTPS certificates in the Tailscale admin console (DNS → HTTPS) first.
+sudo tailscale cert \
+  --cert-file=/etc/dreb/cert.pem \
+  --key-file=/etc/dreb/key.pem \
+  hostname.tailXXXX.ts.net
+sudo chown dreb:dreb /etc/dreb/cert.pem /etc/dreb/key.pem
+sudo chmod 644 /etc/dreb/cert.pem && sudo chmod 600 /etc/dreb/key.pem
+```
+
+Renewal is **manual** — `tailscale cert` certs are Let's Encrypt, 90-day
+lifetime. The dashboard hot-reloads the cert files on change
+(`setSecureContext`), so a renewal that rewrites the files is picked up with
+zero downtime. A daily systemd timer with `--min-validity=720h` (only renews
+when within 30 days of expiry) is the recommended cadence:
+
+```ini
+# /etc/systemd/system/dreb-cert.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/tailscale cert --cert-file=/etc/dreb/cert.pem \
+  --key-file=/etc/dreb/key.pem --min-validity=720h hostname.tailXXXX.ts.net
+ExecStartPost=/bin/chown dreb:dreb /etc/dreb/cert.pem /etc/dreb/key.pem
+
+# /etc/systemd/system/dreb-cert.timer
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=3600
+[Install]
+WantedBy=timers.target
+```
+
+Then open `https://hostname.tailXXXX.ts.net:<port>` on the phone.
+
+> **Hostname note (important):** the `tailscale cert` certificate is issued
+> for your machine's tailnet name (`hostname.tailXXXX.ts.net`) **only** — not
+> `127.0.0.1`, not a raw tailnet IP. When `--https` is enabled the server
+> speaks TLS on every address it binds, so on the host itself:
+>
+> - `https://hostname.tailXXXX.ts.net:<port>` — works, cert validates (resolves
+>   to your tailnet IP). But it's a *remote* request: you go through the full
+>   Tailscale allowlist + pairing flow, not instant loopback local mode.
+> - `https://127.0.0.1:<port>` — the server answers, but the browser rejects
+>   the cert (no `127.0.0.1` SAN) with a scary warning.
+> - `http://127.0.0.1:<port>` — **dead**: the server only speaks TLS now.
+>
+> If you want the host dashboard tab to stay instant (loopback local mode, no
+> pairing, no warning), run a **second** dashboard process without `--https` on
+> a different port for local-only use, and keep the TLS-enabled one for remote.
+> `--https` is primarily for the `--remote` path; pure-local setups don't need
+> it (`127.0.0.1` is already a secure context).
 
 ## Subagent observability
 

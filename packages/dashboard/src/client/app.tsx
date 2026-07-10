@@ -19,6 +19,24 @@ export function App(): JSX.Element {
 
 	onMount(() => {
 		store.start();
+		// The service worker's notificationclick handler focuses an open client
+		// and posts a navigate-session message so the already-open dashboard jumps
+		// to the session that needs attention. (When no client is open, the SW
+		// opens ./#session/<key> and the store's hashchange routing handles it.)
+		if ("serviceWorker" in navigator) {
+			navigator.serviceWorker.addEventListener("message", (event) => {
+				if (event.data?.type === "navigate-session" && typeof event.data.sessionKey === "string") {
+					store.navigate({ screen: "session", key: event.data.sessionKey });
+				}
+			});
+			// Register the SW for notifications + installability. Stable root-relative
+			// URL (never content-hashed) so browsers fetch the latest copy and compare
+			// byte-for-byte. Only available in secure contexts (HTTPS or localhost).
+			// Errors are logged, never fatal — the in-tab ◆ badge still works.
+			navigator.serviceWorker.register("./sw.js").catch((err) => {
+				console.warn("dashboard: service worker registration failed", err);
+			});
+		}
 	});
 	onCleanup(() => store.stop());
 
@@ -58,17 +76,27 @@ export function App(): JSX.Element {
 		for (const [key, item] of sessionAttention) {
 			if (notifiedAttention.has(key)) continue;
 			notifiedAttention.add(key);
+			// Notifications through the service worker (registration.showNotification)
+			// — the only path that works on Android Chrome (which removed the page
+			// Notification constructor) and on iOS (installed PWA only). Gated exactly
+			// as before: permission granted + page hidden. Click handling lives in the
+			// SW (notificationclick): it focuses/open a client and posts a navigate
+			// message (handled below). The in-tab ◆ badge above is the no-SW fallback.
 			if (
 				typeof Notification !== "undefined" &&
 				Notification.permission === "granted" &&
-				document.visibilityState !== "visible"
+				document.visibilityState !== "visible" &&
+				"serviceWorker" in navigator
 			) {
-				const notification = new Notification(`dreb — ${item.name}`, { body: item.reason });
-				notification.onclick = () => {
-					window.focus();
-					store.navigate({ screen: "session", key });
-					notification.close();
-				};
+				navigator.serviceWorker.ready
+					.then((reg) =>
+						reg.showNotification(`dreb — ${item.name}`, {
+							body: item.reason,
+							tag: key,
+							data: { sessionKey: key },
+						}),
+					)
+					.catch((err) => console.warn("dashboard: showNotification failed", err));
 			}
 		}
 		for (const key of [...notifiedAttention]) {
