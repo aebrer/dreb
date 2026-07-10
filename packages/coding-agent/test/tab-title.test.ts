@@ -342,8 +342,9 @@ describe("TabTitleGenerator", () => {
 			expect(content).toContain("Tool bash completed: ls output");
 		});
 
-		it("includes only metadata when no events have been sent", async () => {
+		it("includes only metadata when no events and no user messages", async () => {
 			const deps = createMockDeps({
+				getMessages: () => [],
 				getBranch: () => "main",
 				getRepo: () => "dreb",
 				getCwd: () => "/home/user/dreb",
@@ -366,9 +367,26 @@ describe("TabTitleGenerator", () => {
 	});
 
 	describe("title sanitization", () => {
-		it("truncates titles longer than 30 characters", async () => {
+		it("truncates titles longer than the hard cap (300)", async () => {
+			mockCompleteSimple.mockResolvedValue(makeAssistantResponse("A".repeat(400)) as any);
+
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(deps.setTitle).toHaveBeenCalled();
+			});
+
+			const title = (deps.setTitle as ReturnType<typeof vi.fn>).mock.calls[0][0];
+			const titleContent = title.replace("dreb - ", "");
+			expect(titleContent.length).toBe(300);
+		});
+
+		it("does not truncate titles under the hard cap (soft target is only a prompt hint)", async () => {
 			mockCompleteSimple.mockResolvedValue(
-				makeAssistantResponse("This is a very long title that exceeds the limit") as any,
+				makeAssistantResponse("This is a longer descriptive title well over thirty characters") as any,
 			);
 
 			const deps = createMockDeps();
@@ -381,9 +399,7 @@ describe("TabTitleGenerator", () => {
 			});
 
 			const title = (deps.setTitle as ReturnType<typeof vi.fn>).mock.calls[0][0];
-			// "dreb - " is 7 chars, title content should be ≤30
-			const titleContent = title.replace("dreb - ", "");
-			expect(titleContent.length).toBeLessThanOrEqual(30);
+			expect(title).toBe("dreb - This is a longer descriptive title well over thirty characters");
 		});
 
 		it("strips surrounding double quotes from LLM response", async () => {
@@ -462,8 +478,9 @@ describe("TabTitleGenerator", () => {
 			expect(context.messages[0].content).toContain("Assistant: Looking at the code now.");
 		});
 
-		it("onMessageEnd with user message → no entry (filtered out)", async () => {
+		it("onMessageEnd with user message → no rolling-buffer entry (filtered out)", async () => {
 			const deps = createMockDeps({
+				getMessages: () => [],
 				getBranch: () => "main",
 			});
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
@@ -567,8 +584,9 @@ describe("TabTitleGenerator", () => {
 		});
 
 		it("buildContext returns undefined when buffer is empty and no metadata", async () => {
-			// Explicitly nullify all metadata getters and send no events
+			// Explicitly nullify all metadata getters, empty messages, and send no events
 			const deps = createMockDeps({
+				getMessages: () => [],
 				getBranch: () => null,
 				getRepo: () => undefined,
 				getCwd: () => undefined,
@@ -802,6 +820,213 @@ describe("TabTitleGenerator", () => {
 
 			expect(deps.setTitle).not.toHaveBeenCalled();
 			expect(deps.setSessionName).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("user intent priority", () => {
+		it("titles from the user's request, not the branch slug", async () => {
+			// Regression for issue 324: a dashboard-foundation branch must not override
+			// an unrelated user request.
+			const deps = createMockDeps({
+				getMessages: () => [{ role: "user", content: "install the Playwright webapp-testing skill" }],
+				getBranch: () => "feature/issue-307-dashboard-foundation",
+				getRepo: () => "dreb",
+				getCwd: () => "/home/user/dreb",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			const content = context.messages[0].content as string;
+			// User request appears, and leads the context ahead of metadata.
+			expect(content).toContain("install the Playwright webapp-testing skill");
+			expect(content.indexOf("install the Playwright")).toBeLessThan(content.indexOf("Branch:"));
+			// Metadata is explicitly demoted to secondary.
+			expect(content).toContain("secondary");
+		});
+
+		it("pins the first user request even after many tool calls (no buffer eviction)", async () => {
+			const deps = createMockDeps({
+				getMessages: () => [
+					{ role: "user", content: "refactor the auth module to use JWT" },
+					{ role: "assistant", content: [{ type: "text", text: "on it" }] },
+				],
+				getBranch: () => "main",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 30 }, deps);
+
+			// Flood the rolling buffer with unrelated tool activity.
+			for (let i = 0; i < 30; i++) {
+				gen.onToolEnd({ toolName: "bash", isError: false, result: { output: `noise ${i}` } });
+			}
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			expect(context.messages[0].content).toContain("refactor the auth module to use JWT");
+		});
+
+		it("includes both first and latest user request when they differ", async () => {
+			const deps = createMockDeps({
+				getMessages: () => [
+					{ role: "user", content: "start building the export feature" },
+					{ role: "assistant", content: [{ type: "text", text: "sure" }] },
+					{ role: "user", content: "actually make it a CSV export" },
+				],
+				getBranch: () => "main",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const content = (mockCompleteSimple.mock.calls[0][1] as any).messages[0].content as string;
+			expect(content).toContain("start building the export feature");
+			expect(content).toContain("actually make it a CSV export");
+		});
+
+		it("de-duplicates when first and only user request equals the latest", async () => {
+			const deps = createMockDeps({
+				getMessages: () => [{ role: "user", content: "fix the flaky test" }],
+				getBranch: () => "main",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const content = (mockCompleteSimple.mock.calls[0][1] as any).messages[0].content as string;
+			expect(content.split("fix the flaky test").length - 1).toBe(1);
+		});
+
+		it("extracts text from structured (array) user content", async () => {
+			const deps = createMockDeps({
+				getMessages: () => [{ role: "user", content: [{ type: "text", text: "add dark mode toggle" }] }],
+				getBranch: () => "main",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const content = (mockCompleteSimple.mock.calls[0][1] as any).messages[0].content as string;
+			expect(content).toContain("add dark mode toggle");
+		});
+	});
+
+	describe("title length (soft target / hard cap)", () => {
+		it("mentions the default soft target (60) in the prompt", async () => {
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			expect(context.systemPrompt).toContain("60");
+		});
+
+		it("honors a custom maxTitleLength as the soft target hint", async () => {
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator({ triggerAfter: 1, maxTitleLength: 120 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			expect(context.systemPrompt).toContain("120");
+		});
+
+		it("clamps an over-large maxTitleLength to the hard cap in the prompt", async () => {
+			const deps = createMockDeps();
+			const gen = new TabTitleGenerator({ triggerAfter: 1, maxTitleLength: 9999 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const context = mockCompleteSimple.mock.calls[0][1] as any;
+			expect(context.systemPrompt).toContain("300");
+			expect(context.systemPrompt).not.toContain("9999");
+		});
+	});
+
+	describe("resumed / already-named session guard", () => {
+		it("skips generation when the session already has a name", async () => {
+			const deps = createMockDeps({ getSessionName: () => "Existing session name" });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(gen.hasFired).toBe(true);
+			});
+
+			expect(mockCompleteSimple).not.toHaveBeenCalled();
+			expect(deps.setTitle).not.toHaveBeenCalled();
+			expect(deps.setSessionName).not.toHaveBeenCalled();
+		});
+
+		it("does not overwrite a name that appears during async generation", async () => {
+			// Unnamed at fire time, but a name lands before the LLM call resolves.
+			let name: string | undefined;
+			let resolveCompletion: (v: unknown) => void = () => {};
+			mockCompleteSimple.mockImplementation(
+				() =>
+					new Promise((resolve) => {
+						resolveCompletion = resolve;
+					}) as any,
+			);
+
+			const deps = createMockDeps({ getSessionName: () => name });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+			await vi.waitFor(() => expect(mockCompleteSimple).toHaveBeenCalled());
+
+			// Name is set (e.g. user renamed) before completion resolves.
+			name = "User chosen name";
+			resolveCompletion(makeAssistantResponse("Auto title") as any);
+
+			await vi.waitFor(() => expect(gen.hasFired).toBe(true));
+			expect(deps.setTitle).not.toHaveBeenCalled();
+			expect(deps.setSessionName).not.toHaveBeenCalled();
+		});
+
+		it("generates normally when getSessionName returns empty", async () => {
+			const deps = createMockDeps({ getSessionName: () => undefined });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(deps.setTitle).toHaveBeenCalled();
+			});
+			expect(deps.setSessionName).toHaveBeenCalled();
 		});
 	});
 });

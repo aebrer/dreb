@@ -710,11 +710,19 @@ export class InteractiveMode {
 		const settings = this.settingsManager.getTabTitleSettings();
 		if (settings?.enabled === false) return;
 
+		// Don't auto-title a session that already has a name (e.g. resumed sessions).
+		// Auto-titling exists to name unnamed sessions; overwriting a user's/prior name
+		// with fresh context would be the cross-session confusion this guards against.
+		if (this.sessionManager.getSessionName()) return;
+
 		this.tabTitleGenerator = new TabTitleGenerator(settings, {
 			setTitle: (title) => this.ui.terminal.setTitle(title),
 			setSessionName: (name) => {
+				// Re-check at fire time: a name may have been set between init and firing.
+				if (this.sessionManager.getSessionName()) return;
 				this.session.setSessionName(name);
 			},
+			getSessionName: () => this.sessionManager.getSessionName(),
 			getMessages: () => this.session.state.messages,
 			getModel: () => this.session.model,
 			getModelRegistry: () => this.session.modelRegistry,
@@ -723,6 +731,9 @@ export class InteractiveMode {
 			getBranch: () => this.footerDataProvider.getGitBranch(),
 			getRepo: () => path.basename(process.cwd()),
 			getCwd: () => process.cwd(),
+			onError: (err) => {
+				this.showError(`Tab title auto-generation failed: ${err instanceof Error ? err.message : String(err)}`);
+			},
 		});
 	}
 

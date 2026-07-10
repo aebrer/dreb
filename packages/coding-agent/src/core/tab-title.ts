@@ -13,33 +13,52 @@ import { join } from "node:path";
 import type { Api, Context, Model } from "@dreb/ai";
 import { completeSimple } from "@dreb/ai";
 import { CONFIG_DIR_NAME, getPackageDir } from "../config.js";
-import { labelMessageEnd, labelToolEnd, RollingContextBuffer } from "./context-buffer.js";
+import { extractUserText, labelMessageEnd, labelToolEnd, RollingContextBuffer } from "./context-buffer.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { TabTitleSettings } from "./settings-manager.js";
 import { parseAgentFrontmatter, resolveModelForSubagentSpawn } from "./tools/subagent.js";
 
 const DEFAULT_TRIGGER_AFTER = 9;
-const MAX_TITLE_LENGTH = 30;
+// Soft target communicated to the model — titles should aim for this length but
+// may run longer when clarity demands it. Configurable via TabTitleSettings.maxTitleLength.
+const DEFAULT_TITLE_SOFT_TARGET = 60;
+// Hidden hard cap — a safety limit that titles are truncated to regardless of the
+// soft target. The dashboard has room for long names; the TUI truncates visually.
+const TITLE_HARD_CAP = 300;
+// Cap on how much of a single user message we feed into the title context.
+const MAX_USER_TEXT_CHARS = 2000;
 const TITLE_GENERATION_TIMEOUT_MS = 60_000;
 
-const TITLE_PROMPT =
-	"You are a headless terminal-tab title generator. You are NOT the assistant in the session — " +
-	"you will never speak to the user. Your only job is to output a single short title string, nothing else. " +
-	"No quotes, no explanation, no preamble. " +
-	"The title disambiguates terminal windows for a human at a glance. " +
-	"Describe what is being DONE (e.g. 'Fix auth bug', 'Plan subagent refactor', 'Review modal'), " +
-	"not just label the invocation. " +
-	"If a branch name is present, abbreviate it to its semantic slug " +
-	"(e.g. feature/issue-217-copy-selector-modal → copy-selector) and combine with the action. " +
-	"Avoid reference-only formats like '#N' or 'mach6-X #N'. " +
-	"Do not include 'dreb' — the caller already adds it. " +
-	"Output ONLY the title text, ≤30 characters.";
+function buildTitlePrompt(softTarget: number): string {
+	return (
+		"You are a headless terminal-tab title generator. You are NOT the assistant in the session — " +
+		"you will never speak to the user. Your only job is to output a single short title string, nothing else. " +
+		"No quotes, no explanation, no preamble. " +
+		"The title disambiguates terminal windows for a human at a glance. " +
+		"Base the title PRIMARILY on the user's actual request and the concrete actions taken in THIS session. " +
+		"Describe what is being DONE (e.g. 'Fix auth bug', 'Plan subagent refactor', 'Review modal'), " +
+		"not just label the invocation. " +
+		"Branch, repo, and cwd metadata are SECONDARY — use them only to disambiguate when the user's " +
+		"request is otherwise ambiguous. Never let a branch name override the user's actual intent: " +
+		"if the branch is 'feature/dashboard-foundation' but the user asked to install a Playwright skill, " +
+		"the title is about the Playwright skill, not the dashboard. " +
+		"Avoid reference-only formats like '#N' or 'mach6-X #N'. " +
+		"Do not include 'dreb' — the caller already adds it. " +
+		`Output ONLY the title text. Aim for about ${softTarget} characters; a little longer is fine if needed for clarity.`
+	);
+}
 
 export interface TabTitleDeps {
 	/** Set the terminal tab title (OSC 0). */
 	setTitle: (title: string) => void;
 	/** Persist the generated title as the session name. Called with the raw title (without "dreb - " prefix). */
 	setSessionName?: (name: string) => void;
+	/**
+	 * Get the current session name, if the session is already named. When this returns a
+	 * non-empty string, title generation is skipped — auto-titling only names unnamed
+	 * sessions and must never overwrite an existing (e.g. resumed) session's name.
+	 */
+	getSessionName?: () => string | undefined;
 	/** Get the current session messages (for context). */
 	getMessages: () => Array<{ role: string; content?: unknown }>;
 	/** Get the current model (parent session model — used as fallback). */
@@ -67,6 +86,7 @@ export class TabTitleGenerator {
 	private toolCallCount = 0;
 	private fired = false;
 	private readonly threshold: number;
+	private readonly softTarget: number;
 	private readonly contextBuffer: RollingContextBuffer;
 
 	constructor(
@@ -74,6 +94,9 @@ export class TabTitleGenerator {
 		private readonly deps: TabTitleDeps,
 	) {
 		this.threshold = settings?.triggerAfter ?? DEFAULT_TRIGGER_AFTER;
+		// Soft target is configurable but always clamped to the hidden hard cap.
+		const configured = settings?.maxTitleLength ?? DEFAULT_TITLE_SOFT_TARGET;
+		this.softTarget = Math.max(1, Math.min(configured, TITLE_HARD_CAP));
 		this.contextBuffer = new RollingContextBuffer({ maxEntries: 30, maxChars: 6000 });
 	}
 
@@ -120,6 +143,10 @@ export class TabTitleGenerator {
 	}
 
 	private async generateTitle(): Promise<void> {
+		// Skip entirely if the session already has a name (e.g. resumed session).
+		// This guards the race where a name is set between generator construction and firing.
+		if (this.deps.getSessionName?.()) return;
+
 		// Single timeout bounds the entire pipeline (model probing + API key + LLM call)
 		const signal = AbortSignal.timeout(TITLE_GENERATION_TIMEOUT_MS);
 
@@ -130,13 +157,15 @@ export class TabTitleGenerator {
 		if (!userContext) return;
 
 		const context: Context = {
-			systemPrompt: TITLE_PROMPT,
+			systemPrompt: buildTitlePrompt(this.softTarget),
 			messages: [{ role: "user", content: userContext, timestamp: Date.now() }],
 		};
 
 		const response = await this.completeWithParentFallback(model, context, signal);
 		const title = this.sanitizeTitle(response);
 		if (title) {
+			// Re-check: a name may have landed during the async LLM call.
+			if (this.deps.getSessionName?.()) return;
 			this.deps.setTitle(`dreb - ${title}`);
 			this.deps.setSessionName?.(title);
 		}
@@ -259,20 +288,61 @@ export class TabTitleGenerator {
 	private buildContext(): string | undefined {
 		const lines: string[] = [];
 
-		// Metadata block
+		// Primary signal: the user's actual request(s) from the current session.
+		// Pin the FIRST user message (session-defining intent) and append the LATEST
+		// user message when it differs, to catch mid-session pivots. Sourced from the
+		// live message list rather than the rolling buffer so early intent is never
+		// evicted by later tool activity.
+		const userIntent = this.collectUserIntent();
+		if (userIntent.length > 0) {
+			lines.push("User request(s):");
+			for (const req of userIntent) {
+				lines.push(`- ${req}`);
+			}
+		}
+
+		// Secondary signal: concrete current-session actions (assistant text + tools).
+		const bufferContent = this.contextBuffer.build();
+		if (bufferContent) {
+			lines.push("");
+			lines.push("Session activity:");
+			lines.push(bufferContent);
+		}
+
+		// Tertiary signal: metadata, for disambiguation only.
 		const branch = this.deps.getBranch?.();
 		const repo = this.deps.getRepo?.();
 		const cwd = this.deps.getCwd?.();
-		if (branch) lines.push(`Branch: ${branch}`);
-		if (repo) lines.push(`Repo: ${repo}`);
-		if (cwd) lines.push(`Cwd: ${cwd}`);
-
-		// Rolling buffer
-		const bufferContent = this.contextBuffer.build();
-		if (bufferContent) lines.push(bufferContent);
+		const metadata: string[] = [];
+		if (branch) metadata.push(`Branch: ${branch}`);
+		if (repo) metadata.push(`Repo: ${repo}`);
+		if (cwd) metadata.push(`Cwd: ${cwd}`);
+		if (metadata.length > 0) {
+			lines.push("");
+			lines.push("Context metadata (secondary — disambiguation only):");
+			lines.push(...metadata);
+		}
 
 		if (lines.length === 0) return undefined;
 		return lines.join("\n");
+	}
+
+	/**
+	 * Collect the user's intent-bearing requests from the current session's messages.
+	 * Returns the first user message, plus the latest user message when it differs.
+	 */
+	private collectUserIntent(): string[] {
+		const messages = this.deps.getMessages?.() ?? [];
+		const userTexts: string[] = [];
+		for (const message of messages) {
+			const text = extractUserText(message);
+			if (text) userTexts.push(text.slice(0, MAX_USER_TEXT_CHARS));
+		}
+		if (userTexts.length === 0) return [];
+
+		const first = userTexts[0];
+		const last = userTexts[userTexts.length - 1];
+		return first === last ? [first] : [first, last];
 	}
 
 	/** Clean up LLM response to a usable tab title. */
@@ -292,9 +362,9 @@ export class TabTitleGenerator {
 		}
 		// Remove newlines
 		title = title.replace(/[\r\n]+/g, " ").trim();
-		// Truncate to max length
-		if (title.length > MAX_TITLE_LENGTH) {
-			title = title.slice(0, MAX_TITLE_LENGTH);
+		// Truncate to the hidden hard cap (safety limit; the soft target is a prompt hint)
+		if (title.length > TITLE_HARD_CAP) {
+			title = title.slice(0, TITLE_HARD_CAP);
 		}
 		return title || undefined;
 	}

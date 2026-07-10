@@ -1015,6 +1015,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 							session.setSessionName(name);
 						}
 					},
+					getSessionName: () => session.sessionName,
 					getMessages: () => session.messages,
 					getModel: () => session.model,
 					getModelRegistry: () => session.modelRegistry,

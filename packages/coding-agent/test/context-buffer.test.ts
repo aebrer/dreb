@@ -2,7 +2,7 @@
  * Tests for the shared rolling context buffer and event-labeling utilities.
  */
 import { describe, expect, it } from "vitest";
-import { labelMessageEnd, labelToolEnd, RollingContextBuffer } from "../src/core/context-buffer.js";
+import { extractUserText, labelMessageEnd, labelToolEnd, RollingContextBuffer } from "../src/core/context-buffer.js";
 
 describe("RollingContextBuffer", () => {
 	it("append adds entries", () => {
@@ -182,5 +182,45 @@ describe("labelToolEnd", () => {
 			result: { output: "command not found" },
 		});
 		expect(result).toBe("Tool bash failed: command not found");
+	});
+});
+
+describe("extractUserText", () => {
+	it("returns trimmed string content for a user message", () => {
+		expect(extractUserText({ role: "user", content: "  fix the bug  " })).toBe("fix the bug");
+	});
+
+	it("joins text parts of structured user content", () => {
+		expect(
+			extractUserText({
+				role: "user",
+				content: [
+					{ type: "text", text: "add " },
+					{ type: "text", text: "dark mode" },
+				],
+			}),
+		).toBe("add dark mode");
+	});
+
+	it("ignores non-text parts in structured content", () => {
+		expect(
+			extractUserText({
+				role: "user",
+				content: [
+					{ type: "toolResult", output: "ignored" },
+					{ type: "text", text: "real request" },
+				],
+			}),
+		).toBe("real request");
+	});
+
+	it("returns undefined for non-user messages", () => {
+		expect(extractUserText({ role: "assistant", content: "hello" })).toBeUndefined();
+	});
+
+	it("returns undefined for empty or whitespace-only content", () => {
+		expect(extractUserText({ role: "user", content: "   " })).toBeUndefined();
+		expect(extractUserText({ role: "user", content: [] })).toBeUndefined();
+		expect(extractUserText({ role: "user" })).toBeUndefined();
 	});
 });

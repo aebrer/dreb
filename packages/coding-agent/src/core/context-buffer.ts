@@ -46,6 +46,34 @@ export class RollingContextBuffer {
 }
 
 /**
+ * Extract the plain-text content of a user message.
+ *
+ * Handles both string content and structured content arrays (text parts only —
+ * tool_result and other non-text parts are ignored). Returns the trimmed text,
+ * or undefined when the message is not a usable user message.
+ */
+export function extractUserText(message: { role: string; content?: unknown }): string | undefined {
+	if (message.role !== "user") return undefined;
+
+	const { content } = message;
+	if (typeof content === "string") {
+		const trimmed = content.trim();
+		return trimmed || undefined;
+	}
+
+	if (Array.isArray(content)) {
+		const text = content
+			.filter((c: any) => c?.type === "text" && typeof c.text === "string")
+			.map((c: any) => c.text)
+			.join("")
+			.trim();
+		return text || undefined;
+	}
+
+	return undefined;
+}
+
+/**
  * Label an assistant message_end event into 0-2 context entries.
  *
  * Returns labeled strings for text content and/or tool calls.
