@@ -181,6 +181,7 @@ pre {
 
 .topbar {
 	border-bottom: var(--hairline);
+	padding-top: env(safe-area-inset-top, 0px);
 }
 
 .topbar-inner {

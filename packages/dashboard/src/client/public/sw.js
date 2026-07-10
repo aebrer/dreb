@@ -81,6 +81,13 @@ self.addEventListener("activate", (event) => {
 
 // Network-first for navigations and same-origin GETs. On network failure only,
 // fall back to cache (so a brief blip doesn't blank the dashboard).
+// Clone-and-store a fresh response in the shell cache; cache failures are
+// non-fatal (the response is still returned to the page).
+function cachePut(req, res) {
+	const copy = res.clone();
+	caches.open(SHELL_CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
+}
+
 self.addEventListener("fetch", (event) => {
 	const req = event.request;
 	if (req.method !== "GET") return;
@@ -100,10 +107,7 @@ self.addEventListener("fetch", (event) => {
 					// otherwise be stored as the offline shell and served on the next
 					// disconnected visit, showing a broken cached error page instead of
 					// the graceful 503 fallback below.
-					if (res && res.ok) {
-						const copy = res.clone();
-						caches.open(SHELL_CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
-					}
+					if (res && res.ok) cachePut(req, res);
 					return res;
 				})
 				.catch(() =>
@@ -120,10 +124,7 @@ self.addEventListener("fetch", (event) => {
 	event.respondWith(
 		fetch(req)
 			.then((res) => {
-				if (res && res.status === 200 && res.type === "basic") {
-					const copy = res.clone();
-					caches.open(SHELL_CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
-				}
+				if (res && res.status === 200 && res.type === "basic") cachePut(req, res);
 				return res;
 			})
 			.catch(() => caches.match(req)),

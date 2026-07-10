@@ -134,6 +134,20 @@ describe("dashboard PWA — manifest + service worker serving", () => {
 		expect(res512.status).toBe(200);
 	});
 
+	it("keeps the committed source manifest token-derived (unconditional)", async () => {
+		// Unlike the dist/ test below, this always runs — the source manifest is
+		// committed, so the color regression guard can never be skipped by a
+		// tests-before-build run or fresh checkout.
+		const srcManifest = join(import.meta.dirname, "..", "src", "client", "public", "manifest.webmanifest");
+		const manifest = JSON.parse(await readFile(srcManifest, "utf8")) as Record<string, unknown>;
+		expect(manifest.display).toBe("standalone");
+		expect(manifest.theme_color).toBe("#ffffff");
+		expect(manifest.background_color).toBe("#ffffff");
+		const icons = manifest.icons as Array<Record<string, unknown>>;
+		expect(icons.length).toBeGreaterThan(0);
+		expect(icons.some((icon) => icon.purpose === "maskable")).toBe(true);
+	});
+
 	it("preserves the committed manifest + sw.js from the real build output", async () => {
 		// The built dist/static/ is the source of truth for what ships. Read the
 		// committed artifacts directly and assert the invariants the Vite plugin

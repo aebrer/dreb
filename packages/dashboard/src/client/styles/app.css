@@ -284,6 +284,7 @@ body,
 .session-bar {
 	border-bottom: var(--hairline);
 	flex-shrink: 0;
+	padding-top: env(safe-area-inset-top, 0px);
 }
 
 .session-bar-inner {
@@ -2156,5 +2157,10 @@ details.thinking .thinking-body {
 
 	.head-actions .btn {
 		flex: 1;
+	}
+
+	/* Prevent iOS Safari auto-zoom on textarea focus (triggers at font-size < 16px). */
+	.composer textarea {
+		font-size: 16px;
 	}
 }

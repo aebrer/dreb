@@ -1407,6 +1407,30 @@ describe("dashboard client regressions", () => {
 			expect(el.textContent).not.toContain("iOS notifications need the installed PWA");
 		});
 
+		it("shows the HTTPS hint (not the install hint) on an insecure context with no Notification API", async () => {
+			// `--remote` without `--https` serves plain HTTP over the tailnet — an
+			// insecure context where the Notification API is absent entirely.
+			// Installing the PWA cannot fix an insecure origin, so the hint must
+			// point at HTTPS, not at Add to Home Screen — even on iOS.
+			vi.stubGlobal("Notification", undefined);
+			stubAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X)");
+			stubStandalone(false);
+			stubMatchMedia(false);
+			Object.defineProperty(window, "isSecureContext", { configurable: true, value: false });
+			restore.push(() => {
+				Reflect.deleteProperty(window, "isSecureContext");
+			});
+
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const checkbox = el.querySelector("#pref-notifications") as HTMLInputElement;
+			expect(checkbox.disabled).toBe(true);
+			expect(el.textContent).toContain("not a secure context");
+			expect(el.textContent).not.toContain("iOS notifications need the installed PWA");
+		});
+
 		it("does not crash when window.matchMedia is undefined (optional chaining guards .matches)", async () => {
 			// The display-mode probe is `window.matchMedia?.("…")?.matches`. If
 			// matchMedia is absent (old/embedded browsers) the access must

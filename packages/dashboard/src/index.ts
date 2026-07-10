@@ -89,6 +89,136 @@ export function parseArgs(argv: string[]): CliArgs {
 	return args;
 }
 
+/**
+ * Warning shown at startup when `--remote` binds the tailnet over plain HTTP
+ * (no `--https`). Browsers treat plain HTTP over a non-loopback host as an
+ * INSECURE context, so service workers and the Notification API are
+ * unavailable — PWA install and mobile notifications (iOS exposes no
+ * Notification API at all there) silently never work. Loopback (127.0.0.1) is
+ * exempt (it counts as secure), so pure-local mode returns no warning.
+ *
+ * Returns the multi-line warning string, or `undefined` when TLS is enabled or
+ * the server is loopback-only. Kept pure (no console) so it is unit-testable.
+ */
+export function insecureRemoteWarning(args: Pick<CliArgs, "remote" | "https">): string | undefined {
+	if (!args.remote || args.https) return undefined;
+	return (
+		"⚠ warning: --remote without --https serves plain HTTP over the tailnet, which browsers treat as an\n" +
+		"  INSECURE context — service workers, PWA install, and mobile notifications (especially iOS) will NOT work.\n" +
+		"  Enable TLS for the tailnet hostname:\n" +
+		"    tailscale cert <host>.<tailnet>.ts.net\n" +
+		"    …then relaunch with --https --cert <host>.<tailnet>.ts.net.crt --key <host>.<tailnet>.ts.net.key\n" +
+		"  and open the dashboard via https://<host>.<tailnet>.ts.net (the hostname, not the tailnet IP)."
+	);
+}
+
+type ShutdownWatcher = Pick<ReturnType<typeof watch>, "close">;
+
+interface ShutdownDeps {
+	log: (message: string) => void;
+	clearReloadTimer: () => void;
+	watchers: Iterable<ShutdownWatcher>;
+	closeServer: () => void;
+	stopAll: () => Promise<unknown>;
+	exit: (code: number) => void;
+}
+
+export function createShutdown(deps: ShutdownDeps): (message: string, exitCode: number) => void {
+	let shuttingDown = false;
+	return (message: string, exitCode: number) => {
+		if (shuttingDown) return;
+		shuttingDown = true;
+		deps.log(message);
+		deps.clearReloadTimer();
+		for (const watcher of deps.watchers) watcher.close();
+		deps.closeServer();
+		deps.stopAll().finally(() => deps.exit(exitCode));
+	};
+}
+
+type TlsOptions = { cert: string; key: string };
+type TlsWatchFilename = string | Buffer | null;
+type TlsWatchListener = (event: string, filename: TlsWatchFilename) => void;
+type TlsFileWatcher = ShutdownWatcher & {
+	on(event: "error", listener: (err: unknown) => void): unknown;
+};
+
+interface TlsReloaderDeps {
+	readTlsOptions: () => TlsOptions;
+	setSecureContext: (options: TlsOptions) => void;
+	log: (message: string) => void;
+	warn: (message: string) => void;
+}
+
+export function createTlsReloader(deps: TlsReloaderDeps): () => void {
+	return () => {
+		try {
+			deps.setSecureContext(deps.readTlsOptions());
+			deps.log("tls certificate reloaded");
+		} catch (err) {
+			deps.warn(`tls reload failed (keeping old cert): ${err instanceof Error ? err.message : String(err)}`);
+		}
+	};
+}
+
+export function shouldReloadForFile(filename: TlsWatchFilename, certBase: string, keyBase: string): boolean {
+	if (filename == null) return true;
+	if (typeof filename !== "string") return false;
+	return filename === certBase || filename === keyBase;
+}
+
+interface TlsWatchDeps {
+	certPath: string;
+	keyPath: string;
+	watchDirectory: (directory: string, listener: TlsWatchListener) => TlsFileWatcher;
+	reloadTls: () => void;
+	warn: (message: string) => void;
+	debounceMs?: number;
+}
+
+interface TlsWatchController {
+	watchers: TlsFileWatcher[];
+	clearReloadTimer: () => void;
+}
+
+export function createTlsWatchers(deps: TlsWatchDeps): TlsWatchController {
+	let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+	const watchers: TlsFileWatcher[] = [];
+	const debounceMs = deps.debounceMs ?? 500;
+	const certBase = basename(deps.certPath);
+	const keyBase = basename(deps.keyPath);
+	const clearReloadTimer = () => {
+		if (!reloadTimer) return;
+		clearTimeout(reloadTimer);
+		reloadTimer = undefined;
+	};
+	const scheduleReload = () => {
+		clearReloadTimer();
+		reloadTimer = setTimeout(deps.reloadTls, debounceMs);
+	};
+
+	for (const dir of new Set([dirname(deps.certPath), dirname(deps.keyPath)])) {
+		try {
+			const watcher = deps.watchDirectory(dir, (_event, filename) => {
+				// `fs.watch` directory events on macOS (FSEvents) frequently fire
+				// with `filename === null`; fall through and reload anyway.
+				// On Linux (inotify) the basename is carried reliably and filters
+				// out unrelated files in the parent directory.
+				if (!shouldReloadForFile(filename, certBase, keyBase)) return;
+				scheduleReload();
+			});
+			watcher.on("error", (err) => {
+				deps.warn(`tls cert watch error: ${err instanceof Error ? err.message : String(err)}`);
+			});
+			watchers.push(watcher);
+		} catch (err) {
+			deps.warn(`tls cert watch setup failed for ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	return { watchers, clearReloadTimer };
+}
+
 const HELP = `dreb-dashboard — dreb web dashboard server
 
 Usage: dreb-dashboard [options]
@@ -97,6 +227,9 @@ Options:
   --port <n>          Port to listen on (default ${DEFAULT_PORT})
   --remote            Enable remote mode (requires Tailscale). Without this
                       flag the server binds 127.0.0.1 only — no LAN access.
+                      Plain HTTP over the tailnet is an INSECURE context: add
+                      --https (below) or mobile PWA install + notifications
+                      (especially iOS) will not work.
   --allow <identity>  Tailscale login name allowed to pair (repeatable;
                       required with --remote)
   --https             Terminate TLS on the dashboard itself (native TLS). No
@@ -153,26 +286,20 @@ async function main(): Promise<void> {
 	// etc.) respawns the process with the freshly-built dist. Assigned the http
 	// server below via a mutable holder so the closure can close it first.
 	// The TLS hot-reload debounce timer and directory watchers are lifted here
-	// too, so onRestart and the shutdown handler can release them (otherwise
-	// they leak across restart/exit).
+	// too, so restart and signal shutdown can release them (otherwise they leak
+	// across restart/exit).
 	let httpServer: HttpServer | HttpsServer | undefined;
-	let reloadTimer: ReturnType<typeof setTimeout> | undefined;
-	const tlsWatchers: ReturnType<typeof watch>[] = [];
-	// Idempotency guard: SIGINT and SIGTERM can arrive close together (and an
-	// onRestart call can race a signal), so the second invocation would call
-	// server.close() again → ERR_SERVER_NOT_RUNNING, unwinding before pool.stopAll
-	// / TLS-watcher cleanup completes. Whichever path fires first wins; the rest
-	// are no-ops.
-	let shuttingDown = false;
-	const onRestart = () => {
-		if (shuttingDown) return;
-		shuttingDown = true;
-		console.log("restart requested — exiting for supervisor to respawn");
-		if (reloadTimer) clearTimeout(reloadTimer);
-		for (const w of tlsWatchers) w.close();
-		httpServer?.close();
-		pool.stopAll().finally(() => process.exit(1));
-	};
+	let clearTlsReloadTimer = () => {};
+	const tlsWatchers: TlsFileWatcher[] = [];
+	const beginShutdown = createShutdown({
+		log: (message) => console.log(message),
+		clearReloadTimer: () => clearTlsReloadTimer(),
+		watchers: tlsWatchers,
+		closeServer: () => httpServer?.close(),
+		stopAll: () => pool.stopAll(),
+		exit: (code) => process.exit(code),
+	});
+	const onRestart = () => beginShutdown("restart requested — exiting for supervisor to respawn", 1);
 
 	const { SessionManager } = await import("@dreb/coding-agent");
 	const app = createDashboardServer({
@@ -199,12 +326,13 @@ async function main(): Promise<void> {
 	// context), but it's allowed if the operator wants it.
 	let server: HttpServer | HttpsServer;
 	if (args.https && args.cert && args.key) {
-		let tlsOptions: { cert: string; key: string };
+		const readTlsOptions = () => ({
+			cert: readFileSync(args.cert!, "utf-8"),
+			key: readFileSync(args.key!, "utf-8"),
+		});
+		let tlsOptions: TlsOptions;
 		try {
-			tlsOptions = {
-				cert: readFileSync(args.cert, "utf-8"),
-				key: readFileSync(args.key, "utf-8"),
-			};
+			tlsOptions = readTlsOptions();
 		} catch (err) {
 			console.error(`error: failed to read TLS cert/key: ${err instanceof Error ? err.message : String(err)}`);
 			process.exit(1);
@@ -213,46 +341,27 @@ async function main(): Promise<void> {
 		// Hot-reload the cert on file change (zero-downtime renewal — e.g. a
 		// systemd timer rewrites the `tailscale cert` files daily). New
 		// connections pick up the new cert; existing ones finish on the old.
-		const reloadTls = () => {
-			try {
-				httpsServer.setSecureContext({
-					cert: readFileSync(args.cert!, "utf-8"),
-					key: readFileSync(args.key!, "utf-8"),
-				});
-				console.log("tls certificate reloaded");
-			} catch (err) {
-				console.warn(`tls reload failed (keeping old cert): ${err instanceof Error ? err.message : String(err)}`);
-			}
-		};
+		const reloadTls = createTlsReloader({
+			readTlsOptions,
+			setSecureContext: (options) => httpsServer.setSecureContext(options),
+			log: (message) => console.log(message),
+			warn: (message) => console.warn(message),
+		});
 		// Debounce: cert + key are often rewritten in quick succession. Watch
 		// the PARENT DIRECTORY (not each file) and filter by filename: `fs.watch`
 		// follows the inode, so an atomic renewal (write temp + rename(2))
 		// replaces the inode and a file-level watcher goes silent on the new
 		// file after the first reload. A directory watcher survives renames and
 		// reports the changed basename via the `filename` callback argument.
-		const certBase = basename(args.cert!);
-		const keyBase = basename(args.key!);
-		for (const dir of new Set([dirname(args.cert!), dirname(args.key!)])) {
-			try {
-				const watcher = watch(dir, (_event, filename) => {
-					// `fs.watch` directory events on macOS (FSEvents) frequently fire
-					// with `filename === null`; a strict `!== certBase` filter would
-					// reject it and renewals would silently never reload on macOS. When
-					// filename is null, fall through and reload anyway — `reloadTls` is
-					// idempotent and debounced, so a spurious reload just re-reads the
-					// same files. On Linux (inotify) the basename is carried reliably.
-					if (filename != null && filename !== certBase && filename !== keyBase) return;
-					if (reloadTimer) clearTimeout(reloadTimer);
-					reloadTimer = setTimeout(reloadTls, 500);
-				});
-				watcher.on("error", (err) => {
-					console.warn(`tls cert watch error: ${err instanceof Error ? err.message : String(err)}`);
-				});
-				tlsWatchers.push(watcher);
-			} catch (err) {
-				console.warn(`tls cert watch setup failed for ${dir}: ${err instanceof Error ? err.message : String(err)}`);
-			}
-		}
+		const tlsWatchController = createTlsWatchers({
+			certPath: args.cert,
+			keyPath: args.key,
+			watchDirectory: (dir, listener) => watch(dir, listener),
+			reloadTls,
+			warn: (message) => console.warn(message),
+		});
+		clearTlsReloadTimer = tlsWatchController.clearReloadTimer;
+		tlsWatchers.push(...tlsWatchController.watchers);
 		server = httpsServer;
 	} else {
 		server = createHttpServer(app);
@@ -273,19 +382,14 @@ async function main(): Promise<void> {
 		}
 		if (args.https) {
 			console.log("tls: native HTTPS enabled (cert + key hot-reload on file change)");
+		} else {
+			const insecureWarning = insecureRemoteWarning(args);
+			if (insecureWarning) console.warn(insecureWarning);
 		}
 	});
 	httpServer = server;
 
-	const shutdown = () => {
-		if (shuttingDown) return;
-		shuttingDown = true;
-		console.log("shutting down…");
-		if (reloadTimer) clearTimeout(reloadTimer);
-		for (const w of tlsWatchers) w.close();
-		server.close();
-		pool.stopAll().finally(() => process.exit(0));
-	};
+	const shutdown = () => beginShutdown("shutting down…", 0);
 	process.on("SIGINT", shutdown);
 	process.on("SIGTERM", shutdown);
 }
