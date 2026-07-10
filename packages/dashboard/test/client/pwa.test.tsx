@@ -48,6 +48,36 @@ vi.mock("../../src/client/api.js", () => ({
 			systemPromptPresent: false,
 		})),
 		transportChoices: vi.fn(async () => ({})),
+		// SessionScreen on mount hits branch/dailyCost/commands/pending/runtime
+		// (called sync inside refreshRuntimeDetails before allSettled, so a missing
+		// stub throws synchronously and leaks an unhandled rejection when the
+		// badge test drives a routed session). Stubbed to safe defaults mirroring
+		// screens.test.tsx.
+		branch: vi.fn(async () => ({ branch: null })),
+		dailyCost: vi.fn(async () => ({ cost: 0 })),
+		commands: vi.fn(async () => ({ commands: [] })),
+		pending: vi.fn(async () => ({ steering: [], followUp: [] })),
+		dequeue: vi.fn(async () => ({ steering: [], followUp: [] })),
+		runtime: vi.fn(async (key: string) => ({
+			key,
+			cwd: "/tmp/p",
+			state: {
+				sessionId: key,
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			backgroundAgents: [],
+			needsAttention: false,
+			createdAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+		})),
+		exportHtmlUrl: (key: string) => `/api/runtimes/${key}/export-html`,
 	},
 	connectEvents: vi.fn(() => () => {}),
 }));
@@ -166,6 +196,37 @@ async function mountAppAndFlush(): Promise<void> {
 	await Promise.resolve();
 	await Promise.resolve();
 	await new Promise((r) => setTimeout(r, 0));
+}
+
+/**
+ * Capture the SSE `onEnvelope` handler the store registers via connectEvents
+ * so a test can push synthetic envelopes (session_name_changed, agent_start,
+ * …) to drive session-state + fleet-refresh reactions. mockImplementationOnce
+ * is consumed by the single connectEvents call App's start() makes on mount.
+ */
+function captureEnvelopeHandler(): {
+	push: (env: { seq: number; key: string; event: Record<string, unknown> }) => void;
+} {
+	let onEnvelope: ((e: { seq: number; key: string; event: Record<string, unknown> }) => void) | undefined;
+	vi.mocked(connectEvents).mockImplementationOnce((handlers) => {
+		onEnvelope = handlers.onEnvelope;
+		return () => {};
+	});
+	return { push: (env) => onEnvelope?.(env) };
+}
+
+async function flushEffects(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+	await new Promise((r) => setTimeout(r, 0));
+}
+
+/** Runtime with an explicit display name + a long session id (for truncation tests). */
+function makeNamedRuntime(key: string, name: string | undefined, needsAttention: boolean) {
+	const rt = makeRuntime(key, needsAttention);
+	(rt.state as { sessionName?: string }).sessionName = name;
+	(rt.state as { sessionId: string }).sessionId = `${key}longsuffix1234`;
+	return rt;
 }
 
 describe("PWA client — service worker registration", () => {
@@ -315,5 +376,90 @@ describe("PWA client — notification dispatch gating", () => {
 		expect(showNotification).toHaveBeenCalledTimes(2);
 		expect(warnSpy).toHaveBeenCalledWith("dashboard: showNotification failed", expect.any(Error));
 		warnSpy.mockRestore();
+	});
+});
+
+describe("PWA client — browser tab ◆ attention badge", () => {
+	// The ◆ prefix on document.title is the primary in-tab attention signal and
+	// the no-SW fallback. Prior rounds had only a single `toContain("◆")`
+	// assertion; these cover badge presence for a fleet-runtime attention flag,
+	// name formatting ("◆ <name> — dreb"), the no-name "◆ dreb" form, and badge
+	// removal once attention clears.
+
+	it("shows a plain title with no ◆ when nothing needs attention", async () => {
+		vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
+		await mountAppAndFlush();
+		expect(document.title).toBe("dreb");
+		expect(document.title).not.toContain("◆");
+	});
+
+	it("badges the title with the runtime's sessionName when a runtime needs attention and is open", async () => {
+		// Routed to the session: displayName comes from currentRuntime.state.sessionName.
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [makeNamedRuntime("k1", "Deploy", true)],
+			diskSessions: [],
+		});
+		window.location.hash = "#/session/k1";
+		try {
+			await mountAppAndFlush();
+			expect(document.title).toBe("◆ Deploy — dreb");
+		} finally {
+			window.location.hash = "#/";
+		}
+	});
+
+	it("shows `◆ dreb` for a fleet runtime needing attention when not viewing a named session", async () => {
+		// Routed to fleet (no current session): displayName is undefined → base "dreb".
+		// The badge still fires because attention is global across runtimes/sessions,
+		// not gated on the current route.
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [makeNamedRuntime("k2", undefined, true)],
+			diskSessions: [],
+		});
+		await mountAppAndFlush();
+		expect(document.title).toBe("◆ dreb");
+	});
+
+	it("removes the ◆ badge once attention clears (fleet runtime no longer needs attention)", async () => {
+		// Seed attention, mount, then refresh the fleet to a no-attention runtime
+		// by pushing an agent_start envelope (handleEnvelope calls refreshFleet on
+		// agent_start, which re-reads api.fleet).
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [makeNamedRuntime("k3", undefined, true)],
+			diskSessions: [],
+		});
+		const stream = captureEnvelopeHandler();
+		await mountAppAndFlush();
+		expect(document.title).toContain("◆");
+
+		// The runtime clears attention; the next fleet refresh must drop the badge.
+		// (agent_start also creates a session for k3, but it has no uiRequests /
+		// errors / suggested command, so its needsAttention stays false.)
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [makeNamedRuntime("k3", undefined, false)],
+			diskSessions: [],
+		});
+		stream.push({ seq: 1, key: "k3", event: { type: "agent_start" } });
+		await flushEffects();
+
+		expect(document.title).not.toContain("◆");
+		expect(document.title).toBe("dreb");
+	});
+});
+
+describe("PWA client — notification title name fallback", () => {
+	it("notifies with `dreb — <id.slice(0,8)>` when the attention runtime has no sessionName", async () => {
+		// item.name = runtime.state.sessionName ?? runtime.state.sessionId.slice(0, 8).
+		// With no sessionName the notification title falls back to the truncated id
+		// (first 8 chars), so a still-unnamed session shows a meaningful label.
+		setPermission("granted");
+		setHidden(true);
+		const rt = makeRuntime("abcdef1234567890", true); // sessionId === key
+		vi.mocked(api.fleet).mockResolvedValue({ runtimes: [rt], diskSessions: [] });
+		await mountAppAndFlush();
+		expect(showNotification).toHaveBeenCalled();
+		const title = showNotification.mock.calls[0]?.[0] as string;
+		expect(title).toContain("abcdef12"); // first 8 chars of the session id
+		expect(title).toContain("dreb");
 	});
 });

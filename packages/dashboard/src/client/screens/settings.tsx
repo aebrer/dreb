@@ -59,7 +59,7 @@ function initialNotificationPermission(): NotificationPermission | "unsupported"
 		const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 		const isStandalone =
 			(navigator as { standalone?: boolean }).standalone === true ||
-			window.matchMedia?.("(display-mode: standalone)").matches === true;
+			window.matchMedia?.("(display-mode: standalone)")?.matches === true;
 		if (isIOS && !isStandalone) return "ios-install";
 		return "unsupported";
 	}

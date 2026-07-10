@@ -223,6 +223,23 @@ describe("sw install handler", () => {
 		expect(env.cache.add).toHaveBeenCalledTimes(2);
 		expect(env.self.skipWaiting).toHaveBeenCalledTimes(1);
 	});
+
+	it("C3: a `caches.open` rejection still forces activation (skipWaiting runs, install does not reject)", async () => {
+		// The outer caches.open() (not the per-URL cache.add()) can reject under
+		// private browsing / quota exhaustion. The catch-all on the install chain
+		// must still call skipWaiting so notifications + installability stay
+		// available — activation proceeds unconditionally even with no cache.
+		const env = loadSW();
+		env.caches.open.mockRejectedValue(new Error("CacheStorage unavailable (private browsing)"));
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const wait = fireInstall(env);
+		await expect(wait).resolves.toBeUndefined();
+		expect(env.self.skipWaiting).toHaveBeenCalledTimes(1);
+		// A loud error is logged so the failure isn't entirely silent.
+		expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("install cache open failed"), expect.any(Error));
+		errSpy.mockRestore();
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -270,6 +287,24 @@ describe("sw activate handler", () => {
 		await fireActivate(env);
 		expect(env.self.clients.claim).toHaveBeenCalledTimes(1);
 	});
+
+	it("D3: a `caches.keys` rejection does not abort activate — clients.claim still runs", async () => {
+		// Cache cleanup is best-effort: a CacheStorage failure during activate
+		// must not reject the event and skip clients.claim(), or already-open
+		// tabs stay on the stale SW and never get the new version's notifications.
+		const env = loadSW();
+		env.caches.keys.mockRejectedValue(new Error("CacheStorage unavailable"));
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const wait = fireActivate(env);
+		// The activate event must not reject (the cache-cleanup branch has its
+		// own .catch); Promise.all resolves to an array, so assert it resolves
+		// (not rejects) rather than a specific value.
+		await expect(wait).resolves.toBeDefined();
+		expect(env.self.clients.claim).toHaveBeenCalledTimes(1);
+		expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("cache cleanup failed"), expect.any(Error));
+		errSpy.mockRestore();
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -310,6 +345,31 @@ describe("sw fetch handler", () => {
 		expect(event.respondWith).not.toHaveBeenCalled();
 	});
 
+	it("B3b: a non-GET request (POST) is passed through (respondWith NOT called) — guards API mutations", async () => {
+		// The very first fetch-handler guard is `if (req.method !== "GET") return;`.
+		// Without it the SW would intercept POST/DELETE RPC mutations and either
+		// cache them or hand them to respondWith, breaking every dashboard write.
+		// A regression that reorders/removes this guard would corrupt all API
+		// writes — so assert a POST to a same-origin /api path (and a non-api path)
+		// both pass straight through to the network.
+		const env = loadSW();
+		const { event: apiPost } = makeFetchEvent({
+			method: "POST",
+			url: "https://dashboard.test/api/fleet",
+			mode: "cors",
+		});
+		env.handlers.fetch[0](apiPost);
+		expect(apiPost.respondWith).not.toHaveBeenCalled();
+
+		const { event: assetPost } = makeFetchEvent({
+			method: "POST",
+			url: "https://dashboard.test/assets/app.js",
+			mode: "cors",
+		});
+		env.handlers.fetch[0](assetPost);
+		expect(assetPost.respondWith).not.toHaveBeenCalled();
+	});
+
 	it("B4: a navigation that succeeds responds with the 200 network response and caches it", async () => {
 		const networkRes = new Response("<html></html>", { status: 200, headers: { "content-type": "text/html" } });
 		const fetchImpl = vi.fn(async () => networkRes);
@@ -332,6 +392,31 @@ describe("sw fetch handler", () => {
 		expect(putRes.status).toBe(200);
 	});
 
+	it("B4b: a navigation that returns a transient 4xx/5xx is returned to the page but NEVER cached", async () => {
+		// The navigation branch gates `cache.put` on `res.ok`. A transient 404/500
+		// must NOT be written to the shell cache — otherwise the next offline visit
+		// serves a cached error page instead of the graceful 503 fallback. The
+		// error response is still returned to the page verbatim (the server is up,
+		// the user should see the real error, not a fabricated one).
+		const errorRes = new Response("<html>Not Found</html>", {
+			status: 404,
+			headers: { "content-type": "text/html" },
+		});
+		const fetchImpl = vi.fn(async () => errorRes);
+		const env = loadSW({ fetchImpl });
+		const { event } = makeFetchEvent({ method: "GET", url: "https://dashboard.test/", mode: "navigate" });
+		env.handlers.fetch[0](event);
+
+		expect(event.respondWith).toHaveBeenCalledTimes(1);
+		const res = await event.respondWith.mock.calls[0][0];
+		expect(res).toBe(errorRes); // returned verbatim — the real server response
+		expect(res.status).toBe(404);
+		// Flush any pending microtasks; cache.put must not have been called at all.
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(env.cache.put).not.toHaveBeenCalled();
+	});
+
 	it("B5: a navigation that fails with an empty cache responds with 503 (never undefined)", async () => {
 		const fetchImpl = vi.fn(async () => {
 			throw new Error("network down");
@@ -347,10 +432,13 @@ describe("sw fetch handler", () => {
 		const res = await event.respondWith.mock.calls[0][0];
 		expect(res).toBeInstanceOf(Response);
 		expect(res.status).toBe(503);
-		// The fallback chain must CONSULT the cache before falling through to 503 —
-		// a regression that skips caches.match (e.g. a bare .catch(() => 503))
-		// would still pass the status assertion above but break offline fallback.
-		expect(env.caches.match).toHaveBeenCalled();
+		// The fallback chain CONSULTS the cache in TWO steps before falling through
+		// to 503: `caches.match(req)` then `caches.match("./")`. Asserting both
+		// calls (not just `toHaveBeenCalled`) guards against a regression that
+		// silently drops the middle "./" fallback (e.g. a bare `.catch(() => 503)`)
+		// which would still pass the status assertion above but break offline
+		// index fallback (the B6 middle path).
+		expect(env.caches.match).toHaveBeenCalledTimes(2);
 	});
 
 	it("B6: a navigation that fails with no cached request but a cached index serves the index (middle fallback)", async () => {

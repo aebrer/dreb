@@ -1385,6 +1385,49 @@ describe("dashboard client regressions", () => {
 			expect(checkbox.disabled).toBe(true);
 			expect(el.textContent).toContain("blocked by browser settings");
 		});
+
+		it("shows the unsupported hint and disables the toggle on a non-iOS browser with no Notification API", async () => {
+			// A non-iOS browser/WebView exposing no Notification API (e.g. an
+			// embedded WebView, or a privacy mode that strips it) lands in the
+			// "unsupported" branch — distinct from "ios-install" (the user can't
+			// fix it by installing). The toggle must be disabled and the hint must
+			// explain notifications are unavailable, not offer the install path.
+			vi.stubGlobal("Notification", undefined);
+			stubAgent("Mozilla/5.0 (X11; Linux x86_64)");
+			stubStandalone(false);
+			stubMatchMedia(false);
+
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const checkbox = el.querySelector("#pref-notifications") as HTMLInputElement;
+			expect(checkbox.disabled).toBe(true);
+			expect(el.textContent).toContain("browser notifications are unavailable in this environment");
+			expect(el.textContent).not.toContain("iOS notifications need the installed PWA");
+		});
+
+		it("does not crash when window.matchMedia is undefined (optional chaining guards .matches)", async () => {
+			// The display-mode probe is `window.matchMedia?.("…")?.matches`. If
+			// matchMedia is absent (old/embedded browsers) the access must
+			// short-circuit to undefined, not throw TypeError. Mount SettingsScreen
+			// with no matchMedia and a Notification API absent on a non-iOS UA so
+			// the standalone probe runs; the screen must render the unsupported
+			// hint rather than crashing to a blank view.
+			vi.stubGlobal("Notification", undefined);
+			stubAgent("Mozilla/5.0 (X11; Linux x86_64)");
+			// Ensure matchMedia is truly absent (some jsdom configs stub it).
+			Reflect.deleteProperty(window, "matchMedia");
+
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const checkbox = el.querySelector("#pref-notifications") as HTMLInputElement;
+			expect(checkbox).not.toBeNull();
+			expect(checkbox.disabled).toBe(true);
+			expect(el.textContent).toContain("browser notifications are unavailable in this environment");
+		});
 	});
 
 	it("settings refreshes pairing code and unpairs devices", async () => {

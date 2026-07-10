@@ -29,7 +29,11 @@ self.addEventListener("install", (event) => {
 	// Pre-cache entries individually so a single failed URL does not reject
 	// the whole install (which would prevent skipWaiting/activation and leave
 	// notifications + installability permanently unavailable with no error).
-	// Degraded cache is acceptable; activation must proceed unconditionally.
+	// Degraded cache is acceptable; activation must proceed unconditionally —
+	// so a CacheStorage failure at the top level (e.g. `caches.open` rejecting
+	// under private browsing / quota exhaustion / storage corruption) is caught
+	// here and skipWaiting still runs, keeping notifications + installability
+	// available even when the precache store is unusable.
 	event.waitUntil(
 		caches
 			.open(SHELL_CACHE)
@@ -42,21 +46,34 @@ self.addEventListener("install", (event) => {
 					),
 				),
 			)
-			.then(() => self.skipWaiting()),
+			.then(() => self.skipWaiting())
+			.catch((err) => {
+				console.error("[sw] install cache open failed, forcing activation:", err);
+				return self.skipWaiting();
+			}),
 	);
 });
 
 self.addEventListener("activate", (event) => {
 	event.waitUntil(
 		Promise.all([
-			// Drop caches from prior versions.
-			caches.keys().then((keys) =>
-				Promise.all(
-					keys
-						.filter((key) => key.startsWith("dreb-dashboard-") && key !== SHELL_CACHE)
-						.map((key) => caches.delete(key)),
-				),
-			),
+			// Drop caches from prior versions. Best-effort: a CacheStorage failure
+			// here (e.g. private browsing) must not reject the activate event and
+			// prevent clients.claim() from running — otherwise already-open tabs
+			// stay controlled by the stale SW and never receive notifications from
+			// the new version until a full reload.
+			caches
+				.keys()
+				.then((keys) =>
+					Promise.all(
+						keys
+							.filter((key) => key.startsWith("dreb-dashboard-") && key !== SHELL_CACHE)
+							.map((key) => caches.delete(key)),
+					),
+				)
+				.catch((err) => {
+					console.error("[sw] cache cleanup failed:", err);
+				}),
 			self.clients.claim(),
 		]),
 	);

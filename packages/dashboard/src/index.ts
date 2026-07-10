@@ -158,7 +158,15 @@ async function main(): Promise<void> {
 	let httpServer: HttpServer | HttpsServer | undefined;
 	let reloadTimer: ReturnType<typeof setTimeout> | undefined;
 	const tlsWatchers: ReturnType<typeof watch>[] = [];
+	// Idempotency guard: SIGINT and SIGTERM can arrive close together (and an
+	// onRestart call can race a signal), so the second invocation would call
+	// server.close() again → ERR_SERVER_NOT_RUNNING, unwinding before pool.stopAll
+	// / TLS-watcher cleanup completes. Whichever path fires first wins; the rest
+	// are no-ops.
+	let shuttingDown = false;
 	const onRestart = () => {
+		if (shuttingDown) return;
+		shuttingDown = true;
 		console.log("restart requested — exiting for supervisor to respawn");
 		if (reloadTimer) clearTimeout(reloadTimer);
 		for (const w of tlsWatchers) w.close();
@@ -270,6 +278,8 @@ async function main(): Promise<void> {
 	httpServer = server;
 
 	const shutdown = () => {
+		if (shuttingDown) return;
+		shuttingDown = true;
 		console.log("shutting down…");
 		if (reloadTimer) clearTimeout(reloadTimer);
 		for (const w of tlsWatchers) w.close();
