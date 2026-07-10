@@ -208,3 +208,5 @@ See [FORK.md](FORK.md) for details.
 ## License
 
 MIT
+
+Contribution types: [docs/contribution-types.md](docs/contribution-types.md).
