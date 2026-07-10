@@ -55,4 +55,25 @@ describe("supportsXhigh", () => {
 		expect(model).toBeDefined();
 		expect(supportsXhigh(model!)).toBe(true);
 	});
+
+	it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const)("returns true for GPT-5.6 model %s", (id) => {
+		const model = getModel("openai-codex", id);
+		expect(model).toBeDefined();
+		expect(supportsXhigh(model!)).toBe(true);
+	});
+
+	it.each([
+		["gpt-5.6-sol", { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 }],
+		["gpt-5.6-terra", { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 }],
+		["gpt-5.6-luna", { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 }],
+	] as const)("has the expected OpenAI Codex registry spec for %s", (id, cost) => {
+		const model = getModel("openai-codex", id);
+		expect(model).toBeDefined();
+		expect(model!.cost.input).toBe(cost.input);
+		expect(model!.cost.output).toBe(cost.output);
+		expect(model!.cost.cacheRead).toBe(cost.cacheRead);
+		// GPT-5.6+ cache writes are billed at 1.25x the input rate (OpenAI pricing docs).
+		expect(model!.cost.cacheWrite).toBe(cost.cacheWrite);
+		expect(model!.contextWindow).toBe(372000);
+	});
 });

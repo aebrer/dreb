@@ -1,15 +1,17 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ExtensionRunner } from "../src/core/extensions/runner.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
-import { DefaultResourceLoader } from "../src/core/resource-loader.js";
+import { DefaultResourceLoader, loadContextFilesFromDir } from "../src/core/resource-loader.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import type { Skill } from "../src/core/skills.js";
 import { createSyntheticSourceInfo } from "../src/core/source-info.js";
+
+const itIfCaseInsensitiveFilesystem = hasCaseInsensitiveFilesystem() ? it : it.skip;
 
 describe("DefaultResourceLoader", () => {
 	let tempDir: string;
@@ -26,6 +28,16 @@ describe("DefaultResourceLoader", () => {
 
 	afterEach(() => {
 		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	itIfCaseInsensitiveFilesystem("dedupes a context file reached through differently-cased candidates", () => {
+		const contextPath = join(cwd, "AGENTS.md");
+		writeFileSync(contextPath, "# context");
+
+		const contextFiles = loadContextFilesFromDir(cwd);
+
+		expect(existsSync(join(cwd, "AGENTS.MD"))).toBe(true);
+		expect(contextFiles).toEqual([{ path: contextPath, content: "# context" }]);
 	});
 
 	describe("reload", () => {
@@ -597,3 +609,14 @@ export default function(dreb: ExtensionAPI) {
 		});
 	});
 });
+
+function hasCaseInsensitiveFilesystem(): boolean {
+	const dir = join(tmpdir(), `rl-case-check-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	try {
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "AGENTS.md"), "");
+		return existsSync(join(dir, "AGENTS.MD"));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}

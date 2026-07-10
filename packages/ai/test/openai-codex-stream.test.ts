@@ -185,6 +185,183 @@ describe("openai-codex streaming", () => {
 		expect(sawDone).toBe(true);
 	});
 
+	it("exposes final GPT-5.6 Responses Lite SSE payloads to onPayload", async () => {
+		const token = mockToken();
+		let requestHeaders: Headers | undefined;
+		let requestBody: Record<string, unknown> | undefined;
+		global.fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				requestHeaders = new Headers(init?.headers);
+				requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return new Response(buildSSEPayload({ status: "completed" }), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.6-luna",
+			name: "GPT-5.6 Luna",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 372000,
+			maxTokens: 128000,
+		};
+		const context: Context = {
+			systemPrompt: "Original instructions",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		};
+
+		const onPayload = vi.fn((payload: unknown) => {
+			const litePayload = payload as Record<string, unknown>;
+			expect(litePayload).toMatchObject({
+				model: "gpt-5.6-luna",
+				tool_choice: "auto",
+				parallel_tool_calls: false,
+				reasoning: { context: "all_turns" },
+			});
+			expect(litePayload.instructions).toBeUndefined();
+			expect(litePayload.tools).toBeUndefined();
+			expect(litePayload.input).toEqual([
+				{ type: "additional_tools", role: "developer", tools: [] },
+				{
+					type: "message",
+					role: "developer",
+					content: [{ type: "input_text", text: "Original instructions" }],
+				},
+				{
+					role: "user",
+					content: [{ type: "input_text", text: "Say hello" }],
+				},
+			]);
+			return { ...litePayload, text: { verbosity: "high" } };
+		});
+		await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			sessionId: "dreb-session",
+			onPayload,
+		}).result();
+
+		expect(onPayload).toHaveBeenCalledOnce();
+
+		expect(requestHeaders?.get("version")).toBe("0.144.0");
+		expect(requestHeaders?.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		const sessionId = requestHeaders?.get("session-id");
+		expect(sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(requestHeaders?.get("x-session-affinity")).toBe(sessionId);
+		expect(requestHeaders?.get("session_id")).toBeNull();
+		expect(requestBody).toMatchObject({
+			model: "gpt-5.6-luna",
+			prompt_cache_key: sessionId,
+			tool_choice: "auto",
+			parallel_tool_calls: false,
+			reasoning: { context: "all_turns" },
+			text: { verbosity: "high" },
+		});
+		expect(requestBody?.tools).toBeUndefined();
+		expect(requestBody?.instructions).toBeUndefined();
+		expect(requestBody?.input).toEqual([
+			{ type: "additional_tools", role: "developer", tools: [] },
+			{
+				type: "message",
+				role: "developer",
+				content: [{ type: "input_text", text: "Original instructions" }],
+			},
+			{
+				role: "user",
+				content: [{ type: "input_text", text: "Say hello" }],
+			},
+		]);
+	});
+
+	it("rejects onPayload callbacks that reintroduce unsupported Lite fields", async () => {
+		const fetchMock = vi.fn();
+		global.fetch = fetchMock as typeof fetch;
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.6-luna",
+			name: "GPT-5.6 Luna",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 372000,
+			maxTokens: 128000,
+		};
+
+		const result = await streamOpenAICodexResponses(
+			model,
+			{ messages: [{ role: "user", content: "Hello", timestamp: Date.now() }] },
+			{
+				apiKey: mockToken(),
+				onPayload: (payload) => ({ ...(payload as Record<string, unknown>), instructions: "unsupported" }),
+			},
+		).result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("Responses Lite does not support top-level instructions");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("leaves legacy GPT-5.5 SSE requests unchanged", async () => {
+		const token = mockToken();
+		let requestHeaders: Headers | undefined;
+		let requestBody: Record<string, unknown> | undefined;
+		const payload = {
+			model: "gpt-5.5",
+			input: [{ role: "user", content: [{ type: "input_text", text: "Hello" }] }],
+			instructions: "Be concise.",
+			tools: [],
+			parallel_tool_calls: true,
+			prompt_cache_key: "legacy-session",
+			reasoning: { effort: "medium", summary: "auto" },
+			stream: true,
+		};
+		global.fetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url === "https://chatgpt.com/backend-api/codex/responses") {
+				requestHeaders = new Headers(init?.headers);
+				requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+				return new Response(buildSSEPayload({ status: "completed" }), {
+					status: 200,
+					headers: { "content-type": "text/event-stream" },
+				});
+			}
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.5",
+			name: "GPT-5.5",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		await streamOpenAICodexResponses(
+			model,
+			{ messages: [{ role: "user", content: "Hello", timestamp: Date.now() }] },
+			{ apiKey: token, sessionId: "legacy-session", onPayload: () => payload },
+		).result();
+
+		expect(requestHeaders?.get("session_id")).toBe("legacy-session");
+		expect(requestHeaders?.get("version")).toBeNull();
+		expect(requestHeaders?.get("x-openai-internal-codex-responses-lite")).toBeNull();
+		expect(requestBody).toEqual(payload);
+	});
+
 	it("reports truncated SSE responses with a retryable stream-drop message", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
@@ -941,101 +1118,104 @@ describe("openai-codex streaming", () => {
 		});
 	});
 
-	it.each(["gpt-5.4", "gpt-5.5"])("clamps %s minimal reasoning effort to low", async (modelId) => {
-		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
-		process.env.DREB_CODING_AGENT_DIR = tempDir;
+	it.each(["gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+		"clamps %s minimal reasoning effort to low",
+		async (modelId) => {
+			const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
+			process.env.DREB_CODING_AGENT_DIR = tempDir;
 
-		const payload = Buffer.from(
-			JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
-			"utf8",
-		).toString("base64");
-		const token = `aaa.${payload}.bbb`;
+			const payload = Buffer.from(
+				JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc_test" } }),
+				"utf8",
+			).toString("base64");
+			const token = `aaa.${payload}.bbb`;
 
-		const sse = `${[
-			`data: ${JSON.stringify({
-				type: "response.output_item.added",
-				item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
-			})}`,
-			`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
-			`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
-			`data: ${JSON.stringify({
-				type: "response.output_item.done",
-				item: {
-					type: "message",
-					id: "msg_1",
-					role: "assistant",
-					status: "completed",
-					content: [{ type: "output_text", text: "Hello" }],
-				},
-			})}`,
-			`data: ${JSON.stringify({
-				type: "response.completed",
-				response: {
-					status: "completed",
-					usage: {
-						input_tokens: 5,
-						output_tokens: 3,
-						total_tokens: 8,
-						input_tokens_details: { cached_tokens: 0 },
+			const sse = `${[
+				`data: ${JSON.stringify({
+					type: "response.output_item.added",
+					item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
+				})}`,
+				`data: ${JSON.stringify({ type: "response.content_part.added", part: { type: "output_text", text: "" } })}`,
+				`data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello" })}`,
+				`data: ${JSON.stringify({
+					type: "response.output_item.done",
+					item: {
+						type: "message",
+						id: "msg_1",
+						role: "assistant",
+						status: "completed",
+						content: [{ type: "output_text", text: "Hello" }],
 					},
+				})}`,
+				`data: ${JSON.stringify({
+					type: "response.completed",
+					response: {
+						status: "completed",
+						usage: {
+							input_tokens: 5,
+							output_tokens: 3,
+							total_tokens: 8,
+							input_tokens_details: { cached_tokens: 0 },
+						},
+					},
+				})}`,
+			].join("\n\n")}\n\n`;
+
+			const encoder = new TextEncoder();
+			const stream = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(encoder.encode(sse));
+					controller.close();
 				},
-			})}`,
-		].join("\n\n")}\n\n`;
+			});
 
-		const encoder = new TextEncoder();
-		const stream = new ReadableStream<Uint8Array>({
-			start(controller) {
-				controller.enqueue(encoder.encode(sse));
-				controller.close();
-			},
-		});
+			const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+				const url = typeof input === "string" ? input : input.toString();
+				if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
+					return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
+				}
+				if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
+					return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
+				}
+				if (url === "https://chatgpt.com/backend-api/codex/responses") {
+					const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
+					expect(body?.reasoning).toEqual({ effort: "low", summary: "auto" });
 
-		const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
-			const url = typeof input === "string" ? input : input.toString();
-			if (url === "https://api.github.com/repos/openai/codex/releases/latest") {
-				return new Response(JSON.stringify({ tag_name: "rust-v0.0.0" }), { status: 200 });
-			}
-			if (url.startsWith("https://raw.githubusercontent.com/openai/codex/")) {
-				return new Response("PROMPT", { status: 200, headers: { etag: '"etag"' } });
-			}
-			if (url === "https://chatgpt.com/backend-api/codex/responses") {
-				const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
-				expect(body?.reasoning).toEqual({ effort: "low", summary: "auto" });
+					return new Response(stream, {
+						status: 200,
+						headers: { "content-type": "text/event-stream" },
+					});
+				}
+				return new Response("not found", { status: 404 });
+			});
 
-				return new Response(stream, {
-					status: 200,
-					headers: { "content-type": "text/event-stream" },
-				});
-			}
-			return new Response("not found", { status: 404 });
-		});
+			global.fetch = fetchMock as typeof fetch;
 
-		global.fetch = fetchMock as typeof fetch;
+			const model: Model<"openai-codex-responses"> = {
+				id: modelId,
+				name: modelId,
+				api: "openai-codex-responses",
+				provider: "openai-codex",
+				baseUrl: "https://chatgpt.com/backend-api",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 400000,
+				maxTokens: 128000,
+			};
 
-		const model: Model<"openai-codex-responses"> = {
-			id: modelId,
-			name: modelId,
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: "https://chatgpt.com/backend-api",
-			reasoning: true,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 400000,
-			maxTokens: 128000,
-		};
+			const context: Context = {
+				systemPrompt: "You are a helpful assistant.",
+				messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+			};
 
-		const context: Context = {
-			systemPrompt: "You are a helpful assistant.",
-			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
-		};
-
-		const streamResult = streamOpenAICodexResponses(model, context, {
-			apiKey: token,
-			reasoningEffort: "minimal",
-		});
-		await streamResult.result();
-	});
+			const streamResult = streamOpenAICodexResponses(model, context, {
+				apiKey: token,
+				reasoningEffort: "minimal",
+			});
+			await streamResult.result();
+		},
+	);
 
 	it("applies flex service tier pricing (0.5x multiplier)", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));

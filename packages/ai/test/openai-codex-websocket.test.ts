@@ -192,6 +192,123 @@ describe("openai-codex WebSocket streaming", () => {
 		expect(onWarning).toHaveBeenCalledWith("ws_parse_error", expect.stringContaining("Malformed WebSocket message"));
 	});
 
+	it("adds Responses Lite client metadata to GPT-5.6 WebSocket requests", async () => {
+		const token = mockToken();
+		let requestHeaders: Headers | undefined;
+		let request: Record<string, unknown> | undefined;
+		(globalThis as { WebSocket?: unknown }).WebSocket = class extends MockWebSocket {
+			constructor(url: string, options?: { headers?: Record<string, string> }) {
+				super(url, options);
+				requestHeaders = new Headers(options?.headers);
+			}
+
+			send(data: string): void {
+				request = JSON.parse(data) as Record<string, unknown>;
+				setTimeout(() => {
+					this.emit("message", {
+						data: JSON.stringify({
+							type: "response.completed",
+							response: {
+								status: "completed",
+								usage: {
+									input_tokens: 0,
+									output_tokens: 0,
+									total_tokens: 0,
+									input_tokens_details: { cached_tokens: 0 },
+								},
+							},
+						}),
+					});
+				}, 0);
+			}
+		};
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.6-terra",
+			name: "GPT-5.6 Terra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 372000,
+			maxTokens: 128000,
+		};
+		await streamOpenAICodexResponses(
+			model,
+			{ systemPrompt: "Be concise.", messages: [{ role: "user", content: "Hello", timestamp: Date.now() }] },
+			{ apiKey: token, sessionId: "websocket-session", transport: "websocket" },
+		).result();
+
+		expect(requestHeaders?.get("version")).toBe("0.144.0");
+		expect(requestHeaders?.get("x-openai-internal-codex-responses-lite")).toBe("true");
+		const sessionId = requestHeaders?.get("session-id");
+		expect(sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(requestHeaders?.get("x-session-affinity")).toBe(sessionId);
+		expect(request).toMatchObject({
+			type: "response.create",
+			client_metadata: { ws_request_header_x_openai_internal_codex_responses_lite: "true" },
+		});
+	});
+
+	it("uses transient Lite affinity IDs without caching anonymous WebSockets", async () => {
+		const token = mockToken();
+		const requestHeaders: Headers[] = [];
+		let socketCount = 0;
+		(globalThis as { WebSocket?: unknown }).WebSocket = class extends MockWebSocket {
+			constructor(url: string, options?: { headers?: Record<string, string> }) {
+				super(url, options);
+				socketCount++;
+				requestHeaders.push(new Headers(options?.headers));
+			}
+
+			send(): void {
+				setTimeout(() => {
+					this.emit("message", {
+						data: JSON.stringify({
+							type: "response.completed",
+							response: {
+								status: "completed",
+								usage: {
+									input_tokens: 0,
+									output_tokens: 0,
+									total_tokens: 0,
+									input_tokens_details: { cached_tokens: 0 },
+								},
+							},
+						}),
+					});
+				}, 0);
+			}
+		};
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.6-terra",
+			name: "GPT-5.6 Terra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 372000,
+			maxTokens: 128000,
+		};
+		const context: Context = { messages: [{ role: "user", content: "Hello", timestamp: Date.now() }] };
+
+		await streamOpenAICodexResponses(model, context, { apiKey: token, transport: "websocket" }).result();
+		await streamOpenAICodexResponses(model, context, { apiKey: token, transport: "websocket" }).result();
+
+		expect(socketCount).toBe(2);
+		expect(requestHeaders).toHaveLength(2);
+		const firstSessionId = requestHeaders[0]?.get("session-id");
+		const secondSessionId = requestHeaders[1]?.get("session-id");
+		expect(firstSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(secondSessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+		expect(secondSessionId).not.toBe(firstSessionId);
+	});
+
 	it("reports pre-completion WebSocket closes with a retryable stream-drop message", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-ws-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
