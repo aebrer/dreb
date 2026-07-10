@@ -125,7 +125,7 @@ The dashboard is the visual face of dreb: every agent session on the host, live 
 <!-- screenshot: fleet overview, desktop (light) -->
 <!-- screenshot: session view, mobile -->
 
-**Fleet overview.** Home base is every session across every project: live sessions with status chips (running / needs-attention / idle / error), activity lines, running subagents, task progress, context usage, and model — plus past sessions grouped by project, resumable with one tap. When a session needs input, the browser tab badges and (opt-in) sends a notification.
+**Fleet overview.** Home base is every session across every project: live sessions with status chips (running / needs-attention / idle / error), activity lines, running subagents, task progress, context usage, and model — plus past sessions grouped by project, resumable with one tap. When a session needs input, the browser tab badges and (opt-in) sends a service-worker notification (installable PWA, works on Android and iOS).
 
 **Full-parity session view.** Not a reduced chat client: streaming markdown, thinking blocks, bespoke tool cards (read/write/edit/bash and markdown-rendering tools), task panels, queued-message chips, image attach/paste, slash-command autocomplete, model/thinking switchers, fork-from-message, HTML export. While the agent works you can **steer** (inject into the running turn), **queue follow-ups**, or **stop** — the same queue semantics as the TUI.
 
@@ -149,6 +149,15 @@ dreb-dashboard --remote --allow you@example.com
 ```
 
 Every remote request passes fail-closed layers: tailnet identity resolution, identity allowlist (empty list denies everyone), first-login pairing with a rotating 6-digit code shown only on the host, then a signed device cookie. Paired devices are listed in settings and can be unpaired at any time. Pairing grants terminal-equivalent power — the pairing screen says so before the code is entered.
+
+**Installable PWA + mobile notifications.** The dashboard is an installable web app — add it to the home screen on Android Chrome or iOS Safari 16.4+ for a standalone, no-URL-bar experience. Needs-attention notifications go through the service worker (`registration.showNotification`) — the only path that works on Android (which removed the page Notification constructor) and on iOS (installed PWA only). For remote access from a phone, notifications and the service worker require a **secure context** (HTTPS), so the dashboard can terminate TLS itself using `tailscale cert` files — no reverse proxy, and the auth model is unchanged (the peer address stays the real tailnet IP):
+
+```bash
+dreb-dashboard --remote --allow you@example.com \
+  --https --cert /etc/dreb/cert.pem --key /etc/dreb/key.pem
+```
+
+Local mode (`http://127.0.0.1`) already qualifies as a secure context, so install and notifications work there with no TLS setup. See the [dashboard docs](packages/coding-agent/docs/dashboard.md) for the one-time `tailscale cert` setup and renewal walkthrough.
 
 For auto-restart on Linux, install a systemd user unit. Use the absolute path from `which dreb-dashboard` for `ExecStart` (the example below matches an npm global prefix under `~/.npm-global`):
 

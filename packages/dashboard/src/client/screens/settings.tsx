@@ -42,6 +42,35 @@ function modelMatchesQuery(model: ModelChoice, query: string): boolean {
 	return `${model.provider}/${model.id} ${model.name ?? ""}`.toLowerCase().includes(query);
 }
 
+/**
+ * Compute the initial notification-permission state for the settings screen.
+ * NOTE: Solid's `createSignal` treats a function argument as the stored value,
+ * not as a lazy initializer — so this must be called (not passed as `() => …`)
+ * when constructing the signal, otherwise the signal holds the function object
+ * and the disabled/hint bindings never see "ios-install" / "unsupported" /
+ * "denied".
+ */
+function initialNotificationPermission(): NotificationPermission | "unsupported" | "ios-install" | "insecure" {
+	if (typeof Notification === "undefined") {
+		// Plain HTTP over a non-loopback host (e.g. `--remote` without `--https`)
+		// is an insecure context: the browser exposes no Notification API and no
+		// service workers at all. Installing the PWA cannot fix this — say so
+		// instead of showing a misleading install hint or a bare "unsupported".
+		if (window.isSecureContext === false) return "insecure";
+		// iOS Safari exposes no Notification API in a browser tab — only the
+		// installed PWA (Add to Home Screen) gets one (iOS 16.4+). Show the
+		// install prerequisite instead of a bare "unsupported" so the user
+		// knows what to do rather than thinking their device can't do it.
+		const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+		const isStandalone =
+			(navigator as { standalone?: boolean }).standalone === true ||
+			window.matchMedia?.("(display-mode: standalone)")?.matches === true;
+		if (isIOS && !isStandalone) return "ios-install";
+		return "unsupported";
+	}
+	return Notification.permission;
+}
+
 function groupedModels(models: ModelChoice[]): Array<{ provider: string; models: ModelChoice[] }> {
 	const groups = new Map<string, ModelChoice[]>();
 	for (const model of models) {
@@ -137,9 +166,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	const [modelPickerTarget, setModelPickerTarget] = createSignal<ModelPickerTarget>();
 	const [editingAgent, setEditingAgent] = createSignal<string>();
 	const [agentContextCwd, setAgentContextCwd] = createSignal<string>();
-	const [notificationPermission, setNotificationPermission] = createSignal<NotificationPermission | "unsupported">(
-		typeof Notification === "undefined" ? "unsupported" : Notification.permission,
-	);
+	const [notificationPermission, setNotificationPermission] = createSignal<
+		NotificationPermission | "unsupported" | "ios-install" | "insecure"
+	>(initialNotificationPermission());
 
 	const [settings, { mutate, refetch }] = createResource(async () => {
 		setError(undefined);
@@ -688,9 +717,13 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 							<span class="hint">
 								{notificationPermission() === "denied"
 									? "blocked by browser settings — re-enable notifications in site permissions"
-									: notificationPermission() === "unsupported"
-										? "browser notifications are unavailable in this environment"
-										: "show a browser notification when a hidden tab needs input"}
+									: notificationPermission() === "insecure"
+										? "this page is not a secure context — notifications need HTTPS. Run the server with --https (tailscale cert <host>.<tailnet>.ts.net) and open it via the https:// hostname"
+										: notificationPermission() === "ios-install"
+											? "iOS notifications need the installed PWA — tap Share → Add to Home Screen, then open dreb from the home screen icon"
+											: notificationPermission() === "unsupported"
+												? "browser notifications are unavailable in this environment"
+												: "show a notification when the tab needs input (Android/desktop need the app installed on mobile; works over HTTPS or localhost)"}
 							</span>
 						</span>
 						<span class="setting-control">
@@ -700,7 +733,10 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 									type="checkbox"
 									checked={notificationPermission() === "granted"}
 									disabled={
-										notificationPermission() === "denied" || notificationPermission() === "unsupported"
+										notificationPermission() === "denied" ||
+										notificationPermission() === "unsupported" ||
+										notificationPermission() === "ios-install" ||
+										notificationPermission() === "insecure"
 									}
 									onChange={(e) => {
 										if (e.currentTarget.checked) void requestNotifications();
