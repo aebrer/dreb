@@ -18,7 +18,7 @@ This command is strictly for **planning**. Do NOT implement any code changes —
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
 5. **Task tracking** — Use the `tasks_update` tool to show progress through multi-step commands.
 6. **Project conventions** — Check for CLAUDE.md, AGENTS.md, .dreb/CONTEXT.md, and CONTRIBUTING.md before planning.
-7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks.
+7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 ## Step 1: Set up task tracking
 
@@ -98,14 +98,15 @@ git commit --allow-empty -m "chore: open PR for issue <N>"
 git push -u origin feature/issue-<N>-<slug>
 
 # Open draft PR
-cat > /tmp/gh-body.md << 'MACH6_EOF'
+GH_BODY="$(mktemp /tmp/gh-body.XXXXXX.md)"
+cat > "$GH_BODY" << 'MACH6_EOF'
 Closes #<N>
 
 <brief description>
 
 Implementation plan posted as a comment below.
 MACH6_EOF
-gh pr create --draft --title "<title>" --body-file /tmp/gh-body.md
+gh pr create --draft --title "<title>" --body-file "$GH_BODY"
 ```
 
 Update task: branch → completed, post → in_progress.
@@ -113,7 +114,8 @@ Update task: branch → completed, post → in_progress.
 ## Step 7: Post plan to PR
 
 ```bash
-cat > /tmp/gh-comment.md << 'MACH6_EOF'
+GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-plan -->
 ## Implementation Plan
 
@@ -122,7 +124,7 @@ cat > /tmp/gh-comment.md << 'MACH6_EOF'
 ---
 *Plan created by mach6*
 MACH6_EOF
-gh pr comment <pr-number> --body-file /tmp/gh-comment.md
+gh pr comment <pr-number> --body-file "$GH_BODY"
 ```
 
 Update task: post → completed.
