@@ -7,6 +7,37 @@
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    /* Thin, hairline scrollbars that follow the injected theme tokens, so they
+       adapt to the exported theme automatically — no color literals. Firefox /
+       standards via scrollbar-*; Chromium / WebKit via ::-webkit-scrollbar*.
+       Hover swaps the thumb color; no shadows or gradients. */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--dim) transparent;
+    }
+
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--dim);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: var(--muted);
+    }
+
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+
     :root {
       --line-height: 18px; /* 12px font * 1.5 */
       --sidebar-width: 400px;
