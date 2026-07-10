@@ -258,9 +258,9 @@ Compaction is lossy. The full history remains in the JSONL file; use `/tree` to 
 
 ### Tab Title
 
-After a few tool calls, dreb auto-generates a short terminal tab title describing the session's task. Useful when multiple tabs are open. Fires once per session via a background LLM call; failures are silent.
+After a few tool calls, dreb auto-generates a terminal tab title describing the session's task — based primarily on your actual request and current-session actions, with branch/repo/cwd used only for disambiguation. Useful when multiple tabs are open. Fires once per session via a background LLM call, and never overwrites an already-named (e.g. resumed) session; failures are surfaced (shown in interactive mode, logged to stderr in RPC mode).
 
-Disable or adjust the trigger threshold in [settings](docs/settings.md):
+Disable, adjust the trigger threshold, or set a title length target in [settings](docs/settings.md):
 
 ```json
 { "tabTitle": { "enabled": false } }
