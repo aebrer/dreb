@@ -14,7 +14,7 @@ argument-hint: "<pr-number> [code|errors|tests|completeness|simplify]"
 2. **HTML markers** — Use `<!-- mach6-review -->` and `<!-- mach6-assessment -->` as the first line of comment bodies.
 3. **No `#N` in comment bodies** — Use "finding 3", "item 3", "stage 2" etc. instead.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
-5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks.
+5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 **Important: Do NOT fix any issues in this session. Fixes happen via `/skill:mach6-implement`.**
 
@@ -96,7 +96,8 @@ Update task: review → completed, post-review → in_progress.
 Compile all findings from all agents into a single structured comment:
 
 ```bash
-cat > /tmp/gh-comment.md << 'MACH6_EOF'
+GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-review -->
 ## Code Review
 
@@ -117,7 +118,7 @@ cat > /tmp/gh-comment.md << 'MACH6_EOF'
 ---
 *Reviewed by mach6*
 MACH6_EOF
-gh pr comment <pr-number> --body-file /tmp/gh-comment.md
+gh pr comment <pr-number> --body-file "$GH_BODY"
 ```
 
 Save the review comment URL:
@@ -156,7 +157,8 @@ Update task: assess → completed, post-assess → in_progress.
 ## Step 7: Post assessment
 
 ```bash
-cat > /tmp/gh-comment.md << 'MACH6_EOF'
+GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-assessment -->
 ## Review Assessment
 
@@ -175,7 +177,7 @@ cat > /tmp/gh-comment.md << 'MACH6_EOF'
 ---
 *Assessment by mach6*
 MACH6_EOF
-gh pr comment <pr-number> --body-file /tmp/gh-comment.md
+gh pr comment <pr-number> --body-file "$GH_BODY"
 ```
 
 Update task: post-assess → completed, summary → in_progress.
@@ -189,10 +191,11 @@ Present to the user:
 
 If any findings were classified as **deferred**, ask the user if they want to create issues for them:
 ```bash
-cat > /tmp/gh-body.md << 'MACH6_EOF'
+GH_BODY="$(mktemp /tmp/gh-body.XXXXXX.md)"
+cat > "$GH_BODY" << 'MACH6_EOF'
 <body referencing PR and finding>
 MACH6_EOF
-gh issue create --title "<title>" --body-file /tmp/gh-body.md
+gh issue create --title "<title>" --body-file "$GH_BODY"
 ```
 
 Update task: summary → completed.
