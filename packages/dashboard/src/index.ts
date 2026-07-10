@@ -15,7 +15,7 @@ import { existsSync, readFileSync, watch } from "node:fs";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DashboardAuth } from "./server/auth.js";
 import { FilePairingStorage, loadOrCreateDashboardSecret } from "./server/pairing-storage.js";
@@ -152,9 +152,16 @@ async function main(): Promise<void> {
 	// Restart hook: exit non-zero so a supervisor (systemd Restart=on-failure,
 	// etc.) respawns the process with the freshly-built dist. Assigned the http
 	// server below via a mutable holder so the closure can close it first.
+	// The TLS hot-reload debounce timer and directory watchers are lifted here
+	// too, so onRestart and the shutdown handler can release them (otherwise
+	// they leak across restart/exit).
 	let httpServer: HttpServer | HttpsServer | undefined;
+	let reloadTimer: ReturnType<typeof setTimeout> | undefined;
+	const tlsWatchers: ReturnType<typeof watch>[] = [];
 	const onRestart = () => {
 		console.log("restart requested — exiting for supervisor to respawn");
+		if (reloadTimer) clearTimeout(reloadTimer);
+		for (const w of tlsWatchers) w.close();
 		httpServer?.close();
 		pool.stopAll().finally(() => process.exit(1));
 	};
@@ -209,13 +216,28 @@ async function main(): Promise<void> {
 				console.warn(`tls reload failed (keeping old cert): ${err instanceof Error ? err.message : String(err)}`);
 			}
 		};
-		// Debounce: cert + key are often rewritten in quick succession.
-		let reloadTimer: ReturnType<typeof setTimeout> | undefined;
-		for (const file of [args.cert, args.key]) {
-			watch(file!, () => {
-				if (reloadTimer) clearTimeout(reloadTimer);
-				reloadTimer = setTimeout(reloadTls, 500);
-			});
+		// Debounce: cert + key are often rewritten in quick succession. Watch
+		// the PARENT DIRECTORY (not each file) and filter by filename: `fs.watch`
+		// follows the inode, so an atomic renewal (write temp + rename(2))
+		// replaces the inode and a file-level watcher goes silent on the new
+		// file after the first reload. A directory watcher survives renames and
+		// reports the changed basename via the `filename` callback argument.
+		const certBase = basename(args.cert!);
+		const keyBase = basename(args.key!);
+		for (const dir of new Set([dirname(args.cert!), dirname(args.key!)])) {
+			try {
+				const watcher = watch(dir, (_event, filename) => {
+					if (filename !== certBase && filename !== keyBase) return;
+					if (reloadTimer) clearTimeout(reloadTimer);
+					reloadTimer = setTimeout(reloadTls, 500);
+				});
+				watcher.on("error", (err) => {
+					console.warn(`tls cert watch error: ${err instanceof Error ? err.message : String(err)}`);
+				});
+				tlsWatchers.push(watcher);
+			} catch (err) {
+				console.warn(`tls cert watch setup failed for ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+			}
 		}
 		server = httpsServer;
 	} else {
@@ -243,6 +265,8 @@ async function main(): Promise<void> {
 
 	const shutdown = () => {
 		console.log("shutting down…");
+		if (reloadTimer) clearTimeout(reloadTimer);
+		for (const w of tlsWatchers) w.close();
 		server.close();
 		pool.stopAll().finally(() => process.exit(0));
 	};

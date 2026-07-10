@@ -1283,6 +1283,110 @@ describe("dashboard client regressions", () => {
 		expect(notifications.checked).toBe(true);
 	});
 
+	describe("settings iOS notification permission detection (#pref-notifications)", () => {
+		// Restore the navigator/matchMedia mocks between cases — jsdom defines
+		// userAgent as a prototype getter, so we shadow it with an own data
+		// property (configurable so afterEach can delete it). The shared file
+		// afterEach already unstubAllGlobals()s Notification and deletes
+		// window.matchMedia, but our own navigator props need restoring here.
+		const restore: Array<() => void> = [];
+
+		afterEach(() => {
+			for (const fn of restore.splice(0)) fn();
+		});
+
+		function stubAgent(value: string) {
+			const nav = window.navigator;
+			Object.defineProperty(nav, "userAgent", { configurable: true, value });
+			restore.push(() => {
+				delete (nav as { userAgent?: string }).userAgent;
+			});
+		}
+
+		function stubStandalone(value: boolean) {
+			const nav = window.navigator as { standalone?: boolean };
+			Object.defineProperty(nav, "standalone", { configurable: true, value });
+			restore.push(() => {
+				delete nav.standalone;
+			});
+		}
+
+		function stubMatchMedia(matches: boolean) {
+			Object.defineProperty(window, "matchMedia", {
+				configurable: true,
+				value: vi.fn((query: string) => ({
+					matches,
+					media: query,
+					onchange: null,
+					addListener: vi.fn(),
+					removeListener: vi.fn(),
+					addEventListener: vi.fn(),
+					removeEventListener: vi.fn(),
+					dispatchEvent: vi.fn(),
+				})),
+			});
+			restore.push(() => {
+				Reflect.deleteProperty(window, "matchMedia");
+			});
+		}
+
+		it("shows the install-prerequisite hint and disables the toggle on un-installed iOS Safari (no Notification API)", async () => {
+			vi.stubGlobal("Notification", undefined);
+			stubAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X)");
+			stubStandalone(false);
+			stubMatchMedia(false);
+
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const checkbox = el.querySelector("#pref-notifications") as HTMLInputElement;
+			expect(checkbox.disabled).toBe(true);
+			expect(el.textContent).toContain("iOS notifications need the installed PWA");
+			expect(el.textContent).not.toContain("browser notifications are unavailable in this environment");
+		});
+
+		it("treats an installed iOS PWA with the Notification API as normal (not ios-install)", async () => {
+			const fakeNotification = Object.assign(function Notification() {}, {
+				permission: "default" as NotificationPermission,
+				requestPermission: vi.fn(async () => "default" as NotificationPermission),
+			});
+			vi.stubGlobal("Notification", fakeNotification);
+			stubAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X)");
+			stubStandalone(true);
+			// display-mode: standalone also matches for an installed PWA; either
+			// signal is sufficient — exercise the standalone===true branch here.
+
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const checkbox = el.querySelector("#pref-notifications") as HTMLInputElement;
+			expect(checkbox.disabled).toBe(false);
+			expect(el.textContent).not.toContain("iOS notifications need the installed PWA");
+			expect(el.textContent).not.toContain("browser notifications are unavailable in this environment");
+			// default permission → the normal grant hint shows the enable copy.
+			expect(el.textContent).toContain("show a notification when the tab needs input");
+		});
+
+		it("disables the toggle and shows the blocked hint when permission is denied", async () => {
+			const fakeNotification = Object.assign(function Notification() {}, {
+				permission: "denied" as NotificationPermission,
+				requestPermission: vi.fn(async () => "denied" as NotificationPermission),
+			});
+			vi.stubGlobal("Notification", fakeNotification);
+			stubAgent("Mozilla/5.0 (X11; Linux x86_64)");
+
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const checkbox = el.querySelector("#pref-notifications") as HTMLInputElement;
+			expect(checkbox.disabled).toBe(true);
+			expect(el.textContent).toContain("blocked by browser settings");
+		});
+	});
+
 	it("settings refreshes pairing code and unpairs devices", async () => {
 		vi.mocked(api.pairingCode).mockResolvedValue({ enabled: true, code: "123456", expiresInMs: 30_000 });
 		vi.mocked(api.devices).mockClear();

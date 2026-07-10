@@ -59,6 +59,11 @@ import { App } from "../../src/client/app.js";
 const disposers: Array<() => void> = [];
 let showNotification: ReturnType<typeof vi.fn>;
 let registerSpy: ReturnType<typeof vi.fn>;
+// SW message listeners registered via navigator.serviceWorker.addEventListener.
+// Kept real (not a vi.fn() spy that swallows registrations) so tests can dispatch
+// synthetic MessageEvents on the recorded handler — mirrors how the SW posts
+// navigate-session messages to the open dashboard client.
+let swMessageHandlers: Array<(event: MessageEvent) => void>;
 
 beforeEach(() => {
 	// localStorage shim (jsdom may not provide it without --localstorage-file).
@@ -85,11 +90,17 @@ beforeEach(() => {
 	registerSpy = vi.fn(async () => ({
 		showNotification,
 	}));
+	swMessageHandlers = [];
 	// @ts-expect-error partial mock
 	navigator.serviceWorker = {
 		register: registerSpy,
 		ready: Promise.resolve({ showNotification }),
-		addEventListener: vi.fn(),
+		// Real recorder — stores the handler so tests can dispatch synthetic
+		// MessageEvents on it (app.tsx registers the navigate-session listener
+		// here during onMount). A vi.fn() spy would swallow the registration.
+		addEventListener: (type: string, handler: (event: MessageEvent) => void) => {
+			if (type === "message") swMessageHandlers.push(handler);
+		},
 	};
 
 	// Notification global mock — permission controllable per-test via setPermission().
@@ -148,6 +159,34 @@ describe("PWA client — service worker registration", () => {
 	});
 });
 
+describe("PWA client — navigate-session SW→app message bridge", () => {
+	it("registers a message listener on navigator.serviceWorker", async () => {
+		const addSpy = vi.spyOn(navigator.serviceWorker, "addEventListener");
+		await mountAppAndFlush();
+		expect(addSpy).toHaveBeenCalledWith("message", expect.any(Function));
+	});
+
+	it("navigates the store to the session screen on a navigate-session message", async () => {
+		await mountAppAndFlush();
+		expect(swMessageHandlers.length).toBeGreaterThan(0);
+		const handler = swMessageHandlers[swMessageHandlers.length - 1];
+		handler(new MessageEvent("message", { data: { type: "navigate-session", sessionKey: "test-123" } }));
+		// store.navigate({screen:'session', key}) sets window.location.hash to
+		// `#/session/<key>` (see state/store.ts routeToHash); the hashchange
+		// listener then updates the route signal.
+		expect(window.location.hash).toBe("#/session/test-123");
+	});
+
+	it("ignores messages that are not navigate-session events", async () => {
+		await mountAppAndFlush();
+		const handler = swMessageHandlers[swMessageHandlers.length - 1];
+		handler(new MessageEvent("message", { data: { type: "something-else", sessionKey: "no-456" } }));
+		expect(window.location.hash).toBe("#/");
+		handler(new MessageEvent("message", { data: { type: "navigate-session" } }));
+		expect(window.location.hash).toBe("#/");
+	});
+});
+
 describe("PWA client — notification dispatch gating", () => {
 	async function seedNeedsAttention(): Promise<void> {
 		// Replace the fleet with a single runtime that needs attention so the
@@ -193,6 +232,14 @@ describe("PWA client — notification dispatch gating", () => {
 
 	it("does NOT fire when permission is not granted", async () => {
 		setPermission("default");
+		setHidden(true);
+		await seedNeedsAttention();
+		await mountAppAndFlush();
+		expect(showNotification).not.toHaveBeenCalled();
+	});
+
+	it("does NOT fire when permission is denied", async () => {
+		setPermission("denied");
 		setHidden(true);
 		await seedNeedsAttention();
 		await mountAppAndFlush();

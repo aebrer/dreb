@@ -22,7 +22,7 @@ const swOut = resolve(dirname(fileURLToPath(import.meta.url)), "dist/static/sw.j
  * assets are emitted by Vite's built-in copy step, so we patch the file in
  * `writeBundle` once it's on disk.
  */
-function versionServiceWorker(): Plugin {
+export function versionServiceWorker(swPath: string = swOut): Plugin {
 	return {
 		name: "dreb-version-service-worker",
 		apply: "build",
@@ -31,12 +31,20 @@ function versionServiceWorker(): Plugin {
 			handler() {
 				let before: string;
 				try {
-					before = readFileSync(swOut, "utf-8");
+					before = readFileSync(swPath, "utf-8");
 				} catch {
-					return; // sw.js not present (test/no-public build) — no-op.
+					// This handler only runs during `apply: "build"`, so a missing
+					// sw.js at this point means the build is misconfigured (public/sw.js
+					// deleted or the public-dir copy failed). Fail loudly so `npm run
+					// build` errors out and CI catches it — otherwise the emitted sw.js
+					// keeps the literal `__SW_VERSION__` placeholder and the SW cache
+					// never advances across deploys.
+					throw new Error(
+						"dreb versionServiceWorker: dist/static/sw.js missing after build — public/sw.js may have been deleted or the public-dir copy failed",
+					);
 				}
 				if (!before.includes("__SW_VERSION__")) return; // already versioned
-				writeFileSync(swOut, before.replace("__SW_VERSION__", String(dashboardVersion)));
+				writeFileSync(swPath, before.replace("__SW_VERSION__", String(dashboardVersion)));
 				console.log(`service worker versioned: sw.js → v${dashboardVersion}`); // eslint-disable-line no-console
 			},
 		},

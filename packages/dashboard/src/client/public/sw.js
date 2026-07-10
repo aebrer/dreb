@@ -26,10 +26,22 @@ const SHELL_PRECACHE = [
 ];
 
 self.addEventListener("install", (event) => {
+	// Pre-cache entries individually so a single failed URL does not reject
+	// the whole install (which would prevent skipWaiting/activation and leave
+	// notifications + installability permanently unavailable with no error).
+	// Degraded cache is acceptable; activation must proceed unconditionally.
 	event.waitUntil(
 		caches
 			.open(SHELL_CACHE)
-			.then((cache) => cache.addAll(SHELL_PRECACHE))
+			.then((cache) =>
+				Promise.all(
+					SHELL_PRECACHE.map((url) =>
+						cache.add(url).catch((err) => {
+							console.warn(`[sw] precache failed for ${url}:`, err);
+						}),
+					),
+				),
+			)
 			.then(() => self.skipWaiting()),
 	);
 });
@@ -57,6 +69,10 @@ self.addEventListener("fetch", (event) => {
 	if (req.method !== "GET") return;
 	const url = new URL(req.url);
 	if (url.origin !== self.location.origin) return; // never touch cross-origin (e.g. fonts CDN)
+	// The dashboard is a live control surface (SSE + RPC); API responses and
+	// the infinite EventSource stream must NEVER be cached (caching them hangs
+	// cache.put and serves stale data). Pass /api/* straight through to network.
+	if (url.pathname.startsWith("/api/")) return;
 
 	// Navigations: network-first, fall back to cached index.html.
 	if (req.mode === "navigate") {
@@ -67,7 +83,12 @@ self.addEventListener("fetch", (event) => {
 					caches.open(SHELL_CACHE).then((cache) => cache.put(req, copy)).catch(() => {});
 					return res;
 				})
-				.catch(() => caches.match(req).then((r) => r || caches.match("./"))),
+				.catch(() =>
+				caches
+					.match(req)
+					.then((r) => r || caches.match("./"))
+					.then((r) => r || new Response("Service unavailable", { status: 503, statusText: "Service Unavailable" })),
+			),
 		);
 		return;
 	}
@@ -94,17 +115,25 @@ self.addEventListener("notificationclick", (event) => {
 	event.notification.close();
 	event.waitUntil(
 		(async () => {
-			const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-			if (allClients.length > 0) {
-				const client = allClients[0];
-				await client.focus();
-				if (sessionKey) client.postMessage({ type: "navigate-session", sessionKey });
-				return;
-			}
-			// No open dashboard — open one. The client reads a pending-navigation
-			// hint from sessionStorage on load (see app.tsx).
 			const url = sessionKey ? `./#session/${encodeURIComponent(sessionKey)}` : "./";
-			await self.clients.openWindow(url);
+			try {
+				const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+				if (allClients.length > 0) {
+					const client = allClients[0];
+					await client.focus();
+					if (sessionKey) client.postMessage({ type: "navigate-session", sessionKey });
+					return;
+				}
+				// No open dashboard — open one. The client reads a pending-navigation
+				// hint from sessionStorage on load (see app.tsx).
+				await self.clients.openWindow(url);
+			} catch (err) {
+				// focus()/postMessage() can reject (e.g. client closed mid-focus).
+				// The notification is already closed above, so without a fallback a
+				// rejection would leave the user with no visible action.
+				console.warn("[sw] notificationclick handler failed:", err);
+				await self.clients.openWindow(url);
+			}
 		})(),
 	);
 });

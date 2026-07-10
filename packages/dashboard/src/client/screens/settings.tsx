@@ -42,6 +42,30 @@ function modelMatchesQuery(model: ModelChoice, query: string): boolean {
 	return `${model.provider}/${model.id} ${model.name ?? ""}`.toLowerCase().includes(query);
 }
 
+/**
+ * Compute the initial notification-permission state for the settings screen.
+ * NOTE: Solid's `createSignal` treats a function argument as the stored value,
+ * not as a lazy initializer — so this must be called (not passed as `() => …`)
+ * when constructing the signal, otherwise the signal holds the function object
+ * and the disabled/hint bindings never see "ios-install" / "unsupported" /
+ * "denied".
+ */
+function initialNotificationPermission(): NotificationPermission | "unsupported" | "ios-install" {
+	if (typeof Notification === "undefined") {
+		// iOS Safari exposes no Notification API in a browser tab — only the
+		// installed PWA (Add to Home Screen) gets one (iOS 16.4+). Show the
+		// install prerequisite instead of a bare "unsupported" so the user
+		// knows what to do rather than thinking their device can't do it.
+		const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+		const isStandalone =
+			(navigator as { standalone?: boolean }).standalone === true ||
+			window.matchMedia?.("(display-mode: standalone)").matches === true;
+		if (isIOS && !isStandalone) return "ios-install";
+		return "unsupported";
+	}
+	return Notification.permission;
+}
+
 function groupedModels(models: ModelChoice[]): Array<{ provider: string; models: ModelChoice[] }> {
 	const groups = new Map<string, ModelChoice[]>();
 	for (const model of models) {
@@ -139,21 +163,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	const [agentContextCwd, setAgentContextCwd] = createSignal<string>();
 	const [notificationPermission, setNotificationPermission] = createSignal<
 		NotificationPermission | "unsupported" | "ios-install"
-	>(() => {
-		if (typeof Notification === "undefined") {
-			// iOS Safari exposes no Notification API in a browser tab — only the
-			// installed PWA (Add to Home Screen) gets one (iOS 16.4+). Show the
-			// install prerequisite instead of a bare "unsupported" so the user
-			// knows what to do rather than thinking their device can't do it.
-			const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-			const isStandalone =
-				(navigator as { standalone?: boolean }).standalone === true ||
-				window.matchMedia?.("(display-mode: standalone)").matches === true;
-			if (isIOS && !isStandalone) return "ios-install";
-			return "unsupported";
-		}
-		return Notification.permission;
-	});
+	>(initialNotificationPermission());
 
 	const [settings, { mutate, refetch }] = createResource(async () => {
 		setError(undefined);

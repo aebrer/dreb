@@ -75,13 +75,15 @@ export function App(): JSX.Element {
 
 		for (const [key, item] of sessionAttention) {
 			if (notifiedAttention.has(key)) continue;
-			notifiedAttention.add(key);
 			// Notifications through the service worker (registration.showNotification)
 			// — the only path that works on Android Chrome (which removed the page
 			// Notification constructor) and on iOS (installed PWA only). Gated exactly
 			// as before: permission granted + page hidden. Click handling lives in the
 			// SW (notificationclick): it focuses/open a client and posts a navigate
 			// message (handled below). The in-tab ◆ badge above is the no-SW fallback.
+			// Mark the key as notified ONLY after showNotification succeeds, so a
+			// rejected notification (e.g. permission revoked mid-flight, SW unregistered)
+			// can be retried on the next effect run instead of being silently dropped.
 			if (
 				typeof Notification !== "undefined" &&
 				Notification.permission === "granted" &&
@@ -96,6 +98,7 @@ export function App(): JSX.Element {
 							data: { sessionKey: key },
 						}),
 					)
+					.then(() => notifiedAttention.add(key))
 					.catch((err) => console.warn("dashboard: showNotification failed", err));
 			}
 		}
