@@ -7,8 +7,9 @@ import { canonicalizePath, FileApi } from "../src/server/files.js";
 const tempDirs: string[] = [];
 
 async function makeTempDir(): Promise<string> {
-	// realpath: macOS tmpdir() returns /var/... which symlinks to /private/var,
-	// while FileApi resolves paths via realpath — compare like with like.
+	// Canonicalize via realpath so exact path comparisons hold: on macOS tmpdir()
+	// is /var/... but the file API resolves through realpath to /private/var/...,
+	// so a raw mkdtemp path would mismatch the API's returned canonical paths.
 	const dir = await realpath(await mkdtemp(join(tmpdir(), "dreb-dash-files-")));
 	tempDirs.push(dir);
 	return dir;
