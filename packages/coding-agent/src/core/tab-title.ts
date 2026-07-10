@@ -1,7 +1,9 @@
 /**
  * Auto-generates a terminal tab title from session context after a threshold
  * number of tool calls. Uses a lightweight single-shot LLM call to produce a
- * concise ≤30 character title, then sets it via the terminal's OSC 0 escape.
+ * concise title — the model aims for a configurable soft target (default 60
+ * characters, via TabTitleSettings.maxTitleLength) and the result is hard-capped
+ * at 300 characters — then sets it via the terminal's OSC 0 escape.
  *
  * Fires at most once per session. Final failures are reported through the
  * optional onError hook while preserving fire-and-forget behavior.

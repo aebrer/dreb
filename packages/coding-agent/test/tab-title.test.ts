@@ -928,6 +928,29 @@ describe("TabTitleGenerator", () => {
 			const content = (mockCompleteSimple.mock.calls[0][1] as any).messages[0].content as string;
 			expect(content).toContain("add dark mode toggle");
 		});
+
+		it("caps each user message at MAX_USER_TEXT_CHARS (2000) in the context", async () => {
+			// A giant pasted request must not bloat the title context. The head is kept,
+			// the tail beyond 2000 chars is dropped.
+			const head = "H".repeat(2000);
+			const tail = "TAIL_SENTINEL";
+			const deps = createMockDeps({
+				getMessages: () => [{ role: "user", content: head + tail }],
+				getBranch: () => "main",
+			});
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const content = (mockCompleteSimple.mock.calls[0][1] as any).messages[0].content as string;
+			// The first 2000 chars survive; the tail beyond the cap is truncated away.
+			expect(content).toContain(head);
+			expect(content).not.toContain(tail);
+		});
 	});
 
 	describe("title length (soft target / hard cap)", () => {

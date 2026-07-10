@@ -98,14 +98,16 @@ current model supports adaptive thinking).
 |---------|------|---------|-------------|
 | `tabTitle.enabled` | boolean | `true` | Auto-generate terminal tab title from session task |
 | `tabTitle.triggerAfter` | number | `9` | Number of tool calls before generating title |
+| `tabTitle.maxTitleLength` | number | `60` | Soft target length hint for generated titles (clamped to a hard cap of 300) |
 
-After the configured number of tool calls, dreb fires a single background LLM call to summarize the session's task into a short (≤30 character) terminal tab title, then sets it via OSC 0. Only fires once per session. If the LLM call fails, the default title remains.
+After the configured number of tool calls, dreb fires a single background LLM call to summarize the session's task into a terminal tab title, then sets it via OSC 0. The title is based primarily on your actual request and current-session actions, with branch/repo/cwd metadata used only for disambiguation. `maxTitleLength` is a soft target communicated to the model (default 60); titles may run a little longer for clarity and are hard-capped at 300 characters. The TUI truncates long titles visually while the dashboard shows the full name. Only fires once per session, and never overwrites an already-named (e.g. resumed) session. If the LLM call fails, the default title remains and the failure is surfaced (shown in interactive mode, logged to stderr in RPC mode).
 
 ```json
 {
   "tabTitle": {
     "enabled": true,
-    "triggerAfter": 9
+    "triggerAfter": 9,
+    "maxTitleLength": 60
   }
 }
 ```
