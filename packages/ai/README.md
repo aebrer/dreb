@@ -1240,15 +1240,6 @@ Update `packages/ai/README.md`:
 - Document any provider-specific options or authentication requirements
 - Add environment variable to the Environment Variables section
 
-#### 8. Changelog
-
-Add an entry to `packages/ai/CHANGELOG.md` under `## [Unreleased]`:
-
-```markdown
-### Added
-- Added support for [Provider Name] provider ([#PR](link) by [@author](link))
-```
-
 ## License
 
 MIT

@@ -20,8 +20,7 @@
 	},
 	"files": [
 		"dist",
-		"README.md",
-		"CHANGELOG.md"
+		"README.md"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
