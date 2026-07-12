@@ -72,10 +72,10 @@ export function getUpdateInstruction(packageName: string): string {
 // =============================================================================
 
 /**
- * Get the base directory for resolving package assets (themes, package.json, README.md, CHANGELOG.md).
+ * Get the base directory for resolving package assets (themes, package.json, README.md).
  * - For Bun binary: returns the directory containing the executable
- * - For Node.js (dist/): returns __dirname (the dist/ directory)
- * - For tsx (src/): returns parent directory (the package root)
+ * - For Node.js (dist/): walks up from __dirname to the real package root (avoids stale dist/package.json)
+ * - For tsx (src/): returns the package root (__dirname is already at the package root)
  */
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
@@ -90,16 +90,25 @@ export function getPackageDir(): string {
 		// Bun binary: process.execPath points to the compiled executable
 		return dirname(process.execPath);
 	}
-	// Node.js: walk up from __dirname until we find package.json
+	// Node.js: walk up from __dirname until we find package.json.
+	// Build directories (e.g. dist/) may contain a copied package.json,
+	// so prefer the directory that also has src/, node_modules/, or agents/,
+	// which indicates the real package root rather than a build output.
+	// agents/ is always shipped in the files array and never copied into dist/,
+	// so it reliably identifies the package root even when src/ is absent and
+	// node_modules/ is hoisted (e.g. npm-installed local dependencies).
 	let dir = __dirname;
+	let candidate = __dirname;
 	while (dir !== dirname(dir)) {
 		if (existsSync(join(dir, "package.json"))) {
-			return dir;
+			candidate = dir;
+			if (existsSync(join(dir, "src")) || existsSync(join(dir, "node_modules")) || existsSync(join(dir, "agents"))) {
+				return dir;
+			}
 		}
 		dir = dirname(dir);
 	}
-	// Fallback (shouldn't happen)
-	return __dirname;
+	return candidate;
 }
 
 /**
@@ -151,11 +160,6 @@ export function getDocsPath(): string {
 /** Get path to examples directory */
 export function getExamplesPath(): string {
 	return resolve(join(getPackageDir(), "examples"));
-}
-
-/** Get path to CHANGELOG.md */
-export function getChangelogPath(): string {
-	return resolve(join(getPackageDir(), "CHANGELOG.md"));
 }
 
 // =============================================================================

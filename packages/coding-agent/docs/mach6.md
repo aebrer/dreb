@@ -105,7 +105,7 @@ Pre-merge checks, version bump, docs update, merge, tag, and release.
 ```
 
 - Verifies CI passing, no merge conflicts, all findings addressed
-- Runs pre-merge checklist (version bump, changelog, tests)
+- Runs pre-merge checklist (version bump, tests)
 - Applies version bump on the feature branch
 - Proactively reviews and updates ALL documentation affected by the PR's changes
 - Merges with `--squash --delete-branch`
