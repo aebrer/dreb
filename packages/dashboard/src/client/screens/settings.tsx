@@ -21,7 +21,7 @@ const QUEUE_MODES = ["all", "one-at-a-time"] as const;
 const TRANSPORTS = ["sse", "websocket", "auto"] as const;
 
 type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
-type ModelPickerTarget = { kind: "default" } | { kind: "agent"; agentName: string };
+type ModelPickerTarget = { kind: "default" } | { kind: "agent"; agentName: string } | { kind: "localModel" };
 
 function modelKey(model: Pick<ModelInfoDto, "provider" | "id">): string {
 	return `${model.provider}/${model.id}`;
@@ -396,6 +396,53 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 												{(transport) => <option value={transport}>{transport}</option>}
 											</For>
 										</select>
+									</span>
+								</div>
+							</section>
+
+							<section class="settings-section">
+								<h2>local model</h2>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">local model</span>
+										<span class="hint">selected model for local-only mode — pick any available model</span>
+									</span>
+									<span class="setting-control">
+										<button
+											type="button"
+											class="btn btn-small model-picker-button"
+											onClick={() => setModelPickerTarget({ kind: "localModel" })}
+										>
+											{current().localOnlyModel ?? "choose model…"}
+										</button>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">local mode</span>
+										<span class="hint">
+											when on, the local model becomes the default and is prepended to agent fallback lists
+										</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().localOnlyMode !== false}
+											onChange={(value) => save({ localOnlyMode: value })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">final fallback to local model</span>
+										<span class="hint">
+											when on, the local model is appended to all subagent fallback lists as a last resort
+										</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().finalFallbackToLocalModel !== false}
+											onChange={(value) => save({ finalFallbackToLocalModel: value })}
+										/>
 									</span>
 								</div>
 							</section>
@@ -862,7 +909,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 				{(target) => {
 					const pickerTitle = () => {
 						const active = target();
-						return active.kind === "default" ? "select default model" : `add model for ${active.agentName}`;
+						if (active.kind === "default") return "select default model";
+						if (active.kind === "localModel") return "select local model";
+						return `add model for ${active.agentName}`;
 					};
 					const selectedKeys = () => {
 						const active = target();
@@ -870,6 +919,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 							return settings()?.defaultProvider && settings()?.defaultModel
 								? [`${settings()!.defaultProvider}/${settings()!.defaultModel}`]
 								: [];
+						}
+						if (active.kind === "localModel") {
+							return settings()?.localOnlyModel ? [settings()!.localOnlyModel] : [];
 						}
 						return currentAgentModels(active.agentName);
 					};
@@ -884,6 +936,10 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 								setModelPickerTarget(undefined);
 								if (active.kind === "default") {
 									void save({ defaultProvider: model.provider, defaultModel: model.id });
+									return;
+								}
+								if (active.kind === "localModel") {
+									void save({ localOnlyModel: modelKey(model) });
 									return;
 								}
 								const entry = modelKey(model);

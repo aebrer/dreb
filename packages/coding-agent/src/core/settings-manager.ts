@@ -136,6 +136,9 @@ export interface Settings {
 		archivePath?: string; // Custom archive location for dream backups (default: ~/.dreb/memory-archive/)
 	};
 	tabTitle?: TabTitleSettings;
+	localOnlyMode?: boolean; // default: false — when true, prepend local model to all agent fallback lists
+	localOnlyModel?: string; // provider/model ID of the local model to inject
+	finalFallbackToLocalModel?: boolean; // default: false — when true, append local model as last fallback
 }
 
 export interface TabTitleSettings {
@@ -1126,6 +1129,40 @@ export class SettingsManager {
 		}
 		this.globalSettings.modelSettings[modelId].thinkingDisplay = value;
 		this.markModified("modelSettings", modelId);
+		this.save();
+	}
+
+	getLocalOnlyMode(): boolean {
+		return this.settings.localOnlyMode ?? false;
+	}
+
+	getLocalOnlyModel(): string | undefined {
+		return this.settings.localOnlyModel;
+	}
+
+	getFinalFallbackToLocalModel(): boolean {
+		return this.settings.finalFallbackToLocalModel ?? false;
+	}
+
+	setLocalOnlyMode(enabled: boolean): void {
+		this.globalSettings.localOnlyMode = enabled;
+		this.markModified("localOnlyMode");
+		this.save();
+	}
+
+	setLocalOnlyModel(modelId: string | undefined): void {
+		if (modelId === undefined) {
+			delete this.globalSettings.localOnlyModel;
+		} else {
+			this.globalSettings.localOnlyModel = modelId;
+		}
+		this.markModified("localOnlyModel");
+		this.save();
+	}
+
+	setFinalFallbackToLocalModel(enabled: boolean): void {
+		this.globalSettings.finalFallbackToLocalModel = enabled;
+		this.markModified("finalFallbackToLocalModel");
 		this.save();
 	}
 

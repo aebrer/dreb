@@ -158,6 +158,8 @@ export function getStateForRpc(session: AgentSession, modelFallbackMessage?: str
 		pendingMessageCount: session.pendingMessageCount,
 		contextUsage: session.getContextUsage(),
 		modelFallbackMessage,
+		localOnlyMode: session.settingsManager.getLocalOnlyMode(),
+		localOnlyModel: session.settingsManager.getLocalOnlyModel(),
 	};
 }
 
@@ -231,6 +233,9 @@ type SettingsReader = Pick<
 	| "getTransport"
 	| "getHideThinkingBlock"
 	| "getAgentModels"
+	| "getLocalOnlyMode"
+	| "getLocalOnlyModel"
+	| "getFinalFallbackToLocalModel"
 >;
 
 type SettingsWriter = SettingsReader &
@@ -250,6 +255,9 @@ type SettingsWriter = SettingsReader &
 		| "setHideThinkingBlock"
 		| "setAgentModelsForAgent"
 		| "removeAgentModelsForAgent"
+		| "setLocalOnlyMode"
+		| "setLocalOnlyModel"
+		| "setFinalFallbackToLocalModel"
 		| "hasProjectAgentModelOverride"
 		| "hasGlobalSettingsLoadError"
 		| "flush"
@@ -279,6 +287,9 @@ export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsS
 		transport: settingsManager.getTransport(),
 		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
 		agentModels: settingsManager.getAgentModels(),
+		localOnlyMode: settingsManager.getLocalOnlyMode(),
+		localOnlyModel: settingsManager.getLocalOnlyModel(),
+		finalFallbackToLocalModel: settingsManager.getFinalFallbackToLocalModel(),
 	};
 }
 
@@ -297,6 +308,9 @@ const SETTINGS_UPDATE_KEYS = [
 	"transport",
 	"hideThinkingBlock",
 	"agentModels",
+	"localOnlyMode",
+	"localOnlyModel",
+	"finalFallbackToLocalModel",
 ] as const;
 
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
@@ -533,6 +547,15 @@ export async function setSettingsForRpc(
 		}
 		if (update.hideThinkingBlock !== undefined) {
 			settingsManager.setHideThinkingBlock(update.hideThinkingBlock);
+		}
+		if (update.localOnlyMode !== undefined) {
+			settingsManager.setLocalOnlyMode(update.localOnlyMode);
+		}
+		if (update.localOnlyModel !== undefined) {
+			settingsManager.setLocalOnlyModel(update.localOnlyModel);
+		}
+		if (update.finalFallbackToLocalModel !== undefined) {
+			settingsManager.setFinalFallbackToLocalModel(update.finalFallbackToLocalModel);
 		}
 
 		const warnings: string[] = [];

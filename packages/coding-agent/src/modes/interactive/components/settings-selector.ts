@@ -65,6 +65,14 @@ export interface SettingsConfig {
 	agentNames: string[];
 	/** Available model IDs for selection in the ranked list */
 	availableModelIds: string[];
+	/** Local Only Mode toggle state */
+	localOnlyMode: boolean;
+	/** Currently selected local model ID (provider/model) */
+	localOnlyModel: string;
+	/** When true, append local model as last fallback (final fallback to local model). */
+	finalFallbackToLocalModel: boolean;
+	/** List of available model IDs for the local model dropdown (ALL models). */
+	localModelAvailableModels: string[];
 }
 
 export interface SettingsCallbacks {
@@ -89,6 +97,9 @@ export interface SettingsCallbacks {
 	onQuietStartupChange: (enabled: boolean) => void;
 	onAutoLoadNestedContextChange: (enabled: boolean) => void;
 	onAgentModelsChange: (agentName: string, models: string[]) => void;
+	onLocalOnlyModeChange: (enabled: boolean) => void;
+	onLocalOnlyModelChange: (modelId: string) => void;
+	onFinalFallbackToLocalModelChange: (enabled: boolean) => void;
 	onCancel: () => void;
 }
 
@@ -550,6 +561,47 @@ export class SettingsSelectorComponent extends Container {
 			});
 		}
 
+		// Local Only Mode section
+		items.push({
+			id: "local-only-mode",
+			label: "Local only mode",
+			description: "Prepend a local model to all agent fallback lists",
+			currentValue: config.localOnlyMode ? "true" : "false",
+			values: ["true", "false"],
+		});
+
+		if (config.localModelAvailableModels.length > 0) {
+			items.push({
+				id: "local-only-model",
+				label: "Local model",
+				description: "Local model to prepend to agent fallback lists",
+				currentValue: config.localOnlyModel || config.localModelAvailableModels[0],
+				submenu: (_currentValue, done) =>
+					new SelectSubmenu(
+						"Local Model",
+						"Select a local model for agent fallback lists",
+						config.localModelAvailableModels.map((modelId) => ({
+							value: modelId,
+							label: modelId,
+						})),
+						config.localOnlyModel || config.localModelAvailableModels[0],
+						(modelId) => {
+							callbacks.onLocalOnlyModelChange(modelId);
+							done(modelId);
+						},
+						() => done(),
+					),
+			});
+		}
+
+		items.push({
+			id: "local-only-append-mode",
+			label: "Final fallback to local model",
+			description: "Append local model as last fallback instead of first",
+			currentValue: config.finalFallbackToLocalModel ? "true" : "false",
+			values: ["true", "false"],
+		});
+
 		// Only show image toggle if terminal supports it
 		if (supportsImages) {
 			// Insert after autocompact
@@ -682,6 +734,12 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "autocomplete-max-visible":
 						callbacks.onAutocompleteMaxVisibleChange(parseInt(newValue, 10));
+						break;
+					case "local-only-mode":
+						callbacks.onLocalOnlyModeChange(newValue === "true");
+						break;
+					case "local-only-append-mode":
+						callbacks.onFinalFallbackToLocalModelChange(newValue === "true");
 						break;
 				}
 			},

@@ -147,6 +147,8 @@ export interface SessionStateDto {
 	pendingMessageCount: number;
 	contextUsage?: ContextUsageDto;
 	modelFallbackMessage?: string;
+	localOnlyMode?: boolean;
+	localOnlyModel?: string;
 }
 
 /** A live runtime managed by the dashboard server's pool. */
@@ -244,6 +246,9 @@ export interface SettingsDto {
 	transport?: "sse" | "websocket" | "auto";
 	hideThinkingBlock?: boolean;
 	agentModels?: Record<string, string[]>;
+	localOnlyMode?: boolean;
+	localOnlyModel?: string;
+	finalFallbackToLocalModel?: boolean;
 }
 
 export type SettingsSaveResultDto = SettingsDto & { warnings?: string[] };

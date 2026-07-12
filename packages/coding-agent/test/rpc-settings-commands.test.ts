@@ -51,6 +51,9 @@ describe("getSettingsForRpc", () => {
 			transport: "sse",
 			hideThinkingBlock: false,
 			agentModels: {},
+			localOnlyMode: false,
+			localOnlyModel: undefined,
+			finalFallbackToLocalModel: false,
 		});
 	});
 
@@ -69,6 +72,9 @@ describe("getSettingsForRpc", () => {
 			transport: "websocket",
 			hideThinkingBlock: true,
 			agentModels: { models: { Explore: ["anthropic/sonnet", "openai/gpt-5"] } },
+			localOnlyMode: true,
+			localOnlyModel: "ollama/llama3",
+			finalFallbackToLocalModel: true,
 		});
 
 		expect(getSettingsForRpc(manager)).toEqual({
@@ -86,6 +92,9 @@ describe("getSettingsForRpc", () => {
 			transport: "websocket",
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
+			localOnlyMode: true,
+			localOnlyModel: "ollama/llama3",
+			finalFallbackToLocalModel: true,
 		});
 	});
 });
@@ -268,6 +277,9 @@ describe("setSettingsForRpc writes", () => {
 			transport: "auto",
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
+			localOnlyMode: true,
+			localOnlyModel: "ollama/llama3",
+			finalFallbackToLocalModel: true,
 		});
 
 		expect(result.ok).toBe(true);
@@ -287,6 +299,9 @@ describe("setSettingsForRpc writes", () => {
 			transport: "auto",
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
+			localOnlyMode: true,
+			localOnlyModel: "ollama/llama3",
+			finalFallbackToLocalModel: true,
 		});
 		// Reflected in subsequent reads.
 		expect(getSettingsForRpc(manager)).toEqual(result.settings);
@@ -342,6 +357,36 @@ describe("setSettingsForRpc writes", () => {
 		const rawGlobal = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"));
 		expect(rawGlobal.agentModels.models.Explore).toEqual(["global/model"]);
 		expect(rawGlobal.agentModels.models["Code Reviewer"]).toEqual(["global/reviewer"]);
+	});
+
+	it("persists localOnlyMode: true via set_settings", async () => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), { localOnlyMode: true });
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("unreachable");
+		expect(result.settings.localOnlyMode).toBe(true);
+		expect(getSettingsForRpc(manager).localOnlyMode).toBe(true);
+	});
+
+	it("persists localOnlyModel via set_settings", async () => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), { localOnlyModel: "ollama/llama3" });
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("unreachable");
+		expect(result.settings.localOnlyModel).toBe("ollama/llama3");
+		expect(getSettingsForRpc(manager).localOnlyModel).toBe("ollama/llama3");
+	});
+
+	it("persists finalFallbackToLocalModel: true via set_settings", async () => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), { finalFallbackToLocalModel: true });
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("unreachable");
+		expect(result.settings.finalFallbackToLocalModel).toBe(true);
+		expect(getSettingsForRpc(manager).finalFallbackToLocalModel).toBe(true);
 	});
 
 	it("persists to disk and is visible to a fresh SettingsManager (fresh-runtime simulation)", async () => {
@@ -547,6 +592,9 @@ describe("RpcClient settings methods", () => {
 		transport: "sse",
 		hideThinkingBlock: false,
 		agentModels: {},
+		localOnlyMode: false,
+		localOnlyModel: undefined,
+		finalFallbackToLocalModel: false,
 	};
 
 	it("getSettings sends the get_settings command and unwraps the snapshot", async () => {

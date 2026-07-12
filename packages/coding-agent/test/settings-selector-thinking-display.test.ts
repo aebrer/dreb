@@ -46,6 +46,10 @@ function makeConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
 		agentModels: {},
 		agentNames: [],
 		availableModelIds: [],
+		localOnlyMode: false,
+		localOnlyModel: "",
+		finalFallbackToLocalModel: false,
+		localModelAvailableModels: [],
 		...overrides,
 	};
 }
@@ -73,6 +77,9 @@ function makeCallbacks(): SettingsCallbacks {
 		onAutocompleteMaxVisibleChange: vi.fn(),
 		onQuietStartupChange: vi.fn(),
 		onAgentModelsChange: vi.fn(),
+		onLocalOnlyModeChange: vi.fn(),
+		onLocalOnlyModelChange: vi.fn(),
+		onFinalFallbackToLocalModelChange: vi.fn(),
 		onCancel: vi.fn(),
 	};
 }

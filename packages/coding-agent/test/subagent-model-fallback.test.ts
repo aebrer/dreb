@@ -1786,3 +1786,374 @@ describe("parentSessionFile threading", () => {
 		expect(spawnArgs).not.toContain("--parent-session");
 	});
 });
+
+// ---------------------------------------------------------------------------
+// Local Only Mode — subagent resolution injection
+// ---------------------------------------------------------------------------
+
+describe("Local Only Mode — resolveModelForSubagentSpawn injection", () => {
+	const localConfigPrepend = {
+		enabled: true,
+		modelId: "ollama/qwen3.6:latest",
+		finalFallback: false,
+	};
+
+	const localConfigAppend = {
+		enabled: true,
+		modelId: "ollama/qwen3.6:latest",
+		finalFallback: true,
+	};
+
+	function hasLocalInjectionMessage(_prefix = "[subagent]"): boolean {
+		const calls = vi.mocked(log.debug).mock.calls;
+		return calls.some(
+			(c) =>
+				typeof c[0] === "string" &&
+				(c[0].includes("Prepending local model") || c[0].includes("Appending local model")),
+		);
+	}
+
+	test("prepend: local model is added as first fallback when enabled and not already present", async () => {
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			localConfigPrepend,
+		);
+
+		// ollama/qwen3.6:latest is NOT in the mock registry → fails at resolve time,
+		// falls through to primary-model which succeeds.
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+			expect(result.skippedModels).toContainEqual({
+				model: "ollama/qwen3.6:latest",
+				reason: expect.any(String),
+			});
+		}
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(hasLocalInjectionMessage()).toBe(true);
+		expect(hasLocalInjectionMessage()).toBe(true);
+	});
+
+	test("finalFallback: local model is added as last fallback when finalFallback is true", async () => {
+		// primary-model probes first — fail it; fallback-model probes second — succeed;
+		// ollama should be last and never reached.
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(assistantResult("error", "primary down"))
+			.mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			localConfigAppend,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("fallback-model");
+		}
+		// 2 probes (primary + fallback), ollama never reached
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+		expect(log.warn).toHaveBeenCalledWith(
+			'[subagent] Model "primary-model" failed probe (primary down). Trying next fallback...',
+		);
+	});
+
+	test("deduplication: local model not added when already in the list", async () => {
+		// primary-model is already first — it's also our local model via a separate config
+		const dedupConfig = {
+			enabled: true,
+			modelId: "primary-model", // already first in the array
+			finalFallback: false,
+		};
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			dedupConfig,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		// Only 1 probe — local model already first, no duplicate prepended
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(hasLocalInjectionMessage()).toBe(false);
+	});
+
+	test("no injection when enabled is false", async () => {
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const disabledConfig = { ...localConfigPrepend, enabled: false };
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			disabledConfig,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(hasLocalInjectionMessage()).toBe(false);
+	});
+
+	test("no injection when config is undefined", async () => {
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			undefined,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(hasLocalInjectionMessage()).toBe(false);
+	});
+
+	test("no injection when enabled but modelId is empty", async () => {
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const emptyModelIdConfig = { ...localConfigPrepend, modelId: "" };
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			emptyModelIdConfig,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(hasLocalInjectionMessage()).toBe(false);
+	});
+
+	test("no injection when non-array model (registry-less path)", async () => {
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			"primary-model",
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			localConfigPrepend,
+		);
+
+		// Single string → resolveModelWithFallbacks path, no injection
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		expect(completeSimple).not.toHaveBeenCalled();
+		expect(hasLocalInjectionMessage()).toBe(false);
+	});
+
+	test("no injection when no registry (registry-less path)", async () => {
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			undefined, // no registry
+			"parent-model",
+			undefined,
+			"[subagent]",
+			localConfigPrepend,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		expect(completeSimple).not.toHaveBeenCalled();
+		expect(hasLocalInjectionMessage()).toBe(false);
+	});
+
+	test("local model probe fails, falls through to first real fallback", async () => {
+		// parent-model IS in the registry and NOT in the models array,
+		// so it gets prepended and passes resolveModelStringSingle.
+		// Then its probe fails, and we fall through to primary-model.
+		const localProbeConfig = {
+			enabled: true,
+			modelId: "parent-model",
+			finalFallback: false,
+		};
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(assistantResult("error", "local model down"))
+			.mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			localProbeConfig,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		// 2 probes: local (parent-model) fails, primary succeeds
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+		expect(log.warn).toHaveBeenCalledWith(
+			'[subagent] Model "parent-model" failed probe (local model down). Trying next fallback...',
+		);
+	});
+
+	test("local model probe fails, all fallbacks fail, parent succeeds", async () => {
+		const localProbeConfig = {
+			enabled: true,
+			modelId: "parent-model",
+			finalFallback: false,
+		};
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(assistantResult("error", "local down"))
+			.mockResolvedValueOnce(assistantResult("error", "primary down"))
+			.mockRejectedValueOnce(new Error("fallback auth revoked"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			localProbeConfig,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("parent-model");
+			expect(result.warning).toContain('Falling back to parent model "parent-model"');
+		}
+		// 3 probes: local (parent-model) fails, primary fails, fallback fails, then parent succeeds
+		expect(completeSimple).toHaveBeenCalledTimes(3);
+	});
+
+	test("append mode: local model is tried last after all real fallbacks", async () => {
+		// parent-model is in the registry, append mode → added at end.
+		// primary-model probe succeeds → parent-model never reached.
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const appendLocalConfig = {
+			enabled: true,
+			modelId: "parent-model",
+			finalFallback: true,
+		};
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			appendLocalConfig,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		// Only 1 probe — primary-model succeeds, parent-model (appended) never reached
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(hasLocalInjectionMessage()).toBe(true);
+	});
+
+	test("local model probe fails, primary succeeds, fallback never reached", async () => {
+		const localProbeConfig = {
+			enabled: true,
+			modelId: "parent-model",
+			finalFallback: false,
+		};
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(assistantResult("error", "local down"))
+			.mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			localProbeConfig,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		// 2 probes: local fails, primary succeeds (fallback never probed)
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+		expect(result.skippedModels).toContainEqual({
+			model: "parent-model",
+			reason: "local down",
+		});
+	});
+
+	test("local model deduplication when already present via append mode", async () => {
+		// primary-model is in the list; append mode with primary-model as local
+		const dedupAppendConfig = {
+			enabled: true,
+			modelId: "primary-model",
+			finalFallback: true,
+		};
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			dedupAppendConfig,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.modelId).toBe("primary-model");
+		}
+		// Only 1 probe — no duplicate added
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(hasLocalInjectionMessage()).toBe(false);
+	});
+});

@@ -1047,6 +1047,28 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 									{ctx()!.percent === null ? "?" : `${ctx()!.percent!.toFixed(0)}%`}
 								</output>
 							</Show>
+							<button
+								type="button"
+								class="switcher optional"
+								title={runtime()?.state.localOnlyMode ? "local mode on" : "local mode off — click to toggle"}
+								onClick={async () => {
+									try {
+										const newState = !(runtime()?.state.localOnlyMode ?? false);
+										await api.saveSettings({ localOnlyMode: newState });
+										await props.store.refreshFleet();
+									} catch (err) {
+										setActionError(err instanceof Error ? err.message : String(err));
+									}
+								}}
+							>
+								<span class="label">local</span>{" "}
+								<span
+									class="value"
+									style={{ color: runtime()?.state.localOnlyMode ? "var(--accent)" : undefined }}
+								>
+									{runtime()?.state.localOnlyMode ? "on" : "off"}
+								</span>
+							</button>
 							<button type="button" class="switcher" onClick={() => setShowOverflow(!showOverflow())}>
 								⋯
 							</button>

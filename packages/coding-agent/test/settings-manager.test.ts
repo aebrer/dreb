@@ -584,4 +584,53 @@ describe("SettingsManager", () => {
 			expect(manager.getBackgroundAgentGuardrailEnabled()).toBe(false);
 		});
 	});
+
+	describe("local-only mode settings", () => {
+		it("getLocalOnlyMode() returns false by default, true after set", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getLocalOnlyMode()).toBe(false);
+
+			manager.setLocalOnlyMode(true);
+			await manager.flush();
+
+			expect(manager.getLocalOnlyMode()).toBe(true);
+		});
+
+		it("getLocalOnlyModel() returns undefined by default, returns value after set, undefined after clearing", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getLocalOnlyModel()).toBeUndefined();
+
+			manager.setLocalOnlyModel("ollama/qwen3.5");
+			await manager.flush();
+			expect(manager.getLocalOnlyModel()).toBe("ollama/qwen3.5");
+
+			manager.setLocalOnlyModel(undefined);
+			await manager.flush();
+			expect(manager.getLocalOnlyModel()).toBeUndefined();
+		});
+
+		it("getFinalFallbackToLocalModel() returns false by default, true after set", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getFinalFallbackToLocalModel()).toBe(false);
+
+			manager.setFinalFallbackToLocalModel(true);
+			await manager.flush();
+
+			expect(manager.getFinalFallbackToLocalModel()).toBe(true);
+		});
+
+		it("setters call save() — verified via flush persistence", async () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			manager.setLocalOnlyMode(true);
+			manager.setLocalOnlyModel("ollama/qwen3.5");
+			manager.setFinalFallbackToLocalModel(true);
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.localOnlyMode).toBe(true);
+			expect(saved.localOnlyModel).toBe("ollama/qwen3.5");
+			expect(saved.finalFallbackToLocalModel).toBe(true);
+		});
+	});
 });

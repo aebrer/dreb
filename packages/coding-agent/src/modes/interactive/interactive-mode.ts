@@ -3706,6 +3706,8 @@ export class InteractiveMode {
 			const agentNames = Array.from(agentTypes.keys()).sort();
 			const availableModels = this.session.modelRegistry.getAvailable();
 			const availableModelIds = availableModels.map((m) => `${m.provider}/${m.id}`);
+			// Local model dropdown shows ALL available models (same source as Agent Models picker)
+			const localModelAvailableModels = availableModelIds;
 
 			const currentModel = this.session.model;
 			const thinkingDisplaySupported = currentModel ? supportsAdaptiveThinking(currentModel) : false;
@@ -3741,6 +3743,10 @@ export class InteractiveMode {
 					agentModels: this.settingsManager.getAgentModels(),
 					agentNames: agentNames,
 					availableModelIds,
+					localOnlyMode: this.settingsManager.getLocalOnlyMode(),
+					localOnlyModel: this.settingsManager.getLocalOnlyModel() ?? "",
+					finalFallbackToLocalModel: this.settingsManager.getFinalFallbackToLocalModel(),
+					localModelAvailableModels,
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -3875,6 +3881,15 @@ export class InteractiveMode {
 									"Edit the project settings file to change it.",
 							);
 						}
+					},
+					onLocalOnlyModeChange: (enabled) => {
+						this.settingsManager.setLocalOnlyMode(enabled);
+					},
+					onLocalOnlyModelChange: (modelId) => {
+						this.settingsManager.setLocalOnlyModel(modelId || undefined);
+					},
+					onFinalFallbackToLocalModelChange: (enabled: boolean) => {
+						this.settingsManager.setFinalFallbackToLocalModel(enabled);
 					},
 					onCancel: () => {
 						done();

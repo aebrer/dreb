@@ -162,6 +162,10 @@ export interface RpcPendingMessages {
 export interface RpcSessionState {
 	model?: Model<any>;
 	scopedModels: RpcScopedModel[];
+	/** Whether local/self-hosted model injection is enabled for agent fallback lists */
+	localOnlyMode?: boolean;
+	/** The local model ID to inject (provider/model format) */
+	localOnlyModel?: string;
 	usingSubscription: boolean;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
@@ -493,6 +497,12 @@ export interface RpcSettingsSnapshot {
 	hideThinkingBlock?: boolean;
 	/** Per-agent model fallback lists, merged global + project with project entries winning */
 	agentModels?: Record<string, string[]>;
+	/** Whether local/self-hosted model injection is enabled for agent fallback lists */
+	localOnlyMode?: boolean;
+	/** The local model ID to inject (provider/model format) */
+	localOnlyModel?: string;
+	/** When true, final fallback to local model (appended at end of fallback list) */
+	finalFallbackToLocalModel?: boolean;
 }
 
 /** Settings snapshot returned by `set_settings`; warnings are present for loud shadowing notices. */
@@ -518,6 +528,9 @@ export interface RpcSettingsUpdate {
 	transport?: Transport;
 	hideThinkingBlock?: boolean;
 	agentModels?: Record<string, string[]>;
+	localOnlyMode?: boolean;
+	localOnlyModel?: string;
+	finalFallbackToLocalModel?: boolean;
 }
 
 // ============================================================================

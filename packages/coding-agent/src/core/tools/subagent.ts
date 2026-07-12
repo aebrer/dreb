@@ -687,6 +687,14 @@ export function resolveModelStringSingle(
 	return { ok: true, modelId: resolved.model.id, provider: resolved.model.provider };
 }
 
+/** Configuration for Local Only Mode — injects a local model into the fallback list. */
+export interface LocalOnlyConfig {
+	enabled: boolean;
+	modelId: string;
+	/** When true, append local model as last fallback; when false, prepend as first. */
+	finalFallback: boolean;
+}
+
 export interface ProbeModelAvailabilityOptions {
 	/** Parent/tool abort signal. A model availability probe timeout is layered on top. */
 	signal?: AbortSignal;
@@ -820,6 +828,7 @@ export async function resolveModelForSubagentSpawn(
 	signal?: AbortSignal,
 	/** Optional log prefix for warning messages (defaults to "[subagent]") */
 	logPrefix = "[subagent]",
+	localOnlyConfig?: LocalOnlyConfig,
 ): Promise<SubagentModelResolution> {
 	if (signal?.aborted) return { ok: false, error: "Aborted before spawn", skippedModels: [] };
 
@@ -831,10 +840,31 @@ export async function resolveModelForSubagentSpawn(
 		return { ...resolved, skippedModels: [] };
 	}
 
+	// Inject local-only model if enabled
+	const effectiveModels: string[] = [...models];
+	if (localOnlyConfig?.enabled && localOnlyConfig.modelId) {
+		const localModel = localOnlyConfig.modelId;
+		const alreadyPresent = effectiveModels.includes(localModel);
+
+		if (localOnlyConfig.finalFallback) {
+			// Final fallback: append local model at end (skip if already present)
+			if (!alreadyPresent) {
+				effectiveModels.push(localModel);
+				log.debug(`${logPrefix} Appending local model "${localModel}" as final fallback.`);
+			}
+		} else {
+			// Prepend: add as first model (skip if already present)
+			if (!alreadyPresent) {
+				effectiveModels.unshift(localModel);
+				log.debug(`${logPrefix} Prepending local model "${localModel}" to fallback list.`);
+			}
+		}
+	}
+
 	const skippedModels: SkippedFallbackModel[] = [];
 	let lastError = "";
 
-	for (const modelStr of models) {
+	for (const modelStr of effectiveModels) {
 		if (signal?.aborted) return { ok: false, error: "Aborted before spawn", skippedModels };
 
 		const resolved = resolveModelStringSingle(modelStr, parentProvider, registry);
@@ -970,6 +1000,8 @@ export async function executeSingle(
 	agentModels?: string[],
 	parentSessionFile?: string,
 	onChildEvent?: (event: Record<string, unknown>) => void,
+	localOnlyConfig?: LocalOnlyConfig,
+	_logPrefix?: string,
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -1009,7 +1041,15 @@ export async function executeSingle(
 	// an additional best-effort 1-token probe before spawn so runtime-unavailable
 	// models are skipped before committing to a child process.
 	if (modelSpec) {
-		const resolved = await resolveModelForSubagentSpawn(modelSpec, parentProvider, registry, parentModel, signal);
+		const resolved = await resolveModelForSubagentSpawn(
+			modelSpec,
+			parentProvider,
+			registry,
+			parentModel,
+			signal,
+			"[subagent]",
+			localOnlyConfig,
+		);
 		skippedModels = resolved.skippedModels;
 		if (!resolved.ok) {
 			const skippedDetails = formatSkippedModelFailureDetails(skippedModels);
@@ -1064,6 +1104,7 @@ async function executeChain(
 	getAgentModelsForAgentFn?: (name: string) => string[] | undefined,
 	parentSessionFile?: string,
 	onChildEvent?: (event: Record<string, unknown>) => void,
+	localOnlyConfig?: LocalOnlyConfig,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -1119,6 +1160,7 @@ async function executeChain(
 			stepMach6Models,
 			parentSessionFile,
 			onChildEvent,
+			localOnlyConfig,
 		);
 		results.push(result);
 
@@ -1483,6 +1525,8 @@ export interface SubagentToolOptions {
 	modelRegistry?: ModelRegistry;
 	/** Settings-based model override getter for mach6.models. */
 	getAgentModelsForAgent?: (agentName: string) => string[] | undefined;
+	/** Local Only Mode configuration — injects a local model into every agent's fallback list. */
+	localOnlyConfig?: LocalOnlyConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -1653,6 +1697,7 @@ export function createSubagentToolDefinition(
 	const getParentSessionFile = options?.parentSessionFile ?? (() => undefined);
 	const modelRegistry = options?.modelRegistry;
 	const getAgentModelsForAgent = options?.getAgentModelsForAgent;
+	const localOnlyConfig = options?.localOnlyConfig;
 
 	// Discover agents at definition time to build the prompt guidelines.
 	// This is cheap (reads .md files) and the same call happens on every execute().
@@ -1872,6 +1917,7 @@ export function createSubagentToolDefinition(
 							agentModels,
 							getParentSessionFile(),
 							onChildEvent,
+							localOnlyConfig,
 						),
 					);
 				};
@@ -1970,6 +2016,7 @@ export function createSubagentToolDefinition(
 								getAgentModelsForAgent,
 								getParentSessionFile(),
 								onChildEvent,
+								localOnlyConfig,
 							);
 							const resultText = results
 								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
