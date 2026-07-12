@@ -90,16 +90,22 @@ export function getPackageDir(): string {
 		// Bun binary: process.execPath points to the compiled executable
 		return dirname(process.execPath);
 	}
-	// Node.js: walk up from __dirname until we find package.json
+	// Node.js: walk up from __dirname until we find package.json.
+	// Build directories (e.g. dist/) may contain a copied package.json,
+	// so prefer the directory that also has src/ or node_modules/,
+	// which indicates the real package root rather than a build output.
 	let dir = __dirname;
+	let candidate = __dirname;
 	while (dir !== dirname(dir)) {
 		if (existsSync(join(dir, "package.json"))) {
-			return dir;
+			candidate = dir;
+			if (existsSync(join(dir, "src")) || existsSync(join(dir, "node_modules"))) {
+				return dir;
+			}
 		}
 		dir = dirname(dir);
 	}
-	// Fallback (shouldn't happen)
-	return __dirname;
+	return candidate;
 }
 
 /**
