@@ -1,6 +1,7 @@
 /**
- * Removes unpaired Unicode surrogate characters from a string.
+ * Removes NUL and unpaired Unicode surrogate characters from model-bound text.
  *
+ * NUL can corrupt local-model generation even when the provider accepts the JSON payload.
  * Unpaired surrogates (high surrogates 0xD800-0xDBFF without matching low surrogates 0xDC00-0xDFFF,
  * or vice versa) cause JSON serialization errors in many API providers.
  *
@@ -19,7 +20,6 @@
  * sanitizeSurrogates(`Text ${unpaired} here`) // => "Text  here"
  */
 export function sanitizeSurrogates(text: string): string {
-	// Replace unpaired high surrogates (0xD800-0xDBFF not followed by low surrogate)
-	// Replace unpaired low surrogates (0xDC00-0xDFFF not preceded by high surrogate)
-	return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+	// Replace NUL, unpaired high surrogates, and unpaired low surrogates.
+	return text.replace(/\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 }
