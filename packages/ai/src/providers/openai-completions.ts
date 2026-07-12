@@ -620,7 +620,7 @@ export function convertMessages(
 			if (nonEmptyThinkingBlocks.length > 0) {
 				if (compat.requiresThinkingAsText) {
 					// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
-					const thinkingText = nonEmptyThinkingBlocks.map((b) => b.thinking).join("\n\n");
+					const thinkingText = sanitizeSurrogates(nonEmptyThinkingBlocks.map((b) => b.thinking).join("\n\n"));
 					const textContent = assistantMsg.content as Array<{ type: "text"; text: string }> | null;
 					if (textContent) {
 						textContent.unshift({ type: "text", text: thinkingText });
@@ -631,7 +631,9 @@ export function convertMessages(
 					// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
 					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
 					if (signature && signature.length > 0) {
-						(assistantMsg as any)[signature] = nonEmptyThinkingBlocks.map((b) => b.thinking).join("\n");
+						(assistantMsg as any)[signature] = sanitizeSurrogates(
+							nonEmptyThinkingBlocks.map((b) => b.thinking).join("\n"),
+						);
 					}
 				}
 			}
