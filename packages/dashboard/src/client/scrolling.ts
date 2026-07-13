@@ -105,21 +105,20 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 		element: options.scroller,
 		shouldScroll: () => {
 			if (!(following && !gestureActive)) return false;
-			// About to pin to the bottom: record the target so the next genuine
-			// user up-scroll is measured against the pinned position, not a stale
-			// pre-pin one (which would otherwise fail to release follow).
+			// About to pin to the bottom: record the *resting* scrollTop the browser
+			// will settle at after `scrollTop = scrollHeight` (it clamps to
+			// `scrollHeight - clientHeight`), NOT the raw scrollHeight. `lastTop` is
+			// compared against real `scrollTop` values in handleScroll; seeding it
+			// with a height leaves it ~clientHeight too high, so the pin's own async
+			// echo scroll event — or a concurrent content growth before that echo
+			// fires — reads as a user up-scroll and silently latches follow off.
 			const el = options.scroller();
-			if (el) lastTop = el.scrollHeight;
+			if (el) lastTop = Math.max(0, el.scrollHeight - el.clientHeight);
 			return true;
 		},
 		requestAnimationFrame: options.requestAnimationFrame,
 		cancelAnimationFrame: options.cancelAnimationFrame,
 	});
-
-	const atBottom = (): boolean => {
-		const el = options.scroller();
-		return !el || el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
-	};
 
 	function request(): void {
 		scroller.request();
@@ -150,15 +149,29 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 
 	function handleTouchEnd(): void {
 		gestureActive = false;
-		following = atBottom();
+		// Do NOT re-derive follow from absolute at-bottom geometry — that is the
+		// latch-off bug this controller exists to remove. handleScroll (which fires
+		// during the drag) already owns follow state via up-scroll detection, so if
+		// the user did not scroll up, `following` is still true even when content
+		// grew during the gesture. Just replay the pin that gestureActive suppressed.
+		if (following) scroller.request();
 	}
 
 	function observeContent(element: Element | undefined): void {
-		if (!element || !ResizeObserverImpl) return;
+		if (!element) return;
+		if (!ResizeObserverImpl) {
+			// The async-growth re-pin is a core part of the follow fix; if the
+			// platform lacks ResizeObserver we lose it silently. Surface that rather
+			// than degrading quietly (repo convention: loud failure over silent
+			// fallback). ResizeObserver is baseline in all target browsers, so this
+			// should never fire in practice.
+			console.warn(
+				"[dashboard] ResizeObserver unavailable — stick-to-bottom async re-pin disabled; the transcript may lag behind live output until the next envelope arrives.",
+			);
+			return;
+		}
 		observer?.disconnect();
-		observer = new ResizeObserverImpl(() => {
-			if (following && !gestureActive) scroller.request();
-		});
+		observer = new ResizeObserverImpl(() => notifyContentChanged());
 		observer.observe(element);
 	}
 

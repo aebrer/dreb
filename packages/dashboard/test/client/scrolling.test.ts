@@ -292,4 +292,113 @@ describe("createStickToBottom", () => {
 		controller.dispose();
 		expect(ro.disconnectedCount()).toBeGreaterThanOrEqual(1);
 	});
+
+	it("keeps following when a pin's echo scroll fires after further growth (browser clamp mechanism)", () => {
+		// Reproduces the real-browser mechanism the jsdom screen tests cannot: a
+		// programmatic pin clamps `scrollTop` to `scrollHeight - clientHeight` and
+		// fires an async echo `scroll` event. If content grows again before that
+		// echo arrives, the echo must NOT be misread as a user up-scroll.
+		const queue = createManualAnimationFrameQueue();
+		const element: FakeScrollElement = { scrollTop: 0, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+
+		// Parked at the resting bottom (scrollHeight - clientHeight).
+		element.scrollTop = 400;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+
+		// A long tool output lands: content grows and the pin fires.
+		element.scrollHeight = 900;
+		controller.notifyContentChanged();
+		queue.flushAll();
+		// The browser clamps `scrollTop = scrollHeight` to `scrollHeight - clientHeight`.
+		element.scrollTop = element.scrollHeight - element.clientHeight; // 800
+
+		// Late syntax highlighting grows the block again BEFORE the pin's async echo
+		// scroll event is delivered.
+		element.scrollHeight = 1100;
+
+		// The echo scroll arrives with the clamped (unchanged) scrollTop against the
+		// grown height. The old code seeded `lastTop = scrollHeight` (900), so
+		// `800 < 899` released follow here — the silent drop-out reported after a
+		// `read` tool call. The fix seeds `lastTop = scrollHeight - clientHeight`.
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+
+		// Follow survives, so the next growth re-pins to the true bottom.
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(1100);
+	});
+
+	it("touch end keeps following when content grew during the drag without an up-scroll", () => {
+		const queue = createManualAnimationFrameQueue();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+		controller.handleScroll(); // at bottom → following
+		controller.handleTouchStart();
+
+		// Content grows while the finger is down; the user never scrolls up, so the
+		// viewport measures "not at bottom" purely because of the growth.
+		element.scrollHeight = 900;
+
+		// Lifting the finger must NOT re-derive follow from absolute at-bottom
+		// geometry (the old bug), and must replay the pin suppressed during the drag.
+		controller.handleTouchEnd();
+		expect(controller.isFollowing()).toBe(true);
+		queue.flushAll();
+		expect(element.scrollTop).toBe(900);
+	});
+
+	it("observeContent rebinds to a replacement element and ignores undefined", () => {
+		const queue = createManualAnimationFrameQueue();
+		const ro = createFakeResizeObserver();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+			ResizeObserverImpl: ro.Impl,
+		});
+
+		// Undefined element (ref not ready yet) is a safe no-op.
+		controller.observeContent(undefined);
+		expect(ro.observedCount()).toBe(0);
+
+		// First real element.
+		controller.observeContent({} as Element);
+		expect(ro.observedCount()).toBe(1);
+
+		// Rebinding disconnects the prior observer and observes the replacement.
+		controller.observeContent({} as Element);
+		expect(ro.disconnectedCount()).toBe(1);
+		expect(ro.observedCount()).toBe(2);
+
+		// Only the current observer drives re-pins.
+		element.scrollHeight = 900;
+		ro.fire();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(900);
+	});
+
+	it("warns loudly instead of silently disabling re-pin when ResizeObserver is unavailable", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			ResizeObserverImpl: undefined,
+		});
+		controller.observeContent({} as Element);
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(warn.mock.calls[0]?.[0]).toContain("ResizeObserver unavailable");
+		warn.mockRestore();
+	});
 });

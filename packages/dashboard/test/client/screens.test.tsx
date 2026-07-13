@@ -153,6 +153,21 @@ import { MAX_TOTAL_IMAGE_BYTES } from "../../src/shared/protocol.js";
 
 const disposers: Array<() => void> = [];
 
+// jsdom lacks ResizeObserver; real browsers always have it. Install a no-op so
+// the stick-to-bottom controller's observeContent() attaches quietly instead of
+// logging its (correct) "ResizeObserver unavailable" warning on every screen
+// mount. Tests that exercise the observer path override this with a capturing
+// fake and restore it afterward.
+if (!(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver) {
+	class NoopResizeObserver {
+		observe(): void {}
+		unobserve(): void {}
+		disconnect(): void {}
+	}
+	(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+		NoopResizeObserver as unknown as typeof ResizeObserver;
+}
+
 beforeEach(() => {
 	if (window.localStorage) return;
 	const values = new Map<string, string>();
@@ -555,6 +570,55 @@ describe("app store integration", () => {
 		});
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(chat.scrollTop).toBe(1000);
+	});
+
+	it("re-pins the transcript when observed content grows without a new envelope (ResizeObserver path)", async () => {
+		// Wire a controllable global ResizeObserver so the controller's
+		// observeContent() actually attaches (jsdom lacks ResizeObserver, which
+		// would otherwise silently disable the async-growth re-pin).
+		let roCallback: ResizeObserverCallback | undefined;
+		class FakeRO {
+			constructor(cb: ResizeObserverCallback) {
+				roCallback = cb;
+			}
+			observe(): void {}
+			unobserve(): void {}
+			disconnect(): void {}
+		}
+		const priorRO = (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
+		(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+			FakeRO as unknown as typeof ResizeObserver;
+		try {
+			let captured: EventStreamHandlers | undefined;
+			vi.mocked(connectEvents).mockImplementation((handlers) => {
+				captured = handlers;
+				return () => {};
+			});
+			const store = makeStore();
+			await store.start();
+			if (!captured) throw new Error("connectEvents was not called");
+			const el = mount(() => <SessionScreen store={store} sessionKey="k-ro" />);
+			captured.onEnvelope({ seq: 1, key: "k-ro", event: { type: "agent_start" } });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			const chat = el.querySelector(".chat") as HTMLElement;
+			let scrollHeight = 500;
+			Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+			Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+			// Parked at the bottom.
+			chat.scrollTop = 400;
+			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+			// Content grows asynchronously (e.g. late syntax highlighting) with NO
+			// new envelope — only the ResizeObserver fires. The transcript must
+			// re-pin to the new bottom.
+			scrollHeight = 1000;
+			roCallback?.([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(chat.scrollTop).toBe(1000);
+		} finally {
+			(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = priorRO;
+		}
 	});
 });
 
@@ -2686,6 +2750,59 @@ describe("dashboard client regressions", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(el.textContent).toContain("No session log found for this agent");
+	});
+
+	it("subagent transcript re-pins on observed content growth and respects a user up-scroll", async () => {
+		let roCallback: ResizeObserverCallback | undefined;
+		class FakeRO {
+			constructor(cb: ResizeObserverCallback) {
+				roCallback = cb;
+			}
+			observe(): void {}
+			unobserve(): void {}
+			disconnect(): void {}
+		}
+		const priorRO = (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
+		(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+			FakeRO as unknown as typeof ResizeObserver;
+		try {
+			vi.mocked(api.subagentMessages).mockResolvedValue({
+				agent: {
+					agentId: "bg-ro",
+					agentType: "Explore",
+					taskSummary: "streaming task",
+					startedAt: new Date().toISOString(),
+					status: "running",
+				},
+				messages: [{ role: "assistant", content: [{ type: "text", text: "streaming output" }] }],
+			});
+			const store = makeStore();
+			const el = mount(() => <SubagentScreen store={store} sessionKey="k-ro-sub" agentId="bg-ro" />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			const chat = el.querySelector(".chat") as HTMLElement;
+			let scrollHeight = 500;
+			Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+			Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+			// Parked at the bottom; async growth with no revision must re-pin.
+			chat.scrollTop = 400;
+			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+			scrollHeight = 1000;
+			roCallback?.([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(chat.scrollTop).toBe(1000);
+
+			// A deliberate up-scroll suspends follow; later observed growth must not
+			// yank the view back down.
+			chat.scrollTop = 200;
+			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+			scrollHeight = 1600;
+			roCallback?.([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(chat.scrollTop).toBe(200);
+		} finally {
+			(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = priorRO;
+		}
 	});
 
 	it("hydrateSession re-seeds background agents from the runtime registry", async () => {
