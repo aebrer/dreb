@@ -9,7 +9,7 @@ import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { marked } from "marked";
 import { createEffect, createMemo, createSignal, For, type JSX, Match, onCleanup, Show, Switch } from "solid-js";
-import { createCoalescedBottomScroller } from "../scrolling.js";
+import { createStickToBottom } from "../scrolling.js";
 import { expandThinking, isToolAutoOpen } from "../state/preferences.js";
 import type { AgentResultEntry, AssistantEntry, ToolEntry, TranscriptEntry } from "../state/reducer.js";
 
@@ -133,56 +133,31 @@ function HighlightedPre(props: {
 	throttle?: boolean;
 }): JSX.Element {
 	let preRef: HTMLPreElement | undefined;
-	let stickToBottom = true;
-	let userScrolling = false;
-	let userScrollTimer: ReturnType<typeof setTimeout> | undefined;
 	const text = throttledString(
 		() => props.text,
 		() => props.throttle === true,
 	);
 	const html = createMemo(() => highlightedHtml(text(), props.language));
-	const atBottom = () => !preRef || preRef.scrollTop + preRef.clientHeight >= preRef.scrollHeight - 24;
-	const bottomScroller = createCoalescedBottomScroller({
-		element: () => preRef,
-		shouldScroll: () => stickToBottom && !userScrolling,
-	});
-	const releaseUserScrollSoon = () => {
-		if (userScrollTimer) clearTimeout(userScrollTimer);
-		userScrollTimer = setTimeout(() => {
-			userScrolling = false;
-			stickToBottom = atBottom();
-		}, 250);
-	};
+	const stickToBottom = createStickToBottom({ scroller: () => preRef, threshold: 24 });
 
 	createEffect(() => {
 		text();
 		props.language;
-		if (!props.autoScroll || !stickToBottom || userScrolling) return;
-		bottomScroller.request();
+		if (props.autoScroll) stickToBottom.notifyContentChanged();
 	});
-	onCleanup(() => {
-		if (userScrollTimer) clearTimeout(userScrollTimer);
-		bottomScroller.cancel();
-	});
+	onCleanup(() => stickToBottom.dispose());
 
 	return (
 		<pre
 			ref={preRef}
-			onWheel={() => {
-				if (!props.autoScroll) return;
-				userScrolling = true;
-				releaseUserScrollSoon();
-			}}
 			onTouchStart={() => {
-				if (props.autoScroll) userScrolling = true;
+				if (props.autoScroll) stickToBottom.handleTouchStart();
 			}}
 			onTouchEnd={() => {
-				if (!props.autoScroll) return;
-				userScrolling = false;
-				stickToBottom = atBottom();
+				if (props.autoScroll) stickToBottom.handleTouchEnd();
 			}}
 			onScroll={() => {
-				if (props.autoScroll) stickToBottom = atBottom();
+				if (props.autoScroll) stickToBottom.handleScroll();
 			}}
 		>
 			<Show when={html()} fallback={text()}>

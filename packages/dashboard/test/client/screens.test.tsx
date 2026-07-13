@@ -518,6 +518,44 @@ describe("app store integration", () => {
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(chat.scrollTop).toBe(200);
 	});
+
+	it("keeps following when content grows without a user scroll (no silent drop-out)", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		if (!captured) throw new Error("connectEvents was not called");
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-grow" />);
+		captured.onEnvelope({ seq: 1, key: "k-grow", event: { type: "agent_start" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const chat = el.querySelector(".chat") as HTMLElement;
+		let scrollHeight = 500;
+		Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+		Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+		// User is parked at the bottom.
+		chat.scrollTop = 400;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// Content grows below (e.g. a long tool output) and a spurious scroll event
+		// fires while the viewport now measures "not at bottom" — the old absolute
+		// at-bottom check would latch follow off here.
+		scrollHeight = 900;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// A subsequent envelope must still pin to the new bottom.
+		scrollHeight = 1000;
+		captured.onEnvelope({
+			seq: 2,
+			key: "k-grow",
+			event: { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "yes" } },
+		});
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(chat.scrollTop).toBe(1000);
+	});
 });
 
 describe("screen smoke tests", () => {
@@ -2297,6 +2335,46 @@ describe("dashboard client regressions", () => {
 		refreshPre();
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(pre.scrollTop).toBe(100);
+	});
+
+	it("bash tool output keeps following when output grows without a user scroll", async () => {
+		let scrollHeight = 300;
+		const bashEntry = (resultText: string) => ({
+			kind: "tool" as const,
+			toolCallId: "b-grow",
+			toolName: "bash",
+			args: { command: "for i in {1..100}; do echo $i; done" },
+			status: "running" as const,
+			resultText,
+			startedAt: Date.now(),
+		});
+		const entry = bashEntry("line 1");
+		const [entries, setEntries] = createSignal([entry]);
+		const el = mount(() => <Transcript entries={entries()} />);
+		let pre = el.querySelector(".tool-result pre") as HTMLPreElement;
+		const refreshPre = () => {
+			pre = el.querySelector(".tool-result pre") as HTMLPreElement;
+			Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
+			Object.defineProperty(pre, "scrollHeight", { configurable: true, get: () => scrollHeight });
+		};
+		refreshPre();
+
+		// Parked at the bottom.
+		pre.scrollTop = 200;
+		pre.dispatchEvent(new Event("scroll"));
+
+		// Output grows and a spurious scroll fires while not-at-bottom — must not
+		// latch follow off.
+		scrollHeight = 600;
+		pre.dispatchEvent(new Event("scroll"));
+
+		// Further streamed output pins back to the new bottom.
+		scrollHeight = 900;
+		entry.resultText = "line 1\n".repeat(120);
+		setEntries([entry]);
+		refreshPre();
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(pre.scrollTop).toBe(900);
 	});
 
 	it("fork modal rewinds to a selected user message and prefills the composer", async () => {

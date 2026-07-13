@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi } from "vitest";
-import { createCoalescedBottomScroller } from "../../src/client/scrolling.js";
+import { createCoalescedBottomScroller, createStickToBottom } from "../../src/client/scrolling.js";
 
 function flushNextFrame(callbacks: FrameRequestCallback[]): void {
 	const callback = callbacks.shift();
@@ -145,5 +145,151 @@ describe("createCoalescedBottomScroller", () => {
 		expect(element.scrollTop).toBe(900);
 		expect(queue.raf).toHaveBeenCalledTimes(3);
 		expect(queue.callbacks).toHaveLength(0);
+	});
+});
+
+interface FakeScrollElement {
+	scrollTop: number;
+	scrollHeight: number;
+	clientHeight: number;
+}
+
+/** Minimal controllable ResizeObserver: exposes the registered callback for manual firing. */
+function createFakeResizeObserver() {
+	let callback: ResizeObserverCallback | undefined;
+	let observed = 0;
+	let disconnected = 0;
+	class FakeResizeObserver {
+		constructor(cb: ResizeObserverCallback) {
+			callback = cb;
+		}
+		observe(): void {
+			observed++;
+		}
+		unobserve(): void {}
+		disconnect(): void {
+			disconnected++;
+		}
+	}
+	return {
+		Impl: FakeResizeObserver as unknown as typeof ResizeObserver,
+		fire: () => callback?.([], {} as ResizeObserver),
+		observedCount: () => observed,
+		disconnectedCount: () => disconnected,
+	};
+}
+
+describe("createStickToBottom", () => {
+	it("keeps following through content growth when the user has not scrolled up", () => {
+		const queue = createManualAnimationFrameQueue();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+
+		// User is at the bottom.
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+
+		// Content grows below without the user scrolling; a spurious scroll event
+		// fires while the viewport now measures "not at bottom" (the old latch bug).
+		element.scrollHeight = 900;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+
+		// Next content notification pins back to the new bottom.
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(900);
+	});
+
+	it("releases follow on a user up-scroll and re-engages at the bottom", () => {
+		const queue = createManualAnimationFrameQueue();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+		controller.handleScroll();
+
+		// User scrolls up (scrollTop decreases) — follow releases.
+		element.scrollHeight = 900;
+		element.scrollTop = 200;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+
+		// Growth no longer pins while released.
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(200);
+
+		// User returns to the bottom — follow re-engages and pins resume.
+		element.scrollTop = 800;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+		element.scrollHeight = 1000;
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(1000);
+	});
+
+	it("suspends pinning during an active touch drag", () => {
+		const queue = createManualAnimationFrameQueue();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+
+		controller.handleTouchStart();
+		element.scrollHeight = 900;
+		controller.notifyContentChanged();
+		queue.flushAll();
+		// Finger down: no yank even though still following.
+		expect(element.scrollTop).toBe(400);
+
+		// Lifting the finger at the bottom re-enables pinning.
+		element.scrollTop = 860;
+		controller.handleTouchEnd();
+		expect(controller.isFollowing()).toBe(true);
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(900);
+	});
+
+	it("re-pins on ResizeObserver growth while following but not after release", () => {
+		const queue = createManualAnimationFrameQueue();
+		const ro = createFakeResizeObserver();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+			ResizeObserverImpl: ro.Impl,
+		});
+		controller.observeContent({} as Element);
+		expect(ro.observedCount()).toBe(1);
+
+		// Async growth with no envelope re-pins.
+		element.scrollHeight = 900;
+		ro.fire();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(900);
+
+		// After a user up-scroll, observer growth must not yank the view back.
+		element.scrollTop = 300;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+		element.scrollHeight = 1400;
+		ro.fire();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(300);
+
+		controller.dispose();
+		expect(ro.disconnectedCount()).toBeGreaterThanOrEqual(1);
 	});
 });
