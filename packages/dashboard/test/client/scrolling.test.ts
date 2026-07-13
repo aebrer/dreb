@@ -401,4 +401,111 @@ describe("createStickToBottom", () => {
 		expect(warn.mock.calls[0]?.[0]).toContain("ResizeObserver unavailable");
 		warn.mockRestore();
 	});
+
+	it("warns only once when both content and viewport observers are attached without ResizeObserver", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			ResizeObserverImpl: undefined,
+		});
+		// A screen attaches both a content and a viewport observer; the missing-RO
+		// diagnostic must not double-log.
+		controller.observeContent({} as Element);
+		controller.observeViewport({} as Element);
+		expect(warn).toHaveBeenCalledTimes(1);
+		warn.mockRestore();
+	});
+
+	it("re-pins on viewport resize while following but not after release (observeViewport)", () => {
+		// A dock/chrome resize (tasks list, subagent strip, composer auto-grow)
+		// changes the scroller's clientHeight without a content change or a scroll
+		// event. Only the viewport observer catches it.
+		const queue = createManualAnimationFrameQueue();
+		const ro = createFakeResizeObserver();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+			ResizeObserverImpl: ro.Impl,
+		});
+		controller.observeViewport({} as Element);
+		expect(ro.observedCount()).toBe(1);
+
+		// Viewport grows (dock shrank) — clientHeight increased with no scroll event.
+		// While following, the observer must re-pin to the new resting bottom.
+		element.clientHeight = 300;
+		ro.fire();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(900);
+
+		// After a user up-scroll, a later viewport resize must not yank the view back.
+		element.scrollTop = 200;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+		element.clientHeight = 100;
+		ro.fire();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(200);
+	});
+
+	it("touch cancel clears the gesture and re-enables pinning (touchcancel)", () => {
+		const queue = createManualAnimationFrameQueue();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+		controller.handleScroll(); // at bottom → following
+		controller.handleTouchStart();
+
+		// Finger down suppresses pinning even while following.
+		element.scrollHeight = 900;
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(400);
+
+		// The gesture is canceled (system takeover) instead of ending cleanly.
+		// gestureActive must clear so pinning resumes — otherwise every future pin
+		// is silently suppressed.
+		controller.handleTouchCancel();
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(900);
+	});
+
+	it("dispose cancels a pending pin so a detached scroller is never mutated", () => {
+		const queue = createManualAnimationFrameQueue();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+		controller.handleScroll(); // following
+
+		// Schedule a pin, then dispose before either frame fires.
+		controller.notifyContentChanged();
+		controller.dispose();
+		queue.flushAll();
+		// The pin was cancelled — scrollTop is untouched.
+		expect(element.scrollTop).toBe(400);
+	});
+
+	it("dispose disconnects both the content and viewport observers", () => {
+		const ro = createFakeResizeObserver();
+		const element: FakeScrollElement = { scrollTop: 400, scrollHeight: 500, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			ResizeObserverImpl: ro.Impl,
+		});
+		controller.observeContent({} as Element);
+		controller.observeViewport({} as Element);
+		expect(ro.observedCount()).toBe(2);
+
+		controller.dispose();
+		expect(ro.disconnectedCount()).toBe(2);
+	});
 });

@@ -605,6 +605,12 @@ describe("app store integration", () => {
 			Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
 			Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
 
+			// Flush any pending mount/revision pin FIRST, so the assertion below can
+			// only be satisfied by the ResizeObserver-driven re-pin — not by a
+			// leftover coalesced pin that would reach the new bottom regardless of
+			// whether observeViewport/observeContent actually attached.
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
 			// Parked at the bottom.
 			chat.scrollTop = 400;
 			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
@@ -612,6 +618,7 @@ describe("app store integration", () => {
 			// Content grows asynchronously (e.g. late syntax highlighting) with NO
 			// new envelope — only the ResizeObserver fires. The transcript must
 			// re-pin to the new bottom.
+			expect(roCallback).toBeDefined();
 			scrollHeight = 1000;
 			roCallback?.([], {} as ResizeObserver);
 			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -2784,9 +2791,13 @@ describe("dashboard client regressions", () => {
 			Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
 			Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
 
-			// Parked at the bottom; async growth with no revision must re-pin.
+			// Parked at the bottom; async growth with no revision must re-pin. Flush
+			// any pending mount pin first so only the observer-driven re-pin can
+			// satisfy the assertion.
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 			chat.scrollTop = 400;
 			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+			expect(roCallback).toBeDefined();
 			scrollHeight = 1000;
 			roCallback?.([], {} as ResizeObserver);
 			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));

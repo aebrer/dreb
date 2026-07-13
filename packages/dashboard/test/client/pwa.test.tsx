@@ -8,6 +8,19 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// jsdom lacks ResizeObserver; real browsers always have it. Install a no-op so
+// the stick-to-bottom controller (mounted via <App>'s SessionScreen) attaches
+// quietly instead of logging its (correct) "ResizeObserver unavailable" warning.
+if (!(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver) {
+	class NoopResizeObserver {
+		observe(): void {}
+		unobserve(): void {}
+		disconnect(): void {}
+	}
+	(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+		NoopResizeObserver as unknown as typeof ResizeObserver;
+}
+
 // Mock the API + SSE so <App> mounts without a server. Mirrors screens.test.tsx.
 vi.mock("../../src/client/api.js", () => ({
 	api: {

@@ -61,18 +61,24 @@ export interface StickToBottomOptions {
 }
 
 export interface StickToBottomController {
-	/** Request a pin to the bottom (honored only while following and no gesture is active). */
-	request: () => void;
 	/** Call whenever transcript content changes (e.g. per store revision). */
 	notifyContentChanged: () => void;
 	/** Bind to the scroller's `scroll` event. */
 	handleScroll: () => void;
 	/** Bind to the scroller's `touchstart` event (suspends pinning during a drag). */
 	handleTouchStart: () => void;
-	/** Bind to the scroller's `touchend` event (re-evaluates follow state). */
+	/** Bind to the scroller's `touchend` event (ends the drag and replays the pin). */
 	handleTouchEnd: () => void;
+	/** Bind to the scroller's `touchcancel` event (same finish path as touchend). */
+	handleTouchCancel: () => void;
 	/** Observe a content element so async growth (e.g. late tool output) re-pins. */
 	observeContent: (element: Element | undefined) => void;
+	/**
+	 * Observe the scroll *viewport* element so that surrounding-chrome resizes
+	 * (tasks list / subagent strip toggling, composer textarea auto-growing) that
+	 * change `clientHeight` — without a content change or a scroll event — re-pin.
+	 */
+	observeViewport: (element: Element | undefined) => void;
 	/** Current follow state — exposed for tests and diagnostics. */
 	isFollowing: () => boolean;
 	/** Tear down observers and pending frames. */
@@ -87,10 +93,14 @@ export interface StickToBottomController {
  * fix for the silent follow drop-out: appended content grows `scrollHeight`
  * without decreasing `scrollTop`, so it can no longer latch follow off — and the
  * delta signal is input-agnostic (wheel, touch, scrollbar, keyboard all lower
- * `scrollTop` on an up-scroll). A `ResizeObserver` re-pins when content grows
- * after the last envelope (e.g. throttled syntax highlighting of a long tool
- * output), and an active touch drag suspends pinning so the view never yanks
- * out from under the user's finger.
+ * `scrollTop` on an up-scroll). Two `ResizeObserver`s keep the view pinned when
+ * geometry changes without a scroll event: `observeContent` re-pins when the
+ * transcript *content* grows after the last envelope (e.g. throttled syntax
+ * highlighting of a long tool output), and `observeViewport` re-pins when the
+ * scroll *viewport* itself resizes (surrounding chrome such as the tasks list,
+ * subagent strip, or auto-growing composer changes `clientHeight`). An active
+ * touch drag suspends pinning so the view never yanks out from under the user's
+ * finger.
  */
 export function createStickToBottom(options: StickToBottomOptions): StickToBottomController {
 	const threshold = options.threshold ?? 40;
@@ -99,7 +109,9 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 	let following = true;
 	let gestureActive = false;
 	let lastTop = 0;
-	let observer: ResizeObserver | undefined;
+	let contentObserver: ResizeObserver | undefined;
+	let viewportObserver: ResizeObserver | undefined;
+	let warnedMissingObserver = false;
 
 	const scroller = createCoalescedBottomScroller({
 		element: options.scroller,
@@ -120,14 +132,9 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 		cancelAnimationFrame: options.cancelAnimationFrame,
 	});
 
-	function request(): void {
-		scroller.request();
-	}
-
 	function notifyContentChanged(): void {
 		if (following && !gestureActive) scroller.request();
 	}
-
 	function handleScroll(): void {
 		const el = options.scroller();
 		if (!el) return;
@@ -147,7 +154,7 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 		gestureActive = true;
 	}
 
-	function handleTouchEnd(): void {
+	function finishGesture(): void {
 		gestureActive = false;
 		// Do NOT re-derive follow from absolute at-bottom geometry — that is the
 		// latch-off bug this controller exists to remove. handleScroll (which fires
@@ -157,37 +164,67 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 		if (following) scroller.request();
 	}
 
-	function observeContent(element: Element | undefined): void {
-		if (!element) return;
+	function handleTouchEnd(): void {
+		finishGesture();
+	}
+
+	function handleTouchCancel(): void {
+		// touchcancel (system gesture takeover, too many touch points, etc.) fires
+		// *instead of* touchend. Without clearing gestureActive here it would stay
+		// true forever, silently suppressing every pin until the next complete touch
+		// sequence — a real mobile follow drop-out. Same finish path as touchend.
+		finishGesture();
+	}
+
+	function makeObserver(element: Element): ResizeObserver | undefined {
 		if (!ResizeObserverImpl) {
-			// The async-growth re-pin is a core part of the follow fix; if the
+			// The observer-driven re-pin is a core part of the follow fix; if the
 			// platform lacks ResizeObserver we lose it silently. Surface that rather
 			// than degrading quietly (repo convention: loud failure over silent
 			// fallback). ResizeObserver is baseline in all target browsers, so this
-			// should never fire in practice.
-			console.warn(
-				"[dashboard] ResizeObserver unavailable — stick-to-bottom async re-pin disabled; the transcript may lag behind live output until the next envelope arrives.",
-			);
-			return;
+			// should never fire in practice. Warn once per controller so a screen
+			// with both content and viewport observers doesn't double-log.
+			if (!warnedMissingObserver) {
+				warnedMissingObserver = true;
+				console.warn(
+					"[dashboard] ResizeObserver unavailable — stick-to-bottom async re-pin disabled; the transcript may lag behind live output until the next envelope arrives.",
+				);
+			}
+			return undefined;
 		}
-		observer?.disconnect();
-		observer = new ResizeObserverImpl(() => notifyContentChanged());
-		observer.observe(element);
+		const created = new ResizeObserverImpl(() => notifyContentChanged());
+		created.observe(element);
+		return created;
+	}
+
+	function observeContent(element: Element | undefined): void {
+		if (!element) return;
+		contentObserver?.disconnect();
+		contentObserver = makeObserver(element);
+	}
+
+	function observeViewport(element: Element | undefined): void {
+		if (!element) return;
+		viewportObserver?.disconnect();
+		viewportObserver = makeObserver(element);
 	}
 
 	function dispose(): void {
-		observer?.disconnect();
-		observer = undefined;
+		contentObserver?.disconnect();
+		viewportObserver?.disconnect();
+		contentObserver = undefined;
+		viewportObserver = undefined;
 		scroller.cancel();
 	}
 
 	return {
-		request,
 		notifyContentChanged,
 		handleScroll,
 		handleTouchStart,
 		handleTouchEnd,
+		handleTouchCancel,
 		observeContent,
+		observeViewport,
 		isFollowing: () => following,
 		dispose,
 	};

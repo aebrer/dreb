@@ -40,8 +40,13 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 		props.store.revisions[props.sessionKey];
 		stickToBottom.notifyContentChanged();
 	});
-	// Re-pin when content grows asynchronously (e.g. late syntax highlighting).
-	onMount(() => stickToBottom.observeContent(chatInnerRef));
+	// Re-pin when content grows asynchronously (e.g. late syntax highlighting) and
+	// when the scroll viewport resizes (surrounding chrome changing clientHeight
+	// with no content change and no scroll event).
+	onMount(() => {
+		stickToBottom.observeContent(chatInnerRef);
+		stickToBottom.observeViewport(chatRef);
+	});
 	onCleanup(() => stickToBottom.dispose());
 
 	return (
@@ -71,6 +76,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 				ref={chatRef}
 				onTouchStart={() => stickToBottom.handleTouchStart()}
 				onTouchEnd={() => stickToBottom.handleTouchEnd()}
+				onTouchCancel={() => stickToBottom.handleTouchCancel()}
 				onScroll={() => stickToBottom.handleScroll()}
 			>
 				<div class="chat-inner" ref={chatInnerRef}>

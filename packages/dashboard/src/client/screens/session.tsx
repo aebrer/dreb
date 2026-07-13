@@ -761,8 +761,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	});
 
 	// Re-pin when transcript content grows asynchronously (e.g. late syntax
-	// highlighting of a long tool output) without a new envelope.
-	onMount(() => stickToBottom.observeContent(chatInnerRef));
+	// highlighting of a long tool output) without a new envelope, and when the
+	// scroll viewport itself resizes (tasks list / subagent strip toggling, the
+	// composer textarea auto-growing) — those change clientHeight with no content
+	// change and no scroll event, so nothing else would re-pin.
+	onMount(() => {
+		stickToBottom.observeContent(chatInnerRef);
+		stickToBottom.observeViewport(chatRef);
+	});
 
 	let wasStreaming = false;
 	createEffect(() => {
@@ -1162,6 +1168,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				ref={chatRef}
 				onTouchStart={() => stickToBottom.handleTouchStart()}
 				onTouchEnd={() => stickToBottom.handleTouchEnd()}
+				onTouchCancel={() => stickToBottom.handleTouchCancel()}
 				onScroll={() => stickToBottom.handleScroll()}
 			>
 				<div class="chat-inner" ref={chatInnerRef}>

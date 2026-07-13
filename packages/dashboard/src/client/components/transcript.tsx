@@ -156,6 +156,9 @@ function HighlightedPre(props: {
 			onTouchEnd={() => {
 				if (props.autoScroll) stickToBottom.handleTouchEnd();
 			}}
+			onTouchCancel={() => {
+				if (props.autoScroll) stickToBottom.handleTouchCancel();
+			}}
 			onScroll={() => {
 				if (props.autoScroll) stickToBottom.handleScroll();
 			}}
