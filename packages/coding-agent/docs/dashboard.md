@@ -74,6 +74,47 @@ agents, running commands through them, browsing the whole host filesystem
 pairing screen states this before the PIN is entered. Every file operation is
 logged server-side.
 
+## WSL2 gotcha — intermittent "access denied" / pairing screen on localhost
+
+<a id="wsl2-gotcha"></a>
+
+If you run the dashboard inside **WSL2** and reach it from a Windows browser at
+`http://127.0.0.1:5343`, you may intermittently get an **access-denied /
+pairing screen even in local mode** — typically right after the WSL VM has been
+idle, clearing once WSL is "warm" again (e.g. after you open a WSL terminal,
+which is itself slow to start because the VM is resuming).
+
+**Cause.** With WSL's `networkingMode=mirrored`, host→guest loopback traffic can
+reach the server with a source address of `10.255.255.254` — the mirrored
+host-loopback address WSL assigns to `lo` — instead of `127.0.0.1`, during the
+window after a cold boot / resume before the loopback relay settles. Local-mode
+auth only treats `127.x.x.x`/`::1` as loopback, so those requests fail the
+loopback check and are denied; the client renders that denial as the
+access-denied / pairing screen. No actual Tailscale/pairing is involved.
+
+**Why it correlates with WSL idling.** WSL tears the VM down when idle, and a
+dashboard running as a background service does **not** keep it alive: WSL's
+instance watchdog only counts processes it launches directly (interactive
+`wsl.exe` sessions or `wsl --exec`), and a `systemd`-managed service lives under
+PID 1 where the watchdog never sees it. So an always-on dashboard still lets the
+VM idle out, and the first request after resume can land in the transitional
+networking window above.
+
+**Workarounds** (host-side — no dreb changes needed):
+
+- **Keep a WSL terminal open.** Simplest and most reliable: an attached
+  interactive session is exactly the signal WSL uses to keep the VM alive, which
+  also avoids the post-resume networking window entirely.
+- **Headless keep-alive.** Run `wsl --exec dbus-launch true` (e.g. as a logon
+  Scheduled Task): it leaves a lingering background daemon that holds the VM open
+  with no terminal window. Re-run after each Windows reboot — it does not
+  persist. See [microsoft/WSL#10138](https://github.com/microsoft/WSL/issues/10138).
+  A `sleep infinity` session via Task Scheduler works too. (`vmIdleTimeout=-1`
+  in `.wslconfig` is Windows-11-only and reported unreliable for keeping the
+  *instance* — not just the VM — alive.)
+- **Access via the WSL VM's own IP** instead of localhost, if that path is
+  loopback-clean for your setup.
+
 ## Screens
 
 | Screen | What it does |

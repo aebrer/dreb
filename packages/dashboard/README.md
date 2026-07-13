@@ -87,6 +87,16 @@ upload/download. Every file operation is logged server-side. Browser
 notifications are opt-in per device from settings; the tab-title attention
 badge works without permission.
 
+## WSL2 gotcha — intermittent "access denied" / pairing screen on localhost
+
+Running the dashboard inside **WSL2** and reaching it from a Windows browser can
+intermittently show an access-denied / pairing screen on `http://127.0.0.1`
+right after the WSL VM has been idle. It's a WSL mirrored-networking quirk (the
+loopback source address is transiently `10.255.255.254`, which fails local-mode
+auth's `127.x`/`::1` check), not a dreb bug. Keeping a WSL terminal open — or a
+headless keep-alive — avoids it. Full explanation and workarounds:
+[WSL2 gotcha](../coding-agent/docs/dashboard.md#wsl2-gotcha).
+
 ## Options
 
 | Flag | Description |
