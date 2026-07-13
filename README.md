@@ -181,6 +181,8 @@ systemctl --user enable --now dreb-dashboard
 
 macOS users can run the same command under a launchd user agent; a full plist is deferred.
 
+**WSL2 users:** if you reach the dashboard from a Windows browser and hit an intermittent access-denied / pairing screen on `http://127.0.0.1` after the WSL VM has been idle, see the [WSL2 gotcha](packages/coding-agent/docs/dashboard.md#wsl2-gotcha) for the cause and keep-alive workarounds.
+
 Full docs: [dashboard.md](packages/coding-agent/docs/dashboard.md).
 
 ## Design philosophy
