@@ -9,7 +9,7 @@ import { createEffect, createMemo, createSignal, type JSX, onCleanup, onMount, S
 import { StatusChip } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
-import { createCoalescedBottomScroller } from "../scrolling.js";
+import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import type { AppStore } from "../state/store.js";
 
 export function SubagentScreen(props: { store: AppStore; sessionKey: string; agentId: string }): JSX.Element {
@@ -21,12 +21,8 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	const [hydrateError, setHydrateError] = createSignal<string>();
 
 	let chatRef: HTMLDivElement | undefined;
-	let autoScroll = true;
-	const chatAtBottom = () => !chatRef || chatRef.scrollTop + chatRef.clientHeight >= chatRef.scrollHeight - 40;
-	const bottomScroller = createCoalescedBottomScroller({
-		element: () => chatRef,
-		shouldScroll: () => autoScroll,
-	});
+	let chatInnerRef: HTMLDivElement | undefined;
+	const stickToBottom = createStickToBottom({ scroller: () => chatRef });
 
 	onMount(() => {
 		const hydration = new AbortController();
@@ -42,9 +38,17 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	// Stick-to-bottom autoscroll during streaming (revision bumps per envelope).
 	createEffect(() => {
 		props.store.revisions[props.sessionKey];
-		if (autoScroll) bottomScroller.request();
+		stickToBottom.notifyContentChanged();
 	});
-	onCleanup(() => bottomScroller.cancel());
+	// Re-pin when content grows asynchronously (e.g. late syntax highlighting) and
+	// when the scroll viewport resizes (surrounding chrome changing clientHeight
+	// with no content change and no scroll event).
+	onMount(() => {
+		stickToBottom.observeContent(chatInnerRef);
+		stickToBottom.observeViewport(chatRef);
+		if (chatRef) onCleanup(bindStickToBottom(stickToBottom, chatRef, { keyboard: "window" }));
+	});
+	onCleanup(() => stickToBottom.dispose());
 
 	return (
 		<div class="session-screen">
@@ -68,14 +72,8 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 				</div>
 			</header>
 
-			<main
-				class="chat"
-				ref={chatRef}
-				onScroll={() => {
-					autoScroll = chatAtBottom();
-				}}
-			>
-				<div class="chat-inner">
+			<main class="chat" ref={chatRef}>
+				<div class="chat-inner" ref={chatInnerRef}>
 					<Show when={hydrateError()}>
 						<p class="pair-error">{hydrateError()}</p>
 					</Show>

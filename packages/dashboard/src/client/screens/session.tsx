@@ -22,7 +22,7 @@ import { api } from "../api.js";
 import { Modal } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
-import { createCoalescedBottomScroller } from "../scrolling.js";
+import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import {
 	addComposerHistoryEntry,
 	getComposerDraft,
@@ -399,13 +399,11 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [statsPopoverError, setStatsPopoverError] = createSignal<string>();
 
 	let chatRef: HTMLDivElement | undefined;
+	let chatInnerRef: HTMLDivElement | undefined;
 	let composerRef: HTMLTextAreaElement | undefined;
 	let genericFileInputRef: HTMLInputElement | undefined;
 	let imageFileInputRef: HTMLInputElement | undefined;
 	let statsPopoverRef: HTMLDivElement | undefined;
-	let autoScroll = true;
-	let userScrollingTranscript = false;
-	let userScrollTimer: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
 
 	const streaming = () => session()?.streaming ?? false;
@@ -417,21 +415,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	// halts all of these; the dashboard stop button must reach the same states
 	// (a mid-turn refresh or a paused-on-subagents parent must not hide it).
 	const showStopControls = () => streaming() || compacting() || parentPaused() || anyLiveAgent();
-	const chatAtBottom = () => !chatRef || chatRef.scrollTop + chatRef.clientHeight >= chatRef.scrollHeight - 40;
-	const bottomScroller = createCoalescedBottomScroller({
-		element: () => chatRef,
-		shouldScroll: () => autoScroll && !userScrollingTranscript,
-	});
-	function releaseTranscriptScrollSoon(): void {
-		if (userScrollTimer) clearTimeout(userScrollTimer);
-		userScrollTimer = setTimeout(() => {
-			userScrollingTranscript = false;
-			autoScroll = chatAtBottom();
-		}, 250);
-	}
-	function scrollChatToBottomAfterLayout(): void {
-		bottomScroller.request();
-	}
+	const stickToBottom = createStickToBottom({ scroller: () => chatRef });
 
 	async function refreshRuntimeDetails(includeDailyCost = false) {
 		const [statsResult, performanceResult, branchResult] = await Promise.allSettled([
@@ -752,8 +736,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	}, 1000);
 	onCleanup(() => {
 		clearInterval(timer);
-		if (userScrollTimer) clearTimeout(userScrollTimer);
-		bottomScroller.cancel();
+		stickToBottom.dispose();
 		clearImageAttachments();
 	});
 
@@ -774,7 +757,18 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	createEffect(() => {
 		props.store.revisions[props.sessionKey];
 		session()?.entries.length;
-		if (autoScroll && !userScrollingTranscript) scrollChatToBottomAfterLayout();
+		stickToBottom.notifyContentChanged();
+	});
+
+	// Re-pin when transcript content grows asynchronously (e.g. late syntax
+	// highlighting of a long tool output) without a new envelope, and when the
+	// scroll viewport itself resizes (tasks list / subagent strip toggling, the
+	// composer textarea auto-growing) — those change clientHeight with no content
+	// change and no scroll event, so nothing else would re-pin.
+	onMount(() => {
+		stickToBottom.observeContent(chatInnerRef);
+		stickToBottom.observeViewport(chatRef);
+		if (chatRef) onCleanup(bindStickToBottom(stickToBottom, chatRef, { keyboard: "window" }));
 	});
 
 	let wasStreaming = false;
@@ -1170,25 +1164,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</div>
 			</Show>
 
-			<main
-				class="chat"
-				ref={chatRef}
-				onWheel={() => {
-					userScrollingTranscript = true;
-					releaseTranscriptScrollSoon();
-				}}
-				onTouchStart={() => {
-					userScrollingTranscript = true;
-				}}
-				onTouchEnd={() => {
-					userScrollingTranscript = false;
-					autoScroll = chatAtBottom();
-				}}
-				onScroll={() => {
-					autoScroll = chatAtBottom();
-				}}
-			>
-				<div class="chat-inner">
+			<main class="chat" ref={chatRef}>
+				<div class="chat-inner" ref={chatInnerRef}>
 					<Show when={session()} fallback={<p class="muted">loading transcript…</p>}>
 						<For each={session()!.widgets.above}>{(line) => <div class="widget-block">{line}</div>}</For>
 						<Transcript entries={session()!.entries} resetKey={props.sessionKey} />

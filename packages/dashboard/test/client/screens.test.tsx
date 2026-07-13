@@ -133,7 +133,12 @@ vi.mock("../../src/client/api.js", () => ({
 }));
 
 import { api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
-import { TRANSCRIPT_WINDOW_SIZE, Transcript, transcriptRenderItems } from "../../src/client/components/transcript.js";
+import {
+	TRANSCRIPT_WINDOW_SIZE,
+	Transcript,
+	type TranscriptRenderItem,
+	transcriptRenderItems,
+} from "../../src/client/components/transcript.js";
 import { FilesScreen } from "../../src/client/screens/files.js";
 import { FleetScreen, fleetGroupKey } from "../../src/client/screens/fleet.js";
 import { PairingScreen } from "../../src/client/screens/pairing.js";
@@ -152,6 +157,21 @@ import { createAppStore } from "../../src/client/state/store.js";
 import { MAX_TOTAL_IMAGE_BYTES } from "../../src/shared/protocol.js";
 
 const disposers: Array<() => void> = [];
+
+// jsdom lacks ResizeObserver; real browsers always have it. Install a no-op so
+// the stick-to-bottom controller's observeContent() attaches quietly instead of
+// logging its (correct) "ResizeObserver unavailable" warning on every screen
+// mount. Tests that exercise the observer path override this with a capturing
+// fake and restore it afterward.
+if (!(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver) {
+	class NoopResizeObserver {
+		observe(): void {}
+		unobserve(): void {}
+		disconnect(): void {}
+	}
+	(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+		NoopResizeObserver as unknown as typeof ResizeObserver;
+}
 
 beforeEach(() => {
 	if (window.localStorage) return;
@@ -496,7 +516,12 @@ describe("app store integration", () => {
 		chat.scrollTop = 400;
 		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
 
-		chat.dispatchEvent(new Event("touchstart", { bubbles: true }));
+		const touchEvent = (type: string, clientY: number) => {
+			const event = new Event(type, { bubbles: true }) as Event & { touches: Array<{ clientY: number }> };
+			event.touches = [{ clientY }];
+			return event;
+		};
+		chat.dispatchEvent(touchEvent("touchstart", 300));
 		scrollHeight = 900;
 		captured.onEnvelope({
 			seq: 2,
@@ -506,6 +531,8 @@ describe("app store integration", () => {
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(chat.scrollTop).toBe(400);
 
+		// The finger drags DOWN the screen (clientY increases) — an up-scroll.
+		chat.dispatchEvent(touchEvent("touchmove", 360));
 		chat.scrollTop = 200;
 		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
 		chat.dispatchEvent(new Event("touchend", { bubbles: true }));
@@ -517,6 +544,208 @@ describe("app store integration", () => {
 		});
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(chat.scrollTop).toBe(200);
+	});
+
+	it("keeps following when content grows without a user scroll (no silent drop-out)", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		if (!captured) throw new Error("connectEvents was not called");
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-grow" />);
+		captured.onEnvelope({ seq: 1, key: "k-grow", event: { type: "agent_start" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const chat = el.querySelector(".chat") as HTMLElement;
+		let scrollHeight = 500;
+		Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+		Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+		// User is parked at the bottom.
+		chat.scrollTop = 400;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// Content grows below (e.g. a long tool output) and a spurious scroll event
+		// fires while the viewport now measures "not at bottom" — the old absolute
+		// at-bottom check would latch follow off here.
+		scrollHeight = 900;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// A subsequent envelope must still pin to the new bottom.
+		scrollHeight = 1000;
+		captured.onEnvelope({
+			seq: 2,
+			key: "k-grow",
+			event: { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "yes" } },
+		});
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(chat.scrollTop).toBe(1000);
+	});
+
+	it("keeps following when an assistant→tool reflow lowers scrollTop with no user input", async () => {
+		// The residual drop-out: at a tool boundary the transcript reflows (streamed
+		// message replaced by full markdown, assistant-turn DOM recreated) and the
+		// browser LOWERS scrollTop while a tool card is appended below. No wheel /
+		// touch / pointer / key input precedes the resulting scroll event, so it must
+		// not be misread as a user up-scroll.
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		if (!captured) throw new Error("connectEvents was not called");
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-reflow" />);
+		captured.onEnvelope({ seq: 1, key: "k-reflow", event: { type: "agent_start" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const chat = el.querySelector(".chat") as HTMLElement;
+		let scrollHeight = 900;
+		Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+		Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+		// Parked at the resting bottom.
+		chat.scrollTop = 800;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// Reflow: assistant completion lowers scrollTop by 300, a tool card grows the
+		// content far below, and the browser emits a scroll event — WITHOUT any input.
+		scrollHeight = 1500;
+		chat.scrollTop = 500;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// The next envelope must still pin to the new bottom (follow survived).
+		scrollHeight = 1600;
+		captured.onEnvelope({
+			seq: 2,
+			key: "k-reflow",
+			event: { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "yes" } },
+		});
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(chat.scrollTop).toBe(1600);
+	});
+
+	it("releases follow when the user wheels up before a scroll (deliberate up-scroll)", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		if (!captured) throw new Error("connectEvents was not called");
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-wheelup" />);
+		captured.onEnvelope({ seq: 1, key: "k-wheelup", event: { type: "agent_start" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const chat = el.querySelector(".chat") as HTMLElement;
+		let scrollHeight = 900;
+		Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+		Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+		chat.scrollTop = 800;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// A genuine wheel-up followed by the resulting decreased scrollTop releases.
+		chat.dispatchEvent(new WheelEvent("wheel", { deltaY: -40, bubbles: true }));
+		chat.scrollTop = 300;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// Later growth must NOT yank the released view back to the bottom.
+		scrollHeight = 1600;
+		captured.onEnvelope({
+			seq: 2,
+			key: "k-wheelup",
+			event: { type: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: { command: "yes" } },
+		});
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(chat.scrollTop).toBe(300);
+	});
+
+	it("re-pins the transcript when observed content or viewport changes without a new envelope", async () => {
+		// Record each registration: the screen must attach two independent
+		// observers, one to .chat-inner content and one to the .chat viewport.
+		const observers: Array<{ callback: ResizeObserverCallback; observed?: Element }> = [];
+		class FakeRO {
+			private readonly registration: { callback: ResizeObserverCallback; observed?: Element };
+			constructor(callback: ResizeObserverCallback) {
+				this.registration = { callback };
+				observers.push(this.registration);
+			}
+			observe(element: Element): void {
+				this.registration.observed = element;
+			}
+			unobserve(): void {}
+			disconnect(): void {}
+		}
+		const priorRO = (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
+		(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+			FakeRO as unknown as typeof ResizeObserver;
+		try {
+			let captured: EventStreamHandlers | undefined;
+			vi.mocked(connectEvents).mockImplementation((handlers) => {
+				captured = handlers;
+				return () => {};
+			});
+			const store = makeStore();
+			await store.start();
+			if (!captured) throw new Error("connectEvents was not called");
+			const el = mount(() => <SessionScreen store={store} sessionKey="k-ro" />);
+			captured.onEnvelope({ seq: 1, key: "k-ro", event: { type: "agent_start" } });
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			const chat = el.querySelector(".chat") as HTMLElement;
+			const chatInner = el.querySelector(".chat-inner") as HTMLElement;
+			let scrollHeight = 500;
+			let clientHeight = 100;
+			let scrollTop = 0;
+			let scrollWrites = 0;
+			Object.defineProperty(chat, "clientHeight", { configurable: true, get: () => clientHeight });
+			Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+			Object.defineProperty(chat, "scrollTop", {
+				configurable: true,
+				get: () => scrollTop,
+				set: (value: number) => {
+					scrollTop = value;
+					scrollWrites++;
+				},
+			});
+			expect(observers.map((observer) => observer.observed)).toEqual([chatInner, chat]);
+
+			// Flush any pending mount/revision pin FIRST, so the assertion below can
+			// only be satisfied by the ResizeObserver-driven re-pin — not by a
+			// leftover coalesced pin that would reach the new bottom regardless of
+			// whether observeViewport/observeContent actually attached.
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+			// Parked at the bottom.
+			chat.scrollTop = 400;
+			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+			scrollWrites = 0;
+
+			// Content grows asynchronously (e.g. late syntax highlighting) with NO
+			// new envelope — only the content observer fires. The transcript must
+			// re-pin to the new bottom.
+			const contentObserver = observers.find((observer) => observer.observed === chatInner);
+			expect(contentObserver).toBeDefined();
+			scrollHeight = 1000;
+			contentObserver?.callback([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(chat.scrollTop).toBe(1000);
+
+			// A dock/composer resize changes only the viewport geometry. Its separate
+			// observer must independently request the pin.
+			const viewportObserver = observers.find((observer) => observer.observed === chat);
+			expect(viewportObserver).toBeDefined();
+			scrollWrites = 0;
+			clientHeight = 200;
+			viewportObserver?.callback([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(scrollWrites).toBe(1);
+			expect(chat.scrollTop).toBe(1000);
+		} finally {
+			(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = priorRO;
+		}
 	});
 });
 
@@ -959,8 +1188,49 @@ describe("dashboard client regressions", () => {
 		expect(nextItems[0]).toBe(firstItems[0]);
 		expect(nextItems[1]).toBe(firstItems[1]);
 		expect(nextItems[2]).toBe(firstItems[2]);
-		expect(nextItems[3]).not.toBe(firstItems[3]);
-		expect(nextItems[3]).toMatchObject({ kind: "assistant-turn", entries: [entries[4], entries[5]] });
+		// Appending a tool to the ACTIVE assistant turn must keep the turn item —
+		// and therefore its rendered wrapper DOM — stable. Recreating the wrapper
+		// tears down and re-renders the assistant markdown, a reflow that lowers
+		// scrollTop at the assistant→tool boundary.
+		expect(nextItems[3]).toBe(firstItems[3]);
+		const turn = nextItems[3] as Extract<TranscriptRenderItem, { kind: "assistant-turn" }>;
+		expect(turn.kind).toBe("assistant-turn");
+		expect(turn.entries()).toEqual([entries[4], entries[5]]);
+	});
+
+	it("appending a tool keeps the rendered assistant-turn DOM node stable (no destroy/recreate reflow)", async () => {
+		const assistant = {
+			kind: "assistant" as const,
+			blocks: [{ kind: "text" as const, text: "long analysis" }],
+			streaming: false,
+		};
+		const [entries, setEntries] = createSignal<Parameters<typeof transcriptRenderItems>[0]>([assistant]);
+		const el = mount(() => <Transcript entries={entries()} />);
+		const turnBefore = el.querySelector('[data-testid="assistant-turn"]');
+		expect(turnBefore).not.toBeNull();
+		const markdownBefore = turnBefore?.querySelector(".entry-body");
+
+		setEntries([
+			assistant,
+			{
+				kind: "tool",
+				toolCallId: "t-append",
+				toolName: "bash",
+				args: { command: "pwd" },
+				status: "running",
+				resultText: "",
+				startedAt: Date.now(),
+			},
+		]);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const turnAfter = el.querySelector('[data-testid="assistant-turn"]');
+		// SAME DOM nodes — the wrapper and the already-rendered assistant markdown
+		// were not torn down when the tool card was appended.
+		expect(turnAfter).toBe(turnBefore);
+		expect(turnAfter?.querySelector(".entry-body")).toBe(markdownBefore);
+		// …and the tool card actually rendered inside the same wrapper.
+		expect(turnAfter?.querySelector(".tool")).not.toBeNull();
 	});
 
 	it("tool card bodies mount lazily and running tools stay mounted", () => {
@@ -2289,6 +2559,7 @@ describe("dashboard client regressions", () => {
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(pre.scrollTop).toBe(600);
 
+		pre.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
 		pre.scrollTop = 100;
 		pre.dispatchEvent(new Event("scroll"));
 		scrollHeight = 900;
@@ -2297,6 +2568,46 @@ describe("dashboard client regressions", () => {
 		refreshPre();
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(pre.scrollTop).toBe(100);
+	});
+
+	it("bash tool output keeps following when output grows without a user scroll", async () => {
+		let scrollHeight = 300;
+		const bashEntry = (resultText: string) => ({
+			kind: "tool" as const,
+			toolCallId: "b-grow",
+			toolName: "bash",
+			args: { command: "for i in {1..100}; do echo $i; done" },
+			status: "running" as const,
+			resultText,
+			startedAt: Date.now(),
+		});
+		const entry = bashEntry("line 1");
+		const [entries, setEntries] = createSignal([entry]);
+		const el = mount(() => <Transcript entries={entries()} />);
+		let pre = el.querySelector(".tool-result pre") as HTMLPreElement;
+		const refreshPre = () => {
+			pre = el.querySelector(".tool-result pre") as HTMLPreElement;
+			Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
+			Object.defineProperty(pre, "scrollHeight", { configurable: true, get: () => scrollHeight });
+		};
+		refreshPre();
+
+		// Parked at the bottom.
+		pre.scrollTop = 200;
+		pre.dispatchEvent(new Event("scroll"));
+
+		// Output grows and a spurious scroll fires while not-at-bottom — must not
+		// latch follow off.
+		scrollHeight = 600;
+		pre.dispatchEvent(new Event("scroll"));
+
+		// Further streamed output pins back to the new bottom.
+		scrollHeight = 900;
+		entry.resultText = "line 1\n".repeat(120);
+		setEntries([entry]);
+		refreshPre();
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(pre.scrollTop).toBe(900);
 	});
 
 	it("fork modal rewinds to a selected user message and prefills the composer", async () => {
@@ -2608,6 +2919,92 @@ describe("dashboard client regressions", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(el.textContent).toContain("No session log found for this agent");
+	});
+
+	it("subagent transcript independently observes content and viewport geometry", async () => {
+		const observers: Array<{ callback: ResizeObserverCallback; observed?: Element }> = [];
+		class FakeRO {
+			private readonly registration: { callback: ResizeObserverCallback; observed?: Element };
+			constructor(callback: ResizeObserverCallback) {
+				this.registration = { callback };
+				observers.push(this.registration);
+			}
+			observe(element: Element): void {
+				this.registration.observed = element;
+			}
+			unobserve(): void {}
+			disconnect(): void {}
+		}
+		const priorRO = (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
+		(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
+			FakeRO as unknown as typeof ResizeObserver;
+		try {
+			vi.mocked(api.subagentMessages).mockResolvedValue({
+				agent: {
+					agentId: "bg-ro",
+					agentType: "Explore",
+					taskSummary: "streaming task",
+					startedAt: new Date().toISOString(),
+					status: "running",
+				},
+				messages: [{ role: "assistant", content: [{ type: "text", text: "streaming output" }] }],
+			});
+			const store = makeStore();
+			const el = mount(() => <SubagentScreen store={store} sessionKey="k-ro-sub" agentId="bg-ro" />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			const chat = el.querySelector(".chat") as HTMLElement;
+			const chatInner = el.querySelector(".chat-inner") as HTMLElement;
+			let scrollHeight = 500;
+			let clientHeight = 100;
+			let scrollTop = 0;
+			let scrollWrites = 0;
+			Object.defineProperty(chat, "clientHeight", { configurable: true, get: () => clientHeight });
+			Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+			Object.defineProperty(chat, "scrollTop", {
+				configurable: true,
+				get: () => scrollTop,
+				set: (value: number) => {
+					scrollTop = value;
+					scrollWrites++;
+				},
+			});
+			expect(observers.map((observer) => observer.observed)).toEqual([chatInner, chat]);
+
+			// Parked at the bottom; async growth with no revision must re-pin. Flush
+			// any pending mount pin first so only the observer-driven re-pin can
+			// satisfy the assertion.
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			chat.scrollTop = 400;
+			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+			scrollWrites = 0;
+
+			const contentObserver = observers.find((observer) => observer.observed === chatInner);
+			expect(contentObserver).toBeDefined();
+			scrollHeight = 1000;
+			contentObserver?.callback([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(chat.scrollTop).toBe(1000);
+
+			const viewportObserver = observers.find((observer) => observer.observed === chat);
+			expect(viewportObserver).toBeDefined();
+			scrollWrites = 0;
+			clientHeight = 200;
+			viewportObserver?.callback([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(scrollWrites).toBe(1);
+
+			// A deliberate up-scroll (wheel-up) suspends follow; later observed growth
+			// must not yank the view back down.
+			chat.dispatchEvent(new WheelEvent("wheel", { deltaY: -20, bubbles: true }));
+			chat.scrollTop = 200;
+			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+			scrollHeight = 1600;
+			contentObserver?.callback([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(chat.scrollTop).toBe(200);
+		} finally {
+			(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = priorRO;
+		}
 	});
 
 	it("hydrateSession re-seeds background agents from the runtime registry", async () => {
