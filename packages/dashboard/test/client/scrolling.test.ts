@@ -215,9 +215,10 @@ describe("createStickToBottom", () => {
 		});
 		controller.handleScroll();
 
-		// User scrolls up (scrollTop decreases) — follow releases.
+		// User scrolls up (scrollTop decreases) with a genuine wheel-up — follow releases.
 		element.scrollHeight = 900;
 		element.scrollTop = 200;
+		controller.handleWheel(-1);
 		controller.handleScroll();
 		expect(controller.isFollowing()).toBe(false);
 
@@ -282,6 +283,7 @@ describe("createStickToBottom", () => {
 
 		// After a user up-scroll, observer growth must not yank the view back.
 		element.scrollTop = 300;
+		controller.handleWheel(-1);
 		controller.handleScroll();
 		expect(controller.isFollowing()).toBe(false);
 		element.scrollHeight = 1400;
@@ -442,6 +444,7 @@ describe("createStickToBottom", () => {
 
 		// After a user up-scroll, a later viewport resize must not yank the view back.
 		element.scrollTop = 200;
+		controller.handleWheel(-1);
 		controller.handleScroll();
 		expect(controller.isFollowing()).toBe(false);
 		element.clientHeight = 100;
@@ -507,5 +510,287 @@ describe("createStickToBottom", () => {
 
 		controller.dispose();
 		expect(ro.disconnectedCount()).toBe(2);
+	});
+
+	it("keeps following on a layout-induced scrollTop decrease with no user input (assistant→tool boundary)", () => {
+		// The core residual bug: at an assistant→tool boundary the transcript
+		// reflows (streamed message replaced by full markdown, assistant-turn DOM
+		// recreated) and the browser lowers scrollTop while a tool card is appended
+		// below. That is NOT a user up-scroll — no wheel/touch/pointer/key input —
+		// so follow must survive even though scrollTop decreased and the new bottom
+		// is far away.
+		const queue = createManualAnimationFrameQueue();
+		const intentClock = 1000;
+		const element: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+			now: () => intentClock,
+		});
+
+		// Parked at the resting bottom, following.
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+
+		// Reflow: assistant completion lowers scrollTop by 300 and a tool card adds
+		// content far below (new bottom is 1400, >40px from the clamped top). No
+		// input event preceded this scroll.
+		element.scrollHeight = 1500;
+		element.scrollTop = 500;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+
+		// The next content notification re-pins to the true new bottom.
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(1500);
+	});
+
+	it("releases on a wheel-up whose scroll sequence has not settled, but not after scrollend", () => {
+		const intentClock = 1000;
+		const element: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			now: () => intentClock,
+		});
+		controller.handleScroll(); // following at bottom
+
+		// A wheel-up whose scroll has not landed yet: no decrease, no release.
+		controller.handleWheel(-1);
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+
+		// The outer scroller then moves up under the same gesture — releases.
+		element.scrollTop = 400;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+	});
+
+	it("scrollend consumes discrete upward intent (sequence-scoped, not merely time-windowed)", () => {
+		const intentClock = 1000;
+		const element: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			now: () => intentClock, // frozen clock — the 400ms fallback can NEVER expire
+		});
+		controller.handleScroll();
+
+		// A wheel-up arms intent, its (no-op) scroll sequence settles…
+		controller.handleWheel(-1);
+		controller.handleScrollEnd();
+
+		// …then a layout-induced reflow lowers scrollTop. Even though the fallback
+		// window never expired (frozen clock), scrollend already consumed the
+		// intent, so this must NOT release.
+		element.scrollHeight = 1500;
+		element.scrollTop = 500;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+	});
+
+	it("downward movement clears discrete upward intent", () => {
+		const intentClock = 1000;
+		const element: FakeScrollElement = { scrollTop: 800, scrollHeight: 2000, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			now: () => intentClock,
+		});
+		element.scrollTop = 800;
+		controller.handleScroll(); // not at bottom (2000-100=1900), lastTop=800
+		expect(controller.isFollowing()).toBe(true);
+
+		// Wheel-up arms, but the user then scrolls DOWN (still above the bottom).
+		controller.handleWheel(-1);
+		element.scrollTop = 1000;
+		controller.handleScroll();
+		// A later layout-induced decrease must not be released by the stale stamp.
+		element.scrollTop = 700;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+	});
+
+	it("wheel-up over a nested inner scroller that can still scroll up does NOT arm outer intent", () => {
+		// The false-release coincidence: a wheel over the nested bash <pre> bubbles
+		// to the outer scroller but is consumed by the pre (it scrolls up instead).
+		// If that armed outer intent, an unrelated assistant→tool reflow within the
+		// fallback window would satisfy both release conditions — the original
+		// silent drop-out. The wheel handler must detect the consuming inner
+		// scroller from the event target and refuse to arm.
+		const intentClock = 1000;
+		const outer = document.createElement("div");
+		const inner = document.createElement("pre");
+		inner.style.overflowY = "auto";
+		outer.appendChild(inner);
+		document.body.appendChild(outer);
+		Object.defineProperty(inner, "scrollHeight", { configurable: true, value: 600 });
+		Object.defineProperty(inner, "clientHeight", { configurable: true, value: 100 });
+		inner.scrollTop = 250; // can still scroll up → consumes the wheel
+		let outerScrollTop = 800;
+		const element = {
+			get scrollTop() {
+				return outerScrollTop;
+			},
+			set scrollTop(v: number) {
+				outerScrollTop = v;
+			},
+			scrollHeight: 900,
+			clientHeight: 100,
+		};
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			now: () => intentClock,
+		});
+		controller.handleScroll(); // following at bottom
+
+		controller.handleWheel(-1, inner);
+		// Reflow lowers outer scrollTop within the (frozen, never-expiring) window.
+		element.scrollHeight = 1500;
+		outerScrollTop = 500;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+
+		// Same wheel but the inner pre is already at its top → it cannot consume,
+		// the outer will scroll, so intent DOES arm and a real decrease releases.
+		inner.scrollTop = 0;
+		outerScrollTop = 1400;
+		controller.handleScroll(); // re-engage at the new bottom
+		expect(controller.isFollowing()).toBe(true);
+		controller.handleWheel(-1, inner);
+		outerScrollTop = 900;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+		outer.remove();
+	});
+
+	it("touch is directional: an upward drag releases, a stationary hold plus reflow does not", () => {
+		// Upward drag: finger moves DOWN the screen (clientY increases) → content
+		// drags down → scrollTop decreases → release.
+		const upEl: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const upCtl = createStickToBottom({ scroller: () => upEl as unknown as HTMLElement });
+		upCtl.handleScroll();
+		upCtl.handleTouchStart(300);
+		upCtl.handleTouchMove(340);
+		upEl.scrollTop = 700;
+		upCtl.handleScroll();
+		expect(upCtl.isFollowing()).toBe(false);
+
+		// Stationary hold: finger down, no movement — a concurrent layout reflow
+		// lowers scrollTop. That is NOT an up-scroll; follow must survive.
+		const holdEl: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const holdCtl = createStickToBottom({ scroller: () => holdEl as unknown as HTMLElement });
+		holdCtl.handleScroll();
+		holdCtl.handleTouchStart(300);
+		holdEl.scrollHeight = 1500;
+		holdEl.scrollTop = 500;
+		holdCtl.handleScroll();
+		expect(holdCtl.isFollowing()).toBe(true);
+
+		// Downward drag (finger moving UP the screen scrolls down): a concurrent
+		// reflow decrease must not release either.
+		const downEl: FakeScrollElement = { scrollTop: 800, scrollHeight: 2000, clientHeight: 100 };
+		const downCtl = createStickToBottom({ scroller: () => downEl as unknown as HTMLElement });
+		downEl.scrollTop = 1900;
+		downCtl.handleScroll();
+		downCtl.handleTouchStart(300);
+		downCtl.handleTouchMove(260); // finger up = scroll down intent
+		downEl.scrollHeight = 2600;
+		downEl.scrollTop = 1700; // layout-induced decrease during the drag
+		downCtl.handleScroll();
+		expect(downCtl.isFollowing()).toBe(true);
+	});
+
+	it("touch intent survives past touchend through the inertial scroll until scrollend", () => {
+		const intentClock = 1000;
+		const element: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			now: () => intentClock,
+		});
+		controller.handleScroll();
+
+		// Upward flick: drag up, lift — the FIRST significant decrease arrives only
+		// during post-touch inertia, after gestureActive already cleared.
+		controller.handleTouchStart(300);
+		controller.handleTouchMove(320);
+		controller.handleTouchEnd();
+		element.scrollTop = 600; // inertial decrease after the finger lifted
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+
+		// After the inertial sequence settles, the carried intent is consumed: a
+		// later layout-induced decrease cannot release.
+		element.scrollTop = 800;
+		controller.handleScroll(); // back at bottom → re-engage
+		controller.handleScrollEnd();
+		element.scrollHeight = 1500;
+		element.scrollTop = 500;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+	});
+
+	it("a plain (non-scrollbar) pointer press never authorizes a release", () => {
+		const element: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({ scroller: () => element as unknown as HTMLElement });
+		controller.handleScroll();
+
+		// Click / text-selection press (not on the scrollbar) while a reflow lowers
+		// scrollTop — must NOT be misread as a scrollbar up-drag.
+		controller.handlePointerDown(false);
+		element.scrollHeight = 1500;
+		element.scrollTop = 500;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+		controller.handlePointerUp();
+	});
+
+	it("does not release when the upward intent has gone stale", () => {
+		let intentClock = 1000;
+		const element: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			now: () => intentClock,
+			intentWindowMs: 400,
+		});
+		controller.handleScroll();
+
+		// A wheel-up happened long ago; by the time a layout-induced decrease fires
+		// the intent window has elapsed, so it must not authorize a release.
+		controller.handleWheel(-1);
+		intentClock += 1000; // 1000ms later, window is 400ms
+		element.scrollTop = 400;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+	});
+
+	it("releases on a scroll-up key press and on an active pointer (scrollbar) drag", () => {
+		const intentClock = 1000;
+		// Keyboard: at bottom first to seed lastTop, then a PageUp + decrease.
+		const keyEl: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const keyCtl = createStickToBottom({ scroller: () => keyEl as unknown as HTMLElement, now: () => intentClock });
+		keyCtl.handleScroll();
+		keyCtl.handleKeyDown("PageUp");
+		keyEl.scrollTop = 300;
+		keyCtl.handleScroll();
+		expect(keyCtl.isFollowing()).toBe(false);
+
+		// Scrollbar drag: pointerdown on the scrollbar region, then an up movement.
+		const ptrEl: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const ptrCtl = createStickToBottom({ scroller: () => ptrEl as unknown as HTMLElement, now: () => intentClock });
+		ptrCtl.handleScroll();
+		ptrCtl.handlePointerDown(true);
+		ptrEl.scrollTop = 300;
+		ptrCtl.handleScroll();
+		expect(ptrCtl.isFollowing()).toBe(false);
+
+		// After the pointer lifts, a later layout-induced decrease must not release.
+		ptrCtl.handlePointerUp();
+		ptrEl.scrollTop = 800;
+		ptrCtl.handleScroll(); // back at bottom → re-engage
+		expect(ptrCtl.isFollowing()).toBe(true);
+		ptrEl.scrollHeight = 2000;
+		ptrEl.scrollTop = 500;
+		ptrCtl.handleScroll();
+		expect(ptrCtl.isFollowing()).toBe(true);
 	});
 });

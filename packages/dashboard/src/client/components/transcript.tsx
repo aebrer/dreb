@@ -8,8 +8,20 @@
 import DOMPurify from "dompurify";
 import hljs from "highlight.js/lib/common";
 import { marked } from "marked";
-import { createEffect, createMemo, createSignal, For, type JSX, Match, onCleanup, Show, Switch } from "solid-js";
-import { createStickToBottom } from "../scrolling.js";
+import {
+	createEffect,
+	createMemo,
+	createSignal,
+	For,
+	type JSX,
+	Match,
+	onCleanup,
+	onMount,
+	Show,
+	Switch,
+	untrack,
+} from "solid-js";
+import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import { expandThinking, isToolAutoOpen } from "../state/preferences.js";
 import type { AgentResultEntry, AssistantEntry, ToolEntry, TranscriptEntry } from "../state/reducer.js";
 
@@ -145,24 +157,19 @@ function HighlightedPre(props: {
 		props.language;
 		if (props.autoScroll) stickToBottom.notifyContentChanged();
 	});
+	onMount(() => {
+		if (preRef)
+			onCleanup(
+				bindStickToBottom(stickToBottom, preRef, { enabled: () => props.autoScroll === true, keyboard: "element" }),
+			);
+	});
 	onCleanup(() => stickToBottom.dispose());
 
 	return (
-		<pre
-			ref={preRef}
-			onTouchStart={() => {
-				if (props.autoScroll) stickToBottom.handleTouchStart();
-			}}
-			onTouchEnd={() => {
-				if (props.autoScroll) stickToBottom.handleTouchEnd();
-			}}
-			onTouchCancel={() => {
-				if (props.autoScroll) stickToBottom.handleTouchCancel();
-			}}
-			onScroll={() => {
-				if (props.autoScroll) stickToBottom.handleScroll();
-			}}
-		>
+		// tabindex makes the nested scroller keyboard-focusable so PageUp/ArrowUp
+		// can scroll it — and so the element-level keydown listener actually fires
+		// to arm upward intent on ITS controller (not the outer transcript's).
+		<pre ref={preRef} tabindex="0">
 			<Show when={html()} fallback={text()}>
 				{(safeHtml) => <code class="hljs" innerHTML={safeHtml()} />}
 			</Show>
@@ -584,7 +591,14 @@ function AssistantBlockView(props: { entry: AssistantEntry; who: string }): JSX.
 }
 
 export type TranscriptRenderItem =
-	| { kind: "assistant-turn"; entries: Array<AssistantEntry | ToolEntry> }
+	| {
+			kind: "assistant-turn";
+			/** Stable identity — the turn's leading assistant entry. */
+			lead: AssistantEntry;
+			/** Reactive: appending a tool updates this WITHOUT replacing the item. */
+			entries: () => Array<AssistantEntry | ToolEntry>;
+			setEntries: (entries: Array<AssistantEntry | ToolEntry>) => void;
+	  }
 	| { kind: "entry"; entry: TranscriptEntry };
 
 function canReuseEntryItem(
@@ -594,15 +608,9 @@ function canReuseEntryItem(
 	return item?.kind === "entry" && item.entry === entry;
 }
 
-function canReuseAssistantTurn(
-	item: TranscriptRenderItem | undefined,
-	entries: Array<AssistantEntry | ToolEntry>,
-): item is TranscriptRenderItem {
-	return (
-		item?.kind === "assistant-turn" &&
-		item.entries.length === entries.length &&
-		item.entries.every((entry, index) => entry === entries[index])
-	);
+function makeAssistantTurnItem(entries: Array<AssistantEntry | ToolEntry>): TranscriptRenderItem {
+	const [entriesSignal, setEntries] = createSignal(entries);
+	return { kind: "assistant-turn", lead: entries[0] as AssistantEntry, entries: entriesSignal, setEntries };
 }
 
 export function transcriptRenderItems(
@@ -621,11 +629,21 @@ export function transcriptRenderItems(
 				index += 1;
 			}
 			const previousItem = previous[items.length];
-			items.push(
-				canReuseAssistantTurn(previousItem, turnEntries)
-					? previousItem
-					: { kind: "assistant-turn", entries: turnEntries },
-			);
+			if (previousItem?.kind === "assistant-turn" && previousItem.lead === entry) {
+				// Same turn (same leading assistant entry): keep the item — and thus
+				// the rendered wrapper DOM — stable, and only update its entry list.
+				// Appending a tool result must NOT destroy and recreate the whole
+				// assistant-turn subtree (the markdown re-render + wrapper swap is a
+				// reflow that lowers scrollTop and jolts the reading position).
+				const prevEntries = untrack(previousItem.entries);
+				const changed =
+					prevEntries.length !== turnEntries.length ||
+					turnEntries.some((turnEntry, turnIndex) => turnEntry !== prevEntries[turnIndex]);
+				if (changed) previousItem.setEntries(turnEntries);
+				items.push(previousItem);
+			} else {
+				items.push(makeAssistantTurnItem(turnEntries));
+			}
 			continue;
 		}
 		if (entry) {
@@ -750,11 +768,7 @@ export function Transcript(props: {
 					<Switch>
 						<Match when={item.kind === "assistant-turn"}>
 							<div class="assistant-turn" data-testid="assistant-turn">
-								<For
-									each={
-										(item as { kind: "assistant-turn"; entries: Array<AssistantEntry | ToolEntry> }).entries
-									}
-								>
+								<For each={(item as Extract<TranscriptRenderItem, { kind: "assistant-turn" }>).entries()}>
 									{(entry) => <EntryView entry={entry} who={who()} userLabel={userLabel()} />}
 								</For>
 							</div>

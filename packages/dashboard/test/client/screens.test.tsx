@@ -133,7 +133,12 @@ vi.mock("../../src/client/api.js", () => ({
 }));
 
 import { api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
-import { TRANSCRIPT_WINDOW_SIZE, Transcript, transcriptRenderItems } from "../../src/client/components/transcript.js";
+import {
+	TRANSCRIPT_WINDOW_SIZE,
+	Transcript,
+	type TranscriptRenderItem,
+	transcriptRenderItems,
+} from "../../src/client/components/transcript.js";
 import { FilesScreen } from "../../src/client/screens/files.js";
 import { FleetScreen, fleetGroupKey } from "../../src/client/screens/fleet.js";
 import { PairingScreen } from "../../src/client/screens/pairing.js";
@@ -511,7 +516,12 @@ describe("app store integration", () => {
 		chat.scrollTop = 400;
 		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
 
-		chat.dispatchEvent(new Event("touchstart", { bubbles: true }));
+		const touchEvent = (type: string, clientY: number) => {
+			const event = new Event(type, { bubbles: true }) as Event & { touches: Array<{ clientY: number }> };
+			event.touches = [{ clientY }];
+			return event;
+		};
+		chat.dispatchEvent(touchEvent("touchstart", 300));
 		scrollHeight = 900;
 		captured.onEnvelope({
 			seq: 2,
@@ -521,6 +531,8 @@ describe("app store integration", () => {
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(chat.scrollTop).toBe(400);
 
+		// The finger drags DOWN the screen (clientY increases) — an up-scroll.
+		chat.dispatchEvent(touchEvent("touchmove", 360));
 		chat.scrollTop = 200;
 		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
 		chat.dispatchEvent(new Event("touchend", { bubbles: true }));
@@ -570,6 +582,85 @@ describe("app store integration", () => {
 		});
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(chat.scrollTop).toBe(1000);
+	});
+
+	it("keeps following when an assistant→tool reflow lowers scrollTop with no user input", async () => {
+		// The residual drop-out: at a tool boundary the transcript reflows (streamed
+		// message replaced by full markdown, assistant-turn DOM recreated) and the
+		// browser LOWERS scrollTop while a tool card is appended below. No wheel /
+		// touch / pointer / key input precedes the resulting scroll event, so it must
+		// not be misread as a user up-scroll.
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		if (!captured) throw new Error("connectEvents was not called");
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-reflow" />);
+		captured.onEnvelope({ seq: 1, key: "k-reflow", event: { type: "agent_start" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const chat = el.querySelector(".chat") as HTMLElement;
+		let scrollHeight = 900;
+		Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+		Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+		// Parked at the resting bottom.
+		chat.scrollTop = 800;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// Reflow: assistant completion lowers scrollTop by 300, a tool card grows the
+		// content far below, and the browser emits a scroll event — WITHOUT any input.
+		scrollHeight = 1500;
+		chat.scrollTop = 500;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// The next envelope must still pin to the new bottom (follow survived).
+		scrollHeight = 1600;
+		captured.onEnvelope({
+			seq: 2,
+			key: "k-reflow",
+			event: { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: { command: "yes" } },
+		});
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(chat.scrollTop).toBe(1600);
+	});
+
+	it("releases follow when the user wheels up before a scroll (deliberate up-scroll)", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		if (!captured) throw new Error("connectEvents was not called");
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-wheelup" />);
+		captured.onEnvelope({ seq: 1, key: "k-wheelup", event: { type: "agent_start" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const chat = el.querySelector(".chat") as HTMLElement;
+		let scrollHeight = 900;
+		Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+		Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+
+		chat.scrollTop = 800;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// A genuine wheel-up followed by the resulting decreased scrollTop releases.
+		chat.dispatchEvent(new WheelEvent("wheel", { deltaY: -40, bubbles: true }));
+		chat.scrollTop = 300;
+		chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+		// Later growth must NOT yank the released view back to the bottom.
+		scrollHeight = 1600;
+		captured.onEnvelope({
+			seq: 2,
+			key: "k-wheelup",
+			event: { type: "tool_execution_start", toolCallId: "t2", toolName: "bash", args: { command: "yes" } },
+		});
+		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		expect(chat.scrollTop).toBe(300);
 	});
 
 	it("re-pins the transcript when observed content grows without a new envelope (ResizeObserver path)", async () => {
@@ -1068,8 +1159,49 @@ describe("dashboard client regressions", () => {
 		expect(nextItems[0]).toBe(firstItems[0]);
 		expect(nextItems[1]).toBe(firstItems[1]);
 		expect(nextItems[2]).toBe(firstItems[2]);
-		expect(nextItems[3]).not.toBe(firstItems[3]);
-		expect(nextItems[3]).toMatchObject({ kind: "assistant-turn", entries: [entries[4], entries[5]] });
+		// Appending a tool to the ACTIVE assistant turn must keep the turn item —
+		// and therefore its rendered wrapper DOM — stable. Recreating the wrapper
+		// tears down and re-renders the assistant markdown, a reflow that lowers
+		// scrollTop at the assistant→tool boundary.
+		expect(nextItems[3]).toBe(firstItems[3]);
+		const turn = nextItems[3] as Extract<TranscriptRenderItem, { kind: "assistant-turn" }>;
+		expect(turn.kind).toBe("assistant-turn");
+		expect(turn.entries()).toEqual([entries[4], entries[5]]);
+	});
+
+	it("appending a tool keeps the rendered assistant-turn DOM node stable (no destroy/recreate reflow)", async () => {
+		const assistant = {
+			kind: "assistant" as const,
+			blocks: [{ kind: "text" as const, text: "long analysis" }],
+			streaming: false,
+		};
+		const [entries, setEntries] = createSignal<Parameters<typeof transcriptRenderItems>[0]>([assistant]);
+		const el = mount(() => <Transcript entries={entries()} />);
+		const turnBefore = el.querySelector('[data-testid="assistant-turn"]');
+		expect(turnBefore).not.toBeNull();
+		const markdownBefore = turnBefore?.querySelector(".entry-body");
+
+		setEntries([
+			assistant,
+			{
+				kind: "tool",
+				toolCallId: "t-append",
+				toolName: "bash",
+				args: { command: "pwd" },
+				status: "running",
+				resultText: "",
+				startedAt: Date.now(),
+			},
+		]);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const turnAfter = el.querySelector('[data-testid="assistant-turn"]');
+		// SAME DOM nodes — the wrapper and the already-rendered assistant markdown
+		// were not torn down when the tool card was appended.
+		expect(turnAfter).toBe(turnBefore);
+		expect(turnAfter?.querySelector(".entry-body")).toBe(markdownBefore);
+		// …and the tool card actually rendered inside the same wrapper.
+		expect(turnAfter?.querySelector(".tool")).not.toBeNull();
 	});
 
 	it("tool card bodies mount lazily and running tools stay mounted", () => {
@@ -2398,6 +2530,7 @@ describe("dashboard client regressions", () => {
 		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 		expect(pre.scrollTop).toBe(600);
 
+		pre.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
 		pre.scrollTop = 100;
 		pre.dispatchEvent(new Event("scroll"));
 		scrollHeight = 900;
@@ -2803,8 +2936,9 @@ describe("dashboard client regressions", () => {
 			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 			expect(chat.scrollTop).toBe(1000);
 
-			// A deliberate up-scroll suspends follow; later observed growth must not
-			// yank the view back down.
+			// A deliberate up-scroll (wheel-up) suspends follow; later observed growth
+			// must not yank the view back down.
+			chat.dispatchEvent(new WheelEvent("wheel", { deltaY: -20, bubbles: true }));
 			chat.scrollTop = 200;
 			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
 			scrollHeight = 1600;

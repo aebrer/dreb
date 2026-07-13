@@ -9,7 +9,7 @@ import { createEffect, createMemo, createSignal, type JSX, onCleanup, onMount, S
 import { StatusChip } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
-import { createStickToBottom } from "../scrolling.js";
+import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import type { AppStore } from "../state/store.js";
 
 export function SubagentScreen(props: { store: AppStore; sessionKey: string; agentId: string }): JSX.Element {
@@ -46,6 +46,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	onMount(() => {
 		stickToBottom.observeContent(chatInnerRef);
 		stickToBottom.observeViewport(chatRef);
+		if (chatRef) onCleanup(bindStickToBottom(stickToBottom, chatRef, { keyboard: "window" }));
 	});
 	onCleanup(() => stickToBottom.dispose());
 
@@ -71,14 +72,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 				</div>
 			</header>
 
-			<main
-				class="chat"
-				ref={chatRef}
-				onTouchStart={() => stickToBottom.handleTouchStart()}
-				onTouchEnd={() => stickToBottom.handleTouchEnd()}
-				onTouchCancel={() => stickToBottom.handleTouchCancel()}
-				onScroll={() => stickToBottom.handleScroll()}
-			>
+			<main class="chat" ref={chatRef}>
 				<div class="chat-inner" ref={chatInnerRef}>
 					<Show when={hydrateError()}>
 						<p class="pair-error">{hydrateError()}</p>

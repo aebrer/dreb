@@ -22,7 +22,7 @@ import { api } from "../api.js";
 import { Modal } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
-import { createStickToBottom } from "../scrolling.js";
+import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import {
 	addComposerHistoryEntry,
 	getComposerDraft,
@@ -768,6 +768,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	onMount(() => {
 		stickToBottom.observeContent(chatInnerRef);
 		stickToBottom.observeViewport(chatRef);
+		if (chatRef) onCleanup(bindStickToBottom(stickToBottom, chatRef, { keyboard: "window" }));
 	});
 
 	let wasStreaming = false;
@@ -1163,14 +1164,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</div>
 			</Show>
 
-			<main
-				class="chat"
-				ref={chatRef}
-				onTouchStart={() => stickToBottom.handleTouchStart()}
-				onTouchEnd={() => stickToBottom.handleTouchEnd()}
-				onTouchCancel={() => stickToBottom.handleTouchCancel()}
-				onScroll={() => stickToBottom.handleScroll()}
-			>
+			<main class="chat" ref={chatRef}>
 				<div class="chat-inner" ref={chatInnerRef}>
 					<Show when={session()} fallback={<p class="muted">loading transcript…</p>}>
 						<For each={session()!.widgets.above}>{(line) => <div class="widget-block">{line}</div>}</For>
