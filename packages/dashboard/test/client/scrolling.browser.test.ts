@@ -51,7 +51,10 @@ const HARNESS_HTML = `<!DOCTYPE html>
 const HARNESS_SETUP = String.raw`
 	const chat = document.querySelector(".chat");
 	const inner = document.querySelector(".chat-inner");
-	const controller = Scrolling.createStickToBottom({ scroller: () => chat });
+	// Keep fallback intent live well beyond CI frame variance; browser tests that
+	// verify nested-input routing must fail because routing is wrong, never pass
+	// merely because the default 400ms fallback expired while waiting for settle.
+	const controller = Scrolling.createStickToBottom({ scroller: () => chat, intentWindowMs: 10_000 });
 	controller.observeContent(inner);
 	controller.observeViewport(chat);
 	Scrolling.bindStickToBottom(controller, chat, { keyboard: "window" });
@@ -85,6 +88,7 @@ const HARNESS_SETUP = String.raw`
 			const result = document.createElement("div");
 			result.className = "tool-result";
 			const pre = document.createElement("pre");
+			pre.tabIndex = 0; // production tool-output pres are keyboard-scrollable
 			pre.textContent = Array.from({ length: preLines }, (_, i) => "tool output " + i).join("\n");
 			result.appendChild(pre);
 			tool.appendChild(result);
@@ -216,12 +220,10 @@ describe("stick-to-bottom in a real browser", () => {
 		await settleFrames();
 		expect(await harness((h) => h.scrollTop())).toBe(parkedAt);
 
-		// Scrolling back to the bottom re-engages follow.
-		await harness(() => {
-			const chat = document.querySelector(".chat") as HTMLElement;
-			chat.scrollTop = chat.scrollHeight;
-		});
-		await settleFrames();
+		// A deliberate downward wheel return to the bottom re-engages follow.
+		await page.mouse.move(400, 100);
+		await page.mouse.wheel(0, 10_000);
+		await page.waitForFunction(() => window.harness.atBottom());
 		expect(await harness((h) => h.isFollowing())).toBe(true);
 	});
 
@@ -259,6 +261,43 @@ describe("stick-to-bottom in a real browser", () => {
 		expect(await harness((h) => h.atBottom())).toBe(true);
 	});
 
+	it("PageUp focused in a nested tool pre does not arm outer intent during a layout decrease", async () => {
+		await harness((h) => {
+			const assistant = h.addAssistantMarkdown(50);
+			const pre = h.assistantToolBoundary(assistant, 400);
+			(window as unknown as { pre: HTMLElement }).pre = pre;
+		});
+		await settleFrames();
+		const before = await page.evaluate(() => {
+			const chat = document.querySelector(".chat") as HTMLElement;
+			const pre = (window as unknown as { pre: HTMLElement }).pre;
+			pre.focus();
+			return { outerTop: chat.scrollTop, preTop: pre.scrollTop };
+		});
+		expect(before.preTop).toBeGreaterThan(0);
+
+		// Chromium routes PageUp to the focused nested pre. The bubbling window
+		// listener must recognize that consumption and leave outer intent unarmed.
+		await page.keyboard.press("PageUp");
+		await waitForScrollSettle();
+		const afterKey = await page.evaluate(() => {
+			const chat = document.querySelector(".chat") as HTMLElement;
+			const pre = (window as unknown as { pre: HTMLElement }).pre;
+			return { outerTop: chat.scrollTop, preTop: pre.scrollTop };
+		});
+		expect(afterKey.preTop).toBeLessThan(before.preTop);
+		expect(afterKey.outerTop).toBe(before.outerTop);
+
+		// Reproduce a coincident layout/anchor decrease inside the old intent
+		// fallback window. It is a real browser scroll event, but not user intent.
+		await page.evaluate(() => {
+			const chat = document.querySelector(".chat") as HTMLElement;
+			chat.scrollTop -= 120;
+			chat.dispatchEvent(new Event("scroll"));
+		});
+		expect(await harness((h) => h.isFollowing())).toBe(true);
+	});
+
 	it("a real keyboard PageUp releases follow; keys in the composer never do", async () => {
 		await harness((h) => h.addAssistantMarkdown(300));
 		await settleFrames();
@@ -283,6 +322,36 @@ describe("stick-to-bottom in a real browser", () => {
 		await harness((h) => h.addAssistantMarkdown(50));
 		await settleFrames();
 		expect(await harness((h) => h.scrollTop())).toBe(parkedAt);
+	});
+
+	it("content shrink clamps a released reader without re-engaging or yanking on later growth", async () => {
+		await harness((h) => h.addAssistantMarkdown(300));
+		await settleFrames();
+		await page.mouse.move(400, 100);
+		await page.mouse.wheel(0, -600);
+		await page.waitForFunction(() => !window.harness.isFollowing());
+		await waitForScrollSettle();
+
+		// Remove enough content below the parked reader that Chromium clamps the
+		// outer scrollTop to its new geometric bottom and emits scroll/resize.
+		await page.evaluate(() => {
+			const inner = document.querySelector(".chat-inner") as HTMLElement;
+			inner.textContent = "short";
+		});
+		await settleFrames();
+		expect(await harness((h) => h.isFollowing())).toBe(false);
+
+		// Later growth must not revive follow solely because the shrink clamp landed
+		// at bottom; the reader stays put until they deliberately scroll downward.
+		await harness((h) => h.addAssistantMarkdown(300));
+		await settleFrames();
+		expect(await harness((h) => h.isFollowing())).toBe(false);
+		expect(await harness((h) => h.scrollTop())).toBe(0);
+
+		await page.mouse.move(400, 100);
+		await page.mouse.wheel(0, 10_000);
+		await page.waitForFunction(() => window.harness.atBottom());
+		expect(await harness((h) => h.isFollowing())).toBe(true);
 	});
 
 	it("a real touch up-drag releases follow; a stationary touch hold during growth does not", async () => {

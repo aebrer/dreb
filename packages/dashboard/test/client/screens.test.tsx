@@ -663,16 +663,19 @@ describe("app store integration", () => {
 		expect(chat.scrollTop).toBe(300);
 	});
 
-	it("re-pins the transcript when observed content grows without a new envelope (ResizeObserver path)", async () => {
-		// Wire a controllable global ResizeObserver so the controller's
-		// observeContent() actually attaches (jsdom lacks ResizeObserver, which
-		// would otherwise silently disable the async-growth re-pin).
-		let roCallback: ResizeObserverCallback | undefined;
+	it("re-pins the transcript when observed content or viewport changes without a new envelope", async () => {
+		// Record each registration: the screen must attach two independent
+		// observers, one to .chat-inner content and one to the .chat viewport.
+		const observers: Array<{ callback: ResizeObserverCallback; observed?: Element }> = [];
 		class FakeRO {
-			constructor(cb: ResizeObserverCallback) {
-				roCallback = cb;
+			private readonly registration: { callback: ResizeObserverCallback; observed?: Element };
+			constructor(callback: ResizeObserverCallback) {
+				this.registration = { callback };
+				observers.push(this.registration);
 			}
-			observe(): void {}
+			observe(element: Element): void {
+				this.registration.observed = element;
+			}
 			unobserve(): void {}
 			disconnect(): void {}
 		}
@@ -692,9 +695,22 @@ describe("app store integration", () => {
 			captured.onEnvelope({ seq: 1, key: "k-ro", event: { type: "agent_start" } });
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			const chat = el.querySelector(".chat") as HTMLElement;
+			const chatInner = el.querySelector(".chat-inner") as HTMLElement;
 			let scrollHeight = 500;
-			Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+			let clientHeight = 100;
+			let scrollTop = 0;
+			let scrollWrites = 0;
+			Object.defineProperty(chat, "clientHeight", { configurable: true, get: () => clientHeight });
 			Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+			Object.defineProperty(chat, "scrollTop", {
+				configurable: true,
+				get: () => scrollTop,
+				set: (value: number) => {
+					scrollTop = value;
+					scrollWrites++;
+				},
+			});
+			expect(observers.map((observer) => observer.observed)).toEqual([chatInner, chat]);
 
 			// Flush any pending mount/revision pin FIRST, so the assertion below can
 			// only be satisfied by the ResizeObserver-driven re-pin — not by a
@@ -705,14 +721,27 @@ describe("app store integration", () => {
 			// Parked at the bottom.
 			chat.scrollTop = 400;
 			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
+			scrollWrites = 0;
 
 			// Content grows asynchronously (e.g. late syntax highlighting) with NO
-			// new envelope — only the ResizeObserver fires. The transcript must
+			// new envelope — only the content observer fires. The transcript must
 			// re-pin to the new bottom.
-			expect(roCallback).toBeDefined();
+			const contentObserver = observers.find((observer) => observer.observed === chatInner);
+			expect(contentObserver).toBeDefined();
 			scrollHeight = 1000;
-			roCallback?.([], {} as ResizeObserver);
+			contentObserver?.callback([], {} as ResizeObserver);
 			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(chat.scrollTop).toBe(1000);
+
+			// A dock/composer resize changes only the viewport geometry. Its separate
+			// observer must independently request the pin.
+			const viewportObserver = observers.find((observer) => observer.observed === chat);
+			expect(viewportObserver).toBeDefined();
+			scrollWrites = 0;
+			clientHeight = 200;
+			viewportObserver?.callback([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(scrollWrites).toBe(1);
 			expect(chat.scrollTop).toBe(1000);
 		} finally {
 			(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = priorRO;
@@ -2892,13 +2921,17 @@ describe("dashboard client regressions", () => {
 		expect(el.textContent).toContain("No session log found for this agent");
 	});
 
-	it("subagent transcript re-pins on observed content growth and respects a user up-scroll", async () => {
-		let roCallback: ResizeObserverCallback | undefined;
+	it("subagent transcript independently observes content and viewport geometry", async () => {
+		const observers: Array<{ callback: ResizeObserverCallback; observed?: Element }> = [];
 		class FakeRO {
-			constructor(cb: ResizeObserverCallback) {
-				roCallback = cb;
+			private readonly registration: { callback: ResizeObserverCallback; observed?: Element };
+			constructor(callback: ResizeObserverCallback) {
+				this.registration = { callback };
+				observers.push(this.registration);
 			}
-			observe(): void {}
+			observe(element: Element): void {
+				this.registration.observed = element;
+			}
 			unobserve(): void {}
 			disconnect(): void {}
 		}
@@ -2920,9 +2953,22 @@ describe("dashboard client regressions", () => {
 			const el = mount(() => <SubagentScreen store={store} sessionKey="k-ro-sub" agentId="bg-ro" />);
 			await new Promise((resolve) => setTimeout(resolve, 10));
 			const chat = el.querySelector(".chat") as HTMLElement;
+			const chatInner = el.querySelector(".chat-inner") as HTMLElement;
 			let scrollHeight = 500;
-			Object.defineProperty(chat, "clientHeight", { configurable: true, value: 100 });
+			let clientHeight = 100;
+			let scrollTop = 0;
+			let scrollWrites = 0;
+			Object.defineProperty(chat, "clientHeight", { configurable: true, get: () => clientHeight });
 			Object.defineProperty(chat, "scrollHeight", { configurable: true, get: () => scrollHeight });
+			Object.defineProperty(chat, "scrollTop", {
+				configurable: true,
+				get: () => scrollTop,
+				set: (value: number) => {
+					scrollTop = value;
+					scrollWrites++;
+				},
+			});
+			expect(observers.map((observer) => observer.observed)).toEqual([chatInner, chat]);
 
 			// Parked at the bottom; async growth with no revision must re-pin. Flush
 			// any pending mount pin first so only the observer-driven re-pin can
@@ -2930,11 +2976,22 @@ describe("dashboard client regressions", () => {
 			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 			chat.scrollTop = 400;
 			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
-			expect(roCallback).toBeDefined();
+			scrollWrites = 0;
+
+			const contentObserver = observers.find((observer) => observer.observed === chatInner);
+			expect(contentObserver).toBeDefined();
 			scrollHeight = 1000;
-			roCallback?.([], {} as ResizeObserver);
+			contentObserver?.callback([], {} as ResizeObserver);
 			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 			expect(chat.scrollTop).toBe(1000);
+
+			const viewportObserver = observers.find((observer) => observer.observed === chat);
+			expect(viewportObserver).toBeDefined();
+			scrollWrites = 0;
+			clientHeight = 200;
+			viewportObserver?.callback([], {} as ResizeObserver);
+			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			expect(scrollWrites).toBe(1);
 
 			// A deliberate up-scroll (wheel-up) suspends follow; later observed growth
 			// must not yank the view back down.
@@ -2942,7 +2999,7 @@ describe("dashboard client regressions", () => {
 			chat.scrollTop = 200;
 			chat.dispatchEvent(new Event("scroll", { bubbles: true }));
 			scrollHeight = 1600;
-			roCallback?.([], {} as ResizeObserver);
+			contentObserver?.callback([], {} as ResizeObserver);
 			await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 			expect(chat.scrollTop).toBe(200);
 		} finally {

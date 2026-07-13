@@ -89,11 +89,12 @@ export interface StickToBottomController {
 	 */
 	handleWheel: (deltaY: number, target?: EventTarget | null) => void;
 	/**
-	 * Bind to a `keydown` event — arms upward intent for scroll-up navigation keys
-	 * (ArrowUp/PageUp/Home, and Shift+Space). The caller is responsible for not
-	 * forwarding keys consumed by an editable target.
+	 * Bind to a `keydown` event — arms directional user intent for scroll
+	 * navigation keys. Pass the event target so a nested scrollable that will
+	 * consume an upward key does not arm the outer controller. The caller is
+	 * responsible for not forwarding keys consumed by an editable target.
 	 */
-	handleKeyDown: (key: string, shiftKey?: boolean) => void;
+	handleKeyDown: (key: string, shiftKey?: boolean, target?: EventTarget | null) => void;
 	/**
 	 * Bind to the scroller's `pointerdown`. Pass `onScrollbar: true` only when
 	 * the press landed on the scrollbar region — a plain click / text-selection
@@ -106,12 +107,13 @@ export interface StickToBottomController {
 	/** Bind to the scroller's `touchstart` event (suspends pinning during a drag). */
 	handleTouchStart: (clientY?: number) => void;
 	/**
-	 * Bind to the scroller's `touchmove` event with the touch's `clientY`.
-	 * Directional: a finger moving DOWN the screen (clientY increasing) drags the
-	 * content down, i.e. scrolls UP — that arms upward intent. Movement in the
-	 * other direction disarms it.
+	 * Bind to the scroller's `touchmove` event with the touch's `clientY` and
+	 * event target. Directional: a finger moving DOWN the screen (clientY
+	 * increasing) drags the content down, i.e. scrolls UP — that arms upward
+	 * intent unless a nested scroller consumes it. Movement in the other
+	 * direction arms downward intent under the same routing rule.
 	 */
-	handleTouchMove: (clientY: number) => void;
+	handleTouchMove: (clientY: number, target?: EventTarget | null) => void;
 	/** Bind to the scroller's `touchend` event (ends the drag and replays the pin). */
 	handleTouchEnd: () => void;
 	/** Bind to the scroller's `touchcancel` event (same finish path as touchend). */
@@ -131,18 +133,23 @@ export interface StickToBottomController {
 }
 
 /**
- * Walk from a wheel event's target up to (but excluding) the scroller looking
- * for a nested scrollable element that can still consume an upward wheel
- * (overflow-y auto/scroll, scrollable content, and scrollTop > 0). When such an
- * element exists the browser routes the wheel to IT, so the outer scroller will
- * not move and the wheel must not arm upward intent on the outer controller.
+ * Walk from an input event's target up to (but excluding) the scroller looking
+ * for a nested scrollable element that can consume that direction. Both wheel
+ * and keyboard events bubble from the focusable tool-output `<pre>`; when that
+ * nested element will move, the outer scroller must not inherit its intent.
  */
-function upwardWheelConsumedByNestedScroller(target: EventTarget | null | undefined, scroller: HTMLElement): boolean {
+function inputConsumedByNestedScroller(
+	target: EventTarget | null | undefined,
+	scroller: HTMLElement,
+	direction: "up" | "down",
+): boolean {
 	let node: Node | null = target instanceof Node ? target : null;
 	while (node && node !== scroller) {
-		if (node instanceof HTMLElement && node.scrollTop > 0 && node.scrollHeight > node.clientHeight + 1) {
+		if (node instanceof HTMLElement && node.scrollHeight > node.clientHeight + 1) {
+			const canConsume =
+				direction === "up" ? node.scrollTop > 0 : node.scrollTop + node.clientHeight < node.scrollHeight - 1;
 			const overflowY = typeof getComputedStyle === "function" ? getComputedStyle(node).overflowY : "";
-			if (overflowY === "auto" || overflowY === "scroll") return true;
+			if (canConsume && (overflowY === "auto" || overflowY === "scroll")) return true;
 		}
 		node = node.parentNode;
 	}
@@ -204,15 +211,21 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 	// hold or a downward drag never does.
 	let lastTouchY: number | undefined;
 	let touchUpwardIntent = false;
+	let touchDownwardIntent = false;
 	// True while a scrollbar drag is active (pointer pressed on the scrollbar
 	// region). Plain clicks / text-selection presses do NOT set this.
 	let scrollbarDragActive = false;
-	// Timestamp of the last discrete upward input (wheel-up / scroll-up key /
-	// lifted upward touch entering inertia). Sequence-scoped clearing (scrollend,
-	// downward movement) is primary; this stamp plus intentWindowMs is only the
-	// bounded fallback for platforms that never fire scrollend.
+	// Timestamps of the last discrete input. Sequence-scoped clearing (scrollend
+	// and movement in the opposite direction) is primary; these stamps plus
+	// intentWindowMs are only the bounded fallback for platforms without scrollend.
 	let lastUpwardIntentAt = Number.NEGATIVE_INFINITY;
+	let lastDownwardIntentAt = Number.NEGATIVE_INFINITY;
 	let lastTop = 0;
+	// Keep the start of an upward sequence separate from lastTop. Precision
+	// trackpads can emit fractional (or exactly 1px) decreases; advancing lastTop
+	// after each of those jitter-sized events used to discard their cumulative
+	// deliberate movement before it could release follow.
+	let upwardSequenceBaseline = 0;
 	let contentObserver: ResizeObserver | undefined;
 	let viewportObserver: ResizeObserver | undefined;
 	let warnedMissingObserver = false;
@@ -229,7 +242,10 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 			// echo scroll event — or a concurrent content growth before that echo
 			// fires — reads as a user up-scroll and silently latches follow off.
 			const el = options.scroller();
-			if (el) lastTop = Math.max(0, el.scrollHeight - el.clientHeight);
+			if (el) {
+				lastTop = Math.max(0, el.scrollHeight - el.clientHeight);
+				upwardSequenceBaseline = lastTop;
+			}
 			return true;
 		},
 		requestAnimationFrame: options.requestAnimationFrame,
@@ -237,10 +253,37 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 	});
 
 	function armUpwardIntent(): void {
+		// A new upward input supersedes any prior downward sequence.
+		clearDownwardDiscreteIntent();
+		if (now() - lastUpwardIntentAt > intentWindowMs) {
+			// A first user input can precede this controller's first scroll event.
+			// Seed from the live position, not the default zero, so its initial tiny
+			// scroll deltas still accumulate against the true resting point.
+			const top = options.scroller()?.scrollTop ?? lastTop;
+			// Event listeners normally run before the browser applies the scroll, but
+			// programmatic callers/tests may present the moved position first. The
+			// higher known position is the only valid start for an up-scroll sequence.
+			upwardSequenceBaseline = Math.max(lastTop, top);
+		}
 		lastUpwardIntentAt = now();
 	}
-	function clearDiscreteIntent(): void {
+	function armDownwardIntent(): void {
+		// A new downward input supersedes any prior upward discrete sequence before
+		// its scroll event arrives; otherwise a reflow between opposite-direction
+		// keys/wheels could still consume the stale upward authorization.
+		clearUpwardDiscreteIntent();
+		upwardSequenceBaseline = lastTop;
+		lastDownwardIntentAt = now();
+	}
+	function clearUpwardDiscreteIntent(): void {
 		lastUpwardIntentAt = Number.NEGATIVE_INFINITY;
+	}
+	function clearDownwardDiscreteIntent(): void {
+		lastDownwardIntentAt = Number.NEGATIVE_INFINITY;
+	}
+	function resetUpwardSequence(top: number): void {
+		clearUpwardDiscreteIntent();
+		upwardSequenceBaseline = top;
 	}
 	// A follow release is authorized only by a genuine upward user input: an
 	// upward touch drag, an active scrollbar drag, or a discrete wheel/keyboard
@@ -248,6 +291,14 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 	function upwardIntentActive(): boolean {
 		return (
 			(gestureActive && touchUpwardIntent) || scrollbarDragActive || now() - lastUpwardIntentAt <= intentWindowMs
+		);
+	}
+	// A released reader only re-engages after genuine downward input and an actual
+	// downward scroll arrival at the bottom. Geometry-only clamp events caused by
+	// content shrink must never turn follow back on.
+	function downwardIntentActive(): boolean {
+		return (
+			(gestureActive && touchDownwardIntent) || scrollbarDragActive || now() - lastDownwardIntentAt <= intentWindowMs
 		);
 	}
 
@@ -258,47 +309,66 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 		const el = options.scroller();
 		if (!el) return;
 		const top = el.scrollTop;
-		if (top + el.clientHeight >= el.scrollHeight - threshold) {
-			// Reached (or programmatically pinned to) the bottom — (re-)engage follow.
+		const anyDownwardMovement = top > lastTop;
+		const atBottom = top + el.clientHeight >= el.scrollHeight - threshold;
+		if (atBottom && (following || (anyDownwardMovement && downwardIntentActive()))) {
+			// Initial/programmatic following stays engaged. Once released, however,
+			// only a real downward user return to the bottom may re-engage it. Do not
+			// consume an already-armed upward input merely because its first scroll
+			// event still lies within the bottom threshold.
 			following = true;
-		} else if (top < lastTop - 1 && upwardIntentActive()) {
-			// Moved up AND a genuine upward input authorized it — release follow.
-			// Without the intent gate a layout-induced scrollTop decrease (assistant→
-			// tool boundary reflow / DOM recreation) would masquerade as a user
-			// up-scroll and silently latch follow off. Appended content never
-			// decreases scrollTop, so it cannot reach this branch regardless.
+			if (!upwardIntentActive() || anyDownwardMovement) resetUpwardSequence(top);
+		} else if (following && top < upwardSequenceBaseline - 1 && upwardIntentActive()) {
+			// Moved up cumulatively from a stable sequence baseline AND a genuine
+			// upward input authorized it — release follow. The separate baseline lets
+			// fractional/exact-1px scroll events accumulate past the jitter threshold.
 			following = false;
-		} else if (top > lastTop + 1) {
+		} else if (anyDownwardMovement) {
 			// Downward movement ends any upward sequence: a stale wheel-up/key stamp
 			// must not survive an intervening down-scroll to authorize a later
 			// layout-induced decrease.
-			clearDiscreteIntent();
+			resetUpwardSequence(top);
+		} else if (!upwardIntentActive()) {
+			// With no live upward sequence, layout movement is merely a new resting
+			// baseline; it must not contaminate a later genuine input sequence.
+			upwardSequenceBaseline = top;
 		}
 		lastTop = top;
 	}
 	function handleScrollEnd(): void {
-		// The scroll sequence settled — discrete upward intent is consumed. This is
-		// the primary clearing mechanism; the intentWindowMs stamp is only a
-		// fallback for platforms that never deliver scrollend.
-		clearDiscreteIntent();
+		// The scroll sequence settled — discrete input is consumed. This is the
+		// primary clearing mechanism; intentWindowMs is only a fallback.
+		clearUpwardDiscreteIntent();
+		clearDownwardDiscreteIntent();
+		upwardSequenceBaseline = lastTop;
 	}
 
 	const SCROLL_UP_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 	function handleWheel(deltaY: number, target?: EventTarget | null): void {
-		if (deltaY >= 0) return;
-		// Wheel/trackpad up. This only *arms* intent; a release still requires the
-		// outer scroller's scrollTop to actually decrease. Additionally, a wheel
-		// over a nested inner scroller (e.g. a bash-output <pre>) that can still
-		// scroll up is consumed by that inner element — the outer scroller will not
-		// move — so arming here would leave a live intent stamp that an unrelated
-		// layout reflow could later hijack into a false release. Refuse to arm in
-		// that case (causality, not just coincidence-window narrowing).
 		const el = options.scroller();
-		if (el && target && upwardWheelConsumedByNestedScroller(target, el)) return;
-		armUpwardIntent();
+		if (deltaY < 0) {
+			// Wheel/trackpad up. This only *arms* intent; a release still requires the
+			// outer scroller's scrollTop to actually decrease. Additionally, a wheel
+			// over a nested inner scroller (e.g. a bash-output <pre>) that can still
+			// scroll up is consumed by that inner element — the outer scroller will not
+			// move — so arming here would leave a live intent stamp that an unrelated
+			// layout reflow could later hijack into a false release.
+			if (el && target && inputConsumedByNestedScroller(target, el, "up")) return;
+			armUpwardIntent();
+		} else if (deltaY > 0) {
+			if (el && target && inputConsumedByNestedScroller(target, el, "down")) return;
+			armDownwardIntent();
+		}
 	}
-	function handleKeyDown(key: string, shiftKey = false): void {
-		if (SCROLL_UP_KEYS.has(key) || (shiftKey && key === " ")) armUpwardIntent();
+	function handleKeyDown(key: string, shiftKey = false, target?: EventTarget | null): void {
+		const el = options.scroller();
+		if (SCROLL_UP_KEYS.has(key) || (shiftKey && key === " ")) {
+			if (el && target && inputConsumedByNestedScroller(target, el, "up")) return;
+			armUpwardIntent();
+		} else if (key === "ArrowDown" || key === "PageDown" || key === "End" || (!shiftKey && key === " ")) {
+			if (el && target && inputConsumedByNestedScroller(target, el, "down")) return;
+			armDownwardIntent();
+		}
 	}
 	function handlePointerDown(onScrollbar: boolean): void {
 		// Only a scrollbar-region press can express scroll intent. A plain click or
@@ -314,14 +384,37 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 		gestureActive = true;
 		lastTouchY = Number.isFinite(clientY) ? clientY : undefined;
 		touchUpwardIntent = false;
+		touchDownwardIntent = false;
 	}
 
-	function handleTouchMove(clientY: number): void {
+	function handleTouchMove(clientY: number, target?: EventTarget | null): void {
 		if (!gestureActive || !Number.isFinite(clientY)) return;
 		if (lastTouchY !== undefined) {
+			const el = options.scroller();
 			// Finger moving DOWN the screen drags content down = scrolls UP.
-			if (clientY > lastTouchY + 1) touchUpwardIntent = true;
-			else if (clientY < lastTouchY - 1) touchUpwardIntent = false;
+			if (clientY > lastTouchY + 1) {
+				if (el && target && inputConsumedByNestedScroller(target, el, "up")) {
+					touchUpwardIntent = false;
+					touchDownwardIntent = false;
+					clearUpwardDiscreteIntent();
+					clearDownwardDiscreteIntent();
+				} else {
+					touchUpwardIntent = true;
+					touchDownwardIntent = false;
+					armUpwardIntent();
+				}
+			} else if (clientY < lastTouchY - 1) {
+				if (el && target && inputConsumedByNestedScroller(target, el, "down")) {
+					touchUpwardIntent = false;
+					touchDownwardIntent = false;
+					clearUpwardDiscreteIntent();
+					clearDownwardDiscreteIntent();
+				} else {
+					touchUpwardIntent = false;
+					touchDownwardIntent = true;
+					armDownwardIntent();
+				}
+			}
 		}
 		lastTouchY = clientY;
 	}
@@ -336,8 +429,13 @@ export function createStickToBottom(options: StickToBottomOptions): StickToBotto
 			// that survives until the sequence settles (scrollend) or the bounded
 			// fallback expires.
 			armUpwardIntent();
+		} else if (touchDownwardIntent) {
+			// Preserve a downward fling long enough for an actual arrival at bottom
+			// to re-engage an intentionally released transcript.
+			armDownwardIntent();
 		}
 		touchUpwardIntent = false;
+		touchDownwardIntent = false;
 		// Do NOT re-derive follow from absolute at-bottom geometry — that is the
 		// latch-off bug this controller exists to remove. handleScroll (which fires
 		// during the drag) already owns follow state via up-scroll detection, so if
@@ -480,7 +578,7 @@ export function bindStickToBottom(
 	on(scroller, "touchstart", (event) => controller.handleTouchStart(event.touches?.[0]?.clientY));
 	on(scroller, "touchmove", (event) => {
 		const y = event.touches?.[0]?.clientY;
-		if (y !== undefined) controller.handleTouchMove(y);
+		if (y !== undefined) controller.handleTouchMove(y, event.target);
 	});
 	on(scroller, "touchend", () => controller.handleTouchEnd());
 	on(scroller, "touchcancel", () => controller.handleTouchCancel());
@@ -494,12 +592,12 @@ export function bindStickToBottom(
 	if (options.keyboard === "window") {
 		on(window, "keydown", (event) => {
 			if (isEditableTarget(event.target)) return;
-			controller.handleKeyDown(event.key, event.shiftKey);
+			controller.handleKeyDown(event.key, event.shiftKey, event.target);
 		});
 	} else {
 		on(scroller, "keydown", (event) => {
 			if (isEditableTarget(event.target)) return;
-			controller.handleKeyDown(event.key, event.shiftKey);
+			controller.handleKeyDown(event.key, event.shiftKey, event.target);
 		});
 	}
 

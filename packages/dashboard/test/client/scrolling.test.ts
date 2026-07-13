@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it, vi } from "vitest";
-import { createCoalescedBottomScroller, createStickToBottom } from "../../src/client/scrolling.js";
+import { bindStickToBottom, createCoalescedBottomScroller, createStickToBottom } from "../../src/client/scrolling.js";
 
 function flushNextFrame(callbacks: FrameRequestCallback[]): void {
 	const callback = callbacks.shift();
@@ -227,7 +227,9 @@ describe("createStickToBottom", () => {
 		queue.flushAll();
 		expect(element.scrollTop).toBe(200);
 
-		// User returns to the bottom — follow re-engages and pins resume.
+		// User returns to the bottom with deliberate downward input — follow
+		// re-engages and pins resume.
+		controller.handleWheel(1);
 		element.scrollTop = 800;
 		controller.handleScroll();
 		expect(controller.isFollowing()).toBe(true);
@@ -718,8 +720,9 @@ describe("createStickToBottom", () => {
 		controller.handleScroll();
 		expect(controller.isFollowing()).toBe(false);
 
-		// After the inertial sequence settles, the carried intent is consumed: a
-		// later layout-induced decrease cannot release.
+		// Return deliberately to the bottom, then settle: a later layout-induced
+		// decrease cannot release.
+		controller.handleWheel(1);
 		element.scrollTop = 800;
 		controller.handleScroll(); // back at bottom → re-engage
 		controller.handleScrollEnd();
@@ -785,6 +788,7 @@ describe("createStickToBottom", () => {
 
 		// After the pointer lifts, a later layout-induced decrease must not release.
 		ptrCtl.handlePointerUp();
+		ptrCtl.handleWheel(1);
 		ptrEl.scrollTop = 800;
 		ptrCtl.handleScroll(); // back at bottom → re-engage
 		expect(ptrCtl.isFollowing()).toBe(true);
@@ -792,5 +796,265 @@ describe("createStickToBottom", () => {
 		ptrEl.scrollTop = 500;
 		ptrCtl.handleScroll();
 		expect(ptrCtl.isFollowing()).toBe(true);
+	});
+
+	it("accumulates fractional and exact-1px upward scrolls against a stable baseline", () => {
+		const fractional: FakeScrollElement = { scrollTop: 800, scrollHeight: 2000, clientHeight: 100 };
+		const fractionalCtl = createStickToBottom({ scroller: () => fractional as unknown as HTMLElement });
+		fractionalCtl.handleScroll();
+		fractionalCtl.handleWheel(-1);
+		fractional.scrollTop = 799.6;
+		fractionalCtl.handleScroll();
+		expect(fractionalCtl.isFollowing()).toBe(true);
+		fractional.scrollTop = 799.1;
+		fractionalCtl.handleScroll();
+		expect(fractionalCtl.isFollowing()).toBe(true);
+		fractional.scrollTop = 798.5;
+		fractionalCtl.handleScroll();
+		expect(fractionalCtl.isFollowing()).toBe(false);
+
+		const exactPixel: FakeScrollElement = { scrollTop: 800, scrollHeight: 2000, clientHeight: 100 };
+		const exactPixelCtl = createStickToBottom({ scroller: () => exactPixel as unknown as HTMLElement });
+		exactPixelCtl.handleScroll();
+		exactPixelCtl.handleWheel(-1);
+		exactPixel.scrollTop = 799;
+		exactPixelCtl.handleScroll();
+		expect(exactPixelCtl.isFollowing()).toBe(true);
+		exactPixel.scrollTop = 798;
+		exactPixelCtl.handleScroll();
+		expect(exactPixelCtl.isFollowing()).toBe(false);
+	});
+
+	it("does not re-engage a released reader after a shrink clamp without a real downward return", () => {
+		const queue = createManualAnimationFrameQueue();
+		const element: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({
+			scroller: () => element as unknown as HTMLElement,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+		controller.handleScroll();
+		controller.handleWheel(-1);
+		element.scrollTop = 300;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+
+		// Content below the reader disappears; Chrome clamps the position to the
+		// new bottom and emits scroll. Geometry alone must not re-arm follow.
+		element.scrollHeight = 350;
+		element.scrollTop = 250;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+		element.scrollHeight = 900;
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(250);
+
+		// A genuine downward wheel plus actual arrival at bottom re-engages follow.
+		controller.handleWheel(1);
+		element.scrollTop = 800;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+		element.scrollHeight = 1000;
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(element.scrollTop).toBe(1000);
+	});
+
+	it("re-engages when a deliberate downward return crosses the threshold in a 1px step", () => {
+		const element: FakeScrollElement = { scrollTop: 800, scrollHeight: 900, clientHeight: 100 };
+		const controller = createStickToBottom({ scroller: () => element as unknown as HTMLElement });
+		controller.handleScroll();
+		controller.handleWheel(-1);
+		element.scrollTop = 758;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+
+		controller.handleWheel(1);
+		element.scrollTop = 759;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+		element.scrollTop = 760; // enters the 40px at-bottom threshold by exactly 1px
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+	});
+
+	it("does not inherit downward keyboard intent consumed by a nested scroller", () => {
+		const outer = document.createElement("div");
+		const inner = document.createElement("pre");
+		inner.style.overflowY = "auto";
+		outer.appendChild(inner);
+		document.body.appendChild(outer);
+		Object.defineProperties(inner, {
+			scrollHeight: { configurable: true, value: 600 },
+			clientHeight: { configurable: true, value: 100 },
+		});
+		inner.scrollTop = 250;
+		let outerTop = 800;
+		const element = {
+			get scrollTop() {
+				return outerTop;
+			},
+			set scrollTop(value: number) {
+				outerTop = value;
+			},
+			scrollHeight: 900,
+			clientHeight: 100,
+		};
+		const controller = createStickToBottom({ scroller: () => element as unknown as HTMLElement });
+		controller.handleScroll();
+		controller.handleWheel(-1);
+		outerTop = 758;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+
+		// The focused inner pre consumes PageDown, so a coincident outer movement
+		// into the bottom threshold must not re-engage the released transcript.
+		controller.handleKeyDown("PageDown", false, inner);
+		outerTop = 760;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+
+		// At the inner bottom, PageDown chains to the outer scroller and can
+		// legitimately re-engage it after actual downward movement.
+		inner.scrollTop = 500;
+		outerTop = 758;
+		controller.handleScroll();
+		controller.handleKeyDown("PageDown", false, inner);
+		outerTop = 760;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+		outer.remove();
+	});
+
+	it("does not inherit touch intent consumed by a nested scroller", () => {
+		const queue = createManualAnimationFrameQueue();
+		const outer = document.createElement("div");
+		const inner = document.createElement("pre");
+		inner.style.overflowY = "auto";
+		outer.appendChild(inner);
+		document.body.appendChild(outer);
+		Object.defineProperties(inner, {
+			scrollHeight: { configurable: true, value: 600 },
+			clientHeight: { configurable: true, value: 100 },
+		});
+		inner.scrollTop = 250;
+		let outerTop = 800;
+		let outerHeight = 900;
+		Object.defineProperties(outer, {
+			scrollTop: {
+				configurable: true,
+				get: () => outerTop,
+				set: (value: number) => {
+					outerTop = value;
+				},
+			},
+			scrollHeight: { configurable: true, get: () => outerHeight },
+			clientHeight: { configurable: true, value: 100 },
+		});
+		const controller = createStickToBottom({
+			scroller: () => outer,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+		controller.handleScroll();
+
+		// The inner pre consumes the upward touch drag. A coincident outer layout
+		// decrease must not inherit that intent and release outer follow.
+		controller.handleTouchStart(300);
+		controller.handleTouchMove(340, inner);
+		outerHeight = 1500;
+		outerTop = 500;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(true);
+		controller.handleTouchCancel();
+		queue.flushAll();
+
+		// Release outer follow genuinely, then verify a downward drag consumed by
+		// the inner pre cannot re-engage it on coincident outer movement.
+		outerHeight = 900;
+		outerTop = 800;
+		controller.handleScroll();
+		controller.handleWheel(-1, outer);
+		outerTop = 758;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+		controller.handleTouchStart(300);
+		controller.handleTouchMove(260, inner);
+		outerTop = 760;
+		controller.handleScroll();
+		expect(controller.isFollowing()).toBe(false);
+		outer.remove();
+	});
+
+	it("binds touchcancel through the production listener and resumes outer pinning", () => {
+		const queue = createManualAnimationFrameQueue();
+		const scroller = document.createElement("div");
+		Object.defineProperties(scroller, {
+			clientHeight: { configurable: true, value: 100 },
+			scrollHeight: { configurable: true, value: 500 },
+		});
+		scroller.scrollTop = 400;
+		const controller = createStickToBottom({
+			scroller: () => scroller,
+			requestAnimationFrame: queue.raf,
+			cancelAnimationFrame: queue.cancelRaf,
+		});
+		const cleanup = bindStickToBottom(controller, scroller, { keyboard: "window" });
+		scroller.dispatchEvent(new Event("scroll"));
+		const touch = (type: "touchstart" | "touchcancel") => {
+			const event = new Event(type) as Event & { touches: Array<{ clientY: number }> };
+			event.touches = [{ clientY: 300 }];
+			return event;
+		};
+		scroller.dispatchEvent(touch("touchstart"));
+		Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 900 });
+		controller.notifyContentChanged();
+		queue.flushAll();
+		expect(scroller.scrollTop).toBe(400);
+		scroller.dispatchEvent(touch("touchcancel"));
+		queue.flushAll();
+		expect(scroller.scrollTop).toBe(900);
+		cleanup();
+	});
+
+	it("binds scrollbar-region pointer intent and clears outside pointerup/pointercancel", () => {
+		const pointer = (type: "pointerdown" | "pointerup" | "pointercancel", offsetX = 0) => {
+			const event = new Event(type, { bubbles: true }) as Event & { pointerType: string; offsetX: number };
+			event.pointerType = "mouse";
+			event.offsetX = offsetX;
+			return event;
+		};
+		const makeBoundController = () => {
+			const scroller = document.createElement("div");
+			Object.defineProperties(scroller, {
+				clientHeight: { configurable: true, value: 100 },
+				clientWidth: { configurable: true, value: 100 },
+				scrollHeight: { configurable: true, writable: true, value: 900 },
+			});
+			scroller.scrollTop = 800;
+			const controller = createStickToBottom({ scroller: () => scroller });
+			const cleanup = bindStickToBottom(controller, scroller, { keyboard: "window" });
+			scroller.dispatchEvent(new Event("scroll"));
+			return { scroller, controller, cleanup };
+		};
+
+		const active = makeBoundController();
+		active.scroller.dispatchEvent(pointer("pointerdown", 100));
+		active.scroller.scrollTop = 300;
+		active.scroller.dispatchEvent(new Event("scroll"));
+		expect(active.controller.isFollowing()).toBe(false);
+		active.cleanup();
+
+		for (const endType of ["pointerup", "pointercancel"] as const) {
+			const releasedOutside = makeBoundController();
+			releasedOutside.scroller.dispatchEvent(pointer("pointerdown", 100));
+			window.dispatchEvent(pointer(endType)); // release outside the scrollbar
+			(releasedOutside.scroller as unknown as FakeScrollElement).scrollHeight = 1500;
+			releasedOutside.scroller.scrollTop = 500;
+			releasedOutside.scroller.dispatchEvent(new Event("scroll"));
+			expect(releasedOutside.controller.isFollowing()).toBe(true);
+			releasedOutside.cleanup();
+		}
 	});
 });
