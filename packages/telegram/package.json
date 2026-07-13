@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/telegram",
-	"version": "2.39.0",
+	"version": "2.40.0",
 	"description": "Telegram bot frontend for dreb coding agent",
 	"license": "MIT",
 	"type": "module",
