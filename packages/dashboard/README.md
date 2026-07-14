@@ -35,7 +35,9 @@ Open `http://127.0.0.1:5343`.
   project path, status chip, current activity, live subagents, task progress,
   ctx%, model, cost, last-assistant preview). Below, past sessions grouped by project — three
   compact rows each with an "all N on disk" expander — with resume/delete.
-  `+ new session` anywhere.
+  At <=700px, cards stack; long session names, status chips, project paths,
+  activity/subagent text, and past-session labels wrap within cards or rows
+  rather than spilling off-screen. `+ new session` anywhere.
 - **Session view** — full chat parity: markdown streaming transcript, tool
   cards, thinking blocks, compaction summaries, per-message copy, tasks panel,
   suggest-next chip, slash-command autocomplete, image attach/paste,

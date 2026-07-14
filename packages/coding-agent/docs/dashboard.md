@@ -256,11 +256,13 @@ Background subagents are first-class:
 
 ## Responsive behavior
 
-Single breakpoint at 700px. On mobile: fleet cards stack, the session view
-prioritizes read-and-steer (model/thinking switchers collapse into ⋯, tasks
-default collapsed), file table shows name + download only. Composer modes,
-abort, and needs-attention affordances are never reduced away — steering a
-running agent from a phone is the primary remote use case.
+Single breakpoint at 700px. At <=700px, fleet cards stack; long session names,
+status chips, project paths, activity and subagent text, and past-session
+labels wrap within their cards or rows rather than spilling off-screen. The
+session view prioritizes read-and-steer (model/thinking switchers collapse into
+⋯, tasks default collapsed), and the file table shows name + download only.
+Composer modes, abort, and needs-attention affordances are never reduced away
+— steering a running agent from a phone is the primary remote use case.
 
 ## Architecture
 

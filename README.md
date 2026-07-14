@@ -120,7 +120,7 @@ The same agent runtime powers multiple surfaces:
 
 The dashboard is the visual face of dreb: every agent session on the host, live in the browser, with the same fidelity as the terminal.
 
-**One host, every screen.** The dashboard server and the TUI share the same sessions on disk and the same agent runtime. Start a refactor in the terminal, open the dashboard on your desktop to watch its subagents fan out, then pick the same session up from your phone on the couch — one synchronized state everywhere, streaming live over SSE. The layout is responsive by design: on a desktop it's a dense multi-column fleet; on a phone it prioritizes read-and-steer, because steering a running agent from wherever you are is the point.
+**One host, every screen.** The dashboard server and the TUI share the same sessions on disk and the same agent runtime. Start a refactor in the terminal, open the dashboard on your desktop to watch its subagents fan out, then pick the same session up from your phone on the couch — one synchronized state everywhere, streaming live over SSE. The layout is responsive by design: on a desktop it's a dense multi-column fleet; on a phone, fleet cards stack and their content wraps instead of overflowing, while the session view prioritizes read-and-steer because steering a running agent from wherever you are is the point.
 
 <!-- screenshot: fleet overview, desktop (light) -->
 <!-- screenshot: session view, mobile -->
