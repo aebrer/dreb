@@ -117,6 +117,7 @@ type MobileMeasurements = {
 	criticalWithinParents: boolean;
 	internalOverflowFree: boolean;
 	allWrapped: boolean;
+	activitiesClampedToTwoLines: boolean;
 	chipsContained: boolean;
 	diskMetadataAndActionsVisible: boolean;
 	attentionChipMoved: boolean;
@@ -143,6 +144,7 @@ async function mobileMeasurements(): Promise<MobileMeasurements> {
 		const critical = [...document.querySelectorAll<HTMLElement>("[data-critical]")];
 		const overflowChecked = [...document.querySelectorAll<HTMLElement>("[data-no-overflow]")];
 		const wrapped = [...document.querySelectorAll<HTMLElement>("[data-wrap]")];
+		const activities = [...document.querySelectorAll<HTMLElement>(".activity")];
 		const chips = [...document.querySelectorAll<HTMLElement>("[data-chip]")];
 		const diskRow = document.querySelector<HTMLElement>("[data-disk-row]")!;
 		const diskMeta = diskRow.querySelector<HTMLElement>(".meta")!;
@@ -160,6 +162,16 @@ async function mobileMeasurements(): Promise<MobileMeasurements> {
 				(element) => element.scrollWidth <= element.clientWidth + tolerance,
 			),
 			allWrapped: wrapped.every(isMultiline),
+			activitiesClampedToTwoLines: activities.every((activity) => {
+				const style = getComputedStyle(activity);
+				const lineHeight = Number.parseFloat(style.lineHeight);
+				const height = activity.getBoundingClientRect().height;
+				return (
+					style.webkitLineClamp === "2" &&
+					Math.abs(height - 2 * lineHeight) <= tolerance &&
+					activity.scrollHeight > activity.clientHeight + tolerance
+				);
+			}),
 			chipsContained: chips.every((chip) => {
 				const card = chip.closest(".session-card")!;
 				return rectWithin(chip, card) && chip.scrollWidth <= chip.clientWidth + tolerance;
@@ -186,6 +198,7 @@ describe("fleet layout in a real browser", () => {
 			expect(measured.criticalWithinParents).toBe(true);
 			expect(measured.internalOverflowFree).toBe(true);
 			expect(measured.allWrapped).toBe(true);
+			expect(measured.activitiesClampedToTwoLines).toBe(true);
 			expect(measured.chipsContained).toBe(true);
 			expect(measured.diskMetadataAndActionsVisible).toBe(true);
 			if (width === 320) expect(measured.attentionChipMoved).toBe(true);
@@ -200,6 +213,7 @@ describe("fleet layout in a real browser", () => {
 			const agent = document.querySelector<HTMLElement>('[data-card="running"] .agent-line')!;
 			const diskName = document.querySelector<HTMLElement>(".disk-row .name")!;
 			const title = document.querySelector<HTMLElement>(".session-title")!;
+			const activity = document.querySelector<HTMLElement>('[data-card="running"] .activity')!;
 			const desktopEllipsis = [name, project, agent, diskName].every((element) => {
 				const style = getComputedStyle(element);
 				return (
@@ -209,10 +223,22 @@ describe("fleet layout in a real browser", () => {
 					element.scrollWidth > element.clientWidth
 				);
 			});
-			return { desktopEllipsis, titleWrap: getComputedStyle(title).flexWrap };
+			const activityStyle = getComputedStyle(activity);
+			const activityLineHeight = Number.parseFloat(activityStyle.lineHeight);
+			const activityHeight = activity.getBoundingClientRect().height;
+			const activityClampedToTwoLines =
+				activityStyle.webkitLineClamp === "2" &&
+				Math.abs(activityHeight - 2 * activityLineHeight) <= 1 &&
+				activity.scrollHeight > activity.clientHeight + 1;
+			return {
+				desktopEllipsis,
+				titleWrap: getComputedStyle(title).flexWrap,
+				activityClampedToTwoLines,
+			};
 		});
 
 		expect(desktop.desktopEllipsis).toBe(true);
 		expect(desktop.titleWrap).toBe("nowrap");
+		expect(desktop.activityClampedToTwoLines).toBe(true);
 	});
 });
