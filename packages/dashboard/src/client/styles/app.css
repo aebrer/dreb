@@ -2075,6 +2075,8 @@ details.thinking .thinking-body {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
+	/* Session cards are column flex containers: constrain them without adding
+	   flex-wrap, which would turn their vertical content into columns. */
 	.session-card,
 	.disk-row,
 	.session-meta,
@@ -2082,7 +2084,96 @@ details.thinking .thinking-body {
 	.disk-row .actions {
 		min-width: 0;
 		max-width: 100%;
+	}
+
+	.disk-row,
+	.session-meta,
+	.session-actions,
+	.disk-row .actions {
 		flex-wrap: wrap;
+	}
+
+	/* Keep titles in their natural row flow, but let either item take a new line. */
+	.session-title {
+		justify-content: flex-start;
+		flex-wrap: wrap;
+		min-width: 0;
+		max-width: 100%;
+	}
+
+	.session-title .name {
+		flex: 1 1 12rem;
+		min-width: 0;
+		max-width: 100%;
+		overflow: visible;
+		text-overflow: clip;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	/* Tokens keep the status labels intact; this scope only lets a chip move
+	   below the session name when both cannot share a title row. */
+	.session-title .chip {
+		flex: 0 0 auto;
+		max-width: 100%;
+	}
+
+	.session-project,
+	.attention-reason,
+	.error-reason,
+	.activity,
+	.subagents,
+	.session-meta,
+	.group-head h3 {
+		min-width: 0;
+		max-width: 100%;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	.session-project {
+		overflow: visible;
+		text-overflow: clip;
+	}
+
+	/* Retain the activity two-line clamp while allowing words and identifiers
+	   to wrap inside those two lines. */
+	.activity {
+		text-overflow: clip;
+	}
+
+	.subagents .agent-line {
+		min-width: 0;
+		max-width: 100%;
+		overflow: visible;
+		text-overflow: clip;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	.session-meta > span {
+		min-width: 0;
+		max-width: 100%;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	.group-head h3 {
+		flex: 1 1 0;
+	}
+
+	.disk-row .name,
+	.disk-row .meta {
+		min-width: 0;
+		max-width: 100%;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+
+	.disk-row .name {
+		flex: 1 1 0;
+		overflow: visible;
+		text-overflow: clip;
 	}
 
 	.disk-row .meta {
