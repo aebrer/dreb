@@ -1465,6 +1465,44 @@ describe("subagent truncation (stopReason length) surfacing", () => {
 });
 
 describe("subagent promptGuidelines", () => {
+	test("tool description maps each mode to its parameter", () => {
+		const description = subagentToolDefinition.description;
+		expect(description).toContain("`task` for a single task");
+		expect(description).toContain("`tasks` for parallel execution in one call");
+		expect(description).toContain("`chain` for a sequential pipeline");
+	});
+
+	test("parallel guideline requires one tasks-array call", () => {
+		const guidelines = subagentToolDefinition.promptGuidelines ?? [];
+		const parallelGuideline = guidelines.find((g) => g.includes("Typical mach6-review batch"));
+		expect(parallelGuideline).toBeDefined();
+		expect(parallelGuideline).toContain("`tasks` array");
+		expect(parallelGuideline).toContain("single `subagent` call");
+		expect(parallelGuideline).toContain("not separate calls");
+	});
+
+	test("parallel guideline includes a valid mach6-review batch", () => {
+		const guidelines = subagentToolDefinition.promptGuidelines ?? [];
+		const parallelGuideline = guidelines.find((g) => g.includes("Typical mach6-review batch"));
+		expect(parallelGuideline).toBeDefined();
+
+		const marker = "Typical mach6-review batch: `";
+		const exampleStart = parallelGuideline!.indexOf(marker) + marker.length;
+		const exampleEnd = parallelGuideline!.indexOf("`", exampleStart);
+		expect(exampleEnd).toBeGreaterThan(exampleStart);
+
+		const example = JSON.parse(parallelGuideline!.slice(exampleStart, exampleEnd)) as {
+			tasks: Array<{ agent: string; task: string }>;
+		};
+		expect(example.tasks.map(({ agent }) => agent)).toEqual([
+			"code-reviewer",
+			"error-auditor",
+			"test-reviewer",
+			"completeness-checker",
+		]);
+		expect(example.tasks.every(({ task }) => task.length > 0)).toBe(true);
+	});
+
 	test("waiting guideline mentions agent_end explicitly", () => {
 		const guidelines = subagentToolDefinition.promptGuidelines ?? [];
 		const waitingGuideline = guidelines.find((g) => g.includes("Each agent notifies independently when done"));

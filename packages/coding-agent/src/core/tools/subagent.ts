@@ -1670,15 +1670,15 @@ export function createSubagentToolDefinition(
 		label: "subagent",
 		description:
 			"Delegate tasks to independent subagents (Explore for codebase research, Sandbox for isolated /tmp-only analysis). " +
-			"Supports single task, parallel (up to 8, max 4 concurrent), " +
-			"and chain (sequential pipeline with {previous} substitution) modes. " +
+			"Supports `task` for a single task, `tasks` for parallel execution in one call (up to 8, max 4 concurrent), " +
+			"and `chain` for a sequential pipeline with {previous} substitution. " +
 			"All subagents run in background — returns immediately, notifies on completion.",
 		promptSnippet: "Delegate tasks to independent subagents",
 		promptGuidelines: [
 			"Use `subagent` to delegate focused, independent tasks to child agents",
 			"Available agent types can be discovered from ~/.dreb/agents/ and .dreb/agents/ markdown files",
 			builtInAgentsLine,
-			"Use parallel mode for independent tasks that can run concurrently",
+			'Use the `tasks` array to run multiple independent tasks in a single `subagent` call (parallel mode), not separate calls. Typical mach6-review batch: `{ "tasks": [{ "agent": "code-reviewer", "task": "Review code changes" }, { "agent": "error-auditor", "task": "Audit runtime failures" }, { "agent": "test-reviewer", "task": "Review test coverage" }, { "agent": "completeness-checker", "task": "Check issue completeness" }] }`',
 			"Use chain mode when each step depends on the previous step's output (reference with {previous})",
 			"All subagents run in background — the tool returns immediately and you are notified when each agent completes.",
 			"Subagents have their own context window — provide enough context in the task prompt",
