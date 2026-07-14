@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/dashboard",
-	"version": "2.40.1",
+	"version": "2.40.2",
 	"description": "Web dashboard for dreb — fleet overview, chat parity, subagent observability",
 	"license": "MIT",
 	"type": "module",
