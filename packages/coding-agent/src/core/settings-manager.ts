@@ -490,6 +490,30 @@ export class SettingsManager {
 		this.errors.push({ scope, error: normalizedError });
 	}
 
+	private refreshGlobalContextFromStorage(options: { clearContextOnError?: boolean } = {}): boolean {
+		// Keep a just-selected UI value effective until its queued durable write completes;
+		// otherwise always re-read the external global source for cross-process changes.
+		if (this.storage instanceof InMemorySettingsStorage || this.modifiedFields.has("context")) {
+			return true;
+		}
+
+		const loaded = SettingsManager.tryLoadFromStorage(this.storage, "global");
+		if (loaded.error) {
+			this.recordError("global", loaded.error);
+			if (options.clearContextOnError) {
+				this.globalSettings = { ...this.globalSettings, context: undefined };
+				this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+			}
+			return false;
+		}
+
+		// This re-read owns only the security-policy slice. Preserve every other
+		// in-memory global field, including writes that are queued but not yet durable.
+		this.globalSettings = { ...this.globalSettings, context: loaded.settings.context };
+		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		return true;
+	}
+
 	private clearModifiedScope(scope: SettingsScope): void {
 		if (scope === "global") {
 			this.modifiedFields.clear();
@@ -711,23 +735,11 @@ export class SettingsManager {
 	 * global file fails closed rather than retaining a previously permissive value.
 	 */
 	getGlobalContextTrustPolicy(): ContextTrustPolicy {
-		let global = this.globalSettings;
-		// Keep a just-selected UI value effective until its queued durable write completes;
-		// otherwise always re-read the external global source for cross-process changes.
-		if (!(this.storage instanceof InMemorySettingsStorage) && !this.modifiedFields.has("context")) {
-			const loaded = SettingsManager.tryLoadFromStorage(this.storage, "global");
-			if (loaded.error) {
-				this.recordError("global", loaded.error);
-				return { unrestricted: false, trustedFolders: [] };
-			}
-			// This re-read owns only the security-policy slice. Preserve every other
-			// in-memory global field, including writes that are queued but not yet durable.
-			this.globalSettings = { ...this.globalSettings, context: loaded.settings.context };
-			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
-			global = this.globalSettings;
+		if (!this.refreshGlobalContextFromStorage()) {
+			return { unrestricted: false, trustedFolders: [] };
 		}
 
-		const context = global.context;
+		const context = this.globalSettings.context;
 		// A valid JSON file with a malformed security policy is also fail-closed. Do not
 		// coerce strings/truthy values or partially accept an invalid trusted-folder list.
 		if (
@@ -761,6 +773,27 @@ export class SettingsManager {
 		return this.getGlobalContextTrustPolicy().trustedFolders;
 	}
 
+	getConfiguredTrustedContextFolders(): string[] {
+		if (!this.refreshGlobalContextFromStorage()) {
+			return [];
+		}
+
+		const context = this.globalSettings.context;
+		if (context === undefined || typeof context !== "object" || context === null || Array.isArray(context)) {
+			return [];
+		}
+
+		const trustedFolders = (context as Record<string, unknown>).trustedFolders;
+		if (trustedFolders === undefined) {
+			return [];
+		}
+		if (!Array.isArray(trustedFolders) || trustedFolders.some((folder) => typeof folder !== "string")) {
+			return [];
+		}
+
+		return [...trustedFolders];
+	}
+
 	setAutoLoadNestedContext(enabled: boolean): void {
 		this.setContextTrust({ autoLoadNested: enabled });
 	}
@@ -786,16 +819,7 @@ export class SettingsManager {
 		// changes (e.g. a folder just untrusted elsewhere) instead of a stale in-memory value.
 		// A pending context write already owns the authoritative in-memory value; do not stomp
 		// it. Fail closed if the external file is unreadable.
-		if (!(this.storage instanceof InMemorySettingsStorage) && !this.modifiedFields.has("context")) {
-			const loaded = SettingsManager.tryLoadFromStorage(this.storage, "global");
-			if (loaded.error) {
-				this.recordError("global", loaded.error);
-				this.globalSettings = { ...this.globalSettings, context: undefined };
-			} else {
-				this.globalSettings = { ...this.globalSettings, context: loaded.settings.context };
-			}
-			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
-		}
+		this.refreshGlobalContextFromStorage({ clearContextOnError: true });
 
 		const currentContext = this.globalSettings.context;
 		const current =
@@ -836,13 +860,13 @@ export class SettingsManager {
 		if (typeof folder !== "string" || folder === "") {
 			throw new Error("Trusted context folder must be a non-empty string");
 		}
-		const folders = this.getTrustedContextFolders();
+		const folders = this.getConfiguredTrustedContextFolders();
 		if (!folders.includes(folder)) folders.push(folder);
 		this.setTrustedContextFolders(folders);
 	}
 
 	removeTrustedContextFolder(folder: string): void {
-		this.setTrustedContextFolders(this.getTrustedContextFolders().filter((current) => current !== folder));
+		this.setTrustedContextFolders(this.getConfiguredTrustedContextFolders().filter((current) => current !== folder));
 	}
 
 	getCompactionReserveTokens(): number {

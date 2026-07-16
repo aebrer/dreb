@@ -129,6 +129,28 @@ describe("getSettingsForRpc", () => {
 		expect(snapshot.trustedContextFolders).toEqual([trusted, directFile]);
 		expect(snapshot.effectiveTrustedContextRoots).toEqual([trusted]);
 	});
+
+	it("shows configured folders separately from fail-closed enforcement when autoLoadNested is malformed", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		const rootA = join(dir, "a");
+		const rootB = join(dir, "b");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(rootA, { recursive: true });
+		mkdirSync(rootB, { recursive: true });
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ context: { autoLoadNested: "yes", trustedFolders: [rootA, rootB] } }),
+		);
+
+		const snapshot = getSettingsForRpc(SettingsManager.create(projectDir, agentDir));
+
+		expect(snapshot.autoLoadNestedContext).toBe(false);
+		expect(snapshot.trustedContextFolders).toEqual([rootA, rootB]);
+		expect(snapshot.effectiveTrustedContextRoots).toEqual([]);
+	});
 });
 
 describe("setSettingsForRpc validation", () => {
@@ -813,6 +835,82 @@ describe("context trust RPC commands", () => {
 			result: { removedFolder: "relative/legacy", settings: { trustedContextFolders: [] } },
 		});
 		expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual([]);
+	});
+
+	it("removes one configured folder without wiping siblings when autoLoadNested is malformed on disk", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		const rootA = join(dir, "a");
+		const rootB = join(dir, "b");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(rootA, { recursive: true });
+		mkdirSync(rootB, { recursive: true });
+		const canonicalRootB = realpathSync.native(rootB);
+		const settingsPath = join(agentDir, "settings.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({ context: { autoLoadNested: "yes", trustedFolders: [rootA, rootB] } }),
+		);
+		const manager = SettingsManager.create(projectDir, agentDir);
+
+		const result = await removeTrustedContextFolderForRpc(manager, rootA);
+
+		expect(result).toMatchObject({
+			ok: true,
+			result: {
+				removedFolder: rootA,
+				settings: { trustedContextFolders: [rootB], effectiveTrustedContextRoots: [canonicalRootB] },
+			},
+		});
+		const saved = JSON.parse(readFileSync(settingsPath, "utf8"));
+		expect(saved.context).toEqual({ autoLoadNested: false, trustedFolders: [rootB] });
+		expect(SettingsManager.create(projectDir, agentDir).getGlobalContextTrustPolicy()).toEqual({
+			unrestricted: false,
+			trustedFolders: [rootB],
+		});
+	});
+
+	it("trusts a new root without wiping configured siblings when autoLoadNested is malformed on disk", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		const rootA = join(dir, "a");
+		const rootB = join(dir, "b");
+		const rootC = join(dir, "c");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(rootA, { recursive: true });
+		mkdirSync(rootB, { recursive: true });
+		mkdirSync(rootC, { recursive: true });
+		const canonicalRootA = realpathSync.native(rootA);
+		const canonicalRootB = realpathSync.native(rootB);
+		const canonicalRootC = realpathSync.native(rootC);
+		const settingsPath = join(agentDir, "settings.json");
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({ context: { autoLoadNested: "true", trustedFolders: [rootA, rootB] } }),
+		);
+		const manager = SettingsManager.create(projectDir, agentDir);
+
+		const result = await trustContextFolderForRpc(manager, rootC);
+
+		expect(result).toMatchObject({
+			ok: true,
+			result: {
+				addedRoot: canonicalRootC,
+				settings: {
+					trustedContextFolders: [canonicalRootA, canonicalRootB, canonicalRootC],
+					effectiveTrustedContextRoots: [canonicalRootA, canonicalRootB, canonicalRootC],
+				},
+			},
+		});
+		const saved = JSON.parse(readFileSync(settingsPath, "utf8"));
+		expect(saved.context).toEqual({
+			autoLoadNested: false,
+			trustedFolders: [canonicalRootA, canonicalRootB, canonicalRootC],
+		});
 	});
 
 	it("rejects malformed configured-folder removal payloads without mutation", async () => {

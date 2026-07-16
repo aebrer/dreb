@@ -237,6 +237,7 @@ type SettingsReader = Pick<
 	| "getBlockImages"
 	| "getEnableSkillCommands"
 	| "getGlobalContextTrustPolicy"
+	| "getConfiguredTrustedContextFolders"
 	| "getTransport"
 	| "getHideThinkingBlock"
 	| "getAgentModels"
@@ -279,6 +280,7 @@ type SettingsWriter = SettingsReader &
  */
 export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsSnapshot {
 	const contextTrust = settingsManager.getGlobalContextTrustPolicy();
+	const configuredTrustedFolders = settingsManager.getConfiguredTrustedContextFolders();
 	return {
 		defaultProvider: settingsManager.getDefaultProvider(),
 		defaultModel: settingsManager.getDefaultModel(),
@@ -291,7 +293,7 @@ export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsS
 		blockImages: settingsManager.getBlockImages(),
 		enableSkillCommands: settingsManager.getEnableSkillCommands(),
 		autoLoadNestedContext: contextTrust.unrestricted,
-		trustedContextFolders: contextTrust.trustedFolders,
+		trustedContextFolders: configuredTrustedFolders,
 		effectiveTrustedContextRoots: canonicalizeTrustedRoots(contextTrust.trustedFolders),
 		transport: settingsManager.getTransport(),
 		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
@@ -457,8 +459,8 @@ export async function trustContextFolderForRpc(
 		if (!evaluated.ok) return evaluated;
 
 		// Existing malformed entries are fail-closed. A trust mutation rewrites the configured
-		// list as the canonical effective roots plus this new canonical root.
-		const roots = canonicalizeTrustedRoots(settingsManager.getGlobalContextTrustPolicy().trustedFolders);
+		// list as the canonical configured roots plus this new canonical root.
+		const roots = canonicalizeTrustedRoots(settingsManager.getConfiguredTrustedContextFolders());
 		let folders: string[];
 		try {
 			folders = validateTrustedContextFolders([...roots, evaluated.evaluation.canonicalTarget]);
@@ -495,7 +497,7 @@ export async function untrustContextFolderForRpc(
 		}
 
 		const removedRoot = evaluated.evaluation.grantingRoot!;
-		const roots = canonicalizeTrustedRoots(settingsManager.getGlobalContextTrustPolicy().trustedFolders);
+		const roots = canonicalizeTrustedRoots(settingsManager.getConfiguredTrustedContextFolders());
 		return persistContextTrustMutationForRpc(
 			settingsManager,
 			roots.filter((root) => root !== removedRoot),

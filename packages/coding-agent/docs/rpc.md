@@ -1500,7 +1500,37 @@ If `/home/user/src/my-company` grants this descendant's access, a successful res
 {"type":"response","command":"untrust_context_folder","success":false,"error":"Cannot untrust a context folder while unrestricted nested context loading is enabled; disable autoLoadNestedContext first"}
 ```
 
-Invalid paths and write failures have the same semantics as `trust_context_folder`. All three trust commands concern only future lazy nested/out-of-cwd loads in active main/subagent processes; they never alter the separate initial upward scan or retract context already injected into a conversation.
+Invalid paths and write failures have the same semantics as `trust_context_folder`.
+
+#### remove_trusted_context_folder
+
+Remove a configured global trusted-folder string by **exact** match, then durably flush the settings write. This is intentionally different from `untrust_context_folder`: the request path is treated as the configured string to delete and performs no directory/path resolution — no `~` expansion, absolute-path requirement, directory existence check, symlink resolution, canonicalization, or granting-root lookup.
+
+```json
+{"type": "remove_trusted_context_folder", "path": "/legacy/or/moved/path"}
+```
+
+Success response (the nested `settings` object is abbreviated here to its trust fields):
+
+```json
+{
+  "type": "response",
+  "command": "remove_trusted_context_folder",
+  "success": true,
+  "data": {
+    "settings": {
+      "autoLoadNestedContext": false,
+      "trustedContextFolders": [],
+      "effectiveTrustedContextRoots": []
+    },
+    "removedFolder": "/legacy/or/moved/path"
+  }
+}
+```
+
+`settings` is the complete `get_settings` snapshot after the durable global write. `removedFolder` is the configured folder string requested for exact removal; the command is a successful no-op if the exact string was not present. Only a non-empty string `path` is required, so this command can revoke invalid, legacy, or stale configured entries that `untrust_context_folder` cannot validate or resolve. It is not gated by global expert trust-all (`autoLoadNestedContext: true`), because it edits the configured list directly rather than pretending to narrow unrestricted loading. A corrupt global settings file or failed durable write returns `success: false` with `Cannot write settings: ...` or `Failed to persist settings: ...`; no merely in-memory trust removal is reported as success.
+
+All four context-trust commands concern only future lazy nested/out-of-cwd loads in active main/subagent processes; they never alter the separate initial upward scan or retract context already injected into a conversation.
 
 ### Version
 
