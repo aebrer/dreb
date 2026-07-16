@@ -12,6 +12,8 @@ export type {
 	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcCommandType,
+	RpcContextTrustEvaluation,
+	RpcContextTrustMutationResult,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
@@ -22,4 +24,5 @@ export type {
 	RpcSettingsUpdate,
 	RpcSlashCommand,
 	RpcTreeNode,
+	RpcTrustedFolderRemovalResult,
 } from "./rpc-types.js";

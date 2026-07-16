@@ -1414,6 +1414,33 @@ details.thinking .thinking-body {
 	margin-top: var(--space-1);
 }
 
+.context-trust {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: var(--space-3);
+	margin-bottom: var(--space-4);
+	font-size: var(--fs-secondary);
+}
+
+.context-trust p {
+	color: var(--muted);
+	font-size: var(--fs-small);
+	margin: var(--space-1) 0 var(--space-2);
+	overflow-wrap: anywhere;
+}
+
+.context-trust-impact {
+	margin-bottom: 0 !important;
+}
+
+.context-trust-warning {
+	color: var(--status-attention);
+}
+
+.context-trust-warning a {
+	color: inherit;
+}
+
 .head-actions {
 	display: flex;
 	gap: var(--space-2);
@@ -1688,6 +1715,71 @@ details.thinking .thinking-body {
 	display: flex;
 	gap: var(--space-1);
 	flex-shrink: 0;
+}
+
+.context-trust-subsection {
+	margin: var(--space-4) 0;
+}
+
+.context-trust-subsection h3 {
+	font-size: var(--fs-secondary);
+	margin-bottom: var(--space-1);
+}
+
+.context-trust-global-warning {
+	margin: var(--space-3) 0;
+}
+
+.trusted-context-empty {
+	margin: var(--space-3) 0;
+}
+
+.trusted-context-folder-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	padding: var(--space-2) 0;
+	border-bottom: var(--hairline);
+	font-size: var(--fs-secondary);
+}
+
+.trusted-context-folder-row code {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.trusted-context-folder-row .meta {
+	color: var(--muted);
+	font-size: var(--fs-small);
+	margin-left: auto;
+}
+
+.trusted-context-folder-row .btn {
+	flex-shrink: 0;
+}
+
+.trusted-context-folder-add {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	margin-top: var(--space-3);
+}
+
+.trusted-context-folder-add label {
+	font-size: var(--fs-small);
+	white-space: nowrap;
+}
+
+.trusted-context-folder-add input {
+	min-width: 0;
+	flex: 1;
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	font-family: inherit;
+	font-size: var(--fs-secondary);
+	padding: 2px var(--space-2);
 }
 
 .settings-footnote {
@@ -2229,6 +2321,32 @@ details.thinking .thinking-body {
 	.agent-model-entry {
 		align-items: flex-start;
 		flex-direction: column;
+	}
+
+	.trusted-context-folder-row {
+		align-items: flex-start;
+		flex-wrap: wrap;
+	}
+
+	.trusted-context-folder-row code {
+		flex-basis: 100%;
+	}
+
+	.trusted-context-folder-row .meta {
+		margin-left: 0;
+	}
+
+	.trusted-context-folder-add {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	.trusted-context-folder-add label {
+		white-space: normal;
+	}
+
+	.trusted-context-folder-add .btn {
+		align-self: flex-start;
 	}
 
 	.subagent-strip {

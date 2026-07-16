@@ -166,6 +166,8 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	const [modelPickerTarget, setModelPickerTarget] = createSignal<ModelPickerTarget>();
 	const [editingAgent, setEditingAgent] = createSignal<string>();
 	const [agentContextCwd, setAgentContextCwd] = createSignal<string>();
+	const [trustedContextFolderPath, setTrustedContextFolderPath] = createSignal("");
+	const [contextTrustMutating, setContextTrustMutating] = createSignal(false);
 	const [notificationPermission, setNotificationPermission] = createSignal<
 		NotificationPermission | "unsupported" | "ios-install" | "insecure"
 	>(initialNotificationPermission());
@@ -301,6 +303,35 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		await save({ agentModels: { [agentName]: nextList } });
 	}
 
+	async function addTrustedFolder(path: string) {
+		setError(undefined);
+		setContextTrustMutating(true);
+		try {
+			const result = await api.trustContextFolder(path);
+			mutate(result.settings);
+			setTrustedContextFolderPath("");
+		} catch (err) {
+			// RPC validation errors surface verbatim — no silent retry.
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setContextTrustMutating(false);
+		}
+	}
+
+	async function removeTrustedFolder(path: string) {
+		setError(undefined);
+		setContextTrustMutating(true);
+		try {
+			const result = await api.removeTrustedContextFolder(path);
+			mutate(result.settings);
+		} catch (err) {
+			// RPC validation errors surface verbatim — no silent retry.
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setContextTrustMutating(false);
+		}
+	}
+
 	function currentAgentModels(agentName: string): string[] {
 		return settings()?.agentModels?.[agentName] ?? [];
 	}
@@ -321,8 +352,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 			<main class="container settings-wrap">
 				<h1>settings</h1>
 				<p class="settings-intro">
-					Defaults for new sessions. Live sessions keep their current values — change those from the session view.
-					Writes go to the global settings file on the host.
+					Ordinary defaults apply only to new sessions. Context trust changes apply to subsequent lazy loads in
+					live sessions; already injected content cannot be retracted. Writes go to the global settings file on the
+					host.
 				</p>
 
 				<Show when={error()}>
@@ -610,17 +642,85 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										/>
 									</span>
 								</div>
+								<div class="context-trust-subsection">
+									<h3>trusted context folders</h3>
+									<p class="muted small">
+										Specific global roots that may lazy-load nested AGENTS.md/CLAUDE.md and all descendants.
+									</p>
+									<div class="settings-warning context-trust-global-warning">
+										<strong>Global-only policy.</strong> Project <code>.dreb/settings.json</code> cannot
+										enable, disable, or extend nested-context trust. Only these global settings and the Files
+										view can; a cloned repository cannot grant itself trust.
+									</div>
+									<Show
+										when={(current().trustedContextFolders ?? []).length > 0}
+										fallback={
+											<p class="muted small trusted-context-empty">
+												No trusted folders. Use the Files view to trust a project folder and its
+												descendants.
+											</p>
+										}
+									>
+										<For each={current().trustedContextFolders ?? []}>
+											{(path) => (
+												<div class="trusted-context-folder-row">
+													<code>{path}</code>
+													<span class="meta">and all descendants</span>
+													<button
+														type="button"
+														class="btn btn-small btn-danger"
+														disabled={contextTrustMutating()}
+														onClick={() => void removeTrustedFolder(path)}
+													>
+														{contextTrustMutating() ? "revoking…" : "revoke trust"}
+													</button>
+												</div>
+											)}
+										</For>
+									</Show>
+									<form
+										class="trusted-context-folder-add"
+										onSubmit={(event) => {
+											event.preventDefault();
+											const path = trustedContextFolderPath().trim();
+											if (path) void addTrustedFolder(path);
+										}}
+									>
+										<label for="trusted-context-folder-path">add folder by path</label>
+										<input
+											id="trusted-context-folder-path"
+											type="text"
+											value={trustedContextFolderPath()}
+											onInput={(event) => setTrustedContextFolderPath(event.currentTarget.value)}
+											placeholder="/path/to/project"
+										/>
+										<button
+											type="submit"
+											class="btn btn-small"
+											disabled={contextTrustMutating() || !trustedContextFolderPath().trim()}
+										>
+											{contextTrustMutating() ? "trusting…" : "trust folder"}
+										</button>
+									</form>
+								</div>
 								<div class="setting-row">
 									<span class="setting-label">
-										<span class="name">auto-load nested context</span>
-										<span class="hint">load nested AGENTS.md/CLAUDE.md when tools enter subdirectories</span>
+										<span class="name">global expert nested-context trust</span>
+										<span class="hint">allow nested AGENTS.md/CLAUDE.md from any resolvable directory</span>
 									</span>
 									<span class="setting-control">
 										<OnOffSelect
-											value={current().autoLoadNestedContext !== false}
+											value={current().autoLoadNestedContext === true}
 											onChange={(value) => save({ autoLoadNestedContext: value })}
 										/>
 									</span>
+								</div>
+								<div class="settings-warning context-expert-warning">
+									<strong>Expert global override.</strong> Project <code>.dreb/settings.json</code> cannot
+									enable, disable, or extend nested-context trust; a cloned repository cannot grant itself
+									trust. When ON, nested instructions from any resolvable directory may load, including
+									untrusted prompt-injection content. Leave this OFF and use trusted folders for projects you
+									control.
 								</div>
 								<div class="setting-row">
 									<span class="setting-label">

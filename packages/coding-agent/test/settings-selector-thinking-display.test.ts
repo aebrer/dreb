@@ -42,7 +42,7 @@ function makeConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
 		editorPaddingX: 1,
 		autocompleteMaxVisible: 7,
 		quietStartup: false,
-		autoLoadNestedContext: true,
+		autoLoadNestedContext: false,
 		agentModels: {},
 		agentNames: [],
 		availableModelIds: [],
@@ -91,6 +91,16 @@ function focusThinkingDisplay(component: SettingsSelectorComponent): void {
 }
 
 describe("SettingsSelectorComponent — thinking-display toggle", () => {
+	test("labels unrestricted nested loading as a default-off prompt-injection risk", () => {
+		const component = new SettingsSelectorComponent(makeConfig(), makeCallbacks());
+		const list = component.getSettingsList();
+		for (const ch of "unrestricted") list.handleInput(ch);
+		const output = list.render(160).join("\n");
+		expect(output).toContain("Unrestricted nested context loading (expert)");
+		expect(output).toContain("OFF by default");
+		expect(output).toContain("prompt injection");
+	});
+
 	test("shows the thinking-display item when the model supports adaptive thinking", () => {
 		const component = new SettingsSelectorComponent(makeConfig({ thinkingDisplaySupported: true }), makeCallbacks());
 		focusThinkingDisplay(component);

@@ -50,13 +50,50 @@ Open `http://127.0.0.1:5343`.
   view survives browser reloads. No composer: the parent session controls the
   agent.
 - **Files** — host-wide browse with places shortcuts, upload (collision
-  prompts before overwrite), download, new-folder, "new session here".
+  prompts before overwrite), download, new-folder, "new session here", and the
+  effective global nested-context trust for the viewed canonical folder. Trust
+  the folder and descendants, or untrust the actual granting root (including
+  its inherited descendants).
 - **Settings** — persistent defaults (provider-grouped model dropdown,
-  thinking, queue modes, image handling, skill commands, nested context,
-  transport, hide-thinking, compaction/retry), per-agent model fallback editor,
+  thinking, queue modes, image handling, skill commands, transport,
+  hide-thinking, compaction/retry), per-agent model fallback editor, and the
+  global-only nested-context policy: an auditable trusted-roots list with
+  revoke and simple add-by-path controls, plus a prominent expert trust-all
+  warning. The Files view remains the primary trust-grant flow. Most defaults
+  seed new sessions; trust changes are observed by active processes for future
+  lazy loads and cannot retract already injected context. Also includes
   dashboard-local preferences (thinking expansion and notification permission),
   current pairing code, and paired-devices management.
 - **Pairing** — remote first-login rotating-code flow.
+
+## Nested context trust
+
+The Files trust controls apply only to **lazy nested/out-of-cwd** context
+loading. They do not control dreb's separate initial upward scan for
+`AGENTS.md`/`CLAUDE.md` from a session's launch cwd.
+
+Lazy loading is off by default. The Files view is the primary grant flow:
+trust the viewed folder and descendants, or untrust its actual granting root.
+Settings also lists every configured root for audit and revoke, and offers a
+simple add-by-path control. Trusting through either screen writes an explicit,
+global-only `context.trustedFolders` root in
+`~/.dreb/agent/settings.json`; that root covers itself and descendants after
+canonical native-`realpath` resolution. A symlink that lexically appears below
+a root but resolves outside it is not trusted. Project `.dreb/settings.json`
+cannot enable, disable, or extend nested-context trust; only global settings
+and the dashboard Files/Settings controls can, so a cloned repository cannot
+grant itself trust.
+
+The Files view reports the actual state returned by RPC: `untrusted`,
+`trusted-root` (including an inherited canonical granting root), or
+`unrestricted`. Its **untrust** action removes the granting root, not merely
+the selected descendant. `context.autoLoadNested: true` is a global-only expert
+trust-all override; it allows any resolvable directory and can inject
+prompt-injection content from untrusted repositories, so folder controls cannot
+narrow it. Main agents and subagents share this policy. Active processes see
+trust changes before future lazy loads, but already injected context cannot be
+removed. Permitted lazy context is secret-scrubbed, appended after extension
+`tool_result` transforms, and deduplicated per session.
 
 ## Security model — exactly two modes
 

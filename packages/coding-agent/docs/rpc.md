@@ -1219,16 +1219,17 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 ### Settings
 
-Persistent default settings, backed by the settings file (see [settings.md](settings.md)). These are distinct from live session state:
+Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with one security-policy exception:
 
-- **Persistent defaults** (`get_settings` / `set_settings`): the values stored in `settings.json` that seed fresh runtimes — default provider/model, default thinking level, queue modes, compaction/retry/image/context/skill/thinking-display/transport toggles, and per-agent model fallback lists. Writing them does **not** change the running session.
+- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
+- **Global nested-context trust policy** (`autoLoadNestedContext`, `trustedContextFolders`, `effectiveTrustedContextRoots`, and the trust commands below): this is read from `~/.dreb/agent/settings.json` only, never project settings. Active main/subagent processes observe it for **future lazy nested/out-of-cwd loads**; it cannot remove content already injected into a conversation. It does not govern the separate initial upward context scan from the launch cwd.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
 
-A dashboard settings tab typically reads both: `get_state` for what's active now, `get_settings` for what the next startup will use.
+A dashboard settings tab typically reads `get_state` for what is active now and `get_settings` for persistent defaults plus the current global context-trust policy.
 
 #### get_settings
 
-Get the persistent default settings (merged global + project view).
+Get persistent settings. Ordinary fields are the merged global + project view; the nested-context trust fields are always global-only.
 
 ```json
 {"type": "get_settings"}
@@ -1251,7 +1252,9 @@ Response:
     "imageAutoResize": true,
     "blockImages": false,
     "enableSkillCommands": true,
-    "autoLoadNestedContext": true,
+    "autoLoadNestedContext": false,
+    "trustedContextFolders": ["/home/user/src/my-company"],
+    "effectiveTrustedContextRoots": ["/home/user/src/my-company"],
     "transport": "sse",
     "hideThinkingBlock": false,
     "agentModels": {
@@ -1263,6 +1266,8 @@ Response:
 
 `defaultProvider`, `defaultModel`, and `defaultThinkingLevel` are absent if never set. `agentModels` is the merged global + project view; project entries win per agent name.
 
+`trustedContextFolders` is the raw global configured list, including invalid legacy paths that are ignored fail-closed. `effectiveTrustedContextRoots` is the canonical, existing root set actually enforced after `~` expansion, native `realpath`, deduplication, and ancestor subsumption. `autoLoadNestedContext` defaults to `false`; when `true` it is global expert trust-all for every resolvable target, not a project override. Project `.dreb/settings.json` cannot affect any of these three fields.
+
 #### set_settings
 
 Update persistent default settings. Takes a partial payload — only the supplied keys change. The whole payload is validated before anything is applied: on any invalid field, nothing changes and the response is an explicit error. Writes target the global settings file (same scope as every runtime setter).
@@ -1270,6 +1275,14 @@ Update persistent default settings. Takes a partial payload — only the supplie
 ```json
 {"type": "set_settings", "settings": {"defaultThinkingLevel": "low", "retryEnabled": false}}
 ```
+
+Replace the global trusted-root list atomically (paths must be existing directories and are persisted as canonical roots):
+
+```json
+{"type": "set_settings", "settings": {"trustedContextFolders": ["/home/user/src/my-company"]}}
+```
+
+Set `autoLoadNestedContext: true` only as an expert global trust-all choice: it permits lazy context from any resolvable directory, including untrusted prompt-injection content. `set_settings` writes this policy globally even when the RPC session has project settings; project `.dreb/settings.json` cannot add, override, or enable it. Active processes use the result for later lazy loads, not to retract prior injections. The separate initial upward scan from the launch cwd is unaffected.
 
 Setting the default model (both keys required together, validated against available models — the provider must have credentials configured, same rule as `set_model`):
 
@@ -1311,7 +1324,9 @@ Response is the full settings snapshot after the write (same shape as `get_setti
     "imageAutoResize": true,
     "blockImages": false,
     "enableSkillCommands": true,
-    "autoLoadNestedContext": true,
+    "autoLoadNestedContext": false,
+    "trustedContextFolders": ["/home/user/src/my-company"],
+    "effectiveTrustedContextRoots": ["/home/user/src/my-company"],
     "transport": "sse",
     "hideThinkingBlock": false,
     "agentModels": {}
@@ -1334,7 +1349,9 @@ Project-shadow warning example (the global write still lands, but the returned m
     "imageAutoResize": true,
     "blockImages": false,
     "enableSkillCommands": true,
-    "autoLoadNestedContext": true,
+    "autoLoadNestedContext": false,
+    "trustedContextFolders": [],
+    "effectiveTrustedContextRoots": [],
     "transport": "sse",
     "hideThinkingBlock": false,
     "agentModels": {
@@ -1360,7 +1377,8 @@ Valid keys and values:
 | `imageAutoResize` | boolean |
 | `blockImages` | boolean |
 | `enableSkillCommands` | boolean |
-| `autoLoadNestedContext` | boolean |
+| `autoLoadNestedContext` | boolean; global-only expert trust-all for lazy nested/out-of-cwd loading; defaults to `false` |
+| `trustedContextFolders` | Replaces the global list atomically. Array of non-empty paths that expand to absolute, existing directories; each is canonicalized with native `realpath`, then deduplicated/subsumed. Relative, missing, non-directory, and broken-symlink entries are rejected. |
 | `transport` | `"sse"`, `"websocket"`, `"auto"` |
 | `hideThinkingBlock` | boolean |
 | `agentModels` | Plain object mapping agent names to arrays of non-empty model id strings; empty arrays remove the global entry for that agent |
@@ -1374,12 +1392,145 @@ Errors are explicit `success: false` responses (nothing is applied on any of the
 - Non-boolean toggle: `Invalid retryEnabled: "yes". Must be a boolean`
 - Invalid `agentModels` object: `Invalid agentModels: must be a plain object mapping agent names to model fallback arrays`
 - Invalid `agentModels` entry (the offending agent key is named): `Invalid agentModels["Explore"]: expected an array of non-empty strings`
+- Invalid trusted-root list: `trustedContextFolders must be an array of non-empty path strings` or `Invalid trustedContextFolders[0]: path must be absolute after ~ expansion` / `path must be an existing directory`
 - Provider without model (or vice versa): `defaultProvider and defaultModel must be set together`
 - Unavailable model: `Model not found: provider/model-id`
 - Corrupt settings file: `Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)` — without this guard the write would silently no-op
 - Write failure (I/O error): `Failed to persist settings: ...`
 
 Unlike `set_thinking_level` (which silently clamps to the current model's capabilities), `set_settings` rejects invalid values loudly — a dashboard needs the error, not a silent correction.
+
+#### evaluate_context_trust
+
+Evaluate one directory against the current **global** lazy nested-context policy. This is useful for a Files view; it does not load context or change settings.
+
+```json
+{"type": "evaluate_context_trust", "path": "/home/user/src/my-company/package"}
+```
+
+Success response:
+
+```json
+{
+  "type": "response",
+  "command": "evaluate_context_trust",
+  "success": true,
+  "data": {
+    "canonicalTarget": "/home/user/src/my-company/package",
+    "state": "trusted-root",
+    "grantingRoot": "/home/user/src/my-company"
+  }
+}
+```
+
+`canonicalTarget` is the existing directory after strict native `realpath`. `state` is exactly one of:
+
+- `"untrusted"` — no global root covers the target.
+- `"trusted-root"` — a configured canonical root covers it; `grantingRoot` is present, including for inherited descendant access.
+- `"unrestricted"` — global `autoLoadNestedContext` is true; `grantingRoot` is omitted because folder roots are not the grant.
+
+Invalid paths return `success: false`: `path` must be a non-empty string, absolute after `~` expansion, and an existing directory. Error text is prefixed `Invalid context trust path: ` (for example, `Invalid context trust path: path must be an existing directory`). Symlinks are resolved before evaluation, so a lexical descendant that resolves outside a trusted root evaluates as untrusted.
+
+#### trust_context_folder
+
+Add a directory as a global trusted root, then durably flush the settings write. The request path has the same strict validation and canonicalization as `evaluate_context_trust`.
+
+```json
+{"type": "trust_context_folder", "path": "/home/user/src/my-company"}
+```
+
+Success response (the nested `settings` object is abbreviated here to its trust fields):
+
+```json
+{
+  "type": "response",
+  "command": "trust_context_folder",
+  "success": true,
+  "data": {
+    "evaluation": {
+      "canonicalTarget": "/home/user/src/my-company",
+      "state": "trusted-root",
+      "grantingRoot": "/home/user/src/my-company"
+    },
+    "addedRoot": "/home/user/src/my-company",
+    "settings": {
+      "autoLoadNestedContext": false,
+      "trustedContextFolders": ["/home/user/src/my-company"],
+      "effectiveTrustedContextRoots": ["/home/user/src/my-company"]
+    }
+  }
+}
+```
+
+`settings` is the complete `get_settings` snapshot after the durable global write. `addedRoot` is the canonical target when it is retained as a root; it is omitted when an existing ancestor already covers that target. Existing malformed legacy roots are discarded by this mutation; the resulting root list is canonical, deduplicated, and ancestor-subsumed. Invalid paths use the same `Invalid context trust path: ...` errors. A corrupt global settings file or failed durable write returns `success: false` with `Cannot write settings: ...` or `Failed to persist settings: ...`; no merely in-memory trust is reported as success.
+
+#### untrust_context_folder
+
+Remove the actual canonical root granting trust to a target, rather than only removing a selected descendant. This is the companion for an inherited Files-view trust badge.
+
+```json
+{"type": "untrust_context_folder", "path": "/home/user/src/my-company/package"}
+```
+
+If `/home/user/src/my-company` grants this descendant's access, a successful response is (with `settings` abbreviated to its trust fields):
+
+```json
+{
+  "type": "response",
+  "command": "untrust_context_folder",
+  "success": true,
+  "data": {
+    "evaluation": {
+      "canonicalTarget": "/home/user/src/my-company/package",
+      "state": "untrusted"
+    },
+    "removedRoot": "/home/user/src/my-company",
+    "settings": {
+      "autoLoadNestedContext": false,
+      "trustedContextFolders": [],
+      "effectiveTrustedContextRoots": []
+    }
+  }
+}
+```
+
+`removedRoot` is the canonical root removed for the target and therefore revokes its descendants too. If the target was already `untrusted`, this is a successful no-op: `settings` and an `untrusted` evaluation are returned without `removedRoot`. If global expert trust-all is enabled, it fails rather than pretending a folder change can narrow it:
+
+```json
+{"type":"response","command":"untrust_context_folder","success":false,"error":"Cannot untrust a context folder while unrestricted nested context loading is enabled; disable autoLoadNestedContext first"}
+```
+
+Invalid paths and write failures have the same semantics as `trust_context_folder`.
+
+#### remove_trusted_context_folder
+
+Remove a configured global trusted-folder string by **exact** match, then durably flush the settings write. This is intentionally different from `untrust_context_folder`: the request path is treated as the configured string to delete and performs no directory/path resolution — no `~` expansion, absolute-path requirement, directory existence check, symlink resolution, canonicalization, or granting-root lookup.
+
+```json
+{"type": "remove_trusted_context_folder", "path": "/legacy/or/moved/path"}
+```
+
+Success response (the nested `settings` object is abbreviated here to its trust fields):
+
+```json
+{
+  "type": "response",
+  "command": "remove_trusted_context_folder",
+  "success": true,
+  "data": {
+    "settings": {
+      "autoLoadNestedContext": false,
+      "trustedContextFolders": [],
+      "effectiveTrustedContextRoots": []
+    },
+    "removedFolder": "/legacy/or/moved/path"
+  }
+}
+```
+
+`settings` is the complete `get_settings` snapshot after the durable global write. `removedFolder` is the configured folder string requested for exact removal; the command is a successful no-op if the exact string was not present. Only a non-empty string `path` is required, so this command can revoke invalid, legacy, or stale configured entries that `untrust_context_folder` cannot validate or resolve. It is not gated by global expert trust-all (`autoLoadNestedContext: true`), because it edits the configured list directly rather than pretending to narrow unrestricted loading. A corrupt global settings file or failed durable write returns `success: false` with `Cannot write settings: ...` or `Failed to persist settings: ...`; no merely in-memory trust removal is reported as success.
+
+All four context-trust commands concern only future lazy nested/out-of-cwd loads in active main/subagent processes; they never alter the separate initial upward scan or retract context already injected into a conversation.
 
 ### Version
 

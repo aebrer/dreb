@@ -582,11 +582,15 @@ export class AgentSession {
 	 * should be injected. Resolves the directory the tool operates in, walks up to a
 	 * sensible ceiling collecting not-yet-loaded AGENTS.md/CLAUDE.md files, and formats
 	 * them. Each directory is scanned at most once (negative cache) and each file is
-	 * injected at most once per session (realpath dedup). Gated by `context.autoLoadNested`.
+	 * injected at most once per session (realpath dedup). Every decision consumes the
+	 * refreshed global-only trust policy; absent settings managers fail closed.
 	 */
 	private _computeNestedContextBlock(toolName: string, args: Record<string, unknown>): string | null {
-		const enabled = this.settingsManager?.getAutoLoadNestedContext() ?? true;
-		if (!enabled) return null;
+		const policy = this.settingsManager?.getGlobalContextTrustPolicy() ?? {
+			unrestricted: false,
+			trustedFolders: [],
+		};
+		if (!policy.unrestricted && policy.trustedFolders.length === 0) return null;
 
 		// Seed the per-session loaded set from the context files loaded at session start so
 		// ancestor files are never re-injected.
@@ -602,7 +606,7 @@ export class AgentSession {
 		}
 
 		const state: NestedContextState = {
-			enabled,
+			policy,
 			cwd: this._cwd,
 			loaded: this._nestedContextLoaded,
 			scannedDirs: this._nestedContextScannedDirs,
