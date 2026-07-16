@@ -303,13 +303,27 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		await save({ agentModels: { [agentName]: nextList } });
 	}
 
-	async function changeContextTrust(action: "trust" | "untrust", path: string) {
+	async function addTrustedFolder(path: string) {
 		setError(undefined);
 		setContextTrustMutating(true);
 		try {
-			const result = action === "trust" ? await api.trustContextFolder(path) : await api.untrustContextFolder(path);
+			const result = await api.trustContextFolder(path);
 			mutate(result.settings);
-			if (action === "trust") setTrustedContextFolderPath("");
+			setTrustedContextFolderPath("");
+		} catch (err) {
+			// RPC validation errors surface verbatim — no silent retry.
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setContextTrustMutating(false);
+		}
+	}
+
+	async function removeTrustedFolder(path: string) {
+		setError(undefined);
+		setContextTrustMutating(true);
+		try {
+			const result = await api.removeTrustedContextFolder(path);
+			mutate(result.settings);
 		} catch (err) {
 			// RPC validation errors surface verbatim — no silent retry.
 			setError(err instanceof Error ? err.message : String(err));
@@ -656,7 +670,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 														type="button"
 														class="btn btn-small btn-danger"
 														disabled={contextTrustMutating()}
-														onClick={() => void changeContextTrust("untrust", path)}
+														onClick={() => void removeTrustedFolder(path)}
 													>
 														{contextTrustMutating() ? "revoking…" : "revoke trust"}
 													</button>
@@ -669,7 +683,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										onSubmit={(event) => {
 											event.preventDefault();
 											const path = trustedContextFolderPath().trim();
-											if (path) void changeContextTrust("trust", path);
+											if (path) void addTrustedFolder(path);
 										}}
 									>
 										<label for="trusted-context-folder-path">add folder by path</label>

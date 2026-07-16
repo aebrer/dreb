@@ -24,4 +24,5 @@ export type {
 	RpcSettingsUpdate,
 	RpcSlashCommand,
 	RpcTreeNode,
+	RpcTrustedFolderRemovalResult,
 } from "./rpc-types.js";

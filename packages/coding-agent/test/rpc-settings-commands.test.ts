@@ -13,6 +13,7 @@ import {
 	evaluateContextTrustForRpc,
 	getSettingsForRpc,
 	listAgentTypesForRpc,
+	removeTrustedContextFolderForRpc,
 	runRpcMode,
 	setSettingsForRpc,
 	trustContextFolderForRpc,
@@ -790,6 +791,41 @@ describe("context trust RPC commands", () => {
 		});
 	});
 
+	it("removes configured trusted-folder strings without path resolution", async () => {
+		const dir = await createTempDir();
+		const root = join(dir, "root");
+		mkdirSync(root, { recursive: true });
+		const manager = SettingsManager.inMemory({
+			context: { autoLoadNested: true, trustedFolders: [root, "relative/legacy"] },
+		});
+
+		await expect(removeTrustedContextFolderForRpc(manager, root)).resolves.toMatchObject({
+			ok: true,
+			result: {
+				removedFolder: root,
+				settings: { autoLoadNestedContext: true, trustedContextFolders: ["relative/legacy"] },
+			},
+		});
+		expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual(["relative/legacy"]);
+
+		await expect(removeTrustedContextFolderForRpc(manager, "relative/legacy")).resolves.toMatchObject({
+			ok: true,
+			result: { removedFolder: "relative/legacy", settings: { trustedContextFolders: [] } },
+		});
+		expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual([]);
+	});
+
+	it("rejects malformed configured-folder removal payloads without mutation", async () => {
+		const manager = SettingsManager.inMemory({ context: { trustedFolders: ["relative/legacy"] } });
+
+		for (const path of [null, [], {}, "", 123]) {
+			const result = await removeTrustedContextFolderForRpc(manager, path);
+			expect(result).toMatchObject({ ok: false });
+			if (!result.ok) expect(result.error).toContain("non-empty string path");
+		}
+		expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual(["relative/legacy"]);
+	});
+
 	it("dispatches context trust commands from JSONL and rejects malformed wire paths without mutation", async () => {
 		const dir = await createTempDir();
 		const agentDir = join(dir, "agent");
@@ -854,6 +890,18 @@ describe("context trust RPC commands", () => {
 				success: true,
 				data: { removedRoot: canonicalRoot },
 			});
+			expect(await send({ type: "trust_context_folder", id: "trust-before-remove", path: root })).toMatchObject({
+				success: true,
+			});
+			expect(
+				await send({ type: "remove_trusted_context_folder", id: "remove-configured", path: canonicalRoot }),
+			).toMatchObject({
+				id: "remove-configured",
+				type: "response",
+				command: "remove_trusted_context_folder",
+				success: true,
+				data: { removedFolder: canonicalRoot, settings: { trustedContextFolders: [] } },
+			});
 
 			// Establish the policy whose preservation malformed JSON payloads must prove.
 			expect(await send({ type: "trust_context_folder", id: "trust-before-invalid", path: root })).toMatchObject({
@@ -874,6 +922,23 @@ describe("context trust RPC commands", () => {
 					expect(response).toMatchObject({ id, type: "response", command, success: false });
 					expect(response.error).toEqual(expect.any(String));
 				}
+			}
+			for (const [label, path] of [
+				["null", null],
+				["array", []],
+				["object", {}],
+				["empty", ""],
+				["number", 123],
+			] as const) {
+				const id = `remove_trusted_context_folder-${label}`;
+				const response = await send({ type: "remove_trusted_context_folder", id, path });
+				expect(response).toMatchObject({
+					id,
+					type: "response",
+					command: "remove_trusted_context_folder",
+					success: false,
+				});
+				expect(response.error).toEqual(expect.any(String));
 			}
 			expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual([canonicalRoot]);
 		} finally {
@@ -1057,6 +1122,7 @@ describe("RpcClient settings methods", () => {
 			grantingRoot: "/tmp/trusted",
 		};
 		const mutation = { evaluation, settings: snapshot, addedRoot: "/tmp/trusted" };
+		const removal = { settings: snapshot, removedFolder: "/tmp/trusted" };
 		client.send = vi
 			.fn()
 			.mockResolvedValueOnce({
@@ -1066,14 +1132,25 @@ describe("RpcClient settings methods", () => {
 				data: evaluation,
 			})
 			.mockResolvedValueOnce({ type: "response", command: "trust_context_folder", success: true, data: mutation })
-			.mockResolvedValueOnce({ type: "response", command: "untrust_context_folder", success: true, data: mutation });
+			.mockResolvedValueOnce({ type: "response", command: "untrust_context_folder", success: true, data: mutation })
+			.mockResolvedValueOnce({
+				type: "response",
+				command: "remove_trusted_context_folder",
+				success: true,
+				data: removal,
+			});
 
 		await expect(client.evaluateContextTrust("/tmp/trusted")).resolves.toEqual(evaluation);
 		await expect(client.trustContextFolder("/tmp/trusted")).resolves.toEqual(mutation);
 		await expect(client.untrustContextFolder("/tmp/trusted")).resolves.toEqual(mutation);
+		await expect(client.removeTrustedContextFolder("/tmp/trusted")).resolves.toEqual(removal);
 		expect(client.send).toHaveBeenNthCalledWith(1, { type: "evaluate_context_trust", path: "/tmp/trusted" });
 		expect(client.send).toHaveBeenNthCalledWith(2, { type: "trust_context_folder", path: "/tmp/trusted" });
 		expect(client.send).toHaveBeenNthCalledWith(3, { type: "untrust_context_folder", path: "/tmp/trusted" });
+		expect(client.send).toHaveBeenNthCalledWith(4, {
+			type: "remove_trusted_context_folder",
+			path: "/tmp/trusted",
+		});
 	});
 
 	it("setSettings rejects with the RPC error message on failure", async () => {

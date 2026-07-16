@@ -110,6 +110,18 @@ export function makeFakeClient() {
 			},
 			removedRoot: path,
 		})),
+		removeTrustedContextFolder: vi.fn(async (path: string) => ({
+			settings: {
+				autoLoadNestedContext: false,
+				trustedContextFolders: [],
+				effectiveTrustedContextRoots: [],
+				steeringMode: "all" as const,
+				followUpMode: "one-at-a-time" as const,
+				compactionEnabled: true,
+				retryEnabled: true,
+			},
+			removedFolder: path,
+		})),
 		listAgentTypes: vi.fn(async () => [{ name: "Explore", description: "Explore the codebase" }]),
 		getLastAssistantText: vi.fn(async () => "last assistant activity preview"),
 		listBackgroundAgents: vi.fn(async () => [] as unknown[]),

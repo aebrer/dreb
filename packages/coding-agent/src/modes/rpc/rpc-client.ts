@@ -28,6 +28,7 @@ import type {
 	RpcSettingsUpdate,
 	RpcSlashCommand,
 	RpcTreeNode,
+	RpcTrustedFolderRemovalResult,
 } from "./rpc-types.js";
 
 // ============================================================================
@@ -720,6 +721,12 @@ export class RpcClient {
 	async untrustContextFolder(path: string): Promise<RpcContextTrustMutationResult> {
 		const response = await this.send({ type: "untrust_context_folder", path });
 		return this.getData<RpcContextTrustMutationResult>(response);
+	}
+
+	/** Remove a configured trusted-folder string exactly as stored. */
+	async removeTrustedContextFolder(path: string): Promise<RpcTrustedFolderRemovalResult> {
+		const response = await this.send({ type: "remove_trusted_context_folder", path });
+		return this.getData<RpcTrustedFolderRemovalResult>(response);
 	}
 
 	// =========================================================================

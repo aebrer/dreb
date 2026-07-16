@@ -364,6 +364,27 @@ export class SettingsManager {
 		}
 	}
 
+	/**
+	 * Normalize the two known lazy-context trust fields of a `context` slice to fail-closed
+	 * defaults when malformed, preserving valid values and any unrelated keys. Used at persist
+	 * time so a single-field trust write cannot leave a malformed sibling (read fresh from disk)
+	 * that would invalidate — and therefore silently disable — the entire trust policy.
+	 */
+	private static sanitizeContextTrustSlice(nested: Record<string, unknown>): Record<string, unknown> {
+		const sanitized = { ...nested };
+		if ("autoLoadNested" in sanitized && typeof sanitized.autoLoadNested !== "boolean") {
+			sanitized.autoLoadNested = false;
+		}
+		if (
+			"trustedFolders" in sanitized &&
+			(!Array.isArray(sanitized.trustedFolders) ||
+				sanitized.trustedFolders.some((folder) => typeof folder !== "string"))
+		) {
+			sanitized.trustedFolders = [];
+		}
+		return sanitized;
+	}
+
 	/** Migrate old settings format to new format */
 	private static migrateSettings(settings: Record<string, unknown>): Settings {
 		// Migrate queueMode -> steeringMode
@@ -516,9 +537,16 @@ export class SettingsManager {
 					const nestedModified = modifiedNestedFields.get(field)!;
 					const baseNested = (currentFileSettings[field] as Record<string, unknown>) ?? {};
 					const inMemoryNested = value as Record<string, unknown>;
-					const mergedNested = { ...baseNested };
+					let mergedNested = { ...baseNested };
 					for (const nestedKey of nestedModified) {
 						mergedNested[nestedKey] = inMemoryNested[nestedKey];
+					}
+					// The global context-trust slice is security-sensitive: an untouched sibling
+					// is preserved from the fresh on-disk read above, but a malformed on-disk
+					// sibling must still collapse to a fail-closed default so a successful trust
+					// mutation cannot leave the whole policy invalid (and thus silently disabled).
+					if (scope === "global" && field === "context") {
+						mergedNested = SettingsManager.sanitizeContextTrustSlice(mergedNested);
 					}
 					(mergedSettings as Record<string, unknown>)[field] = mergedNested;
 				} else {
@@ -753,6 +781,22 @@ export class SettingsManager {
 			throw new Error("Trusted context folders must be an array of strings");
 		}
 
+		// Refresh the in-memory context slice from the external global file unless a context
+		// write is already pending, so an unspecified sibling reflects concurrent cross-process
+		// changes (e.g. a folder just untrusted elsewhere) instead of a stale in-memory value.
+		// A pending context write already owns the authoritative in-memory value; do not stomp
+		// it. Fail closed if the external file is unreadable.
+		if (!(this.storage instanceof InMemorySettingsStorage) && !this.modifiedFields.has("context")) {
+			const loaded = SettingsManager.tryLoadFromStorage(this.storage, "global");
+			if (loaded.error) {
+				this.recordError("global", loaded.error);
+				this.globalSettings = { ...this.globalSettings, context: undefined };
+			} else {
+				this.globalSettings = { ...this.globalSettings, context: loaded.settings.context };
+			}
+			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		}
+
 		const currentContext = this.globalSettings.context;
 		const current =
 			typeof currentContext === "object" && currentContext !== null && !Array.isArray(currentContext)
@@ -771,11 +815,16 @@ export class SettingsManager {
 			autoLoadNested,
 			trustedFolders: [...trustedFolders],
 		};
-		// Persist both fields rather than merging an unmodified sibling from disk. This is
-		// security-sensitive: malformed values must become fail-closed defaults on the
-		// next successful trust mutation, never survive to invalidate the whole policy.
-		this.markModified("context", "autoLoadNested");
-		this.markModified("context", "trustedFolders");
+		// Mark only the explicitly-supplied fields modified. persistScopedSettings then
+		// preserves an untouched sibling from the fresh on-disk slice read inside the storage
+		// lock, so a single-field write can no longer clobber a concurrent external change to
+		// the other field. Malformed on-disk siblings are still normalized fail-closed there.
+		if (update.autoLoadNested !== undefined) {
+			this.markModified("context", "autoLoadNested");
+		}
+		if (update.trustedFolders !== undefined) {
+			this.markModified("context", "trustedFolders");
+		}
 		this.save();
 	}
 

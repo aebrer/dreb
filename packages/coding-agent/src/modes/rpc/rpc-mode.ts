@@ -62,6 +62,7 @@ import type {
 	RpcSettingsUpdate,
 	RpcSlashCommand,
 	RpcTreeNode,
+	RpcTrustedFolderRemovalResult,
 } from "./rpc-types.js";
 
 // Re-export types for consumers
@@ -255,6 +256,7 @@ type SettingsWriter = SettingsReader &
 		| "setEnableSkillCommands"
 		| "setAutoLoadNestedContext"
 		| "setTrustedContextFolders"
+		| "removeTrustedContextFolder"
 		| "setContextTrust"
 		| "setTransport"
 		| "setHideThinkingBlock"
@@ -500,6 +502,47 @@ export async function untrustContextFolderForRpc(
 			evaluated.evaluation.canonicalTarget,
 			{ removedRoot },
 		);
+	});
+}
+
+/** Remove a configured trusted-folder string exactly as stored and flush the change. */
+export async function removeTrustedContextFolderForRpc(
+	settingsManager: SettingsWriter,
+	path: unknown,
+): Promise<{ ok: true; result: RpcTrustedFolderRemovalResult } | { ok: false; error: string }> {
+	return settingsWriteLock(async () => {
+		if (typeof path !== "string" || path.length === 0) {
+			return { ok: false as const, error: "remove_trusted_context_folder requires a non-empty string path" };
+		}
+
+		settingsManager.drainErrors();
+		if (settingsManager.hasGlobalSettingsLoadError()) {
+			return {
+				ok: false as const,
+				error: "Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)",
+			};
+		}
+
+		try {
+			settingsManager.removeTrustedContextFolder(path);
+			await settingsManager.flush();
+		} catch (error) {
+			// A security-policy mutation must not remain effective solely in memory when its
+			// durable write fails. Reload restores the last persisted global policy.
+			settingsManager.reload();
+			return { ok: false as const, error: `Failed to persist settings: ${(error as Error).message}` };
+		}
+		const writeErrors = settingsManager.drainErrors();
+		if (writeErrors.length > 0) {
+			const detail = writeErrors.map((e) => `${e.scope}: ${e.error.message}`).join("; ");
+			// SettingsManager records queued write failures rather than rejecting flush(). Its
+			// in-memory policy has already changed, so restore it from durable storage before
+			// reporting failure rather than leaving an undurable trust removal effective.
+			settingsManager.reload();
+			return { ok: false as const, error: `Failed to persist settings: ${detail}` };
+		}
+
+		return { ok: true as const, result: { settings: getSettingsForRpc(settingsManager), removedFolder: path } };
 	});
 }
 
@@ -1609,6 +1652,13 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return result.ok
 					? success(id, "untrust_context_folder", result.result)
 					: error(id, "untrust_context_folder", result.error);
+			}
+
+			case "remove_trusted_context_folder": {
+				const result = await removeTrustedContextFolderForRpc(session.settingsManager, command.path);
+				return result.ok
+					? success(id, "remove_trusted_context_folder", result.result)
+					: error(id, "remove_trusted_context_folder", result.error);
 			}
 
 			// =================================================================

@@ -532,6 +532,44 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[0].listAgentTypes).toHaveBeenCalled();
 	});
 
+	it("POST /api/settings/remove-trusted forwards raw configured paths to the utility runtime", async () => {
+		const { base, clients } = await startServer();
+		const res = await fetch(`${base}/api/settings/remove-trusted`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: "relative/legacy" }),
+		});
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toMatchObject({ removedFolder: "relative/legacy" });
+		expect(clients[0].removeTrustedContextFolder).toHaveBeenCalledWith("relative/legacy");
+		expect(clients[0].untrustContextFolder).not.toHaveBeenCalled();
+	});
+
+	it("POST /api/settings/remove-trusted rejects missing paths and surfaces RPC errors", async () => {
+		const { base, clients } = await startServer();
+		const missing = await fetch(`${base}/api/settings/remove-trusted`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: "" }),
+		});
+		expect(missing.status).toBe(400);
+		await expect(missing.json()).resolves.toEqual({ error: "path is required" });
+		expect(clients).toHaveLength(0);
+
+		await fetch(`${base}/api/settings`);
+		const utility = clients[0];
+		if (!utility) throw new Error("utility runtime was not created");
+		vi.mocked(utility.removeTrustedContextFolder).mockRejectedValueOnce(new Error("durable write failed"));
+		const failed = await fetch(`${base}/api/settings/remove-trusted`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: "/configured" }),
+		});
+		expect(failed.status).toBe(502);
+		await expect(failed.json()).resolves.toEqual({ error: "durable write failed" });
+	});
+
 	it("protects dashboard RPC data routes with auth middleware", async () => {
 		const dir = await createTempProject();
 		const { base } = await startServer();
@@ -555,6 +593,7 @@ describe("dashboard server — fleet and runtimes", () => {
 			"/api/daily-cost",
 			"/api/files/trust",
 			"/api/files/untrust",
+			"/api/settings/remove-trusted",
 		];
 
 		for (const path of paths) {

@@ -215,6 +215,12 @@ export interface ContextTrustMutationResultDto {
 	removedRoot?: string;
 }
 
+/** Result of removing a configured trusted-folder string exactly as stored. */
+export interface TrustedFolderRemovalResultDto {
+	settings: SettingsDto;
+	removedFolder: string;
+}
+
 /** Directory listing response. */
 export interface DirListingDto {
 	/** Canonicalized absolute path of the listed directory. */

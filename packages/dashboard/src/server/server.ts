@@ -527,6 +527,22 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 		withAnyRuntime(res, async (h) => ({ version: await h.client.getVersion() }));
 	});
 
+	app.post("/api/settings/remove-trusted", (req, res) => {
+		const rawPath = typeof req.body?.path === "string" ? req.body.path : "";
+		if (!rawPath) {
+			res.status(400).json({ error: "path is required" });
+			return;
+		}
+		pool
+			.ensureUtilityRuntime()
+			.then(async (handle) => {
+				const result = await handle.client.removeTrustedContextFolder(rawPath);
+				log(`context trust configured remove: ${rawPath}`);
+				res.json(result);
+			})
+			.catch((err) => res.status(err?.status ?? 502).json({ error: String(err?.message ?? err) }));
+	});
+
 	// -- server lifecycle ----------------------------------------------------------
 	// Build/version of the *server* process (distinct from a freshly-spawned RPC
 	// child's version) so a stale long-running service is visible at a glance.

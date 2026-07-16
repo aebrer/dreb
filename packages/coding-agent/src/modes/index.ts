@@ -23,4 +23,5 @@ export type {
 	RpcSettingsSetResult,
 	RpcSettingsSnapshot,
 	RpcSettingsUpdate,
+	RpcTrustedFolderRemovalResult,
 } from "./rpc/rpc-types.js";

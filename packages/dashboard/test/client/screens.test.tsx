@@ -99,6 +99,10 @@ vi.mock("../../src/client/api.js", () => ({
 			settings: {},
 			removedRoot: path,
 		})),
+		removeTrustedContextFolder: vi.fn(async (path: string) => ({
+			settings: {},
+			removedFolder: path,
+		})),
 		listFiles: vi.fn(async () => ({
 			path: "/home/test",
 			contextTrust: { canonicalTarget: "/home/test", state: "untrusted" },
@@ -320,6 +324,10 @@ afterEach(() => {
 		evaluation: { canonicalTarget: path, state: "untrusted" },
 		settings: {},
 		removedRoot: path,
+	}));
+	vi.mocked(api.removeTrustedContextFolder).mockImplementation(async (path: string) => ({
+		settings: {},
+		removedFolder: path,
 	}));
 	vi.mocked(api.listFiles).mockResolvedValue({
 		path: "/home/test",
@@ -1215,14 +1223,15 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("untrusted prompt-injection content");
 	});
 
-	it("settings lists trusted context folders and revokes a selected root", async () => {
+	it("settings lists trusted context folders and revokes a selected configured root", async () => {
+		vi.mocked(api.removeTrustedContextFolder).mockClear();
+		vi.mocked(api.untrustContextFolder).mockClear();
 		vi.mocked(api.settings).mockResolvedValue({
 			trustedContextFolders: ["/workspace/controlled", "/workspace/other"],
 		});
-		vi.mocked(api.untrustContextFolder).mockResolvedValueOnce({
-			evaluation: { canonicalTarget: "/workspace/controlled", state: "untrusted" },
+		vi.mocked(api.removeTrustedContextFolder).mockResolvedValueOnce({
 			settings: { trustedContextFolders: ["/workspace/other"] },
-			removedRoot: "/workspace/controlled",
+			removedFolder: "/workspace/controlled",
 		});
 		const store = makeStore();
 		const el = mount(() => <SettingsScreen store={store} />);
@@ -1234,9 +1243,58 @@ describe("screen smoke tests", () => {
 		revoke.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
-		expect(api.untrustContextFolder).toHaveBeenCalledWith("/workspace/controlled");
+		expect(api.removeTrustedContextFolder).toHaveBeenCalledWith("/workspace/controlled");
+		expect(api.untrustContextFolder).not.toHaveBeenCalled();
 		expect(el.textContent).not.toContain("/workspace/controlled");
 		expect(el.textContent).toContain("/workspace/other");
+	});
+
+	it("settings revokes stale configured trusted folders without resolving them", async () => {
+		vi.mocked(api.removeTrustedContextFolder).mockClear();
+		vi.mocked(api.untrustContextFolder).mockClear();
+		vi.mocked(api.settings).mockResolvedValue({ trustedContextFolders: ["relative/legacy", "/workspace/other"] });
+		vi.mocked(api.removeTrustedContextFolder).mockResolvedValueOnce({
+			settings: { trustedContextFolders: ["/workspace/other"] },
+			removedFolder: "relative/legacy",
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("relative/legacy");
+		const staleRow = [...el.querySelectorAll(".trusted-context-folder-row")].find((row) =>
+			row.textContent?.includes("relative/legacy"),
+		)!;
+		(staleRow.querySelector("button") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.removeTrustedContextFolder).toHaveBeenCalledWith("relative/legacy");
+		expect(api.untrustContextFolder).not.toHaveBeenCalled();
+		expect(el.textContent).not.toContain("relative/legacy");
+		expect(el.textContent).toContain("/workspace/other");
+	});
+
+	it("settings revokes configured roots while global expert context trust is on", async () => {
+		vi.mocked(api.removeTrustedContextFolder).mockClear();
+		vi.mocked(api.untrustContextFolder).mockClear();
+		vi.mocked(api.settings).mockResolvedValue({
+			autoLoadNestedContext: true,
+			trustedContextFolders: ["/workspace/controlled"],
+		});
+		vi.mocked(api.removeTrustedContextFolder).mockResolvedValueOnce({
+			settings: { autoLoadNestedContext: true, trustedContextFolders: [] },
+			removedFolder: "/workspace/controlled",
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent === "revoke trust")!.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.removeTrustedContextFolder).toHaveBeenCalledWith("/workspace/controlled");
+		expect(api.untrustContextFolder).not.toHaveBeenCalled();
+		expect(el.textContent).not.toContain("/workspace/controlled");
 	});
 
 	it("settings shows the trusted-context empty state", async () => {
@@ -1250,9 +1308,9 @@ describe("screen smoke tests", () => {
 		);
 	});
 
-	it("settings surfaces a trusted-context revoke error", async () => {
+	it("settings surfaces a trusted-context revoke error without mutating the list", async () => {
 		vi.mocked(api.settings).mockResolvedValue({ trustedContextFolders: ["/workspace/controlled"] });
-		vi.mocked(api.untrustContextFolder).mockRejectedValueOnce(new Error("trust write failed"));
+		vi.mocked(api.removeTrustedContextFolder).mockRejectedValueOnce(new Error("trust write failed"));
 		const store = makeStore();
 		const el = mount(() => <SettingsScreen store={store} />);
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1261,6 +1319,12 @@ describe("screen smoke tests", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(el.textContent).toContain("trust write failed");
+		expect(el.textContent).toContain("/workspace/controlled");
+		expect(el.textContent).not.toContain(
+			"No trusted folders. Use the Files view to trust a project folder and its descendants.",
+		);
+		const revoke = [...el.querySelectorAll("button")].find((button) => button.textContent === "revoke trust")!;
+		expect(revoke.disabled).toBe(false);
 	});
 
 	it("settings trusts a folder added by path", async () => {
@@ -1287,6 +1351,49 @@ describe("screen smoke tests", () => {
 
 		expect(api.trustContextFolder).toHaveBeenCalledWith("/workspace/controlled");
 		expect(el.textContent).toContain("/workspace/controlled");
+	});
+
+	it("settings keeps the add-by-path form stable when trusting a folder fails", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ trustedContextFolders: [] });
+		vi.mocked(api.trustContextFolder).mockRejectedValueOnce(new Error("path must be an existing directory"));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const input = el.querySelector("#trusted-context-folder-path") as HTMLInputElement;
+		input.value = "/workspace/missing";
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		(input.closest("form") as HTMLFormElement).dispatchEvent(
+			new Event("submit", { bubbles: true, cancelable: true }),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("path must be an existing directory");
+		expect(el.textContent).toContain(
+			"No trusted folders. Use the Files view to trust a project folder and its descendants.",
+		);
+		expect(input.value).toBe("/workspace/missing");
+		const submit = [...el.querySelectorAll("button")].find((button) => button.textContent === "trust folder")!;
+		expect(submit.disabled).toBe(false);
+	});
+
+	it("settings shows the trusted-context empty state after revoking the final root", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ trustedContextFolders: ["/workspace/controlled"] });
+		vi.mocked(api.removeTrustedContextFolder).mockResolvedValueOnce({
+			settings: { trustedContextFolders: [] },
+			removedFolder: "/workspace/controlled",
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent === "revoke trust")!.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).not.toContain("/workspace/controlled");
+		expect(el.textContent).toContain(
+			"No trusted folders. Use the Files view to trust a project folder and its descendants.",
+		);
 	});
 
 	it("settings renders expanded default rows and agent model defaults", async () => {

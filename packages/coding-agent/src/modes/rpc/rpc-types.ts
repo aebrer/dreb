@@ -106,6 +106,7 @@ export type RpcCommand =
 	| { id?: string; type: "evaluate_context_trust"; path: string }
 	| { id?: string; type: "trust_context_folder"; path: string }
 	| { id?: string; type: "untrust_context_folder"; path: string }
+	| { id?: string; type: "remove_trusted_context_folder"; path: string }
 
 	// Version
 	| { id?: string; type: "get_version" };
@@ -394,6 +395,13 @@ export type RpcResponse =
 			success: true;
 			data: RpcContextTrustMutationResult;
 	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "remove_trusted_context_folder";
+			success: true;
+			data: RpcTrustedFolderRemovalResult;
+	  }
 
 	// Version
 	| { id?: string; type: "response"; command: "get_version"; success: true; data: { version: string } }
@@ -549,6 +557,14 @@ export interface RpcContextTrustMutationResult {
 	addedRoot?: string;
 	/** Actual canonical granting root removed by untrust_context_folder. */
 	removedRoot?: string;
+}
+
+/** Post-write result of removing a configured trusted-folder string exactly as stored. */
+export interface RpcTrustedFolderRemovalResult {
+	/** Full settings snapshot after the durable write; its trust fields are global-only. */
+	settings: RpcSettingsSnapshot;
+	/** Configured folder string requested for exact removal. */
+	removedFolder: string;
 }
 
 export interface RpcSettingsUpdate {
