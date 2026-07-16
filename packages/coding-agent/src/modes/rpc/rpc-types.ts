@@ -28,6 +28,13 @@ export type RpcCommand =
 
 	// State
 	| { id?: string; type: "get_state" }
+	/**
+	 * Atomically captures dashboard-visible parent-session state. The RPC mode
+	 * writes a matching dashboard_snapshot_barrier immediately before its response;
+	 * consumers must use that barrier rather than promise timing to reconcile
+	 * later streamed events.
+	 */
+	| { id?: string; type: "get_dashboard_snapshot" }
 	| { id?: string; type: "get_resources" }
 	| { id?: string; type: "get_git_branch" }
 	| { id?: string; type: "get_daily_cost" }
@@ -163,9 +170,27 @@ export interface RpcPendingMessages {
 // RPC State
 // ============================================================================
 
+export interface RpcSessionTask {
+	id: string;
+	title: string;
+	status: "pending" | "in_progress" | "completed";
+}
+
+export interface RpcDashboardSnapshot {
+	/** Opaque token repeated by the immediately following barrier event. */
+	snapshotId: string;
+	state: RpcSessionState;
+	/** Complete parent transcript at the same RPC command boundary as state. */
+	messages: AgentMessage[];
+	/** Current background-agent registry at that boundary. */
+	backgroundAgents: RpcBackgroundAgentInfo[];
+}
+
 export interface RpcSessionState {
 	model?: Model<any>;
 	scopedModels: RpcScopedModel[];
+	/** Current in-memory task list, replaced atomically by the tasks_update tool. */
+	tasks: RpcSessionTask[];
 	usingSubscription: boolean;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
@@ -205,6 +230,7 @@ export type RpcResponse =
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
+	| { id?: string; type: "response"; command: "get_dashboard_snapshot"; success: true; data: RpcDashboardSnapshot }
 	| { id?: string; type: "response"; command: "get_resources"; success: true; data: RpcResources }
 	| { id?: string; type: "response"; command: "get_git_branch"; success: true; data: { branch: string | null } }
 	| { id?: string; type: "response"; command: "get_daily_cost"; success: true; data: { cost: number } }

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
+import { EventHub } from "../src/server/event-hub.js";
 import { RuntimePool } from "../src/server/runtime-pool.js";
 import { createDashboardServer, MAX_SSE_BUFFERED_BYTES, parseDeviceCookie } from "../src/server/server.js";
 import { makeFakeClient } from "./runtime-pool.test.js";
@@ -25,6 +26,8 @@ interface TestServerOptions {
 	staticDir?: string;
 	onRestart?: () => void;
 	logger?: (line: string) => void;
+	eventHub?: EventHub;
+	heartbeatIntervalMs?: number;
 }
 
 async function createTempProject(): Promise<string> {
@@ -48,18 +51,22 @@ interface RawSseConnection {
 	destroy: () => void;
 }
 
-async function openRawSse(base: string): Promise<RawSseConnection> {
+async function openRawSse(base: string, lastEventId?: number): Promise<RawSseConnection> {
 	const url = new URL("/api/events", base);
 	return new Promise((resolve, reject) => {
-		const req = request(url, (res) => {
-			let body = "";
-			res.setEncoding("utf8");
-			res.on("data", (chunk) => {
-				body += chunk;
-			});
-			const closed = new Promise<void>((resolveClosed) => res.on("close", resolveClosed));
-			resolve({ body: () => body, closed, destroy: () => req.destroy() });
-		});
+		const req = request(
+			url,
+			{ headers: lastEventId === undefined ? {} : { "last-event-id": String(lastEventId) } },
+			(res) => {
+				let body = "";
+				res.setEncoding("utf8");
+				res.on("data", (chunk) => {
+					body += chunk;
+				});
+				const closed = new Promise<void>((resolveClosed) => res.on("close", resolveClosed));
+				resolve({ body: () => body, closed, destroy: () => req.destroy() });
+			},
+		);
 		req.on("error", reject);
 		req.end();
 	});
@@ -83,6 +90,8 @@ async function startServer(options: TestServerOptions = {}) {
 		staticDir: options.staticDir,
 		onRestart: options.onRestart,
 		logger: options.logger ?? (() => {}),
+		eventHub: options.eventHub,
+		heartbeatIntervalMs: options.heartbeatIntervalMs,
 	});
 	const server = await new Promise<Server>((resolve) => {
 		const s = app.listen(0, "127.0.0.1", () => resolve(s));
@@ -266,6 +275,49 @@ describe("dashboard server — fleet and runtimes", () => {
 		const body = (await res.json()) as { runtimes: unknown[]; diskSessions: unknown[] };
 		expect(body.runtimes).toEqual([]);
 		expect(body.diskSessions).toEqual(disk);
+	});
+
+	it("GET /api/resync captures an active snapshot cursor without broadcasting a barrier", async () => {
+		const dir = await createTempProject();
+		const hub = new EventHub();
+		const frames: string[] = [];
+		hub.attach({
+			write: (frame) => {
+				frames.push(frame);
+				return true;
+			},
+		});
+		const { base, pool, clients } = await startServer({ eventHub: hub });
+		const runtime = await pool.create(dir);
+		clients[0].emit({ type: "before_snapshot" });
+
+		const res = await fetch(`${base}/api/resync?key=${runtime.key}`);
+		const body = (await res.json()) as {
+			active?: { barrierSeq: number; state: { tasks?: unknown[] } };
+			barrierSeq: number;
+		};
+
+		expect(res.status).toBe(200);
+		expect(body.active?.state.tasks).toEqual([]);
+		expect(body.active?.barrierSeq).toBe(1);
+		expect(body.barrierSeq).toBe(1);
+		expect(frames).toHaveLength(1);
+		expect(frames[0]).toContain('"type":"before_snapshot"');
+		clients[0].emit({ type: "after_snapshot" });
+		expect(frames[1]).toContain('"seq":2');
+	});
+
+	it("GET /api/resync without a runtime captures the current cursor without an SSE frame", async () => {
+		const hub = new EventHub();
+		hub.publish("k", { type: "existing" });
+		const { base } = await startServer({ eventHub: hub });
+
+		const res = await fetch(`${base}/api/resync`);
+		const body = (await res.json()) as { barrierSeq: number };
+
+		expect(res.status).toBe(200);
+		expect(body.barrierSeq).toBe(1);
+		expect(hub.currentSequence).toBe(1);
 	});
 
 	it("GET /api/fleet hides disk sessions whose cwd no longer exists", async () => {
@@ -639,6 +691,148 @@ describe("dashboard server — SSE", () => {
 		expect(buffer).toMatch(/id: \d+/);
 	});
 
+	it("sends unnumbered connection metadata and accepts only bounded known diagnostics", async () => {
+		const logs: string[] = [];
+		const { base } = await startServer({ logger: (line) => logs.push(line) });
+		const connection = await openRawSse(base);
+		try {
+			await waitUntil(() => connection.body().includes("event: connection"));
+			const id = connection.body().match(/event: connection\ndata: {"connectionId":"([^"]+)"}\n\n/)?.[1];
+			expect(id).toMatch(/^[0-9a-f-]{36}$/);
+			expect(connection.body().match(/event: connection\ndata: [\s\S]*?\n\n/)?.[0]).not.toContain("id:");
+			const summary = {
+				connectionId: id,
+				state: "connected",
+				attempt: 0,
+				visibility: "visible",
+				eventCount: 2,
+				eventRatePerMinute: 2,
+				processingLagTotalMs: 1,
+				processingLagMaxMs: 1,
+			};
+			await expect(
+				fetch(`${base}/api/events/diagnostic`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify(summary),
+				}),
+			).resolves.toMatchObject({ status: 200 });
+			expect(logs.join("\n")).toContain('"kind":"client_diagnostic"');
+			const limited = await fetch(`${base}/api/events/diagnostic`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(summary),
+			});
+			expect(limited.status).toBe(429);
+			const rejected = await fetch(`${base}/api/events/diagnostic`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ ...summary, prompt: "must not be accepted" }),
+			});
+			expect(rejected.status).toBe(400);
+		} finally {
+			connection.destroy();
+		}
+	});
+
+	it("sends direct named heartbeats with no event id", async () => {
+		const { base } = await startServer({ heartbeatIntervalMs: 5 });
+		const connection = await openRawSse(base);
+		try {
+			await waitUntil(() => connection.body().includes("event: heartbeat"));
+			const heartbeat = connection.body().match(/event: heartbeat\ndata: \{\}\n\n/)?.[0];
+			expect(heartbeat).toBeDefined();
+			expect(heartbeat).not.toContain("id:");
+		} finally {
+			connection.destroy();
+		}
+	});
+
+	it("sends a single resync barrier instead of an aggregate replay", async () => {
+		const dir = await createTempProject();
+		const logs: string[] = [];
+		const hub = new EventHub({ bufferBytes: 10_000, replayBytes: 150, eventBytes: 500 });
+		const { base, clients } = await startServer({ eventHub: hub, logger: (line) => logs.push(line) });
+		await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		clients[0].emit({ type: "one", text: "x".repeat(50) });
+		clients[0].emit({ type: "two", text: "x".repeat(50) });
+
+		const connection = await openRawSse(base, 0);
+		try {
+			await waitUntil(() => connection.body().includes("dashboard_resync"));
+			expect(connection.body()).toContain('"reason":"replay_over_budget"');
+			expect(connection.body()).not.toContain('"type":"one"');
+			expect(connection.body()).not.toContain('"type":"two"');
+			const diagnostics = logs
+				.filter((line) => line.startsWith("sse "))
+				.map((line) => JSON.parse(line.slice(4)) as Record<string, unknown>);
+			expect(diagnostics).toContainEqual(
+				expect.objectContaining({
+					kind: "resync",
+					reason: "replay_over_budget",
+					count: 1,
+					bytes: expect.any(Number),
+				}),
+			);
+			expect(logs.join("\n")).not.toContain("x".repeat(50));
+		} finally {
+			connection.destroy();
+		}
+	});
+
+	it("targets stale-cursor recovery without interrupting healthy SSE clients", async () => {
+		const dir = await createTempProject();
+		const hub = new EventHub({ bufferSize: 2, bufferBytes: 10_000, replayBytes: 10_000, eventBytes: 500 });
+		const { base, clients } = await startServer({ eventHub: hub });
+		await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const healthy = await openRawSse(base);
+		let stale: RawSseConnection | undefined;
+		try {
+			clients[0].emit({ type: "one" });
+			clients[0].emit({ type: "two" });
+			clients[0].emit({ type: "three" });
+			await waitUntil(() => healthy.body().includes('"type":"three"'));
+
+			stale = await openRawSse(base, 0);
+			await waitUntil(() => stale!.body().includes("dashboard_resync"));
+			expect(stale.body()).toContain('"seq":3');
+			expect(stale.body()).toContain('"reason":"buffer_gap"');
+			expect(stale.body()).not.toContain('"type":"two"');
+			expect(healthy.body()).not.toContain("dashboard_resync");
+
+			clients[0].emit({ type: "four" });
+			await waitUntil(() => healthy.body().includes('"type":"four"') && stale!.body().includes('"type":"four"'));
+			expect(healthy.body()).toContain('"seq":4');
+			expect(stale.body()).toContain('"seq":4');
+		} finally {
+			healthy.destroy();
+			stale?.destroy();
+		}
+	});
+
+	it("targets a server-restart cursor at sequence one without a global frame", async () => {
+		const hub = new EventHub();
+		const { base } = await startServer({ eventHub: hub });
+		const restartedClient = await openRawSse(base, 999);
+		try {
+			await waitUntil(() => restartedClient.body().includes("dashboard_resync"));
+			expect(restartedClient.body()).toContain('"seq":1');
+			expect(restartedClient.body()).toContain('"reason":"empty_buffer"');
+			expect(hub.historyCount).toBe(0);
+			expect(hub.currentSequence).toBe(1);
+		} finally {
+			restartedClient.destroy();
+		}
+	});
+
 	it("destroys over-buffered SSE clients and detaches them while other clients keep receiving events", async () => {
 		const dir = await createTempProject();
 		const logs: string[] = [];
@@ -695,8 +889,17 @@ describe("dashboard server — SSE", () => {
 			await waitUntil(() => fast!.body().includes("agent_end"));
 			await new Promise((resolve) => setTimeout(resolve, 25));
 			expect(writeCounts.get(eventResponses[0])).toBe(slowWriteCountAfterDestroy);
-			expect(logs.join("\n")).toContain("SSE client buffer exceeded");
-			expect(logs.join("\n")).toContain(String(MAX_SSE_BUFFERED_BYTES));
+			const diagnostics = logs
+				.filter((line) => line.startsWith("sse "))
+				.map((line) => JSON.parse(line.slice(4)) as Record<string, unknown>);
+			expect(diagnostics).toContainEqual(
+				expect.objectContaining({
+					kind: "backpressure",
+					writeKind: "live",
+					frameBytes: expect.any(Number),
+					writableLength: MAX_SSE_BUFFERED_BYTES + 1,
+				}),
+			);
 		} finally {
 			writeSpy.mockRestore();
 			slow?.destroy();

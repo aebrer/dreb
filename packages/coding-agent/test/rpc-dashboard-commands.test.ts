@@ -62,6 +62,25 @@ describe("RPC dashboard state/resources DTOs", () => {
 		}
 	});
 
+	it("includes the current task snapshot in get_state data", () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		const tasks = [
+			{ id: "read", title: "Read existing code", status: "completed" as const },
+			{ id: "fix", title: "Fix the RPC state", status: "in_progress" as const },
+		];
+		(session as unknown as { _tasks: typeof tasks })._tasks = tasks;
+
+		try {
+			const state = getStateForRpc(session);
+
+			expect(state.tasks).toEqual(tasks);
+			expect(state.tasks).not.toBe(tasks);
+			expect(state.tasks[0]).not.toBe(tasks[0]);
+		} finally {
+			cleanup();
+		}
+	});
+
 	it("includes OAuth subscription usage in get_state data", () => {
 		const { session, cleanup } = createTestSession({ inMemory: true });
 		const isUsingOAuth = vi.spyOn(session.modelRegistry, "isUsingOAuth").mockReturnValue(true);
@@ -176,6 +195,43 @@ describe("RpcClient dashboard command methods", () => {
 
 		await expect(client.getResources()).resolves.toBe(data);
 		expect(client.send).toHaveBeenCalledWith({ type: "get_resources" });
+	});
+
+	it("getDashboardSnapshot sends the ordered snapshot command", async () => {
+		const client = new RpcClient() as any;
+		const data = { snapshotId: "snap-1", state: { tasks: [] }, messages: [], backgroundAgents: [] };
+		client.send = vi
+			.fn()
+			.mockResolvedValue({ type: "response", command: "get_dashboard_snapshot", success: true, data });
+
+		await expect(client.getDashboardSnapshot()).resolves.toBe(data);
+		expect(client.send).toHaveBeenCalledWith({ type: "get_dashboard_snapshot" });
+	});
+
+	it("parses a snapshot barrier before the response promise microtask", async () => {
+		const client = new RpcClient() as any;
+		const order: string[] = [];
+		client.onEvent(() => order.push("barrier"));
+		const response = new Promise<void>((resolve) => {
+			client.pendingRequests.set("req_snapshot", { resolve, reject: vi.fn() });
+		}).then(() => order.push("response"));
+
+		// Wire order, not stdout chunk coalescing, guarantees that a barrier parsed
+		// in one chunk still precedes a response delivered in a later chunk.
+		client.handleLine(JSON.stringify({ type: "dashboard_snapshot_barrier", snapshotId: "snap-1" }));
+		await Promise.resolve();
+		client.handleLine(
+			JSON.stringify({
+				id: "req_snapshot",
+				type: "response",
+				command: "get_dashboard_snapshot",
+				success: true,
+				data: { snapshotId: "snap-1", state: { tasks: [] }, messages: [], backgroundAgents: [] },
+			}),
+		);
+		await response;
+
+		expect(order).toEqual(["barrier", "response"]);
 	});
 
 	it("getGitBranch sends get_git_branch and unwraps the branch", async () => {

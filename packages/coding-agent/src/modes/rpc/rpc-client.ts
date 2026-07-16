@@ -17,6 +17,7 @@ import type {
 	RpcCommand,
 	RpcContextTrustEvaluation,
 	RpcContextTrustMutationResult,
+	RpcDashboardSnapshot,
 	RpcExtensionUIResponse,
 	RpcPendingMessages,
 	RpcResources,
@@ -328,6 +329,16 @@ export class RpcClient {
 	 */
 	async getState(): Promise<RpcSessionState> {
 		const response = await this.send({ type: "get_state" });
+		return this.getData(response);
+	}
+
+	/**
+	 * Capture a dashboard recovery snapshot. The RPC stream emits a matching
+	 * `dashboard_snapshot_barrier` immediately before this response; consumers
+	 * need that event's EventHub sequence before applying the snapshot.
+	 */
+	async getDashboardSnapshot(): Promise<RpcDashboardSnapshot> {
+		const response = await this.send({ type: "get_dashboard_snapshot" });
 		return this.getData(response);
 	}
 

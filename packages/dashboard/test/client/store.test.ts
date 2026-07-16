@@ -7,6 +7,7 @@ vi.mock("../../src/client/api.js", () => ({
 	api: {
 		auth: vi.fn(),
 		fleet: vi.fn(),
+		resync: vi.fn(),
 		messages: vi.fn(),
 		backgroundAgents: vi.fn(),
 		runtime: vi.fn(),
@@ -56,6 +57,7 @@ function runtimeSnapshot(key: string, streaming: boolean): RuntimeInfoDto {
 		cwd: "/tmp/project",
 		state: {
 			sessionId: key,
+			tasks: [],
 			thinkingLevel: "off",
 			isStreaming: streaming,
 			isCompacting: false,
@@ -100,6 +102,7 @@ beforeEach(() => {
 	window.location.hash = "#/";
 	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
 	vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
+	vi.mocked(api.resync).mockResolvedValue({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 });
 	vi.mocked(api.messages).mockResolvedValue({ messages: [] });
 	vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
 	vi.mocked(api.runtime).mockResolvedValue(runtimeSnapshot("default", false));
@@ -146,15 +149,155 @@ describe("app store SSE sync", () => {
 		expect(store.sessions.b?.streaming).toBe(true);
 	});
 
-	it("dashboard_resync clears all session state (caller rehydrates)", async () => {
+	it("reconciles only envelopes after the explicit resync barrier", async () => {
+		const snapshot = runtimeSnapshot("a", true);
+		snapshot.state.tasks = [{ id: "restore", title: "restore tasks", status: "in_progress" }];
+		vi.mocked(api.resync).mockResolvedValue({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [{ role: "user", content: "from snapshot" }],
+				backgroundAgents: [],
+				barrierSeq: 3,
+			},
+			barrierSeq: 3,
+		});
 		const store = await makeStartedStore();
 
 		emit("a", { type: "agent_start" });
-		expect(store.sessions.a).toBeDefined();
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		// This pre-snapshot frame is represented by the authoritative snapshot,
+		// so applying it again would create a duplicate transcript entry. The HTTP
+		// barrier is authoritative; no second SSE reason=snapshot frame exists.
+		emit("a", { type: "message_start", message: { role: "user", content: "discard me" } });
+		await Promise.resolve();
+		emit("a", { type: "tasks_update", tasks: [{ id: "live", title: "live task", status: "completed" }] });
+		await Promise.resolve();
+
+		expect(store.sessions.a?.entries).toMatchObject([{ kind: "user", text: "from snapshot" }]);
+		expect(store.sessions.a?.tasks).toEqual([{ id: "live", title: "live task", status: "completed" }]);
+		expect(store.resyncing()).toBe(false);
+	});
+
+	it("replays subagent relays between its disk barrier and the parent snapshot barrier", async () => {
+		window.location.hash = "#/session/a/subagent/bg1";
+		const snapshot = runtimeSnapshot("a", true);
+		const delayed = deferred<{
+			fleet: { runtimes: RuntimeInfoDto[]; diskSessions: [] };
+			active: {
+				key: string;
+				state: RuntimeInfoDto["state"];
+				messages: unknown[];
+				backgroundAgents: BackgroundAgentDto[];
+				barrierSeq: number;
+				subagent: { agentId: string; agent: BackgroundAgentDto; messages: unknown[]; barrierSeq: number };
+			};
+			barrierSeq: number;
+		}>();
+		vi.mocked(api.resync).mockReturnValueOnce(delayed.promise);
+		const store = await makeStartedStore();
 
 		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
-		expect(store.sessions.a).toBeUndefined();
-		expect(store.revisions.a).toBeUndefined();
+		emit("a", {
+			type: "background_agent_event",
+			agentId: "bg1",
+			event: { type: "message_start", message: { role: "assistant" } },
+		});
+		emit("a", {
+			type: "background_agent_event",
+			agentId: "bg1",
+			event: { type: "message_update", assistantMessageEvent: { type: "text_start" } },
+		});
+		emit("a", {
+			type: "background_agent_event",
+			agentId: "bg1",
+			event: {
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", delta: "between barriers" },
+			},
+		});
+		delayed.resolve({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [],
+				backgroundAgents: [agentSnapshot("bg1", "running")],
+				barrierSeq: 4,
+				subagent: {
+					agentId: "bg1",
+					agent: agentSnapshot("bg1", "running"),
+					messages: [],
+					barrierSeq: 1,
+				},
+			},
+			barrierSeq: 4,
+		});
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(store.sessions.a?.subagents.bg1?.entries).toMatchObject([
+			{ kind: "assistant", blocks: [{ kind: "text", text: "between barriers" }] },
+		]);
+	});
+
+	it("coalesces a second barrier into one sequential follow-up snapshot", async () => {
+		const first = deferred<{ fleet: { runtimes: []; diskSessions: [] }; barrierSeq: number }>();
+		const second = deferred<{ fleet: { runtimes: []; diskSessions: [] }; barrierSeq: number }>();
+		vi.mocked(api.resync).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		expect(api.resync).toHaveBeenCalledOnce();
+		first.resolve({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 2 });
+		await vi.waitFor(() => expect(api.resync).toHaveBeenCalledTimes(2));
+		expect(store.resyncing()).toBe(true);
+		second.resolve({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 3 });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+	});
+
+	it("keeps a failed resync visible and starts a fresh transaction on retry or a later barrier", async () => {
+		vi.mocked(api.resync).mockRejectedValueOnce(new Error("snapshot failed"));
+		const store = await makeStartedStore();
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(store.resyncError()).toBe("snapshot failed");
+
+		vi.mocked(api.resync).mockResolvedValueOnce({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 2 });
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(api.resync).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+		expect(store.resyncError()).toBeUndefined();
+
+		vi.mocked(api.resync).mockRejectedValueOnce(new Error("retry failed"));
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await Promise.resolve();
+		await Promise.resolve();
+		const retry = store.retryResync();
+		await retry;
+		expect(api.resync).toHaveBeenCalledTimes(4);
+	});
+
+	it("fails loudly on recovery queue overflow and never applies its incomplete envelopes", async () => {
+		const delayed = deferred<{ fleet: { runtimes: []; diskSessions: [] }; barrierSeq: number }>();
+		vi.mocked(api.resync).mockReturnValueOnce(delayed.promise);
+		const store = await makeStartedStore();
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		for (let i = 0; i <= 2_000; i++) {
+			eventHandlers?.onEnvelope({ seq: 10 + i, key: "overflow", event: { type: "agent_start" } });
+		}
+		expect(store.resyncError()).toContain("queue overflowed");
+		expect(store.sessions.overflow).toBeUndefined();
+		// A later barrier requests a retry, but the first HTTP recovery must settle
+		// before another starts so resync remains single-flight.
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		expect(api.resync).toHaveBeenCalledOnce();
+		delayed.resolve({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 1 });
+		await vi.waitFor(() => expect(api.resync).toHaveBeenCalledTimes(2));
+		expect(store.sessions.overflow).toBeUndefined();
 	});
 
 	it("runtime_removed deletes session state, revision state, composer memory, and refreshes fleet", async () => {

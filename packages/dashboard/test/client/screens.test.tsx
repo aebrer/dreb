@@ -15,6 +15,8 @@ vi.mock("../../src/client/api.js", () => ({
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
+		resync: vi.fn(async () => ({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 })),
+		connectionDiagnostic: vi.fn(async () => ({ ok: true })),
 		messages: vi.fn(async () => ({ messages: [] })),
 		backgroundAgents: vi.fn(async () => ({ agents: [] })),
 		subagentMessages: vi.fn(async () => ({
@@ -148,6 +150,7 @@ vi.mock("../../src/client/api.js", () => ({
 }));
 
 import { api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
+import { ConnectionIndicator, Topbar } from "../../src/client/components/common.js";
 import {
 	TRANSCRIPT_WINDOW_SIZE,
 	Transcript,
@@ -476,6 +479,21 @@ function toolEntryFromEvents(params: {
 }
 
 describe("app store integration", () => {
+	it("topbar announces retrying live state with text, not color alone", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		if (!captured?.onStatusChange) throw new Error("connection status handler missing");
+		captured.onStatusChange({ state: "retrying", attempt: 2, retryDelayMs: 1500, retryAt: Date.now() + 1500 });
+		const el = mount(() => <Topbar store={store} active="fleet" />);
+		expect(el.textContent).toContain("retrying in 2s");
+		expect(el.querySelector("output")).not.toBeNull();
+	});
+
 	it("dismissToast removes reducer toast and does not resurrect after later sync", async () => {
 		let captured: EventStreamHandlers | undefined;
 		vi.mocked(connectEvents).mockImplementation((handlers) => {
@@ -507,10 +525,28 @@ describe("app store integration", () => {
 			captured = handlers;
 			return () => {};
 		});
-		vi.mocked(api.messages).mockResolvedValue({
-			messages: [{ role: "assistant", content: [{ type: "text", text: "fresh transcript" }] }],
+		vi.mocked(api.resync).mockResolvedValue({
+			fleet: { runtimes: [], diskSessions: [] },
+			active: {
+				key: "k-resync",
+				state: {
+					sessionId: "k-resync",
+					tasks: [],
+					thinkingLevel: "off",
+					isStreaming: false,
+					isCompacting: false,
+					steeringMode: "all",
+					followUpMode: "all",
+					autoCompactionEnabled: true,
+					messageCount: 1,
+					pendingMessageCount: 0,
+				},
+				messages: [{ role: "assistant", content: [{ type: "text", text: "fresh transcript" }] }],
+				backgroundAgents: [],
+				barrierSeq: 3,
+			},
+			barrierSeq: 3,
 		});
-		vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
 		window.location.hash = "#/session/k-resync";
 		const store = makeStore();
 
@@ -520,10 +556,9 @@ describe("app store integration", () => {
 		expect(store.sessions["k-resync"]?.streaming).toBe(true);
 
 		captured.onEnvelope({ seq: 2, key: "", event: { type: "dashboard_resync", reason: "buffer_gap" } });
-		captured.onResync?.();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(api.messages).toHaveBeenCalledWith("k-resync", undefined);
+		expect(api.resync).toHaveBeenCalledWith("k-resync", undefined, expect.any(AbortSignal));
 		expect(store.sessions["k-resync"]?.entries[0]?.kind).toBe("assistant");
 	});
 
@@ -1490,6 +1525,43 @@ describe("screen smoke tests", () => {
 });
 
 describe("dashboard client regressions", () => {
+	it("renders every connection state and exposes the failed recovery retry", async () => {
+		let handlers: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((next) => {
+			handlers = next;
+			return () => {};
+		});
+		const store = makeStore();
+		const el = mount(() => <ConnectionIndicator store={store} />);
+		await store.start();
+		if (!handlers) throw new Error("event handlers were not registered");
+
+		const states = [
+			["connected", "live"],
+			["connecting", "connecting"],
+			["retrying", "retrying in 2s"],
+			["resyncing", "recovering live state"],
+			["auth_failed", "live connection unauthorized"],
+			["disconnected", "live connection disconnected"],
+		] as const;
+		for (const [state, text] of states) {
+			handlers.onStatusChange?.({ state, attempt: 1, retryDelayMs: state === "retrying" ? 1_500 : undefined });
+			expect(el.textContent).toContain(text);
+		}
+
+		vi.mocked(api.resync).mockRejectedValueOnce(new Error("snapshot unavailable"));
+		handlers.onEnvelope({ seq: 1, key: "", event: { type: "dashboard_resync", reason: "buffer_gap" } });
+		await Promise.resolve();
+		await Promise.resolve();
+		const retry = [...el.querySelectorAll("button")].find((button) => button.textContent?.includes("retry"));
+		expect(retry?.textContent).toContain("recovery failed — retry");
+		vi.mocked(api.resync).mockResolvedValueOnce({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 1 });
+		const callsBeforeRetry = vi.mocked(api.resync).mock.calls.length;
+		retry?.click();
+		await Promise.resolve();
+		expect(api.resync).toHaveBeenCalledTimes(callsBeforeRetry + 1);
+	});
+
 	it("routes denied identities to the pairing denial screen without starting fleet or SSE", async () => {
 		vi.mocked(api.auth).mockRejectedValueOnce(
 			Object.assign(new Error('Tailscale identity "mallory@example.com" is not on the dashboard allowlist'), {

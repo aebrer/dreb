@@ -627,6 +627,11 @@ export class SettingsManager {
 		return this.globalSettingsLoadError !== null;
 	}
 
+	/** True when the project settings file failed to load or parse. */
+	hasProjectSettingsLoadError(): boolean {
+		return this.projectSettingsLoadError !== null;
+	}
+
 	drainErrors(): SettingsError[] {
 		const drained = [...this.errors];
 		this.errors = [];

@@ -56,14 +56,53 @@ export function Topbar(props: { store: AppStore; active: "fleet" | "files" | "se
 					</a>
 				</nav>
 				<span class="topbar-spacer" />
-				<Show when={!props.store.connected()}>
-					<span class="chip chip-error">
-						<span class="dot">✕</span> disconnected
-					</span>
-				</Show>
+				<ConnectionIndicator store={props.store} />
 				<ModeBadge store={props.store} />
 			</div>
 		</header>
+	);
+}
+
+export function ConnectionIndicator(props: { store: AppStore }): JSX.Element {
+	const status = () => (props.store.resyncing() ? "resyncing" : props.store.connection().state);
+	const presentation = () => {
+		switch (status()) {
+			case "connected":
+				return { glyph: "●", text: "live", tone: "idle" };
+			case "connecting":
+				return { glyph: "…", text: "connecting", tone: "attention" };
+			case "retrying": {
+				const delay = props.store.connection().retryDelayMs;
+				return {
+					glyph: "↻",
+					text: `retrying${delay === undefined ? "" : ` in ${Math.ceil(delay / 1000)}s`}`,
+					tone: "attention",
+				};
+			}
+			case "resyncing":
+				return { glyph: "↻", text: "recovering live state", tone: "attention" };
+			case "auth_failed":
+				return { glyph: "✕", text: "live connection unauthorized", tone: "error" };
+			default:
+				return { glyph: "✕", text: "live connection disconnected", tone: "error" };
+		}
+	};
+	return (
+		<span class="connection-indicator">
+			<output class={`chip chip-${presentation().tone}`} aria-live="polite">
+				<span class="dot">{presentation().glyph}</span> {presentation().text}
+			</output>
+			<Show when={props.store.resyncError()}>
+				<button
+					type="button"
+					class="btn btn-small"
+					title={props.store.resyncError()}
+					onClick={() => void props.store.retryResync()}
+				>
+					recovery failed — retry
+				</button>
+			</Show>
+		</span>
 	);
 }
 

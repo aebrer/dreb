@@ -103,6 +103,7 @@ export interface Toast {
 }
 
 export interface SessionTaskItem {
+	id: string;
 	title: string;
 	status: "pending" | "in_progress" | "completed";
 }

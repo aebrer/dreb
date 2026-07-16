@@ -19,6 +19,7 @@ export type {
 	RpcResponse,
 	RpcSessionInfo,
 	RpcSessionState,
+	RpcSessionTask,
 	RpcSettingsSetResult,
 	RpcSettingsSnapshot,
 	RpcSettingsUpdate,

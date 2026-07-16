@@ -5,9 +5,9 @@
  */
 
 import { createSignal } from "solid-js";
-import { createStore, produce, reconcile } from "solid-js/store";
-import type { AuthStatusDto, EventEnvelope, FleetDto } from "../../shared/protocol.js";
-import { api, connectEvents } from "../api.js";
+import { createStore, produce } from "solid-js/store";
+import type { ActiveRuntimeSnapshotDto, AuthStatusDto, EventEnvelope, FleetDto } from "../../shared/protocol.js";
+import { api, connectEvents, type EventConnectionStatus } from "../api.js";
 import { evictComposerMemory } from "./composer-memory.js";
 import {
 	applySessionEvent,
@@ -58,6 +58,15 @@ export function routeToHash(route: Route): string {
 }
 
 const MAX_NOTICES = 20;
+const MAX_PENDING_RESYNC_ENVELOPES = 2_000;
+const RESYNC_TIMEOUT_MS = 30_000;
+
+interface PendingResync {
+	queued: EventEnvelope[];
+	state: "active" | "failed";
+	controller: AbortController;
+	barrierSeq?: number;
+}
 
 interface HydrationGuardToken {
 	revision: number;
@@ -76,12 +85,19 @@ export function createAppStore() {
 	const [route, setRouteSignal] = createSignal<Route>(parseHash());
 	const [fleet, setFleet] = createSignal<FleetDto>({ runtimes: [], diskSessions: [] });
 	const [fleetError, setFleetError] = createSignal<string>();
+	const [resyncError, setResyncError] = createSignal<string>();
+	const [resyncing, setResyncing] = createSignal(false);
 	const [auth, setAuth] = createSignal<(AuthStatusDto & { needsPairing?: boolean; error?: string }) | undefined>();
 	const [connected, setConnected] = createSignal(false);
+	const [connection, setConnection] = createSignal<EventConnectionStatus>({ state: "disconnected", attempt: 0 });
 	const [notices, setNotices] = createSignal<Toast[]>([]);
 	const hydrationGenerations = new Map<string, number>();
 	let hydrationEpoch = 0;
 	let noticeCounter = 0;
+	let resyncPromise: Promise<void> | undefined;
+	let pendingResync: PendingResync | undefined;
+	let retryAfterCurrentResync = false;
+	let authoritativeBarrierSeq: number | undefined;
 
 	window.addEventListener("hashchange", () => setRouteSignal(parseHash()));
 
@@ -158,13 +174,9 @@ export function createAppStore() {
 		}
 	}
 
-	function handleEnvelope(envelope: EventEnvelope): void {
+	function applyEnvelope(envelope: EventEnvelope): void {
 		const type = envelope.event?.type as string | undefined;
-		if (type === "dashboard_resync") {
-			hydrationEpoch += 1;
-			setSessions(reconcile({}));
-			setRevisions(reconcile({}));
-		} else if (type === "runtime_removed") {
+		if (type === "runtime_removed") {
 			if (envelope.key) {
 				const wasViewingRemovedRuntime = routedSessionKey() === envelope.key;
 				deleteSessionState(envelope.key);
@@ -176,7 +188,6 @@ export function createAppStore() {
 		} else if (envelope.key) {
 			mutateSession(envelope.key, (session) => applySessionEvent(session, envelope.event));
 		}
-		// Fleet-affecting events refresh the overview lazily.
 		if (
 			type === "agent_start" ||
 			type === "agent_end" ||
@@ -184,26 +195,146 @@ export function createAppStore() {
 			type === "background_agent_end" ||
 			type === "runtime_removed"
 		) {
-			refreshFleet().catch(() => {
-				// Fleet refresh failing is non-fatal; next event retries.
-			});
+			refreshFleet().catch(() => {});
 		}
 	}
 
-	async function resyncFromServer(): Promise<void> {
-		await refreshFleet().catch(() => {});
-		const current = route();
-		try {
-			if (current.screen === "session") {
-				await hydrateSession(current.key);
-			} else if (current.screen === "subagent") {
-				await hydrateSession(current.key);
-				await hydrateSubagent(current.key, current.agentId);
+	function hydrateSnapshot(active: ActiveRuntimeSnapshotDto): void {
+		mutateSession(active.key, (session) => {
+			session.entries = messagesToEntries(active.messages as any[]);
+			session.tasks = (active.state.tasks ?? []).map((task) => ({ ...task }));
+			session.streaming = active.state.isStreaming;
+			session.compacting = active.state.isCompacting;
+			session.sessionName = active.state.sessionName;
+			session.model = active.state.model?.id;
+			session.contextUsage = active.state.contextUsage;
+			if (session.streaming && !session.workingSince) {
+				session.workingSince = Date.now();
+				session.workingText = session.workingText ?? "working";
+			} else if (!session.streaming) {
+				session.workingSince = undefined;
+				session.workingText = undefined;
 			}
-		} catch {
-			// Hydration failures surface when the user opens the route; keep the
-			// reconnect path from throwing out of the EventSource callback.
+			session.backgroundAgents = Object.fromEntries(active.backgroundAgents.map((agent) => [agent.agentId, agent]));
+			capBackgroundAgents(session);
+			if (active.subagent) {
+				session.backgroundAgents[active.subagent.agentId] = active.subagent.agent;
+				session.subagents[active.subagent.agentId] = {
+					agentId: active.subagent.agentId,
+					entries: messagesToEntries(active.subagent.messages as any[]),
+					streaming: active.subagent.agent.status === "running",
+				};
+			}
+		});
+	}
+
+	function finishResync(pending: PendingResync, snapshot: Awaited<ReturnType<typeof api.resync>>): void {
+		if (pendingResync !== pending || pending.state !== "active" || pending.barrierSeq === undefined) return;
+		const barrierSeq = pending.barrierSeq;
+		authoritativeBarrierSeq = barrierSeq;
+		setFleet(snapshot.fleet);
+		setFleetError(undefined);
+		if (snapshot.active) hydrateSnapshot(snapshot.active);
+		// /api/resync's barrierSeq is the parent snapshot ordering point. The
+		// subagent disk transcript is captured earlier, so relay its matching child
+		// events between that boundary and the parent barrier before normal replay.
+		const ordered = [...pending.queued].sort((a, b) => a.seq - b.seq);
+		const subagent = snapshot.active?.subagent;
+		if (subagent && snapshot.active) {
+			for (const envelope of ordered) {
+				if (
+					envelope.seq > subagent.barrierSeq &&
+					envelope.seq <= barrierSeq &&
+					envelope.key === snapshot.active.key &&
+					envelope.event.type === "background_agent_event" &&
+					String(envelope.event.agentId) === subagent.agentId
+				) {
+					applyEnvelope(envelope);
+				}
+			}
 		}
+		for (const envelope of ordered) {
+			if (envelope.seq > barrierSeq) applyEnvelope(envelope);
+		}
+		pendingResync = undefined;
+		setResyncing(false);
+		setResyncError(undefined);
+	}
+
+	function beginResync(queueAfterCurrent = false): Promise<void> {
+		if (resyncPromise) {
+			if (queueAfterCurrent || pendingResync?.state === "failed") retryAfterCurrentResync = true;
+			return resyncPromise;
+		}
+		const current = route();
+		const key = current.screen === "session" || current.screen === "subagent" ? current.key : undefined;
+		const agentId = current.screen === "subagent" ? current.agentId : undefined;
+		// A failed or overflowed transaction is intentionally discarded. Its queue
+		// cannot safely be applied; this request obtains a newer authoritative view.
+		const pending: PendingResync = { queued: [], state: "active", controller: new AbortController() };
+		pendingResync = pending;
+		// Invalidate pre-barrier REST hydrations without clearing the currently
+		// rendered state; the ordered snapshot will replace it only once ready.
+		hydrationEpoch += 1;
+		setResyncing(true);
+		setResyncError(undefined);
+		const timeout = setTimeout(() => pending.controller.abort("Dashboard recovery timed out"), RESYNC_TIMEOUT_MS);
+		let request: Promise<void>;
+		request = api
+			.resync(key, agentId, pending.controller.signal)
+			.then((snapshot) => {
+				pending.barrierSeq = snapshot.barrierSeq;
+				finishResync(pending, snapshot);
+			})
+			.catch((err) => {
+				if (pendingResync !== pending) return;
+				pending.state = "failed";
+				const reason = pending.controller.signal.reason;
+				setResyncError(typeof reason === "string" ? reason : err instanceof Error ? err.message : String(err));
+				setResyncing(false);
+			})
+			.finally(() => {
+				clearTimeout(timeout);
+				if (resyncPromise === request) resyncPromise = undefined;
+				if (retryAfterCurrentResync) {
+					retryAfterCurrentResync = false;
+					void beginResync();
+				}
+			});
+		resyncPromise = request;
+		return request;
+	}
+
+	function retryResync(): Promise<void> {
+		return beginResync(true);
+	}
+
+	function handleEnvelope(envelope: EventEnvelope): void {
+		const type = envelope.event?.type as string | undefined;
+		if (type === "dashboard_resync") {
+			// A later barrier may represent another gap beyond the in-flight snapshot.
+			// Coalesce it into one sequential follow-up without overlapping requests.
+			void beginResync(true);
+			return;
+		}
+		if (pendingResync) {
+			if (pendingResync.state === "failed") return;
+			if (pendingResync.queued.length >= MAX_PENDING_RESYNC_ENVELOPES) {
+				pendingResync.queued = [];
+				pendingResync.state = "failed";
+				setResyncing(false);
+				const message = "Dashboard recovery queue overflowed; waiting for a newer authoritative snapshot";
+				setResyncError(message);
+				pendingResync.controller.abort(message);
+				return;
+			}
+			// Queue even a lower number while a restart transaction is active: its
+			// replacement snapshot may establish a new sequence domain.
+			pendingResync.queued.push(envelope);
+			return;
+		}
+		if (authoritativeBarrierSeq !== undefined && envelope.seq <= authoritativeBarrierSeq) return;
+		applyEnvelope(envelope);
 	}
 
 	let disconnect: (() => void) | undefined;
@@ -225,15 +356,23 @@ export function createAppStore() {
 		await refreshFleet().catch(() => {});
 		disconnect = connectEvents({
 			onEnvelope: handleEnvelope,
-			onStatusChange: setConnected,
-			onResync: () => {
-				resyncFromServer().catch(() => {});
+			onStatusChange: (status) => {
+				setConnection(status);
+				setConnected(status.state === "connected");
+			},
+			onRecovery: () => {
+				// connectEvents has already closed the stale source. The store owns the
+				// authoritative snapshot transaction and dashboard_resync envelopes.
+				void beginResync();
 			},
 		});
 	}
 
 	function stop(): void {
 		disconnect?.();
+		const pending = pendingResync;
+		pendingResync = undefined;
+		pending?.controller.abort("Dashboard stopped");
 	}
 
 	function dismissToast(id: number): void {
@@ -283,6 +422,7 @@ export function createAppStore() {
 				// the agent is visibly running.
 				if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
 					const state = runtimeResult.value.state;
+					session.tasks = (state.tasks ?? []).map((task) => ({ ...task }));
 					session.streaming = state.isStreaming;
 					session.compacting = state.isCompacting;
 					if (state.isStreaming && !session.workingSince) {
@@ -332,8 +472,12 @@ export function createAppStore() {
 		fleet,
 		fleetError,
 		refreshFleet,
+		resyncing,
+		resyncError,
+		retryResync,
 		auth,
 		connected,
+		connection,
 		notices,
 		start,
 		stop,
