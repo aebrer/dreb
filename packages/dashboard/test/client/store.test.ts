@@ -180,6 +180,42 @@ describe("app store SSE sync", () => {
 		expect(store.resyncing()).toBe(false);
 	});
 
+	it("keeps later parent registry metadata while hydrating an earlier subagent transcript", async () => {
+		const snapshot = runtimeSnapshot("a", false);
+		const activeAgent = agentSnapshot("bg1", "running");
+		const parentAgent = { ...agentSnapshot("bg1", "completed"), sessionFile: "/tmp/bg1.jsonl" };
+		vi.mocked(api.resync).mockResolvedValueOnce({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [],
+				backgroundAgents: [parentAgent],
+				barrierSeq: 1,
+				subagent: {
+					agentId: "bg1",
+					agent: activeAgent,
+					messages: [{ role: "assistant", content: [{ type: "text", text: "disk transcript" }] }],
+					barrierSeq: 1,
+				},
+			},
+			barrierSeq: 1,
+		});
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.backgroundAgents.bg1).toMatchObject({
+			status: "completed",
+			sessionFile: "/tmp/bg1.jsonl",
+		});
+		expect(store.sessions.a?.subagents.bg1).toMatchObject({
+			streaming: false,
+			entries: [{ kind: "assistant", blocks: [{ kind: "text", text: "disk transcript" }] }],
+		});
+	});
+
 	it("replays subagent relays between its disk barrier and the parent snapshot barrier", async () => {
 		window.location.hash = "#/session/a/subagent/bg1";
 		const snapshot = runtimeSnapshot("a", true);
@@ -298,6 +334,65 @@ describe("app store SSE sync", () => {
 		delayed.resolve({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 1 });
 		await vi.waitFor(() => expect(api.resync).toHaveBeenCalledTimes(2));
 		expect(store.sessions.overflow).toBeUndefined();
+	});
+
+	it("reconciles ordinary queued envelopes below both recovery limits", async () => {
+		const delayed = deferred<{ fleet: { runtimes: []; diskSessions: [] }; barrierSeq: number }>();
+		vi.mocked(api.resync).mockReturnValueOnce(delayed.promise);
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		emit("ordinary-queue", { type: "agent_start" });
+		delayed.resolve({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions["ordinary-queue"]?.streaming).toBe(true);
+	});
+
+	it("fails on byte overflow before the envelope count limit and discards the partial queue", async () => {
+		const delayed = deferred<{ fleet: { runtimes: []; diskSessions: [] }; barrierSeq: number }>();
+		vi.mocked(api.resync).mockReturnValueOnce(delayed.promise);
+		const store = await makeStartedStore();
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		const projectedFrame = "x".repeat(1_000_000);
+
+		for (let i = 0; i < 4; i++) {
+			eventHandlers?.onEnvelope({
+				seq: 10 + i,
+				key: "byte-overflow",
+				event: { type: "agent_start", projectedFrame },
+			});
+		}
+
+		expect(store.resyncError()).toContain("queue overflowed");
+		expect(store.sessions["byte-overflow"]).toBeUndefined();
+		expect(api.resync).toHaveBeenCalledOnce();
+		// The queue has only four envelopes, far below the 2,000-envelope cap.
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		delayed.resolve({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 1 });
+		await vi.waitFor(() => expect(api.resync).toHaveBeenCalledTimes(2));
+		expect(store.sessions["byte-overflow"]).toBeUndefined();
+	});
+
+	it("times out a pending resync through its AbortSignal", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.mocked(api.resync).mockImplementationOnce((_key, _agentId, signal) => rejectAfterAbort(signal));
+			const store = await makeStartedStore();
+
+			emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+			const signal = vi.mocked(api.resync).mock.calls[0]?.[2];
+			expect(signal?.aborted).toBe(false);
+
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			expect(signal?.aborted).toBe(true);
+			expect(signal?.reason).toBe("Dashboard recovery timed out");
+			expect(store.resyncError()).toBe("Dashboard recovery timed out");
+			expect(store.resyncing()).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("runtime_removed deletes session state, revision state, composer memory, and refreshes fleet", async () => {

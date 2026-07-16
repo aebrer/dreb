@@ -119,6 +119,23 @@ describe("connectEvents lifecycle", () => {
 		result.disconnect();
 	});
 
+	it("closes and resumes from the last applied cursor after a numeric sequence gap", async () => {
+		vi.useFakeTimers();
+		const applied: number[] = [];
+		const result = setup();
+		const first = result.source();
+		result.onEnvelope.mockImplementation((item) => applied.push(item.seq));
+		first.open();
+		first.message(envelope(1));
+		first.message(envelope(3));
+		expect(first.closed).toBe(true);
+		expect(result.recovery).toHaveBeenCalledWith("protocol");
+		expect(applied).toEqual([1]);
+		await vi.advanceTimersByTimeAsync(100);
+		expect(result.source().url).toBe("/api/events?lastEventId=1");
+		result.disconnect();
+	});
+
 	it("accepts a resync barrier across an evicted range or server sequence reset", () => {
 		const applied: number[] = [];
 		const result = setup();

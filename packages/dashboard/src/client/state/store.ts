@@ -59,10 +59,14 @@ export function routeToHash(route: Route): string {
 
 const MAX_NOTICES = 20;
 const MAX_PENDING_RESYNC_ENVELOPES = 2_000;
+/** Matches the server's replay budget and bounds projected frame retention in the browser. */
+const MAX_PENDING_RESYNC_BYTES = 3 * 1024 * 1024;
 const RESYNC_TIMEOUT_MS = 30_000;
+const textEncoder = new TextEncoder();
 
 interface PendingResync {
 	queued: EventEnvelope[];
+	queuedBytes: number;
 	state: "active" | "failed";
 	controller: AbortController;
 	barrierSeq?: number;
@@ -174,6 +178,15 @@ export function createAppStore() {
 		}
 	}
 
+	function encodedEnvelopeBytes(envelope: EventEnvelope): number {
+		return textEncoder.encode(JSON.stringify(envelope)).byteLength;
+	}
+
+	function clearPendingQueue(pending: PendingResync): void {
+		pending.queued = [];
+		pending.queuedBytes = 0;
+	}
+
 	function applyEnvelope(envelope: EventEnvelope): void {
 		const type = envelope.event?.type as string | undefined;
 		if (type === "runtime_removed") {
@@ -218,11 +231,16 @@ export function createAppStore() {
 			session.backgroundAgents = Object.fromEntries(active.backgroundAgents.map((agent) => [agent.agentId, agent]));
 			capBackgroundAgents(session);
 			if (active.subagent) {
-				session.backgroundAgents[active.subagent.agentId] = active.subagent.agent;
+				// The parent registry is captured after the subagent transcript, so it
+				// is authoritative when it contains this agent.
+				const agent =
+					active.backgroundAgents.find((parentAgent) => parentAgent.agentId === active.subagent.agentId) ??
+					active.subagent.agent;
+				session.backgroundAgents[active.subagent.agentId] = agent;
 				session.subagents[active.subagent.agentId] = {
 					agentId: active.subagent.agentId,
 					entries: messagesToEntries(active.subagent.messages as any[]),
-					streaming: active.subagent.agent.status === "running",
+					streaming: agent.status === "running",
 				};
 			}
 		});
@@ -256,6 +274,7 @@ export function createAppStore() {
 		for (const envelope of ordered) {
 			if (envelope.seq > barrierSeq) applyEnvelope(envelope);
 		}
+		clearPendingQueue(pending);
 		pendingResync = undefined;
 		setResyncing(false);
 		setResyncError(undefined);
@@ -271,7 +290,7 @@ export function createAppStore() {
 		const agentId = current.screen === "subagent" ? current.agentId : undefined;
 		// A failed or overflowed transaction is intentionally discarded. Its queue
 		// cannot safely be applied; this request obtains a newer authoritative view.
-		const pending: PendingResync = { queued: [], state: "active", controller: new AbortController() };
+		const pending: PendingResync = { queued: [], queuedBytes: 0, state: "active", controller: new AbortController() };
 		pendingResync = pending;
 		// Invalidate pre-barrier REST hydrations without clearing the currently
 		// rendered state; the ordered snapshot will replace it only once ready.
@@ -289,6 +308,7 @@ export function createAppStore() {
 			.catch((err) => {
 				if (pendingResync !== pending) return;
 				pending.state = "failed";
+				clearPendingQueue(pending);
 				const reason = pending.controller.signal.reason;
 				setResyncError(typeof reason === "string" ? reason : err instanceof Error ? err.message : String(err));
 				setResyncing(false);
@@ -319,8 +339,12 @@ export function createAppStore() {
 		}
 		if (pendingResync) {
 			if (pendingResync.state === "failed") return;
-			if (pendingResync.queued.length >= MAX_PENDING_RESYNC_ENVELOPES) {
-				pendingResync.queued = [];
+			const envelopeBytes = encodedEnvelopeBytes(envelope);
+			if (
+				pendingResync.queued.length >= MAX_PENDING_RESYNC_ENVELOPES ||
+				pendingResync.queuedBytes + envelopeBytes > MAX_PENDING_RESYNC_BYTES
+			) {
+				clearPendingQueue(pendingResync);
 				pendingResync.state = "failed";
 				setResyncing(false);
 				const message = "Dashboard recovery queue overflowed; waiting for a newer authoritative snapshot";
@@ -331,6 +355,7 @@ export function createAppStore() {
 			// Queue even a lower number while a restart transaction is active: its
 			// replacement snapshot may establish a new sequence domain.
 			pendingResync.queued.push(envelope);
+			pendingResync.queuedBytes += envelopeBytes;
 			return;
 		}
 		if (authoritativeBarrierSeq !== undefined && envelope.seq <= authoritativeBarrierSeq) return;
@@ -372,6 +397,7 @@ export function createAppStore() {
 		disconnect?.();
 		const pending = pendingResync;
 		pendingResync = undefined;
+		if (pending) clearPendingQueue(pending);
 		pending?.controller.abort("Dashboard stopped");
 	}
 
