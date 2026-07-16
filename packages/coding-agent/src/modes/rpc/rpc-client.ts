@@ -15,6 +15,8 @@ import type {
 	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,
 	RpcCommand,
+	RpcContextTrustEvaluation,
+	RpcContextTrustMutationResult,
 	RpcExtensionUIResponse,
 	RpcPendingMessages,
 	RpcResources,
@@ -700,6 +702,24 @@ export class RpcClient {
 	async setSettings(settings: RpcSettingsUpdate): Promise<RpcSettingsSetResult> {
 		const response = await this.send({ type: "set_settings", settings });
 		return this.getData<RpcSettingsSetResult>(response);
+	}
+
+	/** Evaluate an existing directory against the server's global context-trust policy. */
+	async evaluateContextTrust(path: string): Promise<RpcContextTrustEvaluation> {
+		const response = await this.send({ type: "evaluate_context_trust", path });
+		return this.getData<RpcContextTrustEvaluation>(response);
+	}
+
+	/** Add an existing directory as a canonical global trusted context root. */
+	async trustContextFolder(path: string): Promise<RpcContextTrustMutationResult> {
+		const response = await this.send({ type: "trust_context_folder", path });
+		return this.getData<RpcContextTrustMutationResult>(response);
+	}
+
+	/** Remove the root that currently grants the directory context trust. */
+	async untrustContextFolder(path: string): Promise<RpcContextTrustMutationResult> {
+		const response = await this.send({ type: "untrust_context_folder", path });
+		return this.getData<RpcContextTrustMutationResult>(response);
 	}
 
 	// =========================================================================

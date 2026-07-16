@@ -407,8 +407,9 @@ export class SettingsSelectorComponent extends Container {
 			},
 			{
 				id: "auto-load-nested-context",
-				label: "Auto-load nested context",
-				description: "Load a directory's AGENTS.md/CLAUDE.md automatically the first time a tool operates there",
+				label: "Unrestricted nested context loading (expert)",
+				description:
+					"OFF by default. Expert-only: automatically loads AGENTS.md/CLAUDE.md from every tool target; untrusted files can contain prompt injection.",
 				currentValue: config.autoLoadNestedContext ? "true" : "false",
 				values: ["true", "false"],
 			},

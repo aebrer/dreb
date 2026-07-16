@@ -103,6 +103,9 @@ export type RpcCommand =
 	// Settings (persistent defaults)
 	| { id?: string; type: "get_settings" }
 	| { id?: string; type: "set_settings"; settings: RpcSettingsUpdate }
+	| { id?: string; type: "evaluate_context_trust"; path: string }
+	| { id?: string; type: "trust_context_folder"; path: string }
+	| { id?: string; type: "untrust_context_folder"; path: string }
 
 	// Version
 	| { id?: string; type: "get_version" };
@@ -485,8 +488,12 @@ export interface RpcSettingsSnapshot {
 	blockImages?: boolean;
 	/** Whether skills are registered as slash commands */
 	enableSkillCommands?: boolean;
-	/** Whether nested AGENTS.md/CLAUDE.md context auto-loads when tools enter subdirectories */
-	autoLoadNestedContext?: boolean;
+	/** Global-only expert opt-in allowing nested context from any resolvable directory. Defaults to false. */
+	autoLoadNestedContext: boolean;
+	/** Global configured trusted context folders, including any currently invalid legacy entries. */
+	trustedContextFolders: string[];
+	/** Canonical existing trusted roots actually enforced by the global trust matcher. */
+	effectiveTrustedContextRoots: string[];
 	/** Preferred model transport */
 	transport?: Transport;
 	/** Whether raw thinking blocks are hidden in rendered transcripts */
@@ -503,6 +510,26 @@ export type RpcSettingsSetResult = RpcSettingsSnapshot & { warnings?: string[] }
  * must be present. `defaultProvider` and `defaultModel` must be supplied together.
  * Writes persistent defaults only — never touches live session state.
  */
+export interface RpcContextTrustEvaluation {
+	/** Strict-native-realpath canonical existing directory supplied by the caller. */
+	canonicalTarget: string;
+	/** The current global policy source granting (or denying) nested context. */
+	state: "untrusted" | "trusted-root" | "unrestricted";
+	/** Canonical configured root that grants trusted-root access, including inherited access. */
+	grantingRoot?: string;
+}
+
+/** Post-write result of trusting or untrusting a context directory. */
+export interface RpcContextTrustMutationResult {
+	evaluation: RpcContextTrustEvaluation;
+	/** Full settings snapshot after the durable write; its trust fields are global-only. */
+	settings: RpcSettingsSnapshot;
+	/** Canonical root added by trust_context_folder. */
+	addedRoot?: string;
+	/** Actual canonical granting root removed by untrust_context_folder. */
+	removedRoot?: string;
+}
+
 export interface RpcSettingsUpdate {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -515,6 +542,8 @@ export interface RpcSettingsUpdate {
 	blockImages?: boolean;
 	enableSkillCommands?: boolean;
 	autoLoadNestedContext?: boolean;
+	/** Replaces global trusted folders atomically; values persist as canonical existing roots. */
+	trustedContextFolders?: string[];
 	transport?: Transport;
 	hideThinkingBlock?: boolean;
 	agentModels?: Record<string, string[]>;

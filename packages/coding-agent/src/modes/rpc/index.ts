@@ -12,6 +12,8 @@ export type {
 	RpcBackgroundAgentInfo,
 	RpcCommand,
 	RpcCommandType,
+	RpcContextTrustEvaluation,
+	RpcContextTrustMutationResult,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,

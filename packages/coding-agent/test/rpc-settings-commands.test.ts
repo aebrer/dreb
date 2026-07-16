@@ -1,12 +1,19 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@dreb/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SettingsManager } from "../src/core/settings-manager.js";
+import { SettingsManager, type SettingsStorage } from "../src/core/settings-manager.js";
 import { RpcClient } from "../src/modes/rpc/rpc-client.js";
-import { getSettingsForRpc, listAgentTypesForRpc, setSettingsForRpc } from "../src/modes/rpc/rpc-mode.js";
+import {
+	evaluateContextTrustForRpc,
+	getSettingsForRpc,
+	listAgentTypesForRpc,
+	setSettingsForRpc,
+	trustContextFolderForRpc,
+	untrustContextFolderForRpc,
+} from "../src/modes/rpc/rpc-mode.js";
 import type { RpcSettingsSnapshot } from "../src/modes/rpc/rpc-types.js";
 
 const tempDirs: string[] = [];
@@ -47,7 +54,9 @@ describe("getSettingsForRpc", () => {
 			imageAutoResize: true,
 			blockImages: false,
 			enableSkillCommands: true,
-			autoLoadNestedContext: true,
+			autoLoadNestedContext: false,
+			trustedContextFolders: [],
+			effectiveTrustedContextRoots: [],
 			transport: "sse",
 			hideThinkingBlock: false,
 			agentModels: {},
@@ -83,10 +92,37 @@ describe("getSettingsForRpc", () => {
 			blockImages: true,
 			enableSkillCommands: false,
 			autoLoadNestedContext: false,
+			trustedContextFolders: [],
+			effectiveTrustedContextRoots: [],
 			transport: "websocket",
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
 		});
+	});
+
+	it("reports configured global folders separately from enforceable roots and ignores project trust overrides", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		const trusted = join(dir, "trusted");
+		const directFile = join(dir, "not-a-directory");
+		mkdirSync(join(projectDir, ".dreb"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(trusted, { recursive: true });
+		writeFileSync(directFile, "not a directory");
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ context: { autoLoadNested: false, trustedFolders: [trusted, directFile] } }),
+		);
+		writeFileSync(
+			join(projectDir, ".dreb", "settings.json"),
+			JSON.stringify({ context: { autoLoadNested: true, trustedFolders: [projectDir] } }),
+		);
+
+		const snapshot = getSettingsForRpc(SettingsManager.create(projectDir, agentDir));
+		expect(snapshot.autoLoadNestedContext).toBe(false);
+		expect(snapshot.trustedContextFolders).toEqual([trusted, directFile]);
+		expect(snapshot.effectiveTrustedContextRoots).toEqual([trusted]);
 	});
 });
 
@@ -235,6 +271,21 @@ describe("setSettingsForRpc validation", () => {
 		expect(result.error).toContain("Model not found: openai/gpt-42");
 	});
 
+	it("rejects invalid trusted folders atomically", async () => {
+		const dir = await createTempDir();
+		const valid = join(dir, "valid");
+		const file = join(dir, "file");
+		mkdirSync(valid);
+		writeFileSync(file, "file");
+		const manager = SettingsManager.inMemory({ context: { trustedFolders: [valid] } });
+
+		for (const folders of [["relative"], [""], [file], [join(dir, "missing")], [valid, file]]) {
+			const result = await setSettingsForRpc(manager, stubRegistry([]), { trustedContextFolders: folders });
+			expect(result.ok).toBe(false);
+		}
+		expect(getSettingsForRpc(manager).trustedContextFolders).toEqual([valid]);
+	});
+
 	it("applies nothing when any field is invalid (atomicity)", async () => {
 		const manager = SettingsManager.inMemory({ retry: { enabled: true }, images: { autoResize: true } });
 		const result = await setSettingsForRpc(manager, stubRegistry([]), {
@@ -251,6 +302,36 @@ describe("setSettingsForRpc validation", () => {
 });
 
 describe("setSettingsForRpc writes", () => {
+	it("expands home-directory trusted folders before persisting canonical roots", async () => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), { trustedContextFolders: ["~"] });
+
+		expect(result).toMatchObject({
+			ok: true,
+			settings: {
+				trustedContextFolders: [realpathSync.native(homedir())],
+				effectiveTrustedContextRoots: [realpathSync.native(homedir())],
+			},
+		});
+	});
+
+	it("canonicalizes, deduplicates, and persists trusted context folders", async () => {
+		const dir = await createTempDir();
+		const parent = join(dir, "parent");
+		const child = join(parent, "child");
+		mkdirSync(child, { recursive: true });
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), {
+			trustedContextFolders: [child, parent, child],
+		});
+
+		expect(result).toMatchObject({ ok: true });
+		if (!result.ok) throw new Error("unreachable");
+		expect(result.settings.trustedContextFolders).toEqual([parent]);
+		expect(result.settings.effectiveTrustedContextRoots).toEqual([parent]);
+		expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual([parent]);
+	});
+
 	it("applies every supported field and returns the post-write snapshot", async () => {
 		const manager = SettingsManager.inMemory();
 		const result = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), {
@@ -265,6 +346,7 @@ describe("setSettingsForRpc writes", () => {
 			blockImages: true,
 			enableSkillCommands: false,
 			autoLoadNestedContext: false,
+			trustedContextFolders: ["~"],
 			transport: "auto",
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
@@ -284,6 +366,8 @@ describe("setSettingsForRpc writes", () => {
 			blockImages: true,
 			enableSkillCommands: false,
 			autoLoadNestedContext: false,
+			trustedContextFolders: [realpathSync.native(homedir())],
+			effectiveTrustedContextRoots: [realpathSync.native(homedir())],
 			transport: "auto",
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
@@ -348,8 +432,10 @@ describe("setSettingsForRpc writes", () => {
 		const dir = await createTempDir();
 		const agentDir = join(dir, "agent");
 		const projectDir = join(dir, "project");
+		const trusted = join(dir, "trusted");
 		mkdirSync(agentDir, { recursive: true });
 		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(trusted, { recursive: true });
 
 		const manager = SettingsManager.create(projectDir, agentDir);
 		const result = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), {
@@ -361,6 +447,7 @@ describe("setSettingsForRpc writes", () => {
 			blockImages: true,
 			enableSkillCommands: false,
 			autoLoadNestedContext: false,
+			trustedContextFolders: [trusted],
 			transport: "websocket",
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet"] },
@@ -377,6 +464,7 @@ describe("setSettingsForRpc writes", () => {
 		expect(raw.images.blockImages).toBe(true);
 		expect(raw.enableSkillCommands).toBe(false);
 		expect(raw.context.autoLoadNested).toBe(false);
+		expect(raw.context.trustedFolders).toEqual([trusted]);
 		expect(raw.transport).toBe("websocket");
 		expect(raw.hideThinkingBlock).toBe(true);
 		expect(raw.agentModels.models.Explore).toEqual(["anthropic/sonnet"]);
@@ -420,6 +508,31 @@ describe("setSettingsForRpc writes", () => {
 		if (result.ok) throw new Error("unreachable");
 		expect(result.error).toContain("Failed to persist settings");
 		expect(result.error).toContain("disk full");
+	});
+
+	it.each([
+		["unrestricted nested context", (_root: string) => ({ autoLoadNestedContext: true })],
+		["a trusted context folder", (root: string) => ({ trustedContextFolders: [root] })],
+	])("does not retain %s after a failed write", async (_label, createUpdate) => {
+		const dir = await createTempDir();
+		const root = join(dir, "root");
+		mkdirSync(root);
+		const storage: SettingsStorage = {
+			withLock(_scope, fn) {
+				const next = fn(undefined);
+				if (next !== undefined) throw new Error("disk full");
+			},
+		};
+		const manager = SettingsManager.fromStorage(storage);
+
+		const result = await setSettingsForRpc(manager, stubRegistry([]), createUpdate(root));
+
+		expect(result).toMatchObject({ ok: false });
+		expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+		expect(evaluateContextTrustForRpc(manager, root)).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: root, state: "untrusted" },
+		});
 	});
 
 	// chmod-based write-failure injection is bypassed by root (permissions don't apply)
@@ -505,6 +618,153 @@ describe("setSettingsForRpc writes", () => {
 	});
 });
 
+describe("context trust RPC commands", () => {
+	it("evaluates exact and inherited trusted roots through the core matcher", async () => {
+		const dir = await createTempDir();
+		const root = join(dir, "root");
+		const child = join(root, "child");
+		const outside = join(dir, "outside");
+		mkdirSync(child, { recursive: true });
+		mkdirSync(outside, { recursive: true });
+		const manager = SettingsManager.inMemory({ context: { trustedFolders: [root] } });
+
+		expect(evaluateContextTrustForRpc(manager, root)).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: root, state: "trusted-root", grantingRoot: root },
+		});
+		expect(evaluateContextTrustForRpc(manager, child)).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: child, state: "trusted-root", grantingRoot: root },
+		});
+		expect(evaluateContextTrustForRpc(manager, outside)).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: outside, state: "untrusted" },
+		});
+		expect(evaluateContextTrustForRpc(manager, join(dir, "missing"))).toMatchObject({ ok: false });
+	});
+
+	it("rejects relative paths for evaluation and trust mutations", async () => {
+		const dir = await createTempDir();
+		const root = join(dir, "root");
+		mkdirSync(root);
+		const manager = SettingsManager.inMemory({ context: { trustedFolders: [root] } });
+
+		for (const path of [".", "relative"]) {
+			for (const result of [
+				evaluateContextTrustForRpc(manager, path),
+				await trustContextFolderForRpc(manager, path),
+				await untrustContextFolderForRpc(manager, path),
+			]) {
+				expect(result).toMatchObject({ ok: false });
+				if (!result.ok) expect(result.error).toContain("path must be absolute");
+			}
+		}
+		expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual([root]);
+	});
+
+	it("accepts settings-style home paths", () => {
+		const manager = SettingsManager.inMemory();
+
+		expect(evaluateContextTrustForRpc(manager, "~")).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: realpathSync.native(homedir()), state: "untrusted" },
+		});
+	});
+
+	it("trusts a canonical root and untrusts the root granting inherited access", async () => {
+		const dir = await createTempDir();
+		const root = join(dir, "root");
+		const child = join(root, "child");
+		mkdirSync(child, { recursive: true });
+		const manager = SettingsManager.inMemory();
+
+		const trusted = await trustContextFolderForRpc(manager, root);
+		expect(trusted).toMatchObject({
+			ok: true,
+			result: {
+				addedRoot: root,
+				evaluation: { canonicalTarget: root, state: "trusted-root", grantingRoot: root },
+				settings: { trustedContextFolders: [root], effectiveTrustedContextRoots: [root] },
+			},
+		});
+
+		const untrusted = await untrustContextFolderForRpc(manager, child);
+		expect(untrusted).toMatchObject({
+			ok: true,
+			result: {
+				removedRoot: root,
+				evaluation: { canonicalTarget: child, state: "untrusted" },
+				settings: { trustedContextFolders: [], effectiveTrustedContextRoots: [] },
+			},
+		});
+	});
+
+	it("reports unrestricted state and refuses to pretend a folder can be untrusted", async () => {
+		const dir = await createTempDir();
+		const root = join(dir, "root");
+		mkdirSync(root);
+		const manager = SettingsManager.inMemory({ context: { autoLoadNested: true, trustedFolders: [root] } });
+
+		expect(evaluateContextTrustForRpc(manager, root)).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: root, state: "unrestricted" },
+		});
+		const result = await untrustContextFolderForRpc(manager, root);
+		expect(result).toMatchObject({ ok: false });
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("Cannot untrust");
+	});
+
+	it("surfaces trust persistence failures without retaining an undurable root", async () => {
+		const dir = await createTempDir();
+		const root = join(dir, "root");
+		mkdirSync(root);
+		const storage: SettingsStorage = {
+			withLock(_scope, fn) {
+				const next = fn(undefined);
+				if (next !== undefined) throw new Error("disk full");
+			},
+		};
+		const manager = SettingsManager.fromStorage(storage);
+
+		const result = await trustContextFolderForRpc(manager, root);
+		expect(result).toMatchObject({ ok: false });
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("Failed to persist settings: global: disk full");
+		// A failed write cannot leave an in-memory root effective as if it were durable.
+		expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual([]);
+		expect(evaluateContextTrustForRpc(manager, root)).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: root, state: "untrusted" },
+		});
+	});
+
+	it("restores the persisted root after an untrust write fails", async () => {
+		const dir = await createTempDir();
+		const root = join(dir, "root");
+		mkdirSync(root);
+		const global = JSON.stringify({ context: { trustedFolders: [root] } });
+		const storage: SettingsStorage = {
+			withLock(scope, fn) {
+				const next = fn(scope === "global" ? global : undefined);
+				if (next !== undefined) throw new Error("disk full");
+			},
+		};
+		const manager = SettingsManager.fromStorage(storage);
+
+		const result = await untrustContextFolderForRpc(manager, root);
+
+		expect(result).toMatchObject({ ok: false });
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("Failed to persist settings: global: disk full");
+		expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual([root]);
+		expect(evaluateContextTrustForRpc(manager, root)).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: root, state: "trusted-root", grantingRoot: root },
+		});
+	});
+});
+
 describe("listAgentTypesForRpc", () => {
 	it("discovers package and project agent types sorted by name", async () => {
 		const cwd = await createTempDir();
@@ -543,7 +803,9 @@ describe("RpcClient settings methods", () => {
 		imageAutoResize: true,
 		blockImages: false,
 		enableSkillCommands: true,
-		autoLoadNestedContext: true,
+		autoLoadNestedContext: false,
+		trustedContextFolders: [],
+		effectiveTrustedContextRoots: [],
 		transport: "sse",
 		hideThinkingBlock: false,
 		agentModels: {},
@@ -594,6 +856,33 @@ describe("RpcClient settings methods", () => {
 			...snapshot,
 			warnings,
 		});
+	});
+
+	it("context trust methods send typed commands and unwrap results", async () => {
+		const client = new RpcClient() as any;
+		const evaluation = {
+			canonicalTarget: "/tmp/trusted",
+			state: "trusted-root" as const,
+			grantingRoot: "/tmp/trusted",
+		};
+		const mutation = { evaluation, settings: snapshot, addedRoot: "/tmp/trusted" };
+		client.send = vi
+			.fn()
+			.mockResolvedValueOnce({
+				type: "response",
+				command: "evaluate_context_trust",
+				success: true,
+				data: evaluation,
+			})
+			.mockResolvedValueOnce({ type: "response", command: "trust_context_folder", success: true, data: mutation })
+			.mockResolvedValueOnce({ type: "response", command: "untrust_context_folder", success: true, data: mutation });
+
+		await expect(client.evaluateContextTrust("/tmp/trusted")).resolves.toEqual(evaluation);
+		await expect(client.trustContextFolder("/tmp/trusted")).resolves.toEqual(mutation);
+		await expect(client.untrustContextFolder("/tmp/trusted")).resolves.toEqual(mutation);
+		expect(client.send).toHaveBeenNthCalledWith(1, { type: "evaluate_context_trust", path: "/tmp/trusted" });
+		expect(client.send).toHaveBeenNthCalledWith(2, { type: "trust_context_folder", path: "/tmp/trusted" });
+		expect(client.send).toHaveBeenNthCalledWith(3, { type: "untrust_context_folder", path: "/tmp/trusted" });
 	});
 
 	it("setSettings rejects with the RPC error message on failure", async () => {

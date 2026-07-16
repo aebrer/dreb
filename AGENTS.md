@@ -74,9 +74,11 @@ Documentation files to check on every feature change:
 - `packages/coding-agent/docs/` (feature-specific docs: extensions, json, rpc, sdk, etc.)
 - `AGENTS.md` (this file — development guide)
 
-## Nested Context Auto-load
+## Nested Context Trust Boundary
 
-`context.autoLoadNested` defaults to `true`: when a tool first operates in a subdirectory or another repo, dreb auto-injects that directory's `AGENTS.md`/`CLAUDE.md` via the tool result. Treat third-party context files as prompt-injection content; disable the setting when that trust boundary is not acceptable.
+The initial startup scan still walks upward from the main or subagent launch cwd and is separate from lazy nested/out-of-cwd loading. Lazy loading defaults **off**. Its global-only policy lives in `~/.dreb/agent/settings.json`: `context.trustedFolders` grants canonical existing roots and descendants, with native-realpath matching that denies symlink escapes. Project `.dreb/settings.json` cannot add or override trusted roots or enable loading.
+
+`context.autoLoadNested: true` is a global-only expert trust-all override, not a normal per-project setting. It allows any resolvable target's `AGENTS.md`/`CLAUDE.md` to be injected and therefore crosses a prompt-injection trust boundary. Prefer explicit trusted roots. Main and subagent processes use the same policy and observe changes for future lazy loads; already injected context cannot be removed. Lazy injected content remains secret-scrubbed, ordered after extension `tool_result` transforms, and deduplicated per session.
 
 ## Completeness Rule
 

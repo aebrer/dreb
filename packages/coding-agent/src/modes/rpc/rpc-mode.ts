@@ -16,6 +16,12 @@ import { basename } from "node:path";
 import { isValidThinkingLevel, VALID_THINKING_LEVELS } from "../../cli/args.js";
 import { VERSION } from "../../config.js";
 import type { AgentSession } from "../../core/agent-session.js";
+import {
+	canonicalizeTrustedRoots,
+	matchContextTrust,
+	validateTrustedContextFolder,
+	validateTrustedContextFolders,
+} from "../../core/context-trust.js";
 import { DailyCostTracker } from "../../core/daily-cost-tracker.js";
 import type {
 	ExtensionUIContext,
@@ -42,6 +48,8 @@ import type {
 	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,
 	RpcCommand,
+	RpcContextTrustEvaluation,
+	RpcContextTrustMutationResult,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcPendingMessages,
@@ -227,7 +235,7 @@ type SettingsReader = Pick<
 	| "getImageAutoResize"
 	| "getBlockImages"
 	| "getEnableSkillCommands"
-	| "getAutoLoadNestedContext"
+	| "getGlobalContextTrustPolicy"
 	| "getTransport"
 	| "getHideThinkingBlock"
 	| "getAgentModels"
@@ -246,12 +254,14 @@ type SettingsWriter = SettingsReader &
 		| "setBlockImages"
 		| "setEnableSkillCommands"
 		| "setAutoLoadNestedContext"
+		| "setTrustedContextFolders"
 		| "setTransport"
 		| "setHideThinkingBlock"
 		| "setAgentModelsForAgent"
 		| "removeAgentModelsForAgent"
 		| "hasProjectAgentModelOverride"
 		| "hasGlobalSettingsLoadError"
+		| "reload"
 		| "flush"
 		| "drainErrors"
 	>;
@@ -259,11 +269,13 @@ type SettingsWriter = SettingsReader &
 /**
  * Handle the `get_settings` RPC command: snapshot the persistent default settings.
  *
- * Reads the SettingsManager's merged (global + project) view — these are the values that
- * seed fresh runtimes, NOT the live session state (`get_state` reports that). Extracted
+ * Most fields read the SettingsManager's merged (global + project) view. Context trust
+ * fields intentionally read global settings only, so projects cannot expand the policy.
+ * These seed fresh runtimes, NOT the live session state (`get_state` reports that). Extracted
  * (like {@link deleteSessionForRpc}) so it is unit-testable without a live RPC session.
  */
 export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsSnapshot {
+	const contextTrust = settingsManager.getGlobalContextTrustPolicy();
 	return {
 		defaultProvider: settingsManager.getDefaultProvider(),
 		defaultModel: settingsManager.getDefaultModel(),
@@ -275,7 +287,9 @@ export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsS
 		imageAutoResize: settingsManager.getImageAutoResize(),
 		blockImages: settingsManager.getBlockImages(),
 		enableSkillCommands: settingsManager.getEnableSkillCommands(),
-		autoLoadNestedContext: settingsManager.getAutoLoadNestedContext(),
+		autoLoadNestedContext: contextTrust.unrestricted,
+		trustedContextFolders: contextTrust.trustedFolders,
+		effectiveTrustedContextRoots: canonicalizeTrustedRoots(contextTrust.trustedFolders),
 		transport: settingsManager.getTransport(),
 		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
 		agentModels: settingsManager.getAgentModels(),
@@ -294,6 +308,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"blockImages",
 	"enableSkillCommands",
 	"autoLoadNestedContext",
+	"trustedContextFolders",
 	"transport",
 	"hideThinkingBlock",
 	"agentModels",
@@ -335,6 +350,32 @@ function validateAgentModels(value: unknown): { ok: true } | { ok: false; error:
 	return { ok: true };
 }
 
+/** Evaluate a strictly canonical, absolute directory through the core trust matcher. */
+export function evaluateContextTrustForRpc(
+	settingsManager: Pick<SettingsManager, "getGlobalContextTrustPolicy">,
+	path: unknown,
+): { ok: true; evaluation: RpcContextTrustEvaluation } | { ok: false; error: string } {
+	let canonicalTarget: string;
+	try {
+		canonicalTarget = validateTrustedContextFolder(path);
+	} catch (error) {
+		return { ok: false, error: `Invalid context trust path: ${(error as Error).message}` };
+	}
+
+	const policy = settingsManager.getGlobalContextTrustPolicy();
+	const match = matchContextTrust(policy, canonicalTarget);
+	if (!match) {
+		return { ok: true, evaluation: { canonicalTarget, state: "untrusted" } };
+	}
+	if (policy.unrestricted) {
+		return { ok: true, evaluation: { canonicalTarget, state: "unrestricted" } };
+	}
+	return {
+		ok: true,
+		evaluation: { canonicalTarget, state: "trusted-root", grantingRoot: match.trustedRoot },
+	};
+}
+
 /**
  * Simple promise-based mutex that serializes settings writes. RPC commands are dispatched
  * concurrently (`void handleInputLine(line)`) so two `set_settings` commands can overlap.
@@ -360,6 +401,105 @@ function settingsWriteLock<T>(fn: () => Promise<T>): Promise<T> {
 	const next = prev.then(fn, fn);
 	settingsWriteQueue = next.catch(() => {});
 	return next;
+}
+
+async function persistContextTrustMutationForRpc(
+	settingsManager: SettingsWriter,
+	folders: string[],
+	targetPath: string,
+	mutation: Pick<RpcContextTrustMutationResult, "addedRoot" | "removedRoot">,
+): Promise<{ ok: true; result: RpcContextTrustMutationResult } | { ok: false; error: string }> {
+	settingsManager.drainErrors();
+	if (settingsManager.hasGlobalSettingsLoadError()) {
+		return {
+			ok: false as const,
+			error: "Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)",
+		};
+	}
+
+	try {
+		settingsManager.setTrustedContextFolders(folders);
+		await settingsManager.flush();
+	} catch (error) {
+		// A security-policy mutation must not remain effective solely in memory when its
+		// durable write fails. Reload restores the last persisted global policy.
+		settingsManager.reload();
+		return { ok: false as const, error: `Failed to persist settings: ${(error as Error).message}` };
+	}
+	const writeErrors = settingsManager.drainErrors();
+	if (writeErrors.length > 0) {
+		const detail = writeErrors.map((e) => `${e.scope}: ${e.error.message}`).join("; ");
+		// SettingsManager records queued write failures rather than rejecting flush(). Its
+		// in-memory policy has already changed, so restore it from durable storage before
+		// reporting failure rather than leaving an undurable trusted root effective.
+		settingsManager.reload();
+		return { ok: false as const, error: `Failed to persist settings: ${detail}` };
+	}
+
+	const evaluated = evaluateContextTrustForRpc(settingsManager, targetPath);
+	if (!evaluated.ok) return evaluated;
+	return {
+		ok: true as const,
+		result: { evaluation: evaluated.evaluation, settings: getSettingsForRpc(settingsManager), ...mutation },
+	};
+}
+
+/** Add a canonical directory to the global trusted roots and flush the change. */
+export async function trustContextFolderForRpc(
+	settingsManager: SettingsWriter,
+	path: unknown,
+): Promise<{ ok: true; result: RpcContextTrustMutationResult } | { ok: false; error: string }> {
+	return settingsWriteLock(async () => {
+		const evaluated = evaluateContextTrustForRpc(settingsManager, path);
+		if (!evaluated.ok) return evaluated;
+
+		// Existing malformed entries are fail-closed. A trust mutation rewrites the configured
+		// list as the canonical effective roots plus this new canonical root.
+		const roots = canonicalizeTrustedRoots(settingsManager.getGlobalContextTrustPolicy().trustedFolders);
+		let folders: string[];
+		try {
+			folders = validateTrustedContextFolders([...roots, evaluated.evaluation.canonicalTarget]);
+		} catch (error) {
+			return { ok: false as const, error: (error as Error).message };
+		}
+		return persistContextTrustMutationForRpc(settingsManager, folders, evaluated.evaluation.canonicalTarget, {
+			...(folders.includes(evaluated.evaluation.canonicalTarget)
+				? { addedRoot: evaluated.evaluation.canonicalTarget }
+				: {}),
+		});
+	});
+}
+
+/** Remove the root actually granting a directory access, rather than the supplied descendant. */
+export async function untrustContextFolderForRpc(
+	settingsManager: SettingsWriter,
+	path: unknown,
+): Promise<{ ok: true; result: RpcContextTrustMutationResult } | { ok: false; error: string }> {
+	return settingsWriteLock(async () => {
+		const evaluated = evaluateContextTrustForRpc(settingsManager, path);
+		if (!evaluated.ok) return evaluated;
+		if (evaluated.evaluation.state === "unrestricted") {
+			return {
+				ok: false,
+				error: "Cannot untrust a context folder while unrestricted nested context loading is enabled; disable autoLoadNestedContext first",
+			};
+		}
+		if (evaluated.evaluation.state === "untrusted") {
+			return {
+				ok: true,
+				result: { evaluation: evaluated.evaluation, settings: getSettingsForRpc(settingsManager) },
+			};
+		}
+
+		const removedRoot = evaluated.evaluation.grantingRoot!;
+		const roots = canonicalizeTrustedRoots(settingsManager.getGlobalContextTrustPolicy().trustedFolders);
+		return persistContextTrustMutationForRpc(
+			settingsManager,
+			roots.filter((root) => root !== removedRoot),
+			evaluated.evaluation.canonicalTarget,
+			{ removedRoot },
+		);
+	});
 }
 
 /**
@@ -456,6 +596,15 @@ export async function setSettingsForRpc(
 		}
 	}
 
+	let trustedContextFolders: string[] | undefined;
+	if (update.trustedContextFolders !== undefined) {
+		try {
+			trustedContextFolders = validateTrustedContextFolders(update.trustedContextFolders);
+		} catch (error) {
+			return { ok: false, error: (error as Error).message };
+		}
+	}
+
 	const hasProvider = update.defaultProvider !== undefined;
 	const hasModel = update.defaultModel !== undefined;
 	if (hasProvider !== hasModel) {
@@ -478,6 +627,8 @@ export async function setSettingsForRpc(
 		}
 	}
 
+	const updatesContextTrustPolicy = update.autoLoadNestedContext !== undefined || trustedContextFolders !== undefined;
+
 	// Serialize the apply+flush+drain block so concurrent set_settings commands
 	// cannot race on the shared error bucket. See settingsWriteLock doc.
 	return settingsWriteLock(async () => {
@@ -497,73 +648,90 @@ export async function setSettingsForRpc(
 			};
 		}
 
-		// --- Apply (validated) ---
-		if (update.defaultProvider !== undefined && update.defaultModel !== undefined) {
-			settingsManager.setDefaultModelAndProvider(update.defaultProvider, update.defaultModel);
-		}
-		if (update.defaultThinkingLevel !== undefined) {
-			settingsManager.setDefaultThinkingLevel(update.defaultThinkingLevel);
-		}
-		if (update.steeringMode !== undefined) {
-			settingsManager.setSteeringMode(update.steeringMode);
-		}
-		if (update.followUpMode !== undefined) {
-			settingsManager.setFollowUpMode(update.followUpMode);
-		}
-		if (update.compactionEnabled !== undefined) {
-			settingsManager.setCompactionEnabled(update.compactionEnabled);
-		}
-		if (update.retryEnabled !== undefined) {
-			settingsManager.setRetryEnabled(update.retryEnabled);
-		}
-		if (update.imageAutoResize !== undefined) {
-			settingsManager.setImageAutoResize(update.imageAutoResize);
-		}
-		if (update.blockImages !== undefined) {
-			settingsManager.setBlockImages(update.blockImages);
-		}
-		if (update.enableSkillCommands !== undefined) {
-			settingsManager.setEnableSkillCommands(update.enableSkillCommands);
-		}
-		if (update.autoLoadNestedContext !== undefined) {
-			settingsManager.setAutoLoadNestedContext(update.autoLoadNestedContext);
-		}
-		if (update.transport !== undefined) {
-			settingsManager.setTransport(update.transport);
-		}
-		if (update.hideThinkingBlock !== undefined) {
-			settingsManager.setHideThinkingBlock(update.hideThinkingBlock);
-		}
+		try {
+			// --- Apply (validated) ---
+			if (update.defaultProvider !== undefined && update.defaultModel !== undefined) {
+				settingsManager.setDefaultModelAndProvider(update.defaultProvider, update.defaultModel);
+			}
+			if (update.defaultThinkingLevel !== undefined) {
+				settingsManager.setDefaultThinkingLevel(update.defaultThinkingLevel);
+			}
+			if (update.steeringMode !== undefined) {
+				settingsManager.setSteeringMode(update.steeringMode);
+			}
+			if (update.followUpMode !== undefined) {
+				settingsManager.setFollowUpMode(update.followUpMode);
+			}
+			if (update.compactionEnabled !== undefined) {
+				settingsManager.setCompactionEnabled(update.compactionEnabled);
+			}
+			if (update.retryEnabled !== undefined) {
+				settingsManager.setRetryEnabled(update.retryEnabled);
+			}
+			if (update.imageAutoResize !== undefined) {
+				settingsManager.setImageAutoResize(update.imageAutoResize);
+			}
+			if (update.blockImages !== undefined) {
+				settingsManager.setBlockImages(update.blockImages);
+			}
+			if (update.enableSkillCommands !== undefined) {
+				settingsManager.setEnableSkillCommands(update.enableSkillCommands);
+			}
+			if (update.autoLoadNestedContext !== undefined) {
+				settingsManager.setAutoLoadNestedContext(update.autoLoadNestedContext);
+			}
+			if (trustedContextFolders !== undefined) {
+				settingsManager.setTrustedContextFolders(trustedContextFolders);
+			}
+			if (update.transport !== undefined) {
+				settingsManager.setTransport(update.transport);
+			}
+			if (update.hideThinkingBlock !== undefined) {
+				settingsManager.setHideThinkingBlock(update.hideThinkingBlock);
+			}
 
-		const warnings: string[] = [];
-		if (update.agentModels !== undefined) {
-			for (const [agentName, models] of Object.entries(update.agentModels)) {
-				if (settingsManager.hasProjectAgentModelOverride(agentName)) {
-					warnings.push(
-						`A project-level agentModels override for ${JSON.stringify(agentName)} (.dreb/settings.json) ` +
-							"takes precedence — this change to global settings will have no effect. " +
-							"Edit the project settings file to change it.",
-					);
-				}
-				if (models.length > 0) {
-					settingsManager.setAgentModelsForAgent(agentName, models);
-				} else {
-					settingsManager.removeAgentModelsForAgent(agentName);
+			const warnings: string[] = [];
+			if (update.agentModels !== undefined) {
+				for (const [agentName, models] of Object.entries(update.agentModels)) {
+					if (settingsManager.hasProjectAgentModelOverride(agentName)) {
+						warnings.push(
+							`A project-level agentModels override for ${JSON.stringify(agentName)} (.dreb/settings.json) ` +
+								"takes precedence — this change to global settings will have no effect. " +
+								"Edit the project settings file to change it.",
+						);
+					}
+					if (models.length > 0) {
+						settingsManager.setAgentModelsForAgent(agentName, models);
+					} else {
+						settingsManager.removeAgentModelsForAgent(agentName);
+					}
 				}
 			}
-		}
 
-		// Ensure durability and surface write errors instead of losing them.
-		await settingsManager.flush();
-		const writeErrors = settingsManager.drainErrors();
-		if (writeErrors.length > 0) {
-			const detail = writeErrors.map((e) => `${e.scope}: ${e.error.message}`).join("; ");
-			return { ok: false as const, error: `Failed to persist settings: ${detail}` };
-		}
+			// Ensure durability and surface write errors instead of losing them.
+			await settingsManager.flush();
+			const writeErrors = settingsManager.drainErrors();
+			if (writeErrors.length > 0) {
+				const detail = writeErrors.map((e) => `${e.scope}: ${e.error.message}`).join("; ");
+				if (updatesContextTrustPolicy) {
+					// A failed security-policy write must not leave a newly permissive policy
+					// effective only in memory. Restore the last durable global policy.
+					settingsManager.reload();
+				}
+				return { ok: false as const, error: `Failed to persist settings: ${detail}` };
+			}
 
-		return warnings.length > 0
-			? { ok: true as const, settings: getSettingsForRpc(settingsManager), warnings }
-			: { ok: true as const, settings: getSettingsForRpc(settingsManager) };
+			return warnings.length > 0
+				? { ok: true as const, settings: getSettingsForRpc(settingsManager), warnings }
+				: { ok: true as const, settings: getSettingsForRpc(settingsManager) };
+		} catch (error) {
+			if (updatesContextTrustPolicy) {
+				// Setters and flush() can also fail synchronously. The same fail-closed
+				// rollback is required before returning that persistence failure.
+				settingsManager.reload();
+			}
+			return { ok: false as const, error: `Failed to persist settings: ${(error as Error).message}` };
+		}
 	});
 }
 
@@ -1410,6 +1578,27 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 						? { ...result.settings, warnings: result.warnings }
 						: result.settings,
 				);
+			}
+
+			case "evaluate_context_trust": {
+				const result = evaluateContextTrustForRpc(session.settingsManager, command.path);
+				return result.ok
+					? success(id, "evaluate_context_trust", result.evaluation)
+					: error(id, "evaluate_context_trust", result.error);
+			}
+
+			case "trust_context_folder": {
+				const result = await trustContextFolderForRpc(session.settingsManager, command.path);
+				return result.ok
+					? success(id, "trust_context_folder", result.result)
+					: error(id, "trust_context_folder", result.error);
+			}
+
+			case "untrust_context_folder": {
+				const result = await untrustContextFolderForRpc(session.settingsManager, command.path);
+				return result.ok
+					? success(id, "untrust_context_folder", result.result)
+					: error(id, "untrust_context_folder", result.error);
 			}
 
 			// =================================================================

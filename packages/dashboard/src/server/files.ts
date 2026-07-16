@@ -73,12 +73,18 @@ export async function canonicalizePath(raw: string, opts: { mustExist: boolean }
 export class FileApi {
 	constructor(private readonly log: FileOpLogger) {}
 
-	async list(rawPath: string): Promise<DirListingDto> {
+	/** Resolve an existing directory for listing and context-trust RPC operations. */
+	async resolveDirectory(rawPath: string): Promise<string> {
 		const path = await canonicalizePath(rawPath, { mustExist: true });
 		const info = await stat(path);
 		if (!info.isDirectory()) {
 			throw Object.assign(new Error(`Not a directory: ${path}`), { status: 400 });
 		}
+		return path;
+	}
+
+	async list(rawPath: string): Promise<Omit<DirListingDto, "contextTrust">> {
+		const path = await this.resolveDirectory(rawPath);
 		const names = await readdir(path, { withFileTypes: true });
 		const entries: FileEntryDto[] = [];
 		for (const dirent of names) {

@@ -89,8 +89,19 @@ vi.mock("../../src/client/api.js", () => ({
 			path: `/home/test/project/.dreb-dashboard-uploads/${file.name}`,
 		})),
 		mkdir: vi.fn(async (dir: string, name: string) => ({ path: `${dir}/${name}` })),
+		trustContextFolder: vi.fn(async (path: string) => ({
+			evaluation: { canonicalTarget: path, state: "trusted-root", grantingRoot: path },
+			settings: {},
+			addedRoot: path,
+		})),
+		untrustContextFolder: vi.fn(async (path: string) => ({
+			evaluation: { canonicalTarget: path, state: "untrusted" },
+			settings: {},
+			removedRoot: path,
+		})),
 		listFiles: vi.fn(async () => ({
 			path: "/home/test",
+			contextTrust: { canonicalTarget: "/home/test", state: "untrusted" },
 			entries: [
 				{ name: "src", type: "dir", size: 0, modified: new Date().toISOString() },
 				{ name: "readme.md", type: "file", size: 1200, modified: new Date().toISOString() },
@@ -300,8 +311,19 @@ afterEach(() => {
 		path: `/home/test/project/.dreb-dashboard-uploads/${file.name}`,
 	}));
 	vi.mocked(api.mkdir).mockImplementation(async (dir: string, name: string) => ({ path: `${dir}/${name}` }));
+	vi.mocked(api.trustContextFolder).mockImplementation(async (path: string) => ({
+		evaluation: { canonicalTarget: path, state: "trusted-root", grantingRoot: path },
+		settings: {},
+		addedRoot: path,
+	}));
+	vi.mocked(api.untrustContextFolder).mockImplementation(async (path: string) => ({
+		evaluation: { canonicalTarget: path, state: "untrusted" },
+		settings: {},
+		removedRoot: path,
+	}));
 	vi.mocked(api.listFiles).mockResolvedValue({
 		path: "/home/test",
+		contextTrust: { canonicalTarget: "/home/test", state: "untrusted" },
 		entries: [
 			{ name: "src", type: "dir", size: 0, modified: new Date().toISOString() },
 			{ name: "readme.md", type: "file", size: 1200, modified: new Date().toISOString() },
@@ -1020,13 +1042,176 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("new session here");
 	});
 
-	it("settings renders defaults, devices, and the live-sessions copy", async () => {
+	it("files trusts an untrusted folder and updates its scope immediately", async () => {
+		vi.mocked(api.listFiles).mockResolvedValue({
+			path: "/workspace",
+			entries: [],
+			contextTrust: { canonicalTarget: "/workspace", state: "untrusted" },
+		});
+		const store = makeStore();
+		const el = mount(() => <FilesScreen store={store} initialPath="/workspace" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("Nested context is untrusted");
+		const callsBeforeMutation = vi.mocked(api.listFiles).mock.calls.length;
+		const trust = [...el.querySelectorAll("button")].find(
+			(button) => button.textContent === "trust this folder and descendants",
+		)!;
+		trust.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.trustContextFolder).toHaveBeenCalledWith("/workspace");
+		expect(el.textContent).toContain("Nested context trusted for this folder");
+		expect(el.textContent).toContain("/workspace and all descendants are trusted");
+		expect(api.listFiles).toHaveBeenCalledTimes(callsBeforeMutation);
+	});
+
+	it("files ignores a completed trust mutation after navigation", async () => {
+		vi.mocked(api.listFiles).mockImplementation(async (currentPath: string) => ({
+			path: currentPath,
+			entries:
+				currentPath === "/workspace"
+					? [{ name: "child", type: "dir", size: 0, modified: new Date().toISOString() }]
+					: [{ name: "b-file", type: "file", size: 1, modified: new Date().toISOString() }],
+			contextTrust: { canonicalTarget: currentPath, state: "untrusted" as const },
+		}));
+		let resolveTrust!: (value: Awaited<ReturnType<typeof api.trustContextFolder>>) => void;
+		const trustResult = new Promise<Awaited<ReturnType<typeof api.trustContextFolder>>>((resolve) => {
+			resolveTrust = resolve;
+		});
+		vi.mocked(api.trustContextFolder).mockImplementationOnce(() => trustResult);
+
+		const store = makeStore();
+		const el = mount(() => <FilesScreen store={store} initialPath="/workspace" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		[...el.querySelectorAll("button")]
+			.find((button) => button.textContent === "trust this folder and descendants")!
+			.click();
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("child/"))!.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("b-file");
+
+		resolveTrust({
+			evaluation: { canonicalTarget: "/workspace", state: "trusted-root", grantingRoot: "/workspace" },
+			settings: {},
+			addedRoot: "/workspace",
+		});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("b-file");
+		expect(el.textContent).toContain("Nested context is untrusted");
+	});
+
+	it("files explains and removes an exact or inherited granting root", async () => {
+		vi.mocked(api.listFiles).mockResolvedValue({
+			path: "/workspace/child",
+			entries: [],
+			contextTrust: {
+				canonicalTarget: "/workspace/child",
+				state: "trusted-root",
+				grantingRoot: "/workspace",
+			},
+		});
+		const store = makeStore();
+		const el = mount(() => <FilesScreen store={store} initialPath="/workspace/child" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("Nested context inherited from a trusted root");
+		expect(el.textContent).toContain("covered by /workspace and its descendants");
+		expect(el.textContent).toContain("This removes trust from /workspace and all of its descendants");
+		const untrust = [...el.querySelectorAll("button")].find((button) => button.textContent === "untrust /workspace")!;
+		untrust.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.untrustContextFolder).toHaveBeenCalledWith("/workspace/child");
+		expect(el.textContent).toContain("Nested context is untrusted");
+	});
+
+	it("files explains exact-root untrust scope", async () => {
+		vi.mocked(api.listFiles).mockResolvedValue({
+			path: "/workspace",
+			entries: [],
+			contextTrust: { canonicalTarget: "/workspace", state: "trusted-root", grantingRoot: "/workspace" },
+		});
+		const store = makeStore();
+		const el = mount(() => <FilesScreen store={store} initialPath="/workspace" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("Nested context trusted for this folder");
+		expect(el.textContent).toContain("/workspace and all descendants are trusted");
+		expect(el.textContent).toContain("This removes trust from /workspace and all of its descendants");
+	});
+
+	it("files never offers a false untrust under global expert trust", async () => {
+		vi.mocked(api.listFiles).mockResolvedValue({
+			path: "/workspace",
+			entries: [],
+			contextTrust: { canonicalTarget: "/workspace", state: "unrestricted" },
+		});
+		const store = makeStore();
+		const el = mount(() => <FilesScreen store={store} initialPath="/workspace" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("Global expert trust is ON");
+		expect(el.textContent).toContain("prompt-injection content");
+		expect(el.textContent).toContain("Disable global expert trust in Settings");
+		expect([...el.querySelectorAll("button")].some((button) => button.textContent?.startsWith("untrust"))).toBe(
+			false,
+		);
+	});
+
+	it("files refetches trust on navigation and surfaces trust mutation errors", async () => {
+		vi.mocked(api.listFiles).mockImplementation(async (path: string) => ({
+			path,
+			entries:
+				path === "/workspace" ? [{ name: "child", type: "dir", size: 0, modified: new Date().toISOString() }] : [],
+			contextTrust:
+				path === "/workspace"
+					? { canonicalTarget: path, state: "untrusted" as const }
+					: { canonicalTarget: path, state: "trusted-root" as const, grantingRoot: path },
+		}));
+		const store = makeStore();
+		const el = mount(() => <FilesScreen store={store} initialPath="/workspace" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const child = [...el.querySelectorAll("button")].find((button) => button.textContent?.includes("child/"))!;
+		child.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.listFiles).toHaveBeenLastCalledWith("/workspace/child");
+		expect(el.textContent).toContain("Nested context trusted for this folder");
+
+		vi.mocked(api.untrustContextFolder).mockRejectedValueOnce(new Error("trust write failed"));
+		const untrust = [...el.querySelectorAll("button")].find(
+			(button) => button.textContent === "untrust /workspace/child",
+		)!;
+		untrust.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("trust write failed");
+	});
+
+	it("settings explains defaults and live-session context trust", async () => {
 		const store = makeStore();
 		const el = mount(() => <SettingsScreen store={store} />);
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(el.textContent).toContain("Live sessions keep their current values");
+		expect(el.textContent).toContain("Ordinary defaults apply only to new sessions");
+		expect(el.textContent).toContain("Context trust changes apply to subsequent lazy loads in live sessions");
+		expect(el.textContent).toContain("already injected content cannot be retracted");
 		expect(el.textContent).toContain("default model");
 		expect(el.textContent).toContain("devices");
+	});
+
+	it("settings defaults global expert context trust to off and warns about prompt injection", async () => {
+		vi.mocked(api.settings).mockResolvedValue({});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const row = [...el.querySelectorAll(".setting-row")].find((candidate) =>
+			candidate.textContent?.includes("global expert nested-context trust"),
+		)!;
+		expect((row.querySelector("select") as HTMLSelectElement).value).toBe("off");
+		expect(el.textContent).toContain("Expert setting — global only");
+		expect(el.textContent).toContain("untrusted prompt-injection content");
+		expect(el.textContent).toContain("Files view to trust only folders you control");
 	});
 
 	it("settings renders expanded default rows and agent model defaults", async () => {
@@ -1040,7 +1225,7 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("auto-resize images");
 		expect(el.textContent).toContain("block images");
 		expect(el.textContent).toContain("skill slash commands");
-		expect(el.textContent).toContain("auto-load nested context");
+		expect(el.textContent).toContain("global expert nested-context trust");
 		expect(el.textContent).toContain("hide thinking blocks");
 		expect(el.textContent).toContain("transport");
 		expect(el.textContent).toContain("agent models");
@@ -2018,7 +2203,11 @@ describe("dashboard client regressions", () => {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			return { places: [{ label: "home", path: "/home/slow" }] };
 		});
-		vi.mocked(api.listFiles).mockResolvedValue({ path: "/home/slow", entries: [] });
+		vi.mocked(api.listFiles).mockResolvedValue({
+			path: "/home/slow",
+			entries: [],
+			contextTrust: { canonicalTarget: "/home/slow", state: "untrusted" },
+		});
 
 		const store = makeStore();
 		mount(() => <FilesScreen store={store} />);

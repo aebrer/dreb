@@ -294,6 +294,7 @@ describe("formatNestedContextBlock", () => {
 		const block = formatNestedContextBlock("/x/sub", [{ path: "/x/sub/CLAUDE.md", content: "# hello" }]);
 		expect(block).toContain("Auto-loaded project context");
 		expect(block).toContain("multiple repos / projects / folders");
+		expect(block).toContain("context.trustedFolders");
 		expect(block).toContain("context.autoLoadNested");
 		expect(block).toContain("BEGIN project context: /x/sub/CLAUDE.md");
 		expect(block).toContain("END project context: /x/sub/CLAUDE.md");
@@ -319,8 +320,13 @@ describe("computeNestedContextBlock (orchestration)", () => {
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	function freshState(enabled = true): NestedContextState {
-		return { enabled, cwd, loaded: new Set(), scannedDirs: new Set() };
+	function freshState(enabled = true, trustedFolders: string[] = []): NestedContextState {
+		return {
+			policy: { unrestricted: enabled, trustedFolders },
+			cwd,
+			loaded: new Set(),
+			scannedDirs: new Set(),
+		};
 	}
 
 	it("returns null when disabled", () => {
@@ -699,6 +705,81 @@ describe("computeNestedContextBlock (orchestration)", () => {
 		const block = computeNestedContextBlock("read", { path: join(deeper, "file.py") }, state);
 		expect(block).toContain("# deeper context");
 		expect(block).not.toContain("# sub context");
+	});
+
+	it("allows exact and descendant trusted targets but rejects prefix siblings", () => {
+		const trusted = join(tempDir, "trusted");
+		const child = join(trusted, "child");
+		const sibling = join(tempDir, "trusted-sibling");
+		mkdirSync(child, { recursive: true });
+		mkdirSync(sibling, { recursive: true });
+		writeFileSync(join(trusted, "CLAUDE.md"), "# trusted root");
+		writeFileSync(join(child, "file.txt"), "x");
+		writeFileSync(join(sibling, "CLAUDE.md"), "# sibling");
+		writeFileSync(join(sibling, "file.txt"), "x");
+
+		expect(computeNestedContextBlock("ls", { path: trusted }, freshState(false, [trusted]))).toContain(
+			"# trusted root",
+		);
+		expect(
+			computeNestedContextBlock("read", { path: join(child, "file.txt") }, freshState(false, [trusted])),
+		).toContain("# trusted root");
+		const blocked = freshState(false, [trusted]);
+		expect(computeNestedContextBlock("read", { path: join(sibling, "file.txt") }, blocked)).toBeNull();
+		expect(blocked.scannedDirs).toEqual(new Set());
+	});
+
+	it("does not collect context above a narrow trusted root", () => {
+		const parent = join(tempDir, "parent");
+		const trusted = join(parent, "trusted");
+		const child = join(trusted, "child");
+		mkdirSync(child, { recursive: true });
+		writeFileSync(join(parent, "CLAUDE.md"), "# must not load");
+		writeFileSync(join(trusted, "CLAUDE.md"), "# trusted only");
+		writeFileSync(join(child, "file.txt"), "x");
+		const block = computeNestedContextBlock("read", { path: join(child, "file.txt") }, freshState(false, [trusted]));
+		expect(block).toContain("# trusted only");
+		expect(block).not.toContain("# must not load");
+	});
+
+	itIfSymlinksApply("rejects directory and context-file symlink escapes from a trusted root", () => {
+		const trusted = join(tempDir, "trusted");
+		const outside = join(tempDir, "outside");
+		mkdirSync(trusted, { recursive: true });
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(join(outside, "CLAUDE.md"), "# escaped");
+		writeFileSync(join(outside, "file.txt"), "x");
+		symlinkSync(outside, join(trusted, "linked-dir"), "dir");
+		symlinkSync(join(outside, "CLAUDE.md"), join(trusted, "AGENTS.md"), "file");
+		writeFileSync(join(trusted, "file.txt"), "x");
+
+		expect(
+			computeNestedContextBlock(
+				"read",
+				{ path: join(trusted, "linked-dir", "file.txt") },
+				freshState(false, [trusted]),
+			),
+		).toBeNull();
+		const block = computeNestedContextBlock(
+			"read",
+			{ path: join(trusted, "file.txt") },
+			freshState(false, [trusted]),
+		);
+		expect(block).toBeNull();
+	});
+
+	it("does not cache a blocked target, so a later trusted decision can load it", () => {
+		const outside = join(tempDir, "later-trusted");
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(join(outside, "CLAUDE.md"), "# newly trusted");
+		writeFileSync(join(outside, "file.txt"), "x");
+		const state = freshState(false);
+		expect(computeNestedContextBlock("read", { path: join(outside, "file.txt") }, state)).toBeNull();
+		expect(state.scannedDirs).toEqual(new Set());
+		state.policy.trustedFolders = [outside];
+		expect(computeNestedContextBlock("read", { path: join(outside, "file.txt") }, state)).toContain(
+			"# newly trusted",
+		);
 	});
 });
 

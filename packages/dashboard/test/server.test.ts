@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { type IncomingMessage, request, type Server, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -553,6 +553,8 @@ describe("dashboard server — fleet and runtimes", () => {
 			"/api/settings/models",
 			"/api/settings/agent-types",
 			"/api/daily-cost",
+			"/api/files/trust",
+			"/api/files/untrust",
 		];
 
 		for (const path of paths) {
@@ -781,6 +783,69 @@ describe("dashboard server — lifecycle and disk sessions", () => {
 });
 
 describe("dashboard server — files", () => {
+	it("returns utility-RPC trust state for canonical listings and delegates canonical trust mutations", async () => {
+		const dir = await createTempProject();
+		const canonical = await realpath(dir);
+		const { base, clients } = await startServer();
+
+		const listing = await fetch(`${base}/api/files?path=${encodeURIComponent(join(dir, "."))}`);
+		expect(listing.status).toBe(200);
+		await expect(listing.json()).resolves.toMatchObject({
+			path: canonical,
+			contextTrust: { canonicalTarget: canonical, state: "untrusted" },
+		});
+		expect(clients[0].evaluateContextTrust).toHaveBeenCalledWith(canonical);
+
+		const trusted = await fetch(`${base}/api/files/trust`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: join(dir, ".") }),
+		});
+		expect(trusted.status).toBe(200);
+		await expect(trusted.json()).resolves.toMatchObject({
+			addedRoot: canonical,
+			evaluation: { canonicalTarget: canonical, state: "trusted-root", grantingRoot: canonical },
+			settings: { trustedContextFolders: [canonical], effectiveTrustedContextRoots: [canonical] },
+		});
+		expect(clients[0].trustContextFolder).toHaveBeenCalledWith(canonical);
+
+		const untrusted = await fetch(`${base}/api/files/untrust`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: dir }),
+		});
+		expect(untrusted.status).toBe(200);
+		expect(clients[0].untrustContextFolder).toHaveBeenCalledWith(canonical);
+	});
+
+	it("surfaces canonicalization and utility RPC errors for trust endpoints", async () => {
+		const dir = await createTempProject();
+		const { base, clients } = await startServer();
+
+		const missing = await fetch(`${base}/api/files/trust`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: "relative" }),
+		});
+		expect(missing.status).toBe(400);
+
+		// Create the utility runtime first, then make RPC failures explicit.
+		await fetch(`${base}/api/files?path=${encodeURIComponent(dir)}`);
+		vi.mocked(clients[0].evaluateContextTrust).mockRejectedValueOnce(new Error("trust evaluation failed"));
+		const listingFailed = await fetch(`${base}/api/files?path=${encodeURIComponent(dir)}`);
+		expect(listingFailed.status).toBe(502);
+		await expect(listingFailed.json()).resolves.toEqual({ error: "trust evaluation failed" });
+
+		vi.mocked(clients[0].untrustContextFolder).mockRejectedValueOnce(new Error("durable write failed"));
+		const failed = await fetch(`${base}/api/files/untrust`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ path: dir }),
+		});
+		expect(failed.status).toBe(502);
+		await expect(failed.json()).resolves.toEqual({ error: "durable write failed" });
+	});
+
 	it("lists, uploads (with collision), downloads, and mkdirs", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
 		tempDirs.push(dir);

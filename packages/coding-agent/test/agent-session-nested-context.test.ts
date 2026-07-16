@@ -60,6 +60,10 @@ function getToolResultText(message: ToolResultMessage): string {
 	return getTextBlocks(message).join("\n");
 }
 
+function enableUnrestrictedNestedContext(harness: Harness): void {
+	harness.settingsManager.setAutoLoadNestedContext(true);
+}
+
 describe("AgentSession nested context auto-load", () => {
 	let harness: Harness | undefined;
 	let extraDirs: string[] = [];
@@ -90,6 +94,7 @@ describe("AgentSession nested context auto-load", () => {
 		writeFileSync(join(nestedDir, "file.txt"), "file contents");
 		writeFileSync(join(nestedDir, "second.txt"), "second contents");
 
+		enableUnrestrictedNestedContext(harness);
 		await harness.session.prompt("read twice");
 
 		const afterFirstTool = getToolResults(getContext(harness, 1));
@@ -106,6 +111,54 @@ describe("AgentSession nested context auto-load", () => {
 		const allToolText = afterSecondTool.map(getToolResultText).join("\n");
 		expect(countOccurrences(allToolText, "Auto-loaded project context")).toBe(1);
 		expect(getToolResultText(afterSecondTool[1])).toBe("ok");
+	});
+
+	it("does not append nested context by default", async () => {
+		harness = createHarness({
+			responses: [{ toolCalls: [{ name: "read", args: { path: join("nested", "file.txt") } }] }, "done"],
+			baseToolsOverride: { read: readTool },
+		});
+		const nestedDir = join(harness.tempDir, "nested");
+		mkdirSync(nestedDir, { recursive: true });
+		writeFileSync(join(nestedDir, "CLAUDE.md"), "# Default-off context");
+		writeFileSync(join(nestedDir, "file.txt"), "file contents");
+
+		await harness.session.prompt("read once");
+		expect(getToolResultText(getToolResults(getContext(harness, 1))[0])).toBe("ok");
+	});
+
+	it("refreshes global trusted folders for a previously blocked target", () => {
+		harness = createHarness({ baseToolsOverride: { read: readTool } });
+		const nestedDir = join(harness.tempDir, "nested");
+		mkdirSync(nestedDir, { recursive: true });
+		writeFileSync(join(nestedDir, "CLAUDE.md"), "# Refreshed trust context");
+		writeFileSync(join(nestedDir, "file.txt"), "file contents");
+		const compute = (
+			harness.session as unknown as {
+				_computeNestedContextBlock: (toolName: string, args: Record<string, unknown>) => string | null;
+			}
+		)._computeNestedContextBlock.bind(harness.session);
+
+		expect(compute("read", { path: join(nestedDir, "file.txt") })).toBeNull();
+		writeFileSync(
+			join(harness.tempDir, "settings.json"),
+			JSON.stringify({ context: { trustedFolders: [nestedDir] } }),
+		);
+		expect(compute("read", { path: join(nestedDir, "file.txt") })).toContain("# Refreshed trust context");
+	});
+
+	it("fails closed when an AgentSession has no settings manager", () => {
+		harness = createHarness({ baseToolsOverride: { read: readTool } });
+		const nestedDir = join(harness.tempDir, "nested");
+		mkdirSync(nestedDir, { recursive: true });
+		writeFileSync(join(nestedDir, "CLAUDE.md"), "# Must not load");
+		writeFileSync(join(nestedDir, "file.txt"), "file contents");
+		const session = harness.session as unknown as {
+			settingsManager?: undefined;
+			_computeNestedContextBlock: (toolName: string, args: Record<string, unknown>) => string | null;
+		};
+		session.settingsManager = undefined;
+		expect(session._computeNestedContextBlock("read", { path: join(nestedDir, "file.txt") })).toBeNull();
 	});
 
 	it("does not append nested context when context.autoLoadNested is disabled", async () => {
@@ -145,6 +198,7 @@ describe("AgentSession nested context auto-load", () => {
 		writeFileSync(join(nestedDir, "CLAUDE.md"), "# Extension success context");
 		writeFileSync(join(nestedDir, "file.txt"), "file contents");
 
+		enableUnrestrictedNestedContext(harness);
 		await harness.session.prompt("read once");
 
 		const [toolResult] = getToolResults(getContext(harness, 1));
@@ -173,6 +227,7 @@ describe("AgentSession nested context auto-load", () => {
 		writeFileSync(join(nestedDir, "CLAUDE.md"), "# Extension falsy context");
 		writeFileSync(join(nestedDir, "file.txt"), "file contents");
 
+		enableUnrestrictedNestedContext(harness);
 		await harness.session.prompt("read once");
 
 		const [toolResult] = getToolResults(getContext(harness, 1));
@@ -206,6 +261,7 @@ describe("AgentSession nested context auto-load", () => {
 		writeFileSync(join(nestedDir, "CLAUDE.md"), "# Tool error context");
 		writeFileSync(join(nestedDir, "file.txt"), "file contents");
 
+		enableUnrestrictedNestedContext(harness);
 		await harness.session.prompt("read once");
 
 		const [toolResult] = getToolResults(getContext(harness, 1));
@@ -236,6 +292,7 @@ describe("AgentSession nested context auto-load", () => {
 		writeFileSync(join(nestedDir, "file.txt"), "file contents");
 		agentsFiles.push({ path: rootClaude, content: "# Root context already loaded" });
 
+		enableUnrestrictedNestedContext(harness);
 		await harness.session.prompt("read once");
 
 		const [toolResult] = getToolResults(getContext(harness, 1));
@@ -257,6 +314,7 @@ describe("AgentSession nested context auto-load", () => {
 		writeFileSync(join(nestedDir, "CLAUDE.md"), `# Secret context\nToken: ${token}`);
 		writeFileSync(join(nestedDir, "file.txt"), "file contents");
 
+		enableUnrestrictedNestedContext(harness);
 		await harness.session.prompt("read once");
 
 		const [toolResult] = getToolResults(getContext(harness, 1));
@@ -281,6 +339,7 @@ describe("AgentSession nested context auto-load", () => {
 			baseToolsOverride: { read: readTool },
 		});
 
+		enableUnrestrictedNestedContext(harness);
 		await harness.session.prompt("read outside cwd");
 
 		const [toolResult] = getToolResults(getContext(harness, 1));

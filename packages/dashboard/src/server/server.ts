@@ -558,9 +558,37 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 		const path = typeof req.query.path === "string" ? req.query.path : homedir();
 		files
 			.list(path)
-			.then((listing) => res.json(listing))
-			.catch((err) => res.status(err?.status ?? 500).json({ error: String(err?.message ?? err) }));
+			.then(async (listing) => {
+				const handle = await pool.ensureUtilityRuntime();
+				const contextTrust = await handle.client.evaluateContextTrust(listing.path);
+				res.json({ ...listing, contextTrust });
+			})
+			.catch((err) => res.status(err?.status ?? 502).json({ error: String(err?.message ?? err) }));
 	});
+
+	function contextTrustMutation(
+		req: Request,
+		res: Response,
+		operation: "trustContextFolder" | "untrustContextFolder",
+	): void {
+		const rawPath = typeof req.body?.path === "string" ? req.body.path : "";
+		if (!rawPath) {
+			res.status(400).json({ error: "path is required" });
+			return;
+		}
+		files
+			.resolveDirectory(rawPath)
+			.then(async (path) => {
+				const handle = await pool.ensureUtilityRuntime();
+				const result = await handle.client[operation](path);
+				log(`context trust ${operation === "trustContextFolder" ? "add" : "remove"}: ${path}`);
+				res.json(result);
+			})
+			.catch((err) => res.status(err?.status ?? 502).json({ error: String(err?.message ?? err) }));
+	}
+
+	app.post("/api/files/trust", (req, res) => contextTrustMutation(req, res, "trustContextFolder"));
+	app.post("/api/files/untrust", (req, res) => contextTrustMutation(req, res, "untrustContextFolder"));
 
 	app.get("/api/files/places", (_req, res) => {
 		const roots = [...new Set(pool.list().map((h) => h.cwd))];

@@ -198,10 +198,30 @@ export interface FileEntryDto {
 }
 
 /** Directory listing response. */
+export interface ContextTrustEvaluationDto {
+	/** Canonical existing directory evaluated by the utility RPC runtime. */
+	canonicalTarget: string;
+	/** Whether nested context is untrusted, granted by a root, or globally unrestricted. */
+	state: "untrusted" | "trusted-root" | "unrestricted";
+	/** Canonical root granting trusted-root access, including inherited access. */
+	grantingRoot?: string;
+}
+
+/** Result of changing a context-trust root through the utility RPC runtime. */
+export interface ContextTrustMutationResultDto {
+	evaluation: ContextTrustEvaluationDto;
+	settings: SettingsDto;
+	addedRoot?: string;
+	removedRoot?: string;
+}
+
+/** Directory listing response. */
 export interface DirListingDto {
 	/** Canonicalized absolute path of the listed directory. */
 	path: string;
 	entries: FileEntryDto[];
+	/** Current global nested-context trust for this canonical directory. */
+	contextTrust: ContextTrustEvaluationDto;
 }
 
 /** Auth mode reported to the client. */
@@ -241,6 +261,10 @@ export interface SettingsDto {
 	blockImages?: boolean;
 	enableSkillCommands?: boolean;
 	autoLoadNestedContext?: boolean;
+	/** Global configured trusted context folders, including invalid legacy entries. */
+	trustedContextFolders?: string[];
+	/** Canonical existing trusted roots currently enforced by the runtime. */
+	effectiveTrustedContextRoots?: string[];
 	transport?: "sse" | "websocket" | "auto";
 	hideThinkingBlock?: boolean;
 	agentModels?: Record<string, string[]>;

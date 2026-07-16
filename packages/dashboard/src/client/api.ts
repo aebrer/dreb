@@ -8,6 +8,7 @@ import type {
 	AuthStatusDto,
 	BackgroundAgentDto,
 	CommandDto,
+	ContextTrustMutationResultDto,
 	DirListingDto,
 	EventEnvelope,
 	FleetDto,
@@ -131,6 +132,8 @@ export const api = {
 	dailyCost: () => request<{ cost: number }>("/api/daily-cost"),
 
 	listFiles: (path: string) => request<DirListingDto>(`/api/files?path=${encodeURIComponent(path)}`),
+	trustContextFolder: (path: string) => request<ContextTrustMutationResultDto>("/api/files/trust", json({ path })),
+	untrustContextFolder: (path: string) => request<ContextTrustMutationResultDto>("/api/files/untrust", json({ path })),
 	places: () => request<{ places: Array<{ label: string; path: string }> }>("/api/files/places"),
 	downloadUrl: (path: string) => `/api/files/download?path=${encodeURIComponent(path)}`,
 	upload: async (dir: string, file: File, overwrite: boolean) => {

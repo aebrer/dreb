@@ -321,8 +321,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 			<main class="container settings-wrap">
 				<h1>settings</h1>
 				<p class="settings-intro">
-					Defaults for new sessions. Live sessions keep their current values — change those from the session view.
-					Writes go to the global settings file on the host.
+					Ordinary defaults apply only to new sessions. Context trust changes apply to subsequent lazy loads in
+					live sessions; already injected content cannot be retracted. Writes go to the global settings file on the
+					host.
 				</p>
 
 				<Show when={error()}>
@@ -612,15 +613,20 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 								</div>
 								<div class="setting-row">
 									<span class="setting-label">
-										<span class="name">auto-load nested context</span>
-										<span class="hint">load nested AGENTS.md/CLAUDE.md when tools enter subdirectories</span>
+										<span class="name">global expert nested-context trust</span>
+										<span class="hint">allow nested AGENTS.md/CLAUDE.md from any resolvable directory</span>
 									</span>
 									<span class="setting-control">
 										<OnOffSelect
-											value={current().autoLoadNestedContext !== false}
+											value={current().autoLoadNestedContext === true}
 											onChange={(value) => save({ autoLoadNestedContext: value })}
 										/>
 									</span>
+								</div>
+								<div class="settings-warning context-expert-warning">
+									<strong>Expert setting — global only.</strong> When ON, nested instructions from any
+									resolvable directory may load, including untrusted prompt-injection content. Leave this OFF
+									and use the Files view to trust only folders you control.
 								</div>
 								<div class="setting-row">
 									<span class="setting-label">
