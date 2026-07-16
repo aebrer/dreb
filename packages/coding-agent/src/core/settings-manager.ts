@@ -734,46 +734,53 @@ export class SettingsManager {
 	}
 
 	setAutoLoadNestedContext(enabled: boolean): void {
-		if (!this.globalSettings.context) {
-			this.globalSettings.context = {};
-		}
-		this.globalSettings.context.autoLoadNested = enabled;
-		this.markModified("context", "autoLoadNested");
-		this.save();
+		this.setContextTrust({ autoLoadNested: enabled });
 	}
 
-	/** Atomically persist one or both global lazy-context trust policy fields. */
+	/**
+	 * Atomically persist one or both global lazy-context trust policy fields. Every trust
+	 * write normalizes both known fields, so a malformed on-disk sibling cannot make an
+	 * otherwise successful mutation silently fail closed.
+	 */
 	setContextTrust(update: { autoLoadNested?: boolean; trustedFolders?: string[] }): void {
+		if (update.autoLoadNested !== undefined && typeof update.autoLoadNested !== "boolean") {
+			throw new Error("Auto-load nested context must be a boolean");
+		}
 		if (
 			update.trustedFolders !== undefined &&
 			(!Array.isArray(update.trustedFolders) || update.trustedFolders.some((folder) => typeof folder !== "string"))
 		) {
 			throw new Error("Trusted context folders must be an array of strings");
 		}
-		if (!this.globalSettings.context) {
-			this.globalSettings.context = {};
-		}
-		if (update.autoLoadNested !== undefined) {
-			this.globalSettings.context.autoLoadNested = update.autoLoadNested;
-			this.markModified("context", "autoLoadNested");
-		}
-		if (update.trustedFolders !== undefined) {
-			this.globalSettings.context.trustedFolders = [...update.trustedFolders];
-			this.markModified("context", "trustedFolders");
-		}
+
+		const currentContext = this.globalSettings.context;
+		const current =
+			typeof currentContext === "object" && currentContext !== null && !Array.isArray(currentContext)
+				? (currentContext as Record<string, unknown>)
+				: {};
+		const autoLoadNested =
+			update.autoLoadNested ?? (typeof current.autoLoadNested === "boolean" ? current.autoLoadNested : false);
+		const currentTrustedFolders =
+			Array.isArray(current.trustedFolders) && current.trustedFolders.every((folder) => typeof folder === "string")
+				? (current.trustedFolders as string[])
+				: [];
+		const trustedFolders = update.trustedFolders ?? currentTrustedFolders;
+
+		this.globalSettings.context = {
+			...current,
+			autoLoadNested,
+			trustedFolders: [...trustedFolders],
+		};
+		// Persist both fields rather than merging an unmodified sibling from disk. This is
+		// security-sensitive: malformed values must become fail-closed defaults on the
+		// next successful trust mutation, never survive to invalidate the whole policy.
+		this.markModified("context", "autoLoadNested");
+		this.markModified("context", "trustedFolders");
 		this.save();
 	}
 
 	setTrustedContextFolders(folders: string[]): void {
-		if (!Array.isArray(folders) || folders.some((folder) => typeof folder !== "string")) {
-			throw new Error("Trusted context folders must be an array of strings");
-		}
-		if (!this.globalSettings.context) {
-			this.globalSettings.context = {};
-		}
-		this.globalSettings.context.trustedFolders = [...folders];
-		this.markModified("context", "trustedFolders");
-		this.save();
+		this.setContextTrust({ trustedFolders: folders });
 	}
 
 	addTrustedContextFolder(folder: string): void {

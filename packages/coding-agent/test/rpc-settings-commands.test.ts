@@ -536,6 +536,30 @@ describe("setSettingsForRpc writes", () => {
 		expect(JSON.parse(globalSettings ?? "{}").context).toBeUndefined();
 	});
 
+	it("keeps an ordinary phase-one update when the following context write fails", async () => {
+		let globalSettings: string | undefined;
+		const storage: SettingsStorage = {
+			withLock(scope, fn) {
+				const next = fn(scope === "global" ? globalSettings : undefined);
+				if (next === undefined || scope !== "global") return;
+				if (JSON.parse(next).context !== undefined) throw new Error("disk full");
+				globalSettings = next;
+			},
+		};
+		const manager = SettingsManager.fromStorage(storage);
+
+		const result = await setSettingsForRpc(manager, stubRegistry([]), {
+			transport: "websocket",
+			autoLoadNestedContext: true,
+			trustedContextFolders: [],
+		});
+
+		expect(result).toMatchObject({ ok: false });
+		const fresh = SettingsManager.fromStorage(storage);
+		expect(fresh.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+		expect(fresh.getTransport()).toBe("websocket");
+	});
+
 	it.each([
 		["unrestricted nested context", (_root: string) => ({ autoLoadNestedContext: true })],
 		["a trusted context folder", (root: string) => ({ trustedContextFolders: [root] })],

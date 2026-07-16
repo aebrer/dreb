@@ -120,7 +120,7 @@ At startup, dreb always performs an **initial upward scan** from the launch cwd 
 | `context.trustedFolders` | string[] | `[]` | **Global-only.** Explicit existing directory roots whose canonical descendants may lazy-load context |
 | `context.autoLoadNested` | boolean | `false` | **Global-only expert trust-all.** Allow lazy loading from every resolvable directory |
 
-Both settings belong only in `~/.dreb/agent/settings.json`. Project `.dreb/settings.json` cannot enable unrestricted loading, add trusted roots, override global roots, or otherwise widen this trust boundary.
+Both settings belong only in `~/.dreb/agent/settings.json`. Project `.dreb/settings.json` cannot enable, disable, or extend nested-context trust: it cannot enable unrestricted loading, add trusted roots, override global roots, or otherwise widen this trust boundary. A cloned repository therefore cannot grant itself trust.
 
 #### `context.trustedFolders`
 
@@ -137,6 +137,8 @@ Use explicit roots for directories whose instructions you control:
 Each root authorizes itself and its descendants for lazy loading. Paths are expanded (`~` is supported) and canonically resolved with native `realpath`; the target is independently canonicalized for every decision. Roots must be absolute after expansion, existing directories, and must not be broken symlinks. Invalid/missing legacy entries are ignored fail-closed; RPC/settings updates reject invalid entries atomically. Canonical duplicates are deduplicated, and a descendant root is subsumed by its trusted ancestor. This realpath matching prevents symlink escape: a path that is lexically below a trusted folder but resolves outside it is not trusted.
 
 For a trusted target, the first matching path-bearing tool (`read`, `edit`, `write`, `grep`, `find`, `ls`) — or `bash` beginning with `cd <dir>` — can append its context to the tool result. The walk is bounded by the trusted root (or the normal cwd/repository/context-file ceiling when expert trust-all is in effect). Main agents and subagents read the same global policy. Active processes re-read it for later lazy-load decisions, so a trust/untrust change affects **future** loads without a restart; text already injected into a conversation cannot be retracted.
+
+In the dashboard, the Files view is the primary grant flow: trust the displayed folder and descendants, or untrust the actual granting root. The Settings screen lists every configured trusted root for audit and revoke, and offers a simple add-by-path control. These controls change only lazy nested/out-of-cwd loading; they do not alter the separate initial upward scan described above.
 
 #### `context.autoLoadNested`
 

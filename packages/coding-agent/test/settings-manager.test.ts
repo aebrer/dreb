@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { matchContextTrust } from "../src/core/context-trust.js";
 import { DEFAULT_BG_PARENT_TURN_LIMIT, SettingsManager } from "../src/core/settings-manager.js";
 
 describe("SettingsManager", () => {
@@ -296,6 +297,39 @@ describe("SettingsManager", () => {
 			const saved = JSON.parse(readFileSync(settingsPath, "utf-8"));
 			expect(saved.context).toEqual({ unrelated: "kept", autoLoadNested: true, trustedFolders: ["/trusted"] });
 			expect(saved.theme).toBe("dark");
+		});
+
+		it("normalizes malformed autoLoadNested when updating trusted folders", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			const trustedRoot = join(testDir, "trusted");
+			mkdirSync(trustedRoot);
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: "true" } }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setTrustedContextFolders([trustedRoot]);
+			await manager.flush();
+
+			expect(matchContextTrust(manager.getGlobalContextTrustPolicy(), trustedRoot)).toEqual({
+				targetDir: trustedRoot,
+				trustedRoot,
+			});
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({
+				unrestricted: false,
+				trustedFolders: [trustedRoot],
+			});
+		});
+
+		it("normalizes malformed trustedFolders when updating autoLoadNested", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { trustedFolders: "/tmp" } }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAutoLoadNestedContext(true);
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: [] });
 		});
 
 		it("refreshes external global policy changes and fails closed on corrupt settings", () => {

@@ -1209,9 +1209,84 @@ describe("screen smoke tests", () => {
 			candidate.textContent?.includes("global expert nested-context trust"),
 		)!;
 		expect((row.querySelector("select") as HTMLSelectElement).value).toBe("off");
-		expect(el.textContent).toContain("Expert setting — global only");
+		expect(el.textContent).toContain("Expert global override");
+		expect(el.textContent).toContain(".dreb/settings.json cannot enable, disable, or extend nested-context trust");
+		expect(el.textContent).toContain("cloned repository cannot grant itself trust");
 		expect(el.textContent).toContain("untrusted prompt-injection content");
-		expect(el.textContent).toContain("Files view to trust only folders you control");
+	});
+
+	it("settings lists trusted context folders and revokes a selected root", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			trustedContextFolders: ["/workspace/controlled", "/workspace/other"],
+		});
+		vi.mocked(api.untrustContextFolder).mockResolvedValueOnce({
+			evaluation: { canonicalTarget: "/workspace/controlled", state: "untrusted" },
+			settings: { trustedContextFolders: ["/workspace/other"] },
+			removedRoot: "/workspace/controlled",
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("/workspace/controlled");
+		expect(el.textContent).toContain("/workspace/other");
+		const revoke = [...el.querySelectorAll("button")].find((button) => button.textContent === "revoke trust")!;
+		revoke.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.untrustContextFolder).toHaveBeenCalledWith("/workspace/controlled");
+		expect(el.textContent).not.toContain("/workspace/controlled");
+		expect(el.textContent).toContain("/workspace/other");
+	});
+
+	it("settings shows the trusted-context empty state", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ trustedContextFolders: [] });
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain(
+			"No trusted folders. Use the Files view to trust a project folder and its descendants.",
+		);
+	});
+
+	it("settings surfaces a trusted-context revoke error", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ trustedContextFolders: ["/workspace/controlled"] });
+		vi.mocked(api.untrustContextFolder).mockRejectedValueOnce(new Error("trust write failed"));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent === "revoke trust")!.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("trust write failed");
+	});
+
+	it("settings trusts a folder added by path", async () => {
+		vi.mocked(api.trustContextFolder).mockResolvedValueOnce({
+			evaluation: {
+				canonicalTarget: "/workspace/controlled",
+				state: "trusted-root",
+				grantingRoot: "/workspace/controlled",
+			},
+			settings: { trustedContextFolders: ["/workspace/controlled"] },
+			addedRoot: "/workspace/controlled",
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const input = el.querySelector("#trusted-context-folder-path") as HTMLInputElement;
+		input.value = "/workspace/controlled";
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		(input.closest("form") as HTMLFormElement).dispatchEvent(
+			new Event("submit", { bubbles: true, cancelable: true }),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.trustContextFolder).toHaveBeenCalledWith("/workspace/controlled");
+		expect(el.textContent).toContain("/workspace/controlled");
 	});
 
 	it("settings renders expanded default rows and agent model defaults", async () => {
