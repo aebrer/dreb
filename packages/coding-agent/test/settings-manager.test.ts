@@ -310,6 +310,50 @@ describe("SettingsManager", () => {
 			expect(manager.drainErrors().some((entry) => entry.scope === "global")).toBe(true);
 		});
 
+		it.each([
+			["a string autoLoadNested", { context: { autoLoadNested: "true" } }],
+			["a numeric autoLoadNested", { context: { autoLoadNested: 1 } }],
+			["a string trustedFolders", { context: { trustedFolders: "/tmp" } }],
+			["a non-string trusted folder", { context: { trustedFolders: ["/ok", 42] } }],
+			["a non-object context", { context: "nope" }],
+			["a null context", { context: null }],
+		])("fails closed on valid JSON with %s", (_description, settings) => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify(settings));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+			expect(manager.drainErrors().some((entry) => entry.scope === "global")).toBe(true);
+		});
+
+		it("does not retain a permissive policy after an external malformed context update", () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({ context: { autoLoadNested: true, trustedFolders: ["/global"] } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: ["/global"] });
+
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: "true" } }));
+
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+		});
+
+		it("preserves pending non-context global changes while refreshing context", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark", context: { autoLoadNested: false } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			manager.setTheme("light");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark", context: { trustedFolders: ["/trusted"] } }));
+
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: ["/trusted"] });
+			expect(manager.getTheme()).toBe("light");
+
+			await manager.flush();
+			expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toMatchObject({ theme: "light" });
+		});
+
 		it("keeps InMemorySettingsManager deterministic", () => {
 			const manager = SettingsManager.inMemory({ context: { autoLoadNested: true, trustedFolders: ["/trusted"] } });
 			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: ["/trusted"] });

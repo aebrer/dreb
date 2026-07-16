@@ -255,6 +255,7 @@ type SettingsWriter = SettingsReader &
 		| "setEnableSkillCommands"
 		| "setAutoLoadNestedContext"
 		| "setTrustedContextFolders"
+		| "setContextTrust"
 		| "setTransport"
 		| "setHideThinkingBlock"
 		| "setAgentModelsForAgent"
@@ -649,7 +650,8 @@ export async function setSettingsForRpc(
 		}
 
 		try {
-			// --- Apply (validated) ---
+			// Phase 1: durably persist every ordinary setting before touching the
+			// security-sensitive context trust policy.
 			if (update.defaultProvider !== undefined && update.defaultModel !== undefined) {
 				settingsManager.setDefaultModelAndProvider(update.defaultProvider, update.defaultModel);
 			}
@@ -677,12 +679,6 @@ export async function setSettingsForRpc(
 			if (update.enableSkillCommands !== undefined) {
 				settingsManager.setEnableSkillCommands(update.enableSkillCommands);
 			}
-			if (update.autoLoadNestedContext !== undefined) {
-				settingsManager.setAutoLoadNestedContext(update.autoLoadNestedContext);
-			}
-			if (trustedContextFolders !== undefined) {
-				settingsManager.setTrustedContextFolders(trustedContextFolders);
-			}
 			if (update.transport !== undefined) {
 				settingsManager.setTransport(update.transport);
 			}
@@ -708,17 +704,31 @@ export async function setSettingsForRpc(
 				}
 			}
 
-			// Ensure durability and surface write errors instead of losing them.
 			await settingsManager.flush();
 			const writeErrors = settingsManager.drainErrors();
 			if (writeErrors.length > 0) {
 				const detail = writeErrors.map((e) => `${e.scope}: ${e.error.message}`).join("; ");
-				if (updatesContextTrustPolicy) {
-					// A failed security-policy write must not leave a newly permissive policy
-					// effective only in memory. Restore the last durable global policy.
-					settingsManager.reload();
-				}
+				// Context trust has not yet been modified, so do not reload: doing so
+				// could discard unrelated pending in-memory state.
 				return { ok: false as const, error: `Failed to persist settings: ${detail}` };
+			}
+
+			// Phase 2: apply both context fields in one queued, atomic write only after
+			// phase 1 is durably successful.
+			if (updatesContextTrustPolicy) {
+				settingsManager.setContextTrust({
+					...(update.autoLoadNestedContext !== undefined ? { autoLoadNested: update.autoLoadNestedContext } : {}),
+					...(trustedContextFolders !== undefined ? { trustedFolders: trustedContextFolders } : {}),
+				});
+				await settingsManager.flush();
+				const ctxErrors = settingsManager.drainErrors();
+				if (ctxErrors.length > 0) {
+					const detail = ctxErrors.map((e) => `${e.scope}: ${e.error.message}`).join("; ");
+					// The context write failed, so durable storage retains its previous,
+					// fail-closed policy. Restore that policy in memory before returning.
+					settingsManager.reload();
+					return { ok: false as const, error: `Failed to persist settings: ${detail}` };
+				}
 			}
 
 			return warnings.length > 0

@@ -4,12 +4,16 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Model } from "@dreb/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentSession } from "../src/core/agent-session.js";
+import * as outputGuard from "../src/core/output-guard.js";
 import { SettingsManager, type SettingsStorage } from "../src/core/settings-manager.js";
+import * as jsonl from "../src/modes/rpc/jsonl.js";
 import { RpcClient } from "../src/modes/rpc/rpc-client.js";
 import {
 	evaluateContextTrustForRpc,
 	getSettingsForRpc,
 	listAgentTypesForRpc,
+	runRpcMode,
 	setSettingsForRpc,
 	trustContextFolderForRpc,
 	untrustContextFolderForRpc,
@@ -510,6 +514,28 @@ describe("setSettingsForRpc writes", () => {
 		expect(result.error).toContain("disk full");
 	});
 
+	it("does not durably enable context trust when an ordinary-settings write fails", async () => {
+		let globalSettings: string | undefined;
+		const storage: SettingsStorage = {
+			withLock(scope, fn) {
+				const next = fn(scope === "global" ? globalSettings : undefined);
+				if (next === undefined || scope !== "global") return;
+				if (JSON.parse(next).transport !== undefined) throw new Error("disk full");
+				globalSettings = next;
+			},
+		};
+		const manager = SettingsManager.fromStorage(storage);
+
+		const result = await setSettingsForRpc(manager, stubRegistry([]), {
+			transport: "websocket",
+			autoLoadNestedContext: true,
+		});
+
+		expect(result).toMatchObject({ ok: false });
+		expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+		expect(JSON.parse(globalSettings ?? "{}").context).toBeUndefined();
+	});
+
 	it.each([
 		["unrestricted nested context", (_root: string) => ({ autoLoadNestedContext: true })],
 		["a trusted context folder", (root: string) => ({ trustedContextFolders: [root] })],
@@ -697,6 +723,147 @@ describe("context trust RPC commands", () => {
 				settings: { trustedContextFolders: [], effectiveTrustedContextRoots: [] },
 			},
 		});
+	});
+
+	it("durably trusts a root and removes it through a descendant across fresh managers", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		const root = join(dir, "root");
+		const child = join(root, "child");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(child, { recursive: true });
+		const canonicalRoot = realpathSync.native(root);
+		const canonicalChild = realpathSync.native(child);
+
+		const initial = SettingsManager.create(projectDir, agentDir);
+		await expect(trustContextFolderForRpc(initial, root)).resolves.toMatchObject({
+			ok: true,
+			result: { addedRoot: canonicalRoot },
+		});
+		await initial.flush();
+
+		const afterTrust = SettingsManager.create(projectDir, agentDir);
+		expect(afterTrust.getGlobalContextTrustPolicy().trustedFolders).toEqual([canonicalRoot]);
+		expect(evaluateContextTrustForRpc(afterTrust, child)).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: canonicalChild, state: "trusted-root", grantingRoot: canonicalRoot },
+		});
+
+		const afterTrustFresh = SettingsManager.create(projectDir, agentDir);
+		await expect(untrustContextFolderForRpc(afterTrustFresh, child)).resolves.toMatchObject({
+			ok: true,
+			result: { removedRoot: canonicalRoot },
+		});
+		await afterTrustFresh.flush();
+
+		const afterUntrust = SettingsManager.create(projectDir, agentDir);
+		expect(afterUntrust.getGlobalContextTrustPolicy().trustedFolders).toEqual([]);
+		expect(evaluateContextTrustForRpc(afterUntrust, root)).toEqual({
+			ok: true,
+			evaluation: { canonicalTarget: canonicalRoot, state: "untrusted" },
+		});
+	});
+
+	it("dispatches context trust commands from JSONL and rejects malformed wire paths without mutation", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		const root = join(dir, "root");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		mkdirSync(root, { recursive: true });
+		const canonicalRoot = realpathSync.native(root);
+		const manager = SettingsManager.create(projectDir, agentDir);
+		const responseResolvers: Array<(response: Record<string, unknown>) => void> = [];
+		let handleInputLine: ((line: string) => void) | undefined;
+		const existingEndListeners = new Set(process.stdin.listeners("end"));
+		const existingErrorListeners = new Set(process.stdin.listeners("error"));
+
+		vi.spyOn(outputGuard, "takeOverStdout").mockImplementation(() => {});
+		vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((line) => {
+			responseResolvers.shift()?.(JSON.parse(line) as Record<string, unknown>);
+		});
+		vi.spyOn(jsonl, "attachJsonlLineReader").mockImplementation((_stream, onLine) => {
+			handleInputLine = onLine;
+			return () => {};
+		});
+
+		try {
+			// runRpcMode intentionally never resolves; this minimal session exercises its real
+			// JSONL command dispatcher while the test captures only its stdin/stdout boundary.
+			void runRpcMode({
+				sessionFile: undefined,
+				messages: [],
+				settingsManager: manager,
+				bindExtensions: async () => {},
+				sessionManager: { getCwd: () => projectDir },
+				subscribe: () => () => {},
+			} as unknown as AgentSession);
+			await vi.waitFor(() => expect(handleInputLine).toBeDefined());
+
+			const send = async (command: object): Promise<Record<string, unknown>> => {
+				const response = new Promise<Record<string, unknown>>((resolve) => responseResolvers.push(resolve));
+				handleInputLine!(JSON.stringify(command));
+				return response;
+			};
+
+			expect(await send({ type: "evaluate_context_trust", id: "evaluate-existing", path: root })).toEqual({
+				id: "evaluate-existing",
+				type: "response",
+				command: "evaluate_context_trust",
+				success: true,
+				data: { canonicalTarget: canonicalRoot, state: "untrusted" },
+			});
+			expect(await send({ type: "trust_context_folder", id: "trust-existing", path: root })).toMatchObject({
+				id: "trust-existing",
+				type: "response",
+				command: "trust_context_folder",
+				success: true,
+				data: { addedRoot: canonicalRoot },
+			});
+			expect(await send({ type: "untrust_context_folder", id: "untrust-existing", path: root })).toMatchObject({
+				id: "untrust-existing",
+				type: "response",
+				command: "untrust_context_folder",
+				success: true,
+				data: { removedRoot: canonicalRoot },
+			});
+
+			// Establish the policy whose preservation malformed JSON payloads must prove.
+			expect(await send({ type: "trust_context_folder", id: "trust-before-invalid", path: root })).toMatchObject({
+				success: true,
+			});
+			const malformedPaths: Array<[string, unknown]> = [
+				["null", null],
+				["array", []],
+				["object", {}],
+				["empty", ""],
+				["relative", "relative"],
+				["missing", join(dir, "missing")],
+			];
+			for (const command of ["evaluate_context_trust", "trust_context_folder", "untrust_context_folder"] as const) {
+				for (const [label, path] of malformedPaths) {
+					const id = `${command}-${label}`;
+					const response = await send({ type: command, id, path });
+					expect(response).toMatchObject({ id, type: "response", command, success: false });
+					expect(response.error).toEqual(expect.any(String));
+				}
+			}
+			expect(manager.getGlobalContextTrustPolicy().trustedFolders).toEqual([canonicalRoot]);
+		} finally {
+			for (const listener of process.stdin.listeners("end")) {
+				if (!existingEndListeners.has(listener)) {
+					process.stdin.off("end", listener as (...args: unknown[]) => void);
+				}
+			}
+			for (const listener of process.stdin.listeners("error")) {
+				if (!existingErrorListeners.has(listener)) {
+					process.stdin.off("error", listener as (...args: unknown[]) => void);
+				}
+			}
+		}
 	});
 
 	it("reports unrestricted state and refuses to pretend a folder can be untrusted", async () => {

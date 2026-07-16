@@ -2,6 +2,31 @@ import { chmodSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync 
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const fsReadSwap = vi.hoisted(() => ({
+	candidate: undefined as string | undefined,
+	outsideTarget: undefined as string | undefined,
+	swapped: false,
+}));
+
+// Swap a configured candidate only when resource-loader reads it. This makes the
+// pre-read containment check see the in-root target and the read see the outside one.
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		readFileSync: vi.fn((...args: any[]) => {
+			const filePath = args[0] as string;
+			if (filePath === fsReadSwap.candidate && fsReadSwap.outsideTarget) {
+				actual.unlinkSync(filePath);
+				actual.symlinkSync(fsReadSwap.outsideTarget, filePath, "file");
+				fsReadSwap.swapped = true;
+			}
+			return actual.readFileSync(...(args as Parameters<typeof actual.readFileSync>));
+		}),
+	};
+});
+
 import {
 	collectNestedContext,
 	computeNestedContextBlock,
@@ -12,6 +37,7 @@ import {
 	resolveSelfReadFile,
 	resolveTargetDir,
 } from "../src/core/nested-context.js";
+import { loadContextFilesFromDir } from "../src/core/resource-loader.js";
 import { DEFAULT_MAX_LINES } from "../src/core/tools/truncate.js";
 
 const itIfFilePermissionsApply =
@@ -317,6 +343,9 @@ describe("computeNestedContextBlock (orchestration)", () => {
 	});
 
 	afterEach(() => {
+		fsReadSwap.candidate = undefined;
+		fsReadSwap.outsideTarget = undefined;
+		fsReadSwap.swapped = false;
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -766,6 +795,28 @@ describe("computeNestedContextBlock (orchestration)", () => {
 			freshState(false, [trusted]),
 		);
 		expect(block).toBeNull();
+	});
+
+	itIfSymlinksApply("rejects a context symlink swapped outside the trusted root during its read", () => {
+		const trusted = join(tempDir, "trusted");
+		const inside = join(trusted, "inside");
+		const outside = join(tempDir, "outside");
+		const candidate = join(trusted, "AGENTS.md");
+		const insideTarget = join(inside, "AGENTS.md");
+		const outsideTarget = join(outside, "AGENTS.md");
+		mkdirSync(inside, { recursive: true });
+		mkdirSync(outside, { recursive: true });
+		writeFileSync(insideTarget, "# trusted context");
+		writeFileSync(outsideTarget, "# attacker-controlled context");
+		symlinkSync(insideTarget, candidate, "file");
+
+		fsReadSwap.candidate = candidate;
+		fsReadSwap.outsideTarget = outsideTarget;
+		const files = loadContextFilesFromDir(trusted, undefined, realpathSync(trusted));
+
+		expect(fsReadSwap.swapped).toBe(true);
+		expect(files.map((file) => file.content)).not.toContain("# attacker-controlled context");
+		expect(files.find((file) => file.path === candidate)).toBeUndefined();
 	});
 
 	it("does not cache a blocked target, so a later trusted decision can load it", () => {

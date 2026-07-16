@@ -373,6 +373,27 @@ export type RpcResponse =
 	// Settings
 	| { id?: string; type: "response"; command: "get_settings"; success: true; data: RpcSettingsSnapshot }
 	| { id?: string; type: "response"; command: "set_settings"; success: true; data: RpcSettingsSetResult }
+	| {
+			id?: string;
+			type: "response";
+			command: "evaluate_context_trust";
+			success: true;
+			data: RpcContextTrustEvaluation;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "trust_context_folder";
+			success: true;
+			data: RpcContextTrustMutationResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "untrust_context_folder";
+			success: true;
+			data: RpcContextTrustMutationResult;
+	  }
 
 	// Version
 	| { id?: string; type: "response"; command: "get_version"; success: true; data: { version: string } }

@@ -692,9 +692,11 @@ export class SettingsManager {
 				this.recordError("global", loaded.error);
 				return { unrestricted: false, trustedFolders: [] };
 			}
-			global = loaded.settings;
-			this.globalSettings = global;
+			// This re-read owns only the security-policy slice. Preserve every other
+			// in-memory global field, including writes that are queued but not yet durable.
+			this.globalSettings = { ...this.globalSettings, context: loaded.settings.context };
 			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+			global = this.globalSettings;
 		}
 
 		const context = global.context;
@@ -737,6 +739,28 @@ export class SettingsManager {
 		}
 		this.globalSettings.context.autoLoadNested = enabled;
 		this.markModified("context", "autoLoadNested");
+		this.save();
+	}
+
+	/** Atomically persist one or both global lazy-context trust policy fields. */
+	setContextTrust(update: { autoLoadNested?: boolean; trustedFolders?: string[] }): void {
+		if (
+			update.trustedFolders !== undefined &&
+			(!Array.isArray(update.trustedFolders) || update.trustedFolders.some((folder) => typeof folder !== "string"))
+		) {
+			throw new Error("Trusted context folders must be an array of strings");
+		}
+		if (!this.globalSettings.context) {
+			this.globalSettings.context = {};
+		}
+		if (update.autoLoadNested !== undefined) {
+			this.globalSettings.context.autoLoadNested = update.autoLoadNested;
+			this.markModified("context", "autoLoadNested");
+		}
+		if (update.trustedFolders !== undefined) {
+			this.globalSettings.context.trustedFolders = [...update.trustedFolders];
+			this.markModified("context", "trustedFolders");
+		}
 		this.save();
 	}
 
