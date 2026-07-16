@@ -361,6 +361,93 @@ describe("SettingsManager", () => {
 			});
 		});
 
+		it.each([
+			["a non-string trusted folder", { autoLoadNested: false, trustedFolders: ["/ok", 42] }],
+			["a string trustedFolders", { autoLoadNested: false, trustedFolders: "/tmp" }],
+		])("getConfiguredTrustedContextFolders fails closed on %s", (_description, context) => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ context }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			// The configured accessor tolerates a malformed autoLoadNested sibling, but a
+			// malformed trustedFolders value is the list itself — it must fail closed to [].
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual([]);
+		});
+
+		it("adds onto the current external configured list, not a stale cached one", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/old"] } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			// Manager caches the initial configured list in memory.
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual(["/old"]);
+
+			// Another process replaces the configured list out from under this manager.
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/external"] } }),
+			);
+
+			// The add must derive its base list from a fresh cross-process re-read via the
+			// configured accessor, not the stale cached ["/old"].
+			manager.addTrustedContextFolder("/new");
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({
+				unrestricted: false,
+				trustedFolders: ["/external", "/new"],
+			});
+		});
+
+		it("removes from the current external configured list, not a stale cached one", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/old"] } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual(["/old"]);
+
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/a", "/b"] } }),
+			);
+
+			manager.removeTrustedContextFolder("/a");
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: ["/b"] });
+		});
+
+		it("fails closed and records an error when the configured accessor refresh read fails", () => {
+			let global = JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/old"] } });
+			let failReads = false;
+			const storage: SettingsStorage = {
+				withLock(scope, fn) {
+					if (scope === "project") {
+						fn(undefined);
+						return;
+					}
+					if (failReads) {
+						throw new Error("transient read failure");
+					}
+					const next = fn(global);
+					if (next !== undefined) global = next;
+				},
+			};
+			const manager = SettingsManager.fromStorage(storage);
+			// Initial load caches the configured list.
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual(["/old"]);
+			manager.drainErrors();
+
+			// The accessor's own cross-process refresh read now fails; it must fail closed to []
+			// (never expose the stale cached list) and record the read error loudly.
+			failReads = true;
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual([]);
+			expect(
+				manager
+					.drainErrors()
+					.some((entry) => entry.scope === "global" && entry.error.message === "transient read failure"),
+			).toBe(true);
+		});
+
 		it("normalizes malformed trustedFolders when updating autoLoadNested", async () => {
 			const settingsPath = join(agentDir, "settings.json");
 			writeFileSync(settingsPath, JSON.stringify({ context: { trustedFolders: "/tmp" } }));
