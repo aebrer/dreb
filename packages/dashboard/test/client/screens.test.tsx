@@ -1631,6 +1631,55 @@ describe("dashboard client regressions", () => {
 			expect(window.localStorage.getItem(COLOR_MODE_STORAGE_KEY)).toBeNull();
 		});
 
+		it("reflects a forced color mode onto every preview card's data-color-mode", async () => {
+			// Each card carries data-color-mode so its scoped preview renders the
+			// SELECTED variant (via themes.css), independent of the active :root.
+			window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");
+			reloadAppearance();
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const cards = Array.from(el.querySelectorAll("[data-theme-card]"));
+			expect(cards.length).toBe(4);
+			for (const card of cards) {
+				expect(card.getAttribute("data-color-mode")).toBe("dark");
+			}
+		});
+
+		it("omits data-color-mode on preview cards in system mode", async () => {
+			// system is the default (no stored key), so previews follow the OS and
+			// must NOT carry data-color-mode.
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const cards = Array.from(el.querySelectorAll("[data-theme-card]"));
+			expect(cards.length).toBe(4);
+			for (const card of cards) {
+				expect(card.hasAttribute("data-color-mode")).toBe(false);
+			}
+		});
+
+		it("updates preview cards' data-color-mode reactively when the mode changes", async () => {
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const select = el.querySelector("#pref-color-mode") as HTMLSelectElement;
+			select.value = "light";
+			select.dispatchEvent(new Event("change", { bubbles: true }));
+			for (const card of Array.from(el.querySelectorAll("[data-theme-card]"))) {
+				expect(card.getAttribute("data-color-mode")).toBe("light");
+			}
+
+			select.value = "system";
+			select.dispatchEvent(new Event("change", { bubbles: true }));
+			for (const card of Array.from(el.querySelectorAll("[data-theme-card]"))) {
+				expect(card.hasAttribute("data-color-mode")).toBe(false);
+			}
+		});
+
 		it("documents that the dashboard appearance is independent of the TUI theme", async () => {
 			const store = makeStore();
 			const el = mount(() => <SettingsScreen store={store} />);

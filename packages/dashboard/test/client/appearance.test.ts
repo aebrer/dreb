@@ -220,6 +220,69 @@ describe("appearance — cross-tab storage sync", () => {
 		window.dispatchEvent(new StorageEvent("storage", { key: "some.other.key", newValue: "value" }));
 		expect(theme()).toBe("dim");
 	});
+
+	it("reconciles on a null-key storage event (another tab's localStorage.clear())", () => {
+		initAppearance();
+		setTheme("solarized");
+		setColorMode("dark");
+		expect(document.documentElement.getAttribute("data-theme")).toBe("solarized");
+
+		// Another tab called localStorage.clear(): the store empties and the
+		// storage event carries a null key, which handleStorage must treat as a
+		// reconcile (NOT an unrelated-key early-return) so this tab resets too.
+		window.localStorage.clear();
+		window.dispatchEvent(new StorageEvent("storage", { key: null }));
+
+		expect(theme()).toBe("default");
+		expect(colorMode()).toBe("system");
+		expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
+		expect(document.documentElement.hasAttribute("data-color-mode")).toBe(false);
+	});
+});
+
+describe("appearance — initAppearance idempotency", () => {
+	it("registers the storage listener only once across repeated init calls", () => {
+		const addSpy = vi.spyOn(window, "addEventListener");
+		initAppearance();
+		initAppearance();
+		initAppearance();
+		const storageRegs = addSpy.mock.calls.filter(([type]) => type === "storage");
+		expect(storageRegs.length).toBe(1);
+		addSpy.mockRestore();
+	});
+
+	it("registers the matchMedia OS listener only once across repeated init calls", () => {
+		let addCount = 0;
+		const matchMediaMock = vi.fn().mockImplementation((query: string) => ({
+			matches: false,
+			media: query,
+			addEventListener: () => {
+				addCount += 1;
+			},
+			removeEventListener: () => {},
+			addListener: () => {
+				addCount += 1;
+			},
+			removeListener: () => {},
+		}));
+		Object.defineProperty(window, "matchMedia", { configurable: true, value: matchMediaMock });
+
+		initAppearance();
+		initAppearance();
+		initAppearance();
+		expect(addCount).toBe(1);
+	});
+
+	it("fires the reconcile handler once per storage event after repeated init calls", () => {
+		initAppearance();
+		initAppearance();
+		// A duplicated storage listener would reconcile N times; the observable
+		// result is identical, but the single-registration guard above pins it.
+		window.localStorage.setItem(THEME_STORAGE_KEY, "gruvbox");
+		window.dispatchEvent(new StorageEvent("storage", { key: THEME_STORAGE_KEY, newValue: "gruvbox" }));
+		expect(theme()).toBe("gruvbox");
+		expect(document.documentElement.getAttribute("data-theme")).toBe("gruvbox");
+	});
 });
 
 describe("appearance — theme-color meta", () => {

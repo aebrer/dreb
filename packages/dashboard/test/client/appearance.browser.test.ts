@@ -478,6 +478,47 @@ describe("appearance — the head bootstrap paints the persisted theme on first 
 		expect(state.colorScheme).toBe("dark");
 		await ctx.close();
 	});
+
+	it("sets color-scheme 'light dark' for a curated theme seeded without a color mode", async () => {
+		const ctx = await browser.newContext();
+		// Theme only, no color-mode key → the common "picked a theme, left mode on
+		// system" case. The bootstrap's color-scheme ternary must resolve the
+		// 'light dark' branch (matching applyAppearance()).
+		await ctx.addInitScript(() => {
+			localStorage.setItem("dreb.dashboard.theme", "gruvbox");
+		});
+		const p = await ctx.newPage();
+		await p.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+		const state = await p.evaluate(() => ({
+			theme: document.documentElement.getAttribute("data-theme"),
+			mode: document.documentElement.getAttribute("data-color-mode"),
+			colorScheme: document.documentElement.style.getPropertyValue("color-scheme"),
+		}));
+		expect(state.theme).toBe("gruvbox");
+		expect(state.mode).toBeNull();
+		expect(state.colorScheme).toBe("light dark");
+		await ctx.close();
+	});
+
+	it("sets color-scheme 'light' when a forced-light mode is seeded on the default theme", async () => {
+		const ctx = await browser.newContext();
+		// Mode only (no theme) → default theme forced light. The bootstrap must
+		// resolve the 'light' branch and set data-color-mode without data-theme.
+		await ctx.addInitScript(() => {
+			localStorage.setItem("dreb.dashboard.colorMode", "light");
+		});
+		const p = await ctx.newPage();
+		await p.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+		const state = await p.evaluate(() => ({
+			theme: document.documentElement.getAttribute("data-theme"),
+			mode: document.documentElement.getAttribute("data-color-mode"),
+			colorScheme: document.documentElement.style.getPropertyValue("color-scheme"),
+		}));
+		expect(state.theme).toBeNull();
+		expect(state.mode).toBe("light");
+		expect(state.colorScheme).toBe("light");
+		await ctx.close();
+	});
 });
 
 // ========================================================= 8. live theme-color
