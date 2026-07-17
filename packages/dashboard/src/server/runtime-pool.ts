@@ -34,6 +34,21 @@ export type RuntimeEventListener = (key: string, event: Record<string, unknown>)
 
 export { MAX_COMPLETED_BACKGROUND_AGENTS };
 
+interface RpcDashboardSnapshot {
+	snapshotId: string;
+	state: SessionStateDto;
+	messages: unknown[];
+	backgroundAgents: BackgroundAgentDto[];
+}
+
+type DashboardSnapshotClient = RpcClient & { getDashboardSnapshot(): Promise<RpcDashboardSnapshot> };
+
+export interface DashboardRuntimeSnapshot {
+	key: string;
+	barrierSeq: number;
+	snapshot: RpcDashboardSnapshot;
+}
+
 export interface RuntimeHandle {
 	key: string;
 	cwd: string;
@@ -51,6 +66,9 @@ export interface RuntimeHandle {
 	backgroundAgents: Map<string, BackgroundAgentDto>;
 }
 
+export const DEFAULT_DASHBOARD_BARRIER_TTL_MS = 5 * 60_000;
+export const DEFAULT_DASHBOARD_BARRIER_LIMIT = 1000;
+
 export interface RuntimePoolOptions {
 	cliPath?: string;
 	/** Extra args for every runtime (e.g. --provider). */
@@ -58,6 +76,16 @@ export interface RuntimePoolOptions {
 	/** RpcClient factory override for tests. */
 	clientFactory?: (options: { cliPath: string; cwd: string; args: string[] }) => RpcClient;
 	logger?: (line: string) => void;
+	/** Bounds unclaimed RPC snapshot ordering records. */
+	dashboardBarrierTtlMs?: number;
+	dashboardBarrierLimit?: number;
+	/** Injectable clock for deterministic barrier-expiry tests. */
+	now?: () => number;
+}
+
+interface DashboardBarrier {
+	seq: number;
+	recordedAt: number;
 }
 
 export class RuntimePool {
@@ -77,6 +105,12 @@ export class RuntimePool {
 	private readonly starting = new Set<RuntimeHandle>();
 	private readonly startupPromises = new Set<Promise<unknown>>();
 	private readonly exitedHandles = new WeakSet<RuntimeHandle>();
+	/** Snapshot ordering records observed synchronously from RpcClient stdout. */
+	private readonly dashboardBarriers = new Map<string, DashboardBarrier>();
+	private readonly dashboardBarrierTtlMs: number;
+	private readonly dashboardBarrierLimit: number;
+	private readonly now: () => number;
+	private dashboardBarrierPruneTimer: ReturnType<typeof setTimeout> | undefined;
 	private closing = false;
 
 	constructor(options: RuntimePoolOptions = {}) {
@@ -85,6 +119,9 @@ export class RuntimePool {
 		this.clientFactory =
 			options.clientFactory ?? ((o) => new RpcClient({ cliPath: o.cliPath, cwd: o.cwd, args: o.args }));
 		this.logger = options.logger ?? ((line) => console.warn(`[dashboard] ${line}`));
+		this.dashboardBarrierTtlMs = options.dashboardBarrierTtlMs ?? DEFAULT_DASHBOARD_BARRIER_TTL_MS;
+		this.dashboardBarrierLimit = options.dashboardBarrierLimit ?? DEFAULT_DASHBOARD_BARRIER_LIMIT;
+		this.now = options.now ?? Date.now;
 	}
 
 	/** Subscribe to events from every runtime, tagged with the runtime key. */
@@ -102,6 +139,68 @@ export class RuntimePool {
 
 	get(key: string): RuntimeHandle | undefined {
 		return this.runtimes.get(key);
+	}
+
+	/**
+	 * Record the EventHub sequence synchronously when the RPC snapshot marker
+	 * arrives. The marker line precedes its response on stdout, so this runs
+	 * before the RpcClient response continuation even across separate chunks.
+	 */
+	recordDashboardBarrier(runtimeKey: string, snapshotId: string, seq: number): void {
+		this.pruneDashboardBarriers();
+		this.dashboardBarriers.set(this.dashboardBarrierKey(runtimeKey, snapshotId), { seq, recordedAt: this.now() });
+		this.pruneDashboardBarriers();
+	}
+
+	/**
+	 * Capture a parent-session recovery snapshot and pair it with the sequence
+	 * captured at its RPC marker. This deliberately does not infer ordering from
+	 * await: later EventHub publications naturally have higher sequence numbers.
+	 */
+	async snapshotDashboard(handle: RuntimeHandle): Promise<DashboardRuntimeSnapshot> {
+		const snapshot = await (handle.client as DashboardSnapshotClient).getDashboardSnapshot();
+		this.pruneDashboardBarriers();
+		const barrierKey = this.dashboardBarrierKey(handle.key, snapshot.snapshotId);
+		const barrier = this.dashboardBarriers.get(barrierKey);
+		this.dashboardBarriers.delete(barrierKey);
+		this.scheduleDashboardBarrierPrune();
+		if (!barrier) {
+			throw new Error(`Dashboard snapshot ${snapshot.snapshotId} arrived without its ordering barrier`);
+		}
+		return { key: handle.key, barrierSeq: barrier.seq, snapshot };
+	}
+
+	private dashboardBarrierKey(runtimeKey: string, snapshotId: string): string {
+		return `${runtimeKey}\0${snapshotId}`;
+	}
+
+	private pruneDashboardBarriers(): void {
+		const oldestAllowed = this.now() - this.dashboardBarrierTtlMs;
+		for (const [snapshotId, barrier] of this.dashboardBarriers) {
+			if (barrier.recordedAt < oldestAllowed) this.dashboardBarriers.delete(snapshotId);
+		}
+		while (this.dashboardBarriers.size > this.dashboardBarrierLimit) {
+			const oldest = this.dashboardBarriers.keys().next().value;
+			if (oldest === undefined) break;
+			this.dashboardBarriers.delete(oldest);
+		}
+		this.scheduleDashboardBarrierPrune();
+	}
+
+	private scheduleDashboardBarrierPrune(): void {
+		if (this.dashboardBarrierPruneTimer) clearTimeout(this.dashboardBarrierPruneTimer);
+		this.dashboardBarrierPruneTimer = undefined;
+		let oldest: DashboardBarrier | undefined;
+		for (const barrier of this.dashboardBarriers.values()) {
+			if (!oldest || barrier.recordedAt < oldest.recordedAt) oldest = barrier;
+		}
+		if (!oldest) return;
+		const delay = Math.max(1, oldest.recordedAt + this.dashboardBarrierTtlMs - this.now() + 1);
+		this.dashboardBarrierPruneTimer = setTimeout(() => {
+			this.dashboardBarrierPruneTimer = undefined;
+			this.pruneDashboardBarriers();
+		}, delay);
+		this.dashboardBarrierPruneTimer.unref?.();
 	}
 
 	/** Spawn a new runtime in `cwd`, optionally opening an existing session file. */
@@ -220,6 +319,9 @@ export class RuntimePool {
 
 	async stopAll(): Promise<void> {
 		this.closing = true;
+		if (this.dashboardBarrierPruneTimer) clearTimeout(this.dashboardBarrierPruneTimer);
+		this.dashboardBarrierPruneTimer = undefined;
+		this.dashboardBarriers.clear();
 		const handles = new Set<RuntimeHandle>([
 			...this.runtimes.values(),
 			...this.utilities.values(),
@@ -346,6 +448,7 @@ export class RuntimePool {
 		return {
 			sessionId: handle.lastState?.sessionId ?? handle.key,
 			sessionName: handle.lastState?.sessionName,
+			tasks: handle.lastState?.tasks ?? [],
 			thinkingLevel: handle.lastState?.thinkingLevel ?? "off",
 			isStreaming: false,
 			isCompacting: false,

@@ -324,11 +324,14 @@ describe("applySessionEvent — session-level events", () => {
 		applySessionEvent(state, {
 			type: "tasks_update",
 			tasks: [
-				{ title: "a", status: "completed" },
-				{ title: "b", status: "in_progress" },
+				{ id: "a", title: "a", status: "completed" },
+				{ id: "b", title: "b", status: "in_progress" },
 			],
 		});
-		expect(state.tasks).toHaveLength(2);
+		expect(state.tasks).toEqual([
+			{ id: "a", title: "a", status: "completed" },
+			{ id: "b", title: "b", status: "in_progress" },
+		]);
 	});
 
 	it("suggest_next sets the suggestion chip", () => {

@@ -41,7 +41,7 @@ Open `http://127.0.0.1:5343`.
 - **Session view** — full chat parity: markdown streaming transcript, tool
   cards, thinking blocks, compaction summaries, per-message copy, tasks panel,
   suggest-next chip, slash-command autocomplete, image attach/paste,
-  queued-message restore, footer-parity info bar (branch, tokens, cost, ctx%,
+  queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
   and live auto-naming.
@@ -60,11 +60,48 @@ Open `http://127.0.0.1:5343`.
   global-only nested-context policy: an auditable trusted-roots list with
   revoke and simple add-by-path controls, plus a prominent expert trust-all
   warning. The Files view remains the primary trust-grant flow. Most defaults
-  seed new sessions; trust changes are observed by active processes for future
-  lazy loads and cannot retract already injected context. Also includes
-  dashboard-local preferences (thinking expansion and notification permission),
-  current pairing code, and paired-devices management.
+  seed new sessions; opening Settings flushes pending writes and reloads durable
+  global + project settings so external edits appear, while read/parse/write
+  failures are shown instead of stale values. Trust changes are observed by
+  active processes for future lazy loads and cannot retract already injected
+  context. Also includes dashboard-local preferences (thinking expansion and
+  notification permission), current pairing code, and paired-devices management.
 - **Pairing** — remote first-login rotating-code flow.
+
+## Live connection and recovery
+
+The accessible text indicator in the top bar and persistent session header reports
+the SSE connection as **connecting**, **connected**, **retrying**, **resyncing**,
+**disconnected**, or **auth failed** (with retry delay where applicable); color
+is not its only cue. The session-header indicator remains visible when session
+details or composer controls are collapsed.
+The server replays reducer-relevant projected envelopes from history bounded by
+both count and bytes, with a separate byte cap for each replay. A server restart,
+sequence gap, history eviction, or over-budget replay sends only that reconnect
+a resync barrier at the current cursor, not a partial replay; an individually
+oversized event sends a global barrier because every browser missed it.
+
+Recovery fetches an authoritative snapshot whose HTTP `barrierSeq` was captured
+synchronously at the RPC snapshot marker, discards queued envelopes through that
+sequence, then replays only later envelopes. A viewed subagent has an additional
+disk-read boundary so intervening relays are not lost. This restores transcripts,
+background-agent state, and the atomically replaced task list after a hard refresh
+or gap without interrupting healthy browsers. Backpressure disconnects a slow
+client and uses the same recovery path; a foreground 60-second liveness watchdog
+does likewise for a stalled stream. Named, unnumbered heartbeats arrive every 25
+seconds.
+
+Retries use client-owned capped exponential backoff (maximum 30 seconds) with
+±25% jitter. The attempt count resets only after 60 seconds of healthy
+liveness, not on socket open. Returning to a visible tab always validates auth;
+validation is aborted after 10 seconds so a black-holed request cannot stall
+recovery. A 401/403 becomes **auth failed**, while timeouts and other failures
+recover normally.
+Optional correlated diagnostics are dashboard-authenticated, metadata-only,
+4 KiB-capped, and rate-limited (one summary per connection every 30 seconds);
+they never include prompts, cookies, SSE payloads, or tool data.
+
+See the full [dashboard recovery contract](../coding-agent/docs/dashboard.md#live-connection-and-recovery) and [RPC snapshot ordering](../coding-agent/docs/rpc.md#get_dashboard_snapshot).
 
 ## Nested context trust
 
@@ -171,12 +208,11 @@ Browser (SolidJS, hash-routed SPA)
   ⇄ RpcClient pool — one `dreb --mode rpc` child per live session
 ```
 
-- Events stream over a single SSE connection carrying `{seq, key, event}`
-  envelopes; reconnects catch up via `Last-Event-ID` against a bounded ring
-  buffer (a gap triggers a `dashboard_resync` + full refetch). Deleting a
-  runtime publishes a synthetic `runtime_removed` event so clients evict that
-  session's state. Clients that stop draining the stream past a bounded
-  write buffer are disconnected and rely on reconnect catch-up.
+- Events stream over one SSE connection carrying `{seq, key, event}` envelopes.
+  Count/byte-bounded projected replay and an explicitly captured snapshot cursor
+  provide recovery; see [Live connection and recovery](#live-connection-and-recovery).
+  Deleting a runtime publishes a synthetic `runtime_removed` event so clients
+  evict that session's state.
 - Background subagent transcripts arrive over the same pipe via the
   `background_agent_event` relay (see `docs/rpc.md` in
   `@dreb/coding-agent`) — no session-file tailing.

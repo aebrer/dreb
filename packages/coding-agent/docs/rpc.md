@@ -191,6 +191,9 @@ Response:
       {"provider": "anthropic", "id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5", "reasoning": true, "thinkingLevel": "high"}
     ],
     "usingSubscription": false,
+    "tasks": [
+      {"id": "inspect", "title": "Inspect the implementation", "status": "in_progress"}
+    ],
     "thinkingLevel": "medium",
     "isStreaming": false,
     "isCompacting": false,
@@ -214,6 +217,25 @@ Response:
 The `model` field is a full [Model](#model) object or `null`. `scopedModels` is the runtime model scope (from settings `enabledModels` / CLI `--models`) in the same order used by model cycling; it is an empty array when no scope is active. `usingSubscription` is true when the active model is using OAuth subscription credentials, matching the TUI footer's `(sub)` cost indicator. The `sessionName` field is the display name set via `set_session_name` or auto-naming, or omitted if not set.
 
 `contextUsage` carries the same numbers the TUI footer shows, computed by the session itself — clients must render these rather than deriving their own estimate. `tokens` and `percent` are `null` when usage is unknown (right after compaction, before the next LLM response). The whole field is omitted when no model is set or the model has no context window.
+
+`tasks` is the current `RpcSessionState` task list. Every task has a stable `id`, `title`, and `pending`, `in_progress`, or `completed` status. It is replaced atomically by each [`tasks_update`](#event-types) event; clients restoring state after a hard refresh or recovery gap should use this snapshot rather than reconstructing tasks from a partial event history.
+
+#### get_dashboard_snapshot
+
+Capture the dashboard-visible parent-session state, full parent transcript, and background-agent registry at one RPC command boundary. This is for authoritative recovery, not ordinary incremental refreshes.
+
+```json
+{"id": "snapshot-7", "type": "get_dashboard_snapshot"}
+```
+
+The `RpcDashboardSnapshot` result is a `snapshotId`, a complete `RpcSessionState` (including `tasks`), `messages`, and `backgroundAgents`. The RPC child writes a `RpcDashboardSnapshotBarrierEvent` to stdout **immediately before** the matching response line:
+
+```json
+{"type":"dashboard_snapshot_barrier","snapshotId":"snapshot-7"}
+{"id":"snapshot-7","type":"response","command":"get_dashboard_snapshot","success":true,"data":{"snapshotId":"snapshot-7","state":{...},"messages":[...],"backgroundAgents":[...]}}
+```
+
+Stdout JSONL ordering is the contract: a relay records its current event-stream sequence when the marker arrives, before resolving the response, and pairs the snapshot only with that exact marker. The dashboard returns that captured sequence as `/api/resync.barrierSeq`; consumers discard queued events through it and replay only later events. The marker itself is not broadcast as another browser event, so one recovering client does not interrupt healthy clients. Do not infer ordering from request/response timing; see [dashboard recovery](dashboard.md#live-connection-and-recovery).
 
 #### get_resources
 
@@ -1229,7 +1251,7 @@ A dashboard settings tab typically reads `get_state` for what is active now and 
 
 #### get_settings
 
-Get persistent settings. Ordinary fields are the merged global + project view; the nested-context trust fields are always global-only.
+Get persistent settings. Before replying, RPC flushes pending settings writes, reloads durable global and project settings, and then reads the merged view; reopening dashboard Settings therefore sees external file edits. A pending write failure, unreadable file, parse error, or reload failure returns an explicit RPC error rather than a stale snapshot. Ordinary fields are the merged global + project view; the nested-context trust fields are always global-only.
 
 ```json
 {"type": "get_settings"}
@@ -1554,7 +1576,7 @@ Response:
 
 ## Events
 
-Events are streamed to stdout as JSON lines during agent operation. Events do NOT include an `id` field (only responses do).
+`RpcEvent` messages are streamed to stdout as JSON lines during agent operation. Agent/session events and `dashboard_snapshot_barrier` do not include an `id` field; extension UI requests include an `id` so clients can respond.
 
 ### Event Types
 
@@ -1581,7 +1603,8 @@ Events are streamed to stdout as JSON lines during agent operation. Events do NO
 | `background_agent_event` | Relayed event from a background subagent's own stream |
 | `parent_paused_for_background_agents` | Parent paused waiting on background agents |
 | `session_name_changed` | Session display name changed (manual rename, extension rename, or auto-title) |
-| `tasks_update` | Session task list replaced (see the `tasks_update` tool) |
+| `tasks_update` | Session task list atomically replaced (each task has `id`, `title`, and status) |
+| `dashboard_snapshot_barrier` | Ordering marker emitted immediately before a successful `get_dashboard_snapshot` response; pair only the matching `snapshotId` (see [Dashboard snapshots](#get_dashboard_snapshot)) |
 | `suggest_next` | Agent suggested a next command |
 | `extension_error` | Extension threw an error |
 

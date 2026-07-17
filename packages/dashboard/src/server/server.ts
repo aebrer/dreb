@@ -7,15 +7,24 @@
  * itself. Remote mode still passes every request through DashboardAuth.
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { NextFunction, Request, Response } from "express";
 import express from "express";
-import type { AuthStatusDto, FleetDto, ImageAttachmentDto, PairingCodeDto } from "../shared/protocol.js";
-import { MAX_PROMPT_BODY_BYTES } from "../shared/protocol.js";
+import type {
+	ActiveRuntimeSnapshotDto,
+	AuthStatusDto,
+	ClientConnectionDiagnosticDto,
+	DashboardResyncDto,
+	FleetDto,
+	ImageAttachmentDto,
+	PairingCodeDto,
+} from "../shared/protocol.js";
+import { MAX_CLIENT_DIAGNOSTIC_BYTES, MAX_PROMPT_BODY_BYTES } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
-import { EventHub } from "./event-hub.js";
+import { EventHub, formatHeartbeatFrame, type SseWriteMetadata } from "./event-hub.js";
 import { defaultPlaces, FileApi } from "./files.js";
 import type { RuntimePool } from "./runtime-pool.js";
 import { readSubagentMessages } from "./subagent-log.js";
@@ -33,10 +42,56 @@ export interface DashboardServerOptions {
 	serverVersion?: string;
 	/** Restart hook — when set, POST /api/server/restart invokes it (typically process exit for a supervisor to respawn). */
 	onRestart?: () => void;
+	/** Injectable only to make SSE limits deterministic in integration tests. */
+	eventHub?: EventHub;
+	/** Named heartbeat interval; defaults to 25 seconds. */
+	heartbeatIntervalMs?: number;
 }
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
 export const MAX_SSE_BUFFERED_BYTES = 4 * 1024 * 1024;
+export const CLIENT_DIAGNOSTIC_RATE_LIMIT_MS = 30_000;
+const CLIENT_DIAGNOSTIC_CONNECTION_TTL_MS = 10 * 60_000;
+
+function isClientDiagnostic(value: unknown): value is ClientConnectionDiagnosticDto {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const body = value as Record<string, unknown>;
+	const allowed = new Set([
+		"connectionId",
+		"state",
+		"previousState",
+		"attempt",
+		"delayMs",
+		"visibility",
+		"lastAppliedSeq",
+		"heartbeatAgeMs",
+		"eventCount",
+		"eventRatePerMinute",
+		"processingLagTotalMs",
+		"processingLagMaxMs",
+	]);
+	if (Object.keys(body).some((key) => !allowed.has(key))) return false;
+	const states = new Set(["connecting", "connected", "retrying", "resyncing", "disconnected", "auth_failed"]);
+	const nonNegativeNumber = (item: unknown) => typeof item === "number" && Number.isFinite(item) && item >= 0;
+	const nonNegativeInteger = (item: unknown) => typeof item === "number" && Number.isSafeInteger(item) && item >= 0;
+	return (
+		typeof body.connectionId === "string" &&
+		/^[0-9a-f-]{36}$/i.test(body.connectionId) &&
+		typeof body.state === "string" &&
+		states.has(body.state) &&
+		(body.previousState === undefined ||
+			(typeof body.previousState === "string" && states.has(body.previousState))) &&
+		nonNegativeInteger(body.attempt) &&
+		nonNegativeNumber(body.eventCount) &&
+		nonNegativeNumber(body.eventRatePerMinute) &&
+		nonNegativeNumber(body.processingLagTotalMs) &&
+		nonNegativeNumber(body.processingLagMaxMs) &&
+		(body.delayMs === undefined || nonNegativeNumber(body.delayMs)) &&
+		(body.lastAppliedSeq === undefined || nonNegativeInteger(body.lastAppliedSeq)) &&
+		(body.heartbeatAgeMs === undefined || nonNegativeNumber(body.heartbeatAgeMs)) &&
+		(body.visibility === "visible" || body.visibility === "hidden")
+	);
+}
 
 /** Parse the device cookie from a Cookie header. */
 export function parseDeviceCookie(cookieHeader: string | undefined): string | undefined {
@@ -51,22 +106,33 @@ export function parseDeviceCookie(cookieHeader: string | undefined): string | un
 
 interface AuthedRequest extends Request {
 	authDecision?: AuthDecision;
+	/** Per-SSE-request opaque diagnostic correlation id. */
+	sseConnectionId?: string;
 }
 
 export function createDashboardServer(options: DashboardServerOptions): express.Express {
 	const { auth, pool } = options;
 	const serverStartedAt = new Date().toISOString();
+	const diagnosticConnections = new Map<string, { issuedAt: number; lastAt?: number }>();
 	const log = options.logger ?? ((line: string) => console.log(`[dashboard] ${line}`));
 	const files = new FileApi((op, path, detail) => log(`file ${op}: ${path}${detail ? ` (${detail})` : ""}`));
-	const hub = new EventHub();
-	pool.onEvent((key, event) => hub.publish(key, event));
+	const hub = options.eventHub ?? new EventHub();
+	pool.onEvent((key, event) => {
+		if (event.type === "dashboard_snapshot_barrier" && typeof event.snapshotId === "string") {
+			// This RPC marker has no browser frame: its synchronous sequence capture
+			// orders the HTTP snapshot before all later EventHub publications.
+			pool.recordDashboardBarrier(key, event.snapshotId, hub.currentSequence);
+			return;
+		}
+		hub.publish(key, event);
+	});
 
 	const app = express();
 	app.disable("x-powered-by");
-	app.use(express.json({ limit: MAX_PROMPT_BODY_BYTES }));
 
 	// -- auth middleware (every route, fail-closed) ---------------------------
 	app.use((req: AuthedRequest, res: Response, next: NextFunction) => {
+		if (req.path === "/api/events") req.sseConnectionId = randomUUID();
 		auth
 			.authenticate({
 				remoteAddress: req.socket.remoteAddress,
@@ -88,7 +154,19 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 					// below stays fail-closed — only non-API GETs (the app shell) are allowed.
 					if (req.method === "GET" && !req.path.startsWith("/api/")) return next();
 				}
-				log(`denied ${req.method} ${req.path}: ${decision.reason}`);
+				if (req.sseConnectionId) {
+					log(
+						`sse ${JSON.stringify({
+							connectionId: req.sseConnectionId,
+							kind: "auth_denial",
+							method: req.method,
+							path: req.path,
+							status: decision.status,
+						})}`,
+					);
+				} else {
+					log(`denied ${req.method} ${req.path}: ${decision.reason}`);
+				}
 				res.status(decision.status).json({
 					error: decision.reason,
 					needsPairing: decision.needsPairing ?? false,
@@ -100,6 +178,18 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 				log(`auth middleware error — denying: ${err instanceof Error ? err.message : String(err)}`);
 				res.status(500).json({ error: "Auth subsystem error — denied" });
 			});
+	});
+
+	// Authenticate before consuming request bodies. Diagnostics have their own
+	// small parser limit; the larger limit exists only for prompt image payloads.
+	app.use("/api/events/diagnostic", express.json({ limit: MAX_CLIENT_DIAGNOSTIC_BYTES }));
+	app.use(express.json({ limit: MAX_PROMPT_BODY_BYTES }));
+	app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+		if ((err as { type?: string }).type === "entity.too.large") {
+			res.status(413).json({ error: "Request body is too large" });
+			return;
+		}
+		next(err);
 	});
 
 	// -- auth/pairing ----------------------------------------------------------
@@ -185,50 +275,200 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 	});
 
 	// -- events (SSE) ----------------------------------------------------------
-	app.get("/api/events", (req, res) => {
+	app.get("/api/events", (req: AuthedRequest, res) => {
+		const connectionId = req.sseConnectionId ?? randomUUID();
+		const diagnostic = (kind: string, metadata: object = {}) =>
+			log(`sse ${JSON.stringify({ connectionId, kind, ...metadata })}`);
 		res.writeHead(200, {
 			"content-type": "text/event-stream",
 			"cache-control": "no-cache",
 			connection: "keep-alive",
 		});
 
-		const guardedWrite = (chunk: string, context: string): boolean => {
-			if (res.destroyed || res.writableEnded) return false;
+		const guardedWrite = (
+			chunk: string,
+			metadata: SseWriteMetadata | { kind: "handshake" | "heartbeat" | "connection" },
+		): boolean => {
+			if (res.destroyed || res.writableEnded) {
+				diagnostic("write_closed", { writeKind: metadata.kind });
+				return false;
+			}
 			const accepted = res.write(chunk);
+			const details = {
+				writeKind: metadata.kind,
+				...("seq" in metadata
+					? { seq: metadata.seq, type: metadata.type, frameBytes: metadata.frameBytes, reason: metadata.reason }
+					: {}),
+				writableLength: res.writableLength,
+			};
+			diagnostic("write", details);
 			if (!accepted && res.writableLength > MAX_SSE_BUFFERED_BYTES) {
-				log(
-					`SSE client buffer exceeded ${MAX_SSE_BUFFERED_BYTES} bytes during ${context} (${res.writableLength} bytes queued); destroying connection`,
-				);
+				diagnostic("backpressure", details);
 				res.destroy();
 				return false;
 			}
 			return true;
 		};
 
-		if (!guardedWrite(":ok\n\n", "initial handshake")) return;
 		const lastIdRaw = req.headers["last-event-id"] ?? req.query.lastEventId;
 		const lastEventId =
 			typeof lastIdRaw === "string" && /^\d+$/.test(lastIdRaw) ? Number.parseInt(lastIdRaw, 10) : undefined;
-		const detach = hub.attach({ write: (chunk) => guardedWrite(chunk, "event fanout") }, lastEventId);
-		const keepAlive = setInterval(() => {
-			guardedWrite(":ka\n\n", "keepalive");
-		}, 25_000);
-		req.on("close", () => {
-			clearInterval(keepAlive);
+		diagnostic("connect", { cursor: lastEventId });
+		if (!guardedWrite(":ok\n\n", { kind: "handshake" })) return;
+		// Unnumbered connection metadata lets a browser correlate optional,
+		// payload-free diagnostics without mutating its application SSE cursor.
+		const issuedAt = Date.now();
+		for (const [id, record] of diagnosticConnections) {
+			if (issuedAt - record.issuedAt > CLIENT_DIAGNOSTIC_CONNECTION_TTL_MS) diagnosticConnections.delete(id);
+		}
+		diagnosticConnections.set(connectionId, { issuedAt });
+		if (!guardedWrite(`event: connection\ndata: ${JSON.stringify({ connectionId })}\n\n`, { kind: "connection" }))
+			return;
+		let detach = () => {};
+		let keepAlive: ReturnType<typeof setInterval> | undefined;
+		const stop = () => {
+			if (keepAlive) clearInterval(keepAlive);
 			detach();
+		};
+		let usable = true;
+		detach = hub.attach(
+			{
+				write: (chunk, metadata) => {
+					if (!metadata) return false;
+					usable = guardedWrite(chunk, metadata);
+					return usable;
+				},
+			},
+			lastEventId,
+			(replay) => diagnostic(replay.kind, replay),
+		);
+		// A rejected/destroyed replay must not leave a timer or live client behind.
+		if (!usable) return;
+		// Named heartbeats are visible to EventSource but have no id, so they do
+		// not alter the application cursor or consume replay history.
+		keepAlive = setInterval(() => {
+			if (!guardedWrite(formatHeartbeatFrame(), { kind: "heartbeat" })) stop();
+		}, options.heartbeatIntervalMs ?? 25_000);
+		req.on("close", () => {
+			diagnostic("close", { writableLength: res.writableLength });
+			stop();
 		});
 	});
 
+	// -- optional client stream diagnostics -----------------------------------
+	app.post("/api/events/diagnostic", (req, res) => {
+		const declaredLength = Number(req.headers["content-length"] ?? 0);
+		const encodedBytes = Buffer.byteLength(JSON.stringify(req.body ?? null));
+		if (declaredLength > MAX_CLIENT_DIAGNOSTIC_BYTES || encodedBytes > MAX_CLIENT_DIAGNOSTIC_BYTES) {
+			res.status(413).json({ error: "Diagnostic summary exceeds the 4 KiB limit" });
+			return;
+		}
+		if (!isClientDiagnostic(req.body)) {
+			res.status(400).json({ error: "Invalid diagnostic summary" });
+			return;
+		}
+		const now = Date.now();
+		for (const [id, record] of diagnosticConnections) {
+			if (now - record.issuedAt > CLIENT_DIAGNOSTIC_CONNECTION_TTL_MS) diagnosticConnections.delete(id);
+		}
+		const record = diagnosticConnections.get(req.body.connectionId);
+		if (!record) {
+			res.status(400).json({ error: "Unknown or expired SSE connection" });
+			return;
+		}
+		if (record.lastAt !== undefined && now - record.lastAt < CLIENT_DIAGNOSTIC_RATE_LIMIT_MS) {
+			res.status(429).json({ error: "Diagnostic summary rate limited" });
+			return;
+		}
+		record.lastAt = now;
+		// Never log the request body wholesale. The schema is intentionally only
+		// connection metadata, and this explicit projection prevents future fields
+		// from accidentally turning diagnostics into a payload side-channel.
+		log(
+			`sse ${JSON.stringify({
+				connectionId: req.body.connectionId,
+				kind: "client_diagnostic",
+				state: req.body.state,
+				previousState: req.body.previousState,
+				attempt: req.body.attempt,
+				delayMs: req.body.delayMs,
+				visibility: req.body.visibility,
+				lastAppliedSeq: req.body.lastAppliedSeq,
+				heartbeatAgeMs: req.body.heartbeatAgeMs,
+				eventCount: req.body.eventCount,
+				eventRatePerMinute: req.body.eventRatePerMinute,
+				processingLagTotalMs: req.body.processingLagTotalMs,
+				processingLagMaxMs: req.body.processingLagMaxMs,
+			})}`,
+		);
+		res.json({ ok: true });
+	});
+
 	// -- fleet -----------------------------------------------------------------
+	const getFleet = async (): Promise<FleetDto> => {
+		const runtimes = await Promise.all(pool.list().map((h) => pool.describe(h)));
+		const diskSessions = ((await options.listAllSessions()) as FleetDto["diskSessions"]).filter((session) =>
+			existsSync(session.cwd),
+		);
+		return { runtimes, diskSessions };
+	};
+
 	app.get("/api/fleet", (_req, res) => {
+		getFleet()
+			.then((fleet) => res.json(fleet))
+			.catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
+	});
+
+	/**
+	 * Full recovery snapshot. For an active runtime, its RPC marker captures the
+	 * current EventHub sequence before the response; later publications have a
+	 * higher sequence. This is an ordering contract, not a timing heuristic.
+	 */
+	app.get("/api/resync", (req, res) => {
 		(async () => {
-			const runtimes = await Promise.all(pool.list().map((h) => pool.describe(h)));
-			const diskSessions = ((await options.listAllSessions()) as FleetDto["diskSessions"]).filter((session) =>
-				existsSync(session.cwd),
-			);
-			const fleet: FleetDto = { runtimes, diskSessions };
-			res.json(fleet);
-		})().catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
+			const activeKey = typeof req.query.key === "string" ? req.query.key : undefined;
+			const activeAgentId = typeof req.query.agentId === "string" ? req.query.agentId : undefined;
+			let active: DashboardResyncDto["active"];
+			let barrierSeq: number;
+			if (activeKey) {
+				const handle = pool.get(activeKey);
+				if (!handle) {
+					const body: DashboardResyncDto = { fleet: await getFleet(), barrierSeq: hub.currentSequence };
+					res.json(body);
+					return;
+				}
+				// The disk transcript has its own sequence boundary because it is read
+				// before the parent RPC snapshot. Relays between these two barriers must
+				// be reapplied so a subagent delta cannot disappear during recovery.
+				let preBarrierSubagent: NonNullable<ActiveRuntimeSnapshotDto["subagent"]> | undefined;
+				if (activeAgentId) {
+					const agents = await handle.client.listBackgroundAgents();
+					const agent = agents.find((candidate) => candidate.agentId === activeAgentId);
+					if (!agent) throw new Error(`No background agent ${activeAgentId} in this runtime`);
+					const messages = readSubagentMessages(agent);
+					preBarrierSubagent = {
+						agentId: activeAgentId,
+						agent,
+						messages,
+						barrierSeq: hub.currentSequence,
+					};
+				}
+				const snapshot = await pool.snapshotDashboard(handle);
+				barrierSeq = snapshot.barrierSeq;
+				active = {
+					key: activeKey,
+					state: snapshot.snapshot.state,
+					messages: snapshot.snapshot.messages,
+					backgroundAgents: snapshot.snapshot.backgroundAgents,
+					barrierSeq,
+					...(preBarrierSubagent ? { subagent: preBarrierSubagent } : {}),
+				};
+			} else {
+				barrierSeq = hub.currentSequence;
+			}
+			const body: DashboardResyncDto = { fleet: await getFleet(), ...(active ? { active } : {}), barrierSeq };
+			res.json(body);
+		})().catch((err) => res.status(502).json({ error: String(err?.message ?? err) }));
 	});
 
 	// -- runtimes ---------------------------------------------------------------

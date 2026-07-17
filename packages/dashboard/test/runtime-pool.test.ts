@@ -21,6 +21,7 @@ export function makeFakeClient() {
 		}),
 		getState: vi.fn(async () => ({
 			sessionId: "s1",
+			tasks: [],
 			thinkingLevel: "medium",
 			isStreaming: false,
 			isCompacting: false,
@@ -30,6 +31,26 @@ export function makeFakeClient() {
 			messageCount: 0,
 			pendingMessageCount: 0,
 		})),
+		getDashboardSnapshot: vi.fn(async () => {
+			emitter.emit("event", { type: "dashboard_snapshot_barrier", snapshotId: "snapshot-1" });
+			return {
+				snapshotId: "snapshot-1",
+				state: {
+					sessionId: "s1",
+					tasks: [],
+					thinkingLevel: "medium",
+					isStreaming: false,
+					isCompacting: false,
+					steeringMode: "all",
+					followUpMode: "one-at-a-time",
+					autoCompactionEnabled: true,
+					messageCount: 0,
+					pendingMessageCount: 0,
+				},
+				messages: [],
+				backgroundAgents: [],
+			};
+		}),
 		getSessionStats: vi.fn(async () => ({
 			sessionFile: undefined,
 			sessionId: "s1",
@@ -173,6 +194,107 @@ describe("RuntimePool", () => {
 		expect(clients).toHaveLength(2);
 		expect(clients[0].start).toHaveBeenCalled();
 		expect(pool.list()).toHaveLength(2);
+	});
+
+	it("pairs a dashboard snapshot with its explicit EventHub barrier", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+		pool.recordDashboardBarrier(handle.key, "snapshot-1", 42);
+
+		await expect(pool.snapshotDashboard(handle)).resolves.toMatchObject({
+			key: handle.key,
+			barrierSeq: 42,
+			snapshot: { snapshotId: "snapshot-1", state: { tasks: [] } },
+		});
+		expect(clients[0].getDashboardSnapshot).toHaveBeenCalledOnce();
+	});
+
+	it("namespaces equal snapshot ids by runtime", async () => {
+		const { pool, clients } = makePool();
+		const first = await pool.create("/tmp/first");
+		const second = await pool.create("/tmp/second");
+		pool.recordDashboardBarrier(first.key, "req_5", 10);
+		pool.recordDashboardBarrier(second.key, "req_5", 20);
+		for (const client of clients) {
+			vi.mocked(client.getDashboardSnapshot as any).mockResolvedValueOnce({
+				snapshotId: "req_5",
+				state: { tasks: [] },
+				messages: [],
+				backgroundAgents: [],
+			});
+		}
+
+		const [firstSnapshot, secondSnapshot] = await Promise.all([
+			pool.snapshotDashboard(first),
+			pool.snapshotDashboard(second),
+		]);
+		expect(firstSnapshot.barrierSeq).toBe(10);
+		expect(secondSnapshot.barrierSeq).toBe(20);
+	});
+
+	it("rejects a snapshot that was not preceded by its barrier", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+		vi.mocked(clients[0].getDashboardSnapshot as any).mockResolvedValueOnce({
+			snapshotId: "missing",
+			state: {},
+			messages: [],
+			backgroundAgents: [],
+		});
+		await expect(pool.snapshotDashboard(handle)).rejects.toThrow("without its ordering barrier");
+	});
+
+	it("bounds and expires unclaimed dashboard snapshot barriers", async () => {
+		let now = 0;
+		const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			dashboardBarrierLimit: 2,
+			dashboardBarrierTtlMs: 10,
+			now: () => now,
+			clientFactory: () => {
+				const client = makeFakeClient();
+				clients.push(client);
+				return client;
+			},
+		});
+		const handle = await pool.create("/tmp");
+		pool.recordDashboardBarrier(handle.key, "oldest", 1);
+		pool.recordDashboardBarrier(handle.key, "middle", 2);
+		pool.recordDashboardBarrier(handle.key, "newest", 3);
+
+		vi.mocked(clients[0].getDashboardSnapshot as any).mockResolvedValueOnce({
+			snapshotId: "oldest",
+			state: {},
+			messages: [],
+			backgroundAgents: [],
+		});
+		await expect(pool.snapshotDashboard(handle)).rejects.toThrow("without its ordering barrier");
+
+		vi.mocked(clients[0].getDashboardSnapshot as any).mockResolvedValueOnce({
+			snapshotId: "newest",
+			state: {},
+			messages: [],
+			backgroundAgents: [],
+		});
+		await expect(pool.snapshotDashboard(handle)).resolves.toMatchObject({ barrierSeq: 3 });
+		vi.mocked(clients[0].getDashboardSnapshot as any).mockResolvedValueOnce({
+			snapshotId: "newest",
+			state: {},
+			messages: [],
+			backgroundAgents: [],
+		});
+		await expect(pool.snapshotDashboard(handle)).rejects.toThrow("without its ordering barrier");
+
+		pool.recordDashboardBarrier(handle.key, "expired", 4);
+		now = 11;
+		vi.mocked(clients[0].getDashboardSnapshot as any).mockResolvedValueOnce({
+			snapshotId: "expired",
+			state: {},
+			messages: [],
+			backgroundAgents: [],
+		});
+		await expect(pool.snapshotDashboard(handle)).rejects.toThrow("without its ordering barrier");
 	});
 
 	it("stops and removes runtimes", async () => {
@@ -331,7 +453,6 @@ describe("RuntimePool", () => {
 			key: handle.key,
 			event: {
 				type: "agent_end",
-				messages: [],
 				aborted: true,
 				errorMessage: "RPC process exited (code 137, signal SIGKILL)",
 			},
