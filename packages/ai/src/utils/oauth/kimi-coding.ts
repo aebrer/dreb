@@ -113,7 +113,7 @@ function kimiDeviceModel(): string {
 	if (platform === "darwin") {
 		let version: string;
 		try {
-			version = execFileSync("sw_vers", ["-productVersion"], { encoding: "utf-8", timeout: 3000 }).trim();
+			version = execFileSync("/usr/bin/sw_vers", ["-productVersion"], { encoding: "utf-8", timeout: 3000 }).trim();
 		} catch {
 			version = os.release();
 		}
@@ -179,7 +179,7 @@ function parseTokenSuccess(response: Record<string, unknown>): TokenSuccessRespo
 
 export type KimiModelInfo = {
 	id: string;
-	display_name: string;
+	display_name?: string;
 	context_length: number;
 	supports_reasoning?: boolean;
 	supports_image_in?: boolean;
@@ -191,9 +191,84 @@ export type KimiModelInfo = {
 		valid_efforts?: string[];
 		default_effort?: string;
 	};
-	protocol?: "kimi" | "anthropic" | string;
+	protocol?: string;
 	[key: string]: unknown;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseStringArray(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const out = value.filter((v): v is string => typeof v === "string" && v.length > 0);
+	return out.length > 0 ? out : undefined;
+}
+
+function parseSupportsThinkingType(value: unknown): KimiModelInfo["supports_thinking_type"] | undefined {
+	return value === "only" || value === "no" || value === "both" ? value : undefined;
+}
+
+function parseModelProtocol(value: unknown): "anthropic" | undefined {
+	return value === "anthropic" ? "anthropic" : undefined;
+}
+
+function parseThinkEfforts(value: unknown): KimiModelInfo["think_efforts"] | undefined {
+	if (!isRecord(value) || value.support !== true) return undefined;
+	return {
+		support: true,
+		valid_efforts: parseStringArray(value.valid_efforts),
+		default_effort:
+			typeof value.default_effort === "string" && value.default_effort.length > 0 ? value.default_effort : undefined,
+	};
+}
+
+function toKimiModelInfo(item: unknown): KimiModelInfo | undefined {
+	if (!isRecord(item) || typeof item.id !== "string" || item.id.length === 0) {
+		return undefined;
+	}
+
+	const contextLength = Number(item.context_length);
+	if (!Number.isInteger(contextLength) || contextLength <= 0) {
+		throw new Error(`Kimi Code model "${item.id}" must include a positive context_length.`);
+	}
+
+	const displayName = item.display_name;
+	const normalizedDisplayName = typeof displayName === "string" && displayName.length > 0 ? displayName : undefined;
+
+	const optionalBoolean = (value: unknown): boolean | undefined => (typeof value === "boolean" ? value : undefined);
+
+	const parsed: KimiModelInfo = {
+		id: item.id,
+		context_length: contextLength,
+		display_name: normalizedDisplayName,
+	};
+
+	const supportsReasoning = optionalBoolean(item.supports_reasoning);
+	if (supportsReasoning !== undefined) parsed.supports_reasoning = supportsReasoning;
+
+	const supportsImageIn = optionalBoolean(item.supports_image_in);
+	if (supportsImageIn !== undefined) parsed.supports_image_in = supportsImageIn;
+
+	const supportsVideoIn = optionalBoolean(item.supports_video_in);
+	if (supportsVideoIn !== undefined) parsed.supports_video_in = supportsVideoIn;
+
+	if (Object.hasOwn(item, "supports_tool_use")) {
+		const supportsToolUse = optionalBoolean(item.supports_tool_use);
+		if (supportsToolUse !== undefined) parsed.supports_tool_use = supportsToolUse;
+	}
+
+	const supportsThinkingType = parseSupportsThinkingType(item.supports_thinking_type);
+	if (supportsThinkingType !== undefined) parsed.supports_thinking_type = supportsThinkingType;
+
+	const protocol = parseModelProtocol(item.protocol);
+	if (protocol !== undefined) parsed.protocol = protocol;
+
+	const thinkEfforts = parseThinkEfforts(item.think_efforts);
+	if (thinkEfforts !== undefined) parsed.think_efforts = thinkEfforts;
+
+	return parsed;
+}
 
 type KimiCredentials = OAuthCredentials & {
 	/** Full list of models discovered from the Kimi API. */
@@ -275,7 +350,7 @@ export async function listModels(accessToken: string, signal?: AbortSignal): Pro
 		throw new Error("Invalid models response: expected data array");
 	}
 
-	return data as KimiModelInfo[];
+	return data.map((item) => toKimiModelInfo(item)).filter((item): item is KimiModelInfo => item !== undefined);
 }
 
 // ============================================================================
@@ -301,9 +376,9 @@ async function startDeviceFlow(signal?: AbortSignal): Promise<DeviceCodeResponse
 	const device_code = d.device_code;
 	const user_code = d.user_code;
 	const verification_uri_complete =
-		typeof d.verification_uri_complete === "string"
+		typeof d.verification_uri_complete === "string" && d.verification_uri_complete.length > 0
 			? d.verification_uri_complete
-			: typeof d.verification_uri === "string"
+			: typeof d.verification_uri === "string" && d.verification_uri.length > 0
 				? `${d.verification_uri}${d.verification_uri.includes("?") ? "&" : "?"}user_code=${encodeURIComponent(user_code as string)}`
 				: undefined;
 	const interval = d.interval;
@@ -707,7 +782,7 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 				input: discoveredInput(staticModel, info),
 				compat: discoveredCompat(staticModel, info),
 			};
-			if (info.supports_thinking_type === "only") {
+			if (info.supports_thinking_type === "only" || info.supports_thinking_type === "both") {
 				updated.reasoning = true;
 			} else if (info.supports_thinking_type === "no") {
 				updated.reasoning = false;

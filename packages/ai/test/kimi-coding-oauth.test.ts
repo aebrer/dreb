@@ -1,3 +1,4 @@
+import * as childProcess from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "../src/types.js";
 import {
@@ -9,6 +10,10 @@ import {
 	refreshKimiCodingToken,
 } from "../src/utils/oauth/kimi-coding.js";
 import type { OAuthCredentials } from "../src/utils/oauth/types.js";
+
+vi.mock("node:child_process", () => ({
+	execFileSync: vi.fn(),
+}));
 
 // ============================================================================
 // Helpers
@@ -127,6 +132,28 @@ describe("Kimi For Coding OAuth", () => {
 				expect(value).toMatch(/^[\x20-\x7E]*$/);
 			}
 		});
+
+		it("uses /usr/bin/sw_vers to build the macOS device model", () => {
+			const originalPlatform = process.platform;
+			const originalArch = process.arch;
+			Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+			Object.defineProperty(process, "arch", { value: "arm64", configurable: true });
+
+			try {
+				const execSpy = vi.mocked(childProcess.execFileSync).mockReturnValue("14.5.1\n");
+
+				const headers = buildKimiHeaders();
+
+				expect(execSpy).toHaveBeenCalledWith("/usr/bin/sw_vers", ["-productVersion"], {
+					encoding: "utf-8",
+					timeout: 3000,
+				});
+				expect(headers["X-Msh-Device-Model"]).toBe("macOS 14.5.1 arm64");
+			} finally {
+				Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+				Object.defineProperty(process, "arch", { value: originalArch, configurable: true });
+			}
+		});
 	});
 
 	// ------------------------------------------------------------------------
@@ -198,6 +225,65 @@ describe("Kimi For Coding OAuth", () => {
 
 			// Progress was reported
 			expect(progressCalls).toContain("Discovering available models...");
+		});
+
+		it("falls back from an empty verification_uri_complete to verification_uri", async () => {
+			const authCalls: { url: string }[] = [];
+
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+					const url = getUrl(input);
+
+					if (url === DEVICE_AUTH_URL) {
+						return jsonResponse({
+							...MOCK_DEVICE_CODE_RESPONSE,
+							verification_uri_complete: "",
+						});
+					}
+
+					if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
+						return jsonResponse(MOCK_TOKEN_SUCCESS);
+					}
+
+					if (url === MODELS_URL) {
+						return jsonResponse({ data: [] });
+					}
+
+					throw new Error(`Unexpected fetch URL: ${url}`);
+				}),
+			);
+
+			await loginKimiCoding({
+				onAuth: (info) => authCalls.push(info),
+			});
+
+			expect(authCalls).toHaveLength(1);
+			const authUrl = new URL(authCalls[0].url);
+			expect(authUrl.origin + authUrl.pathname).toBe("https://auth.kimi.com/device");
+			expect(authUrl.searchParams.get("user_code")).toBe("WXYZ-1234");
+		});
+
+		it("rejects a device response with both verification URIs empty", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date("2026-04-17T00:00:00Z"));
+
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: unknown): Promise<Response> => {
+					const url = getUrl(input);
+					if (url === DEVICE_AUTH_URL) {
+						return jsonResponse({
+							...MOCK_DEVICE_CODE_RESPONSE,
+							verification_uri_complete: "",
+							verification_uri: "",
+						});
+					}
+					throw new Error(`Unexpected fetch URL: ${url}`);
+				}),
+			);
+
+			await expect(loginKimiCoding({ onAuth: () => {} })).rejects.toThrow("Invalid device code response fields");
 		});
 
 		it("polls with authorization_pending then succeeds", async () => {
@@ -676,6 +762,135 @@ describe("Kimi For Coding OAuth", () => {
 	});
 
 	// ------------------------------------------------------------------------
+	// listModels entry parsing
+	// ------------------------------------------------------------------------
+	describe("listModels entry parsing", () => {
+		it("keeps valid entries and skips malformed ids", async () => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					jsonResponse({
+						data: [
+							{ id: "good", display_name: "Good", context_length: 1000 },
+							null,
+							"not-a-record",
+							{ display_name: "Missing id", context_length: 1000 },
+							{ id: "", display_name: "Empty id", context_length: 1000 },
+						],
+					}),
+				),
+			);
+
+			const models = await listModels("token");
+			expect(models).toHaveLength(1);
+			expect(models[0]).toMatchObject({ id: "good", display_name: "Good", context_length: 1000 });
+		});
+
+		it("throws when a model entry has an invalid context_length", async () => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					jsonResponse({
+						data: [{ id: "bad", display_name: "Bad", context_length: -1 }],
+					}),
+				),
+			);
+
+			await expect(listModels("token")).rejects.toThrow(
+				'Kimi Code model "bad" must include a positive context_length.',
+			);
+		});
+
+		it("normalizes optional fields to safe defaults", async () => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					jsonResponse({
+						data: [
+							{
+								id: "normalized",
+								display_name: "",
+								context_length: 1000,
+								supports_reasoning: "yes",
+								supports_image_in: 1,
+								supports_video_in: 0,
+								supports_tool_use: null,
+								supports_thinking_type: "maybe",
+								protocol: 123,
+								think_efforts: {
+									support: false,
+									valid_efforts: ["low", "", "high"],
+									default_effort: "",
+								},
+							},
+						],
+					}),
+				),
+			);
+
+			const models = await listModels("token");
+			expect(models).toHaveLength(1);
+			const model = models[0];
+			expect(model.id).toBe("normalized");
+			expect(model.display_name).toBeUndefined();
+			expect(model.context_length).toBe(1000);
+			expect(model.supports_reasoning).toBeUndefined();
+			expect(model.supports_image_in).toBeUndefined();
+			expect(model.supports_video_in).toBeUndefined();
+			expect(model.supports_tool_use).toBeUndefined();
+			expect(model.supports_thinking_type).toBeUndefined();
+			expect(model.protocol).toBeUndefined();
+			expect(model.think_efforts).toBeUndefined();
+		});
+
+		it("preserves supported optional values", async () => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () =>
+					jsonResponse({
+						data: [
+							{
+								id: "supported",
+								display_name: "Supported",
+								context_length: 1000,
+								supports_reasoning: true,
+								supports_image_in: false,
+								supports_video_in: true,
+								supports_tool_use: true,
+								supports_thinking_type: "both",
+								protocol: "anthropic",
+								think_efforts: {
+									support: true,
+									valid_efforts: ["low", "high", "max"],
+									default_effort: "high",
+								},
+							},
+						],
+					}),
+				),
+			);
+
+			const models = await listModels("token");
+			expect(models[0]).toMatchObject({
+				id: "supported",
+				display_name: "Supported",
+				context_length: 1000,
+				supports_reasoning: true,
+				supports_image_in: false,
+				supports_video_in: true,
+				supports_tool_use: true,
+				supports_thinking_type: "both",
+				protocol: "anthropic",
+				think_efforts: {
+					support: true,
+					valid_efforts: ["low", "high", "max"],
+					default_effort: "high",
+				},
+			});
+		});
+	});
+
+	// ------------------------------------------------------------------------
 	// Token refresh
 	// ------------------------------------------------------------------------
 	describe("refreshKimiCodingToken", () => {
@@ -965,6 +1180,29 @@ describe("Kimi For Coding OAuth", () => {
 				xhigh: "max",
 			});
 			expect(k3?.headers).toMatchObject({ "X-Msh-Platform": "kimi_code_cli" });
+		});
+
+		it("treats supports_thinking_type 'both' as reasoning even when supports_reasoning is false", () => {
+			const creds: OAuthCredentials & { models?: KimiModelInfo[] } = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+				models: [
+					{
+						id: "k3",
+						display_name: "K3",
+						context_length: 1048576,
+						supports_reasoning: false,
+						supports_thinking_type: "both",
+					},
+				],
+			};
+
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+			const k3 = result.find((m) => m.id === "k3");
+
+			expect(k3).toBeDefined();
+			expect(k3?.reasoning).toBe(true);
 		});
 
 		it("templates future discovered IDs from the static fallback", () => {

@@ -136,7 +136,7 @@ describe("openai-completions kimi thinkingFormat", () => {
 		expect(params.prompt_cache_key).toBe("sess-456");
 	});
 
-	it("omits thinking and reasoning_effort when mapped effort is 'auto'", async () => {
+	it("sends thinking: { type: 'enabled' } without effort when mapped effort is 'auto'", async () => {
 		const model: Model<"openai-completions"> = {
 			...KIMI_MODEL,
 			compat: {
@@ -161,11 +161,11 @@ describe("openai-completions kimi thinkingFormat", () => {
 		).result();
 
 		const params = (payload ?? mockState.lastParams) as {
-			thinking?: { type: string };
+			thinking?: { type: string; effort?: string };
 			reasoning_effort?: string;
 			prompt_cache_key?: string;
 		};
-		expect(params.thinking).toBeUndefined();
+		expect(params.thinking).toEqual({ type: "enabled" });
 		expect(params.reasoning_effort).toBeUndefined();
 		expect(params.prompt_cache_key).toBeUndefined();
 	});

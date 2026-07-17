@@ -436,10 +436,11 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 			const effort = mapReasoningEffort(options.reasoningEffort, compat.reasoningEffortMap);
 			if (effort === "off") {
 				kimiParams.thinking = { type: "disabled" };
-			} else if (effort !== "auto") {
-				kimiParams.thinking = { type: "enabled", effort };
+			} else {
+				// "auto" enables thinking without constraining effort; every other
+				// mapped value is passed through nested inside the thinking object.
+				kimiParams.thinking = effort === "auto" ? { type: "enabled" } : { type: "enabled", effort };
 			}
-			// "auto" lets the server choose its model-specific default.
 		}
 		// No reasoningEffort → omit thinking and use the server default.
 		if (options?.sessionId) {

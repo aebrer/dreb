@@ -270,7 +270,7 @@ For providers with partial OpenAI compatibility, use the `compat` field.
 | `requiresToolResultName` | Include `name` on tool result messages |
 | `requiresAssistantAfterToolResult` | Insert an assistant message before a user message after tool results |
 | `requiresThinkingAsText` | Convert thinking blocks to plain text |
-| `thinkingFormat` | Use `reasoning_effort`, `zai`, `qwen`, or `qwen-chat-template` thinking parameters |
+| `thinkingFormat` | Use `reasoning_effort`, `reasoning: { effort }`, `zai`, `qwen`, `qwen-chat-template`, or nested `thinking: { type, effort? }` parameters |
 | `supportsStrictMode` | Include the `strict` field in tool definitions |
 | `openRouterRouting` | OpenRouter routing config passed to OpenRouter for model/provider selection |
 | `vercelGatewayRouting` | Vercel AI Gateway routing config for provider selection (`only`, `order`) |
