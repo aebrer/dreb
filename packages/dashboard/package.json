@@ -20,7 +20,9 @@
 	},
 	"files": [
 		"dist",
-		"README.md"
+		"README.md",
+		"src/client/assets/fonts/OFL.txt",
+		"src/client/assets/fonts/PROVENANCE.md"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",

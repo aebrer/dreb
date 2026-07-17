@@ -1887,6 +1887,10 @@ details.thinking .thinking-body {
 	line-height: 1.4;
 	white-space: pre;
 	overflow: hidden;
+	/* Force the base monospace stack for ALL preview cards so that merely opening
+	   the gallery doesn't fetch JetBrains Mono for the Gruvbox card. The actual
+	   theme font applies at :root when the user selects the theme. */
+	font-family: "IBM Plex Mono", "Courier New", monospace;
 }
 
 .theme-card-code .hljs {

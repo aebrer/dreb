@@ -2072,6 +2072,21 @@ describe("dashboard client regressions", () => {
 			expect(el.querySelector('[data-theme-card="tol"]')).not.toBeNull();
 		});
 
+		it("every rendered card carries a data-theme matching its catalog id", async () => {
+			// The gallery's scoped-preview contract requires data-theme on each card
+			// so themes.css resolves that theme's palette locally, independent of :root.
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const cards = Array.from(el.querySelectorAll("[data-theme-card]"));
+			expect(cards.length).toBe(8);
+			for (const card of cards) {
+				const cardId = card.getAttribute("data-theme-card");
+				expect(card.getAttribute("data-theme"), `card ${cardId} must have data-theme`).toBe(cardId);
+			}
+		});
+
 		it("marks the restored theme card active and selects the restored color mode", async () => {
 			window.localStorage.setItem(THEME_STORAGE_KEY, "solarized");
 			window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");

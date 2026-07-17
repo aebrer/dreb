@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 describe("appearance — catalog", () => {
-	it("orders default first, then dim, solarized, gruvbox, qud, vangogh, okabe, tol with sequential order fields", () => {
+	it("orders default first, then dim, solarized, gruvbox, qud, vangogh, okabe, tol", () => {
 		expect(THEMES.map((t) => t.id)).toEqual([
 			"default",
 			"dim",
@@ -86,7 +86,6 @@ describe("appearance — catalog", () => {
 			"tol",
 		]);
 		expect(THEMES[0].id).toBe("default");
-		expect(THEMES.map((t) => t.order)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
 	});
 
 	it("has unique, valid ids and matching THEME_IDS", () => {

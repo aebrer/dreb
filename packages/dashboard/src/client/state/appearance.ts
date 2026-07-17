@@ -24,8 +24,6 @@ export interface ThemeEntry {
 	id: ThemeId;
 	/** Human label for pickers. */
 	label: string;
-	/** Fixed catalog position (default is always first / 0). */
-	order: number;
 }
 
 export type ThemeId = "default" | "dim" | "solarized" | "gruvbox" | "qud" | "vangogh" | "okabe" | "tol";
@@ -38,14 +36,14 @@ export type ColorMode = "system" | "light" | "dark";
  * so status stays distinguishable under deutan/protan/tritan color vision.
  */
 export const THEMES: readonly ThemeEntry[] = [
-	{ id: "default", label: "entropist.ca", order: 0 },
-	{ id: "dim", label: "Dim", order: 1 },
-	{ id: "solarized", label: "Solarized", order: 2 },
-	{ id: "gruvbox", label: "Gruvbox", order: 3 },
-	{ id: "qud", label: "Caves of Qud", order: 4 },
-	{ id: "vangogh", label: "Van Gogh", order: 5 },
-	{ id: "okabe", label: "Colorblind-safe (Okabe-Ito)", order: 6 },
-	{ id: "tol", label: "Colorblind-safe (Paul Tol)", order: 7 },
+	{ id: "default", label: "entropist.ca" },
+	{ id: "dim", label: "Dim" },
+	{ id: "solarized", label: "Solarized" },
+	{ id: "gruvbox", label: "Gruvbox" },
+	{ id: "qud", label: "Caves of Qud" },
+	{ id: "vangogh", label: "Van Gogh" },
+	{ id: "okabe", label: "Colorblind-safe (Okabe-Ito)" },
+	{ id: "tol", label: "Colorblind-safe (Paul Tol)" },
 ] as const;
 
 /** All theme ids in catalog order. */
@@ -134,9 +132,11 @@ function computedBg(doc: Document): string {
  * controls / scrollbars aren't retinted out from under a user who hasn't opted
  * into the appearance system.
  */
-export function applyAppearance(doc: Document = document): void {
+export function applyAppearance(doc?: Document): void {
 	try {
-		const root = doc.documentElement;
+		const d = doc ?? (typeof document !== "undefined" ? document : undefined);
+		if (!d) return;
+		const root = d.documentElement;
 		if (!root) return;
 		const t = themeSignal();
 		const m = colorModeSignal();
@@ -166,15 +166,17 @@ export function applyAppearance(doc: Document = document): void {
  * it wins over the media-based fallbacks in index.html. Robust when no meta or
  * no computed style is available.
  */
-export function updateThemeColorMeta(doc: Document = document): void {
+export function updateThemeColorMeta(doc?: Document): void {
 	try {
-		const bg = computedBg(doc);
+		const d = doc ?? (typeof document !== "undefined" ? document : undefined);
+		if (!d) return;
+		const bg = computedBg(d);
 		if (!bg) return;
-		let meta = doc.querySelector<HTMLMetaElement>('meta[name="theme-color"]:not([media])');
+		let meta = d.querySelector<HTMLMetaElement>('meta[name="theme-color"]:not([media])');
 		if (!meta) {
-			meta = doc.createElement("meta");
+			meta = d.createElement("meta");
 			meta.setAttribute("name", "theme-color");
-			const head = doc.head ?? doc.getElementsByTagName("head")[0];
+			const head = d.head ?? d.getElementsByTagName("head")[0];
 			if (head) head.insertBefore(meta, head.firstChild);
 		}
 		meta.setAttribute("content", bg);
