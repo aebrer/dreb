@@ -38,7 +38,7 @@ export type ColorMode = "system" | "light" | "dark";
  * so status stays distinguishable under deutan/protan/tritan color vision.
  */
 export const THEMES: readonly ThemeEntry[] = [
-	{ id: "default", label: "Default", order: 0 },
+	{ id: "default", label: "entropist.ca", order: 0 },
 	{ id: "dim", label: "Dim", order: 1 },
 	{ id: "solarized", label: "Solarized", order: 2 },
 	{ id: "gruvbox", label: "Gruvbox", order: 3 },
