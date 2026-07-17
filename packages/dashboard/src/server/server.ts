@@ -432,7 +432,11 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 			let barrierSeq: number;
 			if (activeKey) {
 				const handle = pool.get(activeKey);
-				if (!handle) throw new Error(`No runtime ${activeKey}`);
+				if (!handle) {
+					const body: DashboardResyncDto = { fleet: await getFleet(), barrierSeq: hub.currentSequence };
+					res.json(body);
+					return;
+				}
 				// The disk transcript has its own sequence boundary because it is read
 				// before the parent RPC snapshot. Relays between these two barriers must
 				// be reapplied so a subagent delta cannot disappear during recovery.

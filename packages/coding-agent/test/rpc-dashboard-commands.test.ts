@@ -6,6 +6,7 @@ import type { Model } from "@dreb/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExtensionRuntime } from "../src/core/extensions/loader.js";
 import { getGitBranch } from "../src/core/git-branch.js";
+import * as outputGuard from "../src/core/output-guard.js";
 import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 import type {
 	RpcDashboardSnapshot as AggregateRpcDashboardSnapshot,
@@ -20,7 +21,8 @@ import type {
 	RpcResources,
 } from "../src/modes/rpc/index.js";
 import { RpcClient } from "../src/modes/rpc/index.js";
-import { getPendingMessagesForRpc, getResourcesForRpc, getStateForRpc } from "../src/modes/rpc/rpc-mode.js";
+import * as jsonl from "../src/modes/rpc/jsonl.js";
+import { getPendingMessagesForRpc, getResourcesForRpc, getStateForRpc, runRpcMode } from "../src/modes/rpc/rpc-mode.js";
 import { createTestResourceLoader, createTestSession } from "./utilities.js";
 
 const tempDirs: string[] = [];
@@ -200,6 +202,76 @@ describe("git branch helper used by RPC", () => {
 		writeFileSync(join(dir, ".git", "HEAD"), "ref: refs/heads/feature/dashboard\n");
 
 		expect(getGitBranch(dir)).toBe("feature/dashboard");
+	});
+});
+
+describe("runRpcMode dashboard dispatcher", () => {
+	it("emits a dashboard snapshot barrier before the snapshot response", async () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		const tasks = [
+			{ id: "read", title: "Read dispatcher pattern", status: "completed" as const },
+			{ id: "test", title: "Assert snapshot ordering", status: "in_progress" as const },
+		];
+		(session as unknown as { _tasks: typeof tasks })._tasks = tasks;
+		const outputs: Array<Record<string, unknown>> = [];
+		let handleInputLine: ((line: string) => void) | undefined;
+		let resolveTwoOutputs: (() => void) | undefined;
+		const twoOutputs = new Promise<void>((resolve) => {
+			resolveTwoOutputs = resolve;
+		});
+		const existingEndListeners = new Set(process.stdin.listeners("end"));
+		const existingErrorListeners = new Set(process.stdin.listeners("error"));
+
+		vi.spyOn(outputGuard, "takeOverStdout").mockImplementation(() => {});
+		vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((line) => {
+			outputs.push(JSON.parse(line) as Record<string, unknown>);
+			if (outputs.length === 2) {
+				resolveTwoOutputs?.();
+			}
+		});
+		vi.spyOn(jsonl, "attachJsonlLineReader").mockImplementation((_stream, onLine) => {
+			handleInputLine = onLine;
+			return () => {};
+		});
+
+		try {
+			// runRpcMode intentionally never resolves; this exercises its real JSONL
+			// command dispatcher while the test captures the stdout boundary.
+			void runRpcMode(session);
+			await vi.waitFor(() => expect(handleInputLine).toBeDefined());
+
+			handleInputLine!(JSON.stringify({ type: "get_dashboard_snapshot" }));
+			await twoOutputs;
+
+			expect(outputs).toHaveLength(2);
+			const barrier = outputs[0]!;
+			const response = outputs[1]!;
+
+			expect(barrier).toEqual({ type: "dashboard_snapshot_barrier", snapshotId: expect.any(String) });
+			const snapshotId = barrier.snapshotId;
+			expect(snapshotId).not.toBe("");
+			expect(response).toMatchObject({
+				type: "response",
+				command: "get_dashboard_snapshot",
+				success: true,
+				data: {
+					snapshotId,
+					state: { tasks },
+				},
+			});
+		} finally {
+			cleanup();
+			for (const listener of process.stdin.listeners("end")) {
+				if (!existingEndListeners.has(listener)) {
+					process.stdin.off("end", listener as (...args: unknown[]) => void);
+				}
+			}
+			for (const listener of process.stdin.listeners("error")) {
+				if (!existingErrorListeners.has(listener)) {
+					process.stdin.off("error", listener as (...args: unknown[]) => void);
+				}
+			}
+		}
 	});
 });
 

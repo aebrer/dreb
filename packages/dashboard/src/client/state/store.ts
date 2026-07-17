@@ -337,7 +337,16 @@ export function createAppStore() {
 		authoritativeBarrierSeq = barrierSeq;
 		setFleet(snapshot.fleet);
 		setFleetError(undefined);
-		if (snapshot.active) hydrateSnapshot(snapshot.active);
+		if (snapshot.active) {
+			hydrateSnapshot(snapshot.active);
+		} else {
+			const activeRouteKey = routedSessionKey();
+			if (activeRouteKey) {
+				deleteSessionState(activeRouteKey);
+				pushNotice(`session ${activeRouteKey} was stopped`, "warning");
+				navigate({ screen: "fleet" });
+			}
+		}
 		// /api/resync's barrierSeq is the parent snapshot ordering point. The
 		// subagent disk transcript is captured earlier, so relay its matching child
 		// events between that boundary and the parent barrier before normal replay.
@@ -366,6 +375,7 @@ export function createAppStore() {
 	}
 
 	function beginResync(queueAfterCurrent = false): Promise<void> {
+		if (stopped) return Promise.resolve();
 		if (resyncPromise) {
 			if (queueAfterCurrent || pendingResync?.state === "failed") retryAfterCurrentResync = true;
 			return resyncPromise;
@@ -402,7 +412,7 @@ export function createAppStore() {
 			.finally(() => {
 				clearTimeout(timeout);
 				if (resyncPromise === request) resyncPromise = undefined;
-				if (retryAfterCurrentResync) {
+				if (!stopped && retryAfterCurrentResync) {
 					retryAfterCurrentResync = false;
 					void beginResync();
 				}
@@ -493,6 +503,7 @@ export function createAppStore() {
 		clearResyncRetry();
 		resyncRetryPreviousConnection = undefined;
 		resyncRetryOwnsConnectionStatus = false;
+		retryAfterCurrentResync = false;
 		const pending = pendingResync;
 		pendingResync = undefined;
 		if (pending) clearPendingQueue(pending);

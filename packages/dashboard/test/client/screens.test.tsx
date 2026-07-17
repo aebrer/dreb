@@ -3295,6 +3295,45 @@ describe("dashboard client regressions", () => {
 		expect(promptText).not.toContain("binary-content-should-not-be-in-prompt");
 	});
 
+	it("fleet cards show task progress from runtime state when session is not hydrated", () => {
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: {},
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "k1",
+						cwd: "/repo",
+						state: {
+							sessionId: "s1",
+							tasks: [
+								{ id: "1", title: "Done task", status: "completed" },
+								{ id: "2", title: "WIP task", status: "in_progress" },
+							],
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 1,
+							pendingMessageCount: 0,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		expect(el.querySelector(".session-meta")?.textContent).toContain("tasks 1/2");
+	});
+
 	it("fleet cards use lastAssistantText as a muted activity preview", () => {
 		const store = makeStore() as any;
 		const fakeStore = {

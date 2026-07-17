@@ -433,6 +433,45 @@ describe("app store SSE sync", () => {
 		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
 	});
 
+	it("stop() prevents a queued follow-up resync from firing after teardown", async () => {
+		vi.useFakeTimers();
+		try {
+			const delayed = deferred<Awaited<ReturnType<typeof api.resync>>>();
+			vi.mocked(api.resync).mockReturnValueOnce(delayed.promise);
+			const store = await makeStartedStore();
+
+			emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+			emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+			expect(api.resync).toHaveBeenCalledOnce();
+
+			store.stop();
+			delayed.resolve({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 1 });
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(api.resync).toHaveBeenCalledOnce();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("navigates to fleet when active-route resync returns no active runtime", async () => {
+		window.location.hash = "#/session/stale-key";
+		vi.mocked(api.resync).mockResolvedValueOnce({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 1 });
+		const store = await makeStartedStore();
+
+		emit("stale-key", { type: "agent_start" });
+		expect(store.sessions["stale-key"]).toBeDefined();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(window.location.hash).toBe("#/"));
+
+		expect(api.resync).toHaveBeenCalledWith("stale-key", undefined, expect.any(AbortSignal));
+		expect(store.sessions["stale-key"]).toBeUndefined();
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: "session stale-key was stopped", tone: "warning" }),
+		]);
+	});
+
 	it("keeps a failed resync visibly degraded and automatically retries with bounded cleanup", async () => {
 		vi.useFakeTimers();
 		try {
