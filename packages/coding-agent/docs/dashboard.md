@@ -123,7 +123,7 @@ networking window above.
 | **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs and markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, compaction/branch summaries, custom messages), per-message copy, tasks panel, subagent strip, status line with elapsed time plus ■ stop and compaction/retry aborts, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, median tok/s, and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests (select/confirm/input/editor) render as modals; notifications as toasts. |
 | **Subagent view** | Read-only transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the view survives browser reloads. Shows the task, streaming output, and tool activity. No composer — subagents can't be steered yet; the parent session controls them. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. |
-| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Dashboard-local preferences (always expand thinking, needs-attention notification permission) live in the browser. Shows the current rotating pairing code on the host/local dashboard, plus the paired-devices list with unpair. |
+| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Dashboard-local preferences (always expand thinking, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of four curated themes (Default, Dim, Solarized, Gruvbox) with live preview cards and a system/light/dark mode selector, saved per browser. Shows the current rotating pairing code on the host/local dashboard, plus the paired-devices list with unpair. |
 | **Pairing** | Remote first-login: identity echo, rotating-code entry, and the security copy explaining what pairing grants. |
 
 ### Composer modes
@@ -285,8 +285,39 @@ Browser dashboard (SolidJS + Vite, tokens.css design system)
   RPC sessions get the same LLM-generated session names as the TUI and update
   live via `session_name_changed`.
 - **Visual language**: `tokens.css` (`packages/dashboard/src/client/styles/`),
-  the dashboard's design system — IBM Plex Mono, light + dark via
+  the dashboard's design system, with `themes.css` as an additive layer on top.
+  The pristine default (Default theme + system mode) renders exactly as the
+  `tokens.css` baseline; a curated theme or a forced mode overrides the design
+  tokens. See the appearance system below.
+
+## Appearance system
+
+The dashboard owns its own palette surface, deliberately **independent of the
+TUI theme system** — dashboard themes intentionally do not map to TUI themes.
+
+- **Curated themes.** Four themes — Default, Dim, Solarized, Gruvbox — each a
+  *family* with its own light and dark palette. A separate mode toggle
+  (system / light / dark) picks which variant renders; forced light/dark works
+  for every theme, including Default. `system` follows the OS via
   `prefers-color-scheme`.
+- **Theme gallery.** The settings appearance section shows a mode selector plus
+  a grid of live preview cards (one per theme). Each card previews its palette
+  locally without touching the page until you commit by clicking it.
+- **Per-browser persistence.** Selections are stored in per-browser
+  `localStorage` (`dreb.dashboard.theme` / `dreb.dashboard.colorMode`), with a
+  cross-tab sync listener; a pristine install (Default + system) leaves no keys
+  behind and renders byte-for-byte identically to the `tokens.css` baseline. No
+  server/RPC involvement, no runtime dependencies.
+- **No wrong-theme flash.** A synchronous bootstrap in `index.html` paints the
+  correct theme before any CSS loads, and keeps a live `theme-color` meta in
+  sync with the active background.
+- **Self-hosted fonts.** Most themes use IBM Plex Mono; Gruvbox uses
+  self-hosted JetBrains Mono (OFL, provenance in
+  `src/client/assets/fonts/`), lazy-loaded by the browser only when Gruvbox is
+  active. No `light-dark()` is used, keeping an iOS Safari 16.4 floor.
+- **PWA launch colors.** The static `manifest.webmanifest` keeps white
+  (default-light) launch colors as the fallback; the live `theme-color` meta
+  follows the active appearance once the app loads.
 
 ## Limitations (deliberate, sequenced later)
 
@@ -294,4 +325,3 @@ Browser dashboard (SolidJS + Vite, tokens.css design system)
   loop; the tree design and RPC are ready).
 - No shell passthrough from the browser.
 - No subagent steering (the drill-in view is read-only).
-- Fixed light/dark via `prefers-color-scheme` — no TUI-theme following.

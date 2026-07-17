@@ -1,0 +1,540 @@
+/*
+ * dreb dashboard — appearance layer (ADDITIVE).
+ *
+ * This is the dashboard's own theming surface. It is deliberately independent of
+ * the TUI theme system: the dashboard owns these palettes. Loaded AFTER
+ * tokens.css and app.css, it overrides the design tokens (--bg, --text,
+ * --border, --muted, the four --status-*, the nine --syntax-*, and --mono-font)
+ * when a curated theme or a forced color mode is active.
+ *
+ * The no-attribute case (default theme + system mode) is intentionally NOT
+ * matched here, so a pristine install renders byte-for-byte identically to the
+ * tokens.css / app.css baseline.
+ *
+ * SCOPING: every rule uses bare attribute selectors ([data-theme='…'],
+ * [data-color-mode='…']) rather than :root-anchored ones, so a preview element
+ * can carry the attributes and get the palette locally (custom properties then
+ * cascade to its subtree). Runtime attributes normally live on <html> (set by
+ * state/appearance.ts + the index.html bootstrap).
+ *
+ * VARIANT MODEL: each curated theme defines BOTH a light and a dark palette as
+ * private --<theme>-l-* / --<theme>-d-* props, then maps the public tokens:
+ *   - light is the default mapping under [data-theme='x']
+ *   - dark applies under [data-theme='x'][data-color-mode='dark'] (forced) AND
+ *     under @media (prefers-color-scheme: dark) when not force-lit (system)
+ * This gives "system follows OS" plus an explicit override WITHOUT the
+ * light-dark() CSS function (unsupported on iOS Safari 16.4).
+ *
+ * ACCESSIBILITY: every hex below was verified to clear WCAG AA (>=4.5:1) for
+ * body --text on --bg, --muted on --bg, all four status accents on --bg, and
+ * every syntax foreground on --bg. The needs-attention chip is filled
+ * (--bg text on the --status-attention fill), whose contrast is symmetric to
+ * --status-attention-on-bg, so it clears AA too.
+ */
+
+/* ============================================================ fonts */
+
+/*
+ * JetBrains Mono — self-hosted, used only by the gruvbox theme. Variable
+ * (wght 100–800) so 400/500/600 render natively without faux bold. Fetched
+ * lazily by the browser only when gruvbox is active (no <link rel=preload>).
+ * Files + license + provenance live in ../assets/fonts/. url() is resolved
+ * relative to this file and fingerprinted by Vite.
+ */
+@font-face {
+	font-family: "JetBrains Mono";
+	font-style: normal;
+	font-weight: 100 800;
+	font-display: swap;
+	src: url("../assets/fonts/jetbrains-mono.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "JetBrains Mono";
+	font-style: italic;
+	font-weight: 100 800;
+	font-display: swap;
+	src: url("../assets/fonts/jetbrains-mono-italic.woff2") format("woff2");
+}
+
+/* ================================================= default: forced modes */
+
+/*
+ * The default theme normally follows the OS via tokens.css/app.css. These
+ * selectors let a user FORCE light or dark against their OS while keeping the
+ * default palette. They restate the tokens.css base tokens AND the nine app.css
+ * syntax tokens verbatim (values are NOT changed — only relocated behind the
+ * forced-mode attribute). Two attribute selectors outrank the tokens.css :root
+ * / @media rules, so the force wins regardless of OS preference.
+ */
+[data-color-mode="light"]:not([data-theme]) {
+	color-scheme: light;
+
+	--bg: #ffffff;
+	--text: #000000;
+	--border: #e0e0e0;
+	--muted: #666666;
+
+	--status-running: #00871f;
+	--status-attention: #8a5400;
+	--status-idle: #666666;
+	--status-error: #d10041;
+
+	--syntax-comment: #008000;
+	--syntax-keyword: #0000ff;
+	--syntax-string: #a31515;
+	--syntax-number: #098658;
+	--syntax-function: #795e26;
+	--syntax-type: #267f99;
+	--syntax-variable: #001080;
+	--syntax-operator: #000000;
+	--syntax-punctuation: #000000;
+}
+
+[data-color-mode="dark"]:not([data-theme]) {
+	color-scheme: dark;
+
+	--bg: #000000;
+	--text: #ffffff;
+	--border: #333333;
+	--muted: #999999;
+
+	--status-running: #00e436;
+	--status-attention: #ffa300;
+	--status-idle: #999999;
+	--status-error: #ff004d;
+
+	--syntax-comment: #6a9955;
+	--syntax-keyword: #569cd6;
+	--syntax-string: #ce9178;
+	--syntax-number: #b5cea8;
+	--syntax-function: #dcdcaa;
+	--syntax-type: #4ec9b0;
+	--syntax-variable: #9cdcfe;
+	--syntax-operator: #d4d4d4;
+	--syntax-punctuation: #d4d4d4;
+}
+
+/* ================================================= default: explicit scope */
+
+/*
+ * Preview surfaces (e.g. the settings theme gallery) render a theme INSIDE a
+ * container without touching :root. The default theme has no ancestor override,
+ * so a scoped element must be able to restate the tokens.css / app.css baseline
+ * explicitly via [data-theme="default"] — otherwise it would inherit whatever
+ * theme is active on :root. This never matches <html> (state/appearance.ts omits
+ * data-theme for the default theme), so the clean no-attribute invariant on the
+ * document root is preserved. Values mirror tokens.css / app.css verbatim.
+ */
+[data-theme="default"] {
+	color-scheme: light;
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+
+	--bg: #ffffff;
+	--text: #000000;
+	--border: #e0e0e0;
+	--muted: #666666;
+
+	--status-running: #00871f;
+	--status-attention: #8a5400;
+	--status-idle: #666666;
+	--status-error: #d10041;
+
+	--syntax-comment: #008000;
+	--syntax-keyword: #0000ff;
+	--syntax-string: #a31515;
+	--syntax-number: #098658;
+	--syntax-function: #795e26;
+	--syntax-type: #267f99;
+	--syntax-variable: #001080;
+	--syntax-operator: #000000;
+	--syntax-punctuation: #000000;
+}
+
+[data-theme="default"][data-color-mode="dark"] {
+	color-scheme: dark;
+
+	--bg: #000000;
+	--text: #ffffff;
+	--border: #333333;
+	--muted: #999999;
+
+	--status-running: #00e436;
+	--status-attention: #ffa300;
+	--status-idle: #999999;
+	--status-error: #ff004d;
+
+	--syntax-comment: #6a9955;
+	--syntax-keyword: #569cd6;
+	--syntax-string: #ce9178;
+	--syntax-number: #b5cea8;
+	--syntax-function: #dcdcaa;
+	--syntax-type: #4ec9b0;
+	--syntax-variable: #9cdcfe;
+	--syntax-operator: #d4d4d4;
+	--syntax-punctuation: #d4d4d4;
+}
+
+@media (prefers-color-scheme: dark) {
+	[data-theme="default"]:not([data-color-mode="light"]) {
+		color-scheme: dark;
+
+		--bg: #000000;
+		--text: #ffffff;
+		--border: #333333;
+		--muted: #999999;
+
+		--status-running: #00e436;
+		--status-attention: #ffa300;
+		--status-idle: #999999;
+		--status-error: #ff004d;
+
+		--syntax-comment: #6a9955;
+		--syntax-keyword: #569cd6;
+		--syntax-string: #ce9178;
+		--syntax-number: #b5cea8;
+		--syntax-function: #dcdcaa;
+		--syntax-type: #4ec9b0;
+		--syntax-variable: #9cdcfe;
+		--syntax-operator: #d4d4d4;
+		--syntax-punctuation: #d4d4d4;
+	}
+}
+
+/* ============================================================ dim */
+
+/*
+ * Low-glare neutral charcoal. The dark variant is deliberately NOT max-contrast
+ * (~11.5:1 body text, not the 21:1 pure-black extreme) to reduce eye strain;
+ * the light variant is a soft off-white with dark-gray text (never pure black).
+ */
+[data-theme="dim"] {
+	/* dark variant palette */
+	--dim-d-bg: #1e1f22;
+	--dim-d-text: #d7d8da;
+	--dim-d-border: #3a3c40;
+	--dim-d-muted: #9a9ea6;
+	--dim-d-running: #5ec27a;
+	--dim-d-attention: #d8a341;
+	--dim-d-idle: #9a9ea6;
+	--dim-d-error: #f0637f;
+	--dim-d-comment: #8b9199;
+	--dim-d-keyword: #8ab4f8;
+	--dim-d-string: #c3956a;
+	--dim-d-number: #9fce8a;
+	--dim-d-function: #d9c46e;
+	--dim-d-type: #5cc2b0;
+	--dim-d-variable: #9cc7e8;
+	--dim-d-operator: #c3c6cb;
+	--dim-d-punctuation: #c3c6cb;
+
+	/* light variant palette */
+	--dim-l-bg: #f0f0ee;
+	--dim-l-text: #33353a;
+	--dim-l-border: #d3d4d1;
+	--dim-l-muted: #5c5f66;
+	--dim-l-running: #1c7a37;
+	--dim-l-attention: #8a5400;
+	--dim-l-idle: #5c5f66;
+	--dim-l-error: #c01743;
+	--dim-l-comment: #4f6e42;
+	--dim-l-keyword: #1a4fc0;
+	--dim-l-string: #9a3a20;
+	--dim-l-number: #1f7a4a;
+	--dim-l-function: #6f5a12;
+	--dim-l-type: #136b7a;
+	--dim-l-variable: #123a9c;
+	--dim-l-operator: #33353a;
+	--dim-l-punctuation: #33353a;
+
+	/* default mapping: light */
+	color-scheme: light;
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+	--bg: var(--dim-l-bg);
+	--text: var(--dim-l-text);
+	--border: var(--dim-l-border);
+	--muted: var(--dim-l-muted);
+	--status-running: var(--dim-l-running);
+	--status-attention: var(--dim-l-attention);
+	--status-idle: var(--dim-l-idle);
+	--status-error: var(--dim-l-error);
+	--syntax-comment: var(--dim-l-comment);
+	--syntax-keyword: var(--dim-l-keyword);
+	--syntax-string: var(--dim-l-string);
+	--syntax-number: var(--dim-l-number);
+	--syntax-function: var(--dim-l-function);
+	--syntax-type: var(--dim-l-type);
+	--syntax-variable: var(--dim-l-variable);
+	--syntax-operator: var(--dim-l-operator);
+	--syntax-punctuation: var(--dim-l-punctuation);
+}
+
+/* dark variant: forced (below) OR OS-preferred when not force-lit (media rule) */
+[data-theme="dim"][data-color-mode="dark"] {
+	color-scheme: dark;
+	--bg: var(--dim-d-bg);
+	--text: var(--dim-d-text);
+	--border: var(--dim-d-border);
+	--muted: var(--dim-d-muted);
+	--status-running: var(--dim-d-running);
+	--status-attention: var(--dim-d-attention);
+	--status-idle: var(--dim-d-idle);
+	--status-error: var(--dim-d-error);
+	--syntax-comment: var(--dim-d-comment);
+	--syntax-keyword: var(--dim-d-keyword);
+	--syntax-string: var(--dim-d-string);
+	--syntax-number: var(--dim-d-number);
+	--syntax-function: var(--dim-d-function);
+	--syntax-type: var(--dim-d-type);
+	--syntax-variable: var(--dim-d-variable);
+	--syntax-operator: var(--dim-d-operator);
+	--syntax-punctuation: var(--dim-d-punctuation);
+}
+
+@media (prefers-color-scheme: dark) {
+	[data-theme="dim"]:not([data-color-mode="light"]) {
+		color-scheme: dark;
+		--bg: var(--dim-d-bg);
+		--text: var(--dim-d-text);
+		--border: var(--dim-d-border);
+		--muted: var(--dim-d-muted);
+		--status-running: var(--dim-d-running);
+		--status-attention: var(--dim-d-attention);
+		--status-idle: var(--dim-d-idle);
+		--status-error: var(--dim-d-error);
+		--syntax-comment: var(--dim-d-comment);
+		--syntax-keyword: var(--dim-d-keyword);
+		--syntax-string: var(--dim-d-string);
+		--syntax-number: var(--dim-d-number);
+		--syntax-function: var(--dim-d-function);
+		--syntax-type: var(--dim-d-type);
+		--syntax-variable: var(--dim-d-variable);
+		--syntax-operator: var(--dim-d-operator);
+		--syntax-punctuation: var(--dim-d-punctuation);
+	}
+}
+
+/* ============================================================ solarized */
+
+/*
+ * Ethan Schoonover's Solarized: base3/base00 family (light) and base03/base0
+ * family (dark). Body text uses base01/base0 and several accents/syntax hues
+ * were nudged darker/brighter from the canonical values so every foreground
+ * clears WCAG AA on the low-contrast solarized backgrounds.
+ */
+[data-theme="solarized"] {
+	/* dark variant palette (base03 bg) */
+	--sol-d-bg: #002b36;
+	--sol-d-text: #93a1a1;
+	--sol-d-border: #0a4b5a;
+	--sol-d-muted: #839496;
+	--sol-d-running: #859900;
+	--sol-d-attention: #cb8b18;
+	--sol-d-idle: #839496;
+	--sol-d-error: #fa6459;
+	--sol-d-comment: #7e9295;
+	--sol-d-keyword: #6c8fd6;
+	--sol-d-string: #2aa198;
+	--sol-d-number: #b58900;
+	--sol-d-function: #4a9fdb;
+	--sol-d-type: #b58900;
+	--sol-d-variable: #93a1a1;
+	--sol-d-operator: #93a1a1;
+	--sol-d-punctuation: #93a1a1;
+
+	/* light variant palette (base3 bg) */
+	--sol-l-bg: #fdf6e3;
+	--sol-l-text: #586e75;
+	--sol-l-border: #e7e0cb;
+	--sol-l-muted: #5b6f76;
+	--sol-l-running: #567500;
+	--sol-l-attention: #a35700;
+	--sol-l-idle: #5b6f76;
+	--sol-l-error: #c9412f;
+	--sol-l-comment: #5e7272;
+	--sol-l-keyword: #5d62bd;
+	--sol-l-string: #147878;
+	--sol-l-number: #8a6d00;
+	--sol-l-function: #1f6fa8;
+	--sol-l-type: #a35700;
+	--sol-l-variable: #586e75;
+	--sol-l-operator: #586e75;
+	--sol-l-punctuation: #586e75;
+
+	/* default mapping: light */
+	color-scheme: light;
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+	--bg: var(--sol-l-bg);
+	--text: var(--sol-l-text);
+	--border: var(--sol-l-border);
+	--muted: var(--sol-l-muted);
+	--status-running: var(--sol-l-running);
+	--status-attention: var(--sol-l-attention);
+	--status-idle: var(--sol-l-idle);
+	--status-error: var(--sol-l-error);
+	--syntax-comment: var(--sol-l-comment);
+	--syntax-keyword: var(--sol-l-keyword);
+	--syntax-string: var(--sol-l-string);
+	--syntax-number: var(--sol-l-number);
+	--syntax-function: var(--sol-l-function);
+	--syntax-type: var(--sol-l-type);
+	--syntax-variable: var(--sol-l-variable);
+	--syntax-operator: var(--sol-l-operator);
+	--syntax-punctuation: var(--sol-l-punctuation);
+}
+
+[data-theme="solarized"][data-color-mode="dark"] {
+	color-scheme: dark;
+	--bg: var(--sol-d-bg);
+	--text: var(--sol-d-text);
+	--border: var(--sol-d-border);
+	--muted: var(--sol-d-muted);
+	--status-running: var(--sol-d-running);
+	--status-attention: var(--sol-d-attention);
+	--status-idle: var(--sol-d-idle);
+	--status-error: var(--sol-d-error);
+	--syntax-comment: var(--sol-d-comment);
+	--syntax-keyword: var(--sol-d-keyword);
+	--syntax-string: var(--sol-d-string);
+	--syntax-number: var(--sol-d-number);
+	--syntax-function: var(--sol-d-function);
+	--syntax-type: var(--sol-d-type);
+	--syntax-variable: var(--sol-d-variable);
+	--syntax-operator: var(--sol-d-operator);
+	--syntax-punctuation: var(--sol-d-punctuation);
+}
+
+@media (prefers-color-scheme: dark) {
+	[data-theme="solarized"]:not([data-color-mode="light"]) {
+		color-scheme: dark;
+		--bg: var(--sol-d-bg);
+		--text: var(--sol-d-text);
+		--border: var(--sol-d-border);
+		--muted: var(--sol-d-muted);
+		--status-running: var(--sol-d-running);
+		--status-attention: var(--sol-d-attention);
+		--status-idle: var(--sol-d-idle);
+		--status-error: var(--sol-d-error);
+		--syntax-comment: var(--sol-d-comment);
+		--syntax-keyword: var(--sol-d-keyword);
+		--syntax-string: var(--sol-d-string);
+		--syntax-number: var(--sol-d-number);
+		--syntax-function: var(--sol-d-function);
+		--syntax-type: var(--sol-d-type);
+		--syntax-variable: var(--sol-d-variable);
+		--syntax-operator: var(--sol-d-operator);
+		--syntax-punctuation: var(--sol-d-punctuation);
+	}
+}
+
+/* ============================================================ gruvbox */
+
+/*
+ * Retro warm palette. Uses the self-hosted JetBrains Mono (declared above) with
+ * an IBM Plex Mono fallback. Several canonical gruvbox accents were nudged for
+ * AA on the warm backgrounds.
+ */
+[data-theme="gruvbox"] {
+	/* dark variant palette (bg0 #282828) */
+	--gruv-d-bg: #282828;
+	--gruv-d-text: #ebdbb2;
+	--gruv-d-border: #504945;
+	--gruv-d-muted: #a89984;
+	--gruv-d-running: #b8bb26;
+	--gruv-d-attention: #fabd2f;
+	--gruv-d-idle: #a89984;
+	--gruv-d-error: #fc6a58;
+	--gruv-d-comment: #a08f7d;
+	--gruv-d-keyword: #fc6a58;
+	--gruv-d-string: #b8bb26;
+	--gruv-d-number: #d3869b;
+	--gruv-d-function: #b8bb26;
+	--gruv-d-type: #fabd2f;
+	--gruv-d-variable: #83a598;
+	--gruv-d-operator: #ebdbb2;
+	--gruv-d-punctuation: #ebdbb2;
+
+	/* light variant palette (bg0 #fbf1c7) */
+	--gruv-l-bg: #fbf1c7;
+	--gruv-l-text: #3c3836;
+	--gruv-l-border: #e6dcae;
+	--gruv-l-muted: #665c54;
+	--gruv-l-running: #557000;
+	--gruv-l-attention: #a35a00;
+	--gruv-l-idle: #665c54;
+	--gruv-l-error: #9d0006;
+	--gruv-l-comment: #6f6358;
+	--gruv-l-keyword: #9d0006;
+	--gruv-l-string: #557000;
+	--gruv-l-number: #8f3f71;
+	--gruv-l-function: #6d680c;
+	--gruv-l-type: #97600f;
+	--gruv-l-variable: #076678;
+	--gruv-l-operator: #3c3836;
+	--gruv-l-punctuation: #3c3836;
+
+	/* default mapping: light */
+	color-scheme: light;
+	--mono-font: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
+	--bg: var(--gruv-l-bg);
+	--text: var(--gruv-l-text);
+	--border: var(--gruv-l-border);
+	--muted: var(--gruv-l-muted);
+	--status-running: var(--gruv-l-running);
+	--status-attention: var(--gruv-l-attention);
+	--status-idle: var(--gruv-l-idle);
+	--status-error: var(--gruv-l-error);
+	--syntax-comment: var(--gruv-l-comment);
+	--syntax-keyword: var(--gruv-l-keyword);
+	--syntax-string: var(--gruv-l-string);
+	--syntax-number: var(--gruv-l-number);
+	--syntax-function: var(--gruv-l-function);
+	--syntax-type: var(--gruv-l-type);
+	--syntax-variable: var(--gruv-l-variable);
+	--syntax-operator: var(--gruv-l-operator);
+	--syntax-punctuation: var(--gruv-l-punctuation);
+}
+
+[data-theme="gruvbox"][data-color-mode="dark"] {
+	color-scheme: dark;
+	--bg: var(--gruv-d-bg);
+	--text: var(--gruv-d-text);
+	--border: var(--gruv-d-border);
+	--muted: var(--gruv-d-muted);
+	--status-running: var(--gruv-d-running);
+	--status-attention: var(--gruv-d-attention);
+	--status-idle: var(--gruv-d-idle);
+	--status-error: var(--gruv-d-error);
+	--syntax-comment: var(--gruv-d-comment);
+	--syntax-keyword: var(--gruv-d-keyword);
+	--syntax-string: var(--gruv-d-string);
+	--syntax-number: var(--gruv-d-number);
+	--syntax-function: var(--gruv-d-function);
+	--syntax-type: var(--gruv-d-type);
+	--syntax-variable: var(--gruv-d-variable);
+	--syntax-operator: var(--gruv-d-operator);
+	--syntax-punctuation: var(--gruv-d-punctuation);
+}
+
+@media (prefers-color-scheme: dark) {
+	[data-theme="gruvbox"]:not([data-color-mode="light"]) {
+		color-scheme: dark;
+		--bg: var(--gruv-d-bg);
+		--text: var(--gruv-d-text);
+		--border: var(--gruv-d-border);
+		--muted: var(--gruv-d-muted);
+		--status-running: var(--gruv-d-running);
+		--status-attention: var(--gruv-d-attention);
+		--status-idle: var(--gruv-d-idle);
+		--status-error: var(--gruv-d-error);
+		--syntax-comment: var(--gruv-d-comment);
+		--syntax-keyword: var(--gruv-d-keyword);
+		--syntax-string: var(--gruv-d-string);
+		--syntax-number: var(--gruv-d-number);
+		--syntax-function: var(--gruv-d-function);
+		--syntax-type: var(--gruv-d-type);
+		--syntax-variable: var(--gruv-d-variable);
+		--syntax-operator: var(--gruv-d-operator);
+		--syntax-punctuation: var(--gruv-d-punctuation);
+	}
+}

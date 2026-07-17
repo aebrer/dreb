@@ -145,6 +145,12 @@ import { PairingScreen } from "../../src/client/screens/pairing.js";
 import { formatTokens, SessionScreen } from "../../src/client/screens/session.js";
 import { SettingsScreen } from "../../src/client/screens/settings.js";
 import { SubagentScreen } from "../../src/client/screens/subagent.js";
+import {
+	__resetAppearanceForTests,
+	COLOR_MODE_STORAGE_KEY,
+	reloadAppearance,
+	THEME_STORAGE_KEY,
+} from "../../src/client/state/appearance.js";
 import { setExpandThinking } from "../../src/client/state/preferences.js";
 import {
 	applySessionEvent,
@@ -174,7 +180,12 @@ if (!(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver) 
 }
 
 beforeEach(() => {
-	if (window.localStorage) return;
+	// Always install a Map-backed localStorage shim. jsdom's own localStorage can
+	// be present-but-broken in some environments (e.g. when node is launched with
+	// a bad `--localstorage-file`, its methods aren't functions), so a plain
+	// `if (window.localStorage) return;` guard would leave those broken methods in
+	// place. Redefining unconditionally (the property is configurable) is
+	// deterministic and functionally identical where jsdom's storage works.
 	const values = new Map<string, string>();
 	Object.defineProperty(window, "localStorage", {
 		configurable: true,
@@ -1530,6 +1541,102 @@ describe("dashboard client regressions", () => {
 
 		expect(window.localStorage.getItem("dreb.dashboard.expandThinking")).toBe("true");
 		expect(checkbox!.checked).toBe(true);
+	});
+
+	describe("settings appearance (theme gallery)", () => {
+		// The appearance state is a module-level singleton driven by localStorage,
+		// so reset both storage and the signals/DOM between cases.
+		function resetAppearance() {
+			window.localStorage.removeItem(THEME_STORAGE_KEY);
+			window.localStorage.removeItem(COLOR_MODE_STORAGE_KEY);
+			__resetAppearanceForTests();
+			reloadAppearance(); // re-reads (now-empty) storage → removes the <html> attrs
+		}
+
+		beforeEach(resetAppearance);
+		afterEach(resetAppearance);
+
+		it("renders the mode selector and theme cards even when settings fails to load", async () => {
+			// The appearance controls live in the dashboard section, OUTSIDE the
+			// server-settings <Show> boundary — so a rejected api.settings() must not
+			// hide them.
+			vi.mocked(api.settings).mockRejectedValue(new Error("settings unavailable"));
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			expect(el.querySelector("#pref-color-mode")).not.toBeNull();
+			expect(el.querySelectorAll("[data-theme-card]").length).toBe(4);
+			expect(el.querySelector('[data-theme-card="default"]')).not.toBeNull();
+			expect(el.querySelector('[data-theme-card="gruvbox"]')).not.toBeNull();
+		});
+
+		it("marks the restored theme card active and selects the restored color mode", async () => {
+			window.localStorage.setItem(THEME_STORAGE_KEY, "solarized");
+			window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");
+			reloadAppearance();
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const card = el.querySelector('[data-theme-card="solarized"]') as HTMLButtonElement;
+			expect(card.classList.contains("active")).toBe(true);
+			expect(card.getAttribute("aria-pressed")).toBe("true");
+			const select = el.querySelector("#pref-color-mode") as HTMLSelectElement;
+			expect(select.value).toBe("dark");
+		});
+
+		it("clicking a non-default card sets the documentElement theme attribute and persists it", async () => {
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(document.documentElement.getAttribute("data-theme")).toBeNull();
+
+			const card = el.querySelector('[data-theme-card="gruvbox"]') as HTMLButtonElement;
+			card.click();
+
+			expect(document.documentElement.getAttribute("data-theme")).toBe("gruvbox");
+			expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("gruvbox");
+			expect(card.classList.contains("active")).toBe(true);
+		});
+
+		it("selecting the default theme clears the attribute and storage key", async () => {
+			window.localStorage.setItem(THEME_STORAGE_KEY, "dim");
+			reloadAppearance();
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(document.documentElement.getAttribute("data-theme")).toBe("dim");
+
+			const defaultCard = el.querySelector('[data-theme-card="default"]') as HTMLButtonElement;
+			defaultCard.click();
+
+			expect(document.documentElement.getAttribute("data-theme")).toBeNull();
+			expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
+		});
+
+		it("selecting system color mode clears the color-mode attribute and key", async () => {
+			window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");
+			reloadAppearance();
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(document.documentElement.getAttribute("data-color-mode")).toBe("dark");
+
+			const select = el.querySelector("#pref-color-mode") as HTMLSelectElement;
+			select.value = "system";
+			select.dispatchEvent(new Event("change", { bubbles: true }));
+
+			expect(document.documentElement.getAttribute("data-color-mode")).toBeNull();
+			expect(window.localStorage.getItem(COLOR_MODE_STORAGE_KEY)).toBeNull();
+		});
+
+		it("documents that the dashboard appearance is independent of the TUI theme", async () => {
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(el.textContent).toContain("independent of the TUI");
+		});
 	});
 
 	it("settings requests browser notification permission from the dashboard toggle", async () => {

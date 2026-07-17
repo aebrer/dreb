@@ -109,23 +109,26 @@ let registerSpy: ReturnType<typeof vi.fn>;
 let swMessageHandlers: Array<(event: MessageEvent) => void>;
 
 beforeEach(() => {
-	// localStorage shim (jsdom may not provide it without --localstorage-file).
+	// Always install a Map-backed localStorage shim. jsdom's own storage can be
+	// present-but-broken (e.g. when node is launched with a bad
+	// `--localstorage-file`, its methods aren't functions), so a `!localStorage`
+	// guard would leave those broken methods in place. Redefining unconditionally
+	// (the property is configurable) is deterministic and functionally identical
+	// where jsdom's storage works.
 	const values = new Map<string, string>();
-	if (!window.localStorage) {
-		Object.defineProperty(window, "localStorage", {
-			configurable: true,
-			value: {
-				getItem: (k: string) => values.get(k) ?? null,
-				setItem: (k: string, v: string) => values.set(k, String(v)),
-				removeItem: (k: string) => values.delete(k),
-				clear: () => values.clear(),
-				key: (i: number) => [...values.keys()][i] ?? null,
-				get length() {
-					return values.size;
-				},
+	Object.defineProperty(window, "localStorage", {
+		configurable: true,
+		value: {
+			getItem: (k: string) => values.get(k) ?? null,
+			setItem: (k: string, v: string) => values.set(k, String(v)),
+			removeItem: (k: string) => values.delete(k),
+			clear: () => values.clear(),
+			key: (i: number) => [...values.keys()][i] ?? null,
+			get length() {
+				return values.size;
 			},
-		});
-	}
+		},
+	});
 
 	// SW registration mock — `ready` resolves to a registration with a
 	// `showNotification` spy so the app's notification code can call it.

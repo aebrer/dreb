@@ -1,8 +1,11 @@
 /*
  * dreb dashboard — screen-specific styles.
  *
- * tokens.css is the design system and is adopted UNMODIFIED; this
- * file only extends it with layout for the app shell and screens.
+ * tokens.css is the design system; this file extends it with the nine
+ * --syntax-* tokens and layout for the app shell and screens. The additive
+ * styles/themes.css layer (loaded after this file) may override these tokens
+ * for curated appearance themes and forced color modes; the token VALUES
+ * declared here remain the default-theme baseline.
  */
 
 :root {
@@ -1693,6 +1696,123 @@ details.thinking .thinking-body {
 .settings-footnote {
 	margin-top: calc(-1 * var(--space-3));
 	margin-bottom: var(--space-5);
+}
+
+/* ------------------------------------------------------------- appearance */
+
+.appearance-block {
+	margin-bottom: var(--space-4);
+}
+
+.appearance-heading-row .name {
+	font-weight: 600;
+}
+
+.theme-gallery {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+	gap: var(--space-3);
+	margin-top: var(--space-2);
+}
+
+.theme-card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	padding: var(--space-2);
+	text-align: left;
+	cursor: pointer;
+	font-family: inherit;
+	transition: border-color 0.2s;
+}
+
+.theme-card:hover {
+	border-color: var(--muted);
+}
+
+.theme-card.active {
+	border-color: var(--text);
+}
+
+/* The .theme-card element carries data-theme/data-color-mode, so themes.css
+   remaps the palette across the whole card (background, chips, code, footer);
+   this inner box is just the framed code/preview inset. */
+.theme-card-preview {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: var(--space-2);
+	overflow: hidden;
+}
+
+.theme-card-swatch {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.theme-card-name {
+	font-size: var(--fs-secondary);
+	font-weight: 600;
+	color: var(--text);
+}
+
+.theme-card-muted {
+	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
+.theme-card-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+}
+
+.theme-card-code {
+	margin: 0;
+	font-size: var(--fs-small);
+	line-height: 1.4;
+	white-space: pre;
+	overflow: hidden;
+}
+
+.theme-card-code .hljs {
+	background: transparent;
+	padding: 0;
+}
+
+.theme-card-footer {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--space-2);
+	font-size: var(--fs-small);
+}
+
+.theme-card-title {
+	font-size: var(--fs-secondary);
+	color: var(--text);
+}
+
+.theme-card-state {
+	color: var(--muted);
+}
+
+.theme-card.active .theme-card-state {
+	color: var(--text);
+}
+
+@media (max-width: 700px) {
+	.theme-gallery {
+		grid-template-columns: 1fr;
+	}
 }
 
 .device-row {
