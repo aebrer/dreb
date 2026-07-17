@@ -227,6 +227,40 @@ describe("Kimi For Coding OAuth", () => {
 			expect(progressCalls).toContain("Discovering available models...");
 		});
 
+		it("records a successful empty discovery during login", async () => {
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+					const url = getUrl(input);
+
+					if (url === DEVICE_AUTH_URL) {
+						return jsonResponse(MOCK_DEVICE_CODE_RESPONSE);
+					}
+
+					if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
+						return jsonResponse(MOCK_TOKEN_SUCCESS);
+					}
+
+					if (url === MODELS_URL) {
+						return jsonResponse({ data: [] });
+					}
+
+					throw new Error(`Unexpected fetch URL: ${url}`);
+				}),
+			);
+
+			const creds = await loginKimiCoding({
+				onAuth: () => {},
+				onProgress: () => {},
+			});
+
+			expect(creds.access).toBe("kimi-access-token-123");
+			expect(creds.models).toEqual([]);
+			expect(creds.modelId).toBeUndefined();
+			expect(creds.contextLength).toBeUndefined();
+			expect(creds.modelDisplay).toBeUndefined();
+		});
+
 		it("falls back from an empty verification_uri_complete to verification_uri", async () => {
 			const authCalls: { url: string }[] = [];
 
@@ -284,6 +318,67 @@ describe("Kimi For Coding OAuth", () => {
 			);
 
 			await expect(loginKimiCoding({ onAuth: () => {} })).rejects.toThrow("Invalid device code response fields");
+		});
+
+		it("rejects a device response missing both verification URIs", async () => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date("2026-04-17T00:00:00Z"));
+
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: unknown): Promise<Response> => {
+					const url = getUrl(input);
+					if (url === DEVICE_AUTH_URL) {
+						return jsonResponse({
+							...MOCK_DEVICE_CODE_RESPONSE,
+							verification_uri_complete: undefined,
+							verification_uri: undefined,
+						});
+					}
+					throw new Error(`Unexpected fetch URL: ${url}`);
+				}),
+			);
+
+			await expect(loginKimiCoding({ onAuth: () => {} })).rejects.toThrow("Invalid device code response fields");
+		});
+
+		it("preserves existing query params when falling back to verification_uri", async () => {
+			const authCalls: { url: string }[] = [];
+
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
+					const url = getUrl(input);
+
+					if (url === DEVICE_AUTH_URL) {
+						return jsonResponse({
+							...MOCK_DEVICE_CODE_RESPONSE,
+							verification_uri_complete: "",
+							verification_uri: "https://auth.kimi.com/device?source=kimi-code",
+						});
+					}
+
+					if (url === TOKEN_URL && String(init?.body).includes("grant_type=urn")) {
+						return jsonResponse(MOCK_TOKEN_SUCCESS);
+					}
+
+					if (url === MODELS_URL) {
+						return jsonResponse({ data: [] });
+					}
+
+					throw new Error(`Unexpected fetch URL: ${url}`);
+				}),
+			);
+
+			await loginKimiCoding({
+				onAuth: (info) => authCalls.push(info),
+			});
+
+			expect(authCalls).toHaveLength(1);
+			const authUrl = new URL(authCalls[0].url);
+			expect(authUrl.origin + authUrl.pathname).toBe("https://auth.kimi.com/device");
+			expect(authUrl.searchParams.get("source")).toBe("kimi-code");
+			expect(authUrl.searchParams.get("user_code")).toBe("WXYZ-1234");
 		});
 
 		it("polls with authorization_pending then succeeds", async () => {
@@ -622,6 +717,45 @@ describe("Kimi For Coding OAuth", () => {
 					tokenCall++;
 					if (tokenCall === 1) {
 						throw new Error("connect ECONNREFUSED 127.0.0.1:443");
+					}
+					return jsonResponse({
+						access_token: "retried-access",
+						refresh_token: "retried-refresh",
+						expires_in: 3600,
+					});
+				}
+
+				if (url === MODELS_URL) {
+					return jsonResponse(MOCK_MODELS_RESPONSE);
+				}
+
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+
+			vi.stubGlobal("fetch", fetchMock);
+
+			const fresh = await refreshKimiCodingToken({
+				refresh: "old-refresh",
+				access: "old-access",
+				expires: 0,
+			});
+
+			expect(fresh.access).toBe("retried-access");
+			expect(tokenCall).toBe(2);
+		});
+
+		it("retries on TimeoutError and then succeeds", async () => {
+			let tokenCall = 0;
+
+			const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+				const url = getUrl(input);
+
+				if (url === TOKEN_URL) {
+					tokenCall++;
+					if (tokenCall === 1) {
+						const error = new Error("Network request timed out");
+						error.name = "TimeoutError";
+						throw error;
 					}
 					return jsonResponse({
 						access_token: "retried-access",
@@ -1205,6 +1339,103 @@ describe("Kimi For Coding OAuth", () => {
 			expect(k3?.reasoning).toBe(true);
 		});
 
+		it("updates all three managed IDs independently without collapse", () => {
+			const creds: OAuthCredentials & { models?: KimiModelInfo[] } = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+				models: [
+					{
+						id: "kimi-for-coding",
+						display_name: "Kimi For Coding Discovered",
+						context_length: 262144,
+						supports_reasoning: true,
+						supports_image_in: true,
+						supports_thinking_type: "both",
+						think_efforts: {
+							support: true,
+							valid_efforts: ["low", "medium", "high"],
+							default_effort: "medium",
+						},
+					},
+					{
+						id: "kimi-for-coding-highspeed",
+						display_name: "HighSpeed Discovered",
+						context_length: 262144,
+						supports_reasoning: true,
+						supports_image_in: false,
+						supports_thinking_type: "both",
+						think_efforts: {
+							support: true,
+							valid_efforts: ["auto"],
+							default_effort: "auto",
+						},
+					},
+					{
+						id: "k3",
+						display_name: "K3 Discovered",
+						context_length: 1048576,
+						supports_reasoning: true,
+						supports_image_in: true,
+						supports_thinking_type: "only",
+						think_efforts: {
+							support: true,
+							valid_efforts: ["low", "high", "max"],
+							default_effort: "high",
+						},
+					},
+				],
+			};
+
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+			const ids = result.map((m) => m.id);
+
+			expect(ids).toHaveLength(3);
+			expect(new Set(ids).size).toBe(ids.length);
+
+			const standard = result.find((m) => m.id === "kimi-for-coding");
+			const highspeed = result.find((m) => m.id === "kimi-for-coding-highspeed");
+			const k3 = result.find((m) => m.id === "k3");
+
+			expect(standard?.name).toBe("Kimi For Coding Discovered");
+			expect(highspeed?.name).toBe("HighSpeed Discovered");
+			expect(k3?.name).toBe("K3 Discovered");
+
+			expect(standard?.contextWindow).toBe(262144);
+			expect(highspeed?.contextWindow).toBe(262144);
+			expect(k3?.contextWindow).toBe(1048576);
+
+			expect(standard?.input).toContain("image");
+			expect(highspeed?.input).not.toContain("image");
+			expect(k3?.input).toContain("image");
+
+			expect(standard?.reasoning).toBe(true);
+			expect(highspeed?.reasoning).toBe(true);
+			expect(k3?.reasoning).toBe(true);
+
+			expect((standard as Model<"openai-completions"> | undefined)?.compat?.reasoningEffortMap).toEqual({
+				minimal: "low",
+				low: "low",
+				medium: "medium",
+				high: "high",
+				xhigh: "high",
+			});
+			expect((highspeed as Model<"openai-completions"> | undefined)?.compat?.reasoningEffortMap).toEqual({
+				minimal: "auto",
+				low: "auto",
+				medium: "auto",
+				high: "auto",
+				xhigh: "auto",
+			});
+			expect((k3 as Model<"openai-completions"> | undefined)?.compat?.reasoningEffortMap).toEqual({
+				minimal: "low",
+				low: "low",
+				medium: "high",
+				high: "high",
+				xhigh: "max",
+			});
+		});
+
 		it("templates future discovered IDs from the static fallback", () => {
 			const creds: OAuthCredentials & { models?: KimiModelInfo[] } = {
 				refresh: "r",
@@ -1305,6 +1536,31 @@ describe("Kimi For Coding OAuth", () => {
 			for (const m of result) {
 				expect(m.headers).toMatchObject({ "X-Msh-Platform": "kimi_code_cli" });
 			}
+		});
+
+		it("enriches a known legacy static ID without collapsing other static models", () => {
+			const creds: OAuthCredentials & {
+				modelId?: string;
+				contextLength?: number;
+				modelDisplay?: string;
+			} = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+				modelId: "kimi-for-coding",
+				contextLength: 131072,
+				modelDisplay: "Legacy Default",
+			};
+
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+			const ids = result.map((m) => m.id);
+
+			expect(ids).toEqual(["kimi-for-coding", "k3", "kimi-for-coding-highspeed"]);
+			expect(new Set(ids).size).toBe(ids.length);
+
+			const enriched = result.find((m) => m.id === "kimi-for-coding");
+			expect(enriched?.name).toBe("Legacy Default");
+			expect(enriched?.contextWindow).toBe(131072);
 		});
 
 		it("leaves non-Kimi-OAuth models unchanged", () => {
