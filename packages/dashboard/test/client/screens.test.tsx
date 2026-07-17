@@ -494,6 +494,37 @@ describe("app store integration", () => {
 		expect(el.querySelector("output")).not.toBeNull();
 	});
 
+	it("session view anchors live connection status next to the composer", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-live-status" />);
+		const dockStatus = () => el.querySelector(".dock .dock-connection-indicator") as HTMLElement | null;
+		expect(dockStatus()?.querySelector("output")).not.toBeNull();
+		if (!captured?.onStatusChange) throw new Error("connection status handler missing");
+
+		captured.onStatusChange({ state: "retrying", attempt: 2, retryDelayMs: 1500, retryAt: Date.now() + 1500 });
+		expect(dockStatus()?.textContent).toContain("retrying in 2s");
+
+		captured.onStatusChange({ state: "resyncing", attempt: 2 });
+		expect(dockStatus()?.textContent).toContain("recovering live state");
+
+		captured.onStatusChange({ state: "auth_failed", attempt: 2 });
+		expect(dockStatus()?.textContent).toContain("live connection unauthorized");
+
+		const collapseComposer = [...el.querySelectorAll("button")].find((button) =>
+			button.textContent?.includes("compose ▾"),
+		);
+		if (!collapseComposer) throw new Error("composer collapse control missing");
+		collapseComposer.click();
+		expect(el.textContent).toContain("composer hidden for transcript reading");
+		expect(dockStatus()?.textContent).toContain("live connection unauthorized");
+	});
+
 	it("dismissToast removes reducer toast and does not resurrect after later sync", async () => {
 		let captured: EventStreamHandlers | undefined;
 		vi.mocked(connectEvents).mockImplementation((handlers) => {

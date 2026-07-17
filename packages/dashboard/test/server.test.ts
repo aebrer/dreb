@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
-import { EventHub } from "../src/server/event-hub.js";
+import { EventHub, formatSseFrame } from "../src/server/event-hub.js";
 import { RuntimePool } from "../src/server/runtime-pool.js";
 import { createDashboardServer, MAX_SSE_BUFFERED_BYTES, parseDeviceCookie } from "../src/server/server.js";
 import { makeFakeClient } from "./runtime-pool.test.js";
@@ -70,6 +70,20 @@ async function openRawSse(base: string, lastEventId?: number): Promise<RawSseCon
 		req.on("error", reject);
 		req.end();
 	});
+}
+
+function parseSseEnvelopes(body: string): Array<{ seq: number; key: string; event: Record<string, unknown> }> {
+	return body
+		.split("\n\n")
+		.filter((frame) => frame.startsWith("id: "))
+		.map((frame) => {
+			const data = frame
+				.split("\n")
+				.find((line) => line.startsWith("data: "))
+				?.slice("data: ".length);
+			if (!data) throw new Error(`SSE frame is missing data: ${frame}`);
+			return JSON.parse(data) as { seq: number; key: string; event: Record<string, unknown> };
+		});
 }
 
 async function startServer(options: TestServerOptions = {}) {
@@ -806,6 +820,81 @@ describe("dashboard server — SSE", () => {
 				}),
 			);
 			expect(logs.join("\n")).not.toContain("x".repeat(50));
+		} finally {
+			connection.destroy();
+		}
+	});
+
+	it("replays a within-budget Last-Event-ID range before later live SSE delivery", async () => {
+		const dir = await createTempProject();
+		const logs: string[] = [];
+		const hub = new EventHub({ bufferBytes: 10_000, replayBytes: 10_000, eventBytes: 500 });
+		const { base, clients } = await startServer({ eventHub: hub, logger: (line) => logs.push(line) });
+		const create = await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const { key } = (await create.json()) as { key: string };
+		clients[0].emit({ type: "one" });
+		clients[0].emit({ type: "two" });
+		clients[0].emit({ type: "three" });
+
+		const expectedReplayBytes =
+			Buffer.byteLength(formatSseFrame({ seq: 2, key, event: { type: "two" } })) +
+			Buffer.byteLength(formatSseFrame({ seq: 3, key, event: { type: "three" } }));
+		const expectedLiveBytes = Buffer.byteLength(formatSseFrame({ seq: 4, key, event: { type: "four" } }));
+		const connection = await openRawSse(base, 1);
+		try {
+			await waitUntil(() => connection.body().includes('"type":"three"'));
+
+			clients[0].emit({ type: "four" });
+			await waitUntil(() => connection.body().includes('"type":"four"'));
+
+			expect(parseSseEnvelopes(connection.body())).toEqual([
+				{ seq: 2, key, event: { type: "two" } },
+				{ seq: 3, key, event: { type: "three" } },
+				{ seq: 4, key, event: { type: "four" } },
+			]);
+			const diagnostics = logs
+				.filter((line) => line.startsWith("sse "))
+				.map((line) => JSON.parse(line.slice(4)) as Record<string, unknown>);
+			expect(diagnostics).toContainEqual(
+				expect.objectContaining({
+					kind: "replay",
+					count: 2,
+					bytes: expectedReplayBytes,
+					fromSeq: 2,
+					toSeq: 3,
+				}),
+			);
+			expect(diagnostics).toContainEqual(
+				expect.objectContaining({
+					kind: "write",
+					writeKind: "replay",
+					seq: 2,
+					type: "two",
+					frameBytes: Buffer.byteLength(formatSseFrame({ seq: 2, key, event: { type: "two" } })),
+				}),
+			);
+			expect(diagnostics).toContainEqual(
+				expect.objectContaining({
+					kind: "write",
+					writeKind: "replay",
+					seq: 3,
+					type: "three",
+					frameBytes: Buffer.byteLength(formatSseFrame({ seq: 3, key, event: { type: "three" } })),
+				}),
+			);
+			expect(diagnostics).toContainEqual(
+				expect.objectContaining({
+					kind: "write",
+					writeKind: "live",
+					seq: 4,
+					type: "four",
+					frameBytes: expectedLiveBytes,
+				}),
+			);
 		} finally {
 			connection.destroy();
 		}

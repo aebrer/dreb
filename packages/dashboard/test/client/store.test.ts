@@ -180,6 +180,140 @@ describe("app store SSE sync", () => {
 		expect(store.resyncing()).toBe(false);
 	});
 
+	it.each([false, true])(
+		"clears stale status, command, attention, and extension affordances when resync restores streaming=%s",
+		async (streaming) => {
+			const snapshot = runtimeSnapshot("a", streaming);
+			vi.mocked(api.resync).mockResolvedValueOnce({
+				fleet: { runtimes: [snapshot], diskSessions: [] },
+				active: {
+					key: "a",
+					state: snapshot.state,
+					messages: [],
+					backgroundAgents: [],
+					barrierSeq: 20,
+				},
+				barrierSeq: 20,
+			});
+			const store = await makeStartedStore();
+
+			emit("a", { type: "agent_start" });
+			emit("a", { type: "tool_execution_start", toolCallId: "stale", toolName: "stale_tool", args: {} });
+			emit("a", { type: "parent_paused_for_background_agents", runningAgentCount: 1 });
+			emit("a", { type: "auto_retry_end", success: false, finalError: "model failed" });
+			emit("a", { type: "suggest_next", command: "try again" });
+			emit("a", {
+				type: "extension_ui_request",
+				method: "setWidget",
+				widgetPlacement: "aboveEditor",
+				widgetLines: ["stale widget"],
+			});
+			emit("a", { type: "extension_ui_request", method: "notify", message: "stale toast" });
+			emit("a", { type: "extension_ui_request", method: "setTitle", title: "stale title" });
+			emit("a", { type: "extension_ui_request", method: "set_editor_text", text: "stale draft" });
+			expect(store.sessions.a?.statusEntries.map((entry) => entry.key)).toEqual(["paused", "error"]);
+			expect(store.sessions.a?.suggestedCommand).toBe("try again");
+			expect(store.sessions.a?.lastError).toBe("model failed");
+			expect(store.sessions.a?.needsAttention).toBe(true);
+			expect(store.sessions.a?.widgets.above).toEqual(["stale widget"]);
+			expect(store.sessions.a?.toasts).toHaveLength(1);
+			expect(store.sessions.a?.title).toBe("stale title");
+			expect(store.sessions.a?.composerPrefill).toBe("stale draft");
+			expect(store.sessions.a?.workingText).toBe("stale_tool");
+
+			emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+			await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+			expect(store.sessions.a?.streaming).toBe(streaming);
+			expect(store.sessions.a?.statusEntries).toEqual([]);
+			expect(store.sessions.a?.suggestedCommand).toBeUndefined();
+			expect(store.sessions.a?.lastError).toBeUndefined();
+			expect(store.sessions.a?.needsAttention).toBe(false);
+			expect(store.sessions.a?.widgets).toEqual({ above: [], below: [] });
+			expect(store.sessions.a?.toasts).toEqual([]);
+			expect(store.sessions.a?.title).toBeUndefined();
+			expect(store.sessions.a?.composerPrefill).toBeUndefined();
+			if (streaming) {
+				expect(store.sessions.a?.workingText).toBe("working");
+				expect(store.sessions.a?.workingSince).toEqual(expect.any(Number));
+			} else {
+				expect(store.sessions.a?.workingText).toBeUndefined();
+				expect(store.sessions.a?.workingSince).toBeUndefined();
+			}
+		},
+	);
+
+	it("clears a stale extension UI modal when it is absent from the authoritative resync", async () => {
+		const snapshot = runtimeSnapshot("a", false);
+		vi.mocked(api.resync).mockResolvedValueOnce({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [],
+				backgroundAgents: [],
+				barrierSeq: 20,
+			},
+			barrierSeq: 20,
+		});
+		const store = await makeStartedStore();
+
+		emit("a", {
+			type: "extension_ui_request",
+			method: "confirm",
+			id: "req-1",
+			title: "Approve?",
+			message: "stale prompt",
+		});
+		expect(store.sessions.a?.uiRequests).toMatchObject([{ id: "req-1", method: "confirm" }]);
+		expect(store.sessions.a?.needsAttention).toBe(true);
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.uiRequests).toEqual([]);
+		expect(store.sessions.a?.needsAttention).toBe(false);
+	});
+
+	it("clears stale extension UI state before replaying post-barrier requests", async () => {
+		const snapshot = runtimeSnapshot("a", false);
+		const request = deferred<Awaited<ReturnType<typeof api.resync>>>();
+		vi.mocked(api.resync).mockReturnValueOnce(request.promise);
+		const store = await makeStartedStore();
+
+		emit("a", {
+			type: "extension_ui_request",
+			method: "confirm",
+			id: "stale-request",
+			title: "Stale prompt",
+			message: "handled before the snapshot barrier",
+		});
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		emit("a", {
+			type: "extension_ui_request",
+			method: "confirm",
+			id: "fresh-request",
+			title: "Fresh prompt",
+			message: "created after the snapshot barrier",
+		});
+
+		request.resolve({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [],
+				backgroundAgents: [],
+				barrierSeq: 2,
+			},
+			barrierSeq: 2,
+		});
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.uiRequests).toMatchObject([{ id: "fresh-request", method: "confirm" }]);
+		expect(store.sessions.a?.needsAttention).toBe(true);
+	});
+
 	it("keeps later parent registry metadata while hydrating an earlier subagent transcript", async () => {
 		const snapshot = runtimeSnapshot("a", false);
 		const activeAgent = agentSnapshot("bg1", "running");

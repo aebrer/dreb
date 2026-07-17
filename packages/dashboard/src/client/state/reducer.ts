@@ -321,7 +321,7 @@ export function capBackgroundAgents(state: SessionViewState): void {
 }
 
 /** Derive needs-attention from current state. */
-function updateAttention(state: SessionViewState): void {
+export function updateAttention(state: SessionViewState): void {
 	state.needsAttention =
 		state.uiRequests.length > 0 ||
 		state.statusEntries.some((s) => s.tone === "error") ||

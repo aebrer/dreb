@@ -949,15 +949,30 @@ details.thinking .thinking-body {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
+	flex-wrap: wrap;
 	font-size: var(--fs-small);
 	color: var(--muted);
 }
 
 .dock-collapsed-hint {
+	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.dock-connection-indicator {
+	margin-left: auto;
+	flex: 0 1 auto;
+	min-width: 0;
+	justify-content: flex-end;
+}
+
+.dock-connection-indicator .chip,
+.dock-connection-indicator .btn {
+	font-size: var(--fs-small);
+	padding: 1px var(--space-2);
 }
 
 .dock-inner {

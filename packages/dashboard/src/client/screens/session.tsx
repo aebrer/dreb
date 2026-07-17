@@ -19,7 +19,7 @@ import type {
 } from "../../shared/protocol.js";
 import { MAX_TOTAL_IMAGE_BYTES } from "../../shared/protocol.js";
 import { api } from "../api.js";
-import { Modal } from "../components/common.js";
+import { ConnectionIndicator, Modal } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
@@ -1193,6 +1193,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 									: "composer hidden for transcript reading"}
 						</span>
 					</Show>
+					<ConnectionIndicator store={props.store} class="dock-connection-indicator" />
 				</div>
 				<Show when={!bottomDockCollapsed()}>
 					<div class="dock-inner">

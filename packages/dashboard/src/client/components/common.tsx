@@ -63,7 +63,7 @@ export function Topbar(props: { store: AppStore; active: "fleet" | "files" | "se
 	);
 }
 
-export function ConnectionIndicator(props: { store: AppStore }): JSX.Element {
+export function ConnectionIndicator(props: { store: AppStore; class?: string }): JSX.Element {
 	const status = () => (props.store.resyncing() ? "resyncing" : props.store.connection().state);
 	const presentation = () => {
 		switch (status()) {
@@ -88,7 +88,7 @@ export function ConnectionIndicator(props: { store: AppStore }): JSX.Element {
 		}
 	};
 	return (
-		<span class="connection-indicator">
+		<span class={`connection-indicator ${props.class ?? ""}`.trim()}>
 			<output class={`chip chip-${presentation().tone}`} aria-live="polite">
 				<span class="dot">{presentation().glyph}</span> {presentation().text}
 			</output>

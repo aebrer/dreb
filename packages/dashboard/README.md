@@ -70,9 +70,10 @@ Open `http://127.0.0.1:5343`.
 
 ## Live connection and recovery
 
-The accessible text indicator in the top bar reports the SSE connection as
-**connecting**, **connected**, **retrying**, **resyncing**, **disconnected**, or
-**auth failed** (with retry delay where applicable); color is not its only cue.
+The accessible text indicator in the top bar and session composer area reports
+the SSE connection as **connecting**, **connected**, **retrying**, **resyncing**,
+**disconnected**, or **auth failed** (with retry delay where applicable); color
+is not its only cue.
 The server replays reducer-relevant projected envelopes from history bounded by
 both count and bytes, with a separate byte cap for each replay. A server restart,
 sequence gap, history eviction, or over-budget replay sends only that reconnect

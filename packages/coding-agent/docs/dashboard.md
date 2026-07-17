@@ -128,7 +128,7 @@ networking window above.
 
 ## Live connection and recovery
 
-The top bar exposes the live-stream state as an accessible text `output`, not color alone: **connecting**, **connected**, **retrying** (including its delay), **resyncing**, **disconnected**, or **auth failed**. This is the state of the dashboard's single SSE connection, not the state of an individual agent.
+The top bar and session composer area expose the live-stream state as an accessible text `output`, not color alone: **connecting**, **connected**, **retrying** (including its delay), **resyncing**, **disconnected**, or **auth failed**. This is the state of the dashboard's single SSE connection, not the state of an individual agent.
 
 Events are `{seq, key, event}` envelopes. The server retains a **projected** form of reducer-relevant events in a ring bounded by both entry count and encoded bytes; a reconnect can replay only a separately byte-bounded range. Projection removes cumulative fields the browser reducer does not use, rather than silently truncating an event. If history is too old or the requested replay exceeds budget, only that reconnect receives a `dashboard_resync` barrier at the current cursor; healthy browsers are not interrupted. A projected event that is itself oversized emits a global barrier because every browser missed it. A slow client's write buffer is bounded too: backpressure closes that SSE connection, then the normal recovery path takes over.
 

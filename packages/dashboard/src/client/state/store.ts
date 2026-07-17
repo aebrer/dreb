@@ -17,6 +17,7 @@ import {
 	messagesToEntries,
 	type SessionViewState,
 	type Toast,
+	updateAttention,
 } from "./reducer.js";
 
 export type Route =
@@ -221,10 +222,25 @@ export function createAppStore() {
 			session.sessionName = active.state.sessionName;
 			session.model = active.state.model?.id;
 			session.contextUsage = active.state.contextUsage;
-			if (session.streaming && !session.workingSince) {
+			// Authoritative recovery snapshots do not carry transient reducer UI
+			// state. Clear pre-gap extension/status affordances so the restored
+			// transcript/runtime state is the source of truth until replay applies
+			// post-barrier events below.
+			session.uiRequests = [];
+			session.statusEntries = [];
+			session.suggestedCommand = undefined;
+			session.lastError = undefined;
+			session.widgets = { above: [], below: [] };
+			session.toasts = [];
+			session.title = undefined;
+			session.composerPrefill = undefined;
+			updateAttention(session);
+			if (session.streaming) {
+				// The snapshot has no current-tool label or turn start time. Reset
+				// both rather than preserving stale pre-gap working metadata.
 				session.workingSince = Date.now();
-				session.workingText = session.workingText ?? "working";
-			} else if (!session.streaming) {
+				session.workingText = "working";
+			} else {
 				session.workingSince = undefined;
 				session.workingText = undefined;
 			}
