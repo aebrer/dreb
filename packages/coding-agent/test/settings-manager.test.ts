@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_BG_PARENT_TURN_LIMIT, SettingsManager } from "../src/core/settings-manager.js";
+import { matchContextTrust } from "../src/core/context-trust.js";
+import { DEFAULT_BG_PARENT_TURN_LIMIT, SettingsManager, type SettingsStorage } from "../src/core/settings-manager.js";
 
 describe("SettingsManager", () => {
 	const testDir = join(process.cwd(), "test-settings-tmp");
@@ -256,33 +257,371 @@ describe("SettingsManager", () => {
 		});
 	});
 
-	describe("autoLoadNestedContext", () => {
-		it("defaults to true when unset", () => {
+	describe("global context trust policy", () => {
+		it("defaults to disabled when unset", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getAutoLoadNestedContext()).toBe(true);
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
 		});
 
-		it("loads false from settings", () => {
-			const settingsPath = join(agentDir, "settings.json");
-			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: false } }));
+		it("ignores project attempts to enable unrestricted loading or add trusted folders", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ context: { autoLoadNested: false } }));
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ context: { autoLoadNested: true, trustedFolders: ["/project-must-not-count"] } }),
+			);
 			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getAutoLoadNestedContext()).toBe(false);
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ context: { autoLoadNested: true, trustedFolders: ["/global"] } }),
+			);
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ context: { autoLoadNested: false } }),
+			);
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: ["/global"] });
 		});
 
-		it("persists the setting and preserves unrelated settings", async () => {
+		it("persists global trust settings without clobbering unrelated values", async () => {
 			const settingsPath = join(agentDir, "settings.json");
-			writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark", context: { unrelated: "kept" } }));
 			const manager = SettingsManager.create(projectDir, agentDir);
 
-			manager.setAutoLoadNestedContext(false);
+			manager.setAutoLoadNestedContext(true);
+			manager.addTrustedContextFolder("/remove-me");
+			manager.addTrustedContextFolder("/trusted");
+			manager.removeTrustedContextFolder("/remove-me");
 			await manager.flush();
 
 			const saved = JSON.parse(readFileSync(settingsPath, "utf-8"));
-			expect(saved.context.autoLoadNested).toBe(false);
+			expect(saved.context).toEqual({ unrelated: "kept", autoLoadNested: true, trustedFolders: ["/trusted"] });
 			expect(saved.theme).toBe("dark");
+		});
 
-			const reloaded = SettingsManager.create(projectDir, agentDir);
-			expect(reloaded.getAutoLoadNestedContext()).toBe(false);
+		it("normalizes malformed autoLoadNested when updating trusted folders", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			const trustedRoot = join(testDir, "trusted");
+			mkdirSync(trustedRoot);
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: "true" } }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setTrustedContextFolders([trustedRoot]);
+			await manager.flush();
+
+			expect(matchContextTrust(manager.getGlobalContextTrustPolicy(), trustedRoot)).toEqual({
+				targetDir: trustedRoot,
+				trustedRoot,
+			});
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({
+				unrestricted: false,
+				trustedFolders: [trustedRoot],
+			});
+		});
+
+		it("reads and edits configured folders when only autoLoadNested is malformed", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({ context: { autoLoadNested: "yes", trustedFolders: ["/a", "/b"] } }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.drainErrors();
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual(["/a", "/b"]);
+			expect(manager.drainErrors()).toEqual([]);
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+			manager.drainErrors();
+
+			manager.removeTrustedContextFolder("/a");
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(settingsPath, "utf-8"));
+			expect(saved.context).toEqual({ autoLoadNested: false, trustedFolders: ["/b"] });
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: ["/b"] });
+		});
+
+		it("preserves configured folders when adding with a malformed autoLoadNested sibling", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({ context: { autoLoadNested: "true", trustedFolders: ["/a", "/b"] } }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.addTrustedContextFolder("/c");
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({
+				unrestricted: false,
+				trustedFolders: ["/a", "/b", "/c"],
+			});
+		});
+
+		it.each([
+			["a non-string trusted folder", { autoLoadNested: false, trustedFolders: ["/ok", 42] }],
+			["a string trustedFolders", { autoLoadNested: false, trustedFolders: "/tmp" }],
+		])("getConfiguredTrustedContextFolders fails closed on %s", (_description, context) => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ context }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			// The configured accessor tolerates a malformed autoLoadNested sibling, but a
+			// malformed trustedFolders value is the list itself — it must fail closed to [].
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual([]);
+		});
+
+		it("adds onto the current external configured list, not a stale cached one", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/old"] } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			// Manager caches the initial configured list in memory.
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual(["/old"]);
+
+			// Another process replaces the configured list out from under this manager.
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/external"] } }),
+			);
+
+			// The add must derive its base list from a fresh cross-process re-read via the
+			// configured accessor, not the stale cached ["/old"].
+			manager.addTrustedContextFolder("/new");
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({
+				unrestricted: false,
+				trustedFolders: ["/external", "/new"],
+			});
+		});
+
+		it("removes from the current external configured list, not a stale cached one", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/old"] } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual(["/old"]);
+
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/a", "/b"] } }),
+			);
+
+			manager.removeTrustedContextFolder("/a");
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: ["/b"] });
+		});
+
+		it("fails closed and records an error when the configured accessor refresh read fails", () => {
+			let global = JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/old"] } });
+			let failReads = false;
+			const storage: SettingsStorage = {
+				withLock(scope, fn) {
+					if (scope === "project") {
+						fn(undefined);
+						return;
+					}
+					if (failReads) {
+						throw new Error("transient read failure");
+					}
+					const next = fn(global);
+					if (next !== undefined) global = next;
+				},
+			};
+			const manager = SettingsManager.fromStorage(storage);
+			// Initial load caches the configured list.
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual(["/old"]);
+			manager.drainErrors();
+
+			// The accessor's own cross-process refresh read now fails; it must fail closed to []
+			// (never expose the stale cached list) and record the read error loudly.
+			failReads = true;
+			expect(manager.getConfiguredTrustedContextFolders()).toEqual([]);
+			expect(
+				manager
+					.drainErrors()
+					.some((entry) => entry.scope === "global" && entry.error.message === "transient read failure"),
+			).toBe(true);
+		});
+
+		it("normalizes malformed trustedFolders when updating autoLoadNested", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { trustedFolders: "/tmp" } }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAutoLoadNestedContext(true);
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: [] });
+		});
+
+		it.each([
+			["a null context container", null],
+			["a string context container", "nope"],
+			["an array context container", ["/tmp"]],
+		])("repairs %s when adding a trusted folder", async (_description, malformedContext) => {
+			const settingsPath = join(agentDir, "settings.json");
+			const trustedRoot = join(testDir, "trusted");
+			mkdirSync(trustedRoot);
+			writeFileSync(settingsPath, JSON.stringify({ context: malformedContext }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setTrustedContextFolders([trustedRoot]);
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({
+				unrestricted: false,
+				trustedFolders: [trustedRoot],
+			});
+		});
+
+		it.each([
+			["a null context container", null],
+			["a string context container", "nope"],
+			["an array context container", ["/tmp"]],
+		])("repairs %s when enabling unrestricted loading", async (_description, malformedContext) => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: malformedContext }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setAutoLoadNestedContext(true);
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: [] });
+		});
+
+		it("does not clobber a concurrent external sibling change on a single-field trust write", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: true, trustedFolders: ["/foo"] } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			// Manager caches the permissive policy in memory (as the dashboard does on render).
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: ["/foo"] });
+
+			// Another process revokes /foo out from under this manager.
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: true, trustedFolders: [] } }));
+
+			// This manager only toggles autoLoadNested and must not resurrect the stale /foo root.
+			manager.setAutoLoadNestedContext(false);
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+		});
+
+		it("does not clobber a concurrent external autoLoadNested change on a trusted-folder write", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: false, trustedFolders: ["/old"] } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: ["/old"] });
+
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: true, trustedFolders: ["/old"] } }));
+
+			manager.setTrustedContextFolders(["/new"]);
+			await manager.flush();
+
+			const fresh = SettingsManager.create(projectDir, agentDir);
+			expect(fresh.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: ["/new"] });
+		});
+
+		it("refreshes external global policy changes and fails closed on corrupt settings", () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: false } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			writeFileSync(settingsPath, JSON.stringify({ context: { trustedFolders: ["/trusted"] } }));
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: ["/trusted"] });
+
+			writeFileSync(settingsPath, "{ corrupt");
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+			expect(manager.drainErrors().some((entry) => entry.scope === "global")).toBe(true);
+		});
+
+		it("fails closed for unspecified siblings after a transient context refresh failure", async () => {
+			let global = JSON.stringify({ context: { autoLoadNested: true, trustedFolders: ["/old"] } });
+			let globalReadCount = 0;
+			const storage: SettingsStorage = {
+				withLock(scope, fn) {
+					if (scope === "project") {
+						fn(undefined);
+						return;
+					}
+
+					const next = fn(global);
+					if (next === undefined) {
+						globalReadCount++;
+						if (globalReadCount === 2) throw new Error("transient read failure");
+						return;
+					}
+					global = next;
+				},
+			};
+			const manager = SettingsManager.fromStorage(storage);
+			expect(manager.getGlobalSettings().context).toEqual({ autoLoadNested: true, trustedFolders: ["/old"] });
+			manager.drainErrors();
+
+			manager.setTrustedContextFolders(["/new"]);
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: ["/new"] });
+
+			const errors = manager.drainErrors();
+			expect(
+				errors.some((entry) => entry.scope === "global" && entry.error.message === "transient read failure"),
+			).toBe(true);
+			await manager.flush();
+		});
+
+		it.each([
+			["a string autoLoadNested", { context: { autoLoadNested: "true" } }],
+			["a numeric autoLoadNested", { context: { autoLoadNested: 1 } }],
+			["a string trustedFolders", { context: { trustedFolders: "/tmp" } }],
+			["a non-string trusted folder", { context: { trustedFolders: ["/ok", 42] } }],
+			["a non-object context", { context: "nope" }],
+			["a null context", { context: null }],
+		])("fails closed on valid JSON with %s", (_description, settings) => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify(settings));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+			expect(manager.drainErrors().some((entry) => entry.scope === "global")).toBe(true);
+		});
+
+		it("does not retain a permissive policy after an external malformed context update", () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({ context: { autoLoadNested: true, trustedFolders: ["/global"] } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: ["/global"] });
+
+			writeFileSync(settingsPath, JSON.stringify({ context: { autoLoadNested: "true" } }));
+
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: [] });
+		});
+
+		it("preserves pending non-context global changes while refreshing context", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark", context: { autoLoadNested: false } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			manager.setTheme("light");
+			writeFileSync(settingsPath, JSON.stringify({ theme: "dark", context: { trustedFolders: ["/trusted"] } }));
+
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: false, trustedFolders: ["/trusted"] });
+			expect(manager.getTheme()).toBe("light");
+
+			await manager.flush();
+			expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toMatchObject({ theme: "light" });
+		});
+
+		it("keeps InMemorySettingsManager deterministic", () => {
+			const manager = SettingsManager.inMemory({ context: { autoLoadNested: true, trustedFolders: ["/trusted"] } });
+			expect(manager.getGlobalContextTrustPolicy()).toEqual({ unrestricted: true, trustedFolders: ["/trusted"] });
 		});
 	});
 

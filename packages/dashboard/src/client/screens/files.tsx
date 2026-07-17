@@ -28,13 +28,14 @@ export function FilesScreen(props: { store: AppStore; initialPath?: string }): J
 	const [collision, setCollision] = createSignal<File>();
 	const [showMkdir, setShowMkdir] = createSignal(false);
 	const [mkdirName, setMkdirName] = createSignal("");
+	const [trustMutating, setTrustMutating] = createSignal(false);
 
 	const [places] = createResource(async () => {
 		const { places } = await api.places();
 		return places;
 	});
 
-	const [listing, { refetch }] = createResource(
+	const [listing, { mutate, refetch }] = createResource(
 		() => path(),
 		async (p): Promise<DirListingDto> => {
 			setError(undefined);
@@ -70,6 +71,28 @@ export function FilesScreen(props: { store: AppStore; initialPath?: string }): J
 			props.store.navigate({ screen: "session", key: runtime.key });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function changeContextTrust(action: "trust" | "untrust") {
+		const current = listing();
+		if (!current) return;
+		setError(undefined);
+		setTrustMutating(true);
+		try {
+			const result =
+				action === "trust"
+					? await api.trustContextFolder(current.path)
+					: await api.untrustContextFolder(current.path);
+			// Do not let a completed mutation overwrite a listing reached by navigation.
+			const displayed = listing();
+			if (path() === current.path && displayed?.path === current.path) {
+				mutate({ ...displayed, contextTrust: result.evaluation });
+			}
+		} catch (err) {
+			setError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setTrustMutating(false);
 		}
 	}
 
@@ -115,6 +138,67 @@ export function FilesScreen(props: { store: AppStore; initialPath?: string }): J
 						</button>
 					</div>
 				</div>
+
+				<section class="context-trust" aria-live="polite">
+					<Show when={listing()?.contextTrust} fallback={<span>nested context trust: checking…</span>}>
+						{(trust) => (
+							<Show
+								when={trust().state === "untrusted"}
+								fallback={
+									<Show
+										when={trust().state === "trusted-root"}
+										fallback={
+											<div class="context-trust-warning">
+												<strong>Global expert trust is ON.</strong> Nested instructions from any resolvable
+												directory may load, including prompt-injection content. Folder trust cannot override
+												this global setting.{" "}
+												<a href="#/settings">Disable global expert trust in Settings.</a>
+											</div>
+										}
+									>
+										<div>
+											<strong>
+												{trust().grantingRoot === trust().canonicalTarget
+													? "Nested context trusted for this folder"
+													: "Nested context inherited from a trusted root"}
+											</strong>
+											<p>
+												{trust().grantingRoot === trust().canonicalTarget
+													? `${trust().grantingRoot} and all descendants are trusted.`
+													: `${trust().canonicalTarget} is covered by ${trust().grantingRoot} and its descendants.`}
+											</p>
+											<button
+												type="button"
+												class="btn btn-small btn-danger"
+												disabled={trustMutating()}
+												onClick={() => void changeContextTrust("untrust")}
+											>
+												{trustMutating() ? "removing trust…" : `untrust ${trust().grantingRoot}`}
+											</button>
+											<p class="context-trust-impact">
+												This removes trust from {trust().grantingRoot} and all of its descendants.
+											</p>
+										</div>
+									</Show>
+								}
+							>
+								<div>
+									<strong>Nested context is untrusted.</strong>
+									<p>This folder's nested instructions are not loaded automatically.</p>
+									<button
+										type="button"
+										class="btn btn-small btn-primary"
+										disabled={trustMutating()}
+										onClick={() => void changeContextTrust("trust")}
+									>
+										{trustMutating() ? "trusting…" : "trust this folder and descendants"}
+									</button>
+									<p class="context-trust-impact">Trusting this folder trusts it and all descendants.</p>
+								</div>
+							</Show>
+						)}
+					</Show>
+				</section>
 
 				<div class="places">
 					<span class="label">places</span>

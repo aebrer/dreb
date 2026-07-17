@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
+import type { ContextTrustPolicy } from "./context-trust.js";
 import { expandPath } from "./tools/path-utils.js";
 
 export interface CompactionSettings {
@@ -14,10 +15,13 @@ export interface CompactionSettings {
 
 export interface ContextSettings {
 	/**
-	 * Auto-load nested AGENTS.md/CLAUDE.md when a tool first operates in a directory
-	 * whose project context has not yet been loaded. default: true
+	 * Expert-only global opt-in to lazy-load nested context from every strictly resolvable
+	 * tool target. This is disabled by default because context files can contain prompt
+	 * injection. Project settings cannot affect this policy.
 	 */
 	autoLoadNested?: boolean;
+	/** Global-only folder roots allowed to lazy-load context for themselves and descendants. */
+	trustedFolders?: string[];
 }
 
 export interface BranchSummarySettings {
@@ -360,6 +364,27 @@ export class SettingsManager {
 		}
 	}
 
+	/**
+	 * Normalize the two known lazy-context trust fields of a `context` slice to fail-closed
+	 * defaults when malformed, preserving valid values and any unrelated keys. Used at persist
+	 * time so a single-field trust write cannot leave a malformed sibling (read fresh from disk)
+	 * that would invalidate — and therefore silently disable — the entire trust policy.
+	 */
+	private static sanitizeContextTrustSlice(nested: Record<string, unknown>): Record<string, unknown> {
+		const sanitized = { ...nested };
+		if ("autoLoadNested" in sanitized && typeof sanitized.autoLoadNested !== "boolean") {
+			sanitized.autoLoadNested = false;
+		}
+		if (
+			"trustedFolders" in sanitized &&
+			(!Array.isArray(sanitized.trustedFolders) ||
+				sanitized.trustedFolders.some((folder) => typeof folder !== "string"))
+		) {
+			sanitized.trustedFolders = [];
+		}
+		return sanitized;
+	}
+
 	/** Migrate old settings format to new format */
 	private static migrateSettings(settings: Record<string, unknown>): Settings {
 		// Migrate queueMode -> steeringMode
@@ -465,6 +490,30 @@ export class SettingsManager {
 		this.errors.push({ scope, error: normalizedError });
 	}
 
+	private refreshGlobalContextFromStorage(options: { clearContextOnError?: boolean } = {}): boolean {
+		// Keep a just-selected UI value effective until its queued durable write completes;
+		// otherwise always re-read the external global source for cross-process changes.
+		if (this.storage instanceof InMemorySettingsStorage || this.modifiedFields.has("context")) {
+			return true;
+		}
+
+		const loaded = SettingsManager.tryLoadFromStorage(this.storage, "global");
+		if (loaded.error) {
+			this.recordError("global", loaded.error);
+			if (options.clearContextOnError) {
+				this.globalSettings = { ...this.globalSettings, context: undefined };
+				this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+			}
+			return false;
+		}
+
+		// This re-read owns only the security-policy slice. Preserve every other
+		// in-memory global field, including writes that are queued but not yet durable.
+		this.globalSettings = { ...this.globalSettings, context: loaded.settings.context };
+		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		return true;
+	}
+
 	private clearModifiedScope(scope: SettingsScope): void {
 		if (scope === "global") {
 			this.modifiedFields.clear();
@@ -512,9 +561,16 @@ export class SettingsManager {
 					const nestedModified = modifiedNestedFields.get(field)!;
 					const baseNested = (currentFileSettings[field] as Record<string, unknown>) ?? {};
 					const inMemoryNested = value as Record<string, unknown>;
-					const mergedNested = { ...baseNested };
+					let mergedNested = { ...baseNested };
 					for (const nestedKey of nestedModified) {
 						mergedNested[nestedKey] = inMemoryNested[nestedKey];
+					}
+					// The global context-trust slice is security-sensitive: an untouched sibling
+					// is preserved from the fresh on-disk read above, but a malformed on-disk
+					// sibling must still collapse to a fail-closed default so a successful trust
+					// mutation cannot leave the whole policy invalid (and thus silently disabled).
+					if (scope === "global" && field === "context") {
+						mergedNested = SettingsManager.sanitizeContextTrustSlice(mergedNested);
 					}
 					(mergedSettings as Record<string, unknown>)[field] = mergedNested;
 				} else {
@@ -672,17 +728,145 @@ export class SettingsManager {
 		this.save();
 	}
 
+	/**
+	 * Read the global-only lazy-context policy. File-backed managers re-read this small
+	 * policy on each decision so independently running main/subagent processes observe
+	 * external global settings writes without ever consulting project settings. A malformed
+	 * global file fails closed rather than retaining a previously permissive value.
+	 */
+	getGlobalContextTrustPolicy(): ContextTrustPolicy {
+		if (!this.refreshGlobalContextFromStorage()) {
+			return { unrestricted: false, trustedFolders: [] };
+		}
+
+		const context = this.globalSettings.context;
+		// A valid JSON file with a malformed security policy is also fail-closed. Do not
+		// coerce strings/truthy values or partially accept an invalid trusted-folder list.
+		if (
+			context !== undefined &&
+			(typeof context !== "object" ||
+				context === null ||
+				(context.autoLoadNested !== undefined && typeof context.autoLoadNested !== "boolean") ||
+				(context.trustedFolders !== undefined &&
+					(!Array.isArray(context.trustedFolders) ||
+						context.trustedFolders.some((folder) => typeof folder !== "string"))))
+		) {
+			const error = new Error(
+				"Global context trust settings are malformed; lazy nested context loading is disabled",
+			);
+			this.recordError("global", error);
+			return { unrestricted: false, trustedFolders: [] };
+		}
+
+		return {
+			unrestricted: context?.autoLoadNested ?? false,
+			trustedFolders: context?.trustedFolders ? [...context.trustedFolders] : [],
+		};
+	}
+
+	/** Effective unrestricted flag; intentionally reads global settings only. */
 	getAutoLoadNestedContext(): boolean {
-		return this.settings.context?.autoLoadNested ?? true;
+		return this.getGlobalContextTrustPolicy().unrestricted;
+	}
+
+	getTrustedContextFolders(): string[] {
+		return this.getGlobalContextTrustPolicy().trustedFolders;
+	}
+
+	getConfiguredTrustedContextFolders(): string[] {
+		if (!this.refreshGlobalContextFromStorage()) {
+			return [];
+		}
+
+		const context = this.globalSettings.context;
+		if (context === undefined || typeof context !== "object" || context === null || Array.isArray(context)) {
+			return [];
+		}
+
+		const trustedFolders = (context as Record<string, unknown>).trustedFolders;
+		if (trustedFolders === undefined) {
+			return [];
+		}
+		if (!Array.isArray(trustedFolders) || trustedFolders.some((folder) => typeof folder !== "string")) {
+			return [];
+		}
+
+		return [...trustedFolders];
 	}
 
 	setAutoLoadNestedContext(enabled: boolean): void {
-		if (!this.globalSettings.context) {
-			this.globalSettings.context = {};
+		this.setContextTrust({ autoLoadNested: enabled });
+	}
+
+	/**
+	 * Atomically persist one or both global lazy-context trust policy fields. Every trust
+	 * write normalizes both known fields, so a malformed on-disk sibling cannot make an
+	 * otherwise successful mutation silently fail closed.
+	 */
+	setContextTrust(update: { autoLoadNested?: boolean; trustedFolders?: string[] }): void {
+		if (update.autoLoadNested !== undefined && typeof update.autoLoadNested !== "boolean") {
+			throw new Error("Auto-load nested context must be a boolean");
 		}
-		this.globalSettings.context.autoLoadNested = enabled;
-		this.markModified("context", "autoLoadNested");
+		if (
+			update.trustedFolders !== undefined &&
+			(!Array.isArray(update.trustedFolders) || update.trustedFolders.some((folder) => typeof folder !== "string"))
+		) {
+			throw new Error("Trusted context folders must be an array of strings");
+		}
+
+		// Refresh the in-memory context slice from the external global file unless a context
+		// write is already pending, so an unspecified sibling reflects concurrent cross-process
+		// changes (e.g. a folder just untrusted elsewhere) instead of a stale in-memory value.
+		// A pending context write already owns the authoritative in-memory value; do not stomp
+		// it. Fail closed if the external file is unreadable.
+		this.refreshGlobalContextFromStorage({ clearContextOnError: true });
+
+		const currentContext = this.globalSettings.context;
+		const current =
+			typeof currentContext === "object" && currentContext !== null && !Array.isArray(currentContext)
+				? (currentContext as Record<string, unknown>)
+				: {};
+		const autoLoadNested =
+			update.autoLoadNested ?? (typeof current.autoLoadNested === "boolean" ? current.autoLoadNested : false);
+		const currentTrustedFolders =
+			Array.isArray(current.trustedFolders) && current.trustedFolders.every((folder) => typeof folder === "string")
+				? (current.trustedFolders as string[])
+				: [];
+		const trustedFolders = update.trustedFolders ?? currentTrustedFolders;
+
+		this.globalSettings.context = {
+			...current,
+			autoLoadNested,
+			trustedFolders: [...trustedFolders],
+		};
+		// Mark only the explicitly-supplied fields modified. persistScopedSettings then
+		// preserves an untouched sibling from the fresh on-disk slice read inside the storage
+		// lock, so a single-field write can no longer clobber a concurrent external change to
+		// the other field. Malformed on-disk siblings are still normalized fail-closed there.
+		if (update.autoLoadNested !== undefined) {
+			this.markModified("context", "autoLoadNested");
+		}
+		if (update.trustedFolders !== undefined) {
+			this.markModified("context", "trustedFolders");
+		}
 		this.save();
+	}
+
+	setTrustedContextFolders(folders: string[]): void {
+		this.setContextTrust({ trustedFolders: folders });
+	}
+
+	addTrustedContextFolder(folder: string): void {
+		if (typeof folder !== "string" || folder === "") {
+			throw new Error("Trusted context folder must be a non-empty string");
+		}
+		const folders = this.getConfiguredTrustedContextFolders();
+		if (!folders.includes(folder)) folders.push(folder);
+		this.setTrustedContextFolders(folders);
+	}
+
+	removeTrustedContextFolder(folder: string): void {
+		this.setTrustedContextFolders(this.getConfiguredTrustedContextFolders().filter((current) => current !== folder));
 	}
 
 	getCompactionReserveTokens(): number {

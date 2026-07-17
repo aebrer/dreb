@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.js";
+import { isWithinCanonicalRoot, strictNativeRealpath } from "./context-trust.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 import { findGitRoot } from "./git-root.js";
 
@@ -99,6 +100,8 @@ export const CONTEXT_FILE_CANDIDATES = [
 export function loadContextFilesFromDir(
 	dir: string,
 	diagnostics?: ResourceDiagnostic[],
+	/** When set, reject symlinked candidate files that resolve outside this canonical root. */
+	allowedRoot?: string,
 ): Array<{ path: string; content: string }> {
 	const results: Array<{ path: string; content: string }> = [];
 	const seenRealPaths = new Set<string>();
@@ -109,20 +112,33 @@ export function loadContextFilesFromDir(
 			// case-insensitive filesystems (macOS) where AGENTS.md and AGENTS.MD
 			// resolve to the same inode.
 			let realPath: string;
-			try {
-				// .native canonicalizes filename case on case-insensitive
-				// filesystems (macOS), which the JS implementation does not.
-				realPath = realpathSync.native(filePath);
-			} catch {
-				realPath = filePath;
+			if (allowedRoot) {
+				const strictPath = strictNativeRealpath(filePath);
+				if (!strictPath || !isWithinCanonicalRoot(allowedRoot, strictPath)) continue;
+				realPath = strictPath;
+			} else {
+				try {
+					// .native canonicalizes filename case on case-insensitive
+					// filesystems (macOS), which the JS implementation does not.
+					realPath = realpathSync.native(filePath);
+				} catch {
+					realPath = filePath;
+				}
 			}
 			if (seenRealPaths.has(realPath)) continue;
 			seenRealPaths.add(realPath);
 			try {
-				results.push({
-					path: filePath,
-					content: stripHtmlComments(readFileSync(filePath, "utf-8")),
-				});
+				const content = readFileSync(filePath, "utf-8");
+				// Defend against a candidate symlink being swapped between its pre-read
+				// containment check and the read. Do not return content unless it still
+				// resolves to the same in-scope file.
+				if (allowedRoot) {
+					const afterRead = strictNativeRealpath(filePath);
+					if (!afterRead || afterRead !== realPath || !isWithinCanonicalRoot(allowedRoot, afterRead)) {
+						continue;
+					}
+				}
+				results.push({ path: filePath, content: stripHtmlComments(content) });
 			} catch (error) {
 				diagnostics?.push({ type: "warning", message: `Could not read ${filePath}: ${error}`, path: filePath });
 			}

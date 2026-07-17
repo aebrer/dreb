@@ -16,9 +16,12 @@ export { runRpcMode } from "./rpc/rpc-mode.js";
 export type {
 	RpcAgentTypeInfo,
 	RpcCommand,
+	RpcContextTrustEvaluation,
+	RpcContextTrustMutationResult,
 	RpcResponse,
 	RpcSessionState,
 	RpcSettingsSetResult,
 	RpcSettingsSnapshot,
 	RpcSettingsUpdate,
+	RpcTrustedFolderRemovalResult,
 } from "./rpc/rpc-types.js";

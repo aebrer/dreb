@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { type ContextTrustPolicy, isWithinCanonicalRoot, matchContextTrust } from "./context-trust.js";
 import { CONTEXT_FILE_CANDIDATES, loadContextFilesFromDir, type ResourceDiagnostic } from "./resource-loader.js";
 import { renderTerminalOutput } from "./tools/terminal-render.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./tools/truncate.js";
@@ -165,8 +166,27 @@ function isWithin(parent: string, child: string): boolean {
  *   3. The outermost directory containing a CLAUDE.md/AGENTS.md.
  *   4. Hard stop at filesystem root, the depth bound, or a permission/stat failure.
  */
-function resolveWalkDirs(targetDir: string, cwd: string): string[] {
+function resolveWalkDirs(targetDir: string, cwd: string, trustedRoot?: string): string[] {
 	const root = resolve("/");
+
+	// A narrowly trusted root is a hard ceiling. It also preserves the existing cwd
+	// ceiling when that is nearer to the target, so startup-loaded ancestors are not
+	// revisited. `trustedRoot` and target have already passed strict native-realpath
+	// containment before this function is called.
+	if (trustedRoot) {
+		const canonicalCwd = safeRealpath(cwd);
+		const stopAtCwd = isWithinCanonicalRoot(canonicalCwd, targetDir);
+		const dirs: string[] = [];
+		let current = targetDir;
+		for (let i = 0; i < MAX_WALK_DEPTH; i++) {
+			dirs.push(current);
+			if (current === trustedRoot || (stopAtCwd && current === canonicalCwd)) break;
+			const parent = resolve(current, "..");
+			if (parent === current) break;
+			current = parent;
+		}
+		return dirs.reverse();
+	}
 
 	// Case 1: target within cwd subtree — never walk above cwd.
 	if (isWithin(cwd, targetDir)) {
@@ -261,13 +281,14 @@ export function collectNestedContext(
 	cwd: string,
 	alreadyLoaded: Set<string>,
 	suppress?: SuppressPredicate,
+	trustedRoot?: string,
 ): NestedContextCollection {
-	const dirs = resolveWalkDirs(targetDir, cwd);
+	const dirs = resolveWalkDirs(targetDir, cwd, trustedRoot);
 	const collected: LoadedContextFile[] = [];
 	let hadReadError = false;
 	for (const dir of dirs) {
 		const diagnostics: ResourceDiagnostic[] = [];
-		const files = loadContextFilesFromDir(dir, diagnostics);
+		const files = loadContextFilesFromDir(dir, diagnostics, trustedRoot);
 		for (const diagnostic of diagnostics) {
 			if (diagnostic.type !== "warning") continue;
 			hadReadError = true;
@@ -298,7 +319,7 @@ export function formatNestedContextBlock(targetDir: string, files: LoadedContext
 		`A tool just operated in \`${targetDir}\`, whose project context had not been loaded yet. ` +
 		`The file(s) below were loaded automatically to prevent missing important project context ` +
 		`when working across multiple repos / projects / folders. ` +
-		`(Disable with the \`context.autoLoadNested\` setting.)`;
+		`(Manage folder-specific loading with \`context.trustedFolders\`, or disable unrestricted loading with \`context.autoLoadNested\`.)`;
 
 	const sections = files.map(
 		(f) =>
@@ -443,8 +464,8 @@ export function resolveBashDeliveredFiles(command: string, workingDir: string): 
 }
 
 export interface NestedContextState {
-	/** Whether auto-loading is enabled (the `context.autoLoadNested` setting). */
-	enabled: boolean;
+	/** Global-only policy for this decision. Project settings never enter this value. */
+	policy: ContextTrustPolicy;
 	/** The session's working directory. */
 	cwd: string;
 	/** Realpaths of context files already loaded this session (seeded at session start). Mutated. */
@@ -496,12 +517,15 @@ export function computeNestedContextBlock(
 	args: Record<string, unknown> | undefined,
 	state: NestedContextState,
 ): string | null {
-	if (!state.enabled) return null;
-
 	const targetDir = resolveTargetDir(toolName, args, state.cwd);
 	if (!targetDir) return null;
 
-	const realTarget = safeRealpath(targetDir);
+	// Trust is evaluated before consulting or mutating the negative cache. In particular,
+	// an untrusted touch must not prevent a later global settings refresh from admitting
+	// the same directory after the user explicitly trusts it.
+	const trust = matchContextTrust(state.policy, targetDir);
+	if (!trust) return null;
+	const realTarget = trust.targetDir;
 	if (state.scannedDirs.has(realTarget)) return null;
 
 	// A context file the triggering tool already delivers should be marked loaded but not
@@ -529,7 +553,7 @@ export function computeNestedContextBlock(
 		return false;
 	};
 
-	const collected = collectNestedContext(targetDir, state.cwd, state.loaded, suppress);
+	const collected = collectNestedContext(realTarget, state.cwd, state.loaded, suppress, trust.trustedRoot);
 	if (!collected.hadReadError) {
 		state.scannedDirs.add(realTarget);
 	}

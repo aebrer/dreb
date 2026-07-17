@@ -1,6 +1,6 @@
 # Settings
 
-dreb uses JSON settings files with project settings overriding global settings.
+dreb uses JSON settings files with project settings overriding global settings, except where a setting is explicitly global-only (notably nested-context trust).
 
 | Location | Scope |
 |----------|-------|
@@ -113,13 +113,36 @@ After the configured number of tool calls, dreb fires a single background LLM ca
 
 ### Context
 
+At startup, dreb always performs an **initial upward scan** from the launch cwd for `AGENTS.md`/`CLAUDE.md`. This is separate from lazy nested/out-of-cwd loading and is not enabled, disabled, or scoped by either context setting below. It is not a claim that the initial scan has a fixed boundary: it follows the startup upward-walk behavior for that cwd.
+
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `context.autoLoadNested` | boolean | `true` | Auto-load a directory's `AGENTS.md`/`CLAUDE.md` the first time a tool operates there |
+| `context.trustedFolders` | string[] | `[]` | **Global-only.** Explicit existing directory roots whose canonical descendants may lazy-load context |
+| `context.autoLoadNested` | boolean | `false` | **Global-only expert trust-all.** Allow lazy loading from every resolvable directory |
 
-When enabled, dreb loads nested context files that the startup upward-walk misses (e.g. a `CLAUDE.md` in a monorepo subpackage, or context in a different repo a subagent visits). The first tool to touch a directory triggers a walk up to a sensible ceiling — the session cwd for in-tree targets, otherwise the outermost git repo root, otherwise the outermost directory containing a context file — and the collected files are appended to that tool's result. Each file loads at most once per session. See [Context Files](../README.md#context-files).
+Both settings belong only in `~/.dreb/agent/settings.json`. Project `.dreb/settings.json` cannot enable, disable, or extend nested-context trust: it cannot enable unrestricted loading, add trusted roots, override global roots, or otherwise widen this trust boundary. A cloned repository therefore cannot grant itself trust.
 
-**Security caution:** when working across untrusted or third-party repositories, their `AGENTS.md`/`CLAUDE.md` files may be auto-injected into the agent's context, which is a prompt-injection consideration. Set `context.autoLoadNested` to `false` to disable this behavior. Auto-loaded content is secret-scrubbed before injection, but extension `tool_result` transforms do not see it because nested context is injected after those transforms for cache safety.
+#### `context.trustedFolders`
+
+Use explicit roots for directories whose instructions you control:
+
+```json
+{
+  "context": {
+    "trustedFolders": ["~/src/my-company", "/srv/controlled-repos"]
+  }
+}
+```
+
+Each root authorizes itself and its descendants for lazy loading. Paths are expanded (`~` is supported) and canonically resolved with native `realpath`; the target is independently canonicalized for every decision. Roots must be absolute after expansion, existing directories, and must not be broken symlinks. Invalid/missing legacy entries are ignored fail-closed; RPC/settings updates reject invalid entries atomically. Canonical duplicates are deduplicated, and a descendant root is subsumed by its trusted ancestor. This realpath matching prevents symlink escape: a path that is lexically below a trusted folder but resolves outside it is not trusted.
+
+For a trusted target, the first matching path-bearing tool (`read`, `edit`, `write`, `grep`, `find`, `ls`) — or `bash` beginning with `cd <dir>` — can append its context to the tool result. The walk is bounded by the trusted root (or the normal cwd/repository/context-file ceiling when expert trust-all is in effect). Main agents and subagents read the same global policy. Active processes re-read it for later lazy-load decisions, so a trust/untrust change affects **future** loads without a restart; text already injected into a conversation cannot be retracted.
+
+In the dashboard, the Files view is the primary grant flow: trust the displayed folder and descendants, or untrust the actual granting root. The Settings screen lists every configured trusted root for audit and revoke, and offers a simple add-by-path control. These controls change only lazy nested/out-of-cwd loading; they do not alter the separate initial upward scan described above.
+
+#### `context.autoLoadNested`
+
+**Expert setting — prompt-injection warning.** Set this to `true` only in global settings to allow lazy loading from **any** resolvable target directory:
 
 ```json
 {
@@ -128,6 +151,10 @@ When enabled, dreb loads nested context files that the startup upward-walk misse
   }
 }
 ```
+
+This includes untrusted or third-party repositories and can inject prompt-injection content. Prefer `trustedFolders`; leave this setting `false` unless you intentionally trust all such targets. A project settings file cannot enable it.
+
+For either permitted lazy-load path, each context file is realpath-deduplicated and injected at most once per session; files already obtained during the initial upward scan are not repeated. If the triggering tool already returns a context file in full, it is marked loaded without a duplicate injection. Auto-loaded content is secret-scrubbed before injection and is appended after extension `tool_result` transforms, so those transforms intentionally do not see it. See [Context Files](../README.md#context-files).
 
 ### Compaction
 
@@ -357,7 +384,7 @@ See [packages.md](packages.md) for package management details.
 
 ## Project Overrides
 
-Project settings (`.dreb/settings.json`) override global settings. Nested objects are merged:
+Project settings (`.dreb/settings.json`) override global settings. Nested objects are merged. **Exception:** `context.trustedFolders` and `context.autoLoadNested` are global-only security policy: project settings cannot add, replace, override, or enable either one. Nested context from the initial startup upward scan remains separate from this lazy-load policy.
 
 ```json
 // ~/.dreb/agent/settings.json (global)

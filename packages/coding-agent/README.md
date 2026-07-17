@@ -289,16 +289,29 @@ dreb loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
 
 Use for project instructions, conventions, common commands. All matching files are concatenated.
 
-### Nested context auto-load
+### Nested context trust
 
-The startup scan only walks **upward** from cwd, so an `AGENTS.md`/`CLAUDE.md` that lives in a **subdirectory** (e.g. a monorepo subpackage) is not loaded until the agent actually works there. When `context.autoLoadNested` is enabled (default), the first time any tool operates in a directory, dreb loads that directory's context files and appends them to the tool result — explaining why the load happened and headering each file with its source path.
+At startup, dreb **always** performs a separate upward scan from its launch cwd and loads matching `AGENTS.md`/`CLAUDE.md` files there and in parent directories. That initial scan is not lazy nested loading and is **not** controlled by the settings below. A context file in a subdirectory — or in a different repo an agent later visits — is considered only when a tool operates there.
 
-- Triggers on path-bearing tools (`read`, `edit`, `write`, `grep`, `find`, `ls`) and on `bash` commands that begin with `cd <dir>`.
-- Walks up from the target directory to a sensible ceiling: the session cwd (for in-tree targets), otherwise the outermost git repo root, otherwise the outermost directory containing a context file.
-- Each file is injected at most once per session, and files already loaded at startup are never repeated. Applies to subagents too — including subagents that work in a different repo than the parent.
-- Disable with `context.autoLoadNested: false` in settings, or toggle "Auto-load nested context" in `/settings`.
+Lazy nested/out-of-cwd context loading is **off by default**. Configure explicit global trusted roots in `~/.dreb/agent/settings.json`:
 
-**Security caution:** when working across untrusted or third-party repositories, their `AGENTS.md`/`CLAUDE.md` files may be auto-injected into the agent's context, which is a prompt-injection consideration. Auto-loaded content is secret-scrubbed before injection, but extension `tool_result` transforms do not see it because nested context is injected after those transforms for cache safety.
+```json
+{
+  "context": {
+    "trustedFolders": ["~/src/my-company", "/srv/controlled-repos"]
+  }
+}
+```
+
+A trusted root permits lazy loading for that existing directory and all of its descendants. dreb resolves both the root and each tool target through canonical native `realpath` at decision time: relative, missing, non-directory, and broken-symlink roots fail closed; duplicate and nested roots are deduplicated/subsumed. A lexical descendant that symlinks outside the canonical root is therefore **not** trusted. Project `.dreb/settings.json` cannot add, override, or otherwise widen this policy.
+
+- Lazy loading triggers on path-bearing tools (`read`, `edit`, `write`, `grep`, `find`, `ls`) and on `bash` commands that begin with `cd <dir>`.
+- It walks from the target toward the applicable ceiling. A trusted root is a hard ceiling; otherwise the session cwd is used for in-tree targets, then the outermost git repo root, then the outermost directory containing a context file.
+- Each file is injected at most once per session, including files from the initial upward scan. The paths are realpath-deduplicated. If a triggering `read` or full `cat`/`bat` already returns a context file in full, dreb marks it loaded without adding a duplicate block.
+- Auto-loaded text is secret-scrubbed and appended **after** extension `tool_result` transforms, so those transforms intentionally do not see it.
+- Main agents and subagents make the same global trust decision. Global trust changes are observed by active processes for **future** lazy loads; already injected content cannot be removed from their conversation.
+
+**Expert trust-all override — prompt-injection warning:** setting `context.autoLoadNested: true` in the **global** `~/.dreb/agent/settings.json` allows lazy loading from any resolvable tool target. This can inject instructions from untrusted or third-party repositories. It is global-only; a project `.dreb/settings.json` cannot enable it. Leave it off and trust only folders you control whenever possible. The Files view shows the effective trust for the directory being viewed and lets you trust a folder or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all of its descendants.
 
 ### System Prompt
 
