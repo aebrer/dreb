@@ -92,7 +92,9 @@ seconds.
 Retries use client-owned capped exponential backoff (maximum 30 seconds) with
 ±25% jitter. The attempt count resets only after 60 seconds of healthy
 liveness, not on socket open. Returning to a visible tab always validates auth;
-401/403 becomes **auth failed**, while other failures recover normally.
+validation is aborted after 10 seconds so a black-holed request cannot stall
+recovery. A 401/403 becomes **auth failed**, while timeouts and other failures
+recover normally.
 Optional correlated diagnostics are dashboard-authenticated, metadata-only,
 4 KiB-capped, and rate-limited (one summary per connection every 30 seconds);
 they never include prompts, cookies, SSE payloads, or tool data.

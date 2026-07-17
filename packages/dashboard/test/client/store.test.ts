@@ -349,6 +349,37 @@ describe("app store SSE sync", () => {
 		expect(store.sessions["ordinary-queue"]?.streaming).toBe(true);
 	});
 
+	it("ignores stale envelopes after an authoritative resync while applying later ones", async () => {
+		const snapshot = runtimeSnapshot("a", false);
+		vi.mocked(api.resync).mockResolvedValueOnce({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [{ role: "user", content: "from snapshot" }],
+				backgroundAgents: [],
+				barrierSeq: 10,
+			},
+			barrierSeq: 10,
+		});
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		// The transaction is complete: this exercises the persistent barrier guard,
+		// not filtering of envelopes queued while the snapshot was in flight.
+		seq = 9;
+		emit("a", { type: "message_start", message: { role: "user", content: "stale duplicate" } });
+		emit("a", { type: "message_start", message: { role: "user", content: "later live event" } });
+
+		expect(store.sessions.a?.entries).toHaveLength(2);
+		expect(store.sessions.a?.entries).toMatchObject([
+			{ kind: "user", text: "from snapshot" },
+			{ kind: "user", text: "later live event" },
+		]);
+	});
+
 	it("fails on byte overflow before the envelope count limit and discards the partial queue", async () => {
 		const delayed = deferred<{ fleet: { runtimes: []; diskSessions: [] }; barrierSeq: number }>();
 		vi.mocked(api.resync).mockReturnValueOnce(delayed.promise);

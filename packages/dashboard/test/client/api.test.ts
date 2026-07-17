@@ -200,6 +200,73 @@ describe("connectEvents lifecycle", () => {
 		lower.disconnect();
 	});
 
+	it("times out a hung watchdog validation into a bounded retry", async () => {
+		vi.useFakeTimers();
+		let signal: AbortSignal | undefined;
+		const status = vi.fn((candidateSignal?: AbortSignal) => {
+			signal = candidateSignal;
+			return new Promise<never>(() => {});
+		});
+		const result = setup({ status, watchdogMs: 10, statusTimeoutMs: 50 });
+		const first = result.source();
+		first.open();
+		result.setNow(11);
+		await vi.advanceTimersByTimeAsync(10);
+		expect(first.closed).toBe(true);
+		expect(result.recovery).toHaveBeenCalledWith("watchdog");
+		expect(status).toHaveBeenCalledOnce();
+		expect(signal?.aborted).toBe(false);
+		await vi.advanceTimersByTimeAsync(50);
+		expect(signal?.aborted).toBe(true);
+		expect(result.statuses.at(-1)).toMatchObject({ state: "retrying", attempt: 1, retryDelayMs: 100 });
+		await vi.advanceTimersByTimeAsync(100);
+		expect(FakeEventSource.instances).toHaveLength(2);
+		result.disconnect();
+	});
+
+	it("times out a hung transport validation into the same capped retry", async () => {
+		vi.useFakeTimers();
+		let signal: AbortSignal | undefined;
+		const status = vi.fn((candidateSignal?: AbortSignal) => {
+			signal = candidateSignal;
+			return new Promise<never>(() => {});
+		});
+		const result = setup({ status, statusTimeoutMs: 50 });
+		result.source().error();
+		expect(status).toHaveBeenCalledOnce();
+		await vi.advanceTimersByTimeAsync(50);
+		expect(signal?.aborted).toBe(true);
+		expect(result.statuses.at(-1)).toMatchObject({ state: "retrying", attempt: 1, retryDelayMs: 100 });
+		await vi.advanceTimersByTimeAsync(100);
+		expect(FakeEventSource.instances).toHaveLength(2);
+		result.disconnect();
+	});
+
+	it("aborts in-flight validation during cleanup and ignores its stale completion", async () => {
+		vi.useFakeTimers();
+		let signal: AbortSignal | undefined;
+		let resolveStatus: (() => void) | undefined;
+		const status = vi.fn((candidateSignal?: AbortSignal) => {
+			signal = candidateSignal;
+			return new Promise<void>((resolve) => {
+				resolveStatus = resolve;
+			});
+		});
+		const result = setup({ status, statusTimeoutMs: 50 });
+		const first = result.source();
+		first.error();
+		await Promise.resolve();
+		expect(status).toHaveBeenCalledOnce();
+		expect(signal?.aborted).toBe(false);
+		result.disconnect();
+		expect(signal?.aborted).toBe(true);
+		resolveStatus?.();
+		await Promise.resolve();
+		await vi.advanceTimersByTimeAsync(10_000);
+		expect(FakeEventSource.instances).toHaveLength(1);
+		expect(result.statuses.at(-1)?.state).toBe("disconnected");
+	});
+
 	it("validates immediately when returning to the foreground and removes its visibility listener", async () => {
 		const visibility = new FakeVisibility();
 		const status = vi.fn().mockResolvedValue({ mode: "local" });

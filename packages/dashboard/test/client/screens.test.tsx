@@ -1242,6 +1242,16 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("devices");
 	});
 
+	it("settings reports an initial durable-load failure", async () => {
+		vi.mocked(api.settings).mockRejectedValueOnce(new Error("settings file contains malformed JSON"));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector(".settings-error")?.textContent).toContain("settings file contains malformed JSON");
+		expect(el.textContent).toContain("Settings could not be loaded — see the error above.");
+	});
+
 	it("settings defaults global expert context trust to off and warns about prompt injection", async () => {
 		vi.mocked(api.settings).mockResolvedValue({});
 		const store = makeStore();

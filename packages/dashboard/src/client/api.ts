@@ -61,7 +61,8 @@ function json(body: unknown): RequestInit {
 }
 
 export const api = {
-	auth: () => request<AuthStatusDto & { needsPairing: boolean; identity?: string; error?: string }>("/api/auth"),
+	auth: (signal?: AbortSignal) =>
+		request<AuthStatusDto & { needsPairing: boolean; identity?: string; error?: string }>("/api/auth", { signal }),
 	connectionDiagnostic: (summary: ClientConnectionDiagnosticDto) =>
 		request<{ ok: true }>("/api/events/diagnostic", json(summary)),
 	pair: (pin: string) => request<{ device: PairedDeviceDto }>("/api/pair", json({ pin })),
@@ -200,10 +201,12 @@ export interface EventStreamDependencies {
 	clearInterval?: typeof clearInterval;
 	visibility?: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
 	/** Authenticated /api/auth validation differentiates expiry from a network failure. */
-	status?: () => Promise<unknown>;
+	status?: (signal?: AbortSignal) => Promise<unknown>;
 	diagnostic?: (summary: ClientConnectionDiagnosticDto) => void | Promise<void>;
 	baseDelayMs?: number;
 	maxDelayMs?: number;
+	/** Maximum duration of an authenticated validation; default is 10 s. */
+	statusTimeoutMs?: number;
 	/** Continuous liveness required before retry backoff resets; default is 60 s. */
 	healthyResetMs?: number;
 	/** Must exceed the server's 25 s heartbeat interval; default is 60 s. */
@@ -213,6 +216,7 @@ export interface EventStreamDependencies {
 const EVENT_SOURCE_OPEN = 1;
 const DEFAULT_HEALTHY_RESET_MS = 60_000;
 const DEFAULT_WATCHDOG_MS = 60_000;
+const DEFAULT_STATUS_TIMEOUT_MS = 10_000;
 
 function isEnvelope(value: unknown): value is EventEnvelope {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -248,12 +252,13 @@ export function connectEvents(handlers: EventStreamHandlers, injected: EventStre
 	const maxDelayMs = injected.maxDelayMs ?? 30_000;
 	const healthyResetMs = injected.healthyResetMs ?? DEFAULT_HEALTHY_RESET_MS;
 	const watchdogMs = injected.watchdogMs ?? DEFAULT_WATCHDOG_MS;
+	const statusTimeoutMs = injected.statusTimeoutMs ?? DEFAULT_STATUS_TIMEOUT_MS;
 	let source: EventSourceLike | undefined;
 	let heartbeatListener: ((event: MessageEvent<string>) => void) | undefined;
 	let connectionListener: ((event: MessageEvent<string>) => void) | undefined;
 	let retryTimer: ReturnType<typeof setTimeout> | undefined;
 	let watchdog: ReturnType<typeof setInterval> | undefined;
-	let validation: Promise<void> | undefined;
+	let validation: { controller: AbortController; timeout: ReturnType<typeof setTimeout> | undefined } | undefined;
 	let generation = 0;
 	let stopped = false;
 	let attempt = 0;
@@ -352,24 +357,54 @@ export function connectEvents(handlers: EventStreamHandlers, injected: EventStre
 		else scheduleRetry();
 	}
 
-	function validateThenRetry(): void {
+	function cancelValidation(): void {
+		if (!validation) return;
+		if (validation.timeout !== undefined) cancelTimeout(validation.timeout);
+		validation.controller.abort();
+		validation = undefined;
+	}
+
+	function validate(onSuccess: () => void, onFailure: (error: { status?: number }) => void): void {
 		if (validation || stopped) return;
-		validation = Promise.resolve(statusCheck())
-			.then(() => {
-				if (!stopped) scheduleRetry();
-			})
-			.catch((error: { status?: number }) => {
-				if (stopped) return;
+		const current = {
+			controller: new AbortController(),
+			timeout: undefined as ReturnType<typeof setTimeout> | undefined,
+		};
+		validation = current;
+		let settled = false;
+		const finish = (callback: () => void) => {
+			if (settled) return;
+			settled = true;
+			if (current.timeout !== undefined) cancelTimeout(current.timeout);
+			if (!stopped && validation === current) callback();
+			if (validation === current) validation = undefined;
+		};
+		current.timeout = scheduleTimeout(() => {
+			current.controller.abort();
+			finish(() => onFailure(new Error("dashboard authentication validation timed out")));
+		}, statusTimeoutMs);
+		try {
+			void Promise.resolve(statusCheck(current.controller.signal)).then(
+				() => finish(onSuccess),
+				(error: { status?: number }) => finish(() => onFailure(error)),
+			);
+		} catch (error) {
+			finish(() => onFailure(error as { status?: number }));
+		}
+	}
+
+	function validateThenRetry(): void {
+		validate(
+			() => scheduleRetry(),
+			(error) => {
 				if (error?.status === 401 || error?.status === 403) {
 					clearRetry();
 					publish({ state: "auth_failed", attempt });
 					return;
 				}
 				scheduleRetry();
-			})
-			.finally(() => {
-				validation = undefined;
-			});
+			},
+		);
 	}
 
 	function open(): void {
@@ -470,17 +505,13 @@ export function connectEvents(handlers: EventStreamHandlers, injected: EventStre
 		if (stopped || !isVisible() || validation) return;
 		// Returning to foreground always validates auth before deciding whether a
 		// stale/backgrounded stream can be trusted again.
-		validation = Promise.resolve(statusCheck())
-			.then(() => {
-				if (
-					!stopped &&
-					(!source || source.readyState !== EVENT_SOURCE_OPEN || now() - lastLivenessAt > watchdogMs)
-				) {
+		validate(
+			() => {
+				if (!source || source.readyState !== EVENT_SOURCE_OPEN || now() - lastLivenessAt > watchdogMs) {
 					recover("watchdog");
 				}
-			})
-			.catch((error: { status?: number }) => {
-				if (stopped) return;
+			},
+			(error) => {
 				if (error?.status === 401 || error?.status === 403) {
 					clearRetry();
 					publish({ state: "auth_failed", attempt });
@@ -488,10 +519,8 @@ export function connectEvents(handlers: EventStreamHandlers, injected: EventStre
 					return;
 				}
 				recover("watchdog");
-			})
-			.finally(() => {
-				validation = undefined;
-			});
+			},
+		);
 	};
 	visibility.addEventListener("visibilitychange", onVisibilityChange);
 	watchdog = scheduleInterval(
@@ -505,6 +534,7 @@ export function connectEvents(handlers: EventStreamHandlers, injected: EventStre
 	return () => {
 		stopped = true;
 		generation += 1;
+		cancelValidation();
 		clearRetry();
 		if (watchdog !== undefined) cancelInterval(watchdog);
 		watchdog = undefined;

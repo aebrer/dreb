@@ -748,6 +748,33 @@ describe("dashboard server — SSE", () => {
 		}
 	});
 
+	it("sends one oversized-event barrier over SSE and continues live delivery", async () => {
+		const dir = await createTempProject();
+		const hub = new EventHub({ eventBytes: 160 });
+		const { base, clients } = await startServer({ eventHub: hub });
+		await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+
+		const connection = await openRawSse(base);
+		const oversizedPayload = "x".repeat(500);
+		try {
+			clients[0].emit({ type: "unknown_extension_event", output: oversizedPayload });
+			await waitUntil(() => connection.body().includes('"reason":"oversized_event"'));
+
+			expect(connection.body().match(/"type":"dashboard_resync"/g)).toHaveLength(1);
+			expect(connection.body()).not.toContain(oversizedPayload);
+
+			clients[0].emit({ type: "small" });
+			await waitUntil(() => connection.body().includes('"type":"small"'));
+			expect(connection.body()).toMatch(/"type":"dashboard_resync","reason":"oversized_event"[\s\S]*"type":"small"/);
+		} finally {
+			connection.destroy();
+		}
+	});
+
 	it("sends a single resync barrier instead of an aggregate replay", async () => {
 		const dir = await createTempProject();
 		const logs: string[] = [];
