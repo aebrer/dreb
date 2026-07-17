@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildKimiHeaders,
+	type KimiModelInfo,
 	kimiCodingOAuthProvider,
 	loginKimiCoding,
 	refreshKimiCodingToken,
@@ -162,10 +163,11 @@ describe("Kimi For Coding OAuth", () => {
 			expect(authUrl.searchParams.get("user_code")).toBe("WXYZ-1234");
 			expect(authCalls[0].instructions).toContain("WXYZ-1234");
 
-			// Credentials include model discovery extras
+			// Credentials include the full discovered model list and legacy extras
 			expect(creds.refresh).toBe("kimi-refresh-token-456");
 			expect(creds.access).toBe("kimi-access-token-123");
 			expect(creds.expires).toBeGreaterThan(Date.now());
+			expect(creds.models).toEqual(MOCK_MODELS_RESPONSE.data);
 			expect(creds.modelId).toBe("kimi-k2-0715-chat");
 			expect(creds.contextLength).toBe(131072);
 			expect(creds.modelDisplay).toBe("Kimi K2");
@@ -648,6 +650,7 @@ describe("Kimi For Coding OAuth", () => {
 
 			expect(fresh.access).toBe("new-access");
 			expect(fresh.refresh).toBe("new-refresh");
+			expect(fresh.models).toBeUndefined();
 			expect(fresh.modelId).toBeUndefined();
 			expect(fresh.contextLength).toBeUndefined();
 		});
@@ -691,8 +694,34 @@ describe("Kimi For Coding OAuth", () => {
 			expect(fresh.access).toBe("new-access");
 			expect(fresh.refresh).toBe("new-refresh");
 			expect(fresh.expires).toBeGreaterThan(Date.now());
+			expect(fresh.models).toEqual(MOCK_MODELS_RESPONSE.data);
 			expect(fresh.modelId).toBe("kimi-k2-0715-chat");
 			expect(fresh.contextLength).toBe(131072);
+		});
+
+		it("clears stale entitlements after a successful empty discovery", async () => {
+			const fetchMock = vi.fn(async (input: unknown): Promise<Response> => {
+				const url = getUrl(input);
+				if (url === TOKEN_URL) {
+					return jsonResponse({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 });
+				}
+				if (url === MODELS_URL) return jsonResponse({ data: [] });
+				throw new Error(`Unexpected URL: ${url}`);
+			});
+			vi.stubGlobal("fetch", fetchMock);
+
+			const fresh = await refreshKimiCodingToken({
+				refresh: "old-refresh",
+				access: "old-access",
+				expires: 0,
+				models: MOCK_MODELS_RESPONSE.data,
+				modelId: "kimi-k2-0715-chat",
+				contextLength: 131072,
+			} as OAuthCredentials);
+
+			expect(fresh.models).toEqual([]);
+			expect(fresh.modelId).toBeUndefined();
+			expect(fresh.contextLength).toBeUndefined();
 		});
 
 		it("retries on 429 and then succeeds", async () => {
@@ -804,7 +833,152 @@ describe("Kimi For Coding OAuth", () => {
 	// modifyModels
 	// ------------------------------------------------------------------------
 	describe("modifyModels", () => {
-		it("injects Kimi headers and updates model id and contextWindow", () => {
+		const buildStaticModels = () => [
+			{
+				id: "kimi-for-coding",
+				name: "Kimi For Coding",
+				api: "openai-completions" as const,
+				provider: "kimi-coding-oauth" as const,
+				baseUrl: "https://api.kimi.com/coding/v1",
+				reasoning: true,
+				input: ["text", "image"] as ("text" | "image")[],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 262144,
+				maxTokens: 32768,
+				compat: { thinkingFormat: "kimi" as const, supportsDeveloperRole: false as const },
+			},
+			{
+				id: "k3",
+				name: "Kimi K3",
+				api: "openai-completions" as const,
+				provider: "kimi-coding-oauth" as const,
+				baseUrl: "https://api.kimi.com/coding/v1",
+				reasoning: true,
+				input: ["text", "image"] as ("text" | "image")[],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 1048576,
+				maxTokens: 32768,
+				compat: { thinkingFormat: "kimi" as const, supportsDeveloperRole: false as const },
+			},
+			{
+				id: "kimi-for-coding-highspeed",
+				name: "Kimi For Coding Highspeed",
+				api: "openai-completions" as const,
+				provider: "kimi-coding-oauth" as const,
+				baseUrl: "https://api.kimi.com/coding/v1",
+				reasoning: true,
+				input: ["text", "image"] as ("text" | "image")[],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 262144,
+				maxTokens: 32768,
+				compat: { thinkingFormat: "kimi" as const, supportsDeveloperRole: false as const },
+			},
+		];
+
+		it("keeps static fallbacks when no discovery is available", () => {
+			const creds: OAuthCredentials = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+			};
+
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+			const ids = result.map((m) => m.id).sort();
+
+			expect(ids).toEqual(["k3", "kimi-for-coding", "kimi-for-coding-highspeed"]);
+			for (const m of result) {
+				expect(m.headers).toMatchObject({
+					"User-Agent": "KimiCLI/1.35.0",
+					"X-Msh-Platform": "kimi_cli",
+				});
+				expect(m.input).toContain("image");
+			}
+		});
+
+		it("matches discovered models by ID and updates metadata", () => {
+			const creds: OAuthCredentials & { models?: KimiModelInfo[] } = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+				models: [
+					{
+						id: "k3",
+						display_name: "Kimi K3 Discovered",
+						context_length: 2097152,
+						supports_reasoning: true,
+					},
+				],
+			};
+
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+			const k3 = result.find((m) => m.id === "k3");
+
+			expect(k3).toBeDefined();
+			expect(k3?.name).toBe("Kimi K3 Discovered");
+			expect(k3?.contextWindow).toBe(2097152);
+			expect(k3?.headers).toMatchObject({ "X-Msh-Platform": "kimi_cli" });
+		});
+
+		it("templates future discovered IDs from the static fallback", () => {
+			const creds: OAuthCredentials & { models?: KimiModelInfo[] } = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+				models: [
+					{
+						id: "kimi-future-model",
+						display_name: "Kimi Future",
+						context_length: 524288,
+					},
+				],
+			};
+
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+			const future = result.find((m) => m.id === "kimi-future-model");
+
+			expect(future).toBeDefined();
+			expect(future?.name).toBe("Kimi Future");
+			expect(future?.contextWindow).toBe(524288);
+			expect(future?.reasoning).toBe(false);
+			expect(future?.baseUrl).toBe("https://api.kimi.com/coding/v1");
+			expect(future?.input).toContain("image");
+		});
+
+		it("preserves distinct IDs and exposes discovered entitlements", () => {
+			const creds: OAuthCredentials & { models?: KimiModelInfo[] } = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+				models: [
+					{ id: "k3", display_name: "K3", context_length: 1048576 },
+					{ id: "k3", display_name: "K3 dup", context_length: 1048576 },
+					{ id: "kimi-for-coding", display_name: "Default", context_length: 262144 },
+				],
+			};
+
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+			const ids = result.map((m) => m.id);
+
+			expect(new Set(ids).size).toBe(ids.length);
+			expect(ids).toContain("k3");
+			expect(ids).toContain("kimi-for-coding");
+			expect(ids).not.toContain("kimi-for-coding-highspeed");
+		});
+
+		it("treats successful discovery as authoritative", () => {
+			const creds: OAuthCredentials & { models?: KimiModelInfo[] } = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+				models: [{ id: "k3", display_name: "K3", context_length: 1048576 }],
+			};
+
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+
+			expect(result.filter((m) => m.provider === "kimi-coding-oauth").map((m) => m.id)).toEqual(["k3"]);
+		});
+
+		it("preserves static IDs and appends an unknown legacy model", () => {
 			const creds: OAuthCredentials & {
 				modelId?: string;
 				contextLength?: number;
@@ -816,140 +990,43 @@ describe("Kimi For Coding OAuth", () => {
 				contextLength: 131072,
 			};
 
-			const models = [
-				{
-					id: "kimi-default",
-					name: "Kimi",
-					api: "openai-completions" as const,
-					provider: "kimi-coding-oauth",
-					baseUrl: "https://api.kimi.com/coding/v1",
-					reasoning: false,
-					input: ["text"] as ("text" | "image")[],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 32768,
-					maxTokens: 4096,
-				},
-				{
-					id: "other-model",
-					name: "Other",
-					api: "openai-completions" as const,
-					provider: "other-provider",
-					baseUrl: "https://other.example.com",
-					reasoning: false,
-					input: ["text"] as ("text" | "image")[],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 8192,
-					maxTokens: 2048,
-				},
-			];
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+			const ids = result.map((m) => m.id);
 
-			const result = kimiCodingOAuthProvider.modifyModels!(models, creds);
-
-			// First model should be updated
-			expect(result[0].id).toBe("kimi-k2-0715-chat");
-			expect(result[0].contextWindow).toBe(131072);
-			expect(result[0].headers).toMatchObject({
-				"User-Agent": "KimiCLI/1.35.0",
-				"X-Msh-Platform": "kimi_cli",
-				"X-Msh-Version": "1.35.0",
-			});
-
-			// Second model should be unchanged
-			expect(result[1].id).toBe("other-model");
-			expect(result[1].contextWindow).toBe(8192);
-			expect(result[1].headers).toBeUndefined();
+			expect(ids).toEqual(["kimi-for-coding", "k3", "kimi-for-coding-highspeed", "kimi-k2-0715-chat"]);
+			expect(new Set(ids).size).toBe(ids.length);
+			expect(result.at(-1)?.contextWindow).toBe(131072);
+			for (const m of result) {
+				expect(m.headers).toMatchObject({ "X-Msh-Platform": "kimi_cli" });
+			}
 		});
 
-		it("preserves image input capability when modifying models", () => {
-			const creds: OAuthCredentials & {
-				modelId?: string;
-				contextLength?: number;
-			} = {
-				refresh: "r",
-				access: "a",
-				expires: Date.now() + 120_000,
-				modelId: "kimi-for-coding",
-				contextLength: 262144,
-			};
-
-			const models = [
-				{
-					id: "kimi-default",
-					name: "Kimi",
-					api: "openai-completions" as const,
-					provider: "kimi-coding-oauth",
-					baseUrl: "https://api.kimi.com/coding/v1",
-					reasoning: true,
-					input: ["text", "image"] as ("text" | "image")[],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 32768,
-					maxTokens: 4096,
-				},
-			];
-
-			const result = kimiCodingOAuthProvider.modifyModels!(models, creds);
-
-			expect(result[0].input).toEqual(["text", "image"]);
-		});
-
-		it("adds image input capability if static Kimi OAuth metadata is stale", () => {
+		it("leaves non-Kimi-OAuth models unchanged", () => {
 			const creds: OAuthCredentials = {
 				refresh: "r",
 				access: "a",
 				expires: Date.now() + 120_000,
 			};
 
-			const models = [
-				{
-					id: "kimi-default",
-					name: "Kimi",
-					api: "openai-completions" as const,
-					provider: "kimi-coding-oauth",
-					baseUrl: "https://api.kimi.com/coding/v1",
-					reasoning: true,
-					input: ["text"] as ("text" | "image")[],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 32768,
-					maxTokens: 4096,
-				},
-			];
-
-			const result = kimiCodingOAuthProvider.modifyModels!(models, creds);
-
-			expect(result[0].input).toEqual(["text", "image"]);
-		});
-
-		it("does not modify model id when credentials lack modelId", () => {
-			const creds: OAuthCredentials = {
-				refresh: "r",
-				access: "a",
-				expires: Date.now() + 120_000,
+			const otherModel = {
+				id: "other-model",
+				name: "Other",
+				api: "openai-completions" as const,
+				provider: "other-provider" as const,
+				baseUrl: "https://other.example.com",
+				reasoning: false,
+				input: ["text"] as ("text" | "image")[],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 8192,
+				maxTokens: 2048,
 			};
 
-			const models = [
-				{
-					id: "kimi-default",
-					name: "Kimi",
-					api: "openai-completions" as const,
-					provider: "kimi-coding-oauth",
-					baseUrl: "https://api.kimi.com/coding/v1",
-					reasoning: false,
-					input: ["text"] as ("text" | "image")[],
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-					contextWindow: 32768,
-					maxTokens: 4096,
-				},
-			];
+			const result = kimiCodingOAuthProvider.modifyModels!([...buildStaticModels(), otherModel], creds);
+			const other = result.find((m) => m.provider === "other-provider");
 
-			const result = kimiCodingOAuthProvider.modifyModels!(models, creds);
-
-			// Headers still injected
-			expect(result[0].headers).toMatchObject({
-				"X-Msh-Platform": "kimi_cli",
-			});
-			// But id and contextWindow unchanged
-			expect(result[0].id).toBe("kimi-default");
-			expect(result[0].contextWindow).toBe(32768);
+			expect(other?.headers).toBeUndefined();
+			expect(other?.id).toBe("other-model");
+			expect(other?.contextWindow).toBe(8192);
 		});
 	});
 

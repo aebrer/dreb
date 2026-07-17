@@ -144,8 +144,13 @@ export type KimiModelInfo = {
 };
 
 type KimiCredentials = OAuthCredentials & {
+	/** Full list of models discovered from the Kimi API. */
+	models?: KimiModelInfo[];
+	/** @deprecated Kept for legacy credential compatibility; derived from models[0]. */
 	modelId?: string;
+	/** @deprecated Kept for legacy credential compatibility; derived from models[0]. */
 	contextLength?: number;
+	/** @deprecated Kept for legacy credential compatibility; derived from models[0]. */
 	modelDisplay?: string;
 };
 
@@ -433,9 +438,10 @@ export async function loginKimiCoding(options: {
 
 	const tokenResp = await pollForAccessToken(device.device_code, device.interval, device.expires_in, options.signal);
 
-	// Discover model entitlement
+	// Discover model entitlement. Undefined means discovery failed; an empty
+	// array is a successful, authoritative response.
 	options.onProgress?.("Discovering available models...");
-	let models: KimiModelInfo[] = [];
+	let models: KimiModelInfo[] | undefined;
 	try {
 		models = await listModels(tokenResp.access_token);
 	} catch {
@@ -448,11 +454,14 @@ export async function loginKimiCoding(options: {
 		expires: Date.now() + tokenResp.expires_in * 1000,
 	};
 
-	if (models.length > 0) {
+	if (models) {
+		credentials.models = models;
 		const primary = models[0];
-		credentials.modelId = primary.id;
-		credentials.contextLength = primary.context_length;
-		credentials.modelDisplay = primary.display_name;
+		if (primary) {
+			credentials.modelId = primary.id;
+			credentials.contextLength = primary.context_length;
+			credentials.modelDisplay = primary.display_name;
+		}
 	}
 
 	return credentials;
@@ -468,28 +477,32 @@ export async function refreshKimiCodingToken(
 ): Promise<OAuthCredentials> {
 	const tokenResp = await refreshWithRetry(credentials.refresh, signal);
 
-	// Re-discover model entitlement
-	let models: KimiModelInfo[] = [];
+	// Re-discover model entitlement. Undefined means discovery failed; an empty
+	// array is a successful, authoritative response.
+	let models: KimiModelInfo[] | undefined;
 	try {
 		models = await listModels(tokenResp.access_token);
 	} catch {
 		// Proceed without model enrichment if the models endpoint fails
 	}
 
+	const oldCreds = credentials as KimiCredentials;
 	const fresh: KimiCredentials = {
 		refresh: tokenResp.refresh_token ?? credentials.refresh,
 		access: tokenResp.access_token,
 		expires: Date.now() + tokenResp.expires_in * 1000,
-		modelId: (credentials as KimiCredentials).modelId,
-		contextLength: (credentials as KimiCredentials).contextLength,
-		modelDisplay: (credentials as KimiCredentials).modelDisplay,
+		models: oldCreds.models,
+		modelId: oldCreds.modelId,
+		contextLength: oldCreds.contextLength,
+		modelDisplay: oldCreds.modelDisplay,
 	};
 
-	if (models.length > 0) {
+	if (models) {
+		fresh.models = models;
 		const primary = models[0];
-		fresh.modelId = primary.id;
-		fresh.contextLength = primary.context_length;
-		fresh.modelDisplay = primary.display_name;
+		fresh.modelId = primary?.id;
+		fresh.contextLength = primary?.context_length;
+		fresh.modelDisplay = primary?.display_name;
 	}
 
 	return fresh;
@@ -523,26 +536,111 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 		const creds = credentials as KimiCredentials;
 		const headers = buildKimiHeaders();
 
-		return models.map((m) => {
-			if (m.provider !== "kimi-coding-oauth") return m;
+		const staticModels = models.filter((m) => m.provider === "kimi-coding-oauth");
+		if (staticModels.length === 0) {
+			return models;
+		}
 
-			const updated = {
-				...m,
-				// The OAuth coding endpoint accepts OpenAI-style image_url data URLs for
-				// kimi-for-coding; keep this capability even if static metadata is stale.
-				input: Array.from(new Set([...m.input, "image" as const])),
-				headers: { ...headers, ...(m.headers || {}) },
-			};
-
-			if (creds.modelId) {
-				updated.id = creds.modelId;
-			}
-
-			if (creds.contextLength) {
-				updated.contextWindow = creds.contextLength;
-			}
-
-			return updated;
+		const injectHeaders = (m: Model<Api>): Model<Api> => ({
+			...m,
+			headers: { ...headers, ...(m.headers || {}) },
 		});
+
+		const staticById = new Map(staticModels.map((m) => [m.id, m]));
+		const fallbackTemplate = staticById.get("kimi-for-coding") ?? staticModels[0];
+
+		// No discovery (or failed discovery): keep the static fallback list intact.
+		// Legacy credentials describe one discovered model, so enrich or append only
+		// that model rather than collapsing every static entry to the same ID.
+		const discovered = creds.models;
+		if (!discovered) {
+			const fallbackModels = models.map((m) => {
+				if (m.provider !== "kimi-coding-oauth") return m;
+
+				const updated: Model<Api> = {
+					...m,
+					// The OAuth coding endpoint accepts OpenAI-style image_url data URLs;
+					// keep this capability even if static metadata is stale.
+					input: Array.from(new Set([...m.input, "image" as const])),
+				};
+				if (creds.modelId === m.id && creds.contextLength) {
+					updated.contextWindow = creds.contextLength;
+				}
+				if (creds.modelId === m.id && creds.modelDisplay) {
+					updated.name = creds.modelDisplay;
+				}
+				return injectHeaders(updated);
+			});
+
+			if (creds.modelId && !staticById.has(creds.modelId)) {
+				fallbackModels.push(
+					injectHeaders({
+						...fallbackTemplate,
+						id: creds.modelId,
+						name: creds.modelDisplay || creds.modelId,
+						contextWindow: creds.contextLength || fallbackTemplate.contextWindow,
+					}),
+				);
+			}
+			return fallbackModels;
+		}
+
+		// Apply discovered metadata to a static model, preserving its static shape.
+		const applyDiscovery = (staticModel: Model<Api>, info: KimiModelInfo): Model<Api> => {
+			const updated: Model<Api> = {
+				...staticModel,
+				id: info.id,
+				name: info.display_name || info.id,
+				contextWindow: info.context_length || staticModel.contextWindow,
+				input: Array.from(new Set([...staticModel.input, "image" as const])),
+			};
+			if (typeof info.supports_reasoning === "boolean") {
+				updated.reasoning = info.supports_reasoning;
+			}
+			return injectHeaders(updated);
+		};
+
+		// Safely template a future/discovered model ID using the static fallback.
+		const templateDiscovery = (info: KimiModelInfo): Model<Api> => {
+			const templated: Model<Api> = {
+				...fallbackTemplate,
+				id: info.id,
+				name: info.display_name || info.id,
+				contextWindow: info.context_length || fallbackTemplate.contextWindow,
+				reasoning: info.supports_reasoning ?? false,
+				input: Array.from(new Set([...fallbackTemplate.input, "image" as const])),
+			};
+			return injectHeaders(templated);
+		};
+
+		const result: Model<Api>[] = [];
+		const seen = new Set<string>();
+
+		// 1. Walk the original model list to preserve order, replacing discovered
+		//    static models and dropping undiscovered entries. A successful response
+		//    is authoritative for the subscription's current entitlements.
+		for (const m of models) {
+			if (m.provider !== "kimi-coding-oauth") {
+				result.push(m);
+				continue;
+			}
+
+			const info = staticById.has(m.id) ? discovered.find((d) => d.id === m.id) : undefined;
+			if (info) {
+				result.push(applyDiscovery(m, info));
+				seen.add(info.id);
+			}
+		}
+
+		// 2. Discovered models with IDs not present in the static list are templated
+		//    from the fallback so future model IDs are safely usable.
+		for (const info of discovered) {
+			if (!seen.has(info.id)) {
+				result.push(templateDiscovery(info));
+				seen.add(info.id);
+			}
+		}
+
+		return result;
 	},
 };
