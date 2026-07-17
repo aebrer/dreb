@@ -51,9 +51,10 @@ Use `/logout` to clear credentials. Tokens are stored in `~/.dreb/agent/auth.jso
 
 - `/login` uses the Kimi Code OAuth subscription endpoint at `https://api.kimi.com/coding/v1`.
 - `KIMI_API_KEY` uses Kimi For Coding's Anthropic-compatible API at `https://api.kimi.com/coding`.
-- Built-in OAuth models are `kimi-for-coding` (default), `k3` (1M context), and `kimi-for-coding-highspeed` (262k context). On login/refresh, dreb asks the Kimi API which models the subscription is entitled to and updates matching model metadata; newly discovered IDs are templated from the static fallback so future models are usable immediately. If discovery fails, the static list remains available.
-- The OAuth coding endpoint has been verified to accept OpenAI-style multimodal content arrays with base64 `image_url` data URLs for the OAuth coding models.
-- Moonshot Open Platform vision docs use a different base URL (`https://api.moonshot.ai/v1`), and the first-party Kimi CLI may have its own media handling; don't assume all Kimi routes expose identical media behavior.
+- Built-in OAuth models are `kimi-for-coding` (default), `k3` (1M context), and `kimi-for-coding-highspeed` (262k context). On login/refresh, dreb asks the Kimi API which models the subscription is entitled to and updates context, reasoning, image, tool-use, protocol, and thinking-effort metadata. Compatible newly discovered IDs are templated conservatively; if discovery fails, the static list remains available.
+- OAuth requests use the current Kimi Code device identity contract and share its stable `~/.kimi-code/device_id`. Extra low-precedence headers can be supplied with newline-separated `KIMI_CODE_CUSTOM_HEADERS` values.
+- The OAuth coding endpoint accepts OpenAI-style multimodal content arrays with base64 `image_url` data URLs. dreb keeps a conservative 32k output-token cap because the managed model catalog does not currently advertise a per-model output limit.
+- Moonshot Open Platform uses a different base URL (`https://api.moonshot.ai/v1`); don't assume both routes expose identical behavior.
 
 ## API Keys
 

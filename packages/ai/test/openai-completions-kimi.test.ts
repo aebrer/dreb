@@ -52,7 +52,7 @@ describe("openai-completions kimi thinkingFormat", () => {
 		mockState.lastParams = undefined;
 	});
 
-	it("sets thinking enabled + reasoning_effort when reasoning is specified", async () => {
+	it("sets thinking effort using the Kimi Code request shape", async () => {
 		let payload: unknown;
 
 		await streamSimple(
@@ -75,9 +75,30 @@ describe("openai-completions kimi thinkingFormat", () => {
 			reasoning_effort?: string;
 			prompt_cache_key?: string;
 		};
-		expect(params.thinking).toEqual({ type: "enabled" });
-		expect(params.reasoning_effort).toBe("medium");
+		expect(params.thinking).toEqual({ type: "enabled", effort: "medium" });
+		expect(params.reasoning_effort).toBeUndefined();
 		expect(params.prompt_cache_key).toBe("sess-123");
+	});
+
+	it("nests mapped K3 effort values inside thinking", async () => {
+		const model: Model<"openai-completions"> = {
+			...KIMI_MODEL,
+			provider: "kimi-coding-oauth",
+			id: "k3",
+			compat: { thinkingFormat: "kimi", reasoningEffortMap: { xhigh: "max" } },
+		};
+		await streamSimple(
+			model,
+			{ messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey: "test", reasoning: "xhigh" },
+		).result();
+
+		const params = mockState.lastParams as {
+			thinking?: { type: string; effort?: string };
+			reasoning_effort?: string;
+		};
+		expect(params.thinking).toEqual({ type: "enabled", effort: "max" });
+		expect(params.reasoning_effort).toBeUndefined();
 	});
 
 	it("sets thinking disabled when mapped effort is 'off'", async () => {
@@ -198,8 +219,8 @@ describe("openai-completions kimi thinkingFormat", () => {
 			reasoning_effort?: string;
 			prompt_cache_key?: string;
 		};
-		expect(params.thinking).toEqual({ type: "enabled" });
-		expect(params.reasoning_effort).toBe("high");
+		expect(params.thinking).toEqual({ type: "enabled", effort: "high" });
+		expect(params.reasoning_effort).toBeUndefined();
 		expect(params.prompt_cache_key).toBeUndefined();
 	});
 

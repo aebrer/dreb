@@ -1,12 +1,13 @@
 /**
  * Kimi For Coding OAuth flow (device code)
  *
- * Authenticates against Moonshot's Kimi API (auth.kimi.com) with scope "kimi-code".
+ * Authenticates against Moonshot's Kimi API (auth.kimi.com) using the current Kimi Code device identity.
  * Uses the device authorization grant flow to obtain access/refresh tokens,
  * then discovers the user's model entitlement via the /models endpoint.
  */
 
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,48 +18,61 @@ import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } fr
 // Constants
 // ============================================================================
 
-const KIMI_CLI_VERSION = "1.35.0";
-const USER_AGENT = `KimiCLI/${KIMI_CLI_VERSION}`;
+function readDrebVersion(): string {
+	try {
+		const pkg = JSON.parse(fs.readFileSync(new URL("../../../package.json", import.meta.url), "utf-8")) as {
+			version?: unknown;
+		};
+		if (typeof pkg.version === "string" && pkg.version.length > 0) return pkg.version;
+	} catch {
+		// Fall back for unusual bundlers that omit package.json.
+	}
+	return "unknown";
+}
+
+const DREB_VERSION = readDrebVersion();
+const USER_AGENT = `dreb/${DREB_VERSION}`;
 const OAUTH_HOST = "https://auth.kimi.com";
 const OAUTH_DEVICE_AUTH_URL = `${OAUTH_HOST}/api/oauth/device_authorization`;
 const OAUTH_TOKEN_URL = `${OAUTH_HOST}/api/oauth/token`;
 const OAUTH_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
-const OAUTH_SCOPE = "kimi-code";
 const OAUTH_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 const OAUTH_REFRESH_GRANT = "refresh_token";
 const API_BASE_URL = "https://api.kimi.com/coding/v1";
 
-const DEVICE_ID_PATH = path.join(os.homedir(), ".kimi", "device_id");
+const KIMI_CODE_HOME = path.join(os.homedir(), ".kimi-code");
+const DEVICE_ID_PATH = path.join(KIMI_CODE_HOME, "device_id");
 
 const MAX_REFRESH_RETRIES = 3;
+const MAX_DEVICE_FLOW_MS = 15 * 60 * 1000;
 
 // ============================================================================
 // Device ID
 // ============================================================================
 
-function generateDeviceId(): string {
-	// UUID v4 without dashes (hex only, 32 chars)
-	return "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx".replace(/x/g, () => Math.floor(Math.random() * 16).toString(16));
-}
+let sessionDeviceId: string | undefined;
 
 function getDeviceId(): string {
+	if (sessionDeviceId) return sessionDeviceId;
 	try {
 		if (fs.existsSync(DEVICE_ID_PATH)) {
 			const id = fs.readFileSync(DEVICE_ID_PATH, "utf-8").trim();
-			if (/^[0-9a-f]{32}$/i.test(id)) {
+			if (id.length > 0) {
+				sessionDeviceId = id;
 				return id;
 			}
 		}
 	} catch {
-		// Fall through to generate
+		// Fall through to generate.
 	}
 
-	const id = generateDeviceId();
+	const id = randomUUID();
+	sessionDeviceId = id;
 	try {
-		fs.mkdirSync(path.dirname(DEVICE_ID_PATH), { recursive: true });
-		fs.writeFileSync(DEVICE_ID_PATH, id, "utf-8");
+		fs.mkdirSync(KIMI_CODE_HOME, { recursive: true, mode: 0o700 });
+		fs.writeFileSync(DEVICE_ID_PATH, id, { encoding: "utf-8", mode: 0o600 });
 	} catch {
-		// If we can't persist, just use the generated ID for this session
+		// If we can't persist, just use the generated ID for this session.
 	}
 	return id;
 }
@@ -70,8 +84,23 @@ function getDeviceId(): string {
 /**
  * Strip non-ASCII characters from a string for use in HTTP header values.
  */
-function asciiHeaderValue(value: string): string {
-	return value.replace(/[^\x20-\x7E]/g, "");
+function asciiHeaderValue(value: string, fallback = "unknown"): string {
+	const cleaned = value.replace(/[^\x20-\x7E]/g, "").trim();
+	return cleaned.length > 0 ? cleaned : fallback;
+}
+
+function customKimiHeaders(): Record<string, string> {
+	const raw = process.env.KIMI_CODE_CUSTOM_HEADERS?.trim();
+	if (!raw) return {};
+	const headers: Record<string, string> = {};
+	for (const line of raw.split("\n")) {
+		const colon = line.indexOf(":");
+		if (colon < 0) continue;
+		const name = line.slice(0, colon).trim();
+		if (!name) continue;
+		headers[name] = line.slice(colon + 1).trim();
+	}
+	return headers;
 }
 
 /**
@@ -79,7 +108,7 @@ function asciiHeaderValue(value: string): string {
  */
 function kimiDeviceModel(): string {
 	const platform = os.platform();
-	const machine = os.machine?.() || process.arch;
+	const machine = os.arch();
 
 	if (platform === "darwin") {
 		let version: string;
@@ -92,14 +121,11 @@ function kimiDeviceModel(): string {
 	}
 
 	if (platform === "win32") {
-		const release = os.release();
-		const buildNumber = Number.parseInt(release.split(".").pop() || "0", 10);
-		const label = buildNumber >= 22000 ? "11" : "10";
-		return `Windows ${label} ${machine}`;
+		return `Windows ${os.release()} ${machine}`;
 	}
 
 	// Linux and other
-	return `${os.type()} ${os.release()} ${machine}`;
+	return `${os.type()} ${os.release()} ${machine}`.trim();
 }
 
 /**
@@ -107,13 +133,14 @@ function kimiDeviceModel(): string {
  */
 export function buildKimiHeaders(): Record<string, string> {
 	return {
+		...customKimiHeaders(),
 		"User-Agent": USER_AGENT,
-		"X-Msh-Platform": "kimi_cli",
-		"X-Msh-Version": KIMI_CLI_VERSION,
+		"X-Msh-Platform": "kimi_code_cli",
+		"X-Msh-Version": DREB_VERSION,
 		"X-Msh-Device-Name": asciiHeaderValue(os.hostname()),
 		"X-Msh-Device-Model": asciiHeaderValue(kimiDeviceModel()),
 		"X-Msh-Device-Id": getDeviceId(),
-		"X-Msh-Os-Version": asciiHeaderValue(os.version?.() || `${os.type()} ${os.release()}`),
+		"X-Msh-Os-Version": asciiHeaderValue(os.release()),
 	};
 }
 
@@ -124,7 +151,7 @@ export function buildKimiHeaders(): Record<string, string> {
 type DeviceCodeResponse = {
 	device_code: string;
 	user_code: string;
-	verification_uri: string;
+	verification_uri_complete: string;
 	interval: number;
 	expires_in: number;
 };
@@ -135,11 +162,36 @@ type TokenSuccessResponse = {
 	expires_in: number;
 };
 
+function parseTokenSuccess(response: Record<string, unknown>): TokenSuccessResponse {
+	if (
+		typeof response.access_token !== "string" ||
+		response.access_token.length === 0 ||
+		typeof response.refresh_token !== "string" ||
+		response.refresh_token.length === 0 ||
+		typeof response.expires_in !== "number" ||
+		!Number.isFinite(response.expires_in) ||
+		response.expires_in <= 0
+	) {
+		throw new Error("Invalid token response fields");
+	}
+	return response as unknown as TokenSuccessResponse;
+}
+
 export type KimiModelInfo = {
 	id: string;
 	display_name: string;
 	context_length: number;
 	supports_reasoning?: boolean;
+	supports_image_in?: boolean;
+	supports_video_in?: boolean;
+	supports_tool_use?: boolean;
+	supports_thinking_type?: "only" | "no" | "both";
+	think_efforts?: {
+		support?: boolean;
+		valid_efforts?: string[];
+		default_effort?: string;
+	};
+	protocol?: "kimi" | "anthropic" | string;
 	[key: string]: unknown;
 };
 
@@ -157,6 +209,13 @@ type KimiCredentials = OAuthCredentials & {
 // ============================================================================
 // Network helpers
 // ============================================================================
+
+const REQUEST_TIMEOUT_MS = 30_000;
+
+function requestSignal(signal?: AbortSignal): AbortSignal {
+	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+	return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
 
 async function fetchJson(url: string, init: RequestInit): Promise<unknown> {
 	const response = await fetch(url, init);
@@ -198,11 +257,12 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
  * List available models from the Kimi API.
  * Returns the model info array from the response's `data` field.
  */
-export async function listModels(accessToken: string): Promise<KimiModelInfo[]> {
+export async function listModels(accessToken: string, signal?: AbortSignal): Promise<KimiModelInfo[]> {
 	const raw = await fetchJson(`${API_BASE_URL}/models`, {
+		signal: requestSignal(signal),
 		headers: {
-			Authorization: `Bearer ${accessToken}`,
 			...buildKimiHeaders(),
+			Authorization: `Bearer ${accessToken}`,
 		},
 	});
 
@@ -222,17 +282,15 @@ export async function listModels(accessToken: string): Promise<KimiModelInfo[]> 
 // Device flow
 // ============================================================================
 
-async function startDeviceFlow(): Promise<DeviceCodeResponse> {
+async function startDeviceFlow(signal?: AbortSignal): Promise<DeviceCodeResponse> {
 	const data = await fetchJson(OAUTH_DEVICE_AUTH_URL, {
 		method: "POST",
+		signal: requestSignal(signal),
 		headers: {
-			"Content-Type": "application/x-www-form-urlencoded",
 			...buildKimiHeaders(),
+			"Content-Type": "application/x-www-form-urlencoded",
 		},
-		body: new URLSearchParams({
-			client_id: OAUTH_CLIENT_ID,
-			scope: OAUTH_SCOPE,
-		}),
+		body: new URLSearchParams({ client_id: OAUTH_CLIENT_ID }),
 	});
 
 	if (!data || typeof data !== "object") {
@@ -242,21 +300,33 @@ async function startDeviceFlow(): Promise<DeviceCodeResponse> {
 	const d = data as Record<string, unknown>;
 	const device_code = d.device_code;
 	const user_code = d.user_code;
-	const verification_uri = d.verification_uri;
+	const verification_uri_complete =
+		typeof d.verification_uri_complete === "string"
+			? d.verification_uri_complete
+			: typeof d.verification_uri === "string"
+				? `${d.verification_uri}${d.verification_uri.includes("?") ? "&" : "?"}user_code=${encodeURIComponent(user_code as string)}`
+				: undefined;
 	const interval = d.interval;
 	const expires_in = d.expires_in;
 
 	if (
 		typeof device_code !== "string" ||
 		typeof user_code !== "string" ||
-		typeof verification_uri !== "string" ||
+		typeof verification_uri_complete !== "string" ||
 		typeof interval !== "number" ||
 		typeof expires_in !== "number"
 	) {
 		throw new Error("Invalid device code response fields");
 	}
 
-	return { device_code, user_code, verification_uri, interval, expires_in };
+	return { device_code, user_code, verification_uri_complete, interval, expires_in };
+}
+
+class DeviceCodeExpiredError extends Error {
+	constructor() {
+		super("Device code expired");
+		this.name = "DeviceCodeExpiredError";
+	}
 }
 
 async function pollForAccessToken(
@@ -264,8 +334,9 @@ async function pollForAccessToken(
 	intervalSeconds: number,
 	expiresIn: number,
 	signal?: AbortSignal,
+	overallDeadline = Date.now() + MAX_DEVICE_FLOW_MS,
 ): Promise<TokenSuccessResponse> {
-	const deadline = Date.now() + expiresIn * 1000;
+	const deadline = Math.min(Date.now() + expiresIn * 1000, overallDeadline);
 	let intervalMs = Math.max(1000, Math.floor(intervalSeconds * 1000));
 
 	while (Date.now() < deadline) {
@@ -279,9 +350,10 @@ async function pollForAccessToken(
 
 		const tokenResponse = await fetch(OAUTH_TOKEN_URL, {
 			method: "POST",
+			signal: requestSignal(signal),
 			headers: {
-				"Content-Type": "application/x-www-form-urlencoded",
 				...buildKimiHeaders(),
+				"Content-Type": "application/x-www-form-urlencoded",
 			},
 			body: new URLSearchParams({
 				client_id: OAUTH_CLIENT_ID,
@@ -296,7 +368,7 @@ async function pollForAccessToken(
 
 		// Success: has access_token
 		if (typeof resp.access_token === "string") {
-			return resp as unknown as TokenSuccessResponse;
+			return parseTokenSuccess(resp);
 		}
 
 		// Error response (RFC 8628 §3.5)
@@ -318,7 +390,7 @@ async function pollForAccessToken(
 			}
 
 			if (error === "expired_token") {
-				throw new Error("Device code expired. Please try logging in again.");
+				throw new DeviceCodeExpiredError();
 			}
 
 			const descriptionSuffix = description ? `: ${description}` : "";
@@ -351,7 +423,7 @@ class RetriableError extends Error {
  * recognizable substrings in the message.
  */
 function isNetworkError(error: Error): boolean {
-	if (error instanceof TypeError) return true;
+	if (error instanceof TypeError || error.name === "TimeoutError") return true;
 	const msg = error.message.toLowerCase();
 	return ["fetch failed", "econnrefused", "etimedout", "enotfound", "econnreset", "socket hang up"].some((s) =>
 		msg.includes(s),
@@ -369,9 +441,10 @@ async function refreshWithRetry(refreshToken: string, signal?: AbortSignal): Pro
 		try {
 			const response = await fetch(OAUTH_TOKEN_URL, {
 				method: "POST",
+				signal: requestSignal(signal),
 				headers: {
-					"Content-Type": "application/x-www-form-urlencoded",
 					...buildKimiHeaders(),
+					"Content-Type": "application/x-www-form-urlencoded",
 				},
 				body: new URLSearchParams({
 					client_id: OAUTH_CLIENT_ID,
@@ -391,12 +464,10 @@ async function refreshWithRetry(refreshToken: string, signal?: AbortSignal): Pro
 			}
 
 			const raw = await response.json();
-			if (!raw || typeof raw !== "object" || typeof (raw as Record<string, unknown>).access_token !== "string") {
-				throw new Error("Invalid token refresh response");
-			}
-
-			return raw as unknown as TokenSuccessResponse;
+			if (!raw || typeof raw !== "object") throw new Error("Invalid token refresh response");
+			return parseTokenSuccess(raw as Record<string, unknown>);
 		} catch (error) {
+			if (signal?.aborted) throw new Error("Refresh cancelled");
 			lastError = error instanceof Error ? error : new Error(String(error));
 
 			// Wrap network errors (TypeError from fetch, or common network failure indicators) as retriable
@@ -427,24 +498,38 @@ export async function loginKimiCoding(options: {
 	onProgress?: (message: string) => void;
 	signal?: AbortSignal;
 }): Promise<OAuthCredentials> {
-	const device = await startDeviceFlow();
-	// Kimi's device page expects user_code as a query parameter
-	const authUrl = new URL(device.verification_uri);
-	authUrl.searchParams.set("user_code", device.user_code);
-	options.onAuth({
-		url: authUrl.toString(),
-		instructions: `Enter code: ${device.user_code}`,
-	});
+	const overallDeadline = Date.now() + MAX_DEVICE_FLOW_MS;
+	let tokenResp: TokenSuccessResponse;
+	while (true) {
+		const device = await startDeviceFlow(options.signal);
+		options.onAuth({
+			url: device.verification_uri_complete,
+			instructions: `Enter code: ${device.user_code}`,
+		});
 
-	const tokenResp = await pollForAccessToken(device.device_code, device.interval, device.expires_in, options.signal);
+		try {
+			tokenResp = await pollForAccessToken(
+				device.device_code,
+				device.interval,
+				device.expires_in,
+				options.signal,
+				overallDeadline,
+			);
+			break;
+		} catch (error) {
+			if (error instanceof DeviceCodeExpiredError && Date.now() < overallDeadline) continue;
+			throw error;
+		}
+	}
 
 	// Discover model entitlement. Undefined means discovery failed; an empty
 	// array is a successful, authoritative response.
 	options.onProgress?.("Discovering available models...");
 	let models: KimiModelInfo[] | undefined;
 	try {
-		models = await listModels(tokenResp.access_token);
+		models = await listModels(tokenResp.access_token, options.signal);
 	} catch {
+		if (options.signal?.aborted) throw new Error("Login cancelled");
 		// Proceed without model enrichment if the models endpoint fails
 	}
 
@@ -481,8 +566,9 @@ export async function refreshKimiCodingToken(
 	// array is a successful, authoritative response.
 	let models: KimiModelInfo[] | undefined;
 	try {
-		models = await listModels(tokenResp.access_token);
+		models = await listModels(tokenResp.access_token, signal);
 	} catch {
+		if (signal?.aborted) throw new Error("Refresh cancelled");
 		// Proceed without model enrichment if the models endpoint fails
 	}
 
@@ -543,7 +629,7 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 
 		const injectHeaders = (m: Model<Api>): Model<Api> => ({
 			...m,
-			headers: { ...headers, ...(m.headers || {}) },
+			headers: { ...(m.headers || {}), ...headers },
 		});
 
 		const staticById = new Map(staticModels.map((m) => [m.id, m]));
@@ -585,6 +671,32 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 			return fallbackModels;
 		}
 
+		const discoveredInput = (base: Model<Api>, info: KimiModelInfo): Model<Api>["input"] => {
+			if (info.supports_image_in === true) return Array.from(new Set([...base.input, "image" as const]));
+			if (info.supports_image_in === false) return base.input.filter((input) => input !== "image");
+			return base.input;
+		};
+
+		const discoveredCompat = (base: Model<Api>, info: KimiModelInfo): Model<Api>["compat"] => {
+			const valid = info.think_efforts?.support ? info.think_efforts.valid_efforts : undefined;
+			if (!valid || valid.length === 0) return base.compat;
+			const efforts = new Set(valid);
+			const declaredDefault = info.think_efforts?.default_effort;
+			const validDefault = declaredDefault && efforts.has(declaredDefault) ? declaredDefault : undefined;
+			const choose = (...preferences: string[]): string =>
+				preferences.find((effort) => efforts.has(effort)) ?? validDefault ?? valid[0];
+			return {
+				...base.compat,
+				reasoningEffortMap: {
+					minimal: choose("minimal", "low", "medium", "high", "max"),
+					low: choose("low", "minimal", "medium", "high", "max"),
+					medium: choose("medium", "high", "low", "max"),
+					high: choose("high", "medium", "max", "low"),
+					xhigh: choose("max", "xhigh", "high", "medium", "low"),
+				},
+			};
+		};
+
 		// Apply discovered metadata to a static model, preserving its static shape.
 		const applyDiscovery = (staticModel: Model<Api>, info: KimiModelInfo): Model<Api> => {
 			const updated: Model<Api> = {
@@ -592,9 +704,14 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 				id: info.id,
 				name: info.display_name || info.id,
 				contextWindow: info.context_length || staticModel.contextWindow,
-				input: Array.from(new Set([...staticModel.input, "image" as const])),
+				input: discoveredInput(staticModel, info),
+				compat: discoveredCompat(staticModel, info),
 			};
-			if (typeof info.supports_reasoning === "boolean") {
+			if (info.supports_thinking_type === "only") {
+				updated.reasoning = true;
+			} else if (info.supports_thinking_type === "no") {
+				updated.reasoning = false;
+			} else if (typeof info.supports_reasoning === "boolean") {
 				updated.reasoning = info.supports_reasoning;
 			}
 			return injectHeaders(updated);
@@ -607,12 +724,21 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 				id: info.id,
 				name: info.display_name || info.id,
 				contextWindow: info.context_length || fallbackTemplate.contextWindow,
-				reasoning: info.supports_reasoning ?? false,
-				input: Array.from(new Set([...fallbackTemplate.input, "image" as const])),
+				reasoning:
+					info.supports_thinking_type === undefined
+						? (info.supports_reasoning ?? false)
+						: info.supports_thinking_type !== "no",
+				input: info.supports_image_in === true ? ["text", "image"] : ["text"],
+				compat: discoveredCompat(fallbackTemplate, info),
 			};
 			return injectHeaders(templated);
 		};
 
+		// The official client treats only the explicit "anthropic" protocol as a
+		// separate wire format; absent and future values use the default Kimi route.
+		const supportedDiscovered = discovered.filter(
+			(info) => info.supports_tool_use !== false && info.protocol !== "anthropic",
+		);
 		const result: Model<Api>[] = [];
 		const seen = new Set<string>();
 
@@ -625,7 +751,7 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 				continue;
 			}
 
-			const info = staticById.has(m.id) ? discovered.find((d) => d.id === m.id) : undefined;
+			const info = staticById.has(m.id) ? supportedDiscovered.find((d) => d.id === m.id) : undefined;
 			if (info) {
 				result.push(applyDiscovery(m, info));
 				seen.add(info.id);
@@ -634,7 +760,7 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 
 		// 2. Discovered models with IDs not present in the static list are templated
 		//    from the fallback so future model IDs are safely usable.
-		for (const info of discovered) {
+		for (const info of supportedDiscovered) {
 			if (!seen.has(info.id)) {
 				result.push(templateDiscovery(info));
 				seen.add(info.id);

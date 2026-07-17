@@ -32,6 +32,12 @@ describe("supportsXhigh", () => {
 		expect(supportsXhigh(model!)).toBe(false);
 	});
 
+	it("returns true for managed Kimi K3", () => {
+		const model = getModel("kimi-coding-oauth", "k3");
+		expect(model).toBeDefined();
+		expect(supportsXhigh(model!)).toBe(true);
+	});
+
 	it("returns true for GPT-5.4 models", () => {
 		const model = getModel("openai-codex", "gpt-5.4");
 		expect(model).toBeDefined();
