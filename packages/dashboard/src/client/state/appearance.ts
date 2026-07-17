@@ -28,15 +28,17 @@ export interface ThemeEntry {
 	order: number;
 }
 
-export type ThemeId = "default" | "dim" | "solarized" | "gruvbox";
+export type ThemeId = "default" | "dim" | "solarized" | "gruvbox" | "qud" | "vangogh";
 export type ColorMode = "system" | "light" | "dark";
 
-/** FIXED catalog — default first, then dim, solarized, gruvbox. */
+/** FIXED catalog — default first, then dim, solarized, gruvbox, qud, vangogh. */
 export const THEMES: readonly ThemeEntry[] = [
 	{ id: "default", label: "Default", order: 0 },
 	{ id: "dim", label: "Dim", order: 1 },
 	{ id: "solarized", label: "Solarized", order: 2 },
 	{ id: "gruvbox", label: "Gruvbox", order: 3 },
+	{ id: "qud", label: "Caves of Qud", order: 4 },
+	{ id: "vangogh", label: "Van Gogh", order: 5 },
 ] as const;
 
 /** All theme ids in catalog order. */

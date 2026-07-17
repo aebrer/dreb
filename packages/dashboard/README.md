@@ -64,8 +64,9 @@ Open `http://127.0.0.1:5343`.
   lazy loads and cannot retract already injected context. Also includes
   dashboard-local preferences (thinking expansion and notification permission),
   an appearance section with a curated-theme gallery (Default / Dim / Solarized
-  / Gruvbox, live preview cards, system/light/dark mode selector, saved per
-  browser), current pairing code, and paired-devices management.
+  / Gruvbox / Caves of Qud / Van Gogh, live preview cards, system/light/dark
+  mode selector, saved per browser), current pairing code, and paired-devices
+  management.
 - **Pairing** — remote first-login rotating-code flow.
 
 ## Nested context trust
@@ -188,8 +189,9 @@ Browser (SolidJS, hash-routed SPA)
   curated theme or a forced color mode is active.
 - **Appearance system** (`src/client/state/appearance.ts` + `styles/themes.css`
   + `components/theme-gallery.tsx`) — a dashboard-native theming surface,
-  independent of the TUI themes. Four curated themes (Default, Dim, Solarized,
-  Gruvbox), each with light and dark palettes, plus a system/light/dark mode.
+  independent of the TUI themes. Six curated themes (Default, Dim, Solarized,
+  Gruvbox, Caves of Qud, Van Gogh), each with light and dark palettes, plus a
+  system/light/dark mode.
   A settings theme gallery renders live preview cards; selections persist per
   browser in `localStorage` (a pristine Default + system install leaves no keys
   and matches the `tokens.css` baseline exactly). Most themes use IBM Plex Mono;

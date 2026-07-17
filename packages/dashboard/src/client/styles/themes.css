@@ -538,3 +538,232 @@
 		--syntax-punctuation: var(--gruv-d-punctuation);
 	}
 }
+
+/* ============================================================ qud */
+
+/*
+ * Caves of Qud — the "Qud viridian" palette (https://wiki.cavesofqud.com,
+ * Lospec "qud-viridian"). The dark variant is the authentic look: the iconic
+ * viridian background (#0f3b3a, the game's "k") with pale green-gray text and
+ * the game's bright ANSI-ish accents (nudged where needed for AA on viridian).
+ * The light variant is a complementary pale-viridian parchment with dark
+ * viridian text. Uses IBM Plex Mono (no dedicated game font is shipped).
+ */
+[data-theme="qud"] {
+	/* dark variant palette (viridian bg #0f3b3a) */
+	--qud-d-bg: #0f3b3a;
+	--qud-d-text: #d7e4de;
+	--qud-d-border: #1f5b57;
+	--qud-d-muted: #8fb3aa;
+	--qud-d-running: #00c420;
+	--qud-d-attention: #e99f10;
+	--qud-d-idle: #8fb3aa;
+	--qud-d-error: #ff8a70;
+	--qud-d-comment: #8ab0a1;
+	--qud-d-keyword: #3aa6ff;
+	--qud-d-string: #cfc041;
+	--qud-d-number: #e894e2;
+	--qud-d-function: #3fd45f;
+	--qud-d-type: #77bfcf;
+	--qud-d-variable: #8fd0dd;
+	--qud-d-operator: #b1c9c3;
+	--qud-d-punctuation: #b1c9c3;
+
+	/* light variant palette (pale viridian parchment) */
+	--qud-l-bg: #e8efe9;
+	--qud-l-text: #123b38;
+	--qud-l-border: #cdddd6;
+	--qud-l-muted: #3c655d;
+	--qud-l-running: #0a6b1f;
+	--qud-l-attention: #8a5400;
+	--qud-l-idle: #3c655d;
+	--qud-l-error: #b3341a;
+	--qud-l-comment: #3f6a5e;
+	--qud-l-keyword: #12489c;
+	--qud-l-string: #7a6a00;
+	--qud-l-number: #8f3a86;
+	--qud-l-function: #0a6b1f;
+	--qud-l-type: #0f6070;
+	--qud-l-variable: #155352;
+	--qud-l-operator: #123b38;
+	--qud-l-punctuation: #123b38;
+
+	/* default mapping: light */
+	color-scheme: light;
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+	--bg: var(--qud-l-bg);
+	--text: var(--qud-l-text);
+	--border: var(--qud-l-border);
+	--muted: var(--qud-l-muted);
+	--status-running: var(--qud-l-running);
+	--status-attention: var(--qud-l-attention);
+	--status-idle: var(--qud-l-idle);
+	--status-error: var(--qud-l-error);
+	--syntax-comment: var(--qud-l-comment);
+	--syntax-keyword: var(--qud-l-keyword);
+	--syntax-string: var(--qud-l-string);
+	--syntax-number: var(--qud-l-number);
+	--syntax-function: var(--qud-l-function);
+	--syntax-type: var(--qud-l-type);
+	--syntax-variable: var(--qud-l-variable);
+	--syntax-operator: var(--qud-l-operator);
+	--syntax-punctuation: var(--qud-l-punctuation);
+}
+
+[data-theme="qud"][data-color-mode="dark"] {
+	color-scheme: dark;
+	--bg: var(--qud-d-bg);
+	--text: var(--qud-d-text);
+	--border: var(--qud-d-border);
+	--muted: var(--qud-d-muted);
+	--status-running: var(--qud-d-running);
+	--status-attention: var(--qud-d-attention);
+	--status-idle: var(--qud-d-idle);
+	--status-error: var(--qud-d-error);
+	--syntax-comment: var(--qud-d-comment);
+	--syntax-keyword: var(--qud-d-keyword);
+	--syntax-string: var(--qud-d-string);
+	--syntax-number: var(--qud-d-number);
+	--syntax-function: var(--qud-d-function);
+	--syntax-type: var(--qud-d-type);
+	--syntax-variable: var(--qud-d-variable);
+	--syntax-operator: var(--qud-d-operator);
+	--syntax-punctuation: var(--qud-d-punctuation);
+}
+
+@media (prefers-color-scheme: dark) {
+	[data-theme="qud"]:not([data-color-mode="light"]) {
+		color-scheme: dark;
+		--bg: var(--qud-d-bg);
+		--text: var(--qud-d-text);
+		--border: var(--qud-d-border);
+		--muted: var(--qud-d-muted);
+		--status-running: var(--qud-d-running);
+		--status-attention: var(--qud-d-attention);
+		--status-idle: var(--qud-d-idle);
+		--status-error: var(--qud-d-error);
+		--syntax-comment: var(--qud-d-comment);
+		--syntax-keyword: var(--qud-d-keyword);
+		--syntax-string: var(--qud-d-string);
+		--syntax-number: var(--qud-d-number);
+		--syntax-function: var(--qud-d-function);
+		--syntax-type: var(--qud-d-type);
+		--syntax-variable: var(--qud-d-variable);
+		--syntax-operator: var(--qud-d-operator);
+		--syntax-punctuation: var(--qud-d-punctuation);
+	}
+}
+
+/* ============================================================ vangogh */
+
+/*
+ * Van Gogh — "The Starry Night". The dark variant is the night sky: a deep
+ * midnight blue ground (#0d1b3d) with warm cream text and the painting's
+ * signature golden-yellow star/moon accent plus swirling blues. The light
+ * variant is a sunlit wheat-field parchment (#f4ecd2) with deep-blue ink text.
+ * Uses IBM Plex Mono.
+ */
+[data-theme="vangogh"] {
+	/* dark variant palette (midnight-blue night sky) */
+	--vg-d-bg: #0d1b3d;
+	--vg-d-text: #f0e6c8;
+	--vg-d-border: #2a3e6a;
+	--vg-d-muted: #aab4d2;
+	--vg-d-running: #8fbf6a;
+	--vg-d-attention: #f5db37;
+	--vg-d-idle: #aab4d2;
+	--vg-d-error: #f07a52;
+	--vg-d-comment: #8c96b8;
+	--vg-d-keyword: #f5db37;
+	--vg-d-string: #7fc5dc;
+	--vg-d-number: #e0a95a;
+	--vg-d-function: #5fb0e0;
+	--vg-d-type: #c9b26a;
+	--vg-d-variable: #a9c7ea;
+	--vg-d-operator: #dad69f;
+	--vg-d-punctuation: #dad69f;
+
+	/* light variant palette (sunlit wheat parchment) */
+	--vg-l-bg: #f4ecd2;
+	--vg-l-text: #1a2a52;
+	--vg-l-border: #e0d4ad;
+	--vg-l-muted: #4a557d;
+	--vg-l-running: #4a6b1f;
+	--vg-l-attention: #855000;
+	--vg-l-idle: #4a557d;
+	--vg-l-error: #b03a1a;
+	--vg-l-comment: #5a6488;
+	--vg-l-keyword: #1a3a8c;
+	--vg-l-string: #1f6f8c;
+	--vg-l-number: #8a5a12;
+	--vg-l-function: #2a4e93;
+	--vg-l-type: #6a5a12;
+	--vg-l-variable: #2a3e83;
+	--vg-l-operator: #1a2a52;
+	--vg-l-punctuation: #1a2a52;
+
+	/* default mapping: light */
+	color-scheme: light;
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+	--bg: var(--vg-l-bg);
+	--text: var(--vg-l-text);
+	--border: var(--vg-l-border);
+	--muted: var(--vg-l-muted);
+	--status-running: var(--vg-l-running);
+	--status-attention: var(--vg-l-attention);
+	--status-idle: var(--vg-l-idle);
+	--status-error: var(--vg-l-error);
+	--syntax-comment: var(--vg-l-comment);
+	--syntax-keyword: var(--vg-l-keyword);
+	--syntax-string: var(--vg-l-string);
+	--syntax-number: var(--vg-l-number);
+	--syntax-function: var(--vg-l-function);
+	--syntax-type: var(--vg-l-type);
+	--syntax-variable: var(--vg-l-variable);
+	--syntax-operator: var(--vg-l-operator);
+	--syntax-punctuation: var(--vg-l-punctuation);
+}
+
+[data-theme="vangogh"][data-color-mode="dark"] {
+	color-scheme: dark;
+	--bg: var(--vg-d-bg);
+	--text: var(--vg-d-text);
+	--border: var(--vg-d-border);
+	--muted: var(--vg-d-muted);
+	--status-running: var(--vg-d-running);
+	--status-attention: var(--vg-d-attention);
+	--status-idle: var(--vg-d-idle);
+	--status-error: var(--vg-d-error);
+	--syntax-comment: var(--vg-d-comment);
+	--syntax-keyword: var(--vg-d-keyword);
+	--syntax-string: var(--vg-d-string);
+	--syntax-number: var(--vg-d-number);
+	--syntax-function: var(--vg-d-function);
+	--syntax-type: var(--vg-d-type);
+	--syntax-variable: var(--vg-d-variable);
+	--syntax-operator: var(--vg-d-operator);
+	--syntax-punctuation: var(--vg-d-punctuation);
+}
+
+@media (prefers-color-scheme: dark) {
+	[data-theme="vangogh"]:not([data-color-mode="light"]) {
+		color-scheme: dark;
+		--bg: var(--vg-d-bg);
+		--text: var(--vg-d-text);
+		--border: var(--vg-d-border);
+		--muted: var(--vg-d-muted);
+		--status-running: var(--vg-d-running);
+		--status-attention: var(--vg-d-attention);
+		--status-idle: var(--vg-d-idle);
+		--status-error: var(--vg-d-error);
+		--syntax-comment: var(--vg-d-comment);
+		--syntax-keyword: var(--vg-d-keyword);
+		--syntax-string: var(--vg-d-string);
+		--syntax-number: var(--vg-d-number);
+		--syntax-function: var(--vg-d-function);
+		--syntax-type: var(--vg-d-type);
+		--syntax-variable: var(--vg-d-variable);
+		--syntax-operator: var(--vg-d-operator);
+		--syntax-punctuation: var(--vg-d-punctuation);
+	}
+}
