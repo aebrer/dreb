@@ -135,7 +135,7 @@ The dashboard is the visual face of dreb: every agent session on the host, live 
 
 **Host files, explicitly.** Browse the host filesystem, upload/download, create folders, and start a new session in any directory — every file operation logged server-side.
 
-**Curated appearance themes.** A theme gallery in settings offers six dashboard-native themes (Default, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh), each with its own light and dark palette, plus a system/light/dark mode toggle. Choices are saved per browser and are independent of your TUI theme.
+**Curated appearance themes.** A theme gallery in settings offers eight dashboard-native themes (Default, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, plus the colorblind-safe Okabe-Ito and Paul Tol palettes), each with its own light and dark palette, plus a system/light/dark mode toggle. Choices are saved per browser and are independent of your TUI theme.
 
 Launch locally:
 

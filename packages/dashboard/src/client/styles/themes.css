@@ -767,3 +767,232 @@
 		--syntax-punctuation: var(--vg-d-punctuation);
 	}
 }
+
+/* ============================================================ okabe */
+
+/*
+ * Okabe-Ito — the canonical colorblind-safe qualitative palette (Masataka
+ * Okabe & Kei Ito, 2008), designed to stay distinguishable under deuteranopia,
+ * protanopia and tritanopia. Neutral charcoal/off-white backgrounds let the
+ * accents do the work. Crucially, running is sky-blue/blue and error is
+ * vermillion (NOT green-vs-red), so success/failure never collide for CVD
+ * viewers. Every foreground still clears WCAG AA on --bg. Uses IBM Plex Mono.
+ */
+[data-theme="okabe"] {
+	/* dark variant palette (neutral charcoal) */
+	--okabe-d-bg: #16181d;
+	--okabe-d-text: #eceef2;
+	--okabe-d-border: #363a42;
+	--okabe-d-muted: #9ba1ab;
+	--okabe-d-running: #56b4e9;
+	--okabe-d-attention: #f0e442;
+	--okabe-d-idle: #9ba1ab;
+	--okabe-d-error: #f57a48;
+	--okabe-d-comment: #8b95a3;
+	--okabe-d-keyword: #56b4e9;
+	--okabe-d-string: #4fc6a0;
+	--okabe-d-number: #e08cc6;
+	--okabe-d-function: #f0c04a;
+	--okabe-d-type: #8fd4f0;
+	--okabe-d-variable: #d7dbe1;
+	--okabe-d-operator: #cdd2d9;
+	--okabe-d-punctuation: #cdd2d9;
+
+	/* light variant palette (neutral off-white) */
+	--okabe-l-bg: #f6f6f3;
+	--okabe-l-text: #1a1a1a;
+	--okabe-l-border: #dcdcd6;
+	--okabe-l-muted: #565b62;
+	--okabe-l-running: #0067a3;
+	--okabe-l-attention: #8a5a00;
+	--okabe-l-idle: #565b62;
+	--okabe-l-error: #b8430a;
+	--okabe-l-comment: #4a5560;
+	--okabe-l-keyword: #0067a3;
+	--okabe-l-string: #077a5a;
+	--okabe-l-number: #9a4a86;
+	--okabe-l-function: #7a5500;
+	--okabe-l-type: #0f6a86;
+	--okabe-l-variable: #333333;
+	--okabe-l-operator: #1a1a1a;
+	--okabe-l-punctuation: #1a1a1a;
+
+	/* default mapping: light */
+	color-scheme: light;
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+	--bg: var(--okabe-l-bg);
+	--text: var(--okabe-l-text);
+	--border: var(--okabe-l-border);
+	--muted: var(--okabe-l-muted);
+	--status-running: var(--okabe-l-running);
+	--status-attention: var(--okabe-l-attention);
+	--status-idle: var(--okabe-l-idle);
+	--status-error: var(--okabe-l-error);
+	--syntax-comment: var(--okabe-l-comment);
+	--syntax-keyword: var(--okabe-l-keyword);
+	--syntax-string: var(--okabe-l-string);
+	--syntax-number: var(--okabe-l-number);
+	--syntax-function: var(--okabe-l-function);
+	--syntax-type: var(--okabe-l-type);
+	--syntax-variable: var(--okabe-l-variable);
+	--syntax-operator: var(--okabe-l-operator);
+	--syntax-punctuation: var(--okabe-l-punctuation);
+}
+
+[data-theme="okabe"][data-color-mode="dark"] {
+	color-scheme: dark;
+	--bg: var(--okabe-d-bg);
+	--text: var(--okabe-d-text);
+	--border: var(--okabe-d-border);
+	--muted: var(--okabe-d-muted);
+	--status-running: var(--okabe-d-running);
+	--status-attention: var(--okabe-d-attention);
+	--status-idle: var(--okabe-d-idle);
+	--status-error: var(--okabe-d-error);
+	--syntax-comment: var(--okabe-d-comment);
+	--syntax-keyword: var(--okabe-d-keyword);
+	--syntax-string: var(--okabe-d-string);
+	--syntax-number: var(--okabe-d-number);
+	--syntax-function: var(--okabe-d-function);
+	--syntax-type: var(--okabe-d-type);
+	--syntax-variable: var(--okabe-d-variable);
+	--syntax-operator: var(--okabe-d-operator);
+	--syntax-punctuation: var(--okabe-d-punctuation);
+}
+
+@media (prefers-color-scheme: dark) {
+	[data-theme="okabe"]:not([data-color-mode="light"]) {
+		color-scheme: dark;
+		--bg: var(--okabe-d-bg);
+		--text: var(--okabe-d-text);
+		--border: var(--okabe-d-border);
+		--muted: var(--okabe-d-muted);
+		--status-running: var(--okabe-d-running);
+		--status-attention: var(--okabe-d-attention);
+		--status-idle: var(--okabe-d-idle);
+		--status-error: var(--okabe-d-error);
+		--syntax-comment: var(--okabe-d-comment);
+		--syntax-keyword: var(--okabe-d-keyword);
+		--syntax-string: var(--okabe-d-string);
+		--syntax-number: var(--okabe-d-number);
+		--syntax-function: var(--okabe-d-function);
+		--syntax-type: var(--okabe-d-type);
+		--syntax-variable: var(--okabe-d-variable);
+		--syntax-operator: var(--okabe-d-operator);
+		--syntax-punctuation: var(--okabe-d-punctuation);
+	}
+}
+
+/* ============================================================ tol */
+
+/*
+ * Paul Tol — the other widely-used colorblind-safe qualitative scheme
+ * (personal.sron.nl/~pault). Cool-neutral backgrounds distinguish it from the
+ * warmer-neutral Okabe-Ito theme. Running is teal and error is red (a CVD-safe
+ * pairing, never green-vs-red); every foreground clears WCAG AA on --bg.
+ * Uses IBM Plex Mono.
+ */
+[data-theme="tol"] {
+	/* dark variant palette (cool charcoal) */
+	--tol-d-bg: #1b1d21;
+	--tol-d-text: #e9eaec;
+	--tol-d-border: #363a43;
+	--tol-d-muted: #9a9ea6;
+	--tol-d-running: #3fc0a8;
+	--tol-d-attention: #d9c94a;
+	--tol-d-idle: #9a9ea6;
+	--tol-d-error: #f0687a;
+	--tol-d-comment: #8a929c;
+	--tol-d-keyword: #66ccee;
+	--tol-d-string: #4fc08a;
+	--tol-d-number: #cc99dd;
+	--tol-d-function: #eebb55;
+	--tol-d-type: #7fd0f0;
+	--tol-d-variable: #d6d9de;
+	--tol-d-operator: #cbcfd5;
+	--tol-d-punctuation: #cbcfd5;
+
+	/* light variant palette (cool off-white) */
+	--tol-l-bg: #f4f4f6;
+	--tol-l-text: #1a1c22;
+	--tol-l-border: #dadae0;
+	--tol-l-muted: #565a62;
+	--tol-l-running: #007a68;
+	--tol-l-attention: #8a6a00;
+	--tol-l-idle: #565a62;
+	--tol-l-error: #c23346;
+	--tol-l-comment: #565a62;
+	--tol-l-keyword: #1a5a8c;
+	--tol-l-string: #0a6a52;
+	--tol-l-number: #8a3a77;
+	--tol-l-function: #8a5a12;
+	--tol-l-type: #0f6a86;
+	--tol-l-variable: #2a2e83;
+	--tol-l-operator: #1a1c22;
+	--tol-l-punctuation: #1a1c22;
+
+	/* default mapping: light */
+	color-scheme: light;
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+	--bg: var(--tol-l-bg);
+	--text: var(--tol-l-text);
+	--border: var(--tol-l-border);
+	--muted: var(--tol-l-muted);
+	--status-running: var(--tol-l-running);
+	--status-attention: var(--tol-l-attention);
+	--status-idle: var(--tol-l-idle);
+	--status-error: var(--tol-l-error);
+	--syntax-comment: var(--tol-l-comment);
+	--syntax-keyword: var(--tol-l-keyword);
+	--syntax-string: var(--tol-l-string);
+	--syntax-number: var(--tol-l-number);
+	--syntax-function: var(--tol-l-function);
+	--syntax-type: var(--tol-l-type);
+	--syntax-variable: var(--tol-l-variable);
+	--syntax-operator: var(--tol-l-operator);
+	--syntax-punctuation: var(--tol-l-punctuation);
+}
+
+[data-theme="tol"][data-color-mode="dark"] {
+	color-scheme: dark;
+	--bg: var(--tol-d-bg);
+	--text: var(--tol-d-text);
+	--border: var(--tol-d-border);
+	--muted: var(--tol-d-muted);
+	--status-running: var(--tol-d-running);
+	--status-attention: var(--tol-d-attention);
+	--status-idle: var(--tol-d-idle);
+	--status-error: var(--tol-d-error);
+	--syntax-comment: var(--tol-d-comment);
+	--syntax-keyword: var(--tol-d-keyword);
+	--syntax-string: var(--tol-d-string);
+	--syntax-number: var(--tol-d-number);
+	--syntax-function: var(--tol-d-function);
+	--syntax-type: var(--tol-d-type);
+	--syntax-variable: var(--tol-d-variable);
+	--syntax-operator: var(--tol-d-operator);
+	--syntax-punctuation: var(--tol-d-punctuation);
+}
+
+@media (prefers-color-scheme: dark) {
+	[data-theme="tol"]:not([data-color-mode="light"]) {
+		color-scheme: dark;
+		--bg: var(--tol-d-bg);
+		--text: var(--tol-d-text);
+		--border: var(--tol-d-border);
+		--muted: var(--tol-d-muted);
+		--status-running: var(--tol-d-running);
+		--status-attention: var(--tol-d-attention);
+		--status-idle: var(--tol-d-idle);
+		--status-error: var(--tol-d-error);
+		--syntax-comment: var(--tol-d-comment);
+		--syntax-keyword: var(--tol-d-keyword);
+		--syntax-string: var(--tol-d-string);
+		--syntax-number: var(--tol-d-number);
+		--syntax-function: var(--tol-d-function);
+		--syntax-type: var(--tol-d-type);
+		--syntax-variable: var(--tol-d-variable);
+		--syntax-operator: var(--tol-d-operator);
+		--syntax-punctuation: var(--tol-d-punctuation);
+	}
+}

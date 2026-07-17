@@ -782,7 +782,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 								<span class="name">appearance</span>
 								<span class="hint">
 									this browser only — theme and light/dark mode are stored in localStorage and are independent
-									of the TUI theme
+									of the TUI theme. Okabe-Ito and Paul Tol are colorblind-safe palettes.
 								</span>
 							</span>
 						</div>

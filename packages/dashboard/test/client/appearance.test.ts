@@ -74,10 +74,19 @@ afterEach(() => {
 });
 
 describe("appearance — catalog", () => {
-	it("orders default first, then dim, solarized, gruvbox, qud, vangogh with sequential order fields", () => {
-		expect(THEMES.map((t) => t.id)).toEqual(["default", "dim", "solarized", "gruvbox", "qud", "vangogh"]);
+	it("orders default first, then dim, solarized, gruvbox, qud, vangogh, okabe, tol with sequential order fields", () => {
+		expect(THEMES.map((t) => t.id)).toEqual([
+			"default",
+			"dim",
+			"solarized",
+			"gruvbox",
+			"qud",
+			"vangogh",
+			"okabe",
+			"tol",
+		]);
 		expect(THEMES[0].id).toBe("default");
-		expect(THEMES.map((t) => t.order)).toEqual([0, 1, 2, 3, 4, 5]);
+		expect(THEMES.map((t) => t.order)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
 	});
 
 	it("has unique, valid ids and matching THEME_IDS", () => {
@@ -379,7 +388,7 @@ describe("appearance — index.html bootstrap contract", () => {
 	it("does not list the default theme or system mode in the bootstrap allowlists", () => {
 		// The bootstrap only sets attributes for non-default/non-system values.
 		// The literal arrays must NOT contain them (guards against drift).
-		expect(html).toContain('["dim", "solarized", "gruvbox", "qud", "vangogh"]');
+		expect(html).toContain('["dim", "solarized", "gruvbox", "qud", "vangogh", "okabe", "tol"]');
 		expect(html).toContain('["light", "dark"]');
 	});
 });

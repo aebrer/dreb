@@ -1933,11 +1933,13 @@ describe("dashboard client regressions", () => {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 
 			expect(el.querySelector("#pref-color-mode")).not.toBeNull();
-			expect(el.querySelectorAll("[data-theme-card]").length).toBe(6);
+			expect(el.querySelectorAll("[data-theme-card]").length).toBe(8);
 			expect(el.querySelector('[data-theme-card="default"]')).not.toBeNull();
 			expect(el.querySelector('[data-theme-card="gruvbox"]')).not.toBeNull();
 			expect(el.querySelector('[data-theme-card="qud"]')).not.toBeNull();
 			expect(el.querySelector('[data-theme-card="vangogh"]')).not.toBeNull();
+			expect(el.querySelector('[data-theme-card="okabe"]')).not.toBeNull();
+			expect(el.querySelector('[data-theme-card="tol"]')).not.toBeNull();
 		});
 
 		it("marks the restored theme card active and selects the restored color mode", async () => {
@@ -2010,7 +2012,7 @@ describe("dashboard client regressions", () => {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 
 			const cards = Array.from(el.querySelectorAll("[data-theme-card]"));
-			expect(cards.length).toBe(6);
+			expect(cards.length).toBe(8);
 			for (const card of cards) {
 				expect(card.getAttribute("data-color-mode")).toBe("dark");
 			}
@@ -2024,7 +2026,7 @@ describe("dashboard client regressions", () => {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 
 			const cards = Array.from(el.querySelectorAll("[data-theme-card]"));
-			expect(cards.length).toBe(6);
+			expect(cards.length).toBe(8);
 			for (const card of cards) {
 				expect(card.hasAttribute("data-color-mode")).toBe(false);
 			}

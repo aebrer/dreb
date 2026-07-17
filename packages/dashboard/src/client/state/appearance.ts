@@ -28,10 +28,15 @@ export interface ThemeEntry {
 	order: number;
 }
 
-export type ThemeId = "default" | "dim" | "solarized" | "gruvbox" | "qud" | "vangogh";
+export type ThemeId = "default" | "dim" | "solarized" | "gruvbox" | "qud" | "vangogh" | "okabe" | "tol";
 export type ColorMode = "system" | "light" | "dark";
 
-/** FIXED catalog — default first, then dim, solarized, gruvbox, qud, vangogh. */
+/**
+ * FIXED catalog — default first, then dim, solarized, gruvbox, qud, vangogh,
+ * then the two colorblind-safe palettes (okabe, tol). The two CVD-safe themes
+ * keep running/error on a blue/teal-vs-vermillion/red axis (never green-vs-red),
+ * so status stays distinguishable under deutan/protan/tritan color vision.
+ */
 export const THEMES: readonly ThemeEntry[] = [
 	{ id: "default", label: "Default", order: 0 },
 	{ id: "dim", label: "Dim", order: 1 },
@@ -39,6 +44,8 @@ export const THEMES: readonly ThemeEntry[] = [
 	{ id: "gruvbox", label: "Gruvbox", order: 3 },
 	{ id: "qud", label: "Caves of Qud", order: 4 },
 	{ id: "vangogh", label: "Van Gogh", order: 5 },
+	{ id: "okabe", label: "Colorblind-safe (Okabe-Ito)", order: 6 },
+	{ id: "tol", label: "Colorblind-safe (Paul Tol)", order: 7 },
 ] as const;
 
 /** All theme ids in catalog order. */

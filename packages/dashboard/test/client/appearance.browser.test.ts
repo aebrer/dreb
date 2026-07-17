@@ -38,7 +38,7 @@ const indexHtml = readFileSync(indexHtmlPath, "utf8");
 
 // ---------------------------------------------------------------- catalog
 
-const THEME_IDS = ["default", "dim", "solarized", "gruvbox", "qud", "vangogh"] as const;
+const THEME_IDS = ["default", "dim", "solarized", "gruvbox", "qud", "vangogh", "okabe", "tol"] as const;
 const MODES = ["system", "light", "dark"] as const;
 type ThemeId = (typeof THEME_IDS)[number];
 type Mode = (typeof MODES)[number];
@@ -407,6 +407,8 @@ describe("appearance — JetBrains Mono is fetched only when gruvbox is active",
 		["gruvbox", true],
 		["qud", false],
 		["vangogh", false],
+		["okabe", false],
+		["tol", false],
 	] as Array<[ThemeId, boolean]>)("theme=%s requests the webfont: %s", async (theme, expectFont) => {
 		// A fresh context per case gives a clean HTTP cache so a genuine (not
 		// cache-suppressed) request is observed for gruvbox and none for the rest.
