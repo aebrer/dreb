@@ -47,9 +47,105 @@ const KIMI_MODEL: Model<"openai-completions"> = {
 	compat: { thinkingFormat: "kimi" },
 };
 
+const KIMI_OAUTH_MODEL: Model<"openai-completions"> = {
+	...KIMI_MODEL,
+	provider: "kimi-coding-oauth",
+	id: "kimi-for-coding",
+	name: "Kimi For Coding",
+	baseUrl: "https://api.kimi.com/coding/v1",
+};
+
 describe("openai-completions kimi thinkingFormat", () => {
 	beforeEach(() => {
 		mockState.lastParams = undefined;
+	});
+
+	it("re-encodes readable cross-provider summaries as reasoning_content", async () => {
+		let payload: unknown;
+		const sourceSignature = JSON.stringify({ type: "reasoning", encrypted_content: "opaque" });
+
+		await streamSimple(
+			KIMI_OAUTH_MODEL,
+			{
+				messages: [
+					{
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "Readable GPT summary", thinkingSignature: sourceSignature },
+							{ type: "text", text: "Visible answer" },
+						],
+						api: "openai-codex-responses",
+						provider: "openai-codex",
+						model: "gpt-5.6-sol",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{
+				apiKey: "test",
+				reasoning: "medium",
+				onPayload: (params: unknown) => {
+					payload = params;
+				},
+			},
+		).result();
+
+		const params = (payload ?? mockState.lastParams) as {
+			messages: Array<Record<string, unknown>>;
+		};
+		const assistant = params.messages.find((message) => message.role === "assistant");
+		expect(assistant).toEqual({
+			role: "assistant",
+			content: "Visible answer",
+			reasoning_content: "Readable GPT summary",
+		});
+	});
+
+	it("preserves recognized reasoning fields across same-provider completions models", async () => {
+		await streamSimple(
+			KIMI_MODEL,
+			{
+				messages: [
+					{
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "Portable reasoning", thinkingSignature: "reasoning" },
+							{ type: "text", text: "Visible answer" },
+						],
+						api: "openai-completions",
+						provider: "kimi-coding",
+						model: "another-kimi-model",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "stop",
+						timestamp: Date.now(),
+					},
+				],
+			},
+			{ apiKey: "test", reasoning: "medium" },
+		).result();
+
+		const params = mockState.lastParams as { messages: Array<Record<string, unknown>> };
+		expect(params.messages[0]).toEqual({
+			role: "assistant",
+			content: "Visible answer",
+			reasoning: "Portable reasoning",
+		});
 	});
 
 	it("sets thinking enabled + reasoning_effort when reasoning is specified", async () => {

@@ -533,7 +533,21 @@ export function convertMessages(
 		return id;
 	};
 
-	const transformedMessages = transformMessages(context.messages, model, (id) => normalizeToolCallId(id));
+	const portableReasoningFields = new Set(["reasoning_content", "reasoning", "reasoning_text"]);
+	const transformedMessages = transformMessages(
+		context.messages,
+		model,
+		(id) => normalizeToolCallId(id),
+		(block, target, source) => {
+			if (compat.requiresThinkingAsText) return false;
+			if (compat.requiresReasoningContentOnAssistantMessages) return true;
+			return (
+				source.provider === target.provider &&
+				source.api === "openai-completions" &&
+				portableReasoningFields.has(block.thinkingSignature ?? "")
+			);
+		},
+	);
 
 	if (context.systemPrompt) {
 		const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
@@ -628,8 +642,11 @@ export function convertMessages(
 						assistantMsg.content = [{ type: "text", text: thinkingText }];
 					}
 				} else {
-					// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
-					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
+					// Destinations that require reasoning_content normalize foreign provider
+					// signatures to their own protocol field instead of replaying opaque metadata.
+					const signature = compat.requiresReasoningContentOnAssistantMessages
+						? "reasoning_content"
+						: nonEmptyThinkingBlocks[0].thinkingSignature;
 					if (signature && signature.length > 0) {
 						(assistantMsg as any)[signature] = sanitizeSurrogates(
 							nonEmptyThinkingBlocks.map((b) => b.thinking).join("\n"),
@@ -873,6 +890,7 @@ function detectCompat(model: Model<"openai-completions">): Required<OpenAIComple
 		requiresToolResultName: false,
 		requiresAssistantAfterToolResult: false,
 		requiresThinkingAsText: false,
+		requiresReasoningContentOnAssistantMessages: provider === "kimi-coding-oauth",
 		thinkingFormat: isZai
 			? "zai"
 			: provider === "openrouter" || baseUrl.includes("openrouter.ai")
@@ -903,6 +921,9 @@ function getCompat(model: Model<"openai-completions">): Required<OpenAICompletio
 		requiresAssistantAfterToolResult:
 			model.compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
 		requiresThinkingAsText: model.compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
+		requiresReasoningContentOnAssistantMessages:
+			model.compat.requiresReasoningContentOnAssistantMessages ??
+			detected.requiresReasoningContentOnAssistantMessages,
 		thinkingFormat: model.compat.thinkingFormat ?? detected.thinkingFormat,
 		openRouterRouting: model.compat.openRouterRouting ?? {},
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,

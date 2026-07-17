@@ -1,4 +1,4 @@
-import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage } from "../types.js";
+import type { Api, AssistantMessage, Message, Model, ThinkingContent, ToolCall, ToolResultMessage } from "../types.js";
 
 /**
  * Normalize tool call ID for cross-provider compatibility.
@@ -9,6 +9,7 @@ export function transformMessages<TApi extends Api>(
 	messages: Message[],
 	model: Model<TApi>,
 	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+	preserveCrossModelThinking?: (block: ThinkingContent, model: Model<TApi>, source: AssistantMessage) => boolean,
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
@@ -45,15 +46,13 @@ export function transformMessages<TApi extends Api>(
 						return isSameModel ? block : [];
 					}
 					// For same model: keep thinking blocks with signatures (needed for replay)
-					// even if the thinking text is empty (OpenAI encrypted reasoning)
+					// even if the thinking text is empty (OpenAI encrypted reasoning).
 					if (isSameModel && block.thinkingSignature) return block;
-					// Skip empty thinking blocks, convert others to plain text
+					// Readable foreign thinking is preserved only when the destination
+					// serializer explicitly opts in. Never flatten it into visible text.
 					if (!block.thinking || block.thinking.trim() === "") return [];
 					if (isSameModel) return block;
-					return {
-						type: "text" as const,
-						text: block.thinking,
-					};
+					return preserveCrossModelThinking?.(block, model, assistantMsg) ? block : [];
 				}
 
 				if (block.type === "text") {

@@ -794,7 +794,8 @@ interface OpenAICompletionsCompat {
   requiresToolResultName?: boolean;  // Whether tool results require the `name` field (default: false)
   requiresAssistantAfterToolResult?: boolean; // Whether tool results must be followed by an assistant message (default: false)
   requiresThinkingAsText?: boolean;  // Whether thinking blocks must be converted to text (default: false)
-  thinkingFormat?: 'openai' | 'zai' | 'qwen'; // Format for reasoning param: 'openai' uses reasoning_effort, 'zai' uses thinking: { type: "enabled" }, 'qwen' uses enable_thinking: boolean (default: openai)
+  requiresReasoningContentOnAssistantMessages?: boolean; // Preserve readable foreign thinking as reasoning_content (default: false)
+  thinkingFormat?: 'openai' | 'openrouter' | 'zai' | 'qwen' | 'qwen-chat-template' | 'kimi';
   openRouterRouting?: OpenRouterRouting; // OpenRouter routing preferences (default: {})
   vercelGatewayRouting?: VercelGatewayRouting; // Vercel AI Gateway routing preferences (default: {})
 }
@@ -830,16 +831,19 @@ await streamAnthropic(claude, context, options);
 
 ## Cross-Provider Handoffs
 
-The library supports seamless handoffs between different LLM providers within the same conversation. This allows you to switch models mid-conversation while preserving context, including thinking blocks, tool calls, and tool results.
+The library supports handoffs between LLM providers within the same conversation. You can switch models while retaining user-visible context, tool calls, and tool results. Reasoning state is retained only when it can be represented safely by the destination.
 
 ### How It Works
 
-When messages from one provider are sent to a different provider, the library automatically transforms them for compatibility:
+When historical messages are sent to another model, the library transforms them for compatibility:
 
 - **User and tool result messages** are passed through unchanged
-- **Assistant messages from the same provider/API** are preserved as-is
-- **Assistant messages from different providers** have their thinking blocks converted to text with `<thinking>` tags
-- **Tool calls and regular text** are preserved unchanged
+- **Exact-model assistant messages** retain their original signed, encrypted, or redacted reasoning state
+- **Readable reasoning** remains structured only when the destination explicitly accepts it; compatible OpenAI-completions fields and Kimi `reasoning_content` are supported
+- **Opaque or incompatible reasoning** is omitted from the outbound request instead of being converted to visible assistant text
+- **Tool calls and regular text** are preserved, while model-bound tool-call signatures are removed
+
+The stored conversation is not mutated. Switching back to the originating model can therefore restore its original reasoning state unless history was compacted or pruned.
 
 ### Example: Multi-Provider Conversation
 
@@ -858,7 +862,7 @@ const claudeResponse = await complete(claude, context, {
 });
 context.messages.push(claudeResponse);
 
-// Switch to GPT-5 - it will see Claude's thinking as <thinking> tagged text
+// Switch to GPT-5 - Claude's signed thinking is omitted, while visible context remains
 const gpt5 = getModel('openai', 'gpt-5-mini');
 context.messages.push({ role: 'user', content: 'Is that calculation correct?' });
 const gptResponse = await complete(gpt5, context);
@@ -875,7 +879,7 @@ const geminiResponse = await complete(gemini, context);
 All providers can handle messages from other providers, including:
 - Text content
 - Tool calls and tool results (including images in tool results)
-- Thinking/reasoning blocks (transformed to tagged text for cross-provider compatibility)
+- Compatible readable reasoning when the destination opts in; opaque or incompatible reasoning is omitted
 - Aborted messages with partial content
 
 This enables flexible workflows where you can:
