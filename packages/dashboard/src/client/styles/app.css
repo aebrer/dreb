@@ -336,6 +336,18 @@ body,
 	flex-wrap: wrap;
 }
 
+.session-connection-indicator {
+	flex: 0 1 auto;
+	min-width: 0;
+	flex-wrap: wrap;
+}
+
+.session-connection-indicator .chip,
+.session-connection-indicator .btn {
+	font-size: var(--fs-small);
+	padding: 1px var(--space-2);
+}
+
 .session-info-bar {
 	padding-top: 0;
 	font-size: var(--fs-small);
@@ -952,11 +964,13 @@ details.thinking .thinking-body {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
+	flex-wrap: wrap;
 	font-size: var(--fs-small);
 	color: var(--muted);
 }
 
 .dock-collapsed-hint {
+	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;

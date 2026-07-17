@@ -41,7 +41,7 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 	const session = () => props.store.sessions[props.runtime.key];
 	const liveAgents = () => props.runtime.backgroundAgents.filter((a) => a.status === "running");
 	const doneAgents = () => props.runtime.backgroundAgents.filter((a) => a.status !== "running");
-	const tasks = () => session()?.tasks ?? [];
+	const tasks = () => session()?.tasks ?? props.runtime.state.tasks ?? [];
 	const tasksDone = () => tasks().filter((t) => t.status === "completed").length;
 	const ctx = () => props.runtime.state.contextUsage;
 	const activity = () => {
