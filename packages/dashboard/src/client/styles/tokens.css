@@ -3,7 +3,9 @@
  *
  * Forked from the pico8_carts/docs gallery CSS (approved starting template).
  * Design language:
- *   - IBM Plex Mono everywhere. No second typeface.
+ *   - IBM Plex Mono is the baseline typeface. The optional gruvbox appearance
+ *     theme swaps in a self-hosted JetBrains Mono (see styles/themes.css); the
+ *     default, dim, and solarized themes keep IBM Plex Mono.
  *   - Pure #000 / #fff, automatic dark mode via prefers-color-scheme.
  *   - ONE neutral gray for secondary text (--muted). No gray ramps.
  *   - 1px hairline borders are the only separator device. No shadows,
@@ -16,7 +18,10 @@
  *   - Status is never communicated by color alone: every status pairs a
  *     glyph (see .chip variants) with its color.
  *
- * Dark-mode note: the dashboard MVP is fixed light/dark (this file).
+ * Dark-mode note: this file is the baseline light/dark palette (default theme,
+ * following the OS via prefers-color-scheme). The additive styles/themes.css
+ * layer builds on it with curated dashboard themes (dim, solarized, gruvbox)
+ * and light/dark/system mode overrides, without changing any token VALUES here.
  * TUI-theme-following CSS variables (getResolvedThemeColors bridge in
  * core/export-html) are deliberately later work.
  */

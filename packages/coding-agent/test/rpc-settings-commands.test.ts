@@ -25,7 +25,9 @@ import type { RpcSettingsSnapshot } from "../src/modes/rpc/rpc-types.js";
 const tempDirs: string[] = [];
 
 async function createTempDir(): Promise<string> {
-	const dir = await mkdtemp(join(tmpdir(), "dreb-rpc-settings-"));
+	// Canonicalize with realpath so expected paths match the implementation's
+	// native-realpath output; on macOS os.tmpdir() lives under /var → /private/var.
+	const dir = realpathSync.native(await mkdtemp(join(tmpdir(), "dreb-rpc-settings-")));
 	tempDirs.push(dir);
 	return dir;
 }

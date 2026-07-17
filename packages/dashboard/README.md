@@ -65,7 +65,11 @@ Open `http://127.0.0.1:5343`.
   failures are shown instead of stale values. Trust changes are observed by
   active processes for future lazy loads and cannot retract already injected
   context. Also includes dashboard-local preferences (thinking expansion and
-  notification permission), current pairing code, and paired-devices management.
+  notification permission), an appearance section with a curated-theme gallery
+  (entropist.ca / Dim / Solarized / Gruvbox / Caves of Qud / Van Gogh /
+  Okabe-Ito / Paul Tol — the last two colorblind-safe — live preview cards,
+  system/light/dark mode selector, saved per browser), current pairing code,
+  and paired-devices management.
 - **Pairing** — remote first-login rotating-code flow.
 
 ## Live connection and recovery
@@ -217,8 +221,23 @@ Browser (SolidJS, hash-routed SPA)
   `background_agent_event` relay (see `docs/rpc.md` in
   `@dreb/coding-agent`) — no session-file tailing.
 - The visual language is `tokens.css` (`src/client/styles/tokens.css`),
-  the dashboard's design system, adopted unmodified from the accepted
-  design phase.
+  the dashboard's design system. Its defaults are unchanged; `themes.css` is
+  an **additive layer** on top that overrides the design tokens only when a
+  curated theme or a forced color mode is active.
+- **Appearance system** (`src/client/state/appearance.ts` + `styles/themes.css`
+  + `components/theme-gallery.tsx`) — a dashboard-native theming surface,
+  independent of the TUI themes. Eight curated themes (entropist.ca, Dim,
+  Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito
+  and Paul Tol palettes), each with light and dark palettes, plus a
+  system/light/dark mode.
+  A settings theme gallery renders live preview cards; selections persist per
+  browser in `localStorage` (a pristine entropist.ca + system install leaves no
+  keys and matches the `tokens.css` baseline exactly). Most themes use IBM Plex Mono;
+  Gruvbox uses self-hosted JetBrains Mono (OFL, in `src/client/assets/fonts/`),
+  lazy-loaded only when active. No `light-dark()` (iOS Safari 16.4 floor); a
+  synchronous `index.html` bootstrap prevents a wrong-theme flash. The static
+  `manifest.webmanifest` keeps white (default-light) launch colors as the
+  fallback, while the live `theme-color` meta follows the active appearance.
 
 ## Development
 
