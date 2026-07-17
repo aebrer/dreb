@@ -7,7 +7,7 @@
  * Protocol:
  * - Commands: JSON objects with `type` field, optional `id` for correlation
  * - Responses: JSON objects with `type: "response"`, `command`, `success`, and optional `data`/`error`
- * - Events: AgentSessionEvent objects streamed as they occur
+ * - Events: RpcEvent objects streamed as they occur
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 
@@ -69,6 +69,9 @@ import type {
 // Re-export types for consumers
 export type {
 	RpcCommand,
+	RpcDashboardSnapshot,
+	RpcDashboardSnapshotBarrierEvent,
+	RpcEvent,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,

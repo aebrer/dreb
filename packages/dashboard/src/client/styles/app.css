@@ -333,6 +333,18 @@ body,
 	flex-wrap: wrap;
 }
 
+.session-connection-indicator {
+	flex: 0 1 auto;
+	min-width: 0;
+	flex-wrap: wrap;
+}
+
+.session-connection-indicator .chip,
+.session-connection-indicator .btn {
+	font-size: var(--fs-small);
+	padding: 1px var(--space-2);
+}
+
 .session-info-bar {
 	padding-top: 0;
 	font-size: var(--fs-small);
@@ -960,19 +972,6 @@ details.thinking .thinking-body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-
-.dock-connection-indicator {
-	margin-left: auto;
-	flex: 0 1 auto;
-	min-width: 0;
-	justify-content: flex-end;
-}
-
-.dock-connection-indicator .chip,
-.dock-connection-indicator .btn {
-	font-size: var(--fs-small);
-	padding: 1px var(--space-2);
 }
 
 .dock-inner {

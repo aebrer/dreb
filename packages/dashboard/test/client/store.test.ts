@@ -96,6 +96,11 @@ function emit(key: string, event: Record<string, unknown>): void {
 	eventHandlers.onEnvelope({ seq: ++seq, key, event });
 }
 
+async function flushAsyncWork(): Promise<void> {
+	await Promise.resolve();
+	await Promise.resolve();
+}
+
 beforeEach(() => {
 	eventHandlers = undefined;
 	seq = 0;
@@ -428,27 +433,114 @@ describe("app store SSE sync", () => {
 		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
 	});
 
-	it("keeps a failed resync visible and starts a fresh transaction on retry or a later barrier", async () => {
-		vi.mocked(api.resync).mockRejectedValueOnce(new Error("snapshot failed"));
-		const store = await makeStartedStore();
-		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
-		await Promise.resolve();
-		await Promise.resolve();
-		expect(store.resyncError()).toBe("snapshot failed");
+	it("keeps a failed resync visibly degraded and automatically retries with bounded cleanup", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.mocked(api.resync)
+				.mockRejectedValueOnce(new Error("snapshot failed"))
+				.mockResolvedValueOnce({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 2 });
+			const store = await makeStartedStore();
+			eventHandlers?.onStatusChange?.({ state: "connected", attempt: 0, lastAppliedSeq: 41 });
 
-		vi.mocked(api.resync).mockResolvedValueOnce({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 2 });
-		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
-		await vi.waitFor(() => expect(api.resync).toHaveBeenCalledTimes(2));
-		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
-		expect(store.resyncError()).toBeUndefined();
+			emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+			await flushAsyncWork();
+			expect(store.resyncError()).toBe("snapshot failed");
+			expect(store.resyncing()).toBe(false);
+			expect(store.connection()).toMatchObject({ state: "retrying", retryDelayMs: 1000 });
+			expect(() => emit("a", { type: "agent_start" })).toThrow(/refusing to acknowledge/);
+			expect(store.sessions.a).toBeUndefined();
 
-		vi.mocked(api.resync).mockRejectedValueOnce(new Error("retry failed"));
-		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
-		await Promise.resolve();
-		await Promise.resolve();
-		const retry = store.retryResync();
-		await retry;
-		expect(api.resync).toHaveBeenCalledTimes(4);
+			await vi.advanceTimersByTimeAsync(999);
+			expect(api.resync).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1);
+			await flushAsyncWork();
+			expect(api.resync).toHaveBeenCalledTimes(2);
+			expect(store.resyncing()).toBe(false);
+			expect(store.resyncError()).toBeUndefined();
+			expect(store.connection()).toMatchObject({ state: "connected", lastAppliedSeq: 41 });
+
+			vi.mocked(api.resync).mockRejectedValueOnce(new Error("stays down"));
+			emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+			await flushAsyncWork();
+			store.stop();
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(api.resync).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not restore a stale connected status when SSE retry status hands off during REST recovery", async () => {
+		vi.useFakeTimers();
+		try {
+			const retrySnapshot = deferred<{ fleet: { runtimes: []; diskSessions: [] }; barrierSeq: number }>();
+			vi.mocked(api.resync)
+				.mockRejectedValueOnce(new Error("snapshot failed"))
+				.mockReturnValueOnce(retrySnapshot.promise);
+			const store = await makeStartedStore();
+			eventHandlers?.onStatusChange?.({ state: "connected", attempt: 0, lastAppliedSeq: 41 });
+
+			emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+			await flushAsyncWork();
+			expect(store.connection()).toMatchObject({ state: "retrying", retryDelayMs: 1000, lastAppliedSeq: 41 });
+			expect(store.resyncing()).toBe(false);
+
+			eventHandlers?.onStatusChange?.({
+				state: "retrying",
+				attempt: 3,
+				retryDelayMs: 5_000,
+				retryAt: Date.now() + 5_000,
+				lastAppliedSeq: 41,
+			});
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(api.resync).toHaveBeenCalledTimes(2);
+			expect(store.resyncing()).toBe(true);
+
+			retrySnapshot.resolve({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 2 });
+			await flushAsyncWork();
+			expect(store.resyncing()).toBe(false);
+			expect(store.resyncError()).toBeUndefined();
+			expect(store.connection()).toMatchObject({
+				state: "retrying",
+				attempt: 3,
+				retryDelayMs: 5_000,
+				lastAppliedSeq: 41,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("backs off failed resync retries exponentially with one timer and request at a time", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.mocked(api.resync).mockRejectedValue(new Error("still down"));
+			const store = await makeStartedStore();
+			eventHandlers?.onStatusChange?.({ state: "connected", attempt: 0, lastAppliedSeq: 7 });
+
+			emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+			const expectedDelays = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+			for (const [index, delay] of expectedDelays.entries()) {
+				await flushAsyncWork();
+				expect(api.resync).toHaveBeenCalledTimes(index + 1);
+				expect(store.resyncing()).toBe(false);
+				expect(store.connection()).toMatchObject({ state: "retrying", retryDelayMs: delay });
+				expect(vi.getTimerCount()).toBe(1);
+				await vi.advanceTimersByTimeAsync(delay - 1);
+				expect(api.resync).toHaveBeenCalledTimes(index + 1);
+				expect(vi.getTimerCount()).toBe(1);
+				await vi.advanceTimersByTimeAsync(1);
+			}
+
+			await flushAsyncWork();
+			expect(api.resync).toHaveBeenCalledTimes(expectedDelays.length + 1);
+			store.stop();
+			expect(vi.getTimerCount()).toBe(0);
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(api.resync).toHaveBeenCalledTimes(expectedDelays.length + 1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("fails loudly on recovery queue overflow and never applies its incomplete envelopes", async () => {
@@ -456,9 +548,12 @@ describe("app store SSE sync", () => {
 		vi.mocked(api.resync).mockReturnValueOnce(delayed.promise);
 		const store = await makeStartedStore();
 		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
-		for (let i = 0; i <= 2_000; i++) {
+		for (let i = 0; i < 2_000; i++) {
 			eventHandlers?.onEnvelope({ seq: 10 + i, key: "overflow", event: { type: "agent_start" } });
 		}
+		expect(() => eventHandlers?.onEnvelope({ seq: 2010, key: "overflow", event: { type: "agent_start" } })).toThrow(
+			/queue overflowed/,
+		);
 		expect(store.resyncError()).toContain("queue overflowed");
 		expect(store.sessions.overflow).toBeUndefined();
 		// A later barrier requests a retry, but the first HTTP recovery must settle
@@ -521,13 +616,20 @@ describe("app store SSE sync", () => {
 		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
 		const projectedFrame = "x".repeat(1_000_000);
 
-		for (let i = 0; i < 4; i++) {
+		for (let i = 0; i < 3; i++) {
 			eventHandlers?.onEnvelope({
 				seq: 10 + i,
 				key: "byte-overflow",
 				event: { type: "agent_start", projectedFrame },
 			});
 		}
+		expect(() =>
+			eventHandlers?.onEnvelope({
+				seq: 13,
+				key: "byte-overflow",
+				event: { type: "agent_start", projectedFrame },
+			}),
+		).toThrow(/queue overflowed/);
 
 		expect(store.resyncError()).toContain("queue overflowed");
 		expect(store.sessions["byte-overflow"]).toBeUndefined();
@@ -555,6 +657,8 @@ describe("app store SSE sync", () => {
 			expect(signal?.reason).toBe("Dashboard recovery timed out");
 			expect(store.resyncError()).toBe("Dashboard recovery timed out");
 			expect(store.resyncing()).toBe(false);
+			expect(store.connection()).toMatchObject({ state: "retrying", retryDelayMs: 1000 });
+			store.stop();
 		} finally {
 			vi.useRealTimers();
 		}
@@ -709,6 +813,46 @@ describe("app store hydration", () => {
 			blocks: [{ kind: "text", text: "live SSE text" }],
 		});
 		expect(JSON.stringify(session?.entries)).not.toContain("stale snapshot");
+	});
+
+	it("restores runtime tasks during a hard-refresh hydrate even when startup SSE events race it", async () => {
+		const messages = deferred<{ messages: unknown[] }>();
+		const agents = deferred<{ agents: BackgroundAgentDto[] }>();
+		const runtime = runtimeSnapshot("s1", false);
+		runtime.state.tasks = [{ id: "restore", title: "restore me", status: "in_progress" }];
+		vi.mocked(api.messages).mockReturnValueOnce(messages.promise);
+		vi.mocked(api.backgroundAgents).mockReturnValueOnce(agents.promise);
+		vi.mocked(api.runtime).mockResolvedValueOnce(runtime);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("s1");
+		emit("s1", { type: "agent_start" });
+		messages.resolve({ messages: [{ role: "assistant", content: [{ type: "text", text: "stale snapshot" }] }] });
+		agents.resolve({ agents: [] });
+		await hydrate;
+		emit("s1", { type: "agent_start" });
+
+		expect(store.sessions.s1?.tasks).toEqual([{ id: "restore", title: "restore me", status: "in_progress" }]);
+		expect(JSON.stringify(store.sessions.s1?.entries)).not.toContain("stale snapshot");
+	});
+
+	it("does not overwrite a newer live tasks_update with an older runtime hydrate", async () => {
+		const messages = deferred<{ messages: unknown[] }>();
+		const agents = deferred<{ agents: BackgroundAgentDto[] }>();
+		const runtime = runtimeSnapshot("s1", false);
+		runtime.state.tasks = [{ id: "stale", title: "stale task", status: "pending" }];
+		vi.mocked(api.messages).mockReturnValueOnce(messages.promise);
+		vi.mocked(api.backgroundAgents).mockReturnValueOnce(agents.promise);
+		vi.mocked(api.runtime).mockResolvedValueOnce(runtime);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("s1");
+		emit("s1", { type: "tasks_update", tasks: [{ id: "live", title: "live task", status: "completed" }] });
+		messages.resolve({ messages: [] });
+		agents.resolve({ agents: [] });
+		await hydrate;
+
+		expect(store.sessions.s1?.tasks).toEqual([{ id: "live", title: "live task", status: "completed" }]);
 	});
 
 	it("does not create a stub session when aborted hydration calls reject", async () => {

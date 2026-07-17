@@ -7,7 +7,7 @@
 
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
 import type { ImageContent, Model, Transport } from "@dreb/ai";
-import type { SessionStats } from "../../core/agent-session.js";
+import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type { ContextUsage } from "../../core/extensions/types.js";
@@ -185,6 +185,16 @@ export interface RpcDashboardSnapshot {
 	/** Current background-agent registry at that boundary. */
 	backgroundAgents: RpcBackgroundAgentInfo[];
 }
+
+/** Ordering marker emitted immediately before a matching dashboard snapshot response. */
+export interface RpcDashboardSnapshotBarrierEvent {
+	type: "dashboard_snapshot_barrier";
+	/** Opaque token matching the following {@link RpcDashboardSnapshot.snapshotId}. */
+	snapshotId: string;
+}
+
+/** Non-response JSONL messages emitted by the RPC server on stdout. */
+export type RpcEvent = AgentSessionEvent | RpcExtensionUIRequest | RpcDashboardSnapshotBarrierEvent;
 
 export interface RpcSessionState {
 	model?: Model<any>;

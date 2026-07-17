@@ -1,7 +1,7 @@
 /**
  * Session view — full-parity chat drill-in. Transcript, dock (tasks, subagent
  * strip, status line, composer with steer/follow-up modes + abort),
- * session bar with model/thinking switchers, extension-UI modals.
+ * session bar with connection status, model/thinking switchers, extension-UI modals.
  */
 
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
@@ -1008,6 +1008,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					<Show when={!topChromeCollapsed()}>
 						<span class="project">{runtime()?.cwd ? shortenPath(runtime()!.cwd) : undefined}</span>
 					</Show>
+					<ConnectionIndicator store={props.store} class="session-connection-indicator" />
 					<Show when={!topChromeCollapsed()}>
 						<span class="right">
 							<button
@@ -1193,7 +1194,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 									: "composer hidden for transcript reading"}
 						</span>
 					</Show>
-					<ConnectionIndicator store={props.store} class="dock-connection-indicator" />
 				</div>
 				<Show when={!bottomDockCollapsed()}>
 					<div class="dock-inner">

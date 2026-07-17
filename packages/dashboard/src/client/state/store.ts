@@ -63,6 +63,8 @@ const MAX_PENDING_RESYNC_ENVELOPES = 2_000;
 /** Matches the server's replay budget and bounds projected frame retention in the browser. */
 const MAX_PENDING_RESYNC_BYTES = 3 * 1024 * 1024;
 const RESYNC_TIMEOUT_MS = 30_000;
+const RESYNC_RETRY_BASE_MS = 1_000;
+const RESYNC_RETRY_MAX_MS = 30_000;
 const textEncoder = new TextEncoder();
 
 interface PendingResync {
@@ -77,6 +79,7 @@ interface HydrationGuardToken {
 	revision: number;
 	generation: number;
 	epoch: number;
+	taskRevision: number;
 }
 
 export function createAppStore() {
@@ -93,16 +96,22 @@ export function createAppStore() {
 	const [resyncError, setResyncError] = createSignal<string>();
 	const [resyncing, setResyncing] = createSignal(false);
 	const [auth, setAuth] = createSignal<(AuthStatusDto & { needsPairing?: boolean; error?: string }) | undefined>();
-	const [connected, setConnected] = createSignal(false);
 	const [connection, setConnection] = createSignal<EventConnectionStatus>({ state: "disconnected", attempt: 0 });
+	const connected = () => connection().state === "connected";
 	const [notices, setNotices] = createSignal<Toast[]>([]);
 	const hydrationGenerations = new Map<string, number>();
+	const taskRevisions = new Map<string, number>();
 	let hydrationEpoch = 0;
 	let noticeCounter = 0;
 	let resyncPromise: Promise<void> | undefined;
 	let pendingResync: PendingResync | undefined;
+	let resyncRetryTimer: ReturnType<typeof setTimeout> | undefined;
+	let resyncRetryPreviousConnection: EventConnectionStatus | undefined;
+	let resyncRetryOwnsConnectionStatus = false;
+	let resyncRetryAttempt = 0;
 	let retryAfterCurrentResync = false;
 	let authoritativeBarrierSeq: number | undefined;
+	let stopped = false;
 
 	window.addEventListener("hashchange", () => setRouteSignal(parseHash()));
 
@@ -118,6 +127,14 @@ export function createAppStore() {
 		return hydrationGenerations.get(key) ?? 0;
 	}
 
+	function currentTaskRevision(key: string): number {
+		return taskRevisions.get(key) ?? 0;
+	}
+
+	function bumpTaskRevision(key: string): void {
+		taskRevisions.set(key, currentTaskRevision(key) + 1);
+	}
+
 	function bumpHydrationGeneration(key: string): void {
 		hydrationGenerations.set(key, currentHydrationGeneration(key) + 1);
 	}
@@ -127,15 +144,20 @@ export function createAppStore() {
 			revision: currentRevision(key),
 			generation: currentHydrationGeneration(key),
 			epoch: hydrationEpoch,
+			taskRevision: currentTaskRevision(key),
 		};
 	}
 
+	function hydrationIdentityMatches(key: string, guard: HydrationGuardToken): boolean {
+		return currentHydrationGeneration(key) === guard.generation && hydrationEpoch === guard.epoch;
+	}
+
 	function hydrationGuardMatches(key: string, guard: HydrationGuardToken): boolean {
-		return (
-			currentRevision(key) === guard.revision &&
-			currentHydrationGeneration(key) === guard.generation &&
-			hydrationEpoch === guard.epoch
-		);
+		return currentRevision(key) === guard.revision && hydrationIdentityMatches(key, guard);
+	}
+
+	function taskHydrationGuardMatches(key: string, guard: HydrationGuardToken): boolean {
+		return currentTaskRevision(key) === guard.taskRevision && hydrationIdentityMatches(key, guard);
 	}
 
 	function bumpRevision(key: string): void {
@@ -154,6 +176,7 @@ export function createAppStore() {
 
 	function deleteSessionState(key: string): void {
 		bumpHydrationGeneration(key);
+		taskRevisions.delete(key);
 		setSessions(key, undefined!);
 		setRevisions(key, undefined!);
 		evictComposerMemory(key);
@@ -188,6 +211,47 @@ export function createAppStore() {
 		pending.queuedBytes = 0;
 	}
 
+	function clearResyncRetry(): void {
+		if (resyncRetryTimer !== undefined) clearTimeout(resyncRetryTimer);
+		resyncRetryTimer = undefined;
+	}
+
+	function resyncRetryDelay(): number {
+		return Math.min(RESYNC_RETRY_MAX_MS, RESYNC_RETRY_BASE_MS * 2 ** Math.max(0, resyncRetryAttempt - 1));
+	}
+
+	function scheduleResyncRetry(): void {
+		if (stopped || resyncRetryTimer !== undefined) return;
+		resyncRetryAttempt += 1;
+		const delay = resyncRetryDelay();
+		setResyncing(false);
+		if (!resyncRetryPreviousConnection) resyncRetryPreviousConnection = connection();
+		setConnection((current) => {
+			if (current.state === "auth_failed") return current;
+			resyncRetryOwnsConnectionStatus = true;
+			return {
+				...current,
+				state: "retrying",
+				attempt: Math.max(current.attempt, resyncRetryAttempt),
+				retryDelayMs: delay,
+				retryAt: Date.now() + delay,
+			};
+		});
+		resyncRetryTimer = setTimeout(() => {
+			resyncRetryTimer = undefined;
+			void beginResync();
+		}, delay);
+	}
+
+	function restoreConnectionAfterResyncRetry(): void {
+		const previous = resyncRetryPreviousConnection;
+		const ownsConnectionStatus = resyncRetryOwnsConnectionStatus;
+		resyncRetryPreviousConnection = undefined;
+		resyncRetryOwnsConnectionStatus = false;
+		if (!ownsConnectionStatus || previous?.state !== "connected" || connection().state !== "retrying") return;
+		setConnection({ state: "connected", attempt: previous.attempt, lastAppliedSeq: previous.lastAppliedSeq });
+	}
+
 	function applyEnvelope(envelope: EventEnvelope): void {
 		const type = envelope.event?.type as string | undefined;
 		if (type === "runtime_removed") {
@@ -201,6 +265,7 @@ export function createAppStore() {
 			}
 		} else if (envelope.key) {
 			mutateSession(envelope.key, (session) => applySessionEvent(session, envelope.event));
+			if (type === "tasks_update") bumpTaskRevision(envelope.key);
 		}
 		if (
 			type === "agent_start" ||
@@ -260,10 +325,14 @@ export function createAppStore() {
 				};
 			}
 		});
+		bumpTaskRevision(active.key);
 	}
 
 	function finishResync(pending: PendingResync, snapshot: Awaited<ReturnType<typeof api.resync>>): void {
 		if (pendingResync !== pending || pending.state !== "active" || pending.barrierSeq === undefined) return;
+		clearResyncRetry();
+		resyncRetryAttempt = 0;
+		restoreConnectionAfterResyncRetry();
 		const barrierSeq = pending.barrierSeq;
 		authoritativeBarrierSeq = barrierSeq;
 		setFleet(snapshot.fleet);
@@ -301,6 +370,7 @@ export function createAppStore() {
 			if (queueAfterCurrent || pendingResync?.state === "failed") retryAfterCurrentResync = true;
 			return resyncPromise;
 		}
+		clearResyncRetry();
 		const current = route();
 		const key = current.screen === "session" || current.screen === "subagent" ? current.key : undefined;
 		const agentId = current.screen === "subagent" ? current.agentId : undefined;
@@ -314,8 +384,7 @@ export function createAppStore() {
 		setResyncing(true);
 		setResyncError(undefined);
 		const timeout = setTimeout(() => pending.controller.abort("Dashboard recovery timed out"), RESYNC_TIMEOUT_MS);
-		let request: Promise<void>;
-		request = api
+		const request = api
 			.resync(key, agentId, pending.controller.signal)
 			.then((snapshot) => {
 				pending.barrierSeq = snapshot.barrierSeq;
@@ -327,7 +396,8 @@ export function createAppStore() {
 				clearPendingQueue(pending);
 				const reason = pending.controller.signal.reason;
 				setResyncError(typeof reason === "string" ? reason : err instanceof Error ? err.message : String(err));
-				setResyncing(false);
+				scheduleResyncRetry();
+				if (resyncRetryTimer === undefined) setResyncing(false);
 			})
 			.finally(() => {
 				clearTimeout(timeout);
@@ -354,7 +424,12 @@ export function createAppStore() {
 			return;
 		}
 		if (pendingResync) {
-			if (pendingResync.state === "failed") return;
+			if (pendingResync.state === "failed") {
+				scheduleResyncRetry();
+				throw new Error(
+					"Dashboard recovery is failed; refusing to acknowledge live envelope before resync succeeds",
+				);
+			}
 			const envelopeBytes = encodedEnvelopeBytes(envelope);
 			if (
 				pendingResync.queued.length >= MAX_PENDING_RESYNC_ENVELOPES ||
@@ -362,11 +437,12 @@ export function createAppStore() {
 			) {
 				clearPendingQueue(pendingResync);
 				pendingResync.state = "failed";
-				setResyncing(false);
 				const message = "Dashboard recovery queue overflowed; waiting for a newer authoritative snapshot";
 				setResyncError(message);
 				pendingResync.controller.abort(message);
-				return;
+				scheduleResyncRetry();
+				if (resyncRetryTimer === undefined) setResyncing(false);
+				throw new Error(message);
 			}
 			// Queue even a lower number while a restart transaction is active: its
 			// replacement snapshot may establish a new sequence domain.
@@ -381,6 +457,7 @@ export function createAppStore() {
 	let disconnect: (() => void) | undefined;
 
 	async function start(): Promise<void> {
+		stopped = false;
 		try {
 			const status = await api.auth();
 			setAuth(status);
@@ -398,8 +475,9 @@ export function createAppStore() {
 		disconnect = connectEvents({
 			onEnvelope: handleEnvelope,
 			onStatusChange: (status) => {
+				resyncRetryOwnsConnectionStatus = false;
+				resyncRetryPreviousConnection = status.state === "connected" ? status : undefined;
 				setConnection(status);
-				setConnected(status.state === "connected");
 			},
 			onRecovery: () => {
 				// connectEvents has already closed the stale source. The store owns the
@@ -410,7 +488,11 @@ export function createAppStore() {
 	}
 
 	function stop(): void {
+		stopped = true;
 		disconnect?.();
+		clearResyncRetry();
+		resyncRetryPreviousConnection = undefined;
+		resyncRetryOwnsConnectionStatus = false;
 		const pending = pendingResync;
 		pendingResync = undefined;
 		if (pending) clearPendingQueue(pending);
@@ -446,12 +528,15 @@ export function createAppStore() {
 		// An aborted hydration (screen unmounted) must not create or touch
 		// session state — without this guard the all-rejected mutation below
 		// would still create a stub session and bump its revision.
-		if (!signal?.aborted && hydrationGuardMatches(key, hydrationGuard)) {
+		if (!signal?.aborted && hydrationIdentityMatches(key, hydrationGuard)) {
+			const fullSnapshotSafe = hydrationGuardMatches(key, hydrationGuard);
+			const tasksSnapshotSafe = taskHydrationGuardMatches(key, hydrationGuard);
+			let appliedTasks = false;
 			mutateSession(key, (session) => {
-				if (messagesResult.status === "fulfilled") {
+				if (fullSnapshotSafe && messagesResult.status === "fulfilled") {
 					session.entries = messagesToEntries(messagesResult.value.messages as any[]);
 				}
-				if (agentsResult.status === "fulfilled") {
+				if (fullSnapshotSafe && agentsResult.status === "fulfilled") {
 					for (const agent of agentsResult.value.agents) {
 						session.backgroundAgents[agent.agentId] = agent;
 					}
@@ -461,20 +546,28 @@ export function createAppStore() {
 				// still shows stop/working UI. Without this, `streaming` only becomes
 				// true via a future agent_start SSE event — after a refresh that event
 				// is in the past, leaving the stop button and status line missing while
-				// the agent is visibly running.
+				// the agent is visibly running. If unrelated live events raced this REST
+				// hydrate, keep their transcript/streaming state while still restoring the
+				// task snapshot unless a newer tasks_update event has already arrived.
 				if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
 					const state = runtimeResult.value.state;
-					session.tasks = (state.tasks ?? []).map((task) => ({ ...task }));
-					session.streaming = state.isStreaming;
-					session.compacting = state.isCompacting;
-					if (state.isStreaming && !session.workingSince) {
-						session.workingSince = Date.now();
-						session.workingText = session.workingText ?? "working";
-					} else if (!state.isStreaming) {
-						session.workingSince = undefined;
+					if (tasksSnapshotSafe) {
+						session.tasks = (state.tasks ?? []).map((task) => ({ ...task }));
+						appliedTasks = true;
+					}
+					if (fullSnapshotSafe) {
+						session.streaming = state.isStreaming;
+						session.compacting = state.isCompacting;
+						if (state.isStreaming && !session.workingSince) {
+							session.workingSince = Date.now();
+							session.workingText = session.workingText ?? "working";
+						} else if (!state.isStreaming) {
+							session.workingSince = undefined;
+						}
 					}
 				}
 			});
+			if (appliedTasks) bumpTaskRevision(key);
 		}
 		// Loud failure: apply what succeeded above, then surface the error.
 		const failed = [messagesResult, agentsResult, runtimeResult].find((result) => result.status === "rejected");

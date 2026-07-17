@@ -283,7 +283,8 @@ describe("connectEvents lifecycle", () => {
 		expect(status).toHaveBeenCalledTimes(1);
 	});
 
-	it("treats malformed envelopes and reducer failures as loud full recovery without cursor advancement", () => {
+	it("treats malformed envelopes and reducer failures as loud full recovery without cursor advancement", async () => {
+		vi.useFakeTimers();
 		const result = setup();
 		result.source().open();
 		result.source().message({ seq: "bad" });
@@ -296,6 +297,8 @@ describe("connectEvents lifecycle", () => {
 		second.source().open();
 		second.source().message(envelope(1));
 		expect(second.recovery).toHaveBeenCalledWith("handler");
+		await vi.advanceTimersByTimeAsync(100);
+		expect(second.source().url).toBe("/api/events");
 		second.disconnect();
 		result.disconnect();
 	});

@@ -228,7 +228,7 @@ Capture the dashboard-visible parent-session state, full parent transcript, and 
 {"id": "snapshot-7", "type": "get_dashboard_snapshot"}
 ```
 
-The result is a `snapshotId`, a complete `RpcSessionState` (including `tasks`), `messages`, and `backgroundAgents`. The RPC child writes this event to stdout **immediately before** the matching response line:
+The `RpcDashboardSnapshot` result is a `snapshotId`, a complete `RpcSessionState` (including `tasks`), `messages`, and `backgroundAgents`. The RPC child writes a `RpcDashboardSnapshotBarrierEvent` to stdout **immediately before** the matching response line:
 
 ```json
 {"type":"dashboard_snapshot_barrier","snapshotId":"snapshot-7"}
@@ -1576,7 +1576,7 @@ Response:
 
 ## Events
 
-Events are streamed to stdout as JSON lines during agent operation. Events do NOT include an `id` field (only responses do).
+`RpcEvent` messages are streamed to stdout as JSON lines during agent operation. Agent/session events and `dashboard_snapshot_barrier` do not include an `id` field; extension UI requests include an `id` so clients can respond.
 
 ### Event Types
 

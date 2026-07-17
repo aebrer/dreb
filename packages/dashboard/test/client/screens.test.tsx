@@ -494,7 +494,8 @@ describe("app store integration", () => {
 		expect(el.querySelector("output")).not.toBeNull();
 	});
 
-	it("session view anchors live connection status next to the composer", async () => {
+	it("session view anchors live connection status in the persistent session header", async () => {
+		stubMobile(true);
 		let captured: EventStreamHandlers | undefined;
 		vi.mocked(connectEvents).mockImplementation((handlers) => {
 			captured = handlers;
@@ -503,18 +504,31 @@ describe("app store integration", () => {
 		const store = makeStore();
 		await store.start();
 		const el = mount(() => <SessionScreen store={store} sessionKey="k-live-status" />);
-		const dockStatus = () => el.querySelector(".dock .dock-connection-indicator") as HTMLElement | null;
-		expect(dockStatus()?.querySelector("output")).not.toBeNull();
+		const headerStatus = () =>
+			el.querySelector("header.session-bar .session-bar-main .session-connection-indicator") as HTMLElement | null;
+		const footerStatus = () => el.querySelector("footer.dock .connection-indicator") as HTMLElement | null;
+		expect(headerStatus()?.querySelector("output")).not.toBeNull();
+		expect(footerStatus()).toBeNull();
 		if (!captured?.onStatusChange) throw new Error("connection status handler missing");
 
 		captured.onStatusChange({ state: "retrying", attempt: 2, retryDelayMs: 1500, retryAt: Date.now() + 1500 });
-		expect(dockStatus()?.textContent).toContain("retrying in 2s");
+		expect(headerStatus()?.textContent).toContain("retrying in 2s");
+		expect(footerStatus()).toBeNull();
 
 		captured.onStatusChange({ state: "resyncing", attempt: 2 });
-		expect(dockStatus()?.textContent).toContain("recovering live state");
+		expect(headerStatus()?.textContent).toContain("recovering live state");
 
 		captured.onStatusChange({ state: "auth_failed", attempt: 2 });
-		expect(dockStatus()?.textContent).toContain("live connection unauthorized");
+		expect(headerStatus()?.textContent).toContain("live connection unauthorized");
+
+		const collapseTopChrome = [...el.querySelectorAll("button")].find((button) =>
+			button.textContent?.includes("details ▴"),
+		);
+		if (!collapseTopChrome) throw new Error("top chrome collapse control missing");
+		collapseTopChrome.click();
+		expect(el.querySelector("header.session-bar.collapsed .session-connection-indicator")?.textContent).toContain(
+			"live connection unauthorized",
+		);
 
 		const collapseComposer = [...el.querySelectorAll("button")].find((button) =>
 			button.textContent?.includes("compose ▾"),
@@ -522,7 +536,8 @@ describe("app store integration", () => {
 		if (!collapseComposer) throw new Error("composer collapse control missing");
 		collapseComposer.click();
 		expect(el.textContent).toContain("composer hidden for transcript reading");
-		expect(dockStatus()?.textContent).toContain("live connection unauthorized");
+		expect(headerStatus()?.textContent).toContain("live connection unauthorized");
+		expect(footerStatus()).toBeNull();
 	});
 
 	it("dismissToast removes reducer toast and does not resurrect after later sync", async () => {
@@ -1594,6 +1609,8 @@ describe("dashboard client regressions", () => {
 		handlers.onEnvelope({ seq: 1, key: "", event: { type: "dashboard_resync", reason: "buffer_gap" } });
 		await Promise.resolve();
 		await Promise.resolve();
+		expect(el.textContent).toContain("retrying in 1s");
+		expect(el.textContent).not.toContain("recovering live state");
 		const retry = [...el.querySelectorAll("button")].find((button) => button.textContent?.includes("retry"));
 		expect(retry?.textContent).toContain("recovery failed — retry");
 		vi.mocked(api.resync).mockResolvedValueOnce({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 1 });

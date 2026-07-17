@@ -7,9 +7,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExtensionRuntime } from "../src/core/extensions/loader.js";
 import { getGitBranch } from "../src/core/git-branch.js";
 import { createSyntheticSourceInfo } from "../src/core/source-info.js";
-import { RpcClient } from "../src/modes/rpc/rpc-client.js";
+import type {
+	RpcDashboardSnapshot as AggregateRpcDashboardSnapshot,
+	RpcEvent as AggregateRpcEvent,
+} from "../src/modes/index.js";
+import type {
+	RpcDashboardSnapshot,
+	RpcDashboardSnapshotBarrierEvent,
+	RpcEvent,
+	RpcEventListener,
+	RpcPendingMessages,
+	RpcResources,
+} from "../src/modes/rpc/index.js";
+import { RpcClient } from "../src/modes/rpc/index.js";
 import { getPendingMessagesForRpc, getResourcesForRpc, getStateForRpc } from "../src/modes/rpc/rpc-mode.js";
-import type { RpcPendingMessages, RpcResources } from "../src/modes/rpc/rpc-types.js";
 import { createTestResourceLoader, createTestSession } from "./utilities.js";
 
 const tempDirs: string[] = [];
@@ -37,6 +48,17 @@ function model(provider: string, id: string, name = id): Model<any> {
 		contextWindow: 200_000,
 		maxTokens: 8192,
 	} as Model<any>;
+}
+
+function requireSnapshotBarrier(event: RpcEvent): RpcDashboardSnapshotBarrierEvent {
+	if (event.type !== "dashboard_snapshot_barrier") {
+		throw new Error(`Expected dashboard snapshot barrier, got ${event.type}`);
+	}
+	return event;
+}
+
+function acceptRpcEventListener(listener: RpcEventListener): RpcEventListener {
+	return listener;
 }
 
 describe("RPC dashboard state/resources DTOs", () => {
@@ -206,6 +228,64 @@ describe("RpcClient dashboard command methods", () => {
 
 		await expect(client.getDashboardSnapshot()).resolves.toBe(data);
 		expect(client.send).toHaveBeenCalledWith({ type: "get_dashboard_snapshot" });
+	});
+
+	it("exposes snapshot barrier and snapshot types from public RPC exports", () => {
+		const barrier = {
+			type: "dashboard_snapshot_barrier",
+			snapshotId: "snap-typed",
+		} satisfies RpcDashboardSnapshotBarrierEvent;
+		const rpcEvent: RpcEvent = barrier;
+		const aggregateEvent: AggregateRpcEvent = barrier;
+		const snapshot = {
+			snapshotId: "snap-typed",
+			state: {
+				scopedModels: [],
+				tasks: [],
+				usingSubscription: false,
+				thinkingLevel: "high",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				sessionId: "session-1",
+				autoCompactionEnabled: false,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			messages: [],
+			backgroundAgents: [],
+		} satisfies RpcDashboardSnapshot;
+		const aggregateSnapshot: AggregateRpcDashboardSnapshot = snapshot;
+
+		expect(requireSnapshotBarrier(rpcEvent).snapshotId).toBe("snap-typed");
+		expect(requireSnapshotBarrier(aggregateEvent).snapshotId).toBe("snap-typed");
+		expect(aggregateSnapshot.snapshotId).toBe("snap-typed");
+	});
+
+	it("delivers typed snapshot barrier events to RpcClient listeners", () => {
+		const client = new RpcClient() as any;
+		const received: RpcDashboardSnapshotBarrierEvent[] = [];
+		client.onEvent(
+			acceptRpcEventListener((event) => {
+				const barrier = requireSnapshotBarrier(event);
+				received.push(barrier);
+			}),
+		);
+
+		client.handleLine(JSON.stringify({ type: "dashboard_snapshot_barrier", snapshotId: "snap-typed" }));
+
+		expect(received).toEqual([{ type: "dashboard_snapshot_barrier", snapshotId: "snap-typed" }]);
+	});
+
+	it("does not deliver malformed snapshot barrier frames to RpcClient listeners", () => {
+		const client = new RpcClient() as any;
+		const received: RpcEvent[] = [];
+		client.onEvent((event: RpcEvent) => received.push(event));
+
+		client.handleLine(JSON.stringify({ type: "dashboard_snapshot_barrier", snapshotId: 42 }));
+
+		expect(received).toEqual([]);
 	});
 
 	it("parses a snapshot barrier before the response promise microtask", async () => {

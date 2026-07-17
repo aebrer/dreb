@@ -41,7 +41,7 @@ Open `http://127.0.0.1:5343`.
 - **Session view** — full chat parity: markdown streaming transcript, tool
   cards, thinking blocks, compaction summaries, per-message copy, tasks panel,
   suggest-next chip, slash-command autocomplete, image attach/paste,
-  queued-message restore, footer-parity info bar (branch, tokens, cost, ctx%,
+  queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
   and live auto-naming.
@@ -70,10 +70,11 @@ Open `http://127.0.0.1:5343`.
 
 ## Live connection and recovery
 
-The accessible text indicator in the top bar and session composer area reports
+The accessible text indicator in the top bar and persistent session header reports
 the SSE connection as **connecting**, **connected**, **retrying**, **resyncing**,
 **disconnected**, or **auth failed** (with retry delay where applicable); color
-is not its only cue.
+is not its only cue. The session-header indicator remains visible when session
+details or composer controls are collapsed.
 The server replays reducer-relevant projected envelopes from history bounded by
 both count and bytes, with a separate byte cap for each replay. A server restart,
 sequence gap, history eviction, or over-budget replay sends only that reconnect

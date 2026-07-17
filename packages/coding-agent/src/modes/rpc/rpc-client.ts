@@ -7,7 +7,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
 import type { ImageContent } from "@dreb/ai";
-import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
+import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -18,6 +18,9 @@ import type {
 	RpcContextTrustEvaluation,
 	RpcContextTrustMutationResult,
 	RpcDashboardSnapshot,
+	RpcDashboardSnapshotBarrierEvent,
+	RpcEvent,
+	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcPendingMessages,
 	RpcResources,
@@ -85,17 +88,53 @@ export interface ModelInfo {
 }
 
 /**
- * Listener for events streamed by the RPC server. The wire carries the full
- * {@link AgentSessionEvent} union (core AgentEvents plus session-level events like
- * background_agent_start/end/event, tasks_update, suggest_next).
+ * Listener for non-response messages streamed by the RPC server. The wire carries
+ * the full {@link RpcEvent} union: session events, extension UI requests, and
+ * RPC-specific ordering markers such as `dashboard_snapshot_barrier`.
  */
-export type RpcEventListener = (event: AgentSessionEvent) => void;
+export type RpcEventListener = (event: RpcEvent) => void;
 
 export type RpcExitInfo =
 	| { code: number | null; signal: NodeJS.Signals | null; error?: undefined }
 	| { code?: undefined; signal?: undefined; error: Error };
 
 export type RpcExitListener = (info: RpcExitInfo) => void;
+
+type JsonRecord = Record<string, unknown>;
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRpcResponseMessage(value: unknown): value is RpcResponse {
+	return isJsonRecord(value) && value.type === "response";
+}
+
+function isRpcDashboardSnapshotBarrierEvent(value: unknown): value is RpcDashboardSnapshotBarrierEvent {
+	return isJsonRecord(value) && value.type === "dashboard_snapshot_barrier" && typeof value.snapshotId === "string";
+}
+
+function isRpcExtensionUIRequestMessage(value: unknown): value is RpcExtensionUIRequest {
+	return (
+		isJsonRecord(value) &&
+		value.type === "extension_ui_request" &&
+		typeof value.id === "string" &&
+		typeof value.method === "string"
+	);
+}
+
+function isRpcEvent(value: unknown): value is RpcEvent {
+	if (!isJsonRecord(value) || typeof value.type !== "string" || value.type === "response") {
+		return false;
+	}
+	if (value.type === "dashboard_snapshot_barrier") {
+		return isRpcDashboardSnapshotBarrierEvent(value);
+	}
+	if (value.type === "extension_ui_request") {
+		return isRpcExtensionUIRequestMessage(value);
+	}
+	return true;
+}
 
 // ============================================================================
 // RPC Client
@@ -768,9 +807,9 @@ export class RpcClient {
 	/**
 	 * Collect events until agent becomes idle.
 	 */
-	collectEvents(timeout = 60000): Promise<AgentSessionEvent[]> {
+	collectEvents(timeout = 60000): Promise<RpcEvent[]> {
 		return new Promise((resolve, reject) => {
-			const events: AgentSessionEvent[] = [];
+			const events: RpcEvent[] = [];
 			const timer = setTimeout(() => {
 				unsubscribe();
 				reject(new Error(`Timeout collecting events. Stderr: ${this.stderr}`));
@@ -790,7 +829,7 @@ export class RpcClient {
 	/**
 	 * Send prompt and wait for completion, returning all events.
 	 */
-	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<AgentSessionEvent[]> {
+	async promptAndWait(message: string, images?: ImageContent[], timeout = 60000): Promise<RpcEvent[]> {
 		const eventsPromise = this.collectEvents(timeout);
 		await this.prompt(message, images);
 		return eventsPromise;
@@ -821,19 +860,25 @@ export class RpcClient {
 
 	private handleLine(line: string): void {
 		try {
-			const data = JSON.parse(line);
+			const data: unknown = JSON.parse(line);
 
-			// Check if it's a response to a pending request
-			if (data.type === "response" && data.id && this.pendingRequests.has(data.id)) {
-				const pending = this.pendingRequests.get(data.id)!;
-				this.pendingRequests.delete(data.id);
-				pending.resolve(data as RpcResponse);
+			// Check if it's a response to a pending request. Unknown/unsolicited
+			// response frames are not events and should not be forwarded to listeners.
+			if (isRpcResponseMessage(data)) {
+				if (typeof data.id === "string" && this.pendingRequests.has(data.id)) {
+					const pending = this.pendingRequests.get(data.id)!;
+					this.pendingRequests.delete(data.id);
+					pending.resolve(data);
+				}
 				return;
 			}
 
-			// Otherwise it's an event
+			if (!isRpcEvent(data)) {
+				return;
+			}
+
 			for (const listener of this.eventListeners) {
-				listener(data as AgentSessionEvent);
+				listener(data);
 			}
 		} catch {
 			// Ignore non-JSON lines
