@@ -133,7 +133,11 @@ The dashboard is the visual face of dreb: every agent session on the host, live 
 
 **Live subagent observability.** Background subagents are first-class: chips on the parent session, live counts on fleet cards, and a read-only drill-in transcript per agent that streams in real time and survives browser reloads.
 
+**Live connection recovery.** The top bar and persistent session header have an accessible, text-labelled connection indicator (connecting, connected, retrying, resyncing, disconnected, or auth failed). SSE uses bounded replay and an authoritative snapshot barrier to recover from browser reloads, server restarts, sequence gaps, slow-client backpressure, and stalls without duplicating state; task lists restore with the session snapshot. Named 25-second heartbeats and a foreground 60-second liveness watchdog detect a stuck stream. See [dashboard recovery details](packages/coding-agent/docs/dashboard.md#live-connection-and-recovery) and the [RPC ordering contract](packages/coding-agent/docs/rpc.md#get_dashboard_snapshot).
+
 **Host files, explicitly.** Browse the host filesystem, upload/download, create folders, and start a new session in any directory — every file operation logged server-side.
+
+**Curated appearance themes.** A theme gallery in settings offers eight dashboard-native themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, plus the colorblind-safe Okabe-Ito and Paul Tol palettes), each with its own light and dark palette, plus a system/light/dark mode toggle. Choices are saved per browser and are independent of your TUI theme.
 
 Launch locally:
 

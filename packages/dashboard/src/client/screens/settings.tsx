@@ -7,6 +7,7 @@ import { createMemo, createResource, createSignal, For, type JSX, onCleanup, onM
 import type { AgentTypeDto, ModelInfoDto, PairingCodeDto, SettingsDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
+import { ThemeGallery } from "../components/theme-gallery.js";
 import {
 	expandThinking,
 	isToolAutoOpen,
@@ -765,7 +766,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 							</section>
 
 							<p class="muted small settings-footnote">
-								TUI-only settings (theme, cursor, editor) are managed in the terminal /settings menu.
+								TUI-only settings (cursor, editor) are managed in the terminal /settings menu. The dashboard
+								appearance (theme + light/dark mode) is set here, per-browser, and is independent of the TUI
+								theme.
 							</p>
 						</>
 					)}
@@ -773,6 +776,18 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 
 				<section class="settings-section">
 					<h2>dashboard</h2>
+					<div class="appearance-block">
+						<div class="setting-row appearance-heading-row">
+							<span class="setting-label">
+								<span class="name">appearance</span>
+								<span class="hint">
+									this browser only — theme and light/dark mode are stored in localStorage and are independent
+									of the TUI theme. Okabe-Ito and Paul Tol are colorblind-safe palettes.
+								</span>
+							</span>
+						</div>
+						<ThemeGallery />
+					</div>
 					<div class="setting-row">
 						<span class="setting-label">
 							<span class="name">always expand thinking</span>

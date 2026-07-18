@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/dashboard",
-	"version": "2.41.0",
+	"version": "2.43.0",
 	"description": "Web dashboard for dreb — fleet overview, chat parity, subagent observability",
 	"license": "MIT",
 	"type": "module",
@@ -20,7 +20,9 @@
 	},
 	"files": [
 		"dist",
-		"README.md"
+		"README.md",
+		"src/client/assets/fonts/OFL.txt",
+		"src/client/assets/fonts/PROVENANCE.md"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",

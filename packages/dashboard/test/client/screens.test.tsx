@@ -15,6 +15,8 @@ vi.mock("../../src/client/api.js", () => ({
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
+		resync: vi.fn(async () => ({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 })),
+		connectionDiagnostic: vi.fn(async () => ({ ok: true })),
 		messages: vi.fn(async () => ({ messages: [] })),
 		backgroundAgents: vi.fn(async () => ({ agents: [] })),
 		subagentMessages: vi.fn(async () => ({
@@ -148,6 +150,7 @@ vi.mock("../../src/client/api.js", () => ({
 }));
 
 import { api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
+import { ConnectionIndicator, Topbar } from "../../src/client/components/common.js";
 import {
 	TRANSCRIPT_WINDOW_SIZE,
 	Transcript,
@@ -160,6 +163,12 @@ import { PairingScreen } from "../../src/client/screens/pairing.js";
 import { formatTokens, SessionScreen } from "../../src/client/screens/session.js";
 import { SettingsScreen } from "../../src/client/screens/settings.js";
 import { SubagentScreen } from "../../src/client/screens/subagent.js";
+import {
+	__resetAppearanceForTests,
+	COLOR_MODE_STORAGE_KEY,
+	reloadAppearance,
+	THEME_STORAGE_KEY,
+} from "../../src/client/state/appearance.js";
 import { setExpandThinking } from "../../src/client/state/preferences.js";
 import {
 	applySessionEvent,
@@ -189,7 +198,12 @@ if (!(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver) 
 }
 
 beforeEach(() => {
-	if (window.localStorage) return;
+	// Always install a Map-backed localStorage shim. jsdom's own localStorage can
+	// be present-but-broken in some environments (e.g. when node is launched with
+	// a bad `--localstorage-file`, its methods aren't functions), so a plain
+	// `if (window.localStorage) return;` guard would leave those broken methods in
+	// place. Redefining unconditionally (the property is configurable) is
+	// deterministic and functionally identical where jsdom's storage works.
 	const values = new Map<string, string>();
 	Object.defineProperty(window, "localStorage", {
 		configurable: true,
@@ -476,6 +490,67 @@ function toolEntryFromEvents(params: {
 }
 
 describe("app store integration", () => {
+	it("topbar announces retrying live state with text, not color alone", async () => {
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		if (!captured?.onStatusChange) throw new Error("connection status handler missing");
+		captured.onStatusChange({ state: "retrying", attempt: 2, retryDelayMs: 1500, retryAt: Date.now() + 1500 });
+		const el = mount(() => <Topbar store={store} active="fleet" />);
+		expect(el.textContent).toContain("retrying in 2s");
+		expect(el.querySelector("output")).not.toBeNull();
+	});
+
+	it("session view anchors live connection status in the persistent session header", async () => {
+		stubMobile(true);
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-live-status" />);
+		const headerStatus = () =>
+			el.querySelector("header.session-bar .session-bar-main .session-connection-indicator") as HTMLElement | null;
+		const footerStatus = () => el.querySelector("footer.dock .connection-indicator") as HTMLElement | null;
+		expect(headerStatus()?.querySelector("output")).not.toBeNull();
+		expect(footerStatus()).toBeNull();
+		if (!captured?.onStatusChange) throw new Error("connection status handler missing");
+
+		captured.onStatusChange({ state: "retrying", attempt: 2, retryDelayMs: 1500, retryAt: Date.now() + 1500 });
+		expect(headerStatus()?.textContent).toContain("retrying in 2s");
+		expect(footerStatus()).toBeNull();
+
+		captured.onStatusChange({ state: "resyncing", attempt: 2 });
+		expect(headerStatus()?.textContent).toContain("recovering live state");
+
+		captured.onStatusChange({ state: "auth_failed", attempt: 2 });
+		expect(headerStatus()?.textContent).toContain("live connection unauthorized");
+
+		const collapseTopChrome = [...el.querySelectorAll("button")].find((button) =>
+			button.textContent?.includes("details ▴"),
+		);
+		if (!collapseTopChrome) throw new Error("top chrome collapse control missing");
+		collapseTopChrome.click();
+		expect(el.querySelector("header.session-bar.collapsed .session-connection-indicator")?.textContent).toContain(
+			"live connection unauthorized",
+		);
+
+		const collapseComposer = [...el.querySelectorAll("button")].find((button) =>
+			button.textContent?.includes("compose ▾"),
+		);
+		if (!collapseComposer) throw new Error("composer collapse control missing");
+		collapseComposer.click();
+		expect(el.textContent).toContain("composer hidden for transcript reading");
+		expect(headerStatus()?.textContent).toContain("live connection unauthorized");
+		expect(footerStatus()).toBeNull();
+	});
+
 	it("dismissToast removes reducer toast and does not resurrect after later sync", async () => {
 		let captured: EventStreamHandlers | undefined;
 		vi.mocked(connectEvents).mockImplementation((handlers) => {
@@ -507,10 +582,28 @@ describe("app store integration", () => {
 			captured = handlers;
 			return () => {};
 		});
-		vi.mocked(api.messages).mockResolvedValue({
-			messages: [{ role: "assistant", content: [{ type: "text", text: "fresh transcript" }] }],
+		vi.mocked(api.resync).mockResolvedValue({
+			fleet: { runtimes: [], diskSessions: [] },
+			active: {
+				key: "k-resync",
+				state: {
+					sessionId: "k-resync",
+					tasks: [],
+					thinkingLevel: "off",
+					isStreaming: false,
+					isCompacting: false,
+					steeringMode: "all",
+					followUpMode: "all",
+					autoCompactionEnabled: true,
+					messageCount: 1,
+					pendingMessageCount: 0,
+				},
+				messages: [{ role: "assistant", content: [{ type: "text", text: "fresh transcript" }] }],
+				backgroundAgents: [],
+				barrierSeq: 3,
+			},
+			barrierSeq: 3,
 		});
-		vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
 		window.location.hash = "#/session/k-resync";
 		const store = makeStore();
 
@@ -520,10 +613,9 @@ describe("app store integration", () => {
 		expect(store.sessions["k-resync"]?.streaming).toBe(true);
 
 		captured.onEnvelope({ seq: 2, key: "", event: { type: "dashboard_resync", reason: "buffer_gap" } });
-		captured.onResync?.();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(api.messages).toHaveBeenCalledWith("k-resync", undefined);
+		expect(api.resync).toHaveBeenCalledWith("k-resync", undefined, expect.any(AbortSignal));
 		expect(store.sessions["k-resync"]?.entries[0]?.kind).toBe("assistant");
 	});
 
@@ -1207,6 +1299,16 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("devices");
 	});
 
+	it("settings reports an initial durable-load failure", async () => {
+		vi.mocked(api.settings).mockRejectedValueOnce(new Error("settings file contains malformed JSON"));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector(".settings-error")?.textContent).toContain("settings file contains malformed JSON");
+		expect(el.textContent).toContain("Settings could not be loaded — see the error above.");
+	});
+
 	it("settings defaults global expert context trust to off and warns about prompt injection", async () => {
 		vi.mocked(api.settings).mockResolvedValue({});
 		const store = makeStore();
@@ -1490,6 +1592,45 @@ describe("screen smoke tests", () => {
 });
 
 describe("dashboard client regressions", () => {
+	it("renders every connection state and exposes the failed recovery retry", async () => {
+		let handlers: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((next) => {
+			handlers = next;
+			return () => {};
+		});
+		const store = makeStore();
+		const el = mount(() => <ConnectionIndicator store={store} />);
+		await store.start();
+		if (!handlers) throw new Error("event handlers were not registered");
+
+		const states = [
+			["connected", "live"],
+			["connecting", "connecting"],
+			["retrying", "retrying in 2s"],
+			["resyncing", "recovering live state"],
+			["auth_failed", "live connection unauthorized"],
+			["disconnected", "live connection disconnected"],
+		] as const;
+		for (const [state, text] of states) {
+			handlers.onStatusChange?.({ state, attempt: 1, retryDelayMs: state === "retrying" ? 1_500 : undefined });
+			expect(el.textContent).toContain(text);
+		}
+
+		vi.mocked(api.resync).mockRejectedValueOnce(new Error("snapshot unavailable"));
+		handlers.onEnvelope({ seq: 1, key: "", event: { type: "dashboard_resync", reason: "buffer_gap" } });
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(el.textContent).toContain("retrying in 1s");
+		expect(el.textContent).not.toContain("recovering live state");
+		const retry = [...el.querySelectorAll("button")].find((button) => button.textContent?.includes("retry"));
+		expect(retry?.textContent).toContain("recovery failed — retry");
+		vi.mocked(api.resync).mockResolvedValueOnce({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 1 });
+		const callsBeforeRetry = vi.mocked(api.resync).mock.calls.length;
+		retry?.click();
+		await Promise.resolve();
+		expect(api.resync).toHaveBeenCalledTimes(callsBeforeRetry + 1);
+	});
+
 	it("routes denied identities to the pairing denial screen without starting fleet or SSE", async () => {
 		vi.mocked(api.auth).mockRejectedValueOnce(
 			Object.assign(new Error('Tailscale identity "mallory@example.com" is not on the dashboard allowlist'), {
@@ -1897,6 +2038,170 @@ describe("dashboard client regressions", () => {
 
 		expect(window.localStorage.getItem("dreb.dashboard.expandThinking")).toBe("true");
 		expect(checkbox!.checked).toBe(true);
+	});
+
+	describe("settings appearance (theme gallery)", () => {
+		// The appearance state is a module-level singleton driven by localStorage,
+		// so reset both storage and the signals/DOM between cases.
+		function resetAppearance() {
+			window.localStorage.removeItem(THEME_STORAGE_KEY);
+			window.localStorage.removeItem(COLOR_MODE_STORAGE_KEY);
+			__resetAppearanceForTests();
+			reloadAppearance(); // re-reads (now-empty) storage → removes the <html> attrs
+		}
+
+		beforeEach(resetAppearance);
+		afterEach(resetAppearance);
+
+		it("renders the mode selector and theme cards even when settings fails to load", async () => {
+			// The appearance controls live in the dashboard section, OUTSIDE the
+			// server-settings <Show> boundary — so a rejected api.settings() must not
+			// hide them.
+			vi.mocked(api.settings).mockRejectedValue(new Error("settings unavailable"));
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			expect(el.querySelector("#pref-color-mode")).not.toBeNull();
+			expect(el.querySelectorAll("[data-theme-card]").length).toBe(8);
+			expect(el.querySelector('[data-theme-card="default"]')).not.toBeNull();
+			expect(el.querySelector('[data-theme-card="gruvbox"]')).not.toBeNull();
+			expect(el.querySelector('[data-theme-card="qud"]')).not.toBeNull();
+			expect(el.querySelector('[data-theme-card="vangogh"]')).not.toBeNull();
+			expect(el.querySelector('[data-theme-card="okabe"]')).not.toBeNull();
+			expect(el.querySelector('[data-theme-card="tol"]')).not.toBeNull();
+		});
+
+		it("every rendered card carries a data-theme matching its catalog id", async () => {
+			// The gallery's scoped-preview contract requires data-theme on each card
+			// so themes.css resolves that theme's palette locally, independent of :root.
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const cards = Array.from(el.querySelectorAll("[data-theme-card]"));
+			expect(cards.length).toBe(8);
+			for (const card of cards) {
+				const cardId = card.getAttribute("data-theme-card");
+				expect(card.getAttribute("data-theme"), `card ${cardId} must have data-theme`).toBe(cardId);
+			}
+		});
+
+		it("marks the restored theme card active and selects the restored color mode", async () => {
+			window.localStorage.setItem(THEME_STORAGE_KEY, "solarized");
+			window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");
+			reloadAppearance();
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const card = el.querySelector('[data-theme-card="solarized"]') as HTMLButtonElement;
+			expect(card.classList.contains("active")).toBe(true);
+			expect(card.getAttribute("aria-pressed")).toBe("true");
+			const select = el.querySelector("#pref-color-mode") as HTMLSelectElement;
+			expect(select.value).toBe("dark");
+		});
+
+		it("clicking a non-default card sets the documentElement theme attribute and persists it", async () => {
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(document.documentElement.getAttribute("data-theme")).toBeNull();
+
+			const card = el.querySelector('[data-theme-card="gruvbox"]') as HTMLButtonElement;
+			card.click();
+
+			expect(document.documentElement.getAttribute("data-theme")).toBe("gruvbox");
+			expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("gruvbox");
+			expect(card.classList.contains("active")).toBe(true);
+		});
+
+		it("selecting the default theme clears the attribute and storage key", async () => {
+			window.localStorage.setItem(THEME_STORAGE_KEY, "dim");
+			reloadAppearance();
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(document.documentElement.getAttribute("data-theme")).toBe("dim");
+
+			const defaultCard = el.querySelector('[data-theme-card="default"]') as HTMLButtonElement;
+			defaultCard.click();
+
+			expect(document.documentElement.getAttribute("data-theme")).toBeNull();
+			expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
+		});
+
+		it("selecting system color mode clears the color-mode attribute and key", async () => {
+			window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");
+			reloadAppearance();
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(document.documentElement.getAttribute("data-color-mode")).toBe("dark");
+
+			const select = el.querySelector("#pref-color-mode") as HTMLSelectElement;
+			select.value = "system";
+			select.dispatchEvent(new Event("change", { bubbles: true }));
+
+			expect(document.documentElement.getAttribute("data-color-mode")).toBeNull();
+			expect(window.localStorage.getItem(COLOR_MODE_STORAGE_KEY)).toBeNull();
+		});
+
+		it("reflects a forced color mode onto every preview card's data-color-mode", async () => {
+			// Each card carries data-color-mode so its scoped preview renders the
+			// SELECTED variant (via themes.css), independent of the active :root.
+			window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");
+			reloadAppearance();
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const cards = Array.from(el.querySelectorAll("[data-theme-card]"));
+			expect(cards.length).toBe(8);
+			for (const card of cards) {
+				expect(card.getAttribute("data-color-mode")).toBe("dark");
+			}
+		});
+
+		it("omits data-color-mode on preview cards in system mode", async () => {
+			// system is the default (no stored key), so previews follow the OS and
+			// must NOT carry data-color-mode.
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const cards = Array.from(el.querySelectorAll("[data-theme-card]"));
+			expect(cards.length).toBe(8);
+			for (const card of cards) {
+				expect(card.hasAttribute("data-color-mode")).toBe(false);
+			}
+		});
+
+		it("updates preview cards' data-color-mode reactively when the mode changes", async () => {
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const select = el.querySelector("#pref-color-mode") as HTMLSelectElement;
+			select.value = "light";
+			select.dispatchEvent(new Event("change", { bubbles: true }));
+			for (const card of Array.from(el.querySelectorAll("[data-theme-card]"))) {
+				expect(card.getAttribute("data-color-mode")).toBe("light");
+			}
+
+			select.value = "system";
+			select.dispatchEvent(new Event("change", { bubbles: true }));
+			for (const card of Array.from(el.querySelectorAll("[data-theme-card]"))) {
+				expect(card.hasAttribute("data-color-mode")).toBe(false);
+			}
+		});
+
+		it("documents that the dashboard appearance is independent of the TUI theme", async () => {
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(el.textContent).toContain("independent of the TUI");
+		});
 	});
 
 	it("settings requests browser notification permission from the dashboard toggle", async () => {
@@ -3163,6 +3468,45 @@ describe("dashboard client regressions", () => {
 		expect(promptText).toContain("archive.zip");
 		expect(promptText).toContain("/home/test/project/.dreb-dashboard-uploads/");
 		expect(promptText).not.toContain("binary-content-should-not-be-in-prompt");
+	});
+
+	it("fleet cards show task progress from runtime state when session is not hydrated", () => {
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: {},
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "k1",
+						cwd: "/repo",
+						state: {
+							sessionId: "s1",
+							tasks: [
+								{ id: "1", title: "Done task", status: "completed" },
+								{ id: "2", title: "WIP task", status: "in_progress" },
+							],
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 1,
+							pendingMessageCount: 0,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		expect(el.querySelector(".session-meta")?.textContent).toContain("tasks 1/2");
 	});
 
 	it("fleet cards use lastAssistantText as a muted activity preview", () => {

@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import { EventHub, formatSseFrame } from "../src/server/event-hub.js";
+import { applySessionEvent, createSessionViewState } from "../src/client/state/reducer.js";
+import { EventHub, formatHeartbeatFrame, formatSseFrame, projectDashboardEvent } from "../src/server/event-hub.js";
 
 function collectClient() {
 	const chunks: string[] = [];
 	return {
 		chunks,
-		client: { write: (c: string) => chunks.push(c) },
+		client: {
+			write: (c: string) => {
+				chunks.push(c);
+				return undefined;
+			},
+		},
 		envelopes: () =>
 			chunks
 				.filter((c) => c.includes("data: "))
@@ -50,6 +56,7 @@ describe("EventHub", () => {
 
 		const { client, envelopes } = collectClient();
 		hub.attach(client, 0); // asks for everything from the start — gap exists
+		expect(envelopes()).toHaveLength(1);
 		expect(envelopes()[0].event.type).toBe("dashboard_resync");
 	});
 
@@ -92,15 +99,172 @@ describe("EventHub", () => {
 		expect(envelopes()).toHaveLength(1);
 	});
 
-	it("leaves write-return handling to transport-specific clients", () => {
+	it("evicts a client whose write rejects while other clients keep receiving", () => {
 		const hub = new EventHub();
 		const falseReturning = { write: vi.fn(() => false) };
 		const { client, envelopes } = collectClient();
 		hub.attach(falseReturning);
 		hub.attach(client);
 		hub.publish("k", { type: "one" });
+		hub.publish("k", { type: "two" });
 		expect(falseReturning.write).toHaveBeenCalledTimes(1);
+		expect(envelopes().map((event) => event.event.type)).toEqual(["one", "two"]);
+		expect(hub.clientCount).toBe(1);
+	});
+
+	it("bounds history by encoded bytes as well as entry count", () => {
+		const hub = new EventHub({ bufferSize: 10, bufferBytes: 160, replayBytes: 120, eventBytes: 120 });
+		hub.publish("k", { type: "one", text: "x".repeat(45) });
+		hub.publish("k", { type: "two", text: "x".repeat(45) });
+		expect(hub.historyBytes).toBeLessThanOrEqual(160);
+
+		const { client, envelopes } = collectClient();
+		hub.attach(client, 0);
 		expect(envelopes()).toHaveLength(1);
+		expect(envelopes()[0].event).toMatchObject({ type: "dashboard_resync", reason: "buffer_gap" });
+	});
+
+	it("replays a viable range in strictly increasing sequence order", () => {
+		const hub = new EventHub({ replayBytes: 10_000 });
+		const first = hub.publish("k", { type: "one" });
+		hub.publish("k", { type: "two" });
+		hub.publish("k", { type: "three" });
+		const { client, envelopes } = collectClient();
+		hub.attach(client, first.seq);
+		expect(envelopes().map((event) => event.seq)).toEqual([first.seq + 1, first.seq + 2]);
+	});
+
+	it("sends an isolated current-sequence resync without older frames for an over-budget replay", () => {
+		const hub = new EventHub({ bufferBytes: 10_000, replayBytes: 150, eventBytes: 500 });
+		hub.publish("k", { type: "one", text: "x".repeat(50) });
+		hub.publish("k", { type: "two", text: "x".repeat(50) });
+		const { client, envelopes } = collectClient();
+		hub.attach(client, 0);
+		expect(envelopes()).toHaveLength(1);
+		expect(envelopes()[0]).toMatchObject({
+			seq: 2,
+			event: { type: "dashboard_resync", reason: "replay_over_budget" },
+		});
+		expect(hub.publish("k", { type: "three" }).seq).toBe(3);
+	});
+
+	it("keeps healthy clients ordered during sustained targeted recovery", () => {
+		const hub = new EventHub({ bufferSize: 8, bufferBytes: 1_200, replayBytes: 1_000, eventBytes: 500 });
+		const healthy = collectClient();
+		const slow = { write: vi.fn(() => false) };
+		hub.attach(healthy.client);
+		hub.attach(slow);
+
+		for (let index = 1; index <= 100; index++) {
+			hub.publish("k", { type: "tick", index, text: "x".repeat(40) });
+		}
+
+		expect(slow.write).toHaveBeenCalledTimes(1);
+		expect(hub.clientCount).toBe(1);
+		expect(hub.historyCount).toBeLessThanOrEqual(8);
+		expect(hub.historyBytes).toBeLessThanOrEqual(1_200);
+		expect(healthy.envelopes().map((event) => event.seq)).toEqual(Array.from({ length: 100 }, (_, i) => i + 1));
+
+		const recovered = collectClient();
+		hub.attach(recovered.client, 0);
+		expect(recovered.envelopes()).toEqual([
+			expect.objectContaining({
+				seq: 100,
+				event: expect.objectContaining({ type: "dashboard_resync", reason: "buffer_gap" }),
+			}),
+		]);
+		expect(healthy.envelopes()).not.toContainEqual(expect.objectContaining({ event: { type: "dashboard_resync" } }));
+
+		hub.publish("k", { type: "tick", index: 101 });
+		expect(healthy.envelopes().at(-1)).toMatchObject({ seq: 101, event: { type: "tick", index: 101 } });
+		expect(recovered.envelopes().at(-1)).toMatchObject({ seq: 101, event: { type: "tick", index: 101 } });
+	});
+
+	it("stops a rejected replay and never attaches that client for live fanout", () => {
+		const hub = new EventHub();
+		const first = hub.publish("k", { type: "one" });
+		hub.publish("k", { type: "two" });
+		const rejected = { write: vi.fn(() => false) };
+		hub.attach(rejected, first.seq);
+		hub.publish("k", { type: "three" });
+		expect(rejected.write).toHaveBeenCalledTimes(1);
+		expect(hub.clientCount).toBe(0);
+	});
+
+	it("turns an oversized projected event into one explicit resync barrier", () => {
+		const hub = new EventHub({ eventBytes: 100 });
+		const { client, envelopes } = collectClient();
+		hub.attach(client);
+		hub.publish("k", { type: "unknown_extension_event", output: "x".repeat(500) });
+		expect(envelopes()).toHaveLength(1);
+		expect(envelopes()[0]).toMatchObject({
+			seq: 1,
+			event: { type: "dashboard_resync", reason: "oversized_event" },
+		});
+		hub.publish("k", { type: "small" });
+		expect(envelopes().map((event) => event.event.type)).toEqual(["dashboard_resync", "small"]);
+	});
+
+	it("projects only reducer-unused cumulative fields and preserves reducer behavior", () => {
+		const events = [
+			{ type: "agent_end", messages: [{ huge: "x".repeat(200) }] },
+			{
+				type: "message_update",
+				message: { content: "x".repeat(200) },
+				assistantMessageEvent: { type: "text_start" },
+			},
+			{
+				type: "tool_execution_update",
+				toolCallId: "tool",
+				toolName: "bash",
+				args: { huge: "x".repeat(200) },
+				partialResult: "ok",
+			},
+			{ type: "turn_end", message: { huge: "x".repeat(200) }, toolResults: [{ huge: "x".repeat(200) }] },
+			{
+				type: "stream_retry",
+				attempt: 1,
+				maxAttempts: 2,
+				error: "kept",
+				discardedPartial: { huge: "x".repeat(200) },
+			},
+			{
+				type: "length_retry",
+				attempt: 1,
+				maxAttempts: 2,
+				previousMaxTokens: 100,
+				nextMaxTokens: 200,
+				discardedPartial: { huge: "x".repeat(200) },
+			},
+			{
+				type: "background_agent_event",
+				agentId: "child",
+				event: { type: "agent_end", messages: [{ huge: "x".repeat(200) }] },
+			},
+			{ type: "unknown_extension_event", cumulative: "kept" },
+		] as Record<string, unknown>[];
+		const full = createSessionViewState("k");
+		const projected = createSessionViewState("k");
+		for (const event of events) {
+			applySessionEvent(full, event);
+			applySessionEvent(projected, projectDashboardEvent(event));
+		}
+		expect(projected).toEqual(full);
+		expect(projectDashboardEvent(events[0]!)).not.toHaveProperty("messages");
+		expect(projectDashboardEvent(events[1]!)).not.toHaveProperty("message");
+		expect(projectDashboardEvent(events[2]!)).not.toHaveProperty("args");
+		expect(projectDashboardEvent(events[2]!)).toMatchObject({ toolName: "bash" });
+		expect(projectDashboardEvent(events[4]!)).not.toHaveProperty("discardedPartial");
+		expect(projectDashboardEvent(events[5]!)).not.toHaveProperty("discardedPartial");
+		expect(projectDashboardEvent(events[6]!)).toMatchObject({ event: { type: "agent_end" } });
+		expect((projectDashboardEvent(events[6]!).event as Record<string, unknown>).messages).toBeUndefined();
+		expect(projectDashboardEvent(events[7]!)).toBe(events[7]);
+	});
+
+	it("formats observable unnumbered heartbeats outside replay history", () => {
+		const frame = formatHeartbeatFrame();
+		expect(frame).toBe("event: heartbeat\ndata: {}\n\n");
+		expect(frame).not.toContain("id:");
 	});
 
 	it("formatSseFrame emits id and single-line JSON data", () => {

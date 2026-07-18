@@ -13,6 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const tokensCss = readFileSync(fileURLToPath(new URL("../../src/client/styles/tokens.css", import.meta.url)), "utf8");
 const appCss = readFileSync(fileURLToPath(new URL("../../src/client/styles/app.css", import.meta.url)), "utf8");
+const themesCss = readFileSync(fileURLToPath(new URL("../../src/client/styles/themes.css", import.meta.url)), "utf8");
 
 const prose =
 	"This deliberately long prose describes a live fleet session whose details must remain readable on a narrow mobile screen ";
@@ -64,6 +65,7 @@ const HARNESS_HTML = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>${tokensCss}</style>
 <style>${appCss}</style>
+<style>${themesCss}</style>
 </head>
 <body>
 	<main class="container">
