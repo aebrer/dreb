@@ -1518,26 +1518,39 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("TUI-only settings");
 	});
 
-	it("settings agent context select renders home-relative options with full-path values and tooltip", async () => {
-		const runtimeAt = (key: string, cwd: string) => ({
-			key,
-			cwd,
-			state: {
-				sessionId: key,
-				thinkingLevel: "off" as const,
-				isStreaming: false,
-				isCompacting: false,
-				steeringMode: "all" as const,
-				followUpMode: "all" as const,
-				autoCompactionEnabled: true,
-				messageCount: 0,
-				pendingMessageCount: 0,
-			},
-			backgroundAgents: [],
-			needsAttention: false,
-			createdAt: new Date().toISOString(),
-			lastActivity: new Date().toISOString(),
+	const runtimeAt = (key: string, cwd: string) => ({
+		key,
+		cwd,
+		state: {
+			sessionId: key,
+			thinkingLevel: "off" as const,
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all" as const,
+			followUpMode: "all" as const,
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		},
+		backgroundAgents: [],
+		needsAttention: false,
+		createdAt: new Date().toISOString(),
+		lastActivity: new Date().toISOString(),
+	});
+
+	const agentContextOptionTexts = async (cwds: string[]): Promise<string[]> => {
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: cwds.map((cwd, index) => runtimeAt(`k${index}`, cwd)),
+			diskSessions: [],
 		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		return [...el.querySelectorAll(".agent-context-row select option")].map((option) => option.textContent ?? "");
+	};
+
+	it("settings agent context select renders home-relative options with full-path values and tooltip", async () => {
 		vi.mocked(api.fleet).mockResolvedValue({
 			runtimes: [
 				runtimeAt("a", "/home/test/project-beta"),
@@ -1576,27 +1589,31 @@ describe("screen smoke tests", () => {
 	});
 
 	it("settings agent context select disambiguates multiple home prefixes as ~user", async () => {
-		const runtimeAt = (key: string, cwd: string) => ({
-			key,
-			cwd,
-			state: {
-				sessionId: key,
-				thinkingLevel: "off" as const,
-				isStreaming: false,
-				isCompacting: false,
-				steeringMode: "all" as const,
-				followUpMode: "all" as const,
-				autoCompactionEnabled: true,
-				messageCount: 0,
-				pendingMessageCount: 0,
-			},
-			backgroundAgents: [],
-			needsAttention: false,
-			createdAt: new Date().toISOString(),
-			lastActivity: new Date().toISOString(),
-		});
+		expect(await agentContextOptionTexts(["/home/alice/x", "/home/bob/y"])).toEqual([
+			"global/home only",
+			"~alice/x",
+			"~bob/y",
+		]);
+	});
+
+	it("settings agent context select collapses /root and /Users home prefixes", async () => {
+		// Single-home cases collapse to ~/… exactly like /home does.
+		expect(await agentContextOptionTexts(["/root/project"])).toEqual(["global/home only", "~/project"]);
+		expect(await agentContextOptionTexts(["/root"])).toEqual(["global/home only", "~"]);
+		expect(await agentContextOptionTexts(["/Users/alice/tools"])).toEqual(["global/home only", "~/tools"]);
+		// Mixed home roots disambiguate every root as ~user/… (order assertion-free:
+		// localeCompare collation of mixed-case prefixes is ICU-dependent).
+		const mixed = await agentContextOptionTexts(["/root/a", "/home/bob/b", "/Users/carol/c"]);
+		expect(mixed).toHaveLength(4);
+		expect(mixed[0]).toBe("global/home only");
+		expect(mixed.slice(1)).toEqual(expect.arrayContaining(["~root/a", "~bob/b", "~carol/c"]));
+	});
+
+	it("settings rows keep the structure the browser layout harness mirrors", async () => {
+		// settings-layout.browser.test.ts measures a static fixture of this markup.
+		// If any selector asserted here drifts in production, update that harness too.
 		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [runtimeAt("a", "/home/alice/x"), runtimeAt("b", "/home/bob/y")],
+			runtimes: [runtimeAt("a", "/home/test/project")],
 			diskSessions: [],
 		});
 		const store = makeStore();
@@ -1604,8 +1621,14 @@ describe("screen smoke tests", () => {
 		await store.refreshFleet();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
-		const options = [...el.querySelectorAll(".agent-context-row select option")];
-		expect(options.map((option) => option.textContent)).toEqual(["global/home only", "~alice/x", "~bob/y"]);
+		const row = el.querySelector(".setting-row.agent-context-row")!;
+		expect(row.querySelector(".setting-label .name")).toBeTruthy();
+		expect(row.querySelector(".setting-label .hint")).toBeTruthy();
+		expect(row.querySelector(".setting-control select[title]")).toBeTruthy();
+		// Short-control rows (other selects) and checkbox rows share the same
+		// .setting-row/.setting-control structure the harness exercises.
+		expect(el.querySelectorAll(".setting-row .setting-control select").length).toBeGreaterThan(1);
+		expect(el.querySelector(".setting-control .checkbox-control input[type=checkbox]")).toBeTruthy();
 	});
 
 	it("pairing renders the PIN flow with both security copy blocks", () => {
