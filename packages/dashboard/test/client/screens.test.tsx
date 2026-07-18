@@ -1550,6 +1550,15 @@ describe("screen smoke tests", () => {
 		return [...el.querySelectorAll(".agent-context-row select option")].map((option) => option.textContent ?? "");
 	};
 
+	// Order-free multi-root assertion: localeCompare collation of mixed-case
+	// prefixes is ICU-dependent, so only membership (plus exact count) is pinned.
+	const expectAgentContextOptions = async (cwds: string[], expected: string[]) => {
+		const options = await agentContextOptionTexts(cwds);
+		expect(options).toHaveLength(expected.length + 1);
+		expect(options[0]).toBe("global/home only");
+		expect(options.slice(1)).toEqual(expect.arrayContaining(expected));
+	};
+
 	it("settings agent context select renders home-relative options with full-path values and tooltip", async () => {
 		vi.mocked(api.fleet).mockResolvedValue({
 			runtimes: [
@@ -1611,19 +1620,58 @@ describe("screen smoke tests", () => {
 
 	it("settings agent context select namespace-qualifies colliding home labels", async () => {
 		// Same-OS collision: /root and /home/root share the alias "root".
-		const rootCollision = await agentContextOptionTexts(["/root/project", "/home/root/project"]);
-		expect(rootCollision).toHaveLength(3);
-		expect(rootCollision.slice(1)).toEqual(expect.arrayContaining(["~root/project", "~home/root/project"]));
+		await expectAgentContextOptions(["/root/project", "/home/root/project"], ["~root/project", "~home/root/project"]);
 
 		// Cross-namespace same-username collision: /home/alice vs /Users/alice.
-		const userCollision = await agentContextOptionTexts(["/home/alice/x", "/Users/alice/x"]);
-		expect(userCollision).toHaveLength(3);
-		expect(userCollision.slice(1)).toEqual(expect.arrayContaining(["~home/alice/x", "~Users/alice/x"]));
+		await expectAgentContextOptions(["/home/alice/x", "/Users/alice/x"], ["~home/alice/x", "~Users/alice/x"]);
 
 		// Distinct usernames across namespaces stay short — no qualification.
-		const noCollision = await agentContextOptionTexts(["/home/alice/x", "/Users/bob/y"]);
-		expect(noCollision).toHaveLength(3);
-		expect(noCollision.slice(1)).toEqual(expect.arrayContaining(["~alice/x", "~bob/y"]));
+		await expectAgentContextOptions(["/home/alice/x", "/Users/bob/y"], ["~alice/x", "~bob/y"]);
+
+		// The special root alias against the generic Users path.
+		await expectAgentContextOptions(["/root/x", "/Users/root/x"], ["~root/x", "~Users/root/x"]);
+
+		// Three-way collision: every label stays unique.
+		await expectAgentContextOptions(
+			["/root/p", "/home/root/p", "/Users/root/p"],
+			["~root/p", "~home/root/p", "~Users/root/p"],
+		);
+
+		// Selective qualification: only colliding aliases qualify; non-colliders stay short.
+		await expectAgentContextOptions(
+			["/home/alice/x", "/Users/alice/x", "/home/bob/y"],
+			["~home/alice/x", "~Users/alice/x", "~bob/y"],
+		);
+	});
+
+	it("settings agent context selection resets to global when its cwd leaves the fleet", async () => {
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
+			diskSessions: [],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
+		select.value = "/home/test/project-alpha";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(select.getAttribute("title")).toBe("/home/test/project-alpha");
+		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBe("/home/test/project-alpha");
+
+		// The selected project disappears from the fleet: the select, tooltip,
+		// and agentTypes context must all fall back to global rather than go stale.
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [runtimeAt("b", "/home/test/project-beta")],
+			diskSessions: [],
+		});
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(select.value).toBe("");
+		expect(select.getAttribute("title")).toBe("global/home only");
+		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBeUndefined();
 	});
 
 	it("settings rows keep the structure the browser layout harness mirrors", async () => {

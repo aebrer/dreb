@@ -3,7 +3,17 @@
  * shown verbatim) + paired-devices management + version footer.
  */
 
-import { createMemo, createResource, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	For,
+	type JSX,
+	onCleanup,
+	onMount,
+	Show,
+} from "solid-js";
 import type { AgentTypeDto, ModelInfoDto, PairingCodeDto, SettingsDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
@@ -240,6 +250,14 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		// Namespace-qualify colliding labels: ~home/root/…, ~Users/alice/….
 		return `~${home.split("/")[1]}/${alias}${rest}`;
 	};
+
+	// Keep the selection reconciled with the fleet: when the selected project
+	// disappears, fall back to global so the select value, title tooltip, and
+	// agentTypes context stay in sync instead of retaining a stale cwd.
+	createEffect(() => {
+		const selected = agentContextCwd();
+		if (selected && !agentProjectRoots().includes(selected)) setAgentContextCwd(undefined);
+	});
 
 	const [agentTypes] = createResource(
 		() => ({ settings: settings(), cwd: agentContextCwd() }),
