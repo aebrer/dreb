@@ -1642,6 +1642,14 @@ describe("screen smoke tests", () => {
 			["/home/alice/x", "/Users/alice/x", "/home/bob/y"],
 			["~home/alice/x", "~Users/alice/x", "~bob/y"],
 		);
+
+		// Crafted username matching a namespace segment: /home/home/alice's
+		// natural label would duplicate the qualified /home/alice label, so both
+		// fall back to the unambiguous full cwd. Uninvolved labels stay short.
+		await expectAgentContextOptions(
+			["/home/alice/x", "/Users/alice/x", "/home/home/alice/x"],
+			["~Users/alice/x", "/home/alice/x", "/home/home/alice/x"],
+		);
 	});
 
 	it("settings agent context selection resets to global when its cwd leaves the fleet", async () => {
@@ -1672,6 +1680,42 @@ describe("screen smoke tests", () => {
 		expect(select.value).toBe("");
 		expect(select.getAttribute("title")).toBe("global/home only");
 		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBeUndefined();
+	});
+
+	it("settings agent context selection survives a transient empty fleet", async () => {
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
+			diskSessions: [],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
+		select.value = "/home/test/project-alpha";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBe("/home/test/project-alpha");
+
+		// Transient empty snapshot (resync window / out-of-order refresh): the
+		// select hides with no roots, but the selection must NOT be reset.
+		vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.querySelector(".agent-context-row select")).toBeNull();
+		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBe("/home/test/project-alpha");
+
+		// Fleet repopulates with the project still present: selection intact.
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
+			diskSessions: [],
+		});
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const restored = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
+		expect(restored.value).toBe("/home/test/project-alpha");
+		expect(restored.getAttribute("title")).toBe("/home/test/project-alpha");
 	});
 
 	it("settings rows keep the structure the browser layout harness mirrors", async () => {

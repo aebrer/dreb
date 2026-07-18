@@ -240,7 +240,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		return new Set([...counts].filter(([, count]) => count > 1).map(([alias]) => alias));
 	});
 
-	const displayCwd = (cwd: string): string => {
+	const candidateLabel = (cwd: string): string => {
 		const home = homePrefixOf(cwd);
 		if (!home) return cwd;
 		const rest = cwd.slice(home.length); // "" or "/…"
@@ -251,12 +251,35 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		return `~${home.split("/")[1]}/${alias}${rest}`;
 	};
 
+	// Labels must be unique — distinct cwds with identical labels would be
+	// indistinguishable in the native popup. Disambiguation covers home-alias
+	// collisions, but crafted names can still duplicate a qualified label (a
+	// user literally named "home": /home/home/alice vs qualified /home/alice).
+	// Any remaining duplicate falls back to the unambiguous full cwd.
+	const displayLabels = createMemo(() => {
+		const labels = new Map<string, string>();
+		for (const root of agentProjectRoots()) labels.set(root, candidateLabel(root));
+		const counts = new Map<string, number>();
+		for (const label of labels.values()) counts.set(label, (counts.get(label) ?? 0) + 1);
+		for (const [root, label] of labels) {
+			if ((counts.get(label) ?? 0) > 1) labels.set(root, root);
+		}
+		return labels;
+	});
+
+	const displayCwd = (cwd: string): string => displayLabels().get(cwd) ?? cwd;
+
 	// Keep the selection reconciled with the fleet: when the selected project
 	// disappears, fall back to global so the select value, title tooltip, and
-	// agentTypes context stay in sync instead of retaining a stale cwd.
+	// agentTypes context stay in sync instead of retaining a stale cwd. Empty
+	// snapshots are tolerated — resync windows and out-of-order refreshes can
+	// transiently report no roots, and the select is hidden while roots are
+	// empty anyway, so a retained selection is neither visible nor harmful.
+	// (General refreshFleet response ordering is tracked separately.)
 	createEffect(() => {
 		const selected = agentContextCwd();
-		if (selected && !agentProjectRoots().includes(selected)) setAgentContextCwd(undefined);
+		const roots = agentProjectRoots();
+		if (selected && roots.length > 0 && !roots.includes(selected)) setAgentContextCwd(undefined);
 	});
 
 	const [agentTypes] = createResource(
