@@ -286,7 +286,15 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	// metadata only: request global/home agent definitions instead of rendering
 	// (and allowing edits to) a project context that is not currently reachable.
 	// When roots repopulate with the project, its definitions return with it.
-	const agentTypesCwd = () => (agentProjectRoots().length === 0 ? undefined : agentContextCwd());
+	// The membership check also prevents a one-flush stale fetch when a
+	// selection disappears — the reconciliation effect clears the signal, but
+	// the resource source memo runs first and must not emit the old cwd.
+	const agentTypesCwd = () => {
+		const roots = agentProjectRoots();
+		if (roots.length === 0) return undefined;
+		const selected = agentContextCwd();
+		return selected && roots.includes(selected) ? selected : undefined;
+	};
 
 	const [agentTypes] = createResource(
 		() => ({ settings: settings(), cwd: agentTypesCwd() }),
@@ -549,110 +557,115 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 									</div>
 								</Show>
 								<Show
-									when={(agentTypes() ?? []).length > 0}
-									fallback={<p class="muted small">No agent definitions found.</p>}
+									when={!agentTypes.loading}
+									fallback={<p class="muted small">loading agent definitions…</p>}
 								>
-									<For each={agentTypes() ?? []}>
-										{(agent: AgentTypeDto) => {
-											const fallbackList = () => current().agentModels?.[agent.name] ?? [];
-											return (
-												<div class="agent-model-row">
-													<div class="agent-model-summary">
-														<span class="agent-model-name">{agent.name}</span>
-														<span class="agent-model-description">{agent.description}</span>
-													</div>
-													<div class="agent-model-fallbacks">
-														<Show
-															when={fallbackList().length > 0}
-															fallback={<span class="muted small">default</span>}
-														>
-															<For each={fallbackList()}>
-																{(entry, index) => (
-																	<span class="agent-model-chip">
-																		{index() + 1}. {entry}
-																	</span>
-																)}
-															</For>
-														</Show>
-													</div>
-													<button
-														type="button"
-														class="btn btn-small agent-model-edit"
-														onClick={() =>
-															setEditingAgent(editingAgent() === agent.name ? undefined : agent.name)
-														}
-													>
-														{editingAgent() === agent.name ? "done" : "edit"}
-													</button>
-													<Show when={editingAgent() === agent.name}>
-														<div class="agent-model-editor">
+									<Show
+										when={(agentTypes() ?? []).length > 0}
+										fallback={<p class="muted small">No agent definitions found.</p>}
+									>
+										<For each={agentTypes() ?? []}>
+											{(agent: AgentTypeDto) => {
+												const fallbackList = () => current().agentModels?.[agent.name] ?? [];
+												return (
+													<div class="agent-model-row">
+														<div class="agent-model-summary">
+															<span class="agent-model-name">{agent.name}</span>
+															<span class="agent-model-description">{agent.description}</span>
+														</div>
+														<div class="agent-model-fallbacks">
 															<Show
 																when={fallbackList().length > 0}
-																fallback={<p class="muted small">Using the default model.</p>}
+																fallback={<span class="muted small">default</span>}
 															>
 																<For each={fallbackList()}>
 																	{(entry, index) => (
-																		<div class="agent-model-entry">
-																			<span>{entry}</span>
-																			<div class="agent-model-entry-actions">
-																				<button
-																					type="button"
-																					class="btn btn-small"
-																					disabled={index() === 0}
-																					onClick={() =>
-																						void saveAgentModels(
-																							agent.name,
-																							moveItem(fallbackList(), index(), -1),
-																						)
-																					}
-																				>
-																					↑
-																				</button>
-																				<button
-																					type="button"
-																					class="btn btn-small"
-																					disabled={index() === fallbackList().length - 1}
-																					onClick={() =>
-																						void saveAgentModels(
-																							agent.name,
-																							moveItem(fallbackList(), index(), 1),
-																						)
-																					}
-																				>
-																					↓
-																				</button>
-																				<button
-																					type="button"
-																					class="btn btn-small"
-																					onClick={() =>
-																						void saveAgentModels(
-																							agent.name,
-																							fallbackList().filter((_, i) => i !== index()),
-																						)
-																					}
-																				>
-																					×
-																				</button>
-																			</div>
-																		</div>
+																		<span class="agent-model-chip">
+																			{index() + 1}. {entry}
+																		</span>
 																	)}
 																</For>
 															</Show>
-															<button
-																type="button"
-																class="btn btn-small"
-																onClick={() =>
-																	setModelPickerTarget({ kind: "agent", agentName: agent.name })
-																}
-															>
-																add model…
-															</button>
 														</div>
-													</Show>
-												</div>
-											);
-										}}
-									</For>
+														<button
+															type="button"
+															class="btn btn-small agent-model-edit"
+															onClick={() =>
+																setEditingAgent(editingAgent() === agent.name ? undefined : agent.name)
+															}
+														>
+															{editingAgent() === agent.name ? "done" : "edit"}
+														</button>
+														<Show when={editingAgent() === agent.name}>
+															<div class="agent-model-editor">
+																<Show
+																	when={fallbackList().length > 0}
+																	fallback={<p class="muted small">Using the default model.</p>}
+																>
+																	<For each={fallbackList()}>
+																		{(entry, index) => (
+																			<div class="agent-model-entry">
+																				<span>{entry}</span>
+																				<div class="agent-model-entry-actions">
+																					<button
+																						type="button"
+																						class="btn btn-small"
+																						disabled={index() === 0}
+																						onClick={() =>
+																							void saveAgentModels(
+																								agent.name,
+																								moveItem(fallbackList(), index(), -1),
+																							)
+																						}
+																					>
+																						↑
+																					</button>
+																					<button
+																						type="button"
+																						class="btn btn-small"
+																						disabled={index() === fallbackList().length - 1}
+																						onClick={() =>
+																							void saveAgentModels(
+																								agent.name,
+																								moveItem(fallbackList(), index(), 1),
+																							)
+																						}
+																					>
+																						↓
+																					</button>
+																					<button
+																						type="button"
+																						class="btn btn-small"
+																						onClick={() =>
+																							void saveAgentModels(
+																								agent.name,
+																								fallbackList().filter((_, i) => i !== index()),
+																							)
+																						}
+																					>
+																						×
+																					</button>
+																				</div>
+																			</div>
+																		)}
+																	</For>
+																</Show>
+																<button
+																	type="button"
+																	class="btn btn-small"
+																	onClick={() =>
+																		setModelPickerTarget({ kind: "agent", agentName: agent.name })
+																	}
+																>
+																	add model…
+																</button>
+															</div>
+														</Show>
+													</div>
+												);
+											}}
+										</For>
+									</Show>
 								</Show>
 							</section>
 

@@ -1671,6 +1671,9 @@ describe("screen smoke tests", () => {
 
 		// The selected project disappears from the fleet: the select, tooltip,
 		// and agentTypes context must all fall back to global rather than go stale.
+		const alphaCallsBefore = vi
+			.mocked(api.agentTypes)
+			.mock.calls.filter((call) => call[0] === "/home/test/project-alpha").length;
 		vi.mocked(api.fleet).mockResolvedValue({
 			runtimes: [runtimeAt("b", "/home/test/project-beta")],
 			diskSessions: [],
@@ -1680,6 +1683,51 @@ describe("screen smoke tests", () => {
 		expect(select.value).toBe("");
 		expect(select.getAttribute("title")).toBe("global/home only");
 		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBeUndefined();
+		// No stale project fetch may fire in the transition flush — the source
+		// membership check prevents it before the reconciliation effect runs.
+		expect(vi.mocked(api.agentTypes).mock.calls.filter((call) => call[0] === "/home/test/project-alpha").length).toBe(
+			alphaCallsBefore,
+		);
+	});
+
+	it("settings agent definitions gate on loading while the context refetches", async () => {
+		let resolveGlobal: ((value: { agentTypes: { name: string; description: string }[] }) => void) | undefined;
+		vi.mocked(api.agentTypes).mockImplementation(async (cwd?: string) => {
+			if (cwd === undefined) {
+				return new Promise((resolve) => {
+					resolveGlobal = resolve;
+				});
+			}
+			return { agentTypes: [{ name: "ProjectAgent", description: "project-local definition" }] };
+		});
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
+			diskSessions: [],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
+		select.value = "/home/test/project-alpha";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("ProjectAgent");
+
+		// Roots empty and the global refetch is in flight: the stale project
+		// rows (and their edit controls) must NOT remain on screen — a resource
+		// keeps its previous value while refreshing, so the gate is what hides them.
+		vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("loading agent definitions");
+		expect(el.querySelector(".agent-model-name")).toBeNull();
+
+		resolveGlobal!({ agentTypes: [{ name: "GlobalAgent", description: "global definition" }] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).not.toContain("loading agent definitions");
+		expect([...el.querySelectorAll(".agent-model-name")].map((node) => node.textContent)).toEqual(["GlobalAgent"]);
 	});
 
 	it("settings agent context selection survives a transient empty fleet", async () => {
