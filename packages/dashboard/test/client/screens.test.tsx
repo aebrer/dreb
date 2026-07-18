@@ -1518,6 +1518,96 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("TUI-only settings");
 	});
 
+	it("settings agent context select renders home-relative options with full-path values and tooltip", async () => {
+		const runtimeAt = (key: string, cwd: string) => ({
+			key,
+			cwd,
+			state: {
+				sessionId: key,
+				thinkingLevel: "off" as const,
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all" as const,
+				followUpMode: "all" as const,
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			backgroundAgents: [],
+			needsAttention: false,
+			createdAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+		});
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [
+				runtimeAt("a", "/home/test/project-beta"),
+				runtimeAt("b", "/home/test/project-alpha"),
+				runtimeAt("c", "/opt/shared"),
+			],
+			diskSessions: [],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
+		expect(select).toBeTruthy();
+		const options = [...select.querySelectorAll("option")];
+		// Sorted by full cwd; display text is home-relative, values stay absolute.
+		expect(options.map((option) => option.textContent)).toEqual([
+			"global/home only",
+			"~/project-alpha",
+			"~/project-beta",
+			"/opt/shared",
+		]);
+		expect(options.map((option) => option.value)).toEqual([
+			"",
+			"/home/test/project-alpha",
+			"/home/test/project-beta",
+			"/opt/shared",
+		]);
+		// Tooltip exposes the full path of the current selection.
+		expect(select.getAttribute("title")).toBe("global/home only");
+		select.value = "/home/test/project-alpha";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(select.getAttribute("title")).toBe("/home/test/project-alpha");
+	});
+
+	it("settings agent context select disambiguates multiple home prefixes as ~user", async () => {
+		const runtimeAt = (key: string, cwd: string) => ({
+			key,
+			cwd,
+			state: {
+				sessionId: key,
+				thinkingLevel: "off" as const,
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all" as const,
+				followUpMode: "all" as const,
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			backgroundAgents: [],
+			needsAttention: false,
+			createdAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+		});
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [runtimeAt("a", "/home/alice/x"), runtimeAt("b", "/home/bob/y")],
+			diskSessions: [],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const options = [...el.querySelectorAll(".agent-context-row select option")];
+		expect(options.map((option) => option.textContent)).toEqual(["global/home only", "~alice/x", "~bob/y"]);
+	});
+
 	it("pairing renders the PIN flow with both security copy blocks", () => {
 		const store = makeStore() as any;
 		const fakeStore = {

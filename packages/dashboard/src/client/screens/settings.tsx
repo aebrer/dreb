@@ -200,6 +200,30 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		return [...roots].sort((a, b) => a.localeCompare(b));
 	});
 
+	// Home-shaped prefixes collapse for display. Chromium's opened select popup
+	// stays control-width and clips long absolute paths (issue 378), so options
+	// render home-relative and the full cwd moves to the select's title tooltip.
+	// With roots from multiple homes, disambiguate as ~user/path.
+	const homePrefixOf = (cwd: string): string | undefined =>
+		cwd.match(/^\/(?:home|Users)\/[^/]+/)?.[0] ?? (cwd === "/root" || cwd.startsWith("/root/") ? "/root" : undefined);
+
+	const distinctHomePrefixes = createMemo(() => {
+		const homes = new Set<string>();
+		for (const root of agentProjectRoots()) {
+			const home = homePrefixOf(root);
+			if (home) homes.add(home);
+		}
+		return homes;
+	});
+
+	const displayCwd = (cwd: string): string => {
+		const home = homePrefixOf(cwd);
+		if (!home) return cwd;
+		const rest = cwd.slice(home.length); // "" or "/…"
+		if (distinctHomePrefixes().size <= 1) return `~${rest}`;
+		return `~${home === "/root" ? "root" : (home.split("/").pop() ?? "")}${rest}`;
+	};
+
 	const [agentTypes] = createResource(
 		() => ({ settings: settings(), cwd: agentContextCwd() }),
 		async ({ cwd }) => {
@@ -449,10 +473,13 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										<span class="setting-control">
 											<select
 												value={agentContextCwd() ?? ""}
+												title={agentContextCwd() ?? "global/home only"}
 												onChange={(e) => setAgentContextCwd(e.currentTarget.value || undefined)}
 											>
 												<option value="">global/home only</option>
-												<For each={agentProjectRoots()}>{(cwd) => <option value={cwd}>{cwd}</option>}</For>
+												<For each={agentProjectRoots()}>
+													{(cwd) => <option value={cwd}>{displayCwd(cwd)}</option>}
+												</For>
 											</select>
 										</span>
 									</div>
