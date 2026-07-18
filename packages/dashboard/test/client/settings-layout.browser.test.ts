@@ -10,6 +10,12 @@
  * layout. jsdom performs no flex layout or document overflow measurement, so
  * this loads the production stylesheets in production order and measures the
  * DOM in real Chromium, mirroring fleet-layout.browser.test.ts.
+ *
+ * Note: the native dropdown popup is not part of the DOM and cannot be
+ * measured in Chromium. "Full paths remain readable in the opened dropdown"
+ * is covered at the DOM level by asserting the option elements retain their
+ * complete text; "the closed control clips the value" is covered by comparing
+ * the select's rendered width against its unconstrained intrinsic width.
  */
 
 import { readFileSync } from "node:fs";
@@ -63,6 +69,18 @@ const HARNESS_HTML = `<!DOCTYPE html>
 					</select>
 				</span>
 			</div>
+			<div class="setting-row" data-checkbox-row>
+				<span class="setting-label">
+					<span class="name">always expand thinking</span>
+					<span class="hint">checkbox control regression guard</span>
+				</span>
+				<span class="setting-control">
+					<label class="checkbox-control">
+						<input type="checkbox" checked data-checkbox />
+						<span>open by default</span>
+					</label>
+				</span>
+			</div>
 		</section>
 	</main>
 </body>
@@ -88,13 +106,17 @@ type SettingsMeasurements = {
 	documentFits: boolean;
 	selectWithinRow: boolean;
 	nameOnOneLine: boolean;
+	rowIsHorizontal: boolean;
 	controlBelowLabel: boolean;
-	shortSelectWithinRow: boolean;
-	shortSelectNotStretched: boolean;
+	agentValueClipped: boolean;
+	selectedOptionTextIntact: boolean;
+	shortSelectNaturalSize: boolean;
+	checkboxWithinRow: boolean;
+	checkboxNaturalSize: boolean;
 };
 
 async function measurements(): Promise<SettingsMeasurements> {
-	return page.evaluate(() => {
+	return page.evaluate((expectedLongPath) => {
 		const tolerance = 1;
 		const rectWithin = (child: Element, parent: Element) => {
 			const childRect = child.getBoundingClientRect();
@@ -106,15 +128,33 @@ async function measurements(): Promise<SettingsMeasurements> {
 				childRect.bottom <= parentRect.bottom + tolerance
 			);
 		};
+		// Width the element would take with no max-width constraint — the
+		// baseline for "natural size" and "is the value clipped" checks. The
+		// clone is appended to the SAME PARENT so scoped rules (e.g.
+		// .setting-control select padding/font-size) apply identically.
+		const intrinsicWidth = (element: HTMLElement) => {
+			const clone = element.cloneNode(true) as HTMLElement;
+			clone.style.maxWidth = "none";
+			clone.style.position = "absolute";
+			clone.style.visibility = "hidden";
+			element.parentElement!.appendChild(clone);
+			const width = clone.getBoundingClientRect().width;
+			clone.remove();
+			return width;
+		};
 		const row = document.querySelector<HTMLElement>("[data-agent-row]")!;
 		const label = row.querySelector<HTMLElement>("[data-agent-label]")!;
 		const name = label.querySelector<HTMLElement>(".name")!;
 		const control = row.querySelector<HTMLElement>("[data-agent-control]")!;
-		const select = row.querySelector<HTMLElement>("[data-agent-select]")!;
+		const select = row.querySelector<HTMLSelectElement>("[data-agent-select]")!;
 		const shortRow = document.querySelector<HTMLElement>("[data-short-row]")!;
 		const shortSelect = shortRow.querySelector<HTMLElement>("[data-short-select]")!;
+		const checkboxRow = document.querySelector<HTMLElement>("[data-checkbox-row]")!;
+		const checkbox = checkboxRow.querySelector<HTMLElement>("[data-checkbox]")!;
 		const nameStyle = getComputedStyle(name);
 		const nameLineHeight = Number.parseFloat(nameStyle.lineHeight);
+		const controlRect = control.getBoundingClientRect();
+		const labelRect = label.getBoundingClientRect();
 
 		return {
 			documentFits: document.documentElement.scrollWidth <= window.innerWidth + tolerance,
@@ -123,39 +163,66 @@ async function measurements(): Promise<SettingsMeasurements> {
 			// secondary and wraps in narrow layouts elsewhere by design). Pre-fix
 			// the unshrinkable select crushes the label until even the name wraps.
 			nameOnOneLine: name.getBoundingClientRect().height <= nameLineHeight + tolerance,
-			controlBelowLabel: control.getBoundingClientRect().top > label.getBoundingClientRect().top + tolerance,
-			shortSelectWithinRow: rectWithin(shortSelect, shortRow),
-			shortSelectNotStretched:
-				shortSelect.getBoundingClientRect().width <= shortRow.getBoundingClientRect().width / 2 + tolerance,
+			// Row layout is active above the 700px breakpoint: the control sits
+			// beside the label, not below it.
+			rowIsHorizontal:
+				controlRect.left > labelRect.left &&
+				controlRect.top < labelRect.bottom &&
+				controlRect.bottom > labelRect.top,
+			controlBelowLabel: controlRect.top > labelRect.top + tolerance,
+			// The capped select must visibly clip its value: rendered width is
+			// smaller than the unconstrained intrinsic width. Pre-fix the wide
+			// layout renders the select AT intrinsic width (no clipping, label
+			// squished instead).
+			agentValueClipped: intrinsicWidth(select) - select.getBoundingClientRect().width > 2,
+			// DOM-level guarantee behind "full paths remain readable in the opened
+			// dropdown": the option data is never truncated, only visually clipped.
+			selectedOptionTextIntact: select.options[select.selectedIndex].text === expectedLongPath,
+			// Natural size = rendered width matches the unconstrained baseline:
+			// neither stretched nor clipped by the new constraints.
+			shortSelectNaturalSize: Math.abs(shortSelect.getBoundingClientRect().width - intrinsicWidth(shortSelect)) <= 2,
+			checkboxWithinRow: rectWithin(checkbox, checkboxRow),
+			checkboxNaturalSize: Math.abs(checkbox.getBoundingClientRect().width - intrinsicWidth(checkbox)) <= 2,
 		};
-	});
+	}, longPath);
+}
+
+async function measurementsAt(width: number): Promise<SettingsMeasurements> {
+	await page.setViewportSize({ width, height: 800 });
+	return measurements();
 }
 
 describe("settings agent-context row layout in a real browser", () => {
-	it.each([760, 1024])("keeps the label readable at %ipx instead of squishing it", async (width) => {
-		await page.setViewportSize({ width, height: 800 });
-		const measured = await measurements();
+	// 701px is the first viewport where the desktop row layout applies; 1024px
+	// exercises the same layout with slack. (.settings-wrap caps at 720px, so
+	// intermediate widths add no new geometry.)
+	it.each([701, 1024])("keeps the label readable and the row horizontal at %ipx", async (width) => {
+		const measured = await measurementsAt(width);
 
 		expect(measured.documentFits).toBe(true);
 		expect(measured.selectWithinRow).toBe(true);
 		expect(measured.nameOnOneLine).toBe(true);
+		expect(measured.rowIsHorizontal).toBe(true);
+		expect(measured.agentValueClipped).toBe(true);
+		expect(measured.selectedOptionTextIntact).toBe(true);
 	});
 
 	it.each([360, 700])("caps the select to the container at %ipx without horizontal overflow", async (width) => {
-		await page.setViewportSize({ width, height: 800 });
-		const measured = await measurements();
+		const measured = await measurementsAt(width);
 
 		expect(measured.documentFits).toBe(true);
 		expect(measured.selectWithinRow).toBe(true);
 		// Column layout is active at these widths: the control stacks below the label.
 		expect(measured.controlBelowLabel).toBe(true);
+		expect(measured.agentValueClipped).toBe(true);
+		expect(measured.selectedOptionTextIntact).toBe(true);
 	});
 
-	it.each([360, 1024])("leaves short controls at their natural size at %ipx", async (width) => {
-		await page.setViewportSize({ width, height: 800 });
-		const measured = await measurements();
+	it.each([360, 1024])("leaves short controls and checkboxes at their natural size at %ipx", async (width) => {
+		const measured = await measurementsAt(width);
 
-		expect(measured.shortSelectWithinRow).toBe(true);
-		expect(measured.shortSelectNotStretched).toBe(true);
+		expect(measured.shortSelectNaturalSize).toBe(true);
+		expect(measured.checkboxWithinRow).toBe(true);
+		expect(measured.checkboxNaturalSize).toBe(true);
 	});
 });
