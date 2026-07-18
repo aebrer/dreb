@@ -300,13 +300,11 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		() => ({ settings: settings(), cwd: agentTypesCwd() }),
 		async ({ cwd }) => {
 			if (!settings()) return [];
-			try {
-				const { agentTypes } = await api.agentTypes(cwd);
-				return agentTypes;
-			} catch (err) {
-				setError(err instanceof Error ? err.message : String(err));
-				return [];
-			}
+			// Failures route through the resource's error state: Solid ignores
+			// superseded fetches entirely (no stale error banners), and the next
+			// successful load clears the error automatically.
+			const { agentTypes } = await api.agentTypes(cwd);
+			return agentTypes;
 		},
 	);
 
@@ -557,8 +555,12 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 									</div>
 								</Show>
 								<Show
-									when={!agentTypes.loading}
-									fallback={<p class="muted small">loading agent definitions…</p>}
+									when={!agentTypes.loading && !agentTypes.error}
+									fallback={
+										<p class="muted small">
+											{agentTypes.error ? "failed to load agent definitions" : "loading agent definitions…"}
+										</p>
+									}
 								>
 									<Show
 										when={(agentTypes() ?? []).length > 0}

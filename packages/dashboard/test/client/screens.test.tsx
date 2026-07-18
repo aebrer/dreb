@@ -1730,6 +1730,85 @@ describe("screen smoke tests", () => {
 		expect([...el.querySelectorAll(".agent-model-name")].map((node) => node.textContent)).toEqual(["GlobalAgent"]);
 	});
 
+	it("settings shows the loading placeholder until the initial agent definitions load", async () => {
+		let resolveDefinitions: ((value: { agentTypes: { name: string; description: string }[] }) => void) | undefined;
+		vi.mocked(api.agentTypes).mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					resolveDefinitions = resolve;
+				}),
+		);
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("loading agent definitions");
+		expect(el.querySelector(".agent-model-name")).toBeNull();
+
+		resolveDefinitions!({ agentTypes: [{ name: "GlobalAgent", description: "global definition" }] });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).not.toContain("loading agent definitions");
+		expect([...el.querySelectorAll(".agent-model-name")].map((node) => node.textContent)).toEqual(["GlobalAgent"]);
+	});
+
+	it("settings shows the empty fallback when no agent definitions exist", async () => {
+		// Default mock resolves an empty list.
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("No agent definitions found.");
+		expect(el.querySelector(".agent-model-name")).toBeNull();
+	});
+
+	it("settings ignores superseded agent definition failures and surfaces current ones", async () => {
+		let rejectStaleGlobal: ((err: Error) => void) | undefined;
+		vi.mocked(api.agentTypes).mockImplementation(async (cwd?: string) => {
+			if (cwd === undefined) {
+				return new Promise((_, reject) => {
+					rejectStaleGlobal = reject;
+				});
+			}
+			return { agentTypes: [{ name: "ProjectAgent", description: "project-local definition" }] };
+		});
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [runtimeAt("a", "/home/test/project-alpha")],
+			diskSessions: [],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await store.refreshFleet();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// Select the project: its definitions load while the initial global
+		// fetch is still in flight (superseded).
+		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
+		select.value = "/home/test/project-alpha";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("ProjectAgent");
+
+		// The superseded fetch rejects: no error surfaces, current definitions
+		// are undisturbed — failures route through the resource's error state,
+		// which Solid only tracks for the latest request.
+		rejectStaleGlobal!(new Error("stale global failure"));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).not.toContain("failed to load agent definitions");
+		expect(el.querySelector(".settings-error")).toBeNull();
+		expect(el.textContent).toContain("ProjectAgent");
+	});
+
+	it("settings surfaces a failed agent definitions load", async () => {
+		vi.mocked(api.agentTypes).mockRejectedValue(new Error("boom"));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("failed to load agent definitions");
+		expect(el.querySelector(".agent-model-name")).toBeNull();
+	});
+
 	it("settings agent context selection survives a transient empty fleet", async () => {
 		vi.mocked(api.agentTypes).mockImplementation(async (cwd?: string) => ({
 			agentTypes: cwd
