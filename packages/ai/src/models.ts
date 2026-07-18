@@ -149,8 +149,10 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
  * Supported today:
  * - GPT-5.2 through GPT-5.6 model families
  * - Opus 4.6+ models (xhigh maps to adaptive effort "max" on Anthropic-compatible providers)
+ * - Kimi Code K3 (xhigh maps to its advertised "max" effort)
  */
 export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
+	if (model.provider === "kimi-coding-oauth" && model.id === "k3") return true;
 	if (
 		model.id.includes("gpt-5.2") ||
 		model.id.includes("gpt-5.3") ||
