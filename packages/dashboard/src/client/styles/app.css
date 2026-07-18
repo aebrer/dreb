@@ -1609,6 +1609,18 @@ details.thinking .thinking-body {
 	color: var(--muted);
 }
 
+.setting-control {
+	min-width: 0;
+	max-width: 100%;
+}
+
+/* The agent context select holds absolute project paths (unbounded intrinsic
+   width). Let the control absorb all flex shrinkage so the label's primary
+   text never wraps; the select clips its value instead. */
+.agent-context-row .setting-label {
+	flex-shrink: 0;
+}
+
 .setting-control select,
 .setting-control input {
 	border: var(--hairline);
@@ -1618,6 +1630,7 @@ details.thinking .thinking-body {
 	font-family: inherit;
 	font-size: var(--fs-secondary);
 	padding: 2px var(--space-2);
+	max-width: 100%;
 }
 
 .checkbox-control {
