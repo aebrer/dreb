@@ -449,6 +449,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										<span class="setting-control">
 											<select
 												value={agentContextCwd() ?? ""}
+												title={agentContextCwd() ?? "global/home only"}
 												onChange={(e) => setAgentContextCwd(e.currentTarget.value || undefined)}
 											>
 												<option value="">global/home only</option>
