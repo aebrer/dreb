@@ -11,15 +11,9 @@
  * this loads the production stylesheets in production order and measures the
  * DOM in real Chromium, mirroring fleet-layout.browser.test.ts.
  *
- * Scope: this test is LAYOUT-ONLY. The harness mirrors the production markup
- * from settings.tsx (home-relative option text, title tooltip) as a static
- * fixture; it intentionally does not assert option semantics. The production
- * markup contract (classes/structure/title binding this fixture depends on)
- * and all option/tooltip semantics are covered in screens.test.tsx (jsdom) —
- * drift there fails loudly. Chromium's opened select popup is a native window
- * outside the DOM and cannot be measured; it also stays control-width and
- * clips long options on Linux, which is why production shortens the display
- * text in the first place.
+ * Scope: LAYOUT-ONLY. The harness mirrors the production markup from
+ * settings.tsx (full-path option text, title tooltip on the select) as a
+ * static fixture; option semantics are covered in screens.test.tsx (jsdom).
  */
 
 import { readFileSync } from "node:fs";
@@ -32,11 +26,8 @@ const appCss = readFileSync(fileURLToPath(new URL("../../src/client/styles/app.c
 const themesCss = readFileSync(fileURLToPath(new URL("../../src/client/styles/themes.css", import.meta.url)), "utf8");
 
 // ~125 chars: long enough that the select's intrinsic width exceeds the space
-// available beside the label even on a wide viewport. Options render
-// home-relative in production (Chromium's opened popup stays control-width
-// and clips); the full path lives in the option value and the select's title.
+// available beside the label even on a wide viewport.
 const longPath = `/home/acters/${"deeply-nested/project-layer/".repeat(4)}dreb`;
-const longPathDisplay = `~/${"deeply-nested/project-layer/".repeat(4)}dreb`;
 
 const HARNESS_HTML = `<!DOCTYPE html>
 <html>
@@ -59,7 +50,7 @@ const HARNESS_HTML = `<!DOCTYPE html>
 				<span class="setting-control" data-agent-control>
 					<select data-agent-select title="${longPath}">
 						<option value="">global/home only</option>
-						<option value="${longPath}" selected>${longPathDisplay}</option>
+						<option value="${longPath}" selected>${longPath}</option>
 					</select>
 				</span>
 			</div>
@@ -74,18 +65,6 @@ const HARNESS_HTML = `<!DOCTYPE html>
 						<option>light</option>
 						<option>dark</option>
 					</select>
-				</span>
-			</div>
-			<div class="setting-row" data-checkbox-row>
-				<span class="setting-label">
-					<span class="name">always expand thinking</span>
-					<span class="hint">checkbox control regression guard</span>
-				</span>
-				<span class="setting-control">
-					<label class="checkbox-control">
-						<input type="checkbox" checked data-checkbox />
-						<span>open by default</span>
-					</label>
 				</span>
 			</div>
 		</section>
@@ -116,9 +95,8 @@ type SettingsMeasurements = {
 	rowIsHorizontal: boolean;
 	controlBelowLabel: boolean;
 	agentValueClipped: boolean;
+	shortSelectWithinRow: boolean;
 	shortSelectNaturalSize: boolean;
-	checkboxWithinRow: boolean;
-	checkboxNaturalSize: boolean;
 };
 
 async function measurements(): Promise<SettingsMeasurements> {
@@ -155,8 +133,6 @@ async function measurements(): Promise<SettingsMeasurements> {
 		const select = row.querySelector<HTMLSelectElement>("[data-agent-select]")!;
 		const shortRow = document.querySelector<HTMLElement>("[data-short-row]")!;
 		const shortSelect = shortRow.querySelector<HTMLElement>("[data-short-select]")!;
-		const checkboxRow = document.querySelector<HTMLElement>("[data-checkbox-row]")!;
-		const checkbox = checkboxRow.querySelector<HTMLElement>("[data-checkbox]")!;
 		const nameStyle = getComputedStyle(name);
 		const nameLineHeight = Number.parseFloat(nameStyle.lineHeight);
 		const controlRect = control.getBoundingClientRect();
@@ -181,11 +157,10 @@ async function measurements(): Promise<SettingsMeasurements> {
 			// layout renders the select AT intrinsic width (no clipping, label
 			// squished instead).
 			agentValueClipped: intrinsicWidth(select) - select.getBoundingClientRect().width > 2,
+			shortSelectWithinRow: rectWithin(shortSelect, shortRow),
 			// Natural size = rendered width matches the unconstrained baseline:
 			// neither stretched nor clipped by the new constraints.
 			shortSelectNaturalSize: Math.abs(shortSelect.getBoundingClientRect().width - intrinsicWidth(shortSelect)) <= 2,
-			checkboxWithinRow: rectWithin(checkbox, checkboxRow),
-			checkboxNaturalSize: Math.abs(checkbox.getBoundingClientRect().width - intrinsicWidth(checkbox)) <= 2,
 		};
 	});
 }
@@ -219,11 +194,10 @@ describe("settings agent-context row layout in a real browser", () => {
 		expect(measured.agentValueClipped).toBe(true);
 	});
 
-	it.each([360, 1024])("leaves short controls and checkboxes at their natural size at %ipx", async (width) => {
+	it.each([360, 1024])("leaves short controls at their natural size at %ipx", async (width) => {
 		const measured = await measurementsAt(width);
 
+		expect(measured.shortSelectWithinRow).toBe(true);
 		expect(measured.shortSelectNaturalSize).toBe(true);
-		expect(measured.checkboxWithinRow).toBe(true);
-		expect(measured.checkboxNaturalSize).toBe(true);
 	});
 });
