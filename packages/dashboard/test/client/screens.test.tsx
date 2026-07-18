@@ -1683,6 +1683,11 @@ describe("screen smoke tests", () => {
 	});
 
 	it("settings agent context selection survives a transient empty fleet", async () => {
+		vi.mocked(api.agentTypes).mockImplementation(async (cwd?: string) => ({
+			agentTypes: cwd
+				? [{ name: "ProjectAgent", description: "project-local definition" }]
+				: [{ name: "GlobalAgent", description: "global definition" }],
+		}));
 		vi.mocked(api.fleet).mockResolvedValue({
 			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
 			diskSessions: [],
@@ -1697,16 +1702,22 @@ describe("screen smoke tests", () => {
 		select.dispatchEvent(new Event("change", { bubbles: true }));
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBe("/home/test/project-alpha");
+		expect(el.textContent).toContain("ProjectAgent");
 
 		// Transient empty snapshot (resync window / out-of-order refresh): the
-		// select hides with no roots, but the selection must NOT be reset.
+		// select hides and the selection is RETAINED as recovery metadata, but
+		// the rendered definitions fall back to global — a stale project context
+		// must not stay visible or editable while its roots are gone.
 		vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
 		await store.refreshFleet();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(el.querySelector(".agent-context-row select")).toBeNull();
-		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBe("/home/test/project-alpha");
+		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBeUndefined();
+		expect(el.textContent).toContain("GlobalAgent");
+		expect(el.textContent).not.toContain("ProjectAgent");
 
-		// Fleet repopulates with the project still present: selection intact.
+		// Fleet repopulates with the project still present: selection and its
+		// project-local definitions return together.
 		vi.mocked(api.fleet).mockResolvedValue({
 			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
 			diskSessions: [],
@@ -1716,6 +1727,8 @@ describe("screen smoke tests", () => {
 		const restored = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
 		expect(restored.value).toBe("/home/test/project-alpha");
 		expect(restored.getAttribute("title")).toBe("/home/test/project-alpha");
+		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBe("/home/test/project-alpha");
+		expect(el.textContent).toContain("ProjectAgent");
 	});
 
 	it("settings rows keep the structure the browser layout harness mirrors", async () => {

@@ -282,8 +282,14 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		if (selected && roots.length > 0 && !roots.includes(selected)) setAgentContextCwd(undefined);
 	});
 
+	// While the fleet reports no roots, the retained selection is recovery
+	// metadata only: request global/home agent definitions instead of rendering
+	// (and allowing edits to) a project context that is not currently reachable.
+	// When roots repopulate with the project, its definitions return with it.
+	const agentTypesCwd = () => (agentProjectRoots().length === 0 ? undefined : agentContextCwd());
+
 	const [agentTypes] = createResource(
-		() => ({ settings: settings(), cwd: agentContextCwd() }),
+		() => ({ settings: settings(), cwd: agentTypesCwd() }),
 		async ({ cwd }) => {
 			if (!settings()) return [];
 			try {
