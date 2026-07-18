@@ -1609,6 +1609,23 @@ describe("screen smoke tests", () => {
 		expect(mixed.slice(1)).toEqual(expect.arrayContaining(["~root/a", "~bob/b", "~carol/c"]));
 	});
 
+	it("settings agent context select namespace-qualifies colliding home labels", async () => {
+		// Same-OS collision: /root and /home/root share the alias "root".
+		const rootCollision = await agentContextOptionTexts(["/root/project", "/home/root/project"]);
+		expect(rootCollision).toHaveLength(3);
+		expect(rootCollision.slice(1)).toEqual(expect.arrayContaining(["~root/project", "~home/root/project"]));
+
+		// Cross-namespace same-username collision: /home/alice vs /Users/alice.
+		const userCollision = await agentContextOptionTexts(["/home/alice/x", "/Users/alice/x"]);
+		expect(userCollision).toHaveLength(3);
+		expect(userCollision.slice(1)).toEqual(expect.arrayContaining(["~home/alice/x", "~Users/alice/x"]));
+
+		// Distinct usernames across namespaces stay short — no qualification.
+		const noCollision = await agentContextOptionTexts(["/home/alice/x", "/Users/bob/y"]);
+		expect(noCollision).toHaveLength(3);
+		expect(noCollision.slice(1)).toEqual(expect.arrayContaining(["~alice/x", "~bob/y"]));
+	});
+
 	it("settings rows keep the structure the browser layout harness mirrors", async () => {
 		// settings-layout.browser.test.ts measures a static fixture of this markup.
 		// If any selector asserted here drifts in production, update that harness too.

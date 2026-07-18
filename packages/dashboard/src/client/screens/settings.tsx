@@ -207,6 +207,8 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	const homePrefixOf = (cwd: string): string | undefined =>
 		cwd.match(/^\/(?:home|Users)\/[^/]+/)?.[0] ?? (cwd === "/root" || cwd.startsWith("/root/") ? "/root" : undefined);
 
+	const homeAliasOf = (home: string): string => (home === "/root" ? "root" : (home.split("/").pop() ?? ""));
+
 	const distinctHomePrefixes = createMemo(() => {
 		const homes = new Set<string>();
 		for (const root of agentProjectRoots()) {
@@ -216,12 +218,27 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		return homes;
 	});
 
+	// Aliases are not unique across home roots: /root vs /home/root and
+	// /home/alice vs /Users/alice all share a final segment. Detect collisions
+	// so displayCwd can namespace-qualify the affected labels.
+	const collidingHomeAliases = createMemo(() => {
+		const counts = new Map<string, number>();
+		for (const home of distinctHomePrefixes()) {
+			const alias = homeAliasOf(home);
+			counts.set(alias, (counts.get(alias) ?? 0) + 1);
+		}
+		return new Set([...counts].filter(([, count]) => count > 1).map(([alias]) => alias));
+	});
+
 	const displayCwd = (cwd: string): string => {
 		const home = homePrefixOf(cwd);
 		if (!home) return cwd;
 		const rest = cwd.slice(home.length); // "" or "/…"
 		if (distinctHomePrefixes().size <= 1) return `~${rest}`;
-		return `~${home === "/root" ? "root" : (home.split("/").pop() ?? "")}${rest}`;
+		const alias = homeAliasOf(home);
+		if (home === "/root" || !collidingHomeAliases().has(alias)) return `~${alias}${rest}`;
+		// Namespace-qualify colliding labels: ~home/root/…, ~Users/alice/….
+		return `~${home.split("/")[1]}/${alias}${rest}`;
 	};
 
 	const [agentTypes] = createResource(
