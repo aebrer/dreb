@@ -3,17 +3,7 @@
  * shown verbatim) + paired-devices management + version footer.
  */
 
-import {
-	createEffect,
-	createMemo,
-	createResource,
-	createSignal,
-	For,
-	type JSX,
-	onCleanup,
-	onMount,
-	Show,
-} from "solid-js";
+import { createMemo, createResource, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import type { AgentTypeDto, ModelInfoDto, PairingCodeDto, SettingsDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
@@ -210,101 +200,17 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		return [...roots].sort((a, b) => a.localeCompare(b));
 	});
 
-	// Home-shaped prefixes collapse for display. Chromium's opened select popup
-	// stays control-width and clips long absolute paths (issue 378), so options
-	// render home-relative and the full cwd moves to the select's title tooltip.
-	// With roots from multiple homes, disambiguate as ~user/path.
-	const homePrefixOf = (cwd: string): string | undefined =>
-		cwd.match(/^\/(?:home|Users)\/[^/]+/)?.[0] ?? (cwd === "/root" || cwd.startsWith("/root/") ? "/root" : undefined);
-
-	const homeAliasOf = (home: string): string => (home === "/root" ? "root" : (home.split("/").pop() ?? ""));
-
-	const distinctHomePrefixes = createMemo(() => {
-		const homes = new Set<string>();
-		for (const root of agentProjectRoots()) {
-			const home = homePrefixOf(root);
-			if (home) homes.add(home);
-		}
-		return homes;
-	});
-
-	// Aliases are not unique across home roots: /root vs /home/root and
-	// /home/alice vs /Users/alice all share a final segment. Detect collisions
-	// so displayCwd can namespace-qualify the affected labels.
-	const collidingHomeAliases = createMemo(() => {
-		const counts = new Map<string, number>();
-		for (const home of distinctHomePrefixes()) {
-			const alias = homeAliasOf(home);
-			counts.set(alias, (counts.get(alias) ?? 0) + 1);
-		}
-		return new Set([...counts].filter(([, count]) => count > 1).map(([alias]) => alias));
-	});
-
-	const candidateLabel = (cwd: string): string => {
-		const home = homePrefixOf(cwd);
-		if (!home) return cwd;
-		const rest = cwd.slice(home.length); // "" or "/…"
-		if (distinctHomePrefixes().size <= 1) return `~${rest}`;
-		const alias = homeAliasOf(home);
-		if (home === "/root" || !collidingHomeAliases().has(alias)) return `~${alias}${rest}`;
-		// Namespace-qualify colliding labels: ~home/root/…, ~Users/alice/….
-		return `~${home.split("/")[1]}/${alias}${rest}`;
-	};
-
-	// Labels must be unique — distinct cwds with identical labels would be
-	// indistinguishable in the native popup. Disambiguation covers home-alias
-	// collisions, but crafted names can still duplicate a qualified label (a
-	// user literally named "home": /home/home/alice vs qualified /home/alice).
-	// Any remaining duplicate falls back to the unambiguous full cwd.
-	const displayLabels = createMemo(() => {
-		const labels = new Map<string, string>();
-		for (const root of agentProjectRoots()) labels.set(root, candidateLabel(root));
-		const counts = new Map<string, number>();
-		for (const label of labels.values()) counts.set(label, (counts.get(label) ?? 0) + 1);
-		for (const [root, label] of labels) {
-			if ((counts.get(label) ?? 0) > 1) labels.set(root, root);
-		}
-		return labels;
-	});
-
-	const displayCwd = (cwd: string): string => displayLabels().get(cwd) ?? cwd;
-
-	// Keep the selection reconciled with the fleet: when the selected project
-	// disappears, fall back to global so the select value, title tooltip, and
-	// agentTypes context stay in sync instead of retaining a stale cwd. Empty
-	// snapshots are tolerated — resync windows and out-of-order refreshes can
-	// transiently report no roots, and the select is hidden while roots are
-	// empty anyway, so a retained selection is neither visible nor harmful.
-	// (General refreshFleet response ordering is tracked separately.)
-	createEffect(() => {
-		const selected = agentContextCwd();
-		const roots = agentProjectRoots();
-		if (selected && roots.length > 0 && !roots.includes(selected)) setAgentContextCwd(undefined);
-	});
-
-	// While the fleet reports no roots, the retained selection is recovery
-	// metadata only: request global/home agent definitions instead of rendering
-	// (and allowing edits to) a project context that is not currently reachable.
-	// When roots repopulate with the project, its definitions return with it.
-	// The membership check also prevents a one-flush stale fetch when a
-	// selection disappears — the reconciliation effect clears the signal, but
-	// the resource source memo runs first and must not emit the old cwd.
-	const agentTypesCwd = () => {
-		const roots = agentProjectRoots();
-		if (roots.length === 0) return undefined;
-		const selected = agentContextCwd();
-		return selected && roots.includes(selected) ? selected : undefined;
-	};
-
 	const [agentTypes] = createResource(
-		() => ({ settings: settings(), cwd: agentTypesCwd() }),
+		() => ({ settings: settings(), cwd: agentContextCwd() }),
 		async ({ cwd }) => {
 			if (!settings()) return [];
-			// Failures route through the resource's error state: Solid ignores
-			// superseded fetches entirely (no stale error banners), and the next
-			// successful load clears the error automatically.
-			const { agentTypes } = await api.agentTypes(cwd);
-			return agentTypes;
+			try {
+				const { agentTypes } = await api.agentTypes(cwd);
+				return agentTypes;
+			} catch (err) {
+				setError(err instanceof Error ? err.message : String(err));
+				return [];
+			}
 		},
 	);
 
@@ -547,127 +453,116 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 												onChange={(e) => setAgentContextCwd(e.currentTarget.value || undefined)}
 											>
 												<option value="">global/home only</option>
-												<For each={agentProjectRoots()}>
-													{(cwd) => <option value={cwd}>{displayCwd(cwd)}</option>}
-												</For>
+												<For each={agentProjectRoots()}>{(cwd) => <option value={cwd}>{cwd}</option>}</For>
 											</select>
 										</span>
 									</div>
 								</Show>
 								<Show
-									when={!agentTypes.loading && !agentTypes.error}
-									fallback={
-										<p class="muted small">
-											{agentTypes.error ? "failed to load agent definitions" : "loading agent definitions…"}
-										</p>
-									}
+									when={(agentTypes() ?? []).length > 0}
+									fallback={<p class="muted small">No agent definitions found.</p>}
 								>
-									<Show
-										when={(agentTypes() ?? []).length > 0}
-										fallback={<p class="muted small">No agent definitions found.</p>}
-									>
-										<For each={agentTypes() ?? []}>
-											{(agent: AgentTypeDto) => {
-												const fallbackList = () => current().agentModels?.[agent.name] ?? [];
-												return (
-													<div class="agent-model-row">
-														<div class="agent-model-summary">
-															<span class="agent-model-name">{agent.name}</span>
-															<span class="agent-model-description">{agent.description}</span>
-														</div>
-														<div class="agent-model-fallbacks">
+									<For each={agentTypes() ?? []}>
+										{(agent: AgentTypeDto) => {
+											const fallbackList = () => current().agentModels?.[agent.name] ?? [];
+											return (
+												<div class="agent-model-row">
+													<div class="agent-model-summary">
+														<span class="agent-model-name">{agent.name}</span>
+														<span class="agent-model-description">{agent.description}</span>
+													</div>
+													<div class="agent-model-fallbacks">
+														<Show
+															when={fallbackList().length > 0}
+															fallback={<span class="muted small">default</span>}
+														>
+															<For each={fallbackList()}>
+																{(entry, index) => (
+																	<span class="agent-model-chip">
+																		{index() + 1}. {entry}
+																	</span>
+																)}
+															</For>
+														</Show>
+													</div>
+													<button
+														type="button"
+														class="btn btn-small agent-model-edit"
+														onClick={() =>
+															setEditingAgent(editingAgent() === agent.name ? undefined : agent.name)
+														}
+													>
+														{editingAgent() === agent.name ? "done" : "edit"}
+													</button>
+													<Show when={editingAgent() === agent.name}>
+														<div class="agent-model-editor">
 															<Show
 																when={fallbackList().length > 0}
-																fallback={<span class="muted small">default</span>}
+																fallback={<p class="muted small">Using the default model.</p>}
 															>
 																<For each={fallbackList()}>
 																	{(entry, index) => (
-																		<span class="agent-model-chip">
-																			{index() + 1}. {entry}
-																		</span>
+																		<div class="agent-model-entry">
+																			<span>{entry}</span>
+																			<div class="agent-model-entry-actions">
+																				<button
+																					type="button"
+																					class="btn btn-small"
+																					disabled={index() === 0}
+																					onClick={() =>
+																						void saveAgentModels(
+																							agent.name,
+																							moveItem(fallbackList(), index(), -1),
+																						)
+																					}
+																				>
+																					↑
+																				</button>
+																				<button
+																					type="button"
+																					class="btn btn-small"
+																					disabled={index() === fallbackList().length - 1}
+																					onClick={() =>
+																						void saveAgentModels(
+																							agent.name,
+																							moveItem(fallbackList(), index(), 1),
+																						)
+																					}
+																				>
+																					↓
+																				</button>
+																				<button
+																					type="button"
+																					class="btn btn-small"
+																					onClick={() =>
+																						void saveAgentModels(
+																							agent.name,
+																							fallbackList().filter((_, i) => i !== index()),
+																						)
+																					}
+																				>
+																					×
+																				</button>
+																			</div>
+																		</div>
 																	)}
 																</For>
 															</Show>
+															<button
+																type="button"
+																class="btn btn-small"
+																onClick={() =>
+																	setModelPickerTarget({ kind: "agent", agentName: agent.name })
+																}
+															>
+																add model…
+															</button>
 														</div>
-														<button
-															type="button"
-															class="btn btn-small agent-model-edit"
-															onClick={() =>
-																setEditingAgent(editingAgent() === agent.name ? undefined : agent.name)
-															}
-														>
-															{editingAgent() === agent.name ? "done" : "edit"}
-														</button>
-														<Show when={editingAgent() === agent.name}>
-															<div class="agent-model-editor">
-																<Show
-																	when={fallbackList().length > 0}
-																	fallback={<p class="muted small">Using the default model.</p>}
-																>
-																	<For each={fallbackList()}>
-																		{(entry, index) => (
-																			<div class="agent-model-entry">
-																				<span>{entry}</span>
-																				<div class="agent-model-entry-actions">
-																					<button
-																						type="button"
-																						class="btn btn-small"
-																						disabled={index() === 0}
-																						onClick={() =>
-																							void saveAgentModels(
-																								agent.name,
-																								moveItem(fallbackList(), index(), -1),
-																							)
-																						}
-																					>
-																						↑
-																					</button>
-																					<button
-																						type="button"
-																						class="btn btn-small"
-																						disabled={index() === fallbackList().length - 1}
-																						onClick={() =>
-																							void saveAgentModels(
-																								agent.name,
-																								moveItem(fallbackList(), index(), 1),
-																							)
-																						}
-																					>
-																						↓
-																					</button>
-																					<button
-																						type="button"
-																						class="btn btn-small"
-																						onClick={() =>
-																							void saveAgentModels(
-																								agent.name,
-																								fallbackList().filter((_, i) => i !== index()),
-																							)
-																						}
-																					>
-																						×
-																					</button>
-																				</div>
-																			</div>
-																		)}
-																	</For>
-																</Show>
-																<button
-																	type="button"
-																	class="btn btn-small"
-																	onClick={() =>
-																		setModelPickerTarget({ kind: "agent", agentName: agent.name })
-																	}
-																>
-																	add model…
-																</button>
-															</div>
-														</Show>
-													</div>
-												);
-											}}
-										</For>
-									</Show>
+													</Show>
+												</div>
+											);
+										}}
+									</For>
 								</Show>
 							</section>
 

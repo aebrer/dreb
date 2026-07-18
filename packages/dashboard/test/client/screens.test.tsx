@@ -1518,54 +1518,28 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("TUI-only settings");
 	});
 
-	const runtimeAt = (key: string, cwd: string) => ({
-		key,
-		cwd,
-		state: {
-			sessionId: key,
-			thinkingLevel: "off" as const,
-			isStreaming: false,
-			isCompacting: false,
-			steeringMode: "all" as const,
-			followUpMode: "all" as const,
-			autoCompactionEnabled: true,
-			messageCount: 0,
-			pendingMessageCount: 0,
-		},
-		backgroundAgents: [],
-		needsAttention: false,
-		createdAt: new Date().toISOString(),
-		lastActivity: new Date().toISOString(),
-	});
-
-	const agentContextOptionTexts = async (cwds: string[]): Promise<string[]> => {
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: cwds.map((cwd, index) => runtimeAt(`k${index}`, cwd)),
-			diskSessions: [],
+	it("settings agent context select carries full path values with a full-path tooltip", async () => {
+		const runtimeAt = (key: string, cwd: string) => ({
+			key,
+			cwd,
+			state: {
+				sessionId: key,
+				thinkingLevel: "off" as const,
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all" as const,
+				followUpMode: "all" as const,
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			backgroundAgents: [],
+			needsAttention: false,
+			createdAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
 		});
-		const store = makeStore();
-		const el = mount(() => <SettingsScreen store={store} />);
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		return [...el.querySelectorAll(".agent-context-row select option")].map((option) => option.textContent ?? "");
-	};
-
-	// Order-free multi-root assertion: localeCompare collation of mixed-case
-	// prefixes is ICU-dependent, so only membership (plus exact count) is pinned.
-	const expectAgentContextOptions = async (cwds: string[], expected: string[]) => {
-		const options = await agentContextOptionTexts(cwds);
-		expect(options).toHaveLength(expected.length + 1);
-		expect(options[0]).toBe("global/home only");
-		expect(options.slice(1)).toEqual(expect.arrayContaining(expected));
-	};
-
-	it("settings agent context select renders home-relative options with full-path values and tooltip", async () => {
 		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [
-				runtimeAt("a", "/home/test/project-beta"),
-				runtimeAt("b", "/home/test/project-alpha"),
-				runtimeAt("c", "/opt/shared"),
-			],
+			runtimes: [runtimeAt("a", "/home/test/project-beta"), runtimeAt("b", "/home/test/project-alpha")],
 			diskSessions: [],
 		});
 		const store = makeStore();
@@ -1573,311 +1547,25 @@ describe("screen smoke tests", () => {
 		await store.refreshFleet();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
+		// Options display the full absolute cwd (no display transformation) and
+		// the closed control exposes it on hover via the title tooltip.
 		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
-		expect(select).toBeTruthy();
 		const options = [...select.querySelectorAll("option")];
-		// Sorted by full cwd; display text is home-relative, values stay absolute.
 		expect(options.map((option) => option.textContent)).toEqual([
 			"global/home only",
-			"~/project-alpha",
-			"~/project-beta",
-			"/opt/shared",
+			"/home/test/project-alpha",
+			"/home/test/project-beta",
 		]);
 		expect(options.map((option) => option.value)).toEqual([
 			"",
 			"/home/test/project-alpha",
 			"/home/test/project-beta",
-			"/opt/shared",
 		]);
-		// Tooltip exposes the full path of the current selection.
 		expect(select.getAttribute("title")).toBe("global/home only");
 		select.value = "/home/test/project-alpha";
 		select.dispatchEvent(new Event("change", { bubbles: true }));
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(select.getAttribute("title")).toBe("/home/test/project-alpha");
-	});
-
-	it("settings agent context select disambiguates multiple home prefixes as ~user", async () => {
-		expect(await agentContextOptionTexts(["/home/alice/x", "/home/bob/y"])).toEqual([
-			"global/home only",
-			"~alice/x",
-			"~bob/y",
-		]);
-	});
-
-	it("settings agent context select collapses /root and /Users home prefixes", async () => {
-		// Single-home cases collapse to ~/… exactly like /home does.
-		expect(await agentContextOptionTexts(["/root/project"])).toEqual(["global/home only", "~/project"]);
-		expect(await agentContextOptionTexts(["/root"])).toEqual(["global/home only", "~"]);
-		expect(await agentContextOptionTexts(["/Users/alice/tools"])).toEqual(["global/home only", "~/tools"]);
-		// Mixed home roots disambiguate every root as ~user/… (order assertion-free:
-		// localeCompare collation of mixed-case prefixes is ICU-dependent).
-		const mixed = await agentContextOptionTexts(["/root/a", "/home/bob/b", "/Users/carol/c"]);
-		expect(mixed).toHaveLength(4);
-		expect(mixed[0]).toBe("global/home only");
-		expect(mixed.slice(1)).toEqual(expect.arrayContaining(["~root/a", "~bob/b", "~carol/c"]));
-	});
-
-	it("settings agent context select namespace-qualifies colliding home labels", async () => {
-		// Same-OS collision: /root and /home/root share the alias "root".
-		await expectAgentContextOptions(["/root/project", "/home/root/project"], ["~root/project", "~home/root/project"]);
-
-		// Cross-namespace same-username collision: /home/alice vs /Users/alice.
-		await expectAgentContextOptions(["/home/alice/x", "/Users/alice/x"], ["~home/alice/x", "~Users/alice/x"]);
-
-		// Distinct usernames across namespaces stay short — no qualification.
-		await expectAgentContextOptions(["/home/alice/x", "/Users/bob/y"], ["~alice/x", "~bob/y"]);
-
-		// The special root alias against the generic Users path.
-		await expectAgentContextOptions(["/root/x", "/Users/root/x"], ["~root/x", "~Users/root/x"]);
-
-		// Three-way collision: every label stays unique.
-		await expectAgentContextOptions(
-			["/root/p", "/home/root/p", "/Users/root/p"],
-			["~root/p", "~home/root/p", "~Users/root/p"],
-		);
-
-		// Selective qualification: only colliding aliases qualify; non-colliders stay short.
-		await expectAgentContextOptions(
-			["/home/alice/x", "/Users/alice/x", "/home/bob/y"],
-			["~home/alice/x", "~Users/alice/x", "~bob/y"],
-		);
-
-		// Crafted username matching a namespace segment: /home/home/alice's
-		// natural label would duplicate the qualified /home/alice label, so both
-		// fall back to the unambiguous full cwd. Uninvolved labels stay short.
-		await expectAgentContextOptions(
-			["/home/alice/x", "/Users/alice/x", "/home/home/alice/x"],
-			["~Users/alice/x", "/home/alice/x", "/home/home/alice/x"],
-		);
-	});
-
-	it("settings agent context selection resets to global when its cwd leaves the fleet", async () => {
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
-			diskSessions: [],
-		});
-		const store = makeStore();
-		const el = mount(() => <SettingsScreen store={store} />);
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
-		select.value = "/home/test/project-alpha";
-		select.dispatchEvent(new Event("change", { bubbles: true }));
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(select.getAttribute("title")).toBe("/home/test/project-alpha");
-		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBe("/home/test/project-alpha");
-
-		// The selected project disappears from the fleet: the select, tooltip,
-		// and agentTypes context must all fall back to global rather than go stale.
-		const alphaCallsBefore = vi
-			.mocked(api.agentTypes)
-			.mock.calls.filter((call) => call[0] === "/home/test/project-alpha").length;
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [runtimeAt("b", "/home/test/project-beta")],
-			diskSessions: [],
-		});
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(select.value).toBe("");
-		expect(select.getAttribute("title")).toBe("global/home only");
-		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBeUndefined();
-		// No stale project fetch may fire in the transition flush — the source
-		// membership check prevents it before the reconciliation effect runs.
-		expect(vi.mocked(api.agentTypes).mock.calls.filter((call) => call[0] === "/home/test/project-alpha").length).toBe(
-			alphaCallsBefore,
-		);
-	});
-
-	it("settings agent definitions gate on loading while the context refetches", async () => {
-		let resolveGlobal: ((value: { agentTypes: { name: string; description: string }[] }) => void) | undefined;
-		vi.mocked(api.agentTypes).mockImplementation(async (cwd?: string) => {
-			if (cwd === undefined) {
-				return new Promise((resolve) => {
-					resolveGlobal = resolve;
-				});
-			}
-			return { agentTypes: [{ name: "ProjectAgent", description: "project-local definition" }] };
-		});
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
-			diskSessions: [],
-		});
-		const store = makeStore();
-		const el = mount(() => <SettingsScreen store={store} />);
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
-		select.value = "/home/test/project-alpha";
-		select.dispatchEvent(new Event("change", { bubbles: true }));
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(el.textContent).toContain("ProjectAgent");
-
-		// Roots empty and the global refetch is in flight: the stale project
-		// rows (and their edit controls) must NOT remain on screen — a resource
-		// keeps its previous value while refreshing, so the gate is what hides them.
-		vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(el.textContent).toContain("loading agent definitions");
-		expect(el.querySelector(".agent-model-name")).toBeNull();
-
-		resolveGlobal!({ agentTypes: [{ name: "GlobalAgent", description: "global definition" }] });
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(el.textContent).not.toContain("loading agent definitions");
-		expect([...el.querySelectorAll(".agent-model-name")].map((node) => node.textContent)).toEqual(["GlobalAgent"]);
-	});
-
-	it("settings shows the loading placeholder until the initial agent definitions load", async () => {
-		let resolveDefinitions: ((value: { agentTypes: { name: string; description: string }[] }) => void) | undefined;
-		vi.mocked(api.agentTypes).mockImplementation(
-			() =>
-				new Promise((resolve) => {
-					resolveDefinitions = resolve;
-				}),
-		);
-		const store = makeStore();
-		const el = mount(() => <SettingsScreen store={store} />);
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		expect(el.textContent).toContain("loading agent definitions");
-		expect(el.querySelector(".agent-model-name")).toBeNull();
-
-		resolveDefinitions!({ agentTypes: [{ name: "GlobalAgent", description: "global definition" }] });
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(el.textContent).not.toContain("loading agent definitions");
-		expect([...el.querySelectorAll(".agent-model-name")].map((node) => node.textContent)).toEqual(["GlobalAgent"]);
-	});
-
-	it("settings shows the empty fallback when no agent definitions exist", async () => {
-		// Default mock resolves an empty list.
-		const store = makeStore();
-		const el = mount(() => <SettingsScreen store={store} />);
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		expect(el.textContent).toContain("No agent definitions found.");
-		expect(el.querySelector(".agent-model-name")).toBeNull();
-	});
-
-	it("settings ignores superseded agent definition failures and surfaces current ones", async () => {
-		let rejectStaleGlobal: ((err: Error) => void) | undefined;
-		vi.mocked(api.agentTypes).mockImplementation(async (cwd?: string) => {
-			if (cwd === undefined) {
-				return new Promise((_, reject) => {
-					rejectStaleGlobal = reject;
-				});
-			}
-			return { agentTypes: [{ name: "ProjectAgent", description: "project-local definition" }] };
-		});
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [runtimeAt("a", "/home/test/project-alpha")],
-			diskSessions: [],
-		});
-		const store = makeStore();
-		const el = mount(() => <SettingsScreen store={store} />);
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		// Select the project: its definitions load while the initial global
-		// fetch is still in flight (superseded).
-		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
-		select.value = "/home/test/project-alpha";
-		select.dispatchEvent(new Event("change", { bubbles: true }));
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(el.textContent).toContain("ProjectAgent");
-
-		// The superseded fetch rejects: no error surfaces, current definitions
-		// are undisturbed — failures route through the resource's error state,
-		// which Solid only tracks for the latest request.
-		rejectStaleGlobal!(new Error("stale global failure"));
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(el.textContent).not.toContain("failed to load agent definitions");
-		expect(el.querySelector(".settings-error")).toBeNull();
-		expect(el.textContent).toContain("ProjectAgent");
-	});
-
-	it("settings surfaces a failed agent definitions load", async () => {
-		vi.mocked(api.agentTypes).mockRejectedValue(new Error("boom"));
-		const store = makeStore();
-		const el = mount(() => <SettingsScreen store={store} />);
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		expect(el.textContent).toContain("failed to load agent definitions");
-		expect(el.querySelector(".agent-model-name")).toBeNull();
-	});
-
-	it("settings agent context selection survives a transient empty fleet", async () => {
-		vi.mocked(api.agentTypes).mockImplementation(async (cwd?: string) => ({
-			agentTypes: cwd
-				? [{ name: "ProjectAgent", description: "project-local definition" }]
-				: [{ name: "GlobalAgent", description: "global definition" }],
-		}));
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
-			diskSessions: [],
-		});
-		const store = makeStore();
-		const el = mount(() => <SettingsScreen store={store} />);
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		const select = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
-		select.value = "/home/test/project-alpha";
-		select.dispatchEvent(new Event("change", { bubbles: true }));
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBe("/home/test/project-alpha");
-		expect(el.textContent).toContain("ProjectAgent");
-
-		// Transient empty snapshot (resync window / out-of-order refresh): the
-		// select hides and the selection is RETAINED as recovery metadata, but
-		// the rendered definitions fall back to global — a stale project context
-		// must not stay visible or editable while its roots are gone.
-		vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(el.querySelector(".agent-context-row select")).toBeNull();
-		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBeUndefined();
-		expect(el.textContent).toContain("GlobalAgent");
-		expect(el.textContent).not.toContain("ProjectAgent");
-
-		// Fleet repopulates with the project still present: selection and its
-		// project-local definitions return together.
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [runtimeAt("a", "/home/test/project-alpha"), runtimeAt("b", "/home/test/project-beta")],
-			diskSessions: [],
-		});
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		const restored = el.querySelector<HTMLSelectElement>(".agent-context-row select")!;
-		expect(restored.value).toBe("/home/test/project-alpha");
-		expect(restored.getAttribute("title")).toBe("/home/test/project-alpha");
-		expect(vi.mocked(api.agentTypes).mock.lastCall?.[0]).toBe("/home/test/project-alpha");
-		expect(el.textContent).toContain("ProjectAgent");
-	});
-
-	it("settings rows keep the structure the browser layout harness mirrors", async () => {
-		// settings-layout.browser.test.ts measures a static fixture of this markup.
-		// If any selector asserted here drifts in production, update that harness too.
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [runtimeAt("a", "/home/test/project")],
-			diskSessions: [],
-		});
-		const store = makeStore();
-		const el = mount(() => <SettingsScreen store={store} />);
-		await store.refreshFleet();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-
-		const row = el.querySelector(".setting-row.agent-context-row")!;
-		expect(row.querySelector(".setting-label .name")).toBeTruthy();
-		expect(row.querySelector(".setting-label .hint")).toBeTruthy();
-		expect(row.querySelector(".setting-control select[title]")).toBeTruthy();
-		// Short-control rows (other selects) and checkbox rows share the same
-		// .setting-row/.setting-control structure the harness exercises.
-		expect(el.querySelectorAll(".setting-row .setting-control select").length).toBeGreaterThan(1);
-		expect(el.querySelector(".setting-control .checkbox-control input[type=checkbox]")).toBeTruthy();
 	});
 
 	it("pairing renders the PIN flow with both security copy blocks", () => {
