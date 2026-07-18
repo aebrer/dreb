@@ -427,23 +427,22 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 			openRouterParams.reasoning = { effort: "none" };
 		}
 	} else if (compat.thinkingFormat === "kimi" && model.reasoning) {
-		// Kimi uses thinking: { type: "enabled" | "disabled" } + reasoning_effort + prompt_cache_key.
+		// Kimi Code carries effort inside the top-level thinking object.
 		const kimiParams = params as Omit<typeof params, "reasoning_effort"> & {
-			thinking?: { type: "enabled" | "disabled" };
-			reasoning_effort?: string;
+			thinking?: { type: "enabled" | "disabled"; effort?: string };
 			prompt_cache_key?: string;
 		};
 		if (options?.reasoningEffort) {
 			const effort = mapReasoningEffort(options.reasoningEffort, compat.reasoningEffortMap);
 			if (effort === "off") {
 				kimiParams.thinking = { type: "disabled" };
-			} else if (effort !== "auto") {
-				kimiParams.reasoning_effort = effort;
-				kimiParams.thinking = { type: "enabled" };
+			} else {
+				// "auto" enables thinking without constraining effort; every other
+				// mapped value is passed through nested inside the thinking object.
+				kimiParams.thinking = effort === "auto" ? { type: "enabled" } : { type: "enabled", effort };
 			}
-			// "auto" → omit both thinking and reasoning_effort
 		}
-		// No reasoningEffort → omit both (default behaviour)
+		// No reasoningEffort → omit thinking and use the server default.
 		if (options?.sessionId) {
 			kimiParams.prompt_cache_key = options.sessionId;
 		}

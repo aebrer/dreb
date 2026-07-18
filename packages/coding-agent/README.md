@@ -81,7 +81,7 @@ Or use a custom provider (corporate proxy, Bedrock, etc.) — see [Custom provid
 
 Then just talk to dreb. All 11 built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, and `wait`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Three additional tools — `search`, `skill`, and `tasks_update` — are always active regardless of `--tools`. `suggest_next` is active by default but excluded when `--tools` is specified. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
 
-**Also available:** [`@dreb/telegram`](https://www.npmjs.com/package/@dreb/telegram) — run dreb as a Telegram bot with live tool status and visible results for user-facing tools (`npm install -g @dreb/telegram`). [`@dreb/dashboard`](https://www.npmjs.com/package/@dreb/dashboard) — run `dreb dashboard` for a browser UI with fleet overview, full chat steering, subagent observability, host file browser, and Tailscale/rotating-code pairing (`npm install -g @dreb/dashboard`; see [docs/dashboard.md](docs/dashboard.md)).
+**Also available:** [`@dreb/telegram`](https://www.npmjs.com/package/@dreb/telegram) — run dreb as a Telegram bot with live tool status and visible results for user-facing tools (`npm install -g @dreb/telegram`). [`@dreb/dashboard`](https://www.npmjs.com/package/@dreb/dashboard) — run `dreb dashboard` for a browser UI with fleet overview, full chat steering, subagent observability, host file browser, curated appearance themes (per-browser light/dark), and Tailscale/rotating-code pairing (`npm install -g @dreb/dashboard`; see [docs/dashboard.md](docs/dashboard.md)). Its top bar and persistent session header indicators report connecting, connected, retrying, resyncing, disconnected, or auth failed; bounded SSE replay plus an explicit snapshot barrier restores session state and tasks after a reload, restart, gap, backpressure disconnect, or stalled stream.
 
 **Platform notes:** [Windows](docs/windows.md) | [Termux (Android)](docs/termux.md) | [tmux](docs/tmux.md) | [Terminal setup](docs/terminal-setup.md) | [Shell aliases](docs/shell-aliases.md)
 
@@ -276,7 +276,7 @@ Use `/settings` to modify common options, or edit JSON files directly:
 | `~/.dreb/agent/settings.json` | Global (all projects) |
 | `.dreb/settings.json` | Project (overrides global) |
 
-See [docs/settings.md](docs/settings.md) for all options.
+See [docs/settings.md](docs/settings.md) for all options. Dashboard Settings re-entry reloads durable global and project settings after flushing pending writes, so it sees external file edits; unreadable, invalid, or failed writes are surfaced as errors rather than showing stale values. See the [RPC settings contract](docs/rpc.md#get_settings).
 
 ---
 

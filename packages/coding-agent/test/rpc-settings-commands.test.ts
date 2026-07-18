@@ -11,6 +11,7 @@ import * as jsonl from "../src/modes/rpc/jsonl.js";
 import { RpcClient } from "../src/modes/rpc/rpc-client.js";
 import {
 	evaluateContextTrustForRpc,
+	getFreshSettingsForRpc,
 	getSettingsForRpc,
 	listAgentTypesForRpc,
 	removeTrustedContextFolderForRpc,
@@ -24,7 +25,9 @@ import type { RpcSettingsSnapshot } from "../src/modes/rpc/rpc-types.js";
 const tempDirs: string[] = [];
 
 async function createTempDir(): Promise<string> {
-	const dir = await mkdtemp(join(tmpdir(), "dreb-rpc-settings-"));
+	// Canonicalize with realpath so expected paths match the implementation's
+	// native-realpath output; on macOS os.tmpdir() lives under /var → /private/var.
+	const dir = realpathSync.native(await mkdtemp(join(tmpdir(), "dreb-rpc-settings-")));
 	tempDirs.push(dir);
 	return dir;
 }
@@ -150,6 +153,173 @@ describe("getSettingsForRpc", () => {
 		expect(snapshot.autoLoadNestedContext).toBe(false);
 		expect(snapshot.trustedContextFolders).toEqual([rootA, rootB]);
 		expect(snapshot.effectiveTrustedContextRoots).toEqual([]);
+	});
+});
+
+describe("getFreshSettingsForRpc", () => {
+	it("reloads durable global and project settings before snapshotting", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		mkdirSync(join(projectDir, ".dreb"), { recursive: true });
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "anthropic" }));
+		writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ steeringMode: "all" }));
+		const manager = SettingsManager.create(projectDir, agentDir);
+
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "openai" }));
+		writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ followUpMode: "all" }));
+
+		await expect(getFreshSettingsForRpc(manager)).resolves.toMatchObject({
+			ok: true,
+			settings: { defaultProvider: "openai", steeringMode: "one-at-a-time", followUpMode: "all" },
+		});
+	});
+
+	it("flushes queued writes before reload so they are not discarded", async () => {
+		const manager = SettingsManager.inMemory();
+		manager.setDefaultProvider("anthropic");
+
+		const result = await getFreshSettingsForRpc(manager);
+
+		expect(result).toMatchObject({ ok: true, settings: { defaultProvider: "anthropic" } });
+	});
+
+	it("fails loudly when a queued write error was already recorded before refresh", async () => {
+		const manager = SettingsManager.inMemory();
+		vi.spyOn(manager, "flush").mockResolvedValue(undefined);
+		const drainSpy = vi.spyOn(manager, "drainErrors");
+		drainSpy.mockReturnValueOnce([{ scope: "global", error: new Error("disk full") }]);
+
+		const result = await getFreshSettingsForRpc(manager);
+
+		expect(result).toMatchObject({ ok: false, error: expect.stringContaining("disk full") });
+		expect(drainSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("fails loudly rather than returning stale settings when a durable file is malformed", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "anthropic" }));
+		const manager = SettingsManager.create(projectDir, agentDir);
+		writeFileSync(join(agentDir, "settings.json"), "{ not json");
+
+		const result = await getFreshSettingsForRpc(manager);
+
+		expect(result).toMatchObject({ ok: false });
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("Failed to reload settings: global:");
+		expect(manager.getDefaultProvider()).toBe("anthropic");
+	});
+
+	it("fails loudly when a durable project settings file is malformed", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(join(projectDir, ".dreb"), { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "anthropic" }));
+		writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ followUpMode: "all" }));
+		const manager = SettingsManager.create(projectDir, agentDir);
+		writeFileSync(join(projectDir, ".dreb", "settings.json"), "{ not json");
+
+		const result = await getFreshSettingsForRpc(manager);
+
+		expect(result).toMatchObject({ ok: false });
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("Failed to reload settings: project:");
+		expect(manager.hasProjectSettingsLoadError()).toBe(true);
+	});
+
+	it("fails loudly when reading durable project settings fails", async () => {
+		let global = JSON.stringify({ defaultProvider: "anthropic" });
+		let project = JSON.stringify({ followUpMode: "all" });
+		let failProjectReads = false;
+		const storage: SettingsStorage = {
+			withLock(scope, fn) {
+				if (failProjectReads && scope === "project") throw new Error("permission denied");
+				const next = fn(scope === "global" ? global : project);
+				if (next !== undefined) {
+					if (scope === "global") {
+						global = next;
+					} else {
+						project = next;
+					}
+				}
+			},
+		};
+		const manager = SettingsManager.fromStorage(storage);
+		failProjectReads = true;
+
+		const result = await getFreshSettingsForRpc(manager);
+
+		expect(result).toMatchObject({ ok: false });
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("Failed to reload settings: project: permission denied");
+		expect(manager.hasProjectSettingsLoadError()).toBe(true);
+	});
+
+	it("returns a get_settings RPC error when durable reload fails", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "anthropic" }));
+		const manager = SettingsManager.create(projectDir, agentDir);
+		writeFileSync(join(agentDir, "settings.json"), "{ not json");
+		let handleInputLine: ((line: string) => void) | undefined;
+		let resolveResponse: ((response: Record<string, unknown>) => void) | undefined;
+		const existingEndListeners = new Set(process.stdin.listeners("end"));
+		const existingErrorListeners = new Set(process.stdin.listeners("error"));
+
+		vi.spyOn(outputGuard, "takeOverStdout").mockImplementation(() => {});
+		vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((line) => {
+			resolveResponse?.(JSON.parse(line) as Record<string, unknown>);
+		});
+		vi.spyOn(jsonl, "attachJsonlLineReader").mockImplementation((_stream, onLine) => {
+			handleInputLine = onLine;
+			return () => {};
+		});
+
+		try {
+			void runRpcMode({
+				sessionFile: undefined,
+				messages: [],
+				settingsManager: manager,
+				bindExtensions: async () => {},
+				sessionManager: { getCwd: () => projectDir },
+				subscribe: () => () => {},
+			} as unknown as AgentSession);
+			await vi.waitFor(() => expect(handleInputLine).toBeDefined());
+
+			const response = new Promise<Record<string, unknown>>((resolve) => {
+				resolveResponse = resolve;
+			});
+			handleInputLine!(JSON.stringify({ type: "get_settings", id: "stale-settings" }));
+
+			await expect(response).resolves.toMatchObject({
+				id: "stale-settings",
+				type: "response",
+				command: "get_settings",
+				success: false,
+				error: expect.stringContaining("Failed to reload settings: global:"),
+			});
+		} finally {
+			for (const listener of process.stdin.listeners("end")) {
+				if (!existingEndListeners.has(listener)) {
+					process.stdin.off("end", listener as (...args: unknown[]) => void);
+				}
+			}
+			for (const listener of process.stdin.listeners("error")) {
+				if (!existingErrorListeners.has(listener)) {
+					process.stdin.off("error", listener as (...args: unknown[]) => void);
+				}
+			}
+		}
 	});
 });
 

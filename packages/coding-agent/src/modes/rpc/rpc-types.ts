@@ -7,7 +7,7 @@
 
 import type { AgentMessage, ThinkingLevel } from "@dreb/agent-core";
 import type { ImageContent, Model, Transport } from "@dreb/ai";
-import type { SessionStats } from "../../core/agent-session.js";
+import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type { ContextUsage } from "../../core/extensions/types.js";
@@ -28,6 +28,13 @@ export type RpcCommand =
 
 	// State
 	| { id?: string; type: "get_state" }
+	/**
+	 * Atomically captures dashboard-visible parent-session state. The RPC mode
+	 * writes a matching dashboard_snapshot_barrier immediately before its response;
+	 * consumers must use that barrier rather than promise timing to reconcile
+	 * later streamed events.
+	 */
+	| { id?: string; type: "get_dashboard_snapshot" }
 	| { id?: string; type: "get_resources" }
 	| { id?: string; type: "get_git_branch" }
 	| { id?: string; type: "get_daily_cost" }
@@ -163,9 +170,37 @@ export interface RpcPendingMessages {
 // RPC State
 // ============================================================================
 
+export interface RpcSessionTask {
+	id: string;
+	title: string;
+	status: "pending" | "in_progress" | "completed";
+}
+
+export interface RpcDashboardSnapshot {
+	/** Opaque token repeated by the immediately following barrier event. */
+	snapshotId: string;
+	state: RpcSessionState;
+	/** Complete parent transcript at the same RPC command boundary as state. */
+	messages: AgentMessage[];
+	/** Current background-agent registry at that boundary. */
+	backgroundAgents: RpcBackgroundAgentInfo[];
+}
+
+/** Ordering marker emitted immediately before a matching dashboard snapshot response. */
+export interface RpcDashboardSnapshotBarrierEvent {
+	type: "dashboard_snapshot_barrier";
+	/** Opaque token matching the following {@link RpcDashboardSnapshot.snapshotId}. */
+	snapshotId: string;
+}
+
+/** Non-response JSONL messages emitted by the RPC server on stdout. */
+export type RpcEvent = AgentSessionEvent | RpcExtensionUIRequest | RpcDashboardSnapshotBarrierEvent;
+
 export interface RpcSessionState {
 	model?: Model<any>;
 	scopedModels: RpcScopedModel[];
+	/** Current in-memory task list, replaced atomically by the tasks_update tool. */
+	tasks: RpcSessionTask[];
 	usingSubscription: boolean;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
@@ -205,6 +240,7 @@ export type RpcResponse =
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
+	| { id?: string; type: "response"; command: "get_dashboard_snapshot"; success: true; data: RpcDashboardSnapshot }
 	| { id?: string; type: "response"; command: "get_resources"; success: true; data: RpcResources }
 	| { id?: string; type: "response"; command: "get_git_branch"; success: true; data: { branch: string | null } }
 	| { id?: string; type: "response"; command: "get_daily_cost"; success: true; data: { cost: number } }

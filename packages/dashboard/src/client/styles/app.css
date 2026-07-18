@@ -1,8 +1,11 @@
 /*
  * dreb dashboard — screen-specific styles.
  *
- * tokens.css is the design system and is adopted UNMODIFIED; this
- * file only extends it with layout for the app shell and screens.
+ * tokens.css is the design system; this file extends it with the nine
+ * --syntax-* tokens and layout for the app shell and screens. The additive
+ * styles/themes.css layer (loaded after this file) may override these tokens
+ * for curated appearance themes and forced color modes; the token VALUES
+ * declared here remain the default-theme baseline.
  */
 
 :root {
@@ -331,6 +334,18 @@ body,
 	align-items: center;
 	gap: var(--space-2);
 	flex-wrap: wrap;
+}
+
+.session-connection-indicator {
+	flex: 0 1 auto;
+	min-width: 0;
+	flex-wrap: wrap;
+}
+
+.session-connection-indicator .chip,
+.session-connection-indicator .btn {
+	font-size: var(--fs-small);
+	padding: 1px var(--space-2);
 }
 
 .session-info-bar {
@@ -949,11 +964,13 @@ details.thinking .thinking-body {
 	display: flex;
 	align-items: center;
 	gap: var(--space-3);
+	flex-wrap: wrap;
 	font-size: var(--fs-small);
 	color: var(--muted);
 }
 
 .dock-collapsed-hint {
+	flex: 1 1 auto;
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1592,6 +1609,18 @@ details.thinking .thinking-body {
 	color: var(--muted);
 }
 
+.setting-control {
+	min-width: 0;
+	max-width: 100%;
+}
+
+/* The agent context select holds absolute project paths (unbounded intrinsic
+   width). Let the control absorb all flex shrinkage so the label's primary
+   text never wraps; the select clips its value instead. */
+.agent-context-row .setting-label {
+	flex-shrink: 0;
+}
+
 .setting-control select,
 .setting-control input {
 	border: var(--hairline);
@@ -1601,6 +1630,7 @@ details.thinking .thinking-body {
 	font-family: inherit;
 	font-size: var(--fs-secondary);
 	padding: 2px var(--space-2);
+	max-width: 100%;
 }
 
 .checkbox-control {
@@ -1785,6 +1815,127 @@ details.thinking .thinking-body {
 .settings-footnote {
 	margin-top: calc(-1 * var(--space-3));
 	margin-bottom: var(--space-5);
+}
+
+/* ------------------------------------------------------------- appearance */
+
+.appearance-block {
+	margin-bottom: var(--space-4);
+}
+
+.appearance-heading-row .name {
+	font-weight: 600;
+}
+
+.theme-gallery {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+	gap: var(--space-3);
+	margin-top: var(--space-2);
+}
+
+.theme-card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	padding: var(--space-2);
+	text-align: left;
+	cursor: pointer;
+	font-family: inherit;
+	transition: border-color 0.2s;
+}
+
+.theme-card:hover {
+	border-color: var(--muted);
+}
+
+.theme-card.active {
+	border-color: var(--text);
+}
+
+/* The .theme-card element carries data-theme/data-color-mode, so themes.css
+   remaps the palette across the whole card (background, chips, code, footer);
+   this inner box is just the framed code/preview inset. */
+.theme-card-preview {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: var(--space-2);
+	overflow: hidden;
+}
+
+.theme-card-swatch {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.theme-card-name {
+	font-size: var(--fs-secondary);
+	font-weight: 600;
+	color: var(--text);
+}
+
+.theme-card-muted {
+	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
+.theme-card-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+}
+
+.theme-card-code {
+	margin: 0;
+	font-size: var(--fs-small);
+	line-height: 1.4;
+	white-space: pre;
+	overflow: hidden;
+	/* Force the base monospace stack for ALL preview cards so that merely opening
+	   the gallery doesn't fetch JetBrains Mono for the Gruvbox card. The actual
+	   theme font applies at :root when the user selects the theme. */
+	font-family: "IBM Plex Mono", "Courier New", monospace;
+}
+
+.theme-card-code .hljs {
+	background: transparent;
+	padding: 0;
+}
+
+.theme-card-footer {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--space-2);
+	font-size: var(--fs-small);
+}
+
+.theme-card-title {
+	font-size: var(--fs-secondary);
+	color: var(--text);
+}
+
+.theme-card-state {
+	color: var(--muted);
+}
+
+.theme-card.active .theme-card-state {
+	color: var(--text);
+}
+
+@media (max-width: 700px) {
+	.theme-gallery {
+		grid-template-columns: 1fr;
+	}
 }
 
 .device-row {

@@ -23,8 +23,41 @@
 			href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap"
 			rel="stylesheet"
 		/>
+		<!--
+			Appearance bootstrap — runs synchronously BEFORE the stylesheets so the
+			persisted theme/mode paints on first frame with no wrong-theme flash. The
+			allowlists here are literal copies of the appearance.ts catalog (default
+			theme + system mode are the no-attribute cases and are intentionally
+			absent); a contract test keeps the two in sync. Wrapped in try/catch so a
+			disabled/broken localStorage can never block the page.
+		-->
+		<script>
+			(function () {
+				try {
+					var THEMES = ["dim", "solarized", "gruvbox", "qud", "vangogh", "okabe", "tol"];
+					var MODES = ["light", "dark"];
+					var el = document.documentElement;
+					var t = null;
+					var m = null;
+					try {
+						t = localStorage.getItem("dreb.dashboard.theme");
+						m = localStorage.getItem("dreb.dashboard.colorMode");
+					} catch (e) {}
+					if (THEMES.indexOf(t) !== -1) el.setAttribute("data-theme", t);
+					if (MODES.indexOf(m) !== -1) el.setAttribute("data-color-mode", m);
+					var active = THEMES.indexOf(t) !== -1 || MODES.indexOf(m) !== -1;
+					if (active) {
+						el.style.setProperty(
+							"color-scheme",
+							m === "light" ? "light" : m === "dark" ? "dark" : "light dark",
+						);
+					}
+				} catch (e) {}
+			})();
+		</script>
 		<link rel="stylesheet" href="./styles/tokens.css" />
 		<link rel="stylesheet" href="./styles/app.css" />
+		<link rel="stylesheet" href="./styles/themes.css" />
 	</head>
 	<body>
 		<div id="root"></div>

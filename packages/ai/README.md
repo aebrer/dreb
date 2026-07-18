@@ -795,7 +795,7 @@ interface OpenAICompletionsCompat {
   requiresAssistantAfterToolResult?: boolean; // Whether tool results must be followed by an assistant message (default: false)
   requiresThinkingAsText?: boolean;  // Whether thinking blocks must be converted to text (default: false)
   requiresReasoningContentOnAssistantMessages?: boolean; // Preserve readable foreign thinking as reasoning_content (default: false)
-  thinkingFormat?: 'openai' | 'openrouter' | 'zai' | 'qwen' | 'qwen-chat-template' | 'kimi';
+  thinkingFormat?: 'openai' | 'openrouter' | 'zai' | 'qwen' | 'qwen-chat-template' | 'kimi'; // Format for reasoning param: 'openai' uses reasoning_effort, 'openrouter' uses reasoning: { effort }, 'zai' uses top-level enable_thinking: boolean, 'qwen' uses top-level enable_thinking: boolean, 'qwen-chat-template' uses chat_template_kwargs.enable_thinking, and 'kimi' uses nested thinking: { type, effort? } plus prompt_cache_key (default: openai)
   openRouterRouting?: OpenRouterRouting; // OpenRouter routing preferences (default: {})
   vercelGatewayRouting?: VercelGatewayRouting; // Vercel AI Gateway routing preferences (default: {})
 }

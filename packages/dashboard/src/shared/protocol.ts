@@ -42,6 +42,37 @@ export const MAX_COMPLETED_BACKGROUND_AGENTS = 20;
 /** Maximum JSON prompt request body accepted by the dashboard server. */
 export const MAX_PROMPT_BODY_BYTES = 25 * 1024 * 1024;
 
+/** Maximum accepted JSON body for optional, payload-free SSE client diagnostics. */
+export const MAX_CLIENT_DIAGNOSTIC_BYTES = 4 * 1024;
+
+export type EventConnectionState =
+	| "connecting"
+	| "connected"
+	| "retrying"
+	| "resyncing"
+	| "disconnected"
+	| "auth_failed";
+
+/**
+ * Deliberately payload-free client connection telemetry. It is useful for
+ * correlating stream failures with server logs, without sending prompts,
+ * cookies, tool data, or SSE event contents back to the server.
+ */
+export interface ClientConnectionDiagnosticDto {
+	connectionId: string;
+	state: EventConnectionState;
+	previousState?: EventConnectionState;
+	attempt: number;
+	delayMs?: number;
+	visibility: "visible" | "hidden";
+	lastAppliedSeq?: number;
+	heartbeatAgeMs?: number;
+	eventCount: number;
+	eventRatePerMinute: number;
+	processingLagTotalMs: number;
+	processingLagMaxMs: number;
+}
+
 /**
  * Inline images are base64-encoded inside the JSON prompt body. Base64 expands
  * raw bytes by 4/3, so a 25 MiB body can carry at most floor(25 MiB * 3/4) =
@@ -129,11 +160,20 @@ export interface RuntimeStatsSummaryDto {
 	cost: number;
 }
 
+/** Current task list (mirrors RpcSessionTask). */
+export interface SessionTaskDto {
+	id: string;
+	title: string;
+	status: "pending" | "in_progress" | "completed";
+}
+
 /** Live session state (mirrors RpcSessionState, model reduced to id fields). */
 export interface SessionStateDto {
 	model?: { provider: string; id: string; name?: string; reasoning?: boolean };
 	scopedModels?: ScopedModelDto[];
 	usingSubscription?: boolean;
+	/** Current task list, atomically replaced by tasks_update events. */
+	tasks: SessionTaskDto[];
 	thinkingLevel: string;
 	isStreaming: boolean;
 	isCompacting: boolean;
@@ -175,6 +215,24 @@ export interface RuntimeInfoDto {
 export interface FleetDto {
 	runtimes: RuntimeInfoDto[];
 	diskSessions: SessionInfoDto[];
+}
+
+/** Parent/subagent data restored by an authoritative recovery snapshot. */
+export interface ActiveRuntimeSnapshotDto {
+	key: string;
+	state: SessionStateDto;
+	messages: unknown[];
+	backgroundAgents: BackgroundAgentDto[];
+	barrierSeq: number;
+	subagent?: { agentId: string; agent: BackgroundAgentDto; messages: unknown[]; barrierSeq: number };
+}
+
+/** Fleet refresh plus the active runtime's explicitly ordered snapshot. */
+export interface DashboardResyncDto {
+	fleet: FleetDto;
+	active?: ActiveRuntimeSnapshotDto;
+	/** The global barrier to await before applying the payload. */
+	barrierSeq: number;
 }
 
 /**

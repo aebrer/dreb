@@ -1,7 +1,7 @@
 /**
  * Session view — full-parity chat drill-in. Transcript, dock (tasks, subagent
  * strip, status line, composer with steer/follow-up modes + abort),
- * session bar with model/thinking switchers, extension-UI modals.
+ * session bar with connection status, model/thinking switchers, extension-UI modals.
  */
 
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
@@ -19,7 +19,7 @@ import type {
 } from "../../shared/protocol.js";
 import { MAX_TOTAL_IMAGE_BYTES } from "../../shared/protocol.js";
 import { api } from "../api.js";
-import { Modal } from "../components/common.js";
+import { ConnectionIndicator, Modal } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
@@ -1008,6 +1008,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					<Show when={!topChromeCollapsed()}>
 						<span class="project">{runtime()?.cwd ? shortenPath(runtime()!.cwd) : undefined}</span>
 					</Show>
+					<ConnectionIndicator store={props.store} class="session-connection-indicator" />
 					<Show when={!topChromeCollapsed()}>
 						<span class="right">
 							<button

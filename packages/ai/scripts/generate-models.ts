@@ -1500,7 +1500,7 @@ async function generateModels() {
 
 	// Kimi For Coding OAuth models (OpenAI Completions API at api.kimi.com/coding/v1)
 	// Verified against the OAuth coding endpoint: it accepts OpenAI-style
-	// base64 data URL image_url content arrays for kimi-for-coding.
+	// base64 data URL image_url content arrays for the OAuth coding models.
 	const KIMI_CODING_OAUTH_BASE_URL = "https://api.kimi.com/coding/v1";
 	const kimiCodingOAuthModels: Model<"openai-completions">[] = [
 		{
@@ -1514,7 +1514,45 @@ async function generateModels() {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 262144,
 			maxTokens: 32768,
-			compat: { thinkingFormat: "kimi", supportsDeveloperRole: false },
+			compat: {
+				thinkingFormat: "kimi",
+				supportsDeveloperRole: false,
+				reasoningEffortMap: { minimal: "auto", low: "auto", medium: "auto", high: "auto", xhigh: "auto" },
+			},
+		},
+		{
+			id: "k3",
+			name: "Kimi K3",
+			api: "openai-completions",
+			provider: "kimi-coding-oauth",
+			baseUrl: KIMI_CODING_OAUTH_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 32768,
+			compat: {
+				thinkingFormat: "kimi",
+				supportsDeveloperRole: false,
+				reasoningEffortMap: { minimal: "low", low: "low", medium: "high", high: "high", xhigh: "max" },
+			},
+		},
+		{
+			id: "kimi-for-coding-highspeed",
+			name: "Kimi For Coding Highspeed",
+			api: "openai-completions",
+			provider: "kimi-coding-oauth",
+			baseUrl: KIMI_CODING_OAUTH_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 262144,
+			maxTokens: 32768,
+			compat: {
+				thinkingFormat: "kimi",
+				supportsDeveloperRole: false,
+				reasoningEffortMap: { minimal: "auto", low: "auto", medium: "auto", high: "auto", xhigh: "auto" },
+			},
 		},
 	];
 	for (const model of kimiCodingOAuthModels) {

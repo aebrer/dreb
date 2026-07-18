@@ -413,6 +413,10 @@ describe("default model selection", () => {
 		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.4");
 	});
 
+	test("kimi-coding-oauth default stays kimi-for-coding", () => {
+		expect(defaultModelPerProvider["kimi-coding-oauth"]).toBe("kimi-for-coding");
+	});
+
 	test("minimax and cerebras defaults track current models", () => {
 		expect(defaultModelPerProvider.minimax).toBe("MiniMax-M2.7");
 		expect(defaultModelPerProvider["minimax-cn"]).toBe("MiniMax-M2.7");

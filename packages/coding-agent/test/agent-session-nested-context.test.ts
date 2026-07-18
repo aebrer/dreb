@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@dreb/agent-core";
@@ -38,8 +38,11 @@ function countOccurrences(text: string, needle: string): number {
 function makeExtraTempDir(prefix: string, extraDirs: string[]): string {
 	const dir = join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 	mkdirSync(dir, { recursive: true });
-	extraDirs.push(dir);
-	return dir;
+	// Canonicalize so expected paths match the implementation's native-realpath
+	// output; on macOS os.tmpdir() lives under /var → /private/var.
+	const canonical = realpathSync.native(dir);
+	extraDirs.push(canonical);
+	return canonical;
 }
 
 function getContext(harness: Harness, index: number): Context {

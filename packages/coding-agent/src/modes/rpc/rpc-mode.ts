@@ -7,7 +7,7 @@
  * Protocol:
  * - Commands: JSON objects with `type` field, optional `id` for correlation
  * - Responses: JSON objects with `type: "response"`, `command`, `success`, and optional `data`/`error`
- * - Events: AgentSessionEvent objects streamed as they occur
+ * - Events: RpcEvent objects streamed as they occur
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 
@@ -50,6 +50,7 @@ import type {
 	RpcCommand,
 	RpcContextTrustEvaluation,
 	RpcContextTrustMutationResult,
+	RpcDashboardSnapshot,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcPendingMessages,
@@ -68,6 +69,9 @@ import type {
 // Re-export types for consumers
 export type {
 	RpcCommand,
+	RpcDashboardSnapshot,
+	RpcDashboardSnapshotBarrierEvent,
+	RpcEvent,
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcResponse,
@@ -153,6 +157,7 @@ export function getStateForRpc(session: AgentSession, modelFallbackMessage?: str
 	return {
 		model: session.model,
 		scopedModels: getScopedModelsForRpc(session),
+		tasks: session.tasks.map((task) => ({ ...task })),
 		usingSubscription: session.model ? session.modelRegistry.isUsingOAuth(session.model) : false,
 		thinkingLevel: session.thinkingLevel,
 		isStreaming: session.isStreaming,
@@ -243,7 +248,13 @@ type SettingsReader = Pick<
 	| "getAgentModels"
 >;
 
-type SettingsWriter = SettingsReader &
+type SettingsRefresher = SettingsReader &
+	Pick<
+		SettingsManager,
+		"reload" | "flush" | "drainErrors" | "hasGlobalSettingsLoadError" | "hasProjectSettingsLoadError"
+	>;
+
+type SettingsWriter = SettingsRefresher &
 	Pick<
 		SettingsManager,
 		| "setDefaultModelAndProvider"
@@ -264,10 +275,6 @@ type SettingsWriter = SettingsReader &
 		| "setAgentModelsForAgent"
 		| "removeAgentModelsForAgent"
 		| "hasProjectAgentModelOverride"
-		| "hasGlobalSettingsLoadError"
-		| "reload"
-		| "flush"
-		| "drainErrors"
 	>;
 
 /**
@@ -299,6 +306,62 @@ export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsS
 		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
 		agentModels: settingsManager.getAgentModels(),
 	};
+}
+
+function formatSettingsErrors(errors: Array<{ scope: string; error: Error }>): string {
+	return errors.map((entry) => `${entry.scope}: ${entry.error.message}`).join("; ");
+}
+
+/**
+ * Reload durable global and project settings before serving `get_settings`.
+ *
+ * The shared settings-operation lock prevents a refresh from discarding another RPC
+ * settings operation's queued modifications. A failed queued write is returned before
+ * reload so its in-memory changes remain intact rather than being replaced by stale disk
+ * content. Reload failures leave SettingsManager's previous values in memory, therefore
+ * they must be surfaced as an RPC error instead of producing a stale snapshot.
+ */
+export async function getFreshSettingsForRpc(
+	settingsManager: SettingsRefresher,
+): Promise<{ ok: true; settings: RpcSettingsSnapshot } | { ok: false; error: string }> {
+	return settingsWriteLock(async () => {
+		try {
+			// A runtime setter may have enqueued a write outside the RPC settings lock.
+			// Waiting for SettingsManager's own queue protects that update from reload().
+			await settingsManager.flush();
+		} catch (error) {
+			return { ok: false as const, error: `Failed to refresh settings: ${(error as Error).message}` };
+		}
+
+		const writeErrors = settingsManager.drainErrors();
+		if (writeErrors.length > 0) {
+			return {
+				ok: false as const,
+				error: `Failed to refresh settings: pending settings write failed: ${formatSettingsErrors(writeErrors)}`,
+			};
+		}
+
+		try {
+			settingsManager.reload();
+		} catch (error) {
+			return { ok: false as const, error: `Failed to reload settings: ${(error as Error).message}` };
+		}
+
+		const loadErrors = settingsManager.drainErrors();
+		if (
+			loadErrors.length > 0 ||
+			settingsManager.hasGlobalSettingsLoadError() ||
+			settingsManager.hasProjectSettingsLoadError()
+		) {
+			const detail = formatSettingsErrors(loadErrors);
+			return {
+				ok: false as const,
+				error: detail ? `Failed to reload settings: ${detail}` : "Failed to reload settings from durable storage",
+			};
+		}
+
+		return { ok: true as const, settings: getSettingsForRpc(settingsManager) };
+	});
 }
 
 const SETTINGS_UPDATE_KEYS = [
@@ -382,14 +445,13 @@ export function evaluateContextTrustForRpc(
 }
 
 /**
- * Simple promise-based mutex that serializes settings writes. RPC commands are dispatched
- * concurrently (`void handleInputLine(line)`) so two `set_settings` commands can overlap.
- * Without serialization, concurrent commands race on SettingsManager's shared error bucket
- * (`drainErrors()` clears the array for everyone): the first to drain takes all errors
- * (including the second's), and the second reports false success despite its write failing.
+ * Simple promise-based mutex that serializes durable settings operations. RPC commands are
+ * dispatched concurrently (`void handleInputLine(line)`) so settings writes and refreshes
+ * can overlap. Without serialization, a refresh could reload over queued modifications, and
+ * concurrent operations could race on SettingsManager's shared error bucket (`drainErrors()`
+ * clears the array for everyone).
  *
- * This lock ensures only one apply+flush+drain block runs at a time — each `set_settings`
- * gets an error window isolated from other `set_settings` commands and from stale errors.
+ * This lock ensures only one apply/flush/drain or flush/reload/drain block runs at a time.
  *
  * Known limitation: the lock does NOT cover the per-runtime commands (`set_model`,
  * `set_steering_mode`, etc.), which persist through the same SettingsManager write queue
@@ -1325,6 +1387,17 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "get_state", getStateForRpc(session, modelFallbackMessage));
 			}
 
+			case "get_dashboard_snapshot": {
+				const snapshotId = id ?? crypto.randomUUID();
+				const data: RpcDashboardSnapshot = {
+					snapshotId,
+					state: getStateForRpc(session, modelFallbackMessage),
+					messages: [...session.messages],
+					backgroundAgents: getBackgroundAgents().map(toRpcBackgroundAgentInfo),
+				};
+				return success(id, "get_dashboard_snapshot", data);
+			}
+
 			case "get_resources": {
 				return success(id, "get_resources", getResourcesForRpc(session));
 			}
@@ -1618,7 +1691,8 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			// =================================================================
 
 			case "get_settings": {
-				return success(id, "get_settings", getSettingsForRpc(session.settingsManager));
+				const result = await getFreshSettingsForRpc(session.settingsManager);
+				return result.ok ? success(id, "get_settings", result.settings) : error(id, "get_settings", result.error);
 			}
 
 			case "set_settings": {
@@ -1758,6 +1832,13 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			// Handle regular commands
 			const command = parsed as RpcCommand;
 			const response = await handleCommand(command);
+			// Emit the barrier before the response. Stdout preserves byte order even
+			// when these lines arrive in separate chunks, so RuntimePool always records
+			// the EventHub sequence before the response promise can resume.
+			if (command.type === "get_dashboard_snapshot" && response.success) {
+				const snapshot = response as Extract<RpcResponse, { command: "get_dashboard_snapshot"; success: true }>;
+				output({ type: "dashboard_snapshot_barrier", snapshotId: snapshot.data.snapshotId });
+			}
 			output(response);
 
 			// Check for deferred shutdown request (idle between commands)
