@@ -608,7 +608,7 @@ interface ProviderModelConfig {
     requiresToolResultName?: boolean;
     requiresAssistantAfterToolResult?: boolean;
     requiresThinkingAsText?: boolean;
-    thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template";
+    thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template" | "kimi";
     openRouterRouting?: OpenRouterRouting;
     vercelGatewayRouting?: VercelGatewayRouting;
     supportsStrictMode?: boolean;
