@@ -11,6 +11,7 @@ Add custom providers and models (Ollama, vLLM, LM Studio, proxies) via `~/.dreb/
 - [Model Configuration](#model-configuration)
 - [Overriding Built-in Providers](#overriding-built-in-providers)
 - [Per-model Overrides](#per-model-overrides)
+- [Reasoning Across Model Switches](#reasoning-across-model-switches)
 - [OpenAI Compatibility](#openai-compatibility)
 
 ## Minimal Example
@@ -235,6 +236,12 @@ Behavior notes:
 - Unknown model IDs are ignored.
 - You can combine provider-level `baseUrl`/`headers` with `modelOverrides`.
 - If `models` is also defined for a provider, custom models are merged after built-in overrides. A custom model with the same `id` replaces the overridden built-in model entry.
+
+## Reasoning Across Model Switches
+
+A custom model's `provider` identity is part of reasoning-state compatibility; matching endpoint URLs or model IDs alone is not enough. Exact-model signed, encrypted, or redacted reasoning state is replayed unchanged. Between different models, structured reasoning is preserved only when both models use the same provider and `openai-completions` API, the destination accepts structured reasoning, and the source uses a recognized plain field: `reasoning_content`, `reasoning`, or `reasoning_text`.
+
+For other targets, readable reasoning is retained as labelled plaintext inside `<reformatted-pre-switch-reasoning>` markers after incompatible protocol metadata is stripped. Redacted or encrypted-only opaque state is omitted. This conversion happens only for the outbound request and does not alter session history, so returning to the original model can replay its original state unless history has been compacted or pruned. Portability also depends on compatible provider signatures.
 
 ## OpenAI Compatibility
 

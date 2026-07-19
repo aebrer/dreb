@@ -830,16 +830,27 @@ await streamAnthropic(claude, context, options);
 
 ## Cross-Provider Handoffs
 
-The library supports seamless handoffs between different LLM providers within the same conversation. This allows you to switch models mid-conversation while preserving context, including thinking blocks, tool calls, and tool results.
+The library can prepare one conversation for another model without changing the stored `Context`. User messages, visible assistant text, tool calls, and tool results remain available, while model-bound tool signatures and IDs are normalized for the destination. Provider-specific reasoning state is handled conservatively.
 
-### How It Works
+### Reasoning State Compatibility
 
-When messages from one provider are sent to a different provider, the library automatically transforms them for compatibility:
+- **Exact model:** signed, encrypted, and redacted reasoning state is replayed unchanged.
+- **Compatible model switch:** structured reasoning is preserved only when source and target share a provider, both use `openai-completions`, the destination accepts structured reasoning, and the source uses a recognized plain field: `reasoning_content`, `reasoning`, or `reasoning_text`.
+- **Other readable reasoning:** it is retained as labelled plaintext inside `<reformatted-pre-switch-reasoning>` markers, with incompatible protocol metadata stripped.
+- **Opaque state:** redacted or encrypted-only reasoning is omitted for incompatible targets.
 
-- **User and tool result messages** are passed through unchanged
-- **Assistant messages from the same provider/API** are preserved as-is
-- **Assistant messages from different providers** have their thinking blocks converted to text with `<thinking>` tags
-- **Tool calls and regular text** are preserved unchanged
+Compatibility depends on provider, API, and signature behavior. This includes custom models: two models at the same endpoint are not compatible merely because their IDs or URLs match; they must share the configured provider identity as well.
+
+The transformation applies only to the outbound request. It does not mutate `Context.messages`, so a later switch back to the original model can replay its original reasoning state unless that history has been compacted or pruned by the caller.
+
+### Examples
+
+| Source and target | Outbound reasoning state |
+|---|---|
+| The same model | Original signed, encrypted, or redacted state is replayed unchanged. |
+| Two models under the same custom provider, both using `openai-completions`, where the destination accepts the source's `reasoning_content`, `reasoning`, or `reasoning_text` field | Recognized plain structured reasoning is preserved. |
+| Different providers or APIs with readable reasoning | Reasoning is sent as labelled plaintext in `<reformatted-pre-switch-reasoning>` markers. |
+| An incompatible target with redacted or encrypted-only reasoning | Opaque reasoning state is omitted. |
 
 ### Example: Multi-Provider Conversation
 
@@ -858,31 +869,16 @@ const claudeResponse = await complete(claude, context, {
 });
 context.messages.push(claudeResponse);
 
-// Switch to GPT-5 - it will see Claude's thinking as <thinking> tagged text
+// Switch to GPT-5. Readable Claude reasoning is reformatted for this outbound request.
 const gpt5 = getModel('openai', 'gpt-5-mini');
 context.messages.push({ role: 'user', content: 'Is that calculation correct?' });
 const gptResponse = await complete(gpt5, context);
 context.messages.push(gptResponse);
 
-// Switch to Gemini
-const gemini = getModel('google', 'gemini-2.5-flash');
+// Switching back to Claude can use the original Claude state in context.
 context.messages.push({ role: 'user', content: 'What was the original question?' });
-const geminiResponse = await complete(gemini, context);
+const finalClaudeResponse = await complete(claude, context);
 ```
-
-### Provider Compatibility
-
-All providers can handle messages from other providers, including:
-- Text content
-- Tool calls and tool results (including images in tool results)
-- Thinking/reasoning blocks (transformed to tagged text for cross-provider compatibility)
-- Aborted messages with partial content
-
-This enables flexible workflows where you can:
-- Start with a fast model for initial responses
-- Switch to a more capable model for complex reasoning
-- Use specialized models for specific tasks
-- Maintain conversation continuity across provider outages
 
 ## Context Serialization
 

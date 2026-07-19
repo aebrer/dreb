@@ -1,4 +1,11 @@
-import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage } from "../types.js";
+import type { Api, AssistantMessage, Message, Model, ThinkingContent, ToolCall, ToolResultMessage } from "../types.js";
+
+/** Decide whether a readable foreign thinking block can use the target's structured format. */
+export type PreserveCrossModelThinking<TApi extends Api> = (
+	thinking: ThinkingContent,
+	target: Model<TApi>,
+	source: AssistantMessage,
+) => boolean;
 
 /**
  * Normalize tool call ID for cross-provider compatibility.
@@ -9,6 +16,7 @@ export function transformMessages<TApi extends Api>(
 	messages: Message[],
 	model: Model<TApi>,
 	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+	preserveCrossModelThinking?: PreserveCrossModelThinking<TApi>,
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
@@ -37,7 +45,7 @@ export function transformMessages<TApi extends Api>(
 				assistantMsg.api === model.api &&
 				assistantMsg.model === model.id;
 
-			const transformedContent = assistantMsg.content.flatMap((block) => {
+			const transformedContent = assistantMsg.content.flatMap((block, index) => {
 				if (block.type === "thinking") {
 					// Redacted thinking is opaque encrypted content, only valid for the same model.
 					// Drop it for cross-model to avoid API errors.
@@ -45,14 +53,29 @@ export function transformMessages<TApi extends Api>(
 						return isSameModel ? block : [];
 					}
 					// For same model: keep thinking blocks with signatures (needed for replay)
-					// even if the thinking text is empty (OpenAI encrypted reasoning)
+					// even if the thinking text is empty (OpenAI encrypted reasoning).
 					if (isSameModel && block.thinkingSignature) return block;
-					// Skip empty thinking blocks, convert others to plain text
+					// Empty foreign thinking has no readable representation. This includes
+					// encrypted reasoning carried only by a signature.
 					if (!block.thinking || block.thinking.trim() === "") return [];
 					if (isSameModel) return block;
+					// Cross-model structural replay is destination-controlled. The caller
+					// must explicitly opt in rather than trusting an arbitrary signature.
+					if (preserveCrossModelThinking?.(block, model, assistantMsg)) return block;
+
+					const hasVisibleTextBefore = assistantMsg.content
+						.slice(0, index)
+						.some((content) => content.type === "text" && content.text.trim().length > 0);
+					const hasVisibleTextAfter = assistantMsg.content
+						.slice(index + 1)
+						.some((content) => content.type === "text" && content.text.trim().length > 0);
+					const separatorBefore = hasVisibleTextBefore ? "\n\n" : "";
+					const separatorAfter = hasVisibleTextAfter ? "\n\n" : "";
 					return {
 						type: "text" as const,
-						text: block.thinking,
+						text:
+							`${separatorBefore}<reformatted-pre-switch-reasoning>\n${block.thinking}\n` +
+							`</reformatted-pre-switch-reasoning>${separatorAfter}`,
 					};
 				}
 

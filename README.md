@@ -84,6 +84,8 @@ dreb supports both subscription and API-key providers, with model metadata updat
 
 Custom model configuration can override built-in provider base URLs, merge custom models into built-in providers, set compatibility flags for OpenAI-compatible servers, resolve API keys from shell commands or environment variables, and register providers dynamically from extensions.
 
+When switching models, dreb replays exact-model signed, encrypted, or redacted reasoning state unchanged. Portable structured reasoning is limited to models on the same provider using the OpenAI Chat Completions API when the destination accepts the source's recognized plain field (`reasoning_content`, `reasoning`, or `reasoning_text`); other readable reasoning is carried as labelled plaintext, while opaque redacted or encrypted-only state is not sent to incompatible targets. Provider identity and signature compatibility matter for custom models as well. Switching changes only the outbound request, so returning to the original model can replay its original state unless history has been compacted or pruned.
+
 Provider-specific docs include Kimi vision notes that distinguish the Kimi Code OAuth endpoint, the Kimi API-key coding provider, first-party Kimi CLI media handling, and Moonshot Open Platform vision support.
 
 ### Workflows and customization
