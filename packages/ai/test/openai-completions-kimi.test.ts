@@ -324,6 +324,35 @@ describe("openai-completions kimi thinkingFormat", () => {
 		},
 	);
 
+	it("uses the labeled fallback when the compatible destination does not support reasoning", async () => {
+		const k3: Model<"openai-completions"> = {
+			...KIMI_MODEL,
+			provider: "kimi-coding-oauth",
+			id: "k3",
+			reasoning: false,
+		};
+		await streamSimple(
+			k3,
+			{
+				messages: [assistantHistory()],
+			},
+			{ apiKey: "test" },
+		).result();
+
+		const params = mockState.lastParams as {
+			messages: Array<Record<string, unknown> & { role: string; content?: string | null }>;
+		};
+		const historical = params.messages.find((message) => message.role === "assistant");
+		expect(historical?.content).toBe(
+			"<reformatted-pre-switch-reasoning>\nhistorical plan\n" +
+				"</reformatted-pre-switch-reasoning>\n\nhistorical answer",
+		);
+		expect(historical).not.toHaveProperty("reasoning_content");
+		expect(historical).not.toHaveProperty("reasoning");
+		expect(historical).not.toHaveProperty("reasoning_text");
+		expect(historical).not.toHaveProperty("reasoning_details");
+	});
+
 	it("uses the labeled fallback when the destination requires thinking as text", async () => {
 		const k3: Model<"openai-completions"> = {
 			...KIMI_MODEL,

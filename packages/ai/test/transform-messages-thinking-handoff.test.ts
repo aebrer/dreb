@@ -108,6 +108,26 @@ describe("transformMessages thinking handoff", () => {
 		]);
 	});
 
+	it("separates visible text before foreign thinking without adding a trailing separator", () => {
+		const target = model("openai-completions", "kimi-coding-oauth", "k3");
+		const message = assistant(
+			[
+				{ type: "text", text: "visible answer" },
+				{ type: "thinking", thinking: "foreign reasoning", thinkingSignature: "reasoning_content" },
+			],
+			{ provider: "other-provider", model: "other-model" },
+		);
+
+		const result = transformMessages([message], target, undefined, preserveCompatibleThinking);
+		expect((result[0] as AssistantMessage).content).toEqual([
+			{ type: "text", text: "visible answer" },
+			{
+				type: "text",
+				text: "\n\n<reformatted-pre-switch-reasoning>\nforeign reasoning\n</reformatted-pre-switch-reasoning>",
+			},
+		]);
+	});
+
 	it("wraps unknown readable signatures and omits redacted or empty foreign thinking", () => {
 		const target = model("openai-completions", "kimi-coding-oauth", "k3");
 		const message = assistant([

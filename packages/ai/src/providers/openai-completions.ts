@@ -538,6 +538,7 @@ export function convertMessages(
 		model,
 		(id) => normalizeToolCallId(id),
 		(thinking, target, source) =>
+			target.reasoning &&
 			!compat.requiresThinkingAsText &&
 			source.provider === target.provider &&
 			source.api === "openai-completions" &&
