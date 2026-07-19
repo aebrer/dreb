@@ -33,6 +33,8 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { buildBaseOptions, clampReasoning } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
+const STRUCTURED_REASONING_FIELDS = new Set(["reasoning_content", "reasoning", "reasoning_text"]);
+
 /**
  * Check if conversation messages contain tool calls or tool results.
  * This is needed because Anthropic (via proxy) requires the tools param
@@ -183,9 +185,8 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					// or reasoning (other openai compatible endpoints)
 					// Use the first non-empty reasoning field to avoid duplication
 					// (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
-					const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
 					let foundReasoningField: string | null = null;
-					for (const field of reasoningFields) {
+					for (const field of STRUCTURED_REASONING_FIELDS) {
 						if (
 							(choice.delta as any)[field] !== null &&
 							(choice.delta as any)[field] !== undefined &&
@@ -532,7 +533,18 @@ export function convertMessages(
 		return id;
 	};
 
-	const transformedMessages = transformMessages(context.messages, model, (id) => normalizeToolCallId(id));
+	const transformedMessages = transformMessages(
+		context.messages,
+		model,
+		(id) => normalizeToolCallId(id),
+		(thinking, target, source) =>
+			target.reasoning &&
+			!compat.requiresThinkingAsText &&
+			source.provider === target.provider &&
+			source.api === "openai-completions" &&
+			target.api === "openai-completions" &&
+			STRUCTURED_REASONING_FIELDS.has(thinking.thinkingSignature ?? ""),
+	);
 
 	if (context.systemPrompt) {
 		const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
@@ -627,9 +639,10 @@ export function convertMessages(
 						assistantMsg.content = [{ type: "text", text: thinkingText }];
 					}
 				} else {
-					// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
+					// OpenAI-compatible reasoning signatures are field names. Whitelist them
+					// before using one as a dynamic outbound property.
 					const signature = nonEmptyThinkingBlocks[0].thinkingSignature;
-					if (signature && signature.length > 0) {
+					if (signature && STRUCTURED_REASONING_FIELDS.has(signature)) {
 						(assistantMsg as any)[signature] = sanitizeSurrogates(
 							nonEmptyThinkingBlocks.map((b) => b.thinking).join("\n"),
 						);

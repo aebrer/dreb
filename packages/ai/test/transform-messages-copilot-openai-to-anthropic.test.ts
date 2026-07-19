@@ -60,11 +60,19 @@ describe("OpenAI to Anthropic session migration for Copilot Claude", () => {
 		const result = transformMessages(messages, model, anthropicNormalizeToolCallId);
 		const assistantMsg = result.find((m) => m.role === "assistant") as AssistantMessage;
 
-		// Thinking block should be converted to text since models differ
+		// Thinking block should become explicitly labeled text since models differ.
 		const textBlocks = assistantMsg.content.filter((b) => b.type === "text");
 		const thinkingBlocks = assistantMsg.content.filter((b) => b.type === "thinking");
 		expect(thinkingBlocks).toHaveLength(0);
-		expect(textBlocks.length).toBeGreaterThanOrEqual(2);
+		expect(textBlocks).toEqual([
+			{
+				type: "text",
+				text:
+					"<reformatted-pre-switch-reasoning>\nLet me think about this...\n" +
+					"</reformatted-pre-switch-reasoning>\n\n",
+			},
+			{ type: "text", text: "Hi there!" },
+		]);
 	});
 
 	it("removes thoughtSignature from tool calls when migrating between models", () => {

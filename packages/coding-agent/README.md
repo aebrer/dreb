@@ -129,6 +129,8 @@ See [docs/providers.md](docs/providers.md) for detailed setup instructions, incl
 
 **Custom providers & models:** Add providers via `~/.dreb/agent/models.json` if they speak a supported API (OpenAI, Anthropic, Google). For custom APIs or OAuth, use extensions. See [docs/models.md](docs/models.md) and [docs/custom-provider.md](docs/custom-provider.md).
 
+**Reasoning across model switches:** Exact-model signed, encrypted, or redacted reasoning state is replayed unchanged. Structured reasoning is portable only between models that share a provider and the `openai-completions` API when the destination accepts the source's recognized plain field (`reasoning_content`, `reasoning`, or `reasoning_text`). Other readable reasoning is retained as labelled plaintext in `<reformatted-pre-switch-reasoning>` markers with incompatible protocol metadata removed; opaque redacted or encrypted-only state is omitted for incompatible targets. This outbound conversion does not change session history, so switching back can replay the original state unless it was compacted or pruned. Custom models must also share provider identity and compatible API/signature behavior.
+
 ---
 
 ## Interactive Mode
