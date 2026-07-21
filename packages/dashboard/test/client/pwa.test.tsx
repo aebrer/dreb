@@ -26,6 +26,25 @@ vi.mock("../../src/client/api.js", () => ({
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
+		sessions: vi.fn(async () => ({ sessions: [] })),
+		hydrate: vi.fn(async (key: string) => ({
+			key,
+			state: {
+				sessionId: key,
+				tasks: [],
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			messages: [],
+			backgroundAgents: [],
+			barrierSeq: 0,
+		})),
 		messages: vi.fn(async () => ({ messages: [] })),
 		backgroundAgents: vi.fn(async () => ({ agents: [] })),
 		subagentMessages: vi.fn(async () => ({ agent: null, messages: [] })),
@@ -464,6 +483,13 @@ describe("PWA client — browser tab ◆ attention badge", () => {
 			runtimes: [makeNamedRuntime("k1", "Deploy", true)],
 			diskSessions: [],
 		});
+		vi.mocked(api.hydrate).mockResolvedValueOnce({
+			key: "k1",
+			state: { ...makeNamedRuntime("k1", "Deploy", true).state, tasks: [] },
+			messages: [],
+			backgroundAgents: [],
+			barrierSeq: 0,
+		});
 		window.location.hash = "#/session/k1";
 		try {
 			await mountAppAndFlush();
@@ -486,9 +512,7 @@ describe("PWA client — browser tab ◆ attention badge", () => {
 	});
 
 	it("removes the ◆ badge once attention clears (fleet runtime no longer needs attention)", async () => {
-		// Seed attention, mount, then refresh the fleet to a no-attention runtime
-		// by pushing an agent_start envelope (handleEnvelope calls refreshFleet on
-		// agent_start, which re-reads api.fleet).
+		// Seed attention, then apply the no-attention fleet SSE snapshot.
 		vi.mocked(api.fleet).mockResolvedValue({
 			runtimes: [makeNamedRuntime("k3", undefined, true)],
 			diskSessions: [],
@@ -497,14 +521,12 @@ describe("PWA client — browser tab ◆ attention badge", () => {
 		await mountAppAndFlush();
 		expect(document.title).toContain("◆");
 
-		// The runtime clears attention; the next fleet refresh must drop the badge.
-		// (agent_start also creates a session for k3, but it has no uiRequests /
-		// errors / suggested command, so its needsAttention stays false.)
-		vi.mocked(api.fleet).mockResolvedValue({
-			runtimes: [makeNamedRuntime("k3", undefined, false)],
-			diskSessions: [],
+		// The authoritative fleet snapshot clears the runtime's attention state.
+		stream.push({
+			seq: 1,
+			key: "",
+			event: { type: "fleet_snapshot", runtimes: [makeNamedRuntime("k3", undefined, false)] },
 		});
-		stream.push({ seq: 1, key: "k3", event: { type: "agent_start" } });
 		await flushEffects();
 
 		expect(document.title).not.toContain("◆");

@@ -1,16 +1,19 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BackgroundAgentDto, RuntimeInfoDto } from "../../src/shared/protocol.js";
+import type { BackgroundAgentDto, RuntimeHydrationDto, RuntimeInfoDto } from "../../src/shared/protocol.js";
 
 vi.mock("../../src/client/api.js", () => ({
 	api: {
 		auth: vi.fn(),
 		fleet: vi.fn(),
+		sessions: vi.fn(),
 		resync: vi.fn(),
+		hydrate: vi.fn(),
 		messages: vi.fn(),
 		backgroundAgents: vi.fn(),
 		runtime: vi.fn(),
+		stats: vi.fn(),
 		subagentMessages: vi.fn(),
 	},
 	connectEvents: vi.fn(() => () => {}),
@@ -74,6 +77,17 @@ function runtimeSnapshot(key: string, streaming: boolean): RuntimeInfoDto {
 	};
 }
 
+function hydrationSnapshot(key: string, streaming: boolean): RuntimeHydrationDto {
+	const runtime = runtimeSnapshot(key, streaming);
+	return {
+		key,
+		state: runtime.state,
+		messages: [],
+		backgroundAgents: [],
+		barrierSeq: 0,
+	};
+}
+
 function agentSnapshot(agentId: string, status: BackgroundAgentDto["status"], startedAtMs = 0): BackgroundAgentDto {
 	return {
 		agentId,
@@ -107,10 +121,22 @@ beforeEach(() => {
 	window.location.hash = "#/";
 	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
 	vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
+	vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
 	vi.mocked(api.resync).mockResolvedValue({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 });
+	vi.mocked(api.hydrate).mockResolvedValue(hydrationSnapshot("default", false));
 	vi.mocked(api.messages).mockResolvedValue({ messages: [] });
 	vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
 	vi.mocked(api.runtime).mockResolvedValue(runtimeSnapshot("default", false));
+	vi.mocked(api.stats).mockResolvedValue({
+		sessionId: "default",
+		userMessages: 0,
+		assistantMessages: 0,
+		toolCalls: 0,
+		toolResults: 0,
+		totalMessages: 0,
+		tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		cost: 0,
+	});
 	vi.mocked(api.subagentMessages).mockResolvedValue({ agent: agentSnapshot("bg1", "completed"), messages: [] });
 	vi.mocked(connectEvents).mockImplementation((handlers) => {
 		eventHandlers = handlers;
@@ -703,7 +729,7 @@ describe("app store SSE sync", () => {
 		}
 	});
 
-	it("runtime_removed deletes session state, revision state, composer memory, and refreshes fleet", async () => {
+	it("runtime_removed deletes session state, revision state, and composer memory without a fleet fetch", async () => {
 		const store = await makeStartedStore();
 		const key = "removed-session";
 
@@ -724,7 +750,7 @@ describe("app store SSE sync", () => {
 		expect(getComposerDraft(key)).toBeUndefined();
 		expect(getComposerHistory(key)).toEqual([]);
 		expect(store.notices()).toEqual([]);
-		expect(api.fleet).toHaveBeenCalledTimes(2);
+		expect(api.fleet).toHaveBeenCalledOnce();
 	});
 
 	it("runtime_removed redirects the actively viewed session to fleet with a notice", async () => {
@@ -785,14 +811,17 @@ describe("app store SSE sync", () => {
 });
 
 describe("app store hydration", () => {
-	it("hydrates the initial session snapshot when no live revision changes", async () => {
-		vi.mocked(api.messages).mockResolvedValue({
-			messages: [{ role: "assistant", content: [{ type: "text", text: "snapshot text" }] }],
-		});
-		vi.mocked(api.runtime).mockResolvedValue(runtimeSnapshot("s1", true));
+	it("hydrates the initial session snapshot with one atomic API call", async () => {
+		const snapshot = hydrationSnapshot("s1", true);
+		snapshot.messages = [{ role: "assistant", content: [{ type: "text", text: "snapshot text" }] }];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
 		const store = createAppStore();
 
 		await store.hydrateSession("s1");
+		expect(api.hydrate).toHaveBeenCalledWith("s1", undefined);
+		expect(api.messages).not.toHaveBeenCalled();
+		expect(api.backgroundAgents).not.toHaveBeenCalled();
+		expect(api.runtime).not.toHaveBeenCalled();
 
 		expect(store.sessions.s1?.entries[0]).toMatchObject({
 			kind: "assistant",
@@ -802,11 +831,27 @@ describe("app store hydration", () => {
 		expect(store.sessions.s1?.workingSince).toEqual(expect.any(Number));
 	});
 
+	it("authoritatively lowers the matching fleet count when hydrate recovers a forked session", async () => {
+		const live = runtimeSnapshot("s1", false);
+		live.state.messageCount = 12;
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [live], diskSessions: [] });
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.state.messageCount = 3;
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = await makeStartedStore();
+
+		await store.hydrateSession("s1");
+
+		expect(store.fleet().runtimes[0]?.state.messageCount).toBe(3);
+	});
+
 	it("caps completed background agents when hydrating the session registry", async () => {
 		const agents: BackgroundAgentDto[] = [];
 		for (let i = 0; i < 25; i++) agents.push(agentSnapshot(`done-${i}`, "completed", i * 1000));
 		agents.push(agentSnapshot("running-old", "running", 0));
-		vi.mocked(api.backgroundAgents).mockResolvedValue({ agents });
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.backgroundAgents = agents;
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
 		const store = createAppStore();
 
 		await store.hydrateSession("s1");
@@ -821,86 +866,68 @@ describe("app store hydration", () => {
 		expect(store.sessions.s1?.backgroundAgents["running-old"]?.status).toBe("running");
 	});
 
-	it("does not let a stale session REST snapshot clobber newer live SSE state", async () => {
-		const messages = deferred<{ messages: unknown[] }>();
-		const agents = deferred<{ agents: BackgroundAgentDto[] }>();
-		const runtime = deferred<RuntimeInfoDto>();
-		vi.mocked(api.messages).mockReturnValueOnce(messages.promise);
-		vi.mocked(api.backgroundAgents).mockReturnValueOnce(agents.promise);
-		vi.mocked(api.runtime).mockReturnValueOnce(runtime.promise);
+	it("installs the hydrate baseline and replays only post-barrier live envelopes in order", async () => {
+		const response = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(response.promise);
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("s1");
-		emit("s1", { type: "agent_start" });
-		emit("s1", { type: "message_update", assistantMessageEvent: { type: "text_start", contentIndex: 0 } });
-		emit("s1", {
-			type: "message_update",
-			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "live SSE text" },
-		});
-		messages.resolve({ messages: [{ role: "assistant", content: [{ type: "text", text: "stale snapshot" }] }] });
-		agents.resolve({ agents: [] });
-		runtime.resolve(runtimeSnapshot("s1", false));
-
+		// This event is already represented by the server's atomic snapshot.
+		emit("s1", { type: "message_start", message: { role: "user", content: "prior transcript" } });
+		emit("s1", { type: "message_start", message: { role: "user", content: "post-barrier delta" } });
+		emit("s1", { type: "tasks_update", tasks: [{ id: "first", title: "first", status: "pending" }] });
+		emit("s1", { type: "tasks_update", tasks: [{ id: "last", title: "last", status: "completed" }] });
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.barrierSeq = 1;
+		snapshot.messages = [{ role: "user", content: "prior transcript" }];
+		snapshot.state.tasks = [{ id: "snapshot", title: "snapshot", status: "pending" }];
+		response.resolve(snapshot);
 		await hydrate;
 
-		const session = store.sessions.s1;
-		expect(session?.streaming).toBe(true);
-		expect(session?.workingSince).toEqual(expect.any(Number));
-		expect(session?.entries[0]).toMatchObject({
-			kind: "assistant",
-			streaming: true,
-			blocks: [{ kind: "text", text: "live SSE text" }],
-		});
-		expect(JSON.stringify(session?.entries)).not.toContain("stale snapshot");
+		expect(store.sessions.s1?.entries).toMatchObject([
+			{ kind: "user", text: "prior transcript" },
+			{ kind: "user", text: "post-barrier delta" },
+		]);
+		expect(store.sessions.s1?.entries).toHaveLength(2);
+		expect(store.sessions.s1?.tasks).toEqual([{ id: "last", title: "last", status: "completed" }]);
 	});
 
 	it("restores runtime tasks during a hard-refresh hydrate even when startup SSE events race it", async () => {
-		const messages = deferred<{ messages: unknown[] }>();
-		const agents = deferred<{ agents: BackgroundAgentDto[] }>();
-		const runtime = runtimeSnapshot("s1", false);
-		runtime.state.tasks = [{ id: "restore", title: "restore me", status: "in_progress" }];
-		vi.mocked(api.messages).mockReturnValueOnce(messages.promise);
-		vi.mocked(api.backgroundAgents).mockReturnValueOnce(agents.promise);
-		vi.mocked(api.runtime).mockResolvedValueOnce(runtime);
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("s1");
 		emit("s1", { type: "agent_start" });
-		messages.resolve({ messages: [{ role: "assistant", content: [{ type: "text", text: "stale snapshot" }] }] });
-		agents.resolve({ agents: [] });
+		const restore = hydrationSnapshot("s1", false);
+		restore.state.tasks = [{ id: "restore", title: "restore me", status: "in_progress" }];
+		restore.messages = [{ role: "assistant", content: [{ type: "text", text: "stale snapshot" }] }];
+		snapshot.resolve(restore);
 		await hydrate;
 		emit("s1", { type: "agent_start" });
 
 		expect(store.sessions.s1?.tasks).toEqual([{ id: "restore", title: "restore me", status: "in_progress" }]);
-		expect(JSON.stringify(store.sessions.s1?.entries)).not.toContain("stale snapshot");
+		expect(JSON.stringify(store.sessions.s1?.entries)).toContain("stale snapshot");
 	});
 
-	it("does not overwrite a newer live tasks_update with an older runtime hydrate", async () => {
-		const messages = deferred<{ messages: unknown[] }>();
-		const agents = deferred<{ agents: BackgroundAgentDto[] }>();
-		const runtime = runtimeSnapshot("s1", false);
-		runtime.state.tasks = [{ id: "stale", title: "stale task", status: "pending" }];
-		vi.mocked(api.messages).mockReturnValueOnce(messages.promise);
-		vi.mocked(api.backgroundAgents).mockReturnValueOnce(agents.promise);
-		vi.mocked(api.runtime).mockResolvedValueOnce(runtime);
+	it("does not overwrite a newer live tasks_update with an older hydrate snapshot", async () => {
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("s1");
 		emit("s1", { type: "tasks_update", tasks: [{ id: "live", title: "live task", status: "completed" }] });
-		messages.resolve({ messages: [] });
-		agents.resolve({ agents: [] });
+		const stale = hydrationSnapshot("s1", false);
+		stale.state.tasks = [{ id: "stale", title: "stale task", status: "pending" }];
+		snapshot.resolve(stale);
 		await hydrate;
 
 		expect(store.sessions.s1?.tasks).toEqual([{ id: "live", title: "live task", status: "completed" }]);
 	});
 
-	it("does not create a stub session when aborted hydration calls reject", async () => {
+	it("does not create a stub session when an aborted hydration rejects", async () => {
 		const key = "abort-hydrate";
-		vi.mocked(api.messages).mockImplementationOnce((_key: string, signal?: AbortSignal) => rejectAfterAbort(signal));
-		vi.mocked(api.backgroundAgents).mockImplementationOnce((_key: string, signal?: AbortSignal) =>
-			rejectAfterAbort(signal),
-		);
-		vi.mocked(api.runtime).mockImplementationOnce((_key: string, signal?: AbortSignal) => rejectAfterAbort(signal));
+		vi.mocked(api.hydrate).mockImplementationOnce((_key: string, signal?: AbortSignal) => rejectAfterAbort(signal));
 		const store = createAppStore();
 		const controller = new AbortController();
 
@@ -915,28 +942,22 @@ describe("app store hydration", () => {
 	});
 
 	it("surfaces genuine hydration rejections when the request was not aborted", async () => {
-		vi.mocked(api.messages).mockRejectedValueOnce(new Error("messages failed"));
-		vi.mocked(api.backgroundAgents).mockRejectedValueOnce(new Error("agents failed"));
-		vi.mocked(api.runtime).mockRejectedValueOnce(new Error("runtime failed"));
+		vi.mocked(api.hydrate).mockRejectedValueOnce(new Error("hydrate failed"));
 		const store = createAppStore();
 
-		await expect(store.hydrateSession("bad-hydrate")).rejects.toThrow("messages failed");
+		await expect(store.hydrateSession("bad-hydrate")).rejects.toThrow("hydrate failed");
 	});
 
 	it("does not let a runtime_removed generation bump recreate a deleted session after hydration resolves", async () => {
-		const messages = deferred<{ messages: unknown[] }>();
-		const agents = deferred<{ agents: BackgroundAgentDto[] }>();
-		const runtime = deferred<RuntimeInfoDto>();
-		vi.mocked(api.messages).mockReturnValueOnce(messages.promise);
-		vi.mocked(api.backgroundAgents).mockReturnValueOnce(agents.promise);
-		vi.mocked(api.runtime).mockReturnValueOnce(runtime.promise);
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("removed-mid-flight");
 		emit("removed-mid-flight", { type: "runtime_removed" });
-		messages.resolve({ messages: [{ role: "assistant", content: [{ type: "text", text: "phantom" }] }] });
-		agents.resolve({ agents: [] });
-		runtime.resolve(runtimeSnapshot("removed-mid-flight", false));
+		const stale = hydrationSnapshot("removed-mid-flight", false);
+		stale.messages = [{ role: "assistant", content: [{ type: "text", text: "phantom" }] }];
+		snapshot.resolve(stale);
 		await hydrate;
 
 		expect(store.sessions["removed-mid-flight"]).toBeUndefined();
@@ -944,19 +965,15 @@ describe("app store hydration", () => {
 	});
 
 	it("does not let dashboard_resync recreate a cleared session after hydration resolves", async () => {
-		const messages = deferred<{ messages: unknown[] }>();
-		const agents = deferred<{ agents: BackgroundAgentDto[] }>();
-		const runtime = deferred<RuntimeInfoDto>();
-		vi.mocked(api.messages).mockReturnValueOnce(messages.promise);
-		vi.mocked(api.backgroundAgents).mockReturnValueOnce(agents.promise);
-		vi.mocked(api.runtime).mockReturnValueOnce(runtime.promise);
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("resync-mid-flight");
 		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
-		messages.resolve({ messages: [{ role: "assistant", content: [{ type: "text", text: "phantom" }] }] });
-		agents.resolve({ agents: [] });
-		runtime.resolve(runtimeSnapshot("resync-mid-flight", false));
+		const stale = hydrationSnapshot("resync-mid-flight", false);
+		stale.messages = [{ role: "assistant", content: [{ type: "text", text: "phantom" }] }];
+		snapshot.resolve(stale);
 		await hydrate;
 
 		expect(store.sessions["resync-mid-flight"]).toBeUndefined();
@@ -1015,5 +1032,326 @@ describe("app store hydration", () => {
 			blocks: [{ kind: "text", text: "live child text" }],
 		});
 		expect(JSON.stringify(subagent?.entries)).not.toContain("stale child snapshot");
+	});
+});
+
+describe("fleet snapshot and inventory store foundation", () => {
+	function fleetSnapshot(key: string, messageCount = 0): RuntimeInfoDto {
+		const runtime = runtimeSnapshot(key, false);
+		runtime.state.messageCount = messageCount;
+		return runtime;
+	}
+
+	function stats(totalMessages: number, tokensTotal: number, cost: number) {
+		return {
+			sessionId: "s",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages,
+			tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: tokensTotal },
+			cost,
+			contextUsage: { tokens: tokensTotal, contextWindow: 100_000, percent: 10 },
+		};
+	}
+
+	it("does not fetch the full fleet for lifecycle events", async () => {
+		const store = await makeStartedStore();
+		vi.mocked(api.fleet).mockClear();
+
+		emit("a", { type: "agent_start" });
+		emit("a", { type: "agent_end", messages: [] });
+		emit("a", { type: "background_agent_start", agent: agentSnapshot("bg", "running") });
+		emit("a", { type: "background_agent_end", agentId: "bg" });
+		emit("a", { type: "runtime_removed" });
+
+		expect(api.fleet).not.toHaveBeenCalled();
+		expect(store.fleet().runtimes).toEqual([]);
+	});
+
+	it("atomically replaces fleet snapshot membership while preserving enriched card fields", async () => {
+		const existing = fleetSnapshot("keep", 12);
+		existing.state.contextUsage = { tokens: 12, contextWindow: 100, percent: 12 };
+		existing.stats = { tokensTotal: 12, cost: 0.12 };
+		existing.lastAssistantText = "initial preview";
+		vi.mocked(api.fleet).mockResolvedValueOnce({
+			runtimes: [existing, fleetSnapshot("gone", 1)],
+			diskSessions: [
+				{
+					path: "/disk.jsonl",
+					id: "disk",
+					cwd: "/tmp",
+					created: "a",
+					modified: "b",
+					messageCount: 1,
+					firstMessage: "hi",
+				},
+			],
+		});
+		const store = await makeStartedStore();
+
+		const snapshot = fleetSnapshot("keep", 4);
+		snapshot.state.contextUsage = { tokens: 4, contextWindow: 100, percent: 4 };
+		emit("", { type: "fleet_snapshot", runtimes: [snapshot, fleetSnapshot("new", 2)] });
+
+		expect(store.fleet().runtimes.map((runtime) => runtime.key)).toEqual(["keep", "new"]);
+		expect(store.fleet().diskSessions).toHaveLength(1);
+		expect(store.fleet().runtimes[0]).toMatchObject({
+			stats: { tokensTotal: 12, cost: 0.12 },
+			lastAssistantText: "initial preview",
+			state: { messageCount: 4, contextUsage: { tokens: 12 } },
+		});
+		expect(store.sessions[""]).toBeUndefined();
+	});
+
+	it("refreshes only disk inventory when cross-client membership changes or a runtime is removed", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("existing")], diskSessions: [] });
+		await makeStartedStore();
+		vi.mocked(api.fleet).mockClear();
+		vi.mocked(api.sessions).mockClear();
+		vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
+
+		emit("", { type: "fleet_snapshot", runtimes: [fleetSnapshot("existing"), fleetSnapshot("other-tab")] });
+		await flushAsyncWork();
+		emit("other-tab", { type: "runtime_removed" });
+		await flushAsyncWork();
+
+		expect(api.sessions).toHaveBeenCalledTimes(2);
+		expect(api.fleet).not.toHaveBeenCalled();
+	});
+
+	it("does not scan disk inventory for lifecycle events or same-membership fleet snapshots", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("live")], diskSessions: [] });
+		await makeStartedStore();
+		vi.mocked(api.sessions).mockClear();
+
+		emit("live", { type: "agent_start" });
+		emit("live", { type: "agent_end", messages: [] });
+		emit("", { type: "fleet_snapshot", runtimes: [fleetSnapshot("live")] });
+		await flushAsyncWork();
+
+		expect(api.sessions).not.toHaveBeenCalled();
+	});
+
+	it("surfaces membership inventory failures without discarding the previous disk rows", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({
+			runtimes: [fleetSnapshot("live")],
+			diskSessions: [
+				{
+					path: "/previous.jsonl",
+					id: "previous",
+					cwd: "/tmp",
+					created: "a",
+					modified: "b",
+					messageCount: 1,
+					firstMessage: "previous",
+				},
+			],
+		});
+		const store = await makeStartedStore();
+		vi.mocked(api.sessions).mockRejectedValueOnce(new Error("inventory unavailable"));
+
+		emit("", { type: "fleet_snapshot", runtimes: [fleetSnapshot("live"), fleetSnapshot("new")] });
+		await flushAsyncWork();
+
+		expect(store.fleetError()).toBe("inventory unavailable");
+		expect(store.fleet().diskSessions.map((session) => session.id)).toEqual(["previous"]);
+	});
+
+	it("applies queued global snapshots only after their resync barrier", async () => {
+		const recovery = deferred<Awaited<ReturnType<typeof api.resync>>>();
+		vi.mocked(api.resync).mockReturnValueOnce(recovery.promise);
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		emit("", { type: "fleet_snapshot", runtimes: [fleetSnapshot("queued")] });
+		recovery.resolve({ fleet: { runtimes: [fleetSnapshot("snapshot")], diskSessions: [] }, barrierSeq: 1 });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.fleet().runtimes.map((runtime) => runtime.key)).toEqual(["queued"]);
+	});
+
+	it("removes a runtime immediately and blocks a stale full response from resurrecting it", async () => {
+		const delayed = deferred<{ runtimes: RuntimeInfoDto[]; diskSessions: [] }>();
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("gone")], diskSessions: [] });
+		const store = await makeStartedStore();
+		vi.mocked(api.fleet).mockReturnValueOnce(delayed.promise);
+		const refresh = store.refreshFleet();
+
+		emit("gone", { type: "runtime_removed" });
+		delayed.resolve({ runtimes: [fleetSnapshot("gone")], diskSessions: [] });
+		await refresh;
+
+		expect(store.fleet().runtimes).toEqual([]);
+	});
+
+	it("refreshes disk inventory without fetching or replacing live runtimes", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("live")], diskSessions: [] });
+		const store = await makeStartedStore();
+		vi.mocked(api.fleet).mockClear();
+		vi.mocked(api.sessions).mockResolvedValueOnce({
+			sessions: [
+				{
+					path: "/new.jsonl",
+					id: "new",
+					cwd: "/tmp",
+					created: "a",
+					modified: "b",
+					messageCount: 2,
+					firstMessage: "hello",
+				},
+			],
+		});
+
+		await store.refreshDiskSessions();
+
+		expect(api.sessions).toHaveBeenCalledOnce();
+		expect(api.fleet).not.toHaveBeenCalled();
+		expect(store.fleet().runtimes.map((runtime) => runtime.key)).toEqual(["live"]);
+		expect(store.fleet().diskSessions.map((session) => session.id)).toEqual(["new"]);
+	});
+
+	it("refreshes disk inventory when another client reports a deletion", async () => {
+		const store = await makeStartedStore();
+		vi.mocked(api.sessions).mockResolvedValueOnce({ sessions: [] });
+
+		emit("", { type: "disk_sessions_changed" });
+		await vi.waitFor(() => expect(api.sessions).toHaveBeenCalledOnce());
+
+		expect(api.fleet).toHaveBeenCalledOnce();
+		expect(store.fleetError()).toBeUndefined();
+		expect(store.sessions[""]).toBeUndefined();
+	});
+
+	it("ignores out-of-order disk inventory responses", async () => {
+		const first = deferred<{ sessions: [] }>();
+		const second = deferred<{
+			sessions: Array<{
+				path: string;
+				id: string;
+				cwd: string;
+				created: string;
+				modified: string;
+				messageCount: number;
+				firstMessage: string;
+			}>;
+		}>();
+		const store = await makeStartedStore();
+		vi.mocked(api.sessions).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+		const firstRefresh = store.refreshDiskSessions();
+		const secondRefresh = store.refreshDiskSessions();
+		second.resolve({
+			sessions: [
+				{
+					path: "/new.jsonl",
+					id: "new",
+					cwd: "/tmp",
+					created: "a",
+					modified: "b",
+					messageCount: 1,
+					firstMessage: "new",
+				},
+			],
+		});
+		await secondRefresh;
+		first.resolve({ sessions: [] });
+		await firstRefresh;
+
+		expect(store.fleet().diskSessions.map((session) => session.id)).toEqual(["new"]);
+	});
+
+	it("upserts runtime and patches direct model/thinking responses without allowing a stale full response", async () => {
+		const delayed = deferred<{ runtimes: RuntimeInfoDto[]; diskSessions: [] }>();
+		const store = await makeStartedStore();
+		vi.mocked(api.fleet).mockReturnValueOnce(delayed.promise);
+
+		const refresh = store.refreshFleet();
+		store.upsertRuntime(fleetSnapshot("created"));
+		store.setRuntimeModel("created", { provider: "test", id: "new-model" });
+		store.setRuntimeThinkingLevel("created", "high");
+		delayed.resolve({ runtimes: [fleetSnapshot("stale")], diskSessions: [] });
+		await refresh;
+
+		expect(store.fleet().runtimes).toHaveLength(1);
+		expect(store.fleet().runtimes[0]).toMatchObject({
+			key: "created",
+			state: { model: { provider: "test", id: "new-model" } },
+		});
+	});
+
+	it("ignores out-of-order full fleet responses", async () => {
+		const first = deferred<{ runtimes: RuntimeInfoDto[]; diskSessions: [] }>();
+		const second = deferred<{ runtimes: RuntimeInfoDto[]; diskSessions: [] }>();
+		const store = await makeStartedStore();
+		vi.mocked(api.fleet).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+		const firstRefresh = store.refreshFleet();
+		const secondRefresh = store.refreshFleet();
+		second.resolve({ runtimes: [fleetSnapshot("new")], diskSessions: [] });
+		await secondRefresh;
+		first.resolve({ runtimes: [fleetSnapshot("old")], diskSessions: [] });
+		await firstRefresh;
+
+		expect(store.fleet().runtimes.map((runtime) => runtime.key)).toEqual(["new"]);
+	});
+
+	it("merges concurrent stats into live cards and retains last-good values on partial failure", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({
+			runtimes: [fleetSnapshot("a", 1), fleetSnapshot("b", 2)],
+			diskSessions: [],
+		});
+		const store = await makeStartedStore();
+		vi.mocked(api.stats)
+			.mockResolvedValueOnce(stats(5, 50, 0.5))
+			.mockRejectedValueOnce(new Error("b stats unavailable"));
+
+		await store.refreshFleetStats();
+
+		expect(api.stats).toHaveBeenCalledWith("a");
+		expect(api.stats).toHaveBeenCalledWith("b");
+		expect(store.fleet().runtimes[0]).toMatchObject({
+			stats: { tokensTotal: 50, cost: 0.5 },
+			state: { messageCount: 5, contextUsage: { tokens: 50 } },
+		});
+		expect(store.fleet().runtimes[1]).not.toHaveProperty("stats");
+		expect(store.fleetStatsError()).toContain("b stats unavailable");
+	});
+
+	it("allows an uncontended stats response to lower a forked count but preserves a newer live count", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("live", 12)], diskSessions: [] });
+		const store = await makeStartedStore();
+		vi.mocked(api.stats).mockResolvedValueOnce(stats(3, 30, 0.3));
+
+		await store.refreshFleetStats();
+		expect(store.fleet().runtimes[0]?.state.messageCount).toBe(3);
+
+		const delayed = deferred<ReturnType<typeof stats>>();
+		vi.mocked(api.stats).mockReturnValueOnce(delayed.promise);
+		const refresh = store.refreshFleetStats();
+		emit("", { type: "fleet_snapshot", runtimes: [fleetSnapshot("live", 8)] });
+		delayed.resolve(stats(2, 20, 0.2));
+		await refresh;
+
+		expect(store.fleet().runtimes[0]?.state.messageCount).toBe(8);
+	});
+
+	it("shares an in-flight stats request and discards stats for runtimes removed while it waits", async () => {
+		const delayed = deferred<ReturnType<typeof stats>>();
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("gone")], diskSessions: [] });
+		const store = await makeStartedStore();
+		vi.mocked(api.stats).mockReturnValueOnce(delayed.promise);
+
+		const first = store.refreshFleetStats();
+		const second = store.refreshFleetStats();
+		expect(first).toBe(second);
+		expect(api.stats).toHaveBeenCalledOnce();
+		emit("gone", { type: "runtime_removed" });
+		delayed.resolve(stats(10, 100, 1));
+		await first;
+
+		expect(store.fleet().runtimes).toEqual([]);
+		expect(store.fleetStatsError()).toBeUndefined();
 	});
 });

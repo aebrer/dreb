@@ -22,7 +22,9 @@ import type {
 	PendingMessagesDto,
 	PerformanceStatsDto,
 	ResourcesDto,
+	RuntimeHydrationDto,
 	RuntimeInfoDto,
+	SessionInventoryDto,
 	SessionStatsDto,
 	SettingsDto,
 	SettingsSaveResultDto,
@@ -71,6 +73,7 @@ export const api = {
 	unpair: (id: string) => request<{ ok: true }>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
 	fleet: () => request<FleetDto>("/api/fleet"),
+	sessions: () => request<SessionInventoryDto>("/api/sessions"),
 	resync: (key?: string, agentId?: string, signal?: AbortSignal) => {
 		const query = new URLSearchParams();
 		if (key) query.set("key", key);
@@ -82,6 +85,8 @@ export const api = {
 		request<RuntimeInfoDto>("/api/runtimes", json({ cwd, ...opts })),
 	stopRuntime: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}`, { method: "DELETE" }),
 	runtime: (key: string, signal?: AbortSignal) => request<RuntimeInfoDto>(`/api/runtimes/${key}`, { signal }),
+	hydrate: (key: string, signal?: AbortSignal) =>
+		request<RuntimeHydrationDto>(`/api/runtimes/${key}/hydrate`, { signal }),
 	messages: (key: string, signal?: AbortSignal) =>
 		request<{ messages: unknown[] }>(`/api/runtimes/${key}/messages`, { signal }),
 	pending: (key: string) => request<PendingMessagesDto>(`/api/runtimes/${key}/pending`),
@@ -381,7 +386,9 @@ export function connectEvents(handlers: EventStreamHandlers, injected: EventStre
 		};
 		current.timeout = scheduleTimeout(() => {
 			current.controller.abort();
-			finish(() => onFailure(new Error("dashboard authentication validation timed out")));
+			finish(() =>
+				onFailure(Object.assign(new Error("dashboard authentication validation timed out"), { status: undefined })),
+			);
 		}, statusTimeoutMs);
 		try {
 			void Promise.resolve(statusCheck(current.controller.signal)).then(
@@ -389,7 +396,7 @@ export function connectEvents(handlers: EventStreamHandlers, injected: EventStre
 				(error: { status?: number }) => finish(() => onFailure(error)),
 			);
 		} catch (error) {
-			finish(() => onFailure(error as { status?: number }));
+			finish(() => onFailure(error as unknown as { status?: number }));
 		}
 	}
 
@@ -456,7 +463,7 @@ export function connectEvents(handlers: EventStreamHandlers, injected: EventStre
 			}
 		};
 		candidate.addEventListener("connection", connectionListener);
-		candidate.onmessage = (message) => {
+		candidate.onmessage = (message: MessageEvent<string>) => {
 			if (stopped || sourceGeneration !== generation || source !== candidate) return;
 			lastLivenessAt = now();
 			let envelope: EventEnvelope;

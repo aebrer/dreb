@@ -6,7 +6,16 @@
 
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-import type { ActiveRuntimeSnapshotDto, AuthStatusDto, EventEnvelope, FleetDto } from "../../shared/protocol.js";
+import type {
+	ActiveRuntimeSnapshotDto,
+	AuthStatusDto,
+	EventEnvelope,
+	FleetDto,
+	FleetRuntimeSnapshotDto,
+	FleetSnapshotEventDto,
+	RuntimeInfoDto,
+	SessionStatsDto,
+} from "../../shared/protocol.js";
 import { api, connectEvents, type EventConnectionStatus } from "../api.js";
 import { evictComposerMemory } from "./composer-memory.js";
 import {
@@ -62,6 +71,9 @@ const MAX_NOTICES = 20;
 const MAX_PENDING_RESYNC_ENVELOPES = 2_000;
 /** Matches the server's replay budget and bounds projected frame retention in the browser. */
 const MAX_PENDING_RESYNC_BYTES = 3 * 1024 * 1024;
+/** A hydrate is also a snapshot/replay transaction, with the same bounded browser budget. */
+const MAX_PENDING_HYDRATION_ENVELOPES = MAX_PENDING_RESYNC_ENVELOPES;
+const MAX_PENDING_HYDRATION_BYTES = MAX_PENDING_RESYNC_BYTES;
 const RESYNC_TIMEOUT_MS = 30_000;
 const RESYNC_RETRY_BASE_MS = 1_000;
 const RESYNC_RETRY_MAX_MS = 30_000;
@@ -79,7 +91,12 @@ interface HydrationGuardToken {
 	revision: number;
 	generation: number;
 	epoch: number;
-	taskRevision: number;
+}
+
+interface PendingHydration {
+	guard: HydrationGuardToken;
+	queued: EventEnvelope[];
+	queuedBytes: number;
 }
 
 export function createAppStore() {
@@ -93,6 +110,7 @@ export function createAppStore() {
 	const [route, setRouteSignal] = createSignal<Route>(parseHash());
 	const [fleet, setFleet] = createSignal<FleetDto>({ runtimes: [], diskSessions: [] });
 	const [fleetError, setFleetError] = createSignal<string>();
+	const [fleetStatsError, setFleetStatsError] = createSignal<string>();
 	const [resyncError, setResyncError] = createSignal<string>();
 	const [resyncing, setResyncing] = createSignal(false);
 	const [auth, setAuth] = createSignal<(AuthStatusDto & { needsPairing?: boolean; error?: string }) | undefined>();
@@ -101,6 +119,8 @@ export function createAppStore() {
 	const [notices, setNotices] = createSignal<Toast[]>([]);
 	const hydrationGenerations = new Map<string, number>();
 	const taskRevisions = new Map<string, number>();
+	/** Per-key HTTP snapshot/replay transactions. Live envelopes still render immediately. */
+	const pendingHydrations = new Map<string, PendingHydration>();
 	let hydrationEpoch = 0;
 	let noticeCounter = 0;
 	let resyncPromise: Promise<void> | undefined;
@@ -111,6 +131,14 @@ export function createAppStore() {
 	let resyncRetryAttempt = 0;
 	let retryAfterCurrentResync = false;
 	let authoritativeBarrierSeq: number | undefined;
+	/** Invalidates in-flight full fleet reads after any narrower authoritative mutation. */
+	let fleetMutationGeneration = 0;
+	let latestFleetRequestGeneration = 0;
+	/** Latest inventory request wins, so a slow earlier response cannot regress disk rows. */
+	let latestDiskSessionsRequestGeneration = 0;
+	let fleetStatsPromise: Promise<void> | undefined;
+	/** Runtime keys removed by lifecycle events cannot be revived by an older snapshot. */
+	const removedRuntimeKeys = new Set<string>();
 	let stopped = false;
 
 	window.addEventListener("hashchange", () => setRouteSignal(parseHash()));
@@ -144,7 +172,6 @@ export function createAppStore() {
 			revision: currentRevision(key),
 			generation: currentHydrationGeneration(key),
 			epoch: hydrationEpoch,
-			taskRevision: currentTaskRevision(key),
 		};
 	}
 
@@ -156,8 +183,13 @@ export function createAppStore() {
 		return currentRevision(key) === guard.revision && hydrationIdentityMatches(key, guard);
 	}
 
-	function taskHydrationGuardMatches(key: string, guard: HydrationGuardToken): boolean {
-		return currentTaskRevision(key) === guard.taskRevision && hydrationIdentityMatches(key, guard);
+	function clearHydrationTransaction(key: string, pending?: PendingHydration): void {
+		if (pending && pendingHydrations.get(key) !== pending) return;
+		pendingHydrations.delete(key);
+		if (pending) {
+			pending.queued = [];
+			pending.queuedBytes = 0;
+		}
 	}
 
 	function bumpRevision(key: string): void {
@@ -175,6 +207,7 @@ export function createAppStore() {
 	}
 
 	function deleteSessionState(key: string): void {
+		clearHydrationTransaction(key);
 		bumpHydrationGeneration(key);
 		taskRevisions.delete(key);
 		setSessions(key, undefined!);
@@ -192,14 +225,201 @@ export function createAppStore() {
 		setNotices((current) => [...current, { id: noticeCounter, text, tone }].slice(-MAX_NOTICES));
 	}
 
-	async function refreshFleet(): Promise<void> {
-		try {
-			setFleet(await api.fleet());
-			setFleetError(undefined);
-		} catch (err) {
-			setFleetError(err instanceof Error ? err.message : String(err));
-			throw err;
-		}
+	function mutateFleet(mutator: (current: FleetDto) => FleetDto): void {
+		fleetMutationGeneration += 1;
+		setFleet(mutator);
+	}
+
+	function replaceFleet(next: FleetDto): void {
+		removedRuntimeKeys.clear();
+		mutateFleet(() => next);
+	}
+
+	/**
+	 * Fleet SSE frames intentionally omit REST-enriched card fields. Preserve
+	 * those values, plus monotonic message/context data, while replacing the
+	 * event-derived runtime membership as one Solid signal update.
+	 */
+	function applyFleetSnapshot(runtimes: FleetRuntimeSnapshotDto[]): void {
+		const nextKeys = new Set(
+			runtimes.filter((runtime) => !removedRuntimeKeys.has(runtime.key)).map((runtime) => runtime.key),
+		);
+		const membershipChanged =
+			nextKeys.size !== fleet().runtimes.length || fleet().runtimes.some((runtime) => !nextKeys.has(runtime.key));
+		mutateFleet((current) => {
+			const existing = new Map(current.runtimes.map((runtime) => [runtime.key, runtime]));
+			return {
+				...current,
+				runtimes: runtimes
+					.filter((runtime) => !removedRuntimeKeys.has(runtime.key))
+					.map((runtime): RuntimeInfoDto => {
+						const previous = existing.get(runtime.key);
+						return {
+							...runtime,
+							state: {
+								...runtime.state,
+								// Context usage is refreshed through the slower authoritative stats
+								// path. Message count belongs to this sequenced snapshot and may
+								// legitimately decrease after a fork/rewind.
+								contextUsage: previous?.state.contextUsage ?? runtime.state.contextUsage,
+							},
+							...(previous?.stats === undefined ? {} : { stats: previous.stats }),
+							...(previous?.lastAssistantText === undefined
+								? {}
+								: { lastAssistantText: previous.lastAssistantText }),
+						};
+					}),
+			};
+		});
+		if (membershipChanged) void refreshDiskSessions().catch(() => {});
+	}
+
+	function removeFleetRuntime(key: string): void {
+		removedRuntimeKeys.add(key);
+		// Bump even when the card was not rendered: an older full response must
+		// still be unable to resurrect a just-removed runtime.
+		mutateFleet((current) => ({ ...current, runtimes: current.runtimes.filter((runtime) => runtime.key !== key) }));
+		void refreshDiskSessions().catch(() => {});
+	}
+
+	function refreshFleet(): Promise<void> {
+		const requestGeneration = ++latestFleetRequestGeneration;
+		const mutationAtRequest = fleetMutationGeneration;
+		return api.fleet().then(
+			(next) => {
+				if (requestGeneration !== latestFleetRequestGeneration || mutationAtRequest !== fleetMutationGeneration) {
+					return;
+				}
+				replaceFleet(next);
+				setFleetError(undefined);
+			},
+			(err) => {
+				if (requestGeneration === latestFleetRequestGeneration && mutationAtRequest === fleetMutationGeneration) {
+					setFleetError(err instanceof Error ? err.message : String(err));
+				}
+				throw err;
+			},
+		);
+	}
+
+	function refreshDiskSessions(): Promise<void> {
+		const requestGeneration = ++latestDiskSessionsRequestGeneration;
+		return api.sessions().then(
+			(inventory) => {
+				if (requestGeneration !== latestDiskSessionsRequestGeneration) return;
+				mutateFleet((current) => ({ ...current, diskSessions: inventory.sessions }));
+				setFleetError(undefined);
+			},
+			(err) => {
+				if (requestGeneration === latestDiskSessionsRequestGeneration) {
+					setFleetError(err instanceof Error ? err.message : String(err));
+				}
+				throw err;
+			},
+		);
+	}
+
+	/** Insert or replace one authoritative runtime without requiring a fleet read. */
+	function upsertRuntime(runtime: RuntimeInfoDto): void {
+		removedRuntimeKeys.delete(runtime.key);
+		mutateFleet((current) => {
+			const index = current.runtimes.findIndex((existing) => existing.key === runtime.key);
+			if (index === -1) return { ...current, runtimes: [...current.runtimes, runtime] };
+			const runtimes = [...current.runtimes];
+			runtimes[index] = runtime;
+			return { ...current, runtimes };
+		});
+	}
+
+	/** Apply the runtime state from an atomic hydrate, including legitimate rewinds. */
+	function setHydratedRuntimeState(key: string, state: RuntimeInfoDto["state"]): void {
+		// SessionScreen can hydrate while start()'s initial fleet request is still
+		// pending. A no-op patch must not invalidate that authoritative first load.
+		if (!fleet().runtimes.some((runtime) => runtime.key === key)) return;
+		mutateFleet((current) => ({
+			...current,
+			runtimes: current.runtimes.map((runtime) => (runtime.key === key ? { ...runtime, state } : runtime)),
+		}));
+	}
+
+	/** Patch the card immediately from the authoritative set-model response. */
+	function setRuntimeModel(key: string, model: { provider: string; id: string }): void {
+		mutateFleet((current) => ({
+			...current,
+			runtimes: current.runtimes.map((runtime) =>
+				runtime.key === key ? { ...runtime, state: { ...runtime.state, model } } : runtime,
+			),
+		}));
+	}
+
+	/** Patch thinking state after the direct RPC response; no session event carries it. */
+	function setRuntimeThinkingLevel(key: string, thinkingLevel: string): void {
+		mutateFleet((current) => ({
+			...current,
+			runtimes: current.runtimes.map((runtime) =>
+				runtime.key === key ? { ...runtime, state: { ...runtime.state, thinkingLevel } } : runtime,
+			),
+		}));
+	}
+
+	function mergeRuntimeStats(
+		runtime: RuntimeInfoDto,
+		stats: SessionStatsDto,
+		liveStateRaced: boolean,
+	): RuntimeInfoDto {
+		return {
+			...runtime,
+			state: {
+				...runtime.state,
+				...(stats.contextUsage === undefined ? {} : { contextUsage: stats.contextUsage }),
+				// Stats is authoritative unless a newer fleet mutation landed while it
+				// was in flight; then it must not rewind that newer live state.
+				messageCount: liveStateRaced
+					? Math.max(runtime.state.messageCount, stats.totalMessages)
+					: stats.totalMessages,
+			},
+			stats: { tokensTotal: stats.tokens.total, cost: stats.cost },
+		};
+	}
+
+	function refreshFleetStats(): Promise<void> {
+		if (fleetStatsPromise) return fleetStatsPromise;
+		const mutationAtRequest = fleetMutationGeneration;
+		const keys = fleet().runtimes.map((runtime) => runtime.key);
+		const requests = keys.map((key) => {
+			try {
+				return api.stats(key);
+			} catch (error) {
+				return Promise.reject(error);
+			}
+		});
+		const promise = Promise.allSettled(requests)
+			.then((results) => {
+				const successful = new Map<string, SessionStatsDto>();
+				const failures: string[] = [];
+				for (const [index, result] of results.entries()) {
+					if (result.status === "fulfilled") successful.set(keys[index], result.value);
+					else failures.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
+				}
+				if (successful.size > 0) {
+					// Re-read membership at application time. Results for removed runtimes
+					// are discarded rather than creating a stale card.
+					const liveStateRaced = fleetMutationGeneration !== mutationAtRequest;
+					mutateFleet((current) => ({
+						...current,
+						runtimes: current.runtimes.map((runtime) => {
+							const stats = successful.get(runtime.key);
+							return stats ? mergeRuntimeStats(runtime, stats, liveStateRaced) : runtime;
+						}),
+					}));
+				}
+				setFleetStatsError(failures.length > 0 ? failures.join("; ") : undefined);
+			})
+			.finally(() => {
+				if (fleetStatsPromise === promise) fleetStatsPromise = undefined;
+			});
+		fleetStatsPromise = promise;
+		return promise;
 	}
 
 	function encodedEnvelopeBytes(envelope: EventEnvelope): number {
@@ -254,9 +474,18 @@ export function createAppStore() {
 
 	function applyEnvelope(envelope: EventEnvelope): void {
 		const type = envelope.event?.type as string | undefined;
-		if (type === "runtime_removed") {
+		if (type === "fleet_snapshot") {
+			// This is a global event (key=""). It updates cards only and must never
+			// create a synthetic session reducer entry under the empty key.
+			applyFleetSnapshot((envelope.event as unknown as FleetSnapshotEventDto).runtimes);
+		} else if (type === "disk_sessions_changed") {
+			// A delete in another dashboard client should converge without bringing
+			// back the expensive full fleet endpoint.
+			void refreshDiskSessions().catch(() => {});
+		} else if (type === "runtime_removed") {
 			if (envelope.key) {
 				const wasViewingRemovedRuntime = routedSessionKey() === envelope.key;
+				removeFleetRuntime(envelope.key);
 				deleteSessionState(envelope.key);
 				if (wasViewingRemovedRuntime) {
 					pushNotice(`session ${envelope.key} was stopped`, "warning");
@@ -267,18 +496,10 @@ export function createAppStore() {
 			mutateSession(envelope.key, (session) => applySessionEvent(session, envelope.event));
 			if (type === "tasks_update") bumpTaskRevision(envelope.key);
 		}
-		if (
-			type === "agent_start" ||
-			type === "agent_end" ||
-			type === "background_agent_start" ||
-			type === "background_agent_end" ||
-			type === "runtime_removed"
-		) {
-			refreshFleet().catch(() => {});
-		}
 	}
 
 	function hydrateSnapshot(active: ActiveRuntimeSnapshotDto): void {
+		const subagent = active.subagent;
 		mutateSession(active.key, (session) => {
 			session.entries = messagesToEntries(active.messages as any[]);
 			session.tasks = (active.state.tasks ?? []).map((task) => ({ ...task }));
@@ -311,16 +532,16 @@ export function createAppStore() {
 			}
 			session.backgroundAgents = Object.fromEntries(active.backgroundAgents.map((agent) => [agent.agentId, agent]));
 			capBackgroundAgents(session);
-			if (active.subagent) {
+			if (subagent) {
 				// The parent registry is captured after the subagent transcript, so it
 				// is authoritative when it contains this agent.
 				const agent =
-					active.backgroundAgents.find((parentAgent) => parentAgent.agentId === active.subagent.agentId) ??
-					active.subagent.agent;
-				session.backgroundAgents[active.subagent.agentId] = agent;
-				session.subagents[active.subagent.agentId] = {
-					agentId: active.subagent.agentId,
-					entries: messagesToEntries(active.subagent.messages as any[]),
+					active.backgroundAgents.find((parentAgent) => parentAgent.agentId === subagent.agentId) ??
+					subagent.agent;
+				session.backgroundAgents[subagent.agentId] = agent;
+				session.subagents[subagent.agentId] = {
+					agentId: subagent.agentId,
+					entries: messagesToEntries(subagent.messages as any[]),
 					streaming: agent.status === "running",
 				};
 			}
@@ -335,7 +556,7 @@ export function createAppStore() {
 		restoreConnectionAfterResyncRetry();
 		const barrierSeq = pending.barrierSeq;
 		authoritativeBarrierSeq = barrierSeq;
-		setFleet(snapshot.fleet);
+		replaceFleet(snapshot.fleet);
 		setFleetError(undefined);
 		if (snapshot.active) {
 			hydrateSnapshot(snapshot.active);
@@ -391,6 +612,9 @@ export function createAppStore() {
 		// Invalidate pre-barrier REST hydrations without clearing the currently
 		// rendered state; the ordered snapshot will replace it only once ready.
 		hydrationEpoch += 1;
+		for (const [hydrationKey, hydration] of pendingHydrations) {
+			clearHydrationTransaction(hydrationKey, hydration);
+		}
 		setResyncing(true);
 		setResyncError(undefined);
 		const timeout = setTimeout(() => pending.controller.abort("Dashboard recovery timed out"), RESYNC_TIMEOUT_MS);
@@ -461,6 +685,23 @@ export function createAppStore() {
 			return;
 		}
 		if (authoritativeBarrierSeq !== undefined && envelope.seq <= authoritativeBarrierSeq) return;
+		const hydration = envelope.key ? pendingHydrations.get(envelope.key) : undefined;
+		if (hydration) {
+			const envelopeBytes = encodedEnvelopeBytes(envelope);
+			if (
+				hydration.queued.length >= MAX_PENDING_HYDRATION_ENVELOPES ||
+				hydration.queuedBytes + envelopeBytes > MAX_PENDING_HYDRATION_BYTES
+			) {
+				clearHydrationTransaction(envelope.key, hydration);
+				throw new Error(
+					`Dashboard hydration queue overflowed for ${envelope.key}; refusing an incomplete snapshot replay`,
+				);
+			}
+			// Render promptly while retaining every frame that may be newer than the
+			// HTTP snapshot's explicit barrier for its later atomic replay.
+			hydration.queued.push(envelope);
+			hydration.queuedBytes += envelopeBytes;
+		}
 		applyEnvelope(envelope);
 	}
 
@@ -508,6 +749,7 @@ export function createAppStore() {
 		pendingResync = undefined;
 		if (pending) clearPendingQueue(pending);
 		pending?.controller.abort("Dashboard stopped");
+		for (const [key, hydration] of pendingHydrations) clearHydrationTransaction(key, hydration);
 	}
 
 	function dismissToast(id: number): void {
@@ -523,67 +765,61 @@ export function createAppStore() {
 	}
 
 	/**
-	 * Hydrate a session from the server (on drill-in): transcript from
-	 * get_messages + background-agent registry from list_background_agents.
-	 * The registry seed is what makes subagent drill-ins reachable again
-	 * after a browser reload (reducer state is per-page, but the runtime
-	 * keeps running server-side).
+	 * Hydrate a session as an atomic snapshot/replay transaction. Live envelopes
+	 * still update the screen immediately, then the snapshot replaces its baseline
+	 * and only frames after its explicit barrier are replayed.
 	 */
 	async function hydrateSession(key: string, signal?: AbortSignal): Promise<void> {
-		const hydrationGuard = captureHydrationGuard(key);
-		const [messagesResult, agentsResult, runtimeResult] = await Promise.allSettled([
-			api.messages(key, signal),
-			api.backgroundAgents(key, signal),
-			api.runtime(key, signal),
-		] as const);
-		// An aborted hydration (screen unmounted) must not create or touch
-		// session state — without this guard the all-rejected mutation below
-		// would still create a stub session and bump its revision.
-		if (!signal?.aborted && hydrationIdentityMatches(key, hydrationGuard)) {
-			const fullSnapshotSafe = hydrationGuardMatches(key, hydrationGuard);
-			const tasksSnapshotSafe = taskHydrationGuardMatches(key, hydrationGuard);
-			let appliedTasks = false;
+		// A newer request supersedes an older one for this key even if both happen
+		// to share the same generation.
+		clearHydrationTransaction(key);
+		const pending: PendingHydration = {
+			guard: captureHydrationGuard(key),
+			queued: [],
+			queuedBytes: 0,
+		};
+		pendingHydrations.set(key, pending);
+		const abortHydration = () => clearHydrationTransaction(key, pending);
+		signal?.addEventListener("abort", abortHydration, { once: true });
+		if (signal?.aborted) abortHydration();
+		try {
+			const snapshot = await api.hydrate(key, signal);
+			// An aborted hydration (screen unmounted), removed runtime, started
+			// resync, overflow, or superseding hydrate must not create phantom state.
+			if (
+				signal?.aborted ||
+				pendingHydrations.get(key) !== pending ||
+				!hydrationIdentityMatches(key, pending.guard)
+			) {
+				return;
+			}
 			mutateSession(key, (session) => {
-				if (fullSnapshotSafe && messagesResult.status === "fulfilled") {
-					session.entries = messagesToEntries(messagesResult.value.messages as any[]);
-				}
-				if (fullSnapshotSafe && agentsResult.status === "fulfilled") {
-					for (const agent of agentsResult.value.agents) {
-						session.backgroundAgents[agent.agentId] = agent;
-					}
-					capBackgroundAgents(session);
-				}
-				// Seed live turn state from the runtime so a mid-turn browser refresh
-				// still shows stop/working UI. Without this, `streaming` only becomes
-				// true via a future agent_start SSE event — after a refresh that event
-				// is in the past, leaving the stop button and status line missing while
-				// the agent is visibly running. If unrelated live events raced this REST
-				// hydrate, keep their transcript/streaming state while still restoring the
-				// task snapshot unless a newer tasks_update event has already arrived.
-				if (runtimeResult.status === "fulfilled" && runtimeResult.value?.state) {
-					const state = runtimeResult.value.state;
-					if (tasksSnapshotSafe) {
-						session.tasks = (state.tasks ?? []).map((task) => ({ ...task }));
-						appliedTasks = true;
-					}
-					if (fullSnapshotSafe) {
-						session.streaming = state.isStreaming;
-						session.compacting = state.isCompacting;
-						if (state.isStreaming && !session.workingSince) {
-							session.workingSince = Date.now();
-							session.workingText = session.workingText ?? "working";
-						} else if (!state.isStreaming) {
-							session.workingSince = undefined;
-						}
-					}
+				session.entries = messagesToEntries(snapshot.messages as any[]);
+				session.backgroundAgents = Object.fromEntries(
+					snapshot.backgroundAgents.map((agent) => [agent.agentId, agent]),
+				);
+				capBackgroundAgents(session);
+				session.streaming = snapshot.state.isStreaming;
+				session.compacting = snapshot.state.isCompacting;
+				session.tasks = (snapshot.state.tasks ?? []).map((task) => ({ ...task }));
+				if (snapshot.state.isStreaming) {
+					session.workingSince = Date.now();
+					session.workingText = "working";
+				} else {
+					session.workingSince = undefined;
+					session.workingText = undefined;
 				}
 			});
-			if (appliedTasks) bumpTaskRevision(key);
-		}
-		// Loud failure: apply what succeeded above, then surface the error.
-		const failed = [messagesResult, agentsResult, runtimeResult].find((result) => result.status === "rejected");
-		if (failed?.status === "rejected") {
-			throw failed.reason instanceof Error ? failed.reason : new Error(String(failed.reason));
+			bumpTaskRevision(key);
+			// The runtime snapshot is authoritative, including a lower count after a
+			// fork or rewind. Preserve card-only enrichment on the surrounding card.
+			setHydratedRuntimeState(key, snapshot.state);
+			for (const envelope of [...pending.queued].sort((a, b) => a.seq - b.seq)) {
+				if (envelope.seq > snapshot.barrierSeq) applyEnvelope(envelope);
+			}
+		} finally {
+			signal?.removeEventListener("abort", abortHydration);
+			clearHydrationTransaction(key, pending);
 		}
 	}
 
@@ -617,7 +853,13 @@ export function createAppStore() {
 		navigate,
 		fleet,
 		fleetError,
+		fleetStatsError,
 		refreshFleet,
+		refreshDiskSessions,
+		refreshFleetStats,
+		upsertRuntime,
+		setRuntimeModel,
+		setRuntimeThinkingLevel,
 		resyncing,
 		resyncError,
 		retryResync,

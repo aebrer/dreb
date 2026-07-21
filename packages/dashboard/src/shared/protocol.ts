@@ -19,6 +19,11 @@ export interface SessionInfoDto {
 	firstMessage: string;
 }
 
+/** On-disk session inventory, independent of live runtime state. */
+export interface SessionInventoryDto {
+	sessions: SessionInfoDto[];
+}
+
 /** Background agent metadata (mirrors RpcBackgroundAgentInfo). */
 export interface BackgroundAgentDto {
 	agentId: string;
@@ -211,19 +216,50 @@ export interface RuntimeInfoDto {
 	lastActivity: string;
 }
 
+/**
+ * Lightweight, event-derived live-runtime view for fleet SSE updates.
+ *
+ * Unlike RuntimeInfoDto, this deliberately excludes RPC-fetched stats and
+ * assistant preview text: RuntimePool can build it synchronously from its
+ * in-memory runtime registry.
+ */
+export interface FleetRuntimeSnapshotDto {
+	key: string;
+	cwd: string;
+	state: SessionStateDto;
+	backgroundAgents: BackgroundAgentDto[];
+	needsAttention: boolean;
+	error?: string;
+	createdAt: string;
+	lastActivity: string;
+}
+
+/** Coalesced fleet update published on the dashboard SSE stream. */
+export interface FleetSnapshotEventDto {
+	type: "fleet_snapshot";
+	runtimes: FleetRuntimeSnapshotDto[];
+}
+
 /** Fleet snapshot: live runtimes + on-disk inventory. */
 export interface FleetDto {
 	runtimes: RuntimeInfoDto[];
 	diskSessions: SessionInfoDto[];
 }
 
-/** Parent/subagent data restored by an authoritative recovery snapshot. */
-export interface ActiveRuntimeSnapshotDto {
+/**
+ * Atomic parent-session snapshot for drill-in hydration. Its barrier sequence
+ * marks the SSE ordering point captured by the matching RPC snapshot marker.
+ */
+export interface RuntimeHydrationDto {
 	key: string;
 	state: SessionStateDto;
 	messages: unknown[];
 	backgroundAgents: BackgroundAgentDto[];
 	barrierSeq: number;
+}
+
+/** Parent/subagent data restored by an authoritative recovery snapshot. */
+export interface ActiveRuntimeSnapshotDto extends RuntimeHydrationDto {
 	subagent?: { agentId: string; agent: BackgroundAgentDto; messages: unknown[]; barrierSeq: number };
 }
 

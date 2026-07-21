@@ -15,8 +15,27 @@ vi.mock("../../src/client/api.js", () => ({
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
+		sessions: vi.fn(async () => ({ sessions: [] })),
 		resync: vi.fn(async () => ({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 })),
 		connectionDiagnostic: vi.fn(async () => ({ ok: true })),
+		hydrate: vi.fn(async (key: string) => ({
+			key,
+			state: {
+				sessionId: key,
+				tasks: [],
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			messages: [],
+			backgroundAgents: [],
+			barrierSeq: 0,
+		})),
 		messages: vi.fn(async () => ({ messages: [] })),
 		backgroundAgents: vi.fn(async () => ({ agents: [] })),
 		subagentMessages: vi.fn(async () => ({
@@ -230,6 +249,25 @@ afterEach(() => {
 	vi.mocked(connectEvents).mockImplementation(() => () => {});
 	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
 	vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
+	vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
+	vi.mocked(api.hydrate).mockImplementation(async (key: string) => ({
+		key,
+		state: {
+			sessionId: key,
+			tasks: [],
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "all",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		},
+		messages: [],
+		backgroundAgents: [],
+		barrierSeq: 0,
+	}));
 	vi.mocked(api.messages).mockResolvedValue({ messages: [] });
 	vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
 	vi.mocked(api.runtime).mockImplementation(async (key: string) => ({
@@ -1085,12 +1123,10 @@ describe("screen smoke tests", () => {
 
 	it("session hydration aborts on unmount without surfacing an error", async () => {
 		let capturedSignal: AbortSignal | undefined;
-		vi.mocked(api.messages).mockImplementation((_key: string, signal?: AbortSignal) => {
+		vi.mocked(api.hydrate).mockImplementation((_key: string, signal?: AbortSignal) => {
 			capturedSignal = signal;
 			return rejectOnAbort(signal);
 		});
-		vi.mocked(api.backgroundAgents).mockImplementation((_key: string, signal?: AbortSignal) => rejectOnAbort(signal));
-		vi.mocked(api.runtime).mockImplementation((_key: string, signal?: AbortSignal) => rejectOnAbort(signal));
 		const store = makeStore();
 		const { container, dispose } = mountDisposable(() => <SessionScreen store={store} sessionKey="abort-session" />);
 
@@ -1122,7 +1158,7 @@ describe("screen smoke tests", () => {
 	});
 
 	it("genuine session hydration failures still surface as action errors", async () => {
-		vi.mocked(api.messages).mockRejectedValueOnce(new Error("hydrate exploded"));
+		vi.mocked(api.hydrate).mockRejectedValueOnce(new Error("hydrate exploded"));
 		const store = makeStore();
 		const el = mount(() => <SessionScreen store={store} sessionKey="bad-hydrate" />);
 
@@ -2819,11 +2855,13 @@ describe("dashboard client regressions", () => {
 
 	it("fleet resumes disk sessions with their session path", async () => {
 		const store = makeStore() as any;
-		const refreshFleet = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
+		const upsertRuntime = vi.fn();
 		const navigate = vi.fn();
 		const fakeStore = {
 			...store,
-			refreshFleet,
+			refreshDiskSessions,
+			upsertRuntime,
 			navigate,
 			fleet: () => ({
 				runtimes: [],
@@ -2842,20 +2880,23 @@ describe("dashboard client regressions", () => {
 			}),
 		};
 		const el = mount(() => <FleetScreen store={fakeStore} />);
+		vi.mocked(api.fleet).mockClear();
 		(el.querySelector(".disk-row .actions .btn") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(api.createRuntime).toHaveBeenCalledWith("/repo", { sessionPath: "/sessions/resume.jsonl" });
-		expect(refreshFleet).toHaveBeenCalled();
+		expect(upsertRuntime).toHaveBeenCalledWith(expect.objectContaining({ key: "new-key" }));
+		expect(refreshDiskSessions).toHaveBeenCalled();
+		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 		expect(navigate).toHaveBeenCalledWith({ screen: "session", key: "new-key" });
 	});
 
-	it("fleet deletes disk sessions and refreshes", async () => {
+	it("fleet deletes disk sessions and refreshes inventory", async () => {
 		const store = makeStore() as any;
-		const refreshFleet = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
 		const fakeStore = {
 			...store,
-			refreshFleet,
+			refreshDiskSessions,
 			fleet: () => ({
 				runtimes: [],
 				diskSessions: [
@@ -2873,6 +2914,7 @@ describe("dashboard client regressions", () => {
 			}),
 		};
 		const el = mount(() => <FleetScreen store={fakeStore} />);
+		vi.mocked(api.fleet).mockClear();
 		const rowButtons = [...el.querySelectorAll(".disk-row .actions .btn")] as HTMLButtonElement[];
 		rowButtons.find((button) => button.textContent === "delete")?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -2881,19 +2923,62 @@ describe("dashboard client regressions", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(api.deleteSession).toHaveBeenCalledWith("/sessions/delete.jsonl");
-		expect(refreshFleet).toHaveBeenCalled();
+		expect(refreshDiskSessions).toHaveBeenCalled();
+		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 	});
 
-	it("fleet shows load errors instead of the empty state", () => {
+	it("fleet polls stats every 30 seconds without an immediate round and cleans up on unmount", async () => {
+		vi.useFakeTimers();
+		const store = makeStore() as any;
+		const refreshFleetStats = vi.fn(async () => {});
+		const { dispose } = mountDisposable(() => <FleetScreen store={{ ...store, refreshFleetStats }} />);
+
+		expect(refreshFleetStats).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(refreshFleetStats).toHaveBeenCalledOnce();
+		// The screen delegates overlap control to the store's shared request.
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(refreshFleetStats).toHaveBeenCalledTimes(2);
+		dispose();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(refreshFleetStats).toHaveBeenCalledTimes(2);
+	});
+
+	it("fleet shows load and stats errors without clearing cards", () => {
 		const store = makeStore() as any;
 		const fakeStore = {
 			...store,
-			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "live",
+						cwd: "/repo",
+						state: {
+							sessionId: "live",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 0,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
 			fleetError: () => "server down",
+			fleetStatsError: () => "stats down",
 		};
 		const el = mount(() => <FleetScreen store={fakeStore} />);
 		expect(el.textContent).toContain("Fleet could not be loaded: server down");
-		expect(el.textContent).not.toContain("No sessions yet");
+		expect(el.textContent).toContain("Fleet stats could not be refreshed: stats down");
+		expect(el.querySelectorAll(".session-card")).toHaveLength(1);
 	});
 
 	it("fleet shows live sessions first and collapses past sessions to three rows with an expand toggle", () => {
@@ -3595,13 +3680,63 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector(".activity")?.textContent).toContain("last assistant preview text");
 	});
 
-	it("model selector defaults to scoped models when scopedModels are present", async () => {
+	it("fleet cards prefer the latest client assistant text over the runtime fallback", () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("preview");
+		session.entries = [
+			{ kind: "assistant", streaming: false, blocks: [{ kind: "text", text: "older assistant reply" }] },
+			{
+				kind: "assistant",
+				streaming: false,
+				blocks: [
+					{ kind: "thinking", text: "hidden" },
+					{ kind: "text", text: "latest client reply" },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { preview: session },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "preview",
+						cwd: "/repo",
+						state: {
+							sessionId: "preview",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 1,
+							pendingMessageCount: 0,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						lastAssistantText: "stale runtime fallback",
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		expect(el.querySelector(".activity")?.textContent).toContain("latest client reply");
+		expect(el.querySelector(".activity")?.textContent).not.toContain("stale runtime fallback");
+	});
+
+	it("model selector defaults to scoped models and patches its card without a fleet fetch", async () => {
 		vi.mocked(api.models).mockResolvedValue({
 			models: [{ provider: "anthropic", id: "all-only", name: "All Only", contextWindow: 1000, reasoning: false }],
 		});
 		const store = makeStore() as any;
+		const setRuntimeModel = vi.fn();
 		const fakeStore = {
 			...store,
+			setRuntimeModel,
 			sessions: { k1: createSessionViewState("k1") },
 			fleet: () => ({
 				runtimes: [
@@ -3639,6 +3774,11 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("scoped");
 		expect(el.textContent).toContain("scoped-model");
 		expect(el.textContent).not.toContain("all-only");
+		vi.mocked(api.fleet).mockClear();
+		(el.querySelector(".model-row") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(setRuntimeModel).toHaveBeenCalledWith("k1", { provider: "test", id: "m1" });
+		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 	});
 
 	it("expanded thinking is the default for fresh browsers (opt-out, not opt-in)", async () => {
@@ -3772,10 +3912,23 @@ describe("dashboard client regressions", () => {
 		}
 	});
 
-	it("hydrateSession re-seeds background agents from the runtime registry", async () => {
-		vi.mocked(api.messages).mockResolvedValue({ messages: [] });
-		vi.mocked(api.backgroundAgents).mockResolvedValue({
-			agents: [
+	it("hydrateSession re-seeds background agents from its atomic runtime snapshot", async () => {
+		vi.mocked(api.hydrate).mockResolvedValue({
+			key: "k-reload",
+			state: {
+				sessionId: "k-reload",
+				tasks: [],
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			messages: [],
+			backgroundAgents: [
 				{
 					agentId: "bg7",
 					agentType: "Explore",
@@ -3784,6 +3937,7 @@ describe("dashboard client regressions", () => {
 					status: "running",
 				},
 			],
+			barrierSeq: 0,
 		});
 		const store = makeStore();
 		await store.hydrateSession("k-reload");

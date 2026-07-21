@@ -28,6 +28,7 @@
 		"clean": "shx rm -rf dist",
 		"build": "tsgo -p tsconfig.build.json && vite build && shx chmod +x dist/index.js",
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"profile:mobile": "node scripts/profile-mobile.mjs",
 		"test": "vitest --run",
 		"prepublishOnly": "npm run clean && npm run build"
 	},

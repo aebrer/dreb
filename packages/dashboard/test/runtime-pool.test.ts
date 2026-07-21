@@ -19,6 +19,7 @@ export function makeFakeClient() {
 			emitter.on("exit", listener);
 			return () => emitter.off("exit", listener);
 		}),
+		getMessages: vi.fn(async () => []),
 		getState: vi.fn(async () => ({
 			sessionId: "s1",
 			tasks: [],
@@ -207,6 +208,18 @@ describe("RuntimePool", () => {
 			snapshot: { snapshotId: "snapshot-1", state: { tasks: [] } },
 		});
 		expect(clients[0].getDashboardSnapshot).toHaveBeenCalledOnce();
+	});
+
+	it("refreshes the event-derived state baseline from a successful dashboard snapshot", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+		clients[0].emit({ type: "message_start" });
+		expect(pool.fleetSnapshot()[0]?.state.messageCount).toBe(1);
+		pool.recordDashboardBarrier(handle.key, "snapshot-1", 42);
+
+		await pool.snapshotDashboard(handle);
+
+		expect(pool.fleetSnapshot()[0]?.state.messageCount).toBe(0);
 	});
 
 	it("namespaces equal snapshot ids by runtime", async () => {
@@ -694,6 +707,156 @@ describe("RuntimePool", () => {
 
 		expect(info.lastAssistantText).toBeUndefined();
 		expect(logs.join("\n")).toContain("preview unavailable");
+	});
+
+	it("builds event-derived fleet snapshots synchronously without RPC calls", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp", "/sessions/resumed.jsonl");
+		expect(pool.fleetSnapshot()[0]?.state).toMatchObject({
+			sessionId: handle.key,
+			sessionFile: "/sessions/resumed.jsonl",
+		});
+		vi.mocked(clients[0].getState).mockResolvedValue({
+			sessionId: "authoritative-id",
+			sessionFile: "/sessions/authoritative.jsonl",
+			sessionName: "baseline name",
+			model: { provider: "test", id: "baseline", name: "Baseline" },
+			scopedModels: [{ provider: "test", id: "baseline" }],
+			tasks: [{ id: "old", title: "old task", status: "completed" }],
+			thinkingLevel: "medium",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "one-at-a-time",
+			autoCompactionEnabled: true,
+			messageCount: 8,
+			pendingMessageCount: 1,
+			contextUsage: { tokens: 123, contextWindow: 200_000, percent: 1 },
+		} as any);
+		await pool.describe(handle);
+		const calls = {
+			state: vi.mocked(clients[0].getState).mock.calls.length,
+			stats: vi.mocked(clients[0].getSessionStats).mock.calls.length,
+			preview: vi.mocked(clients[0].getLastAssistantText).mock.calls.length,
+		};
+
+		clients[0].emit({ type: "agent_start", model: { provider: "test", id: "live" } });
+		clients[0].emit({ type: "auto_compaction_start", reason: "threshold" });
+		clients[0].emit({
+			type: "tasks_update",
+			tasks: [{ id: "live", title: "live task", status: "in_progress" }],
+		});
+		clients[0].emit({ type: "session_name_changed", name: "renamed" });
+		clients[0].emit({ type: "message_start", message: { role: "user", content: "one" } });
+		clients[0].emit({ type: "message_start", message: { role: "assistant", content: [] } });
+		clients[0].emit({ type: "extension_ui_request", id: "ui", method: "confirm" });
+		clients[0].emit({
+			type: "background_agent_start",
+			agentId: "bg",
+			agentType: "Explore",
+			taskSummary: "inspect",
+		});
+
+		const [snapshot] = pool.fleetSnapshot();
+		expect(snapshot).toMatchObject({
+			key: handle.key,
+			cwd: "/tmp",
+			needsAttention: true,
+			state: {
+				sessionId: "authoritative-id",
+				sessionFile: "/sessions/authoritative.jsonl",
+				sessionName: "renamed",
+				model: { provider: "test", id: "live" },
+				scopedModels: [{ provider: "test", id: "baseline" }],
+				tasks: [{ id: "live", title: "live task", status: "in_progress" }],
+				isStreaming: true,
+				isCompacting: true,
+				messageCount: 10,
+				contextUsage: { tokens: 123, contextWindow: 200_000, percent: 1 },
+			},
+			backgroundAgents: [{ agentId: "bg", status: "running" }],
+		});
+		expect(snapshot).not.toHaveProperty("stats");
+		expect(snapshot).not.toHaveProperty("lastAssistantText");
+		expect(clients[0].getState).toHaveBeenCalledTimes(calls.state);
+		expect(clients[0].getSessionStats).toHaveBeenCalledTimes(calls.stats);
+		expect(clients[0].getLastAssistantText).toHaveBeenCalledTimes(calls.preview);
+	});
+
+	it("coalesces fleet snapshot emissions and preserves registration/removal ordering", async () => {
+		vi.useFakeTimers();
+		try {
+			const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+			const pool = new RuntimePool({
+				cliPath: "/fake/cli.js",
+				fleetSnapshotDebounceMs: 200,
+				clientFactory: () => {
+					const client = makeFakeClient();
+					clients.push(client);
+					return client;
+				},
+			});
+			const order: string[] = [];
+			const emissions: number[] = [];
+			pool.onEvent((_key, event) => {
+				if (event.type === "runtime_removed") order.push("runtime_removed");
+			});
+			pool.onFleetSnapshot((event) => {
+				order.push(`snapshot:${event.runtimes.length}`);
+				emissions.push(event.runtimes.length);
+			});
+
+			const handle = await pool.create("/tmp");
+			clients[0].emit({ type: "agent_start" });
+			clients[0].emit({ type: "message_start", message: { role: "user", content: "one" } });
+			await vi.advanceTimersByTimeAsync(100);
+			clients[0].emit({ type: "tasks_update", tasks: [] });
+			await vi.advanceTimersByTimeAsync(99);
+			// High-frequency streaming deltas do not mutate fleet-card fields and
+			// must not postpone the lifecycle snapshot indefinitely.
+			clients[0].emit({
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", delta: "x" },
+			});
+			expect(emissions).toEqual([]);
+			await vi.advanceTimersByTimeAsync(100);
+			expect(emissions).toEqual([]);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(emissions).toEqual([1]);
+
+			order.length = 0;
+			expect(await pool.stop(handle.key)).toBe(true);
+			expect(order).toEqual(["runtime_removed"]);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(order).toEqual(["runtime_removed", "snapshot:0"]);
+			expect(emissions).toEqual([1, 0]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("cancels pending fleet snapshot emissions and listeners in stopAll", async () => {
+		vi.useFakeTimers();
+		try {
+			const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+			const pool = new RuntimePool({
+				cliPath: "/fake/cli.js",
+				clientFactory: () => {
+					const client = makeFakeClient();
+					clients.push(client);
+					return client;
+				},
+			});
+			const listener = vi.fn();
+			pool.onFleetSnapshot(listener);
+			await pool.create("/tmp");
+
+			await pool.stopAll();
+			await vi.advanceTimersByTimeAsync(201);
+			expect(listener).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("a throwing pool listener does not break event distribution", async () => {

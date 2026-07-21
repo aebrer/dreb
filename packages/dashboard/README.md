@@ -72,6 +72,33 @@ Open `http://127.0.0.1:5343`.
   and paired-devices management.
 - **Pairing** — remote first-login rotating-code flow.
 
+## Fleet transport and freshness
+
+A normal dashboard load makes one authoritative `GET /api/fleet`; exceptional
+recovery includes the fleet in its ordered `/api/resync` snapshot. After that,
+live runtime cards are updated by global, event-derived `fleet_snapshot` SSE
+frames, debounced by 200 ms. Those frames are built from the pool's in-memory
+runtime state, so they do not trigger child RPC calls or a disk inventory scan.
+
+Disk inventory is separate from live-runtime state. The client narrowly refreshes
+it with `GET /api/sessions` after create, resume, stop, or delete, rather than
+reloading the whole fleet. While the Fleet screen is visible, it refreshes
+per-runtime stats no more often than every 30 seconds; the refresh is
+single-flight, preserves each card's last good values, and exposes refresh
+failures in the UI.
+
+Cards use the latest assistant text in hydrated client transcript entries for
+their activity preview. The authoritative initial-load or resync fleet value is
+the fallback until transcript entries are available. Likewise, `ctx%` is always
+copied from authoritative session state or stats, never calculated in the
+browser. Card position remains deterministic: project path, then session start
+time.
+
+Opening a session uses one `GET /api/runtimes/:key/hydrate` request. It is backed
+by one `getDashboardSnapshot` RPC call and its matching ordering barrier, instead
+of separately fetching state, messages, and background agents. The existing
+replay/resync ordering contract still applies.
+
 ## Live connection and recovery
 
 The accessible text indicator in the top bar and persistent session header reports
@@ -245,6 +272,20 @@ Browser (SolidJS, hash-routed SPA)
 npm run build   # server (tsgo) + client (vite) → dist/
 npm test        # server, reducer, and screen smoke tests
 ```
+
+### Mobile transport profiling
+
+Run the opt-in local profiler on the dashboard host:
+
+```bash
+npm run --workspace @dreb/dashboard profile:mobile -- http://127.0.0.1:5343
+```
+
+It emits aggregate, payload-free HTTP/SSE timing, size, event-type, and burst
+metrics; it does not save fleet or event contents. Capture the default 60
+seconds against a realistic workload of at least five live runtimes. For browser
+acceptance, use Chromium network throttling at 100 ms RTT and 1.5 Mbps; HTTP
+packet loss is not emulated.
 
 See `packages/coding-agent/docs/dashboard.md` in the repo for the full
 product documentation.
