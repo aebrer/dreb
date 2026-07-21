@@ -6,26 +6,24 @@ import { getExportTemplateDir } from "../src/config.js";
 import { exportFromFile } from "../src/core/export-html/index.js";
 
 /**
- * Regression test for HTML-export image parity.
+ * Regression + security tests for HTML-export image rendering.
  *
- * The dashboard renders tool-result images inline. This test locks the HTML
- * exporter so it keeps embedding tool-result images too.
+ * The dashboard renders tool-result images inline; the HTML exporter must keep
+ * parity. Images are NOT literal `<img>` strings in the exported HTML — they
+ * are produced client-side at runtime by template.js. So we guard two things:
  *
- * How the exporter works (verified in src/core/export-html):
- *   - index.ts `generateHtml()` base64-encodes the whole session (including
- *     tool-result content blocks) and injects it into
- *     `<script id="session-data">{{SESSION_DATA}}</script>`.
- *   - template.js runs in the browser: it decodes that base64 payload and, in
- *     `renderToolCall()` -> `renderResultImages()`, emits
- *     `<img src="data:${mimeType};base64,${data}" class="tool-image" />`
- *     for every `{ type: 'image', ... }` block in the tool result.
- *
- * So the `<img>` tag is NOT a literal string in the exported HTML — it is
- * produced client-side at runtime. The two things we must guard are therefore:
  *   1. Images survive the export pipeline and round-trip intact inside the
- *      embedded (base64) session payload (i.e. they are not stripped by
- *      index.ts before reaching the template).
- *   2. template.js still turns image content blocks into `<img data:...>` tags.
+ *      embedded (base64) session payload (index.ts must not strip them).
+ *   2. template.js turns image content blocks into sanitized `<img data:...>`
+ *      tags via the real `renderToolCall()` / `renderEntry()` dispatch, and
+ *      rejects crafted MIME/base64 that could inject attributes or markup.
+ *
+ * To test (2) faithfully, `loadTemplateInternals()` below evaluates the real
+ * shipped template.js: it decodes a session payload exactly like the browser
+ * does, then returns the internal render functions. A `return` statement is
+ * injected right before the DOM-heavy "HEADER / STATS" section so none of the
+ * browser-only initialization (event listeners, marked.use, navigateTo) runs —
+ * only lightweight `document`/`window`/`hljs` stubs are needed.
  */
 
 // A tiny valid base64 PNG payload (content is arbitrary for the test).
@@ -47,6 +45,106 @@ function extractSessionData(html: string): {
 	const base64 = match[1].trim();
 	const json = Buffer.from(base64, "base64").toString("utf-8");
 	return JSON.parse(json);
+}
+
+// ---------------------------------------------------------------------------
+// Template harness: run the REAL template.js and expose its render functions.
+// ---------------------------------------------------------------------------
+
+interface ImageBlock {
+	type: "image";
+	mimeType: string;
+	data: string;
+}
+
+interface TemplateInternals {
+	renderToolCall(call: { id: string; name: string; arguments: Record<string, unknown> }): string;
+	renderEntry(entry: unknown): string;
+	sanitizeImageDataUri(mimeType: unknown, data: unknown): string | null;
+	renderImageTag(img: unknown, className: string): string;
+}
+
+/** Minimal DOM stub sufficient for the template's data-loading + escapeHtml(). */
+function makeStubs(sessionBase64: string) {
+	const documentStub = {
+		getElementById(id: string) {
+			if (id === "session-data") return { textContent: sessionBase64 };
+			return null;
+		},
+		querySelector() {
+			return null;
+		},
+		// escapeHtml() creates a <div>, sets textContent, reads innerHTML.
+		createElement() {
+			let value = "";
+			return {
+				set textContent(v: unknown) {
+					value = String(v);
+				},
+				get textContent() {
+					return value;
+				},
+				get innerHTML() {
+					return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+				},
+				set innerHTML(v: string) {
+					value = v;
+				},
+			};
+		},
+	};
+	const windowStub = { location: { search: "" } };
+	const hljsStub = {
+		highlight: (code: string) => ({ value: code }),
+		highlightAuto: (code: string) => ({ value: code }),
+		getLanguage: () => null,
+	};
+	return { documentStub, windowStub, hljsStub };
+}
+
+function loadTemplateInternals(entries: unknown[]): TemplateInternals {
+	const templateJs = readFileSync(join(getExportTemplateDir(), "template.js"), "utf-8").trim();
+
+	// Inject a `return` just before the browser-only init section so we get the
+	// render functions without running any DOM/marked/navigate side effects.
+	const marker = "      // ============================================================\n      // HEADER / STATS";
+	if (!templateJs.includes(marker)) {
+		throw new Error("HEADER / STATS marker not found in template.js — harness needs updating");
+	}
+	const instrumented = templateJs.replace(
+		marker,
+		`      return { renderToolCall, renderEntry, sanitizeImageDataUri, renderImageTag };\n\n${marker}`,
+	);
+
+	const sessionData = { header: { id: "t" }, entries, leafId: null, systemPrompt: "", tools: [], renderedTools: {} };
+	const sessionBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
+	const { documentStub, windowStub, hljsStub } = makeStubs(sessionBase64);
+
+	// The template is an IIFE expression: `return` its value to obtain internals.
+	const factory = new Function("document", "window", "hljs", `return ${instrumented}`) as (
+		documentArg: unknown,
+		windowArg: unknown,
+		hljsArg: unknown,
+	) => TemplateInternals;
+
+	return factory(documentStub, windowStub, hljsStub);
+}
+
+/** Build a toolResult session entry that carries a single image block. */
+function toolResultEntry(toolCallId: string, toolName: string, image: ImageBlock) {
+	return {
+		type: "message",
+		id: `r-${toolCallId}`,
+		parentId: "a1",
+		timestamp: new Date().toISOString(),
+		message: {
+			role: "toolResult",
+			toolCallId,
+			toolName,
+			content: [{ type: "text", text: `result for ${toolName}` }, image],
+			isError: false,
+		},
+	};
 }
 
 describe("HTML export — tool-result image parity", () => {
@@ -127,34 +225,143 @@ describe("HTML export — tool-result image parity", () => {
 		expect(imageBlock?.mimeType).toBe("image/png");
 		expect(imageBlock?.data).toBe(IMAGE_BASE64);
 
-		// The raw base64 image data is therefore present in the exported HTML payload.
-		// (Base64-in-base64: the decoded payload contains the exact data string.)
 		expect(session.entries.length).toBeGreaterThan(0);
 	});
+});
 
-	test("template.js renderResultImages() turns image blocks into <img data:...> tags", () => {
-		// Focused unit test of the actual client-side render logic. We extract the
-		// real `renderResultImages` implementation from the shipped template.js and
-		// exercise it, so the img-tag format stays locked to the exporter's source.
-		const templateJs = readFileSync(join(getExportTemplateDir(), "template.js"), "utf-8");
+describe("HTML export — template.js image rendering & sanitization", () => {
+	const validImage: ImageBlock = { type: "image", mimeType: "image/png", data: IMAGE_BASE64 };
 
-		const match = templateJs.match(/const renderResultImages = \(\) => \{[\s\S]*?\n\s*\};/);
-		expect(match, "renderResultImages() not found in template.js").not.toBeNull();
+	test("(a) valid read tool-result image renders via renderToolCall dispatch", () => {
+		const { renderToolCall } = loadTemplateInternals([toolResultEntry("call-read", "read", validImage)]);
 
-		// Provide the closure dependency (`getResultImages`) and evaluate the real body.
-		const factory = new Function("getResultImages", `${match?.[0]}\nreturn renderResultImages();`) as (
-			getResultImages: () => Array<{ type: string; data: string; mimeType: string }>,
-		) => string;
+		const html = renderToolCall({ id: "call-read", name: "read", arguments: { path: "screenshot.png" } });
 
-		const images = [{ type: "image", data: IMAGE_BASE64, mimeType: "image/png" }];
-		const rendered = factory(() => images);
+		expect(html).toContain("<img");
+		expect(html).toContain(`src="data:image/png;base64,${IMAGE_BASE64}"`);
+		expect(html).toContain('class="tool-image"');
+		// The read branch still renders its path/output header.
+		expect(html).toContain("read");
+	});
 
-		expect(rendered).toContain("<img");
-		expect(rendered).toContain(`src="data:image/png;base64,${IMAGE_BASE64}"`);
-		expect(rendered).toContain('class="tool-image"');
+	test("(b) non-read custom tool image renders via generic renderToolCall dispatch", () => {
+		const { renderToolCall } = loadTemplateInternals([toolResultEntry("call-custom", "my_custom_tool", validImage)]);
 
-		// And the empty case produces nothing.
-		const empty = factory(() => []);
-		expect(empty).toBe("");
+		const html = renderToolCall({ id: "call-custom", name: "my_custom_tool", arguments: { foo: 1 } });
+
+		// Proves it went through the generic (default) dispatch, not the read special-case.
+		expect(html).toContain("my_custom_tool");
+		expect(html).toContain("<img");
+		expect(html).toContain(`src="data:image/png;base64,${IMAGE_BASE64}"`);
+		expect(html).toContain('class="tool-image"');
+	});
+
+	test("(c) malicious MIME, SVG, and malformed base64 are rejected for tool-result images", () => {
+		const cases: Array<{ label: string; image: ImageBlock; forbidden: string[] }> = [
+			{
+				label: "attribute-injection MIME",
+				image: { type: "image", mimeType: 'image/png" onerror="alert(1)', data: IMAGE_BASE64 },
+				forbidden: ["onerror", "<img"],
+			},
+			{
+				label: "svg MIME",
+				image: { type: "image", mimeType: "image/svg+xml", data: IMAGE_BASE64 },
+				forbidden: ["svg", "<img"],
+			},
+			{
+				label: "non-raster MIME",
+				image: { type: "image", mimeType: "text/html", data: IMAGE_BASE64 },
+				forbidden: ["text/html", "<img"],
+			},
+			{
+				label: "markup-injection base64",
+				image: { type: "image", mimeType: "image/png", data: 'abc"><img src=x onerror=alert(1)>' },
+				forbidden: ["onerror", "<img"],
+			},
+			{
+				label: "whitespace / invalid base64",
+				image: { type: "image", mimeType: "image/png", data: "not valid base64!!" },
+				forbidden: ["not valid", "<img"],
+			},
+		];
+
+		for (const { label, image, forbidden } of cases) {
+			const { renderToolCall } = loadTemplateInternals([toolResultEntry("call-x", "read", image)]);
+			const html = renderToolCall({ id: "call-x", name: "read", arguments: { path: "x.png" } });
+			for (const needle of forbidden) {
+				expect(html, `${label}: expected no "${needle}"`).not.toContain(needle);
+			}
+		}
+	});
+
+	test("(a) valid message image renders via renderEntry dispatch", () => {
+		const { renderEntry } = loadTemplateInternals([]);
+		const html = renderEntry({
+			type: "message",
+			id: "u1",
+			timestamp: new Date().toISOString(),
+			message: { role: "user", content: [validImage] },
+		});
+
+		expect(html).toContain("<img");
+		expect(html).toContain(`src="data:image/png;base64,${IMAGE_BASE64}"`);
+		expect(html).toContain('class="message-image"');
+	});
+
+	test("(c) malicious MIME, SVG, and malformed base64 are rejected for message images", () => {
+		const cases: Array<{ label: string; image: ImageBlock; forbidden: string[] }> = [
+			{
+				label: "attribute-injection MIME",
+				image: { type: "image", mimeType: 'image/png" onerror="alert(1)', data: IMAGE_BASE64 },
+				forbidden: ["onerror", "<img"],
+			},
+			{
+				label: "svg MIME",
+				image: { type: "image", mimeType: "image/svg+xml", data: IMAGE_BASE64 },
+				// The copy-link button embeds an <svg> icon, so match the exact MIME/img markers.
+				forbidden: ["image/svg", "<img", "message-images"],
+			},
+			{
+				label: "markup-injection base64",
+				image: { type: "image", mimeType: "image/png", data: 'abc"><script>alert(1)</script>' },
+				forbidden: ["<script>", "<img"],
+			},
+		];
+
+		for (const { label, image, forbidden } of cases) {
+			const { renderEntry } = loadTemplateInternals([]);
+			const html = renderEntry({
+				type: "message",
+				id: "u1",
+				timestamp: new Date().toISOString(),
+				message: { role: "user", content: [image] },
+			});
+			for (const needle of forbidden) {
+				expect(html, `${label}: expected no "${needle}"`).not.toContain(needle);
+			}
+		}
+	});
+
+	test("sanitizeImageDataUri enforces the raster allowlist and strict base64", () => {
+		const { sanitizeImageDataUri } = loadTemplateInternals([]);
+
+		// Valid raster types pass and produce a canonical data: URI.
+		expect(sanitizeImageDataUri("image/png", IMAGE_BASE64)).toBe(`data:image/png;base64,${IMAGE_BASE64}`);
+		expect(sanitizeImageDataUri("image/jpeg", "AAAA")).toBe("data:image/jpeg;base64,AAAA");
+		expect(sanitizeImageDataUri("image/gif", "AAAA")).toBe("data:image/gif;base64,AAAA");
+		expect(sanitizeImageDataUri("image/webp", "AAAA")).toBe("data:image/webp;base64,AAAA");
+
+		// Rejected MIME types.
+		expect(sanitizeImageDataUri("image/svg+xml", IMAGE_BASE64)).toBeNull();
+		expect(sanitizeImageDataUri("text/html", IMAGE_BASE64)).toBeNull();
+		expect(sanitizeImageDataUri('image/png" onerror="x', IMAGE_BASE64)).toBeNull();
+		expect(sanitizeImageDataUri(42, IMAGE_BASE64)).toBeNull();
+
+		// Rejected base64 payloads.
+		expect(sanitizeImageDataUri("image/png", "")).toBeNull();
+		expect(sanitizeImageDataUri("image/png", "abc")).toBeNull(); // length not multiple of 4
+		expect(sanitizeImageDataUri("image/png", 'AA"><img>')).toBeNull();
+		expect(sanitizeImageDataUri("image/png", "AA AA")).toBeNull();
+		expect(sanitizeImageDataUri("image/png", null)).toBeNull();
 	});
 });

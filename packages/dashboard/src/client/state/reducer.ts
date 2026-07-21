@@ -509,12 +509,16 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 			const entry = findTool(state, String(event.toolCallId));
 			if (entry) {
 				const partial = event.partialResult as { content?: unknown } | string | undefined;
+				// Each partial snapshot replaces resultText wholesale, so images
+				// follow the same snapshot semantics: when a snapshot carries
+				// content it is authoritative and stale images must be cleared.
 				if (typeof partial === "string") {
 					entry.resultText = partial;
+					entry.images = undefined;
 				} else if (partial?.content) {
 					const parts = contentToParts(partial.content);
 					entry.resultText = parts.text;
-					if (parts.images.length > 0) entry.images = parts.images;
+					entry.images = parts.images.length > 0 ? parts.images : undefined;
 				}
 			}
 			break;
@@ -524,12 +528,19 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 			if (entry) {
 				entry.status = event.isError ? "error" : "done";
 				const result = event.result as { content?: unknown } | string | undefined;
+				// The final result is authoritative: when it replaces content
+				// (string body or a structured content payload) it also dictates
+				// the images. Set the valid final images, or clear any stale
+				// partial images when the authoritative content carries none. When
+				// the event has no result/content at all this is not a replacement,
+				// so prior resultText and images are preserved (fallback).
 				if (typeof result === "string") {
 					entry.resultText = result;
+					entry.images = undefined;
 				} else if (result?.content) {
 					const parts = contentToParts(result.content);
 					entry.resultText = parts.text;
-					if (parts.images.length > 0) entry.images = parts.images;
+					entry.images = parts.images.length > 0 ? parts.images : undefined;
 				}
 				entry.details = (event.result as { details?: unknown } | undefined)?.details;
 				entry.endedAt = Date.now();

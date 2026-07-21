@@ -15,6 +15,51 @@
       const { header, entries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
 
       // ============================================================
+      // IMAGE SANITIZATION
+      // ============================================================
+
+      // Exact raster MIME allowlist. Only these canonical MIME strings may be
+      // interpolated into a data: URI for an <img>. SVG is deliberately excluded
+      // because it can carry scripts/markup.
+      const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+      // Strict base64: one-or-more groups of the base64 alphabet with optional
+      // '=' padding. Rejects whitespace, data-URI prefixes, quotes, angle
+      // brackets, or any character that could break out of the src attribute or
+      // inject additional markup/attributes.
+      const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+      function isPlausibleBase64(value) {
+        if (typeof value !== 'string' || value.length === 0) return false;
+        if (value.length % 4 !== 0) return false;
+        return BASE64_PATTERN.test(value);
+      }
+
+      /**
+       * Build a safe `data:` URI for an image content block, or return null when
+       * the MIME type is not an allowlisted raster type or the base64 payload is
+       * not strictly valid. Because only canonical allowlisted MIME strings and
+       * validated base64 are interpolated, crafted values cannot create extra
+       * attributes or break out into markup.
+       */
+      function sanitizeImageDataUri(mimeType, base64Data) {
+        if (typeof mimeType !== 'string') return null;
+        if (!ALLOWED_IMAGE_MIME_TYPES.has(mimeType)) return null;
+        if (!isPlausibleBase64(base64Data)) return null;
+        return `data:${mimeType};base64,${base64Data}`;
+      }
+
+      /**
+       * Render an <img> tag for an image content block, or '' if it fails
+       * sanitization. Shared by the tool-result and message image paths.
+       */
+      function renderImageTag(img, className) {
+        const src = sanitizeImageDataUri(img && img.mimeType, img && img.data);
+        if (src === null) return '';
+        return `<img src="${src}" class="${className}" />`;
+      }
+
+      // ============================================================
       // URL PARAMETER HANDLING
       // ============================================================
 
@@ -879,9 +924,9 @@
         const renderResultImages = () => {
           const images = getResultImages();
           if (images.length === 0) return '';
-          return '<div class="tool-images">' + 
-            images.map(img => `<img src="data:${img.mimeType};base64,${img.data}" class="tool-image" />`).join('') + 
-            '</div>';
+          const tags = images.map(img => renderImageTag(img, 'tool-image')).filter(Boolean);
+          if (tags.length === 0) return '';
+          return '<div class="tool-images">' + tags.join('') + '</div>';
         };
 
         let html = `<div class="tool-execution ${statusClass}">`;
@@ -915,7 +960,6 @@
 
             html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
             if (result) {
-              html += renderResultImages();
               const output = getResultText();
               const lang = filePath ? getLanguageFromPath(filePath) : null;
               if (output) html += formatExpandableOutput(output, 10, lang);
@@ -999,6 +1043,11 @@
             }
           }
         }
+
+        // Sanitized tool-result images render generically for every tool name.
+        // Kept out of the per-tool switch so it applies uniformly (and only once)
+        // to built-in and custom tools alike.
+        html += renderResultImages();
 
         html += '</div>';
         return html;
@@ -1128,12 +1177,9 @@
 
             if (Array.isArray(content)) {
               const images = content.filter(c => c.type === 'image');
-              if (images.length > 0) {
-                html += '<div class="message-images">';
-                for (const img of images) {
-                  html += `<img src="data:${img.mimeType};base64,${img.data}" class="message-image" />`;
-                }
-                html += '</div>';
+              const imageTags = images.map(img => renderImageTag(img, 'message-image')).filter(Boolean);
+              if (imageTags.length > 0) {
+                html += '<div class="message-images">' + imageTags.join('') + '</div>';
               }
             }
 

@@ -325,6 +325,139 @@ describe("applySessionEvent — streaming lifecycle", () => {
 		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/jpeg", data: PNG_B64 }]);
 	});
 
+	it("clears stale images when a text-only tool_execution_end follows an image update", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: { content: [{ type: "text", text: "text only now" }] },
+			isError: false,
+		});
+		expect(state.entries[0]).toMatchObject({ status: "done", resultText: "text only now" });
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("clears stale images when a string tool_execution_end follows an image update", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: "plain string result",
+			isError: false,
+		});
+		expect(state.entries[0]).toMatchObject({ status: "done", resultText: "plain string result" });
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("clears stale images when the final content has only disallowed/malformed images", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {
+				content: [
+					{ type: "text", text: "note" },
+					{ type: "image", data: "<svg onload=alert(1)>", mimeType: "image/svg+xml" },
+					{ type: "image", data: "not valid base64!!", mimeType: "image/png" },
+				],
+			},
+			isError: false,
+		});
+		expect(state.entries[0]).toMatchObject({ status: "done", resultText: "note" });
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("clears stale images when the final content is an empty array", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: { content: [] },
+			isError: false,
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("preserves prior images when the final event carries no result/content (no replacement)", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {},
+			isError: false,
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+	});
+
+	it("clears stale images when a later text-only tool_execution_update supersedes an image snapshot", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "text", text: "text snapshot" }] },
+		});
+		expect(state.entries[0]).toMatchObject({ resultText: "text snapshot" });
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
 	it("leaves images undefined for text-only tool results", () => {
 		const state = makeState();
 		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} });
