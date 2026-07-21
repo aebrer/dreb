@@ -332,10 +332,13 @@ export function createAppStore() {
 	}
 
 	/** Apply the runtime state from an atomic hydrate, including legitimate rewinds. */
-	function setHydratedRuntimeState(key: string, state: RuntimeInfoDto["state"]): void {
+	function setHydratedRuntimeState(key: string, state: RuntimeInfoDto["state"], mutationAtHydrate?: number): void {
 		// SessionScreen can hydrate while start()'s initial fleet request is still
 		// pending. A no-op patch must not invalidate that authoritative first load.
 		if (!fleet().runtimes.some((runtime) => runtime.key === key)) return;
+		// A newer fleet_snapshot mutated the card while the hydrate HTTP request
+		// was in flight — the live snapshot must win.
+		if (mutationAtHydrate !== undefined && fleetMutationGeneration !== mutationAtHydrate) return;
 		mutateFleet((current) => ({
 			...current,
 			runtimes: current.runtimes.map((runtime) => (runtime.key === key ? { ...runtime, state } : runtime)),
@@ -773,6 +776,9 @@ export function createAppStore() {
 		// A newer request supersedes an older one for this key even if both happen
 		// to share the same generation.
 		clearHydrationTransaction(key);
+		// Capture fleet generation so a mid-flight fleet_snapshot cannot be
+		// rewound by the older hydrate snapshot below.
+		const mutationAtHydrate = fleetMutationGeneration;
 		const pending: PendingHydration = {
 			guard: captureHydrationGuard(key),
 			queued: [],
@@ -813,7 +819,9 @@ export function createAppStore() {
 			bumpTaskRevision(key);
 			// The runtime snapshot is authoritative, including a lower count after a
 			// fork or rewind. Preserve card-only enrichment on the surrounding card.
-			setHydratedRuntimeState(key, snapshot.state);
+			// Skip if a newer fleet_snapshot mutated the card while the HTTP request
+			// was in flight — the live snapshot must win.
+			setHydratedRuntimeState(key, snapshot.state, mutationAtHydrate);
 			for (const envelope of [...pending.queued].sort((a, b) => a.seq - b.seq)) {
 				if (envelope.seq > snapshot.barrierSeq) applyEnvelope(envelope);
 			}

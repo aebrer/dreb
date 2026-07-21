@@ -500,6 +500,31 @@ describe("RuntimePool", () => {
 		expect(handle.attention.has("paused")).toBe(false);
 	});
 
+	it("records error and schedules fleet snapshot on agent_end with errorMessage", async () => {
+		vi.useFakeTimers();
+		try {
+			const { pool, clients } = makePool();
+			const handle = await pool.create("/tmp");
+			const snapshots: unknown[] = [];
+			pool.onFleetSnapshot((event) => snapshots.push(event));
+
+			// Drain the fleet snapshot triggered by create().
+			await vi.advanceTimersByTimeAsync(200);
+			snapshots.length = 0;
+
+			clients[0].emit({ type: "agent_end", errorMessage: "OOM" });
+
+			expect(handle.error).toBe("OOM");
+			expect(handle.attention.get("error")).toBe("OOM");
+			expect(handle.attention.size).toBeGreaterThan(0);
+
+			await vi.advanceTimersByTimeAsync(200);
+			expect(snapshots.length).toBeGreaterThan(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("tracks background agents from lifecycle events", async () => {
 		const { pool, clients } = makePool();
 		const handle = await pool.create("/tmp");

@@ -1033,6 +1033,143 @@ describe("app store hydration", () => {
 		});
 		expect(JSON.stringify(subagent?.entries)).not.toContain("stale child snapshot");
 	});
+
+	it("fails loudly on hydration queue overflow and never applies its incomplete snapshot", async () => {
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("overflow");
+		for (let i = 0; i < 2_000; i++) {
+			eventHandlers?.onEnvelope({ seq: 10 + i, key: "overflow", event: { type: "agent_start" } });
+		}
+		expect(() => eventHandlers?.onEnvelope({ seq: 2010, key: "overflow", event: { type: "agent_start" } })).toThrow(
+			/queue overflowed/,
+		);
+
+		// The queued envelopes already created session state, but the hydrate
+		// snapshot itself must be discarded.
+		const stale = hydrationSnapshot("overflow", false);
+		stale.messages = [{ role: "assistant", content: [{ type: "text", text: "snapshot" }] }];
+		snapshot.resolve(stale);
+		await hydrate;
+		expect(store.sessions.overflow).toBeDefined();
+		expect(store.sessions.overflow?.entries).toHaveLength(0);
+	});
+
+	it("fails on hydration byte overflow before the envelope count limit", async () => {
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("byte-overflow");
+		const projectedFrame = "x".repeat(1_000_000);
+		for (let i = 0; i < 3; i++) {
+			eventHandlers?.onEnvelope({
+				seq: 10 + i,
+				key: "byte-overflow",
+				event: { type: "agent_start", projectedFrame },
+			});
+		}
+		expect(() =>
+			eventHandlers?.onEnvelope({
+				seq: 13,
+				key: "byte-overflow",
+				event: { type: "agent_start", projectedFrame },
+			}),
+		).toThrow(/queue overflowed/);
+
+		const stale = hydrationSnapshot("byte-overflow", false);
+		stale.messages = [{ role: "assistant", content: [{ type: "text", text: "snapshot" }] }];
+		snapshot.resolve(stale);
+		await hydrate;
+		expect(store.sessions["byte-overflow"]).toBeDefined();
+		expect(store.sessions["byte-overflow"]?.entries).toHaveLength(0);
+	});
+
+	it("discards a superseded hydration and applies only the latest snapshot", async () => {
+		const first = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(first.promise);
+		const store = await makeStartedStore();
+
+		const hydrate1 = store.hydrateSession("supersede");
+		emit("supersede", { type: "agent_start" });
+
+		const second = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(second.promise);
+		const hydrate2 = store.hydrateSession("supersede");
+
+		// The first (superseded) hydration resolves later and must be discarded.
+		const stale = hydrationSnapshot("supersede", false);
+		stale.messages = [{ role: "assistant", content: [{ type: "text", text: "stale" }] }];
+		first.resolve(stale);
+		await hydrate1;
+		// The emitted agent_start set streaming=true; the stale snapshot must not
+		// have overwritten it or added its messages.
+		expect(store.sessions.supersede?.streaming).toBe(true);
+		expect(store.sessions.supersede?.entries).toHaveLength(0);
+
+		// The second hydration applies normally.
+		const fresh = hydrationSnapshot("supersede", false);
+		fresh.messages = [{ role: "assistant", content: [{ type: "text", text: "fresh" }] }];
+		second.resolve(fresh);
+		await hydrate2;
+		expect(store.sessions.supersede?.streaming).toBe(false);
+		expect(store.sessions.supersede?.entries).toHaveLength(1);
+	});
+
+	it("keeps newer fleet_snapshot state when a stale hydrate resolves", async () => {
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
+		const store = await makeStartedStore();
+
+		// Seed the fleet with an initial card.
+		const initial = runtimeSnapshot("race", false);
+		initial.state.model = { provider: "old", id: "old-model" };
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		await store.start();
+		if (!eventHandlers) throw new Error("store event stream is not connected");
+
+		const hydrate = store.hydrateSession("race");
+		// A fleet_snapshot arrives mid-hydrate with newer state.
+		emit("", {
+			type: "fleet_snapshot",
+			runtimes: [
+				{
+					key: "race",
+					cwd: "/tmp/project",
+					state: {
+						sessionId: "race",
+						tasks: [],
+						thinkingLevel: "off",
+						isStreaming: true,
+						isCompacting: false,
+						steeringMode: "all",
+						followUpMode: "all",
+						autoCompactionEnabled: true,
+						messageCount: 5,
+						pendingMessageCount: 0,
+						model: { provider: "new", id: "new-model" },
+					},
+					backgroundAgents: [],
+					needsAttention: false,
+					createdAt: new Date(0).toISOString(),
+					lastActivity: new Date(0).toISOString(),
+				},
+			],
+		});
+		// The hydrate resolves with older state.
+		const stale = hydrationSnapshot("race", false);
+		stale.state.model = { provider: "old", id: "old-model" };
+		snapshot.resolve(stale);
+		await hydrate;
+
+		// The card keeps the newer snapshot state.
+		const card = store.fleet().runtimes.find((r) => r.key === "race");
+		expect(card?.state.isStreaming).toBe(true);
+		expect(card?.state.model?.id).toBe("new-model");
+		expect(card?.state.messageCount).toBe(5);
+	});
 });
 
 describe("fleet snapshot and inventory store foundation", () => {
