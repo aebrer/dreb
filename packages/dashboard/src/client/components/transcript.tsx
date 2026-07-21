@@ -23,7 +23,13 @@ import {
 } from "solid-js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import { expandThinking, isToolAutoOpen } from "../state/preferences.js";
-import type { AgentResultEntry, AssistantEntry, ToolEntry, TranscriptEntry } from "../state/reducer.js";
+import type {
+	AgentResultEntry,
+	AssistantEntry,
+	ToolEntry,
+	ToolResultImage,
+	TranscriptEntry,
+} from "../state/reducer.js";
 
 const STREAM_RENDER_THROTTLE_MS = 150;
 export const TRANSCRIPT_WINDOW_SIZE = 150;
@@ -341,6 +347,35 @@ function editDiffText(entry: ToolEntry): string | undefined {
 	return typeof diff === "string" ? diff : undefined;
 }
 
+/**
+ * Mime types we will render inline. Mirrors the reducer allowlist — SVG is
+ * intentionally excluded (it can carry script). This is a second, independent
+ * gate so a bug upstream cannot route an unexpected mime type into an `<img>`.
+ */
+const RENDERABLE_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/**
+ * Render tool-result image content blocks (e.g. `read` on a PNG) inline as
+ * sanitized `data:` URIs. Shown to the human viewing the dashboard regardless
+ * of whether the active model supports vision. The reducer has already
+ * validated mime type + base64; we re-check the mime allowlist here as
+ * defense-in-depth. Data-URI `<img>` cannot execute script.
+ */
+function ToolResultImages(props: { images: ToolResultImage[] }): JSX.Element {
+	const renderable = () => props.images.filter((image) => RENDERABLE_IMAGE_MIME_TYPES.has(image.mimeType));
+	return (
+		<Show when={renderable().length > 0}>
+			<div class="tool-images">
+				<For each={renderable()}>
+					{(image) => (
+						<img class="tool-image" alt="Tool result" src={`data:${image.mimeType};base64,${image.data}`} />
+					)}
+				</For>
+			</div>
+		</Show>
+	);
+}
+
 function ToolResultBody(props: {
 	text: string;
 	language?: string;
@@ -486,6 +521,11 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 						</div>
 					)}
 				</For>
+				<Show when={props.entry.images?.length}>
+					<div class="tool-result">
+						<ToolResultImages images={props.entry.images!} />
+					</div>
+				</Show>
 				<Switch>
 					<Match when={suggestDetails()}>
 						{(details) => (
