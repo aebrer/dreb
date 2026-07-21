@@ -21,7 +21,7 @@ import { codingTools } from "../src/core/tools/index.js";
 
 /**
  * API key for authenticated tests. Tests using this should be wrapped in
- * describe.skipIf(!API_KEY)
+ * describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !API_KEY)
  */
 export const API_KEY = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
 

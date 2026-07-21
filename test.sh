@@ -7,9 +7,26 @@ export DREB_NO_LOCAL_LLM=1
 # Provider E2E tests run for any provider with a configured API key.
 # Tests for unconfigured providers are skipped automatically.
 
+# When --no-live-api is passed, set DREB_SKIP_LIVE_API=1 so every live-API
+# test block (gated on provider credentials via skipIf) auto-skips regardless
+# of which keys are present in the environment. The guard is checked directly
+# in each test's skipIf condition, so no env-var list needs maintenance here.
+SKIP_LIVE_API=false
+for arg in "$@"; do
+    if [ "$arg" = "--no-live-api" ]; then
+        SKIP_LIVE_API=true
+    fi
+done
+
 LOG_FILE="/tmp/dreb-test-$(date +%s).log"
 
-echo "Running tests..."
+if [ "$SKIP_LIVE_API" = true ]; then
+    echo "Running tests (live API tests skipped via DREB_SKIP_LIVE_API=1)..."
+    export DREB_SKIP_LIVE_API=1
+else
+    echo "Running tests..."
+fi
+
 # NO_COLOR prevents vitest/chalk from emitting ANSI codes when CI=true forces
 # color output even through pipes — without this, grep patterns can't match.
 if NO_COLOR=1 npm test > "$LOG_FILE" 2>&1; then

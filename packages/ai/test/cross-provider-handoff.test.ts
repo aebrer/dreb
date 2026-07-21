@@ -285,7 +285,7 @@ async function generateContext(
 	};
 }
 
-describe.skipIf(!hasAnyApiKey())("Cross-Provider Handoff", () => {
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAnyApiKey())("Cross-Provider Handoff", () => {
 	let contexts: Record<string, CachedContext>;
 	let availablePairs: ProviderModelPair[];
 
@@ -325,15 +325,18 @@ describe.skipIf(!hasAnyApiKey())("Cross-Provider Handoff", () => {
 		console.log(`\n=== ${availablePairs.length}/${PROVIDER_MODEL_PAIRS.length} contexts available ===\n`);
 	}, 300000);
 
-	it.skipIf(!hasAnyApiKey())("should have at least 2 fixtures to test handoffs", () => {
-		if (Object.keys(contexts).length < 2) {
-			console.log("Not enough fixtures for handoff test, skipping");
-			return;
-		}
-		expect(Object.keys(contexts).length).toBeGreaterThanOrEqual(2);
-	});
+	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAnyApiKey())(
+		"should have at least 2 fixtures to test handoffs",
+		() => {
+			if (Object.keys(contexts).length < 2) {
+				console.log("Not enough fixtures for handoff test, skipping");
+				return;
+			}
+			expect(Object.keys(contexts).length).toBeGreaterThanOrEqual(2);
+		},
+	);
 
-	it.skipIf(!hasAnyApiKey())(
+	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAnyApiKey())(
 		"should handle cross-provider handoffs for each target",
 		async () => {
 			const contextLabels = Object.keys(contexts);

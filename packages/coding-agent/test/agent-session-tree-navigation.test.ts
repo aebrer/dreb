@@ -12,7 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { API_KEY, createTestSession, type TestSessionContext } from "./utilities.js";
 
-describe.skipIf(!API_KEY)("AgentSession tree navigation e2e", () => {
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !API_KEY)("AgentSession tree navigation e2e", () => {
 	let ctx: TestSessionContext;
 
 	beforeEach(() => {
@@ -276,48 +276,51 @@ describe.skipIf(!API_KEY)("AgentSession tree navigation e2e", () => {
 	}, 120000);
 });
 
-describe.skipIf(!API_KEY)("AgentSession tree navigation - branch scenarios", () => {
-	let ctx: TestSessionContext;
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !API_KEY)(
+	"AgentSession tree navigation - branch scenarios",
+	() => {
+		let ctx: TestSessionContext;
 
-	beforeEach(() => {
-		ctx = createTestSession({
-			systemPrompt: "You are a helpful assistant. Reply with just a few words.",
+		beforeEach(() => {
+			ctx = createTestSession({
+				systemPrompt: "You are a helpful assistant. Reply with just a few words.",
+			});
 		});
-	});
 
-	afterEach(() => {
-		ctx.cleanup();
-	});
+		afterEach(() => {
+			ctx.cleanup();
+		});
 
-	it("should navigate between branches correctly", async () => {
-		const { session, sessionManager } = ctx;
+		it("should navigate between branches correctly", async () => {
+			const { session, sessionManager } = ctx;
 
-		// Build main path: u1 -> a1 -> u2 -> a2
-		await session.prompt("Main branch start");
-		await session.agent.waitForIdle();
-		await session.prompt("Main branch continue");
-		await session.agent.waitForIdle();
+			// Build main path: u1 -> a1 -> u2 -> a2
+			await session.prompt("Main branch start");
+			await session.agent.waitForIdle();
+			await session.prompt("Main branch continue");
+			await session.agent.waitForIdle();
 
-		// Get a1 id for branching
-		const entries = sessionManager.getEntries();
-		const a1 = entries.find((e) => e.type === "message" && e.message.role === "assistant");
+			// Get a1 id for branching
+			const entries = sessionManager.getEntries();
+			const a1 = entries.find((e) => e.type === "message" && e.message.role === "assistant");
 
-		// Create a branch from a1: a1 -> u3 -> a3
-		sessionManager.branch(a1!.id);
-		await session.prompt("Branch path");
-		await session.agent.waitForIdle();
+			// Create a branch from a1: a1 -> u3 -> a3
+			sessionManager.branch(a1!.id);
+			await session.prompt("Branch path");
+			await session.agent.waitForIdle();
 
-		// Now navigate back to u2 (on main branch) with summarization
-		const userEntries = entries.filter((e) => e.type === "message" && e.message.role === "user");
-		const u2 = userEntries[1]; // "Main branch continue"
+			// Now navigate back to u2 (on main branch) with summarization
+			const userEntries = entries.filter((e) => e.type === "message" && e.message.role === "user");
+			const u2 = userEntries[1]; // "Main branch continue"
 
-		const result = await session.navigateTree(u2.id, { summarize: true });
+			const result = await session.navigateTree(u2.id, { summarize: true });
 
-		expect(result.cancelled).toBe(false);
-		expect(result.editorText).toBe("Main branch continue");
-		expect(result.summaryEntry).toBeDefined();
+			expect(result.cancelled).toBe(false);
+			expect(result.editorText).toBe("Main branch continue");
+			expect(result.summaryEntry).toBeDefined();
 
-		// Summary captures the branch we're leaving (the "Branch path" conversation)
-		expect(result.summaryEntry?.summary.length).toBeGreaterThan(0);
-	}, 180000);
-});
+			// Summary captures the branch we're leaving (the "Branch path" conversation)
+			expect(result.summaryEntry?.summary.length).toBeGreaterThan(0);
+		}, 180000);
+	},
+);
