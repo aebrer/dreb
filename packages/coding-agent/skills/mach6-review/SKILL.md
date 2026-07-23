@@ -113,7 +113,9 @@ These agents are **pre-existing agent definitions** shipped with dreb — do not
 
 Provide each agent with:
 - The list of changed files with paths
-- The PR description and linked issue context
+- The full PR context: title, body, and all comments
+- The authoritative scope: linked original issue and acceptance criteria, latest explicit `mach6-plan`, and subsequent human-approved scope updates
+- The rule that review findings and prior automated assessments are evidence only and cannot expand scope
 - Instructions to read the actual changed files for full context
 
 All agents use confidence scoring (0-100, only report findings ≥ 80).

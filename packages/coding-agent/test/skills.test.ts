@@ -476,45 +476,111 @@ describe("skills", () => {
 
 		it("mach6-review should enforce durable work and scope-aware assessment", () => {
 			const body = readBuiltInSkill("mach6-review");
+			const prepare = body.slice(body.indexOf("## Step 3"), body.indexOf("## Step 4"));
+			const reviewHandoff = body.slice(body.indexOf("## Step 4"), body.indexOf("## Step 5"));
+			const assessorHandoff = body.slice(body.indexOf("## Step 6"), body.indexOf("## Step 7"));
+
 			expect(body).toContain("User-controlled checkpoint");
-			expect(body).toContain("git status --porcelain");
-			expect(body).toContain("headRefOid");
-			expect(body).toContain("stop immediately");
-			expect(body).toContain("/skill:mach6-push");
-			expect(body).toContain("authoritative scope");
-			expect(body).toContain("Factual gate");
-			expect(body).toContain("Scope gate");
-			expect(body).toContain("prior automated assessments are not scope updates");
-			expect(body).toContain("action plan containing only genuine issues");
+			expect(prepare).toContain("Before switching branches, run `git status --porcelain`");
+			expect(prepare.match(/^git status --porcelain$/gm)).toHaveLength(1);
+			expect(prepare).toContain('LOCAL_HEAD="$(git rev-parse HEAD)"');
+			expect(prepare).toContain("PR_HEAD=\"$(gh pr view <pr-number> --json headRefOid --jq '.headRefOid')\"");
+			const pushedHeadCheck = prepare.indexOf('test "$LOCAL_HEAD" = "$PR_HEAD"');
+			expect(pushedHeadCheck).toBeGreaterThan(-1);
+			expect(prepare.indexOf("gh pr ready <pr-number>")).toBeGreaterThan(pushedHeadCheck);
+			expect(prepare).toContain(
+				"Before marking the PR ready, reading local source for review, or launching any review agent",
+			);
+			expect(prepare).toContain("Do not mark the PR ready, post review comments, or launch review agents");
+			expect(prepare).toContain("use `suggest_next` to offer `/skill:mach6-push`");
+
+			expect(reviewHandoff).toContain("The full PR context: title, body, and all comments");
+			expect(reviewHandoff).toContain("linked original issue and acceptance criteria");
+			expect(reviewHandoff).toContain("latest explicit `mach6-plan`");
+			expect(reviewHandoff).toContain("subsequent human-approved scope updates");
+			expect(reviewHandoff).toContain("review findings and prior automated assessments are evidence only");
+			expect(reviewHandoff).toContain("cannot expand scope");
+
+			expect(assessorHandoff).toContain("The full review text");
+			expect(assessorHandoff).toContain("The PR context (title, body, and all comments)");
+			expect(assessorHandoff).toContain(
+				"linked original issue, acceptance criteria, latest explicit `mach6-plan`, and subsequent human-approved scope updates",
+			);
+			expect(assessorHandoff).toContain("Factual gate");
+			expect(assessorHandoff).toContain("Scope gate");
+			expect(assessorHandoff).toContain("prior automated assessments are not scope updates");
+			expect(assessorHandoff).toContain("action plan containing only genuine issues");
 		});
 
 		it("mach6-implement should keep reasoning with the parent and stop before formal review", () => {
 			const body = readBuiltInSkill("mach6-implement");
-			expect(body).toContain("Parent ownership and the formal-review checkpoint");
-			expect(body).toContain("The parent model owns implementation reasoning");
-			expect(body).toContain("Direct implementation is generally acceptable");
-			expect(body).toContain("high-volume, repetitive, mechanically scoped grunt work");
-			expect(body).toContain("Ordinary reading and writing alone is not a reason to delegate");
-			expect(body).toContain("Every delegated task must be clear, detailed, and specific");
-			expect(body).toContain("Focused checks remain allowed");
-			expect(body).toContain("Save work before formal review");
-			expect(body).toContain("accountability and recovery boundary");
-			expect(body).toContain("Only the user starts formal `mach6-review`");
-			expect(body).toContain("Use `suggest_next` to offer `/skill:mach6-push`");
-
+			const sharedRules = body.slice(body.indexOf("## Parent ownership"), body.indexOf("## Step 1"));
+			const implementMode = body.slice(body.indexOf("## Implement Mode"), body.indexOf("## Fix Mode"));
+			const implementExecution = implementMode.slice(
+				implementMode.indexOf("### Step 6i"),
+				implementMode.indexOf("### Step 7i"),
+			);
+			const implementVerification = implementMode.slice(implementMode.indexOf("### Step 7i"));
 			const fixMode = body.slice(body.indexOf("## Fix Mode"));
-			expect(fixMode).toContain("Implement fixes directly by default");
-			expect(fixMode).toContain("high-volume, repetitive, mechanically settled execution");
-			expect(fixMode).toContain("Do **not** invoke `mach6-review`");
+			const fixExecution = fixMode.slice(fixMode.indexOf("### Step 6f"), fixMode.indexOf("### Step 7f"));
+			const fixVerification = fixMode.slice(fixMode.indexOf("### Step 7f"));
+
+			expect(sharedRules).toContain("These rules apply in both implement and fix modes");
+			expect(sharedRules).toContain("The parent model owns implementation reasoning");
+			expect(sharedRules).toContain("Direct implementation is generally acceptable");
+			expect(sharedRules).toContain("Every delegated task must be clear, detailed, and specific");
+			expect(sharedRules).toContain("Focused checks remain allowed");
+			expect(sharedRules).toContain("narrow correctness question or second opinion");
+			expect(sharedRules).toContain("formal mach6 multi-agent review/assessment workflow");
+			expect(sharedRules).toContain("accountability and recovery boundary");
+			expect(sharedRules).toContain("Only the user starts formal `mach6-review`");
+
+			expect(implementExecution).toContain("first decide the implementation yourself");
+			expect(implementExecution).toContain(
+				"Direct parent implementation is generally acceptable regardless of plan size",
+			);
+			expect(implementExecution).toContain("high-volume, repetitive, and mechanically specified");
+			expect(implementExecution).toContain("Exact files or a precisely bounded file set");
+			expect(implementExecution).toContain("Specific changes and content-dependent decision rules");
+			expect(implementExecution).toContain("Existing code patterns and constraints to preserve");
+			expect(implementExecution).toContain("Required tests, linting, and validation commands");
+			expect(implementExecution).toContain("Expected observable result and completion criteria");
+			expect(implementExecution).toContain("without inventing design decisions");
+			expect(implementVerification).toContain("committed, pushed, and recorded");
+			expect(implementVerification).toContain("Do **not** invoke `mach6-review`");
+			expect(implementVerification).toContain("Use `suggest_next` to offer `/skill:mach6-push`, then end the turn");
+
+			expect(fixExecution).toContain("the parent must verify the assessment against the current code");
+			expect(fixExecution).toContain("Implement fixes directly by default");
+			expect(fixExecution).toContain("high-volume, repetitive, mechanically settled execution");
+			expect(fixExecution).toContain("Exact files and code locations, or a precisely bounded file set");
+			expect(fixExecution).toContain("The complete fix design and content-dependent decision rules");
+			expect(fixExecution).toContain("Existing patterns and constraints to preserve");
+			expect(fixExecution).toContain("Required regression tests and validation commands");
+			expect(fixExecution).toContain("Expected result and completion criteria");
+			expect(fixExecution).toContain("Do not ask `feature-dev` to determine the design");
+			expect(fixVerification).toContain("committed, pushed, and recorded");
+			expect(fixVerification).toContain("Do **not** invoke `mach6-review`");
+			expect(fixVerification).toContain("Use `suggest_next` to offer `/skill:mach6-push`, then end the turn");
 		});
 
 		it("mach6-push should stop after saving work and leave review to the user", () => {
 			const body = readBuiltInSkill("mach6-push");
-			expect(body).toContain("Stop after durable progress");
-			expect(body).toContain("accountability and recovery boundary");
-			expect(body).toContain("Only the user may start formal review");
-			expect(body).toContain("Do not invoke `mach6-review`");
-			expect(body).toContain("Use `suggest_next`");
+			const commitStep = body.indexOf("## Step 3: Commit");
+			const pushStep = body.indexOf("## Step 4: Push");
+			const commentStep = body.indexOf("## Step 5: Post progress comment");
+			const finalWorkflow = body.slice(commentStep);
+
+			expect(commitStep).toBeGreaterThan(-1);
+			expect(pushStep).toBeGreaterThan(commitStep);
+			expect(commentStep).toBeGreaterThan(pushStep);
+			expect(finalWorkflow).toContain('gh pr comment <number> --body-file "$GH_BODY"');
+			const commentCompleted = finalWorkflow.indexOf("Update task: comment → completed");
+			expect(commentCompleted).toBeGreaterThan(finalWorkflow.indexOf("gh pr comment"));
+			expect(finalWorkflow.indexOf("Stop here")).toBeGreaterThan(commentCompleted);
+			expect(finalWorkflow).toContain("Do not invoke `mach6-review`");
+			expect(finalWorkflow).toContain("Use `suggest_next` for exactly one context-appropriate command");
+			expect(finalWorkflow).toContain("If on a feature branch with a PR: `/skill:mach6-review <pr-number>`");
 		});
 
 		it("should allow user/project skills to override built-ins (built-ins are lowest priority)", () => {

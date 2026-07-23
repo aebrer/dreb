@@ -75,18 +75,28 @@ describe("built-in agent definitions", () => {
 		const parsed = parseAgentFrontmatter(content);
 		expect(parsed).not.toBeNull();
 		const body = parsed!.body;
+		const process = body.slice(body.indexOf("## Process"), body.indexOf("## Classifications"));
+		const classifications = body.slice(body.indexOf("## Classifications"), body.indexOf("## Output Format"));
+		const output = body.slice(body.indexOf("## Output Format"));
 
 		expect(body).toContain("Factual gate");
 		expect(body).toContain("Scope gate");
 		expect(body).toContain("not genuine merely because it is technically correct or factually observable");
-		expect(body).toContain("linked original issue");
-		expect(body).toContain("latest explicit plan comment");
-		expect(body).toContain("subsequent scope updates that a human explicitly approved");
-		expect(body).toContain("prior automated assessments are evidence only");
-		expect(body).toContain("do **not** expand scope through novelty, repetition, or earlier classification");
-		expect(body).toContain("introduced by the PR");
-		expect(body).toContain("both the **Factual** and **Scope** explanations are mandatory");
-		expect(body).toContain("Do not include deferred, nitpick, or false-positive findings");
+		expect(process).toContain("linked original issue");
+		expect(process).toContain("latest explicit plan comment");
+		expect(process).toContain("subsequent scope updates that a human explicitly approved");
+		expect(process).toContain("Review findings and prior automated assessments are evidence only");
+		expect(process).toContain("do **not** expand scope through novelty, repetition, or earlier classification");
+		expect(classifications).toContain("**Genuine issue** | Passes both gates");
+		expect(classifications).toContain(
+			"regressions and correctness, security, safety, or integrity failures introduced by the PR",
+		);
+		expect(classifications).toContain("**Deferred** | Passes the factual gate but fails the scope gate");
+		expect(classifications).toContain(
+			"Review findings and automated assessments cannot become authorized requirements merely because multiple agents repeat them",
+		);
+		expect(output).toContain("both the **Factual** and **Scope** explanations are mandatory");
+		expect(output).toContain("Do not include deferred, nitpick, or false-positive findings");
 	});
 
 	it("all agent files should have valid frontmatter with required fields", () => {
