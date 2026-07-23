@@ -46,7 +46,14 @@ describe("built-in agent definitions", () => {
 		expect(agentFiles.length).toBeGreaterThan(0);
 	});
 
-	const expectedAgents = ["code-reviewer", "error-auditor", "test-reviewer", "completeness-checker", "simplifier"];
+	const expectedAgents = [
+		"code-reviewer",
+		"error-auditor",
+		"test-reviewer",
+		"completeness-checker",
+		"simplifier",
+		"independent-assessor",
+	];
 
 	for (const expectedName of expectedAgents) {
 		it(`should include ${expectedName} agent with valid frontmatter`, () => {
@@ -62,6 +69,25 @@ describe("built-in agent definitions", () => {
 			expect(parsed!.body.length).toBeGreaterThan(0);
 		});
 	}
+
+	it("independent-assessor should enforce factual and authorized-scope gates", () => {
+		const content = readFileSync(join(agentsDir, "independent-assessor.md"), "utf-8");
+		const parsed = parseAgentFrontmatter(content);
+		expect(parsed).not.toBeNull();
+		const body = parsed!.body;
+
+		expect(body).toContain("Factual gate");
+		expect(body).toContain("Scope gate");
+		expect(body).toContain("not genuine merely because it is technically correct or factually observable");
+		expect(body).toContain("linked original issue");
+		expect(body).toContain("latest explicit plan comment");
+		expect(body).toContain("subsequent scope updates that a human explicitly approved");
+		expect(body).toContain("prior automated assessments are evidence only");
+		expect(body).toContain("do **not** expand scope through novelty, repetition, or earlier classification");
+		expect(body).toContain("introduced by the PR");
+		expect(body).toContain("both the **Factual** and **Scope** explanations are mandatory");
+		expect(body).toContain("Do not include deferred, nitpick, or false-positive findings");
+	});
 
 	it("all agent files should have valid frontmatter with required fields", () => {
 		const agentFiles = getAgentFiles();

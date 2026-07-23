@@ -11,10 +11,10 @@ Inspired by [mach10](https://github.com/LeanAndMean/mach10) (MIT, by Kevin Ryan)
 /skill:mach6-plan 42           # Plan, branch, open draft PR
 # ... implement the plan ...
 /skill:mach6-push              # Commit, push, post progress
-/skill:mach6-review 53         # Multi-agent code review
+/skill:mach6-review 53         # User explicitly starts review
 /skill:mach6-implement 53 1,2   # Fix review findings
-/skill:mach6-push              # Push fixes
-/skill:mach6-review 53         # Re-review (repeat until clean)
+/skill:mach6-push              # Durably save fixes
+/skill:mach6-review 53         # User explicitly starts re-review
 /skill:mach6-publish 53        # Docs update, merge, tag, release
 ```
 
@@ -64,10 +64,12 @@ Commit changes, push to remote, and post a progress comment.
 - Matches the repository's existing commit style
 - Auto-detects the associated PR from the current branch
 - Posts a `<!-- mach6-progress -->` comment with a summary of changes
+- Establishes the durable accountability and recovery checkpoint before formal review
+- Stops after pushing and suggests the review command; it never starts review itself
 
 ### mach6-review
 
-Run specialized review agents in parallel, post findings, then independently assess each finding.
+Run specialized review agents in parallel, post findings, then independently assess each finding. Formal review is an explicit user-controlled checkpoint: `mach6-review` cannot be invoked by the model, and it refuses to run until the worktree is clean and local `HEAD` matches the pushed PR head.
 
 ```
 /skill:mach6-review 53                     # Full review (all agents)
@@ -78,7 +80,9 @@ Run specialized review agents in parallel, post findings, then independently ass
 Produces two PR comments:
 
 1. **Review** (`<!-- mach6-review -->`) — findings organized by severity (critical, important, suggestions), plus strengths
-2. **Assessment** (`<!-- mach6-assessment -->`) — each finding independently classified as genuine issue, nitpick, false positive, or deferred, with a prioritized action plan
+2. **Assessment** (`<!-- mach6-assessment -->`) — each finding independently classified as genuine issue, nitpick, false positive, or deferred, with a prioritized action plan containing genuine issues only
+
+A finding is genuine only when it passes both a **factual gate** (the current code contains the problem) and a **scope gate** (the problem must be fixed to deliver the authorized work safely and correctly). Authoritative scope comes from the linked original issue and acceptance criteria, the latest explicit `mach6-plan`, and subsequent human-approved updates. Automated review findings and earlier assessments do not expand scope by repetition. Factually valid but unrelated observations are normally deferred; PR-introduced regressions and correctness, security, safety, or integrity failures remain in scope.
 
 See [Review Agents](#review-agents) below.
 
@@ -92,9 +96,13 @@ Implement a plan from a PR, or fix review findings / CI failures.
 /skill:mach6-implement 53 ci          # Fix CI failures
 ```
 
-**Implement mode** (PR number only): Reads the `<!-- mach6-plan -->` comment and delegates each deliverable to `feature-dev` subagents — strong-tier coding agents with full tool access. Independent deliverables run in parallel.
+In both modes, the parent model owns implementation reasoning: design, decomposition, exact changes, decision rules, tests, and verification. Direct parent implementation is generally acceptable. `feature-dev` delegation is optional and is best reserved for high-volume, repetitive, mechanically scoped execution after the parent has settled the design—for example, applying a content-dependent transformation across dozens of files. Every delegated task receives clear, detailed, specific instructions rather than an open-ended design problem.
 
-**Fix mode** (with finding numbers or `ci`): Reads review and assessment comments via HTML markers, delegates fixes to `feature-dev` subagents, applies batch sizing heuristics (~10 simple, ~6 moderate, ~3 complex fixes per batch), and suggests `/skill:mach6-push` then `/skill:mach6-review` after fixing.
+**Implement mode** (PR number only): Reads the `<!-- mach6-plan -->` comment, decides the implementation, and either works directly or delegates precisely specified execution.
+
+**Fix mode** (with finding numbers or `ci`): Reads review and assessment comments via HTML markers, verifies each authorized finding, decides the fix, and then implements directly or delegates mechanically settled execution.
+
+After direct verification, `mach6-implement` stops at the accountability checkpoint and suggests `/skill:mach6-push`. Committing, pushing, and posting progress protects work from loss or repeated unsupervised rewriting. Only the user can subsequently start formal `mach6-review`. Focused one-off reviewer/checker subagents remain available for narrow correctness questions or second opinions; they are not a formal mach6 review cycle.
 
 ### mach6-publish
 
@@ -115,7 +123,7 @@ Pre-merge checks, version bump, docs update, merge, tag, and release.
 
 ### feature-dev
 
-Strong general-purpose coding agent used by `mach6-implement` for plan implementation and fix application. Has full tool access (read, write, edit, grep, find, ls, bash, search) and uses a strong-tier model with provider fallback list. Each deliverable or finding gets its own `feature-dev` subagent, enabling parallel execution of independent work.
+Strong general-purpose coding agent optionally used by `mach6-implement` for precisely specified execution. It has full tool access (read, write, edit, grep, find, ls, bash, search) and uses a strong-tier model with a provider fallback list. The parent model retains design ownership and may implement directly; `feature-dev` is most useful for high-volume, repetitive work with settled decision rules.
 
 ### Review Agents
 
@@ -136,8 +144,11 @@ Agents run as [subagents](../README.md#subagents) — `code-reviewer`, `error-au
 ## Design Principles
 
 - **GitHub as shared memory** — Plans, reviews, assessments, and progress are posted as PR/issue comments with HTML markers (`<!-- mach6-plan -->`, `<!-- mach6-review -->`, etc.) so any future session can pick up context.
-- **Independent assessment** — Review findings are independently verified before suggesting fixes, separating genuine issues from nitpicks and false positives.
-- **Iterative review cycles** — Review → fix → push → review, repeating until no genuine issues remain.
+- **Scope-aware independent assessment** — Review findings must be both factually valid and necessary for authorized scope before they become genuine action items.
+- **Durable accountability checkpoint** — Implementation and fixes are committed, pushed, and recorded before formal review so work cannot be lost or repeatedly rewritten while still local.
+- **User-controlled review cycles** — Only the user starts each formal review or re-review. Agents stop at the checkpoint and suggest the next command rather than autonomously chaining review and fix cycles.
+- **Focused checks remain available** — One-off reviewer/checker subagents may answer narrow correctness questions without becoming a formal mach6 review cycle.
+- **Parent-owned implementation** — The parent model owns design and may implement directly; delegation is optional execution support for mechanically settled grunt work.
 - **Safe git** — Never `git add -A`, never stage secrets, stage files by name.
 - **Overridable** — Both skills and review agents can be overridden by placing files with the same name in `~/.dreb/agent/skills/` or `~/.dreb/agents/` (user-level) or `.dreb/skills/` or `.dreb/agents/` (project-level).
 

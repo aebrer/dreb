@@ -16,6 +16,7 @@ argument-hint: "[commit message]"
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets (.env, credentials, tokens, keys).
 5. **Task tracking** — Use the `tasks_update` tool to show progress.
 6. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+7. **Stop after durable progress** — The commit, push, and GitHub progress comment are the accountability and recovery boundary. Do not invoke `mach6-review` or continue into a formal review cycle. Only the user may start formal review; offer it with `suggest_next` and stop.
 
 ## Step 1: Set up task tracking
 
@@ -98,9 +99,11 @@ gh pr comment <number> --body-file "$GH_BODY"
 
 Update task: comment → completed.
 
-Report: what was committed, where pushed, where the comment was posted (with link).
+Report: what was committed, where pushed, and where the comment was posted (with link). The work is now durably saved and available for accountable review.
 
-Suggest next step based on context:
+Stop here. Do not invoke `mach6-review`, launch formal review agents, or begin a review-fix-review loop. Only the user may start formal review.
+
+Use `suggest_next` for exactly one context-appropriate command, then end the turn:
 - If on a feature branch with a PR: `/skill:mach6-review <pr-number>`
 - If on a feature branch without a PR: `/skill:mach6-plan <issue-number>` to create one
-- If on the default branch: issue-oriented next steps
+- If on the default branch: an issue-oriented next step

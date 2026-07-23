@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { describe, expect, it } from "vitest";
@@ -435,6 +436,17 @@ describe("skills", () => {
 		const emptyAgentDir = resolve(__dirname, "fixtures/empty-agent");
 		const emptyCwd = resolve(__dirname, "fixtures/empty-cwd");
 
+		function getBuiltInSkill(name: string): Skill {
+			const { skills } = loadSkills({ agentDir: emptyAgentDir, cwd: emptyCwd });
+			const skill = skills.find((candidate) => candidate.name === name && candidate.sourceInfo.source === "builtin");
+			expect(skill, `Built-in skill ${name} not found`).toBeDefined();
+			return skill!;
+		}
+
+		function readBuiltInSkill(name: string): string {
+			return readFileSync(getBuiltInSkill(name).filePath, "utf-8");
+		}
+
 		it("should load built-in skills with source='builtin' and scope='user'", () => {
 			const { skills } = loadSkills({ agentDir: emptyAgentDir, cwd: emptyCwd });
 			const builtins = skills.filter((s) => s.sourceInfo.source === "builtin");
@@ -454,6 +466,55 @@ describe("skills", () => {
 			expect(builtinNames).toContain("mach6-review");
 			expect(builtinNames).toContain("mach6-implement");
 			expect(builtinNames).toContain("mach6-publish");
+		});
+
+		it("mach6-review should require explicit user invocation", () => {
+			const review = getBuiltInSkill("mach6-review");
+			expect(review.disableModelInvocation).toBe(true);
+			expect(review.userInvocable).toBe(true);
+		});
+
+		it("mach6-review should enforce durable work and scope-aware assessment", () => {
+			const body = readBuiltInSkill("mach6-review");
+			expect(body).toContain("User-controlled checkpoint");
+			expect(body).toContain("git status --porcelain");
+			expect(body).toContain("headRefOid");
+			expect(body).toContain("stop immediately");
+			expect(body).toContain("/skill:mach6-push");
+			expect(body).toContain("authoritative scope");
+			expect(body).toContain("Factual gate");
+			expect(body).toContain("Scope gate");
+			expect(body).toContain("prior automated assessments are not scope updates");
+			expect(body).toContain("action plan containing only genuine issues");
+		});
+
+		it("mach6-implement should keep reasoning with the parent and stop before formal review", () => {
+			const body = readBuiltInSkill("mach6-implement");
+			expect(body).toContain("Parent ownership and the formal-review checkpoint");
+			expect(body).toContain("The parent model owns implementation reasoning");
+			expect(body).toContain("Direct implementation is generally acceptable");
+			expect(body).toContain("high-volume, repetitive, mechanically scoped grunt work");
+			expect(body).toContain("Ordinary reading and writing alone is not a reason to delegate");
+			expect(body).toContain("Every delegated task must be clear, detailed, and specific");
+			expect(body).toContain("Focused checks remain allowed");
+			expect(body).toContain("Save work before formal review");
+			expect(body).toContain("accountability and recovery boundary");
+			expect(body).toContain("Only the user starts formal `mach6-review`");
+			expect(body).toContain("Use `suggest_next` to offer `/skill:mach6-push`");
+
+			const fixMode = body.slice(body.indexOf("## Fix Mode"));
+			expect(fixMode).toContain("Implement fixes directly by default");
+			expect(fixMode).toContain("high-volume, repetitive, mechanically settled execution");
+			expect(fixMode).toContain("Do **not** invoke `mach6-review`");
+		});
+
+		it("mach6-push should stop after saving work and leave review to the user", () => {
+			const body = readBuiltInSkill("mach6-push");
+			expect(body).toContain("Stop after durable progress");
+			expect(body).toContain("accountability and recovery boundary");
+			expect(body).toContain("Only the user may start formal review");
+			expect(body).toContain("Do not invoke `mach6-review`");
+			expect(body).toContain("Use `suggest_next`");
 		});
 
 		it("should allow user/project skills to override built-ins (built-ins are lowest priority)", () => {

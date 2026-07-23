@@ -20,6 +20,18 @@ This skill has two modes:
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
 5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
+## Parent ownership and the formal-review checkpoint
+
+These rules apply in both implement and fix modes, even if you never load the `mach6-push` or `mach6-review` skills:
+
+- **The parent model owns implementation reasoning.** You decide the design, decomposition, exact changes, constraints, and verification strategy. Do not use a subagent as a substitute for thinking through the implementation.
+- **Direct implementation is generally acceptable.** The parent may implement any deliverable or fix directly; this is not limited to trivial work.
+- **Delegate execution, not unresolved design.** `feature-dev` is optional and is most useful for high-volume, repetitive, mechanically scoped grunt work after you have settled the rules—for example, applying a content-dependent transformation across dozens of files. Ordinary reading and writing alone is not a reason to delegate.
+- **Every delegated task must be clear, detailed, and specific.** Give the agent the intended changes, exact relevant files, existing patterns to follow, decision rules, constraints, required tests, and expected verification. Resolve ambiguity yourself before delegation; never hand off a vague deliverable and ask the agent to design it.
+- **Focused checks remain allowed.** You may launch a focused, one-off reviewer or checker subagent for a narrow correctness question or second opinion. Do not turn that into the formal mach6 multi-agent review/assessment workflow or an autonomous review-fix-review loop.
+- **Save work before formal review.** A successful implementation is not yet durable shared work. Committing, pushing, and posting a GitHub progress comment creates the accountability and recovery boundary, reducing the risk that unsupervised review cycles repeatedly rewrite or destroy work before it is saved.
+- **Only the user starts formal `mach6-review`.** After implementation and direct verification, do not invoke `mach6-review` and do not begin a review cycle. Use `suggest_next` to offer `/skill:mach6-push`, then stop. After the push is complete, the user decides whether to explicitly invoke review.
+
 ## Step 1: Parse input
 
 Extract:
@@ -71,20 +83,24 @@ Read all files mentioned in the plan. Understand the existing code before making
 
 ### Step 6i: Implement
 
-Use the `feature-dev` subagent to implement each deliverable. `feature-dev` is a **pre-existing agent definition** shipped with dreb — it has full tool access (read, write, edit, grep, find, ls, bash, search) and uses a strong-tier model with a provider fallback list. Do not override its model unless there's a specific reason.
+For each deliverable, first decide the implementation yourself: map it to the approved plan, inspect the relevant code, settle the design and decision rules, identify exact files and patterns, and define the required tests and verification.
 
-**For each deliverable in the plan**, launch a `feature-dev` subagent via the `subagent` tool. Provide each agent with:
-- The specific deliverable to implement (files to modify, what to change, expected behavior)
-- The full plan context and any relevant PR discussion
-- The list of files to read for understanding existing patterns
-- Instructions to run tests and linting after making changes
-- **If the plan includes tests for this deliverable, tests MUST be written as part of the implementation — not deferred**
+Implement directly unless delegation has a concrete context-preservation benefit. Direct parent implementation is generally acceptable regardless of plan size. Use the pre-existing `feature-dev` agent only for execution that is sufficiently high-volume, repetitive, and mechanically specified to justify delegation; do not delegate merely because a task involves reading and writing code.
 
-**Test coverage is part of the deliverable, not an afterthought.** If the plan specifies tests for a deliverable, the feature-dev agent must implement them. If the target package lacks test infrastructure, add it.
+When delegating, provide a complete execution plan containing:
+- The authorized deliverable and why it is in scope
+- Exact files or a precisely bounded file set
+- Specific changes and content-dependent decision rules
+- Existing code patterns and constraints to preserve
+- Required tests, linting, and validation commands
+- Expected observable result and completion criteria
+- Relevant plan and PR discussion context
 
-**Parallelism:** If deliverables are independent (don't modify the same files), run their `feature-dev` agents in parallel. If they have dependencies, use chain mode or run them sequentially — later features may depend on earlier ones.
+A `feature-dev` agent should be able to execute without inventing design decisions. If direction is ambiguous, the parent must resolve it before delegation. Do not override the agent's model unless there is a specific reason.
 
-**Small plans (1-2 simple deliverables):** You may implement directly instead of delegating, if the changes are straightforward enough that subagent overhead isn't justified.
+**Test coverage is part of the deliverable, not an afterthought.** Implement all planned tests with the behavior they cover. If the target package lacks test infrastructure, add it.
+
+**Parallelism:** Parallelize only independent, mechanically specified tasks that do not overlap files or depend on unresolved work. Otherwise implement directly or sequence the work.
 
 Update task tracking as each deliverable completes.
 
@@ -97,7 +113,7 @@ After all `feature-dev` agents complete:
 - Verify each deliverable from the plan is addressed
 - If any agent reported issues or partial completion, address the gaps
 
-Suggest next step: `/skill:mach6-push` then `/skill:mach6-review <pr-number>` for review.
+Stop at the accountability checkpoint. Do **not** invoke `mach6-review` or begin a formal review cycle. Explain that the implementation must be committed, pushed, and recorded before the user decides whether to review. Use `suggest_next` to offer `/skill:mach6-push`, then end the turn.
 
 ---
 
@@ -149,19 +165,23 @@ If more than batch size, fix first batch and tell user to re-run.
 
 ### Step 6f: Implement fixes
 
-Use the `feature-dev` subagent to implement fixes. `feature-dev` is a **pre-existing agent definition** shipped with dreb — it has full tool access and uses a strong-tier model with a provider fallback list. Do not override its model unless there's a specific reason.
+For each authorized finding, the parent must verify the assessment against the current code, decide the exact fix, identify affected files and patterns, and define the regression tests and validation before editing or delegating.
 
-**For each finding** (or batch of related findings), launch a `feature-dev` subagent with:
-- The finding description and the assessment's classification/reasoning
-- The specific files and code locations involved
-- Instructions on what to fix and how
-- Instructions to run tests after fixing
+Implement fixes directly by default. Use the pre-existing `feature-dev` agent only when a fix has high-volume, repetitive, mechanically settled execution that benefits from context isolation. Direct parent implementation is acceptable for simple and complex fixes alike.
 
-**Parallelism:** If findings touch different files, run their `feature-dev` agents in parallel. If findings overlap (same file/function), batch them into a single agent.
+When delegating, provide:
+- The finding and its factual and scope reasoning
+- Exact files and code locations, or a precisely bounded file set
+- The complete fix design and content-dependent decision rules
+- Existing patterns and constraints to preserve
+- Required regression tests and validation commands
+- Expected result and completion criteria
 
-**Simple fixes** (typos, naming, one-line changes): You may fix these directly instead of delegating.
+Do not ask `feature-dev` to determine the design. Resolve ambiguity before delegation, and do not override its model unless there is a specific reason.
 
-Defer out-of-scope items to new issues. Update task tracking per finding.
+**Parallelism:** Parallelize only independent, mechanically specified fixes that do not overlap files. Otherwise implement directly or sequence them.
+
+Defer only review-surfaced items that are factually valid but outside the authoritative PR scope. User-approved requirements are in scope. Update task tracking per finding.
 
 ### Step 7f: Verify
 
@@ -170,4 +190,4 @@ After all `feature-dev` agents complete:
 - Verify each fix addresses its finding
 - If any agent reported issues, address the gaps
 
-Suggest next step: `/skill:mach6-push` then `/skill:mach6-review <pr-number>` for re-review.
+Stop at the accountability checkpoint. Do **not** invoke `mach6-review` or begin a formal re-review cycle. Explain that the fixes must be committed, pushed, and recorded before the user decides whether to re-review. Use `suggest_next` to offer `/skill:mach6-push`, then end the turn.
