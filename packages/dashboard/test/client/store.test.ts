@@ -1175,6 +1175,76 @@ describe("app store hydration", () => {
 		expect(store.fleet().diskSessions.map((session) => session.id)).toEqual(["disk"]);
 	});
 
+	it("applies a hydrate baseline over a same-runtime fleet snapshot at its barrier", async () => {
+		const initial = runtimeSnapshot("pre-barrier", false);
+		initial.state.messageCount = 8;
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("pre-barrier");
+		const olderSnapshot = runtimeSnapshot("pre-barrier", true);
+		olderSnapshot.state.messageCount = 6;
+		emit("", { type: "fleet_snapshot", runtimes: [olderSnapshot] });
+		const hydrated = hydrationSnapshot("pre-barrier", false);
+		hydrated.state.messageCount = 3;
+		hydrated.barrierSeq = 1;
+		snapshot.resolve(hydrated);
+		await hydrate;
+
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({ isStreaming: false, messageCount: 3 });
+	});
+
+	it("keeps a non-snapshot mutation followed by a pre-barrier snapshot when hydrate resolves", async () => {
+		const initial = runtimeSnapshot("mixed-freshness", false);
+		initial.state.model = { provider: "test", id: "old-model" };
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("mixed-freshness");
+		store.setRuntimeModel("mixed-freshness", { provider: "test", id: "new-model" });
+		const preBarrierSnapshot = runtimeSnapshot("mixed-freshness", true);
+		preBarrierSnapshot.state.model = { provider: "test", id: "new-model" };
+		preBarrierSnapshot.state.messageCount = 6;
+		emit("", { type: "fleet_snapshot", runtimes: [preBarrierSnapshot] });
+
+		const stale = hydrationSnapshot("mixed-freshness", false);
+		stale.state.model = { provider: "test", id: "old-model" };
+		stale.state.messageCount = 3;
+		stale.barrierSeq = 1;
+		snapshot.resolve(stale);
+		await hydrate;
+
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			isStreaming: true,
+			messageCount: 6,
+			model: { provider: "test", id: "new-model" },
+		});
+	});
+
+	it("keeps a same-runtime fleet snapshot after the hydrate barrier", async () => {
+		const initial = runtimeSnapshot("post-barrier", false);
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("post-barrier");
+		const newerSnapshot = runtimeSnapshot("post-barrier", true);
+		newerSnapshot.state.messageCount = 5;
+		emit("", { type: "fleet_snapshot", runtimes: [newerSnapshot] });
+		const stale = hydrationSnapshot("post-barrier", false);
+		stale.state.messageCount = 3;
+		stale.barrierSeq = 0;
+		snapshot.resolve(stale);
+		await hydrate;
+
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({ isStreaming: true, messageCount: 5 });
+	});
+
 	it("keeps newer same-runtime fleet_snapshot state when a stale hydrate resolves", async () => {
 		const initial = runtimeSnapshot("race", false);
 		initial.state.model = { provider: "old", id: "old-model" };
@@ -1569,6 +1639,60 @@ describe("fleet snapshot and inventory store foundation", () => {
 		await refresh;
 
 		expect(store.fleet().runtimes[0]?.state.messageCount).toBe(8);
+	});
+
+	it("keeps an authoritative hydrated rewind when older stats resolve afterward", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("rewound", 12)], diskSessions: [] });
+		const delayedStats = deferred<ReturnType<typeof stats>>();
+		vi.mocked(api.stats).mockReturnValueOnce(delayedStats.promise);
+		const store = await makeStartedStore();
+
+		const refresh = store.refreshFleetStats();
+		const hydrated = hydrationSnapshot("rewound", false);
+		hydrated.state.messageCount = 3;
+		vi.mocked(api.hydrate).mockResolvedValueOnce(hydrated);
+		await store.hydrateSession("rewound");
+		expect(store.fleet().runtimes[0]?.state.messageCount).toBe(3);
+
+		delayedStats.resolve(stats(10, 100, 1));
+		await refresh;
+
+		expect(store.fleet().runtimes[0]?.state.messageCount).toBe(3);
+	});
+
+	it("allows a stats response to lower its count across an unrelated disk inventory mutation", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("live", 12)], diskSessions: [] });
+		const delayed = deferred<ReturnType<typeof stats>>();
+		vi.mocked(api.stats).mockReturnValueOnce(delayed.promise);
+		const store = await makeStartedStore();
+
+		const refresh = store.refreshFleetStats();
+		vi.mocked(api.sessions).mockResolvedValueOnce({ sessions: [] });
+		await store.refreshDiskSessions();
+		delayed.resolve(stats(3, 30, 0.3));
+		await refresh;
+
+		expect(store.fleet().runtimes[0]?.state.messageCount).toBe(3);
+	});
+
+	it("isolates stats races per runtime while preserving same-runtime protection", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({
+			runtimes: [fleetSnapshot("a", 12), fleetSnapshot("b", 4)],
+			diskSessions: [],
+		});
+		const statsA = deferred<ReturnType<typeof stats>>();
+		const statsB = deferred<ReturnType<typeof stats>>();
+		vi.mocked(api.stats).mockReturnValueOnce(statsA.promise).mockReturnValueOnce(statsB.promise);
+		const store = await makeStartedStore();
+
+		const refresh = store.refreshFleetStats();
+		emit("", { type: "fleet_snapshot", runtimes: [fleetSnapshot("a", 12), fleetSnapshot("b", 9)] });
+		statsA.resolve(stats(3, 30, 0.3));
+		statsB.resolve(stats(2, 20, 0.2));
+		await refresh;
+
+		expect(store.fleet().runtimes.find((runtime) => runtime.key === "a")?.state.messageCount).toBe(3);
+		expect(store.fleet().runtimes.find((runtime) => runtime.key === "b")?.state.messageCount).toBe(9);
 	});
 
 	it("shares an in-flight stats request and discards stats for runtimes removed while it waits", async () => {

@@ -10,6 +10,7 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { RpcClient, type RpcExitInfo } from "@dreb/coding-agent/rpc";
 import {
 	type BackgroundAgentDto,
@@ -625,6 +626,9 @@ export class RuntimePool {
 
 	/** Snapshot a runtime for the fleet endpoint. */
 	async describe(handle: RuntimeHandle): Promise<RuntimeInfoDto> {
+		const previousFleetRuntime =
+			this.runtimes.get(handle.key) === handle ? this.describeFleetRuntime(handle) : undefined;
+		let fleetRuntimeEnriched = false;
 		let state: SessionStateDto;
 		try {
 			const authoritative = (await handle.client.getState()) as unknown as SessionStateDto;
@@ -637,6 +641,7 @@ export class RuntimePool {
 				tasks: authoritative.tasks ?? fallback.tasks,
 			};
 			handle.lastState = state;
+			fleetRuntimeEnriched = true;
 			if (handle.error?.startsWith("RPC process")) {
 				handle.error = undefined;
 				handle.attention.delete("error");
@@ -653,6 +658,7 @@ export class RuntimePool {
 			stats = { tokensTotal: sessionStats.tokens.total, cost: sessionStats.cost };
 			if (sessionStats.contextUsage) {
 				handle.lastState = { ...this.fallbackState(handle), contextUsage: sessionStats.contextUsage };
+				fleetRuntimeEnriched = true;
 			}
 		} catch (err) {
 			this.logger(
@@ -667,6 +673,14 @@ export class RuntimePool {
 			this.logger(
 				`runtime ${handle.key} last assistant text unavailable for fleet card: ${err instanceof Error ? err.message : String(err)}`,
 			);
+		}
+		if (
+			fleetRuntimeEnriched &&
+			previousFleetRuntime &&
+			this.runtimes.get(handle.key) === handle &&
+			!isDeepStrictEqual(previousFleetRuntime, this.describeFleetRuntime(handle))
+		) {
+			this.scheduleFleetSnapshot();
 		}
 		return {
 			key: handle.key,

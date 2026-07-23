@@ -145,7 +145,7 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 					class="btn btn-small btn-danger"
 					onClick={async () => {
 						await api.stopRuntime(props.runtime.key);
-						await props.store.refreshDiskSessions();
+						await props.store.removeRuntime(props.runtime.key);
 					}}
 				>
 					stop runtime

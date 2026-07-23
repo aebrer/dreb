@@ -54,6 +54,71 @@ describe("profile-mobile", () => {
 		expect(JSON.stringify(summary)).not.toContain(secret);
 	});
 
+	it("matches complete byte-stream ingestion when an SSE separator is fragmented", () => {
+		const encoder = new TextEncoder();
+		const secret = "fragmented payload must not appear";
+		const agentFrame = `id: 1\r\ndata: ${JSON.stringify({ seq: 1, event: { type: "agent_start", secret } })}\r\n\r\n`;
+		const heartbeatFrame = "event: heartbeat\r\ndata: {}\r\n\r\n";
+		const agentBytes = encoder.encode(agentFrame);
+		const heartbeatBytes = encoder.encode(heartbeatFrame);
+		const complete = createSseAggregator(100);
+		complete.ingest(agentBytes, 0);
+		complete.ingest(heartbeatBytes, 200);
+
+		const fragmented = createSseAggregator(100);
+		fragmented.ingest(agentBytes.slice(0, -1), 0);
+		fragmented.ingest(agentBytes.slice(-1), 0);
+		fragmented.ingest(heartbeatBytes, 200);
+		const summary = fragmented.summary();
+
+		expect(summary).toEqual(complete.summary());
+		expect(summary).toEqual({
+			receivedBytes: agentBytes.byteLength + heartbeatBytes.byteLength,
+			unattributedBytes: 0,
+			eventsByType: {
+				agent_start: { count: 1, encodedBytes: agentBytes.byteLength },
+				heartbeat: { count: 1, encodedBytes: heartbeatBytes.byteLength },
+			},
+			bursts: {
+				count: 2,
+				eventCount: { count: 2, min: 1, max: 1, mean: 1 },
+				encodedBytes: summarizeNumbers([agentBytes.byteLength, heartbeatBytes.byteLength]),
+			},
+		});
+		expect(JSON.stringify(summary)).not.toContain(secret);
+	});
+
+	it("matches complete byte-stream ingestion when a multibyte character is fragmented", () => {
+		const encoder = new TextEncoder();
+		const secret = "sensitive 🧪 payload";
+		const frame = `id: 1\ndata: ${JSON.stringify({ seq: 1, event: { type: "agent_message", text: secret } })}\n\n`;
+		const bytes = encoder.encode(frame);
+		const characterOffset = encoder.encode(frame.slice(0, frame.indexOf("🧪"))).byteLength;
+		const splitOffset = characterOffset + 2;
+		const complete = createSseAggregator();
+		complete.ingest(bytes, 0);
+
+		const fragmented = createSseAggregator();
+		fragmented.ingest(bytes.slice(0, splitOffset), 0);
+		fragmented.ingest(bytes.slice(splitOffset), 0);
+		const summary = fragmented.summary();
+
+		expect(summary).toEqual(complete.summary());
+		expect(summary).toEqual({
+			receivedBytes: bytes.byteLength,
+			unattributedBytes: 0,
+			eventsByType: {
+				agent_message: { count: 1, encodedBytes: bytes.byteLength },
+			},
+			bursts: {
+				count: 1,
+				eventCount: { count: 1, min: 1, max: 1, mean: 1 },
+				encodedBytes: { count: 1, min: bytes.byteLength, max: bytes.byteLength, mean: bytes.byteLength },
+			},
+		});
+		expect(JSON.stringify(summary)).not.toContain(secret);
+	});
+
 	it("summarizes numeric measurements deterministically", () => {
 		expect(summarizeNumbers([4, 8, 12])).toEqual({ count: 3, min: 4, max: 12, mean: 8 });
 		expect(summarizeNumbers([])).toEqual({ count: 0, min: 0, max: 0, mean: 0 });

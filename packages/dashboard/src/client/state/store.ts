@@ -134,8 +134,12 @@ export function createAppStore() {
 	let authoritativeBarrierSeq: number | undefined;
 	/** Invalidates in-flight full fleet reads after any narrower authoritative mutation. */
 	let fleetMutationGeneration = 0;
-	/** Per-runtime state freshness prevents unrelated fleet mutations from invalidating hydrates. */
+	/** Per-runtime state freshness prevents unrelated fleet mutations from invalidating hydrates and stats. */
 	const fleetRuntimeStateGenerations = new Map<string, number>();
+	/** Latest non-snapshot state generation for each runtime, retained across later snapshots. */
+	const latestFleetRuntimeNonSnapshotGenerations = new Map<string, number>();
+	/** Latest fleet snapshot sequence that changed each runtime's projected state. */
+	const latestFleetRuntimeSnapshotSequences = new Map<string, number>();
 	let latestFleetRequestGeneration = 0;
 	/** Latest inventory request wins, so a slow earlier response cannot regress disk rows. */
 	let latestDiskSessionsRequestGeneration = 0;
@@ -232,23 +236,36 @@ export function createAppStore() {
 		return fleetRuntimeStateGenerations.get(key) ?? 0;
 	}
 
-	function bumpChangedFleetRuntimeStates(previous: RuntimeInfoDto[], next: RuntimeInfoDto[]): void {
+	function bumpChangedFleetRuntimeStates(
+		previous: RuntimeInfoDto[],
+		next: RuntimeInfoDto[],
+		snapshotSequence?: number,
+	): void {
 		const previousStates = new Map(previous.map((runtime) => [runtime.key, JSON.stringify(runtime.state)]));
 		const nextStates = new Map(next.map((runtime) => [runtime.key, JSON.stringify(runtime.state)]));
 		for (const key of new Set([...previousStates.keys(), ...nextStates.keys()])) {
 			if (previousStates.get(key) === nextStates.get(key)) continue;
-			fleetRuntimeStateGenerations.set(key, currentFleetRuntimeStateGeneration(key) + 1);
+			const generation = currentFleetRuntimeStateGeneration(key) + 1;
+			fleetRuntimeStateGenerations.set(key, generation);
+			if (snapshotSequence === undefined) {
+				latestFleetRuntimeNonSnapshotGenerations.set(key, generation);
+			} else {
+				latestFleetRuntimeSnapshotSequences.set(
+					key,
+					Math.max(latestFleetRuntimeSnapshotSequences.get(key) ?? -1, snapshotSequence),
+				);
+			}
 		}
 	}
 
-	function mutateFleet(mutator: (current: FleetDto) => FleetDto): void {
+	function mutateFleet(mutator: (current: FleetDto) => FleetDto, snapshotSequence?: number): void {
 		setFleet((current) => {
 			const next = mutator(current);
 			fleetMutationGeneration += 1;
 			// Hydrate only writes RuntimeInfoDto.state. Comparing serialized DTOs
 			// automatically follows future state fields while ignoring disk-only and
 			// unrelated-runtime mutations.
-			bumpChangedFleetRuntimeStates(current.runtimes, next.runtimes);
+			bumpChangedFleetRuntimeStates(current.runtimes, next.runtimes, snapshotSequence);
 			return next;
 		});
 	}
@@ -263,7 +280,7 @@ export function createAppStore() {
 	 * those values, plus monotonic message/context data, while replacing the
 	 * event-derived runtime membership as one Solid signal update.
 	 */
-	function applyFleetSnapshot(runtimes: FleetRuntimeSnapshotDto[]): void {
+	function applyFleetSnapshot(runtimes: FleetRuntimeSnapshotDto[], sequence: number): void {
 		const nextKeys = new Set(
 			runtimes.filter((runtime) => !removedRuntimeKeys.has(runtime.key)).map((runtime) => runtime.key),
 		);
@@ -293,16 +310,28 @@ export function createAppStore() {
 						};
 					}),
 			};
-		});
+		}, sequence);
 		if (membershipChanged) void refreshDiskSessions().catch(() => {});
 	}
 
-	function removeFleetRuntime(key: string): void {
+	/** Apply the same narrow local transition for SSE and directly confirmed stops. */
+	function removeRuntime(key: string): Promise<void> {
+		const alreadyRemoved = removedRuntimeKeys.has(key);
 		removedRuntimeKeys.add(key);
-		// Bump even when the card was not rendered: an older full response must
-		// still be unable to resurrect a just-removed runtime.
-		mutateFleet((current) => ({ ...current, runtimes: current.runtimes.filter((runtime) => runtime.key !== key) }));
-		void refreshDiskSessions().catch(() => {});
+		if (!alreadyRemoved) {
+			// Bump even when the card was not rendered: an older full response must
+			// still be unable to resurrect a just-removed runtime.
+			mutateFleet((current) => ({
+				...current,
+				runtimes: current.runtimes.filter((runtime) => runtime.key !== key),
+			}));
+			deleteSessionState(key);
+			return refreshDiskSessions();
+		}
+		// A directly confirmed stop may be followed by its SSE echo. Keep the
+		// transition idempotent so that echo does not trigger a duplicate scan.
+		deleteSessionState(key);
+		return Promise.resolve();
 	}
 
 	function refreshFleet(): Promise<void> {
@@ -355,14 +384,32 @@ export function createAppStore() {
 	}
 
 	/** Apply the runtime state from an atomic hydrate, including legitimate rewinds. */
-	function setHydratedRuntimeState(key: string, state: RuntimeInfoDto["state"], generationAtHydrate?: number): void {
+	function setHydratedRuntimeState(
+		key: string,
+		state: RuntimeInfoDto["state"],
+		generationAtHydrate: number | undefined,
+		barrierSequence: number,
+	): void {
 		// SessionScreen can hydrate while start()'s initial fleet request is still
 		// pending. A no-op patch must not invalidate that authoritative first load.
 		if (!fleet().runtimes.some((runtime) => runtime.key === key)) return;
-		// Only a newer mutation of this runtime can supersede its hydrate. Fleet
-		// changes for other runtimes and disk-only inventory refreshes are unrelated.
-		if (generationAtHydrate !== undefined && currentFleetRuntimeStateGeneration(key) !== generationAtHydrate) {
-			return;
+		// State-changing snapshots at/before the barrier are older than the
+		// hydrate baseline and therefore must not suppress it. Any non-snapshot
+		// mutation after the request started remains newer even if a later
+		// pre-barrier snapshot also changed the runtime.
+		if (generationAtHydrate !== undefined) {
+			const currentGeneration = currentFleetRuntimeStateGeneration(key);
+			if (currentGeneration !== generationAtHydrate) {
+				const latestNonSnapshotGeneration = latestFleetRuntimeNonSnapshotGenerations.get(key) ?? 0;
+				const latestSnapshotSequence = latestFleetRuntimeSnapshotSequences.get(key);
+				if (
+					latestNonSnapshotGeneration > generationAtHydrate ||
+					latestSnapshotSequence === undefined ||
+					latestSnapshotSequence > barrierSequence
+				) {
+					return;
+				}
+			}
 		}
 		mutateFleet((current) => ({
 			...current,
@@ -400,11 +447,10 @@ export function createAppStore() {
 			state: {
 				...runtime.state,
 				...(stats.contextUsage === undefined ? {} : { contextUsage: stats.contextUsage }),
-				// Stats is authoritative unless a newer fleet mutation landed while it
-				// was in flight; then it must not rewind that newer live state.
-				messageCount: liveStateRaced
-					? Math.max(runtime.state.messageCount, stats.totalMessages)
-					: stats.totalMessages,
+				// Stats is authoritative unless a newer same-runtime state mutation
+				// landed while it was in flight. Preserve that newer count exactly:
+				// it may have legitimately decreased after a fork or rewind.
+				messageCount: liveStateRaced ? runtime.state.messageCount : stats.totalMessages,
 			},
 			stats: { tokensTotal: stats.tokens.total, cost: stats.cost },
 		};
@@ -431,8 +477,8 @@ export function createAppStore() {
 
 	function refreshFleetStats(): Promise<void> {
 		if (fleetStatsPromise) return fleetStatsPromise;
-		const mutationAtRequest = fleetMutationGeneration;
 		const keys = fleet().runtimes.map((runtime) => runtime.key);
+		const stateGenerationsAtRequest = new Map(keys.map((key) => [key, currentFleetRuntimeStateGeneration(key)]));
 		const requests = keys.map((key) => fetchFleetRuntimeStats(key));
 		const promise = Promise.allSettled(requests)
 			.then((results) => {
@@ -443,13 +489,17 @@ export function createAppStore() {
 					else failures.push(result.reason instanceof Error ? result.reason.message : String(result.reason));
 				}
 				if (successful.size > 0) {
-					// Re-read membership at application time. Results for removed runtimes
-					// are discarded rather than creating a stale card.
-					const liveStateRaced = fleetMutationGeneration !== mutationAtRequest;
+					// Re-read membership and each target runtime's freshness at application
+					// time. Unrelated disk/runtime mutations must not hide a legitimate
+					// authoritative decrease after a fork or rewind.
 					mutateFleet((current) => ({
 						...current,
 						runtimes: current.runtimes.map((runtime) => {
 							const stats = successful.get(runtime.key);
+							const generationAtRequest = stateGenerationsAtRequest.get(runtime.key);
+							const liveStateRaced =
+								generationAtRequest === undefined ||
+								currentFleetRuntimeStateGeneration(runtime.key) !== generationAtRequest;
 							return stats ? mergeRuntimeStats(runtime, stats, liveStateRaced) : runtime;
 						}),
 					}));
@@ -518,7 +568,7 @@ export function createAppStore() {
 		if (type === "fleet_snapshot") {
 			// This is a global event (key=""). It updates cards only and must never
 			// create a synthetic session reducer entry under the empty key.
-			applyFleetSnapshot((envelope.event as unknown as FleetSnapshotEventDto).runtimes);
+			applyFleetSnapshot((envelope.event as unknown as FleetSnapshotEventDto).runtimes, envelope.seq);
 		} else if (type === "disk_sessions_changed") {
 			// A delete in another dashboard client should converge without bringing
 			// back the expensive full fleet endpoint.
@@ -526,8 +576,7 @@ export function createAppStore() {
 		} else if (type === "runtime_removed") {
 			if (envelope.key) {
 				const wasViewingRemovedRuntime = routedSessionKey() === envelope.key;
-				removeFleetRuntime(envelope.key);
-				deleteSessionState(envelope.key);
+				void removeRuntime(envelope.key).catch(() => {});
 				if (wasViewingRemovedRuntime) {
 					pushNotice(`session ${envelope.key} was stopped`, "warning");
 					navigate({ screen: "fleet" });
@@ -859,7 +908,7 @@ export function createAppStore() {
 			// fork or rewind. Preserve card-only enrichment on the surrounding card.
 			// Skip if a newer fleet_snapshot mutated the card while the HTTP request
 			// was in flight — the live snapshot must win.
-			setHydratedRuntimeState(key, snapshot.state, generationAtHydrate);
+			setHydratedRuntimeState(key, snapshot.state, generationAtHydrate, snapshot.barrierSeq);
 			for (const envelope of [...pending.queued].sort((a, b) => a.seq - b.seq)) {
 				if (envelope.seq > snapshot.barrierSeq) applyEnvelope(envelope);
 			}
@@ -903,6 +952,7 @@ export function createAppStore() {
 		refreshFleet,
 		refreshDiskSessions,
 		refreshFleetStats,
+		removeRuntime,
 		upsertRuntime,
 		setRuntimeModel,
 		setRuntimeThinkingLevel,

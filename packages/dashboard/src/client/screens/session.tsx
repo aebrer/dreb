@@ -869,7 +869,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setActionError(undefined);
 		try {
 			await api.stopRuntime(props.sessionKey);
-			await props.store.refreshDiskSessions();
+			await props.store.removeRuntime(props.sessionKey);
 			props.store.navigate({ screen: "fleet" });
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));

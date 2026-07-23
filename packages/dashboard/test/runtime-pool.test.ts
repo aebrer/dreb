@@ -534,7 +534,7 @@ describe("RuntimePool", () => {
 		expect(handle.attention.has("paused")).toBe(false);
 	});
 
-	it("records error and schedules fleet snapshot on agent_end with errorMessage", async () => {
+	it("records and projects an agent_end error in the fleet snapshot", async () => {
 		vi.useFakeTimers();
 		try {
 			const { pool, clients } = makePool();
@@ -542,7 +542,10 @@ describe("RuntimePool", () => {
 			const snapshots: unknown[] = [];
 			pool.onFleetSnapshot((event) => snapshots.push(event));
 
-			// Drain the fleet snapshot triggered by create().
+			// Drain registration and a streaming-state snapshot so agent_end must
+			// project the transition back to a stopped state.
+			await vi.advanceTimersByTimeAsync(200);
+			clients[0].emit({ type: "agent_start" });
 			await vi.advanceTimersByTimeAsync(200);
 			snapshots.length = 0;
 
@@ -550,10 +553,21 @@ describe("RuntimePool", () => {
 
 			expect(handle.error).toBe("OOM");
 			expect(handle.attention.get("error")).toBe("OOM");
-			expect(handle.attention.size).toBeGreaterThan(0);
 
 			await vi.advanceTimersByTimeAsync(200);
-			expect(snapshots.length).toBeGreaterThan(0);
+			expect(snapshots).toEqual([
+				{
+					type: "fleet_snapshot",
+					runtimes: [
+						expect.objectContaining({
+							key: handle.key,
+							error: "OOM",
+							needsAttention: true,
+							state: expect.objectContaining({ isStreaming: false }),
+						}),
+					],
+				},
+			]);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -766,6 +780,143 @@ describe("RuntimePool", () => {
 
 		expect(info.lastAssistantText).toBeUndefined();
 		expect(logs.join("\n")).toContain("preview unavailable");
+	});
+
+	it("emits one follow-up snapshot when only context usage changes", async () => {
+		vi.useFakeTimers();
+		try {
+			const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+			const pool = new RuntimePool({
+				cliPath: "/fake/cli.js",
+				fleetSnapshotDebounceMs: 200,
+				clientFactory: () => {
+					const client = makeFakeClient();
+					clients.push(client);
+					return client;
+				},
+			});
+			const emittedRuntimes: ReturnType<RuntimePool["fleetSnapshot"]>[] = [];
+			pool.onFleetSnapshot((event) => emittedRuntimes.push(event.runtimes));
+			const handle = await pool.create("/tmp");
+			const lastActivity = handle.lastActivity;
+			const baselineContextUsage = { tokens: 1_000, contextWindow: 200_000, percent: 0.5 };
+			const updatedContextUsage = { tokens: 2_000, contextWindow: 200_000, percent: 1 };
+			const stats = (contextUsage: typeof baselineContextUsage) =>
+				({ tokens: { total: 1545 }, cost: 0.42, contextUsage }) as any;
+			vi.mocked(clients[0].getSessionStats).mockResolvedValue(stats(baselineContextUsage));
+
+			// Establish the authoritative runtime and context-usage baseline, then
+			// discard its coalesced registration/enrichment snapshot.
+			await pool.describe(handle);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(emittedRuntimes).toHaveLength(1);
+			emittedRuntimes.length = 0;
+
+			// getState remains unchanged; only stats contributes new fleet state.
+			vi.mocked(clients[0].getSessionStats).mockResolvedValue(stats(updatedContextUsage));
+			await pool.describe(handle);
+			await vi.advanceTimersByTimeAsync(199);
+			expect(emittedRuntimes).toEqual([]);
+			await vi.advanceTimersByTimeAsync(1);
+
+			expect(emittedRuntimes).toEqual([
+				[
+					expect.objectContaining({
+						key: handle.key,
+						state: expect.objectContaining({ contextUsage: updatedContextUsage }),
+					}),
+				],
+			]);
+			expect(handle.lastActivity).toBe(lastActivity);
+
+			// Re-reading the same state and context usage must not emit again.
+			await pool.describe(handle);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(emittedRuntimes).toHaveLength(1);
+			expect(handle.lastActivity).toBe(lastActivity);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it.each([
+		{ operation: "create", sessionPath: undefined },
+		{ operation: "resume", sessionPath: "/sessions/resumed.jsonl" },
+	])("follows a fallback $operation snapshot with delayed authoritative state", async ({ operation, sessionPath }) => {
+		vi.useFakeTimers();
+		try {
+			const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+			const pool = new RuntimePool({
+				cliPath: "/fake/cli.js",
+				fleetSnapshotDebounceMs: 200,
+				clientFactory: () => {
+					const client = makeFakeClient();
+					clients.push(client);
+					return client;
+				},
+			});
+			const emittedRuntimes: ReturnType<RuntimePool["fleetSnapshot"]>[] = [];
+			pool.onFleetSnapshot((event) => emittedRuntimes.push(event.runtimes));
+			const handle = await pool.create("/tmp", sessionPath);
+			const lastActivity = handle.lastActivity;
+			const delayedState = deferred<any>();
+			const authoritativeState = {
+				sessionId: `authoritative-${operation}`,
+				sessionFile: `/sessions/authoritative-${operation}.jsonl`,
+				sessionName: `Authoritative ${operation}`,
+				tasks: [{ id: "seeded", title: "Seeded task", status: "in_progress" }],
+				thinkingLevel: "high",
+				isStreaming: true,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "one-at-a-time",
+				autoCompactionEnabled: true,
+				messageCount: 7,
+				pendingMessageCount: 1,
+			};
+			vi.mocked(clients[0].getState)
+				.mockReturnValueOnce(delayedState.promise)
+				.mockResolvedValue(authoritativeState as any);
+
+			const describePromise = pool.describe(handle);
+			await vi.advanceTimersByTimeAsync(200);
+
+			expect(emittedRuntimes).toHaveLength(1);
+			expect(emittedRuntimes[0]).toEqual([
+				expect.objectContaining({
+					key: handle.key,
+					state: expect.objectContaining({
+						sessionId: handle.key,
+						sessionFile: sessionPath,
+						messageCount: 0,
+					}),
+				}),
+			]);
+
+			delayedState.resolve(authoritativeState);
+			await describePromise;
+			await vi.advanceTimersByTimeAsync(199);
+			expect(emittedRuntimes).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(1);
+
+			expect(emittedRuntimes).toHaveLength(2);
+			expect(emittedRuntimes[1]).toEqual([
+				expect.objectContaining({
+					key: handle.key,
+					state: expect.objectContaining(authoritativeState),
+				}),
+			]);
+			expect(handle.lastActivity).toBe(lastActivity);
+
+			// Re-reading an unchanged authoritative state must not create a
+			// redundant snapshot or alter activity.
+			await pool.describe(handle);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(emittedRuntimes).toHaveLength(2);
+			expect(handle.lastActivity).toBe(lastActivity);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("builds event-derived fleet snapshots synchronously without RPC calls", async () => {
