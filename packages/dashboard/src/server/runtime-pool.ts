@@ -431,9 +431,11 @@ export class RuntimePool {
 	}
 
 	private handleEvent(handle: RuntimeHandle, event: Record<string, unknown>): void {
-		handle.lastActivity = this.now();
 		const type = event.type as string;
-		this.updateStateFromEvent(handle, event, type);
+		if (type !== "dashboard_snapshot_barrier") {
+			handle.lastActivity = this.now();
+			this.updateStateFromEvent(handle, event, type);
+		}
 
 		// Track needs-attention sources: extension UI requests, parent
 		// paused, error states.

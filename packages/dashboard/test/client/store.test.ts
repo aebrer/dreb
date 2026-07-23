@@ -1118,17 +1118,70 @@ describe("app store hydration", () => {
 		expect(store.sessions.supersede?.entries).toHaveLength(1);
 	});
 
-	it("keeps newer fleet_snapshot state when a stale hydrate resolves", async () => {
+	it("applies a hydrate after an unrelated runtime changes in a fleet snapshot", async () => {
+		const runtimeA = runtimeSnapshot("a", false);
+		const runtimeB = runtimeSnapshot("b", false);
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtimeA, runtimeB], diskSessions: [] });
 		const snapshot = deferred<RuntimeHydrationDto>();
 		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
 		const store = await makeStartedStore();
 
-		// Seed the fleet with an initial card.
+		const hydrate = store.hydrateSession("a");
+		const unchangedA = runtimeSnapshot("a", false);
+		const changedB = runtimeSnapshot("b", true);
+		changedB.state.messageCount = 9;
+		emit("", { type: "fleet_snapshot", runtimes: [unchangedA, changedB] });
+
+		const hydratedA = hydrationSnapshot("a", false);
+		hydratedA.state.messageCount = 4;
+		snapshot.resolve(hydratedA);
+		await hydrate;
+
+		expect(store.fleet().runtimes.find((runtime) => runtime.key === "a")?.state.messageCount).toBe(4);
+		expect(store.fleet().runtimes.find((runtime) => runtime.key === "b")?.state).toMatchObject({
+			isStreaming: true,
+			messageCount: 9,
+		});
+	});
+
+	it("applies a hydrate after a disk-only fleet mutation", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtimeSnapshot("a", false)], diskSessions: [] });
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
+		const store = await makeStartedStore();
+
+		const hydrate = store.hydrateSession("a");
+		vi.mocked(api.sessions).mockResolvedValueOnce({
+			sessions: [
+				{
+					path: "/disk.jsonl",
+					id: "disk",
+					cwd: "/tmp",
+					created: "a",
+					modified: "b",
+					messageCount: 1,
+					firstMessage: "hello",
+				},
+			],
+		});
+		await store.refreshDiskSessions();
+
+		const hydratedA = hydrationSnapshot("a", false);
+		hydratedA.state.messageCount = 4;
+		snapshot.resolve(hydratedA);
+		await hydrate;
+
+		expect(store.fleet().runtimes[0]?.state.messageCount).toBe(4);
+		expect(store.fleet().diskSessions.map((session) => session.id)).toEqual(["disk"]);
+	});
+
+	it("keeps newer same-runtime fleet_snapshot state when a stale hydrate resolves", async () => {
 		const initial = runtimeSnapshot("race", false);
 		initial.state.model = { provider: "old", id: "old-model" };
 		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
-		await store.start();
-		if (!eventHandlers) throw new Error("store event stream is not connected");
+		const snapshot = deferred<RuntimeHydrationDto>();
+		vi.mocked(api.hydrate).mockReturnValueOnce(snapshot.promise);
+		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("race");
 		// A fleet_snapshot arrives mid-hydrate with newer state.
@@ -1446,14 +1499,58 @@ describe("fleet snapshot and inventory store foundation", () => {
 
 		await store.refreshFleetStats();
 
-		expect(api.stats).toHaveBeenCalledWith("a");
-		expect(api.stats).toHaveBeenCalledWith("b");
+		expect(api.stats).toHaveBeenCalledWith("a", expect.any(AbortSignal));
+		expect(api.stats).toHaveBeenCalledWith("b", expect.any(AbortSignal));
 		expect(store.fleet().runtimes[0]).toMatchObject({
 			stats: { tokensTotal: 50, cost: 0.5 },
 			state: { messageCount: 5, contextUsage: { tokens: 50 } },
 		});
 		expect(store.fleet().runtimes[1]).not.toHaveProperty("stats");
 		expect(store.fleetStatsError()).toContain("b stats unavailable");
+	});
+
+	it("times out a stalled stats request, preserves last-good values, and allows the next poll", async () => {
+		vi.useFakeTimers();
+		try {
+			const runtime = fleetSnapshot("stalled", 4);
+			runtime.state.contextUsage = { tokens: 40, contextWindow: 100_000, percent: 10 };
+			runtime.stats = { tokensTotal: 40, cost: 0.4 };
+			vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+			const store = await makeStartedStore();
+			const stalled = deferred<ReturnType<typeof stats>>();
+			vi.mocked(api.stats)
+				.mockReturnValueOnce(stalled.promise)
+				.mockResolvedValueOnce(stats(6, 60, 0.6));
+
+			const first = store.refreshFleetStats();
+			const shared = store.refreshFleetStats();
+			expect(shared).toBe(first);
+			const signal = vi.mocked(api.stats).mock.calls[0]?.[1];
+			expect(signal?.aborted).toBe(false);
+
+			await vi.advanceTimersByTimeAsync(10_000);
+			await first;
+
+			expect(signal?.aborted).toBe(true);
+			expect(store.fleetStatsError()).toBe("Stats request for runtime stalled timed out after 10000 ms");
+			expect(store.fleet().runtimes[0]).toMatchObject({
+				stats: { tokensTotal: 40, cost: 0.4 },
+				state: { messageCount: 4, contextUsage: { tokens: 40 } },
+			});
+			expect(vi.getTimerCount()).toBe(0);
+
+			await store.refreshFleetStats();
+
+			expect(api.stats).toHaveBeenCalledTimes(2);
+			expect(store.fleetStatsError()).toBeUndefined();
+			expect(store.fleet().runtimes[0]).toMatchObject({
+				stats: { tokensTotal: 60, cost: 0.6 },
+				state: { messageCount: 6, contextUsage: { tokens: 60 } },
+			});
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("allows an uncontended stats response to lower a forked count but preserves a newer live count", async () => {

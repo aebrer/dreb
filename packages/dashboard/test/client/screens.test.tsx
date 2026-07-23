@@ -1178,6 +1178,56 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("new session here");
 	});
 
+	it("files creates a new session in the selected directory without refetching the fleet", async () => {
+		vi.mocked(api.listFiles).mockResolvedValue({
+			path: "/workspace/selected",
+			entries: [],
+			contextTrust: { canonicalTarget: "/workspace/selected", state: "untrusted" },
+		});
+		const runtime: Awaited<ReturnType<typeof api.createRuntime>> = {
+			key: "created-here",
+			cwd: "/workspace/selected",
+			state: {
+				sessionId: "created-here",
+				tasks: [],
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			backgroundAgents: [],
+			needsAttention: false,
+			createdAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+		};
+		vi.mocked(api.createRuntime).mockResolvedValueOnce(runtime);
+		const store = makeStore() as any;
+		const upsertRuntime = vi.fn();
+		const refreshDiskSessions = vi.fn(async () => {});
+		const navigate = vi.fn();
+		const el = mount(() => (
+			<FilesScreen
+				store={{ ...store, upsertRuntime, refreshDiskSessions, navigate }}
+				initialPath="/workspace/selected"
+			/>
+		));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		vi.mocked(api.fleet).mockClear();
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("new session here"))!.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.createRuntime).toHaveBeenCalledWith("/workspace/selected");
+		expect(upsertRuntime).toHaveBeenCalledWith(runtime);
+		expect(refreshDiskSessions).toHaveBeenCalledOnce();
+		expect(navigate).toHaveBeenCalledWith({ screen: "session", key: "created-here" });
+		expect(api.fleet).not.toHaveBeenCalled();
+	});
+
 	it("files trusts an untrusted folder and updates its scope immediately", async () => {
 		vi.mocked(api.listFiles).mockResolvedValue({
 			path: "/workspace",

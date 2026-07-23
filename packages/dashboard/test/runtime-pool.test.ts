@@ -210,6 +210,40 @@ describe("RuntimePool", () => {
 		expect(clients[0].getDashboardSnapshot).toHaveBeenCalledOnce();
 	});
 
+	it("does not treat dashboard snapshot hydration as runtime activity", async () => {
+		let now = 100;
+		const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			now: () => now,
+			clientFactory: () => {
+				const client = makeFakeClient();
+				clients.push(client);
+				return client;
+			},
+		});
+		const handle = await pool.create("/tmp");
+		const listener = vi.fn((key: string, event: Record<string, unknown>) => {
+			if (event.type === "dashboard_snapshot_barrier" && typeof event.snapshotId === "string") {
+				pool.recordDashboardBarrier(key, event.snapshotId, 42);
+			}
+		});
+		pool.onEvent(listener);
+		const lastActivity = handle.lastActivity;
+		now = 200;
+
+		await pool.snapshotDashboard(handle);
+
+		expect(listener).toHaveBeenCalledWith(handle.key, {
+			type: "dashboard_snapshot_barrier",
+			snapshotId: "snapshot-1",
+		});
+		expect(handle.lastActivity).toBe(lastActivity);
+
+		clients[0].emit({ type: "agent_start" });
+		expect(handle.lastActivity).toBe(200);
+	});
+
 	it("refreshes the event-derived state baseline from a successful dashboard snapshot", async () => {
 		const { pool, clients } = makePool();
 		const handle = await pool.create("/tmp");

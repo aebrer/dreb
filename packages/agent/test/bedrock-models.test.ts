@@ -25,7 +25,7 @@ import type { AssistantMessage } from "@dreb/ai";
 import { getModels } from "@dreb/ai";
 import { describe, expect, it } from "vitest";
 import { Agent } from "../src/index.js";
-import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { shouldRunBedrockExtensiveTests } from "./bedrock-utils.js";
 
 // =============================================================================
 // Known Issue Categories
@@ -149,7 +149,7 @@ function failsSyntheticSignature(modelId: string): boolean {
 // =============================================================================
 
 describe("Amazon Bedrock Models - Agent Loop", () => {
-	const shouldRunExtensiveTests = hasBedrockCredentials() && process.env.BEDROCK_EXTENSIVE_MODEL_TEST;
+	const shouldRunExtensiveTests = shouldRunBedrockExtensiveTests();
 
 	// Get all Amazon Bedrock models
 	const allBedrockModels = getModels("amazon-bedrock");

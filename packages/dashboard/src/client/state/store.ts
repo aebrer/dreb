@@ -75,6 +75,7 @@ const MAX_PENDING_RESYNC_BYTES = 3 * 1024 * 1024;
 const MAX_PENDING_HYDRATION_ENVELOPES = MAX_PENDING_RESYNC_ENVELOPES;
 const MAX_PENDING_HYDRATION_BYTES = MAX_PENDING_RESYNC_BYTES;
 const RESYNC_TIMEOUT_MS = 30_000;
+const FLEET_STATS_REQUEST_TIMEOUT_MS = 10_000;
 const RESYNC_RETRY_BASE_MS = 1_000;
 const RESYNC_RETRY_MAX_MS = 30_000;
 const textEncoder = new TextEncoder();
@@ -133,6 +134,8 @@ export function createAppStore() {
 	let authoritativeBarrierSeq: number | undefined;
 	/** Invalidates in-flight full fleet reads after any narrower authoritative mutation. */
 	let fleetMutationGeneration = 0;
+	/** Per-runtime state freshness prevents unrelated fleet mutations from invalidating hydrates. */
+	const fleetRuntimeStateGenerations = new Map<string, number>();
 	let latestFleetRequestGeneration = 0;
 	/** Latest inventory request wins, so a slow earlier response cannot regress disk rows. */
 	let latestDiskSessionsRequestGeneration = 0;
@@ -225,9 +228,29 @@ export function createAppStore() {
 		setNotices((current) => [...current, { id: noticeCounter, text, tone }].slice(-MAX_NOTICES));
 	}
 
+	function currentFleetRuntimeStateGeneration(key: string): number {
+		return fleetRuntimeStateGenerations.get(key) ?? 0;
+	}
+
+	function bumpChangedFleetRuntimeStates(previous: RuntimeInfoDto[], next: RuntimeInfoDto[]): void {
+		const previousStates = new Map(previous.map((runtime) => [runtime.key, JSON.stringify(runtime.state)]));
+		const nextStates = new Map(next.map((runtime) => [runtime.key, JSON.stringify(runtime.state)]));
+		for (const key of new Set([...previousStates.keys(), ...nextStates.keys()])) {
+			if (previousStates.get(key) === nextStates.get(key)) continue;
+			fleetRuntimeStateGenerations.set(key, currentFleetRuntimeStateGeneration(key) + 1);
+		}
+	}
+
 	function mutateFleet(mutator: (current: FleetDto) => FleetDto): void {
-		fleetMutationGeneration += 1;
-		setFleet(mutator);
+		setFleet((current) => {
+			const next = mutator(current);
+			fleetMutationGeneration += 1;
+			// Hydrate only writes RuntimeInfoDto.state. Comparing serialized DTOs
+			// automatically follows future state fields while ignoring disk-only and
+			// unrelated-runtime mutations.
+			bumpChangedFleetRuntimeStates(current.runtimes, next.runtimes);
+			return next;
+		});
 	}
 
 	function replaceFleet(next: FleetDto): void {
@@ -332,13 +355,15 @@ export function createAppStore() {
 	}
 
 	/** Apply the runtime state from an atomic hydrate, including legitimate rewinds. */
-	function setHydratedRuntimeState(key: string, state: RuntimeInfoDto["state"], mutationAtHydrate?: number): void {
+	function setHydratedRuntimeState(key: string, state: RuntimeInfoDto["state"], generationAtHydrate?: number): void {
 		// SessionScreen can hydrate while start()'s initial fleet request is still
 		// pending. A no-op patch must not invalidate that authoritative first load.
 		if (!fleet().runtimes.some((runtime) => runtime.key === key)) return;
-		// A newer fleet_snapshot mutated the card while the hydrate HTTP request
-		// was in flight — the live snapshot must win.
-		if (mutationAtHydrate !== undefined && fleetMutationGeneration !== mutationAtHydrate) return;
+		// Only a newer mutation of this runtime can supersede its hydrate. Fleet
+		// changes for other runtimes and disk-only inventory refreshes are unrelated.
+		if (generationAtHydrate !== undefined && currentFleetRuntimeStateGeneration(key) !== generationAtHydrate) {
+			return;
+		}
 		mutateFleet((current) => ({
 			...current,
 			runtimes: current.runtimes.map((runtime) => (runtime.key === key ? { ...runtime, state } : runtime)),
@@ -385,17 +410,30 @@ export function createAppStore() {
 		};
 	}
 
+	function fetchFleetRuntimeStats(key: string): Promise<SessionStatsDto> {
+		const controller = new AbortController();
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		const timedOut = new Promise<never>((_resolve, reject) => {
+			timeout = setTimeout(() => {
+				const error = new Error(
+					`Stats request for runtime ${key} timed out after ${FLEET_STATS_REQUEST_TIMEOUT_MS} ms`,
+				);
+				// Settle the explicit timeout first so an abort-aware fetch cannot replace
+				// the useful timeout diagnostic with a generic AbortError.
+				reject(error);
+				controller.abort(error);
+			}, FLEET_STATS_REQUEST_TIMEOUT_MS);
+		});
+		return Promise.race([api.stats(key, controller.signal), timedOut]).finally(() => {
+			if (timeout !== undefined) clearTimeout(timeout);
+		});
+	}
+
 	function refreshFleetStats(): Promise<void> {
 		if (fleetStatsPromise) return fleetStatsPromise;
 		const mutationAtRequest = fleetMutationGeneration;
 		const keys = fleet().runtimes.map((runtime) => runtime.key);
-		const requests = keys.map((key) => {
-			try {
-				return api.stats(key);
-			} catch (error) {
-				return Promise.reject(error);
-			}
-		});
+		const requests = keys.map((key) => fetchFleetRuntimeStats(key));
 		const promise = Promise.allSettled(requests)
 			.then((results) => {
 				const successful = new Map<string, SessionStatsDto>();
@@ -776,9 +814,9 @@ export function createAppStore() {
 		// A newer request supersedes an older one for this key even if both happen
 		// to share the same generation.
 		clearHydrationTransaction(key);
-		// Capture fleet generation so a mid-flight fleet_snapshot cannot be
-		// rewound by the older hydrate snapshot below.
-		const mutationAtHydrate = fleetMutationGeneration;
+		// Capture only this runtime's state generation. Unrelated runtime and disk
+		// inventory mutations must not suppress this hydrate.
+		const generationAtHydrate = currentFleetRuntimeStateGeneration(key);
 		const pending: PendingHydration = {
 			guard: captureHydrationGuard(key),
 			queued: [],
@@ -821,7 +859,7 @@ export function createAppStore() {
 			// fork or rewind. Preserve card-only enrichment on the surrounding card.
 			// Skip if a newer fleet_snapshot mutated the card while the HTTP request
 			// was in flight — the live snapshot must win.
-			setHydratedRuntimeState(key, snapshot.state, mutationAtHydrate);
+			setHydratedRuntimeState(key, snapshot.state, generationAtHydrate);
 			for (const envelope of [...pending.queued].sort((a, b) => a.seq - b.seq)) {
 				if (envelope.seq > snapshot.barrierSeq) applyEnvelope(envelope);
 			}

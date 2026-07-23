@@ -103,7 +103,7 @@ export const api = {
 	compact: (key: string, instructions?: string) =>
 		request<unknown>(`/api/runtimes/${key}/compact`, json({ instructions })),
 	rename: (key: string, name: string) => request<{ ok: true }>(`/api/runtimes/${key}/name`, json({ name })),
-	stats: (key: string) => request<SessionStatsDto>(`/api/runtimes/${key}/stats`),
+	stats: (key: string, signal?: AbortSignal) => request<SessionStatsDto>(`/api/runtimes/${key}/stats`, { signal }),
 	performance: (key: string) => request<PerformanceStatsDto>(`/api/runtimes/${key}/performance`),
 	resources: (key: string) => request<ResourcesDto>(`/api/runtimes/${key}/resources`),
 	commands: (key: string) => request<{ commands: CommandDto[] }>(`/api/runtimes/${key}/commands`),

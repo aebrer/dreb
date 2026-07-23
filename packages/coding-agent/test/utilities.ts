@@ -74,6 +74,8 @@ function saveAuthStorage(storage: AuthStorageData): void {
  * For google-gemini-cli and google-antigravity, returns JSON-encoded { token, projectId }
  */
 export async function resolveApiKey(provider: string): Promise<string | undefined> {
+	if (process.env.DREB_SKIP_LIVE_API === "1") return undefined;
+
 	const storage = loadAuthStorage();
 	const entry = storage[provider];
 
@@ -110,6 +112,8 @@ export async function resolveApiKey(provider: string): Promise<string | undefine
  * Check if a provider has credentials in ~/.dreb/agent/auth.json
  */
 export function hasAuthForProvider(provider: string): boolean {
+	if (process.env.DREB_SKIP_LIVE_API === "1") return false;
+
 	const storage = loadAuthStorage();
 	return provider in storage;
 }
