@@ -21,7 +21,7 @@ import { codingTools } from "../src/core/tools/index.js";
 
 /**
  * API key for authenticated tests. Tests using this should be wrapped in
- * describe.skipIf(!API_KEY)
+ * describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !API_KEY)
  */
 export const API_KEY = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY;
 
@@ -74,6 +74,8 @@ function saveAuthStorage(storage: AuthStorageData): void {
  * For google-gemini-cli and google-antigravity, returns JSON-encoded { token, projectId }
  */
 export async function resolveApiKey(provider: string): Promise<string | undefined> {
+	if (process.env.DREB_SKIP_LIVE_API === "1") return undefined;
+
 	const storage = loadAuthStorage();
 	const entry = storage[provider];
 
@@ -110,6 +112,8 @@ export async function resolveApiKey(provider: string): Promise<string | undefine
  * Check if a provider has credentials in ~/.dreb/agent/auth.json
  */
 export function hasAuthForProvider(provider: string): boolean {
+	if (process.env.DREB_SKIP_LIVE_API === "1") return false;
+
 	const storage = loadAuthStorage();
 	return provider in storage;
 }

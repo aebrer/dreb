@@ -120,26 +120,32 @@ async function assertSecondToolCallWithInterleavedThinking<TApi extends Api>(
 
 const hasAnthropicCredentials = !!getEnvApiKey("anthropic");
 
-describe.skipIf(!hasBedrockCredentials())("Amazon Bedrock interleaved thinking", () => {
-	it("should do interleaved thinking on Claude Opus 4.5", { retry: 3 }, async () => {
-		const llm = getModel("amazon-bedrock", "global.anthropic.claude-opus-4-5-20251101-v1:0");
-		await assertSecondToolCallWithInterleavedThinking(llm, "high");
-	});
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasBedrockCredentials())(
+	"Amazon Bedrock interleaved thinking",
+	() => {
+		it("should do interleaved thinking on Claude Opus 4.5", { retry: 3 }, async () => {
+			const llm = getModel("amazon-bedrock", "global.anthropic.claude-opus-4-5-20251101-v1:0");
+			await assertSecondToolCallWithInterleavedThinking(llm, "high");
+		});
 
-	it("should do interleaved thinking on Claude Opus 4.6", { retry: 3 }, async () => {
-		const llm = getModel("amazon-bedrock", "global.anthropic.claude-opus-4-6-v1");
-		await assertSecondToolCallWithInterleavedThinking(llm, "high");
-	});
-});
+		it("should do interleaved thinking on Claude Opus 4.6", { retry: 3 }, async () => {
+			const llm = getModel("amazon-bedrock", "global.anthropic.claude-opus-4-6-v1");
+			await assertSecondToolCallWithInterleavedThinking(llm, "high");
+		});
+	},
+);
 
-describe.skipIf(!hasAnthropicCredentials)("Anthropic interleaved thinking", () => {
-	it("should do interleaved thinking on Claude Opus 4.5", { retry: 3 }, async () => {
-		const llm = getModel("anthropic", "claude-opus-4-5");
-		await assertSecondToolCallWithInterleavedThinking(llm, "high");
-	});
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAnthropicCredentials)(
+	"Anthropic interleaved thinking",
+	() => {
+		it("should do interleaved thinking on Claude Opus 4.5", { retry: 3 }, async () => {
+			const llm = getModel("anthropic", "claude-opus-4-5");
+			await assertSecondToolCallWithInterleavedThinking(llm, "high");
+		});
 
-	it("should do interleaved thinking on Claude Opus 4.6", { retry: 3 }, async () => {
-		const llm = findModel("anthropic", "opus")!;
-		await assertSecondToolCallWithInterleavedThinking(llm, "high");
-	});
-});
+		it("should do interleaved thinking on Claude Opus 4.6", { retry: 3 }, async () => {
+			const llm = findModel("anthropic", "opus")!;
+			await assertSecondToolCallWithInterleavedThinking(llm, "high");
+		});
+	},
+);

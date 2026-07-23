@@ -126,6 +126,34 @@ networking window above.
 | **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions; context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards and a system/light/dark mode selector, saved per browser. Shows the current rotating pairing code on the host/local dashboard, plus the paired-devices list with unpair. |
 | **Pairing** | Remote first-login: identity echo, rotating-code entry, and the security copy explaining what pairing grants. |
 
+## Fleet transport and freshness
+
+A normal dashboard load makes one authoritative `GET /api/fleet`; the fleet is
+also included in the ordered `/api/resync` response only during exceptional
+recovery. After initial load, global event-derived `fleet_snapshot` SSE frames
+update live runtime cards. The runtime pool emits those frames with a 200 ms
+debounce from its in-memory state, so an update performs neither child RPC calls
+nor a disk inventory scan.
+
+Live runtime state and on-disk session inventory have separate refresh paths.
+After creating, resuming, stopping, or deleting a session, the client narrowly
+refreshes the disk list through `GET /api/sessions` rather than reloading the
+whole fleet. While the Fleet screen is visible, it polls each live runtime's
+stats no more often than every 30 seconds. That poll is single-flight, retains a
+card's last good stats if an update fails, and surfaces failures in the Fleet UI.
+
+For the activity preview, a card prefers the newest assistant text derived from
+its hydrated client transcript entries. Until those entries exist, the
+authoritative initial-load or resync fleet preview is the fallback. `ctx%` is
+never a browser estimate: it comes from authoritative session state or stats.
+Live card ordering remains deterministic by project path and then session start
+time, not mutable activity.
+
+A session drill-in hydrates through one `GET /api/runtimes/:key/hydrate` request.
+The server backs it with one `getDashboardSnapshot` RPC call and its matching
+barrier, rather than three independently timed state/message/background-agent
+calls. Replay and resync retain their ordering guarantees below.
+
 ## Live connection and recovery
 
 The top bar and persistent session header expose the live-stream state as an accessible text `output`, not color alone: **connecting**, **connected**, **retrying** (including its delay), **resyncing**, **disconnected**, or **auth failed**. The session-header indicator remains visible when the session details or composer controls are collapsed. This is the state of the dashboard's single SSE connection, not the state of an individual agent.
@@ -283,6 +311,22 @@ session view prioritizes read-and-steer (model/thinking switchers collapse into
 ⋯, tasks default collapsed), and the file table shows name + download only.
 Composer modes, abort, and needs-attention affordances are never reduced away
 — steering a running agent from a phone is the primary remote use case.
+
+## Mobile transport profiling
+
+The opt-in profiler runs locally on the dashboard host:
+
+```bash
+npm run --workspace @dreb/dashboard profile:mobile -- http://127.0.0.1:5343
+```
+
+Its output is aggregate and payload-free: HTTP response sizes/timings plus SSE
+sizes, event types, and burst summaries; it does not retain fleet or event
+contents. The default capture is 60 seconds. Profile a realistic workload of at
+least five live runtimes so both fleet and event behavior are representative.
+
+For browser acceptance, use Chromium's network throttling with 100 ms RTT and
+1.5 Mbps. This profile does not emulate HTTP packet loss.
 
 ## Architecture
 

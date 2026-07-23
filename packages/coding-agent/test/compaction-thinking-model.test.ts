@@ -31,193 +31,199 @@ import {
 const HAS_ANTIGRAVITY_AUTH = hasAuthForProvider("google-antigravity");
 const HAS_ANTHROPIC_AUTH = !!API_KEY;
 
-describe.skipIf(!HAS_ANTIGRAVITY_AUTH)("Compaction with thinking models (Antigravity)", () => {
-	let session: AgentSession;
-	let tempDir: string;
-	let apiKey: string;
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !HAS_ANTIGRAVITY_AUTH)(
+	"Compaction with thinking models (Antigravity)",
+	() => {
+		let session: AgentSession;
+		let tempDir: string;
+		let apiKey: string;
 
-	beforeAll(async () => {
-		const key = await resolveApiKey("google-antigravity");
-		if (!key) throw new Error("Failed to resolve google-antigravity API key");
-		apiKey = key;
-	});
-
-	beforeEach(() => {
-		tempDir = join(tmpdir(), `dreb-thinking-compaction-test-${Date.now()}`);
-		mkdirSync(tempDir, { recursive: true });
-	});
-
-	afterEach(async () => {
-		if (session) {
-			session.dispose();
-		}
-		if (tempDir && existsSync(tempDir)) {
-			rmSync(tempDir, { recursive: true });
-		}
-	});
-
-	function createSession(
-		modelId: "claude-opus-4-5-thinking" | "claude-sonnet-4-5",
-		thinkingLevel: ThinkingLevel = "high",
-	) {
-		const model = getModel("google-antigravity", modelId);
-		if (!model) {
-			throw new Error(`Model not found: google-antigravity/${modelId}`);
-		}
-
-		const agent = new Agent({
-			getApiKey: () => apiKey,
-			initialState: {
-				model,
-				systemPrompt: "You are a helpful assistant. Be concise.",
-				tools: codingTools,
-				thinkingLevel,
-			},
+		beforeAll(async () => {
+			const key = await resolveApiKey("google-antigravity");
+			if (!key) throw new Error("Failed to resolve google-antigravity API key");
+			apiKey = key;
 		});
 
-		const sessionManager = SessionManager.inMemory();
-		const settingsManager = SettingsManager.create(tempDir, tempDir);
-		// Use minimal keepRecentTokens so small test conversations have something to summarize
-		// settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 } });
-
-		const authStorage = getRealAuthStorage();
-		const modelRegistry = new ModelRegistry(authStorage);
-
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settingsManager,
-			cwd: tempDir,
-			modelRegistry,
-			resourceLoader: createTestResourceLoader(),
+		beforeEach(() => {
+			tempDir = join(tmpdir(), `dreb-thinking-compaction-test-${Date.now()}`);
+			mkdirSync(tempDir, { recursive: true });
 		});
 
-		session.subscribe(() => {});
+		afterEach(async () => {
+			if (session) {
+				session.dispose();
+			}
+			if (tempDir && existsSync(tempDir)) {
+				rmSync(tempDir, { recursive: true });
+			}
+		});
 
-		return session;
-	}
+		function createSession(
+			modelId: "claude-opus-4-5-thinking" | "claude-sonnet-4-5",
+			thinkingLevel: ThinkingLevel = "high",
+		) {
+			const model = getModel("google-antigravity", modelId);
+			if (!model) {
+				throw new Error(`Model not found: google-antigravity/${modelId}`);
+			}
 
-	it("should compact successfully with claude-opus-4-5-thinking and thinking level high", async () => {
-		createSession("claude-opus-4-5-thinking", "high");
+			const agent = new Agent({
+				getApiKey: () => apiKey,
+				initialState: {
+					model,
+					systemPrompt: "You are a helpful assistant. Be concise.",
+					tools: codingTools,
+					thinkingLevel,
+				},
+			});
 
-		// Send a simple prompt
-		await session.prompt("Write down the first 10 prime numbers.");
-		await session.agent.waitForIdle();
+			const sessionManager = SessionManager.inMemory();
+			const settingsManager = SettingsManager.create(tempDir, tempDir);
+			// Use minimal keepRecentTokens so small test conversations have something to summarize
+			// settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 } });
 
-		// Verify we got a response
-		const messages = session.messages;
-		expect(messages.length).toBeGreaterThan(0);
+			const authStorage = getRealAuthStorage();
+			const modelRegistry = new ModelRegistry(authStorage);
 
-		const assistantMessages = messages.filter((m) => m.role === "assistant");
-		expect(assistantMessages.length).toBeGreaterThan(0);
+			session = new AgentSession({
+				agent,
+				sessionManager,
+				settingsManager,
+				cwd: tempDir,
+				modelRegistry,
+				resourceLoader: createTestResourceLoader(),
+			});
 
-		// Now try to compact - this should not throw
-		const result = await session.compact();
+			session.subscribe(() => {});
 
-		expect(result.summary).toBeDefined();
-		expect(result.summary.length).toBeGreaterThan(0);
-		expect(result.tokensBefore).toBeGreaterThan(0);
+			return session;
+		}
 
-		// Verify session is still usable after compaction
-		const messagesAfterCompact = session.messages;
-		expect(messagesAfterCompact.length).toBeGreaterThan(0);
-		expect(messagesAfterCompact[0].role).toBe("compactionSummary");
-	}, 180000);
+		it("should compact successfully with claude-opus-4-5-thinking and thinking level high", async () => {
+			createSession("claude-opus-4-5-thinking", "high");
 
-	it("should compact successfully with claude-sonnet-4-5 (non-thinking) for comparison", async () => {
-		createSession("claude-sonnet-4-5", "off");
+			// Send a simple prompt
+			await session.prompt("Write down the first 10 prime numbers.");
+			await session.agent.waitForIdle();
 
-		await session.prompt("Write down the first 10 prime numbers.");
-		await session.agent.waitForIdle();
+			// Verify we got a response
+			const messages = session.messages;
+			expect(messages.length).toBeGreaterThan(0);
 
-		const messages = session.messages;
-		expect(messages.length).toBeGreaterThan(0);
+			const assistantMessages = messages.filter((m) => m.role === "assistant");
+			expect(assistantMessages.length).toBeGreaterThan(0);
 
-		const result = await session.compact();
+			// Now try to compact - this should not throw
+			const result = await session.compact();
 
-		expect(result.summary).toBeDefined();
-		expect(result.summary.length).toBeGreaterThan(0);
-	}, 180000);
-});
+			expect(result.summary).toBeDefined();
+			expect(result.summary.length).toBeGreaterThan(0);
+			expect(result.tokensBefore).toBeGreaterThan(0);
+
+			// Verify session is still usable after compaction
+			const messagesAfterCompact = session.messages;
+			expect(messagesAfterCompact.length).toBeGreaterThan(0);
+			expect(messagesAfterCompact[0].role).toBe("compactionSummary");
+		}, 180000);
+
+		it("should compact successfully with claude-sonnet-4-5 (non-thinking) for comparison", async () => {
+			createSession("claude-sonnet-4-5", "off");
+
+			await session.prompt("Write down the first 10 prime numbers.");
+			await session.agent.waitForIdle();
+
+			const messages = session.messages;
+			expect(messages.length).toBeGreaterThan(0);
+
+			const result = await session.compact();
+
+			expect(result.summary).toBeDefined();
+			expect(result.summary.length).toBeGreaterThan(0);
+		}, 180000);
+	},
+);
 
 // ============================================================================
 // Real Anthropic API tests (for comparison)
 // ============================================================================
 
-describe.skipIf(!HAS_ANTHROPIC_AUTH)("Compaction with thinking models (Anthropic)", () => {
-	let session: AgentSession;
-	let tempDir: string;
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !HAS_ANTHROPIC_AUTH)(
+	"Compaction with thinking models (Anthropic)",
+	() => {
+		let session: AgentSession;
+		let tempDir: string;
 
-	beforeEach(() => {
-		tempDir = join(tmpdir(), `dreb-thinking-compaction-anthropic-test-${Date.now()}`);
-		mkdirSync(tempDir, { recursive: true });
-	});
-
-	afterEach(async () => {
-		if (session) {
-			session.dispose();
-		}
-		if (tempDir && existsSync(tempDir)) {
-			rmSync(tempDir, { recursive: true });
-		}
-	});
-
-	function createSession(model: Model<any>, thinkingLevel: ThinkingLevel = "high") {
-		const agent = new Agent({
-			getApiKey: () => API_KEY,
-			initialState: {
-				model,
-				systemPrompt: "You are a helpful assistant. Be concise.",
-				tools: codingTools,
-				thinkingLevel,
-			},
+		beforeEach(() => {
+			tempDir = join(tmpdir(), `dreb-thinking-compaction-anthropic-test-${Date.now()}`);
+			mkdirSync(tempDir, { recursive: true });
 		});
 
-		const sessionManager = SessionManager.inMemory();
-		const settingsManager = SettingsManager.create(tempDir, tempDir);
-
-		const authStorage = getRealAuthStorage();
-		const modelRegistry = new ModelRegistry(authStorage);
-
-		session = new AgentSession({
-			agent,
-			sessionManager,
-			settingsManager,
-			cwd: tempDir,
-			modelRegistry,
-			resourceLoader: createTestResourceLoader(),
+		afterEach(async () => {
+			if (session) {
+				session.dispose();
+			}
+			if (tempDir && existsSync(tempDir)) {
+				rmSync(tempDir, { recursive: true });
+			}
 		});
 
-		session.subscribe(() => {});
+		function createSession(model: Model<any>, thinkingLevel: ThinkingLevel = "high") {
+			const agent = new Agent({
+				getApiKey: () => API_KEY,
+				initialState: {
+					model,
+					systemPrompt: "You are a helpful assistant. Be concise.",
+					tools: codingTools,
+					thinkingLevel,
+				},
+			});
 
-		return session;
-	}
+			const sessionManager = SessionManager.inMemory();
+			const settingsManager = SettingsManager.create(tempDir, tempDir);
 
-	it("should compact successfully with claude-sonnet-4-5 and thinking level high", async () => {
-		const model = findModel("anthropic", "sonnet")!;
-		createSession(model, "high");
+			const authStorage = getRealAuthStorage();
+			const modelRegistry = new ModelRegistry(authStorage);
 
-		// Send a simple prompt
-		await session.prompt("Write down the first 10 prime numbers.");
-		await session.agent.waitForIdle();
+			session = new AgentSession({
+				agent,
+				sessionManager,
+				settingsManager,
+				cwd: tempDir,
+				modelRegistry,
+				resourceLoader: createTestResourceLoader(),
+			});
 
-		// Verify we got a response
-		const messages = session.messages;
-		expect(messages.length).toBeGreaterThan(0);
+			session.subscribe(() => {});
 
-		const assistantMessages = messages.filter((m) => m.role === "assistant");
-		expect(assistantMessages.length).toBeGreaterThan(0);
+			return session;
+		}
 
-		// Now try to compact - this should not throw
-		const result = await session.compact();
+		it("should compact successfully with claude-sonnet-4-5 and thinking level high", async () => {
+			const model = findModel("anthropic", "sonnet")!;
+			createSession(model, "high");
 
-		expect(result.summary).toBeDefined();
-		expect(result.summary.length).toBeGreaterThan(0);
-		expect(result.tokensBefore).toBeGreaterThan(0);
+			// Send a simple prompt
+			await session.prompt("Write down the first 10 prime numbers.");
+			await session.agent.waitForIdle();
 
-		// Verify session is still usable after compaction
-		const messagesAfterCompact = session.messages;
-		expect(messagesAfterCompact.length).toBeGreaterThan(0);
-		expect(messagesAfterCompact[0].role).toBe("compactionSummary");
-	}, 180000);
-});
+			// Verify we got a response
+			const messages = session.messages;
+			expect(messages.length).toBeGreaterThan(0);
+
+			const assistantMessages = messages.filter((m) => m.role === "assistant");
+			expect(assistantMessages.length).toBeGreaterThan(0);
+
+			// Now try to compact - this should not throw
+			const result = await session.compact();
+
+			expect(result.summary).toBeDefined();
+			expect(result.summary.length).toBeGreaterThan(0);
+			expect(result.tokensBefore).toBeGreaterThan(0);
+
+			// Verify session is still usable after compaction
+			const messagesAfterCompact = session.messages;
+			expect(messagesAfterCompact.length).toBeGreaterThan(0);
+			expect(messagesAfterCompact[0].role).toBe("compactionSummary");
+		}, 180000);
+	},
+);

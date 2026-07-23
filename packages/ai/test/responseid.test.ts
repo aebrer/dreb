@@ -29,7 +29,7 @@ async function expectResponseId<TApi extends Api>(model: Model<TApi>, options: S
 }
 
 describe("responseId E2E Tests", () => {
-	describe.skipIf(!process.env.GEMINI_API_KEY)("Google Provider", () => {
+	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.GEMINI_API_KEY)("Google Provider", () => {
 		const llm = getModel("google", "gemini-2.5-flash");
 
 		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
@@ -45,55 +45,75 @@ describe("responseId E2E Tests", () => {
 		const vertexOptions = { project: vertexProject, location: vertexLocation } as const;
 		const llm = getModel("google-vertex", "gemini-3-flash-preview");
 
-		it.skipIf(!isVertexConfigured)("should expose responseId with ADC", { retry: 3, timeout: 30000 }, async () => {
-			await expectResponseId(llm, vertexOptions);
-		});
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !isVertexConfigured)(
+			"should expose responseId with ADC",
+			{ retry: 3, timeout: 30000 },
+			async () => {
+				await expectResponseId(llm, vertexOptions);
+			},
+		);
 
-		it.skipIf(!vertexApiKey)("should expose responseId with API key", { retry: 3, timeout: 30000 }, async () => {
-			await expectResponseId(llm, { apiKey: vertexApiKey! });
-		});
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !vertexApiKey)(
+			"should expose responseId with API key",
+			{ retry: 3, timeout: 30000 },
+			async () => {
+				await expectResponseId(llm, { apiKey: vertexApiKey! });
+			},
+		);
 	});
 
-	describe.skipIf(!process.env.OPENAI_API_KEY)("OpenAI Completions Provider", () => {
-		const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini");
-		void _compat;
-		const llm: Model<"openai-completions"> = {
-			...baseModel,
-			api: "openai-completions",
-		};
+	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
+		"OpenAI Completions Provider",
+		() => {
+			const { compat: _compat, ...baseModel } = getModel("openai", "gpt-4o-mini");
+			void _compat;
+			const llm: Model<"openai-completions"> = {
+				...baseModel,
+				api: "openai-completions",
+			};
 
-		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			await expectResponseId(llm);
-		});
-	});
+			it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
+				await expectResponseId(llm);
+			});
+		},
+	);
 
-	describe.skipIf(!process.env.OPENAI_API_KEY)("OpenAI Responses Provider", () => {
-		const llm = getModel("openai", "gpt-5-mini");
+	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
+		"OpenAI Responses Provider",
+		() => {
+			const llm = getModel("openai", "gpt-5-mini");
 
-		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			await expectResponseId(llm);
-		});
-	});
+			it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
+				await expectResponseId(llm);
+			});
+		},
+	);
 
-	describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic Provider", () => {
-		const llm = findModel("anthropic", "sonnet")!;
+	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
+		"Anthropic Provider",
+		() => {
+			const llm = findModel("anthropic", "sonnet")!;
 
-		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			await expectResponseId(llm);
-		});
-	});
+			it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
+				await expectResponseId(llm);
+			});
+		},
+	);
 
-	describe.skipIf(!hasAzureOpenAICredentials())("Azure OpenAI Responses Provider", () => {
-		const llm = getModel("azure-openai-responses", "gpt-4o-mini");
-		const azureDeploymentName = resolveAzureDeploymentName(llm.id);
-		const azureOptions = azureDeploymentName ? { azureDeploymentName } : {};
+	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !hasAzureOpenAICredentials())(
+		"Azure OpenAI Responses Provider",
+		() => {
+			const llm = getModel("azure-openai-responses", "gpt-4o-mini");
+			const azureDeploymentName = resolveAzureDeploymentName(llm.id);
+			const azureOptions = azureDeploymentName ? { azureDeploymentName } : {};
 
-		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			await expectResponseId(llm, azureOptions);
-		});
-	});
+			it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
+				await expectResponseId(llm, azureOptions);
+			});
+		},
+	);
 
-	describe.skipIf(!process.env.MISTRAL_API_KEY)("Mistral Provider", () => {
+	describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.MISTRAL_API_KEY)("Mistral Provider", () => {
 		const llm = getModel("mistral", "devstral-medium-latest");
 
 		it("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
@@ -102,12 +122,16 @@ describe("responseId E2E Tests", () => {
 	});
 
 	describe("GitHub Copilot Provider", () => {
-		it.skipIf(!githubCopilotToken)("OpenAI path should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
-			await expectResponseId(llm, { apiKey: githubCopilotToken });
-		});
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
+			"OpenAI path should expose responseId",
+			{ retry: 3, timeout: 30000 },
+			async () => {
+				const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
+				await expectResponseId(llm, { apiKey: githubCopilotToken });
+			},
+		);
 
-		it.skipIf(!githubCopilotToken)(
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
 			"Anthropic path should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
@@ -118,28 +142,44 @@ describe("responseId E2E Tests", () => {
 	});
 
 	describe("Google Gemini CLI Provider", () => {
-		it.skipIf(!geminiCliToken)("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			const llm = getModel("google-gemini-cli", "gemini-2.5-flash");
-			await expectResponseId(llm, { apiKey: geminiCliToken });
-		});
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
+			"should expose responseId",
+			{ retry: 3, timeout: 30000 },
+			async () => {
+				const llm = getModel("google-gemini-cli", "gemini-2.5-flash");
+				await expectResponseId(llm, { apiKey: geminiCliToken });
+			},
+		);
 	});
 
 	describe("Google Antigravity Provider", () => {
-		it.skipIf(!antigravityToken)("Gemini path should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			const llm = getModel("google-antigravity", "gemini-3.1-pro-high");
-			await expectResponseId(llm, { apiKey: antigravityToken });
-		});
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+			"Gemini path should expose responseId",
+			{ retry: 3, timeout: 30000 },
+			async () => {
+				const llm = getModel("google-antigravity", "gemini-3.1-pro-high");
+				await expectResponseId(llm, { apiKey: antigravityToken });
+			},
+		);
 
-		it.skipIf(!antigravityToken)("Claude path should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			const llm = getModel("google-antigravity", "claude-sonnet-4-6");
-			await expectResponseId(llm, { apiKey: antigravityToken });
-		});
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+			"Claude path should expose responseId",
+			{ retry: 3, timeout: 30000 },
+			async () => {
+				const llm = getModel("google-antigravity", "claude-sonnet-4-6");
+				await expectResponseId(llm, { apiKey: antigravityToken });
+			},
+		);
 	});
 
 	describe("OpenAI Codex Provider", () => {
-		it.skipIf(!openaiCodexToken)("should expose responseId", { retry: 3, timeout: 30000 }, async () => {
-			const llm = getModel("openai-codex", "gpt-5.4");
-			await expectResponseId(llm, { apiKey: openaiCodexToken });
-		});
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
+			"should expose responseId",
+			{ retry: 3, timeout: 30000 },
+			async () => {
+				const llm = getModel("openai-codex", "gpt-5.4");
+				await expectResponseId(llm, { apiKey: openaiCodexToken });
+			},
+		);
 	});
 });

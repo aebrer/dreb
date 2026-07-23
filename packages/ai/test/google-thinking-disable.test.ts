@@ -94,36 +94,42 @@ async function expectThinkingDisabledE2E<TApi extends Api>(model: Model<TApi>, e
 	}
 }
 
-describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic thinking disable E2E", () => {
-	it("disables thinking for budget-based reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("anthropic", "claude-sonnet-4-5"), {
-			requestOptions: { maxTokens: 320, temperature: 0 },
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
+	"Anthropic thinking disable E2E",
+	() => {
+		it("disables thinking for budget-based reasoning models", { retry: 2, timeout: 30000 }, async () => {
+			await expectThinkingDisabledE2E(getModel("anthropic", "claude-sonnet-4-5"), {
+				requestOptions: { maxTokens: 320, temperature: 0 },
+			});
 		});
-	});
 
-	it("disables thinking for adaptive reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(findModel("anthropic", "sonnet")!, {
-			requestOptions: { maxTokens: 320, temperature: 0 },
+		it("disables thinking for adaptive reasoning models", { retry: 2, timeout: 30000 }, async () => {
+			await expectThinkingDisabledE2E(findModel("anthropic", "sonnet")!, {
+				requestOptions: { maxTokens: 320, temperature: 0 },
+			});
 		});
-	});
-});
+	},
+);
 
-describe.skipIf(!process.env.GEMINI_API_KEY)("Google thinking disable E2E", () => {
-	it("disables thinking for Gemini 2.5", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("google", "gemini-2.5-flash"));
-	});
-
-	it("disables thinking for Gemini 3.x", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("google", "gemini-3-flash-preview"));
-	});
-
-	it("does not error when thinking is off for Gemini 3.1 Pro", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("google", "gemini-3.1-pro-preview"), {
-			requestOptions: { maxTokens: 512 },
-			minPongs: 20,
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.GEMINI_API_KEY)(
+	"Google thinking disable E2E",
+	() => {
+		it("disables thinking for Gemini 2.5", { retry: 2, timeout: 30000 }, async () => {
+			await expectThinkingDisabledE2E(getModel("google", "gemini-2.5-flash"));
 		});
-	});
-});
+
+		it("disables thinking for Gemini 3.x", { retry: 2, timeout: 30000 }, async () => {
+			await expectThinkingDisabledE2E(getModel("google", "gemini-3-flash-preview"));
+		});
+
+		it("does not error when thinking is off for Gemini 3.1 Pro", { retry: 2, timeout: 30000 }, async () => {
+			await expectThinkingDisabledE2E(getModel("google", "gemini-3.1-pro-preview"), {
+				requestOptions: { maxTokens: 512 },
+				minPongs: 20,
+			});
+		});
+	},
+);
 
 describe("Google Vertex thinking disable E2E", () => {
 	const vertexProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
@@ -135,49 +141,71 @@ describe("Google Vertex thinking disable E2E", () => {
 			? ({ project: vertexProject, location: vertexLocation } satisfies SimpleOptionsWithExtras)
 			: undefined;
 
-	it.skipIf(!vertexOptions)("disables thinking for Gemini 2.5", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("google-vertex", "gemini-2.5-flash"), {
-			requestOptions: vertexOptions,
-		});
-	});
+	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !vertexOptions)(
+		"disables thinking for Gemini 2.5",
+		{ retry: 2, timeout: 30000 },
+		async () => {
+			await expectThinkingDisabledE2E(getModel("google-vertex", "gemini-2.5-flash"), {
+				requestOptions: vertexOptions,
+			});
+		},
+	);
 
-	it.skipIf(!vertexOptions)("disables thinking for Gemini 3.x", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("google-vertex", "gemini-3-flash-preview"), {
-			requestOptions: vertexOptions,
-		});
-	});
+	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !vertexOptions)(
+		"disables thinking for Gemini 3.x",
+		{ retry: 2, timeout: 30000 },
+		async () => {
+			await expectThinkingDisabledE2E(getModel("google-vertex", "gemini-3-flash-preview"), {
+				requestOptions: vertexOptions,
+			});
+		},
+	);
 });
 
 describe("Google Gemini CLI thinking disable E2E", () => {
-	it.skipIf(!geminiCliToken)("disables thinking for Gemini 2.5", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("google-gemini-cli", "gemini-2.5-flash"), {
-			requestOptions: { apiKey: geminiCliToken! },
-			maxOutputTokens: 100,
-		});
-	});
+	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !geminiCliToken)(
+		"disables thinking for Gemini 2.5",
+		{ retry: 2, timeout: 30000 },
+		async () => {
+			await expectThinkingDisabledE2E(getModel("google-gemini-cli", "gemini-2.5-flash"), {
+				requestOptions: { apiKey: geminiCliToken! },
+				maxOutputTokens: 100,
+			});
+		},
+	);
 });
 
 describe("Google Antigravity thinking disable E2E", () => {
-	it.skipIf(!antigravityToken)("disables thinking for Gemini 3.x", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("google-antigravity", "gemini-3-flash"), {
-			requestOptions: { apiKey: antigravityToken! },
-			maxOutputTokens: 100,
-		});
-	});
+	it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !antigravityToken)(
+		"disables thinking for Gemini 3.x",
+		{ retry: 2, timeout: 30000 },
+		async () => {
+			await expectThinkingDisabledE2E(getModel("google-antigravity", "gemini-3-flash"), {
+				requestOptions: { apiKey: antigravityToken! },
+				maxOutputTokens: 100,
+			});
+		},
+	);
 });
 
-describe.skipIf(!process.env.OPENAI_API_KEY)("OpenAI thinking disable E2E", () => {
-	it("disables thinking for Responses reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("openai", "gpt-5.4-mini"), {
-			requestOptions: { temperature: undefined },
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
+	"OpenAI thinking disable E2E",
+	() => {
+		it("disables thinking for Responses reasoning models", { retry: 2, timeout: 30000 }, async () => {
+			await expectThinkingDisabledE2E(getModel("openai", "gpt-5.4-mini"), {
+				requestOptions: { temperature: undefined },
+			});
 		});
-	});
-});
+	},
+);
 
-describe.skipIf(!process.env.OPENROUTER_API_KEY)("OpenRouter thinking disable E2E", () => {
-	it("disables thinking for Qwen 3.5 reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		await expectThinkingDisabledE2E(getModel("openrouter", "qwen/qwen3.5-plus-02-15"), {
-			maxOutputTokens: 100,
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENROUTER_API_KEY)(
+	"OpenRouter thinking disable E2E",
+	() => {
+		it("disables thinking for Qwen 3.5 reasoning models", { retry: 2, timeout: 30000 }, async () => {
+			await expectThinkingDisabledE2E(getModel("openrouter", "qwen/qwen3.5-plus-02-15"), {
+				maxOutputTokens: 100,
+			});
 		});
-	});
-});
+	},
+);

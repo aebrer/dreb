@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 import { getModels } from "../src/models.js";
 import { complete } from "../src/stream.js";
 import type { Context } from "../src/types.js";
-import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { shouldRunBedrockExtensiveTests } from "./bedrock-utils.js";
 
 describe("Amazon Bedrock Models", () => {
 	const models = getModels("amazon-bedrock");
@@ -30,7 +30,7 @@ describe("Amazon Bedrock Models", () => {
 		console.log(`Found ${models.length} Bedrock models`);
 	});
 
-	if (hasBedrockCredentials() && process.env.BEDROCK_EXTENSIVE_MODEL_TEST) {
+	if (shouldRunBedrockExtensiveTests()) {
 		for (const model of models) {
 			it(`should make a simple request with ${model.id}`, { timeout: 10_000 }, async () => {
 				const context: Context = {

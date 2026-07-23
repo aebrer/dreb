@@ -115,13 +115,16 @@ describe("Anthropic thinking disable payload", () => {
 	});
 });
 
-describe.skipIf(!process.env.ANTHROPIC_API_KEY)("Anthropic thinking disable E2E", () => {
-	it("disables thinking for Claude reasoning models", { retry: 2, timeout: 30000 }, async () => {
-		const result = await runWithoutReasoning(findModel("anthropic", "sonnet")! as Model<"anthropic-messages">);
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
+	"Anthropic thinking disable E2E",
+	() => {
+		it("disables thinking for Claude reasoning models", { retry: 2, timeout: 30000 }, async () => {
+			const result = await runWithoutReasoning(findModel("anthropic", "sonnet")! as Model<"anthropic-messages">);
 
-		expect(result.thinkingEventCount).toBe(0);
-		expect(result.thinkingCharCount).toBe(0);
-		expect(result.contentTypes).not.toContain("thinking");
-		expect(countPongs(result.text)).toBeGreaterThanOrEqual(35);
-	});
-});
+			expect(result.thinkingEventCount).toBe(0);
+			expect(result.thinkingCharCount).toBe(0);
+			expect(result.contentTypes).not.toContain("thinking");
+			expect(countPongs(result.text)).toBeGreaterThanOrEqual(35);
+		});
+	},
+);

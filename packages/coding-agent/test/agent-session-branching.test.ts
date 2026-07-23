@@ -21,7 +21,7 @@ import { SettingsManager } from "../src/core/settings-manager.js";
 import { codingTools } from "../src/core/tools/index.js";
 import { API_KEY, createTestResourceLoader } from "./utilities.js";
 
-describe.skipIf(!API_KEY)("AgentSession forking", () => {
+describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !API_KEY)("AgentSession forking", () => {
 	let session: AgentSession;
 	let tempDir: string;
 	let sessionManager: SessionManager;
