@@ -468,20 +468,30 @@ describe("skills", () => {
 			expect(builtinNames).toContain("mach6-publish");
 		});
 
-		it("mach6-review should require explicit user invocation", () => {
+		it("mach6-review should remain user-controlled while supporting direct agent invocation", () => {
 			const review = getBuiltInSkill("mach6-review");
-			expect(review.disableModelInvocation).toBe(true);
+			expect(review.disableModelInvocation).toBe(false);
 			expect(review.userInvocable).toBe(true);
+
+			const body = readBuiltInSkill("mach6-review");
+			expect(body).toContain("either through its slash command or a direct instruction to an agent to invoke it");
+			expect(body).toContain("An agent may invoke it in response to that request");
+			expect(body).toContain("never invoke it autonomously or start a review-fix-review loop");
 		});
 
 		it("mach6-review should enforce durable work and scope-aware assessment", () => {
 			const body = readBuiltInSkill("mach6-review");
 			const prepare = body.slice(body.indexOf("## Step 3"), body.indexOf("## Step 4"));
+			const preCheckout = prepare.slice(0, prepare.indexOf("Check out and update the PR branch"));
 			const reviewHandoff = body.slice(body.indexOf("## Step 4"), body.indexOf("## Step 5"));
 			const assessorHandoff = body.slice(body.indexOf("## Step 6"), body.indexOf("## Step 7"));
 
 			expect(body).toContain("User-controlled checkpoint");
-			expect(prepare).toContain("Before switching branches, run `git status --porcelain`");
+			expect(preCheckout).toContain("Before switching branches, run `git status --porcelain`");
+			expect(preCheckout).toContain("If it returns anything, stop");
+			expect(preCheckout).toContain("use `suggest_next` to offer `/skill:mach6-push`");
+			expect(preCheckout).not.toContain("gh pr checkout <pr-number>");
+			expect(prepare.indexOf("gh pr checkout <pr-number>")).toBeGreaterThan(preCheckout.length);
 			expect(prepare.match(/^git status --porcelain$/gm)).toHaveLength(1);
 			expect(prepare).toContain('LOCAL_HEAD="$(git rev-parse HEAD)"');
 			expect(prepare).toContain("PR_HEAD=\"$(gh pr view <pr-number> --json headRefOid --jq '.headRefOid')\"");
@@ -508,8 +518,18 @@ describe("skills", () => {
 			);
 			expect(assessorHandoff).toContain("Factual gate");
 			expect(assessorHandoff).toContain("Scope gate");
+			expect(assessorHandoff).toContain(
+				"not genuine merely because it is technically correct or factually observable",
+			);
+			expect(assessorHandoff).toContain("only when both gates pass");
+			expect(assessorHandoff).toContain("Passes the factual gate but fails the scope gate");
+			expect(assessorHandoff).toContain(
+				"Regressions and correctness, security, safety, or integrity failures introduced by the PR remain eligible",
+			);
 			expect(assessorHandoff).toContain("prior automated assessments are not scope updates");
-			expect(assessorHandoff).toContain("action plan containing only genuine issues");
+			expect(assessorHandoff).toContain(
+				"action plan containing only genuine issues** necessary for the scoped PR to merge",
+			);
 		});
 
 		it("mach6-implement should keep reasoning with the parent and stop before formal review", () => {

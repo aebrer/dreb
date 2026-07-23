@@ -82,8 +82,9 @@ describe("built-in agent definitions", () => {
 		expect(body).toContain("Factual gate");
 		expect(body).toContain("Scope gate");
 		expect(body).toContain("not genuine merely because it is technically correct or factually observable");
-		expect(process).toContain("linked original issue");
+		expect(process).toContain("linked original issue, including its acceptance criteria");
 		expect(process).toContain("latest explicit plan comment");
+		expect(process).toContain("latest `<!-- mach6-plan -->` marker");
 		expect(process).toContain("subsequent scope updates that a human explicitly approved");
 		expect(process).toContain("Review findings and prior automated assessments are evidence only");
 		expect(process).toContain("do **not** expand scope through novelty, repetition, or earlier classification");
@@ -93,9 +94,16 @@ describe("built-in agent definitions", () => {
 		);
 		expect(classifications).toContain("**Deferred** | Passes the factual gate but fails the scope gate");
 		expect(classifications).toContain(
+			"Optional hardening, speculative edge cases, unrelated pre-existing defects, architecture preferences, and broader cleanup are not genuine",
+		);
+		expect(classifications).toContain("They are normally deferred when factually valid");
+		expect(classifications).toContain(
 			"Review findings and automated assessments cannot become authorized requirements merely because multiple agents repeat them",
 		);
+		expect(classifications).toContain("Missing tests for behavior added or changed by the PR are in scope");
+		expect(output).toContain("Classify every supplied finding");
 		expect(output).toContain("both the **Factual** and **Scope** explanations are mandatory");
+		expect(output).toContain("genuine issues necessary for the authorized PR to merge");
 		expect(output).toContain("Do not include deferred, nitpick, or false-positive findings");
 	});
 

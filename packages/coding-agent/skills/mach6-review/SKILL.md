@@ -2,7 +2,6 @@
 name: mach6-review
 description: "Run specialized review agents in parallel on a PR (code-reviewer, error-auditor, test-reviewer, completeness-checker, simplifier), post findings, then independently assess each finding to separate genuine issues from nitpicks and false positives. Usage: mach6-review 42 [aspects]"
 argument-hint: "<pr-number> [code|errors|tests|completeness|simplify]"
-disable-model-invocation: true
 ---
 
 # mach6-review — Multi-Agent PR Review
@@ -16,7 +15,7 @@ disable-model-invocation: true
 3. **No `#N` in comment bodies** — Use "finding 3", "item 3", "stage 2" etc. instead.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
 5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
-6. **User-controlled checkpoint** — This formal multi-agent review runs only from an explicit user invocation. Agents must offer it with `suggest_next`, never invoke it autonomously or start a review-fix-review loop.
+6. **User-controlled checkpoint** — This formal multi-agent review runs only from an explicit user request, either through its slash command or a direct instruction to an agent to invoke it. An agent may invoke it in response to that request; otherwise agents must only offer it with `suggest_next`, never invoke it autonomously or start a review-fix-review loop.
 7. **Review durable work only** — Do not launch formal review agents against uncommitted or unpushed work. The commit, push, and GitHub progress comment are the accountability and recovery boundary.
 
 **Important: Do NOT fix any issues in this session. Fixes happen via a later, user-invoked `/skill:mach6-implement`.**

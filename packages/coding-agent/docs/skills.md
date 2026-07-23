@@ -286,7 +286,7 @@ dreb ships with **mach6**, a development workflow that orchestrates the full iss
 | `mach6-implement` | Implement plans, fix review findings, or fix CI failures |
 | `mach6-publish` | Pre-merge checks, docs update, merge, tag, release |
 
-Built-in skills are always available and can be overridden by placing a skill with the same name in any [user or project location](#locations). `mach6-review` is intentionally excluded from model invocation: an agent can suggest its slash command, but only the user starts a formal review after implementation has been committed and pushed.
+Built-in skills are always available and can be overridden by placing a skill with the same name in any [user or project location](#locations). `mach6-review` is model-invocable when the user directly asks an agent to run it, as well as user-invocable through its slash command. Agents must never start formal review autonomously; implementation must first be committed and pushed.
 
 See [docs/mach6.md](mach6.md) for full documentation.
 

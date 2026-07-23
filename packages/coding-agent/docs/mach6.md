@@ -69,7 +69,7 @@ Commit changes, push to remote, and post a progress comment.
 
 ### mach6-review
 
-Run specialized review agents in parallel, post findings, then independently assess each finding. Formal review is an explicit user-controlled checkpoint: `mach6-review` cannot be invoked by the model, and it refuses to run until the worktree is clean and local `HEAD` matches the pushed PR head.
+Run specialized review agents in parallel, post findings, then independently assess each finding. Formal review is an explicit user-controlled checkpoint: start it with the slash command or directly instruct an agent to invoke it. Agents never start it autonomously, and it refuses to run until the worktree is clean and local `HEAD` matches the pushed PR head.
 
 ```
 /skill:mach6-review 53                     # Full review (all agents)
@@ -102,7 +102,7 @@ In both modes, the parent model owns implementation reasoning: design, decomposi
 
 **Fix mode** (with finding numbers or `ci`): Reads review and assessment comments via HTML markers, verifies each authorized finding, decides the fix, and then implements directly or delegates mechanically settled execution.
 
-After direct verification, `mach6-implement` stops at the accountability checkpoint and suggests `/skill:mach6-push`. Committing, pushing, and posting progress protects work from loss or repeated unsupervised rewriting. Only the user can subsequently start formal `mach6-review`. Focused one-off reviewer/checker subagents remain available for narrow correctness questions or second opinions; they are not a formal mach6 review cycle.
+After direct verification, `mach6-implement` stops at the accountability checkpoint and suggests `/skill:mach6-push`. Committing, pushing, and posting progress protects work from loss or repeated unsupervised rewriting. The user can subsequently start formal `mach6-review` with its slash command or by directly instructing an agent to invoke it; agents never start review autonomously. Focused one-off reviewer/checker subagents remain available for narrow correctness questions or second opinions; they are not a formal mach6 review cycle.
 
 ### mach6-publish
 

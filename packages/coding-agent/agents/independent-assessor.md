@@ -61,7 +61,7 @@ Classify every supplied finding. For every genuine classification, both the **Fa
 
 ### Action Plan
 
-<Numbered list of genuine issues to fix, ordered by priority — critical first. Do not include deferred, nitpick, or false-positive findings.>
+<Numbered list of genuine issues necessary for the authorized PR to merge, ordered by priority — critical first. Do not include deferred, nitpick, or false-positive findings.>
 
 If no genuine issues are found, say "No action needed before merge — all findings are nitpicks, false positives, or deferred." with a brief summary. Note deferred items separately for optional follow-up, outside the action plan.
 
