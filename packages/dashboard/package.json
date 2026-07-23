@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/dashboard",
-	"version": "2.43.3",
+	"version": "2.44.0",
 	"description": "Web dashboard for dreb — fleet overview, chat parity, subagent observability",
 	"license": "MIT",
 	"type": "module",
@@ -28,6 +28,7 @@
 		"clean": "shx rm -rf dist",
 		"build": "tsgo -p tsconfig.build.json && vite build && shx chmod +x dist/index.js",
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"profile:mobile": "node scripts/profile-mobile.mjs",
 		"test": "vitest --run",
 		"prepublishOnly": "npm run clean && npm run build"
 	},

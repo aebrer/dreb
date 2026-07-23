@@ -28,6 +28,7 @@ interface TestServerOptions {
 	logger?: (line: string) => void;
 	eventHub?: EventHub;
 	heartbeatIntervalMs?: number;
+	fleetSnapshotDebounceMs?: number;
 }
 
 async function createTempProject(): Promise<string> {
@@ -95,6 +96,7 @@ async function startServer(options: TestServerOptions = {}) {
 			clients.push(client);
 			return client;
 		},
+		fleetSnapshotDebounceMs: options.fleetSnapshotDebounceMs,
 	});
 	const app = createDashboardServer({
 		auth: options.auth ?? new DashboardAuth(),
@@ -291,6 +293,30 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(body.diskSessions).toEqual(disk);
 	});
 
+	it("logs payload-free structured diagnostics for GET /api/fleet", async () => {
+		const dir = await createTempProject();
+		const secret = "private-cwd-session-prompt-content";
+		const disk = [{ path: `/sessions/${secret}.jsonl`, id: secret, cwd: dir, name: secret }];
+		const logs: string[] = [];
+		const { base } = await startServer({ listAllSessions: async () => disk, logger: (line) => logs.push(line) });
+
+		const res = await fetch(`${base}/api/fleet`);
+		const body = await res.json();
+		const diagnosticLine = logs.find((line) => line.startsWith("fleet "));
+		expect(diagnosticLine).toBeDefined();
+		const diagnostic = JSON.parse(diagnosticLine!.slice("fleet ".length)) as Record<string, unknown>;
+
+		expect(diagnostic).toEqual({
+			elapsedMs: expect.any(Number),
+			encodedBytes: Buffer.byteLength(JSON.stringify(body)),
+			runtimeCount: 0,
+			diskSessionCount: 1,
+		});
+		expect(diagnostic.elapsedMs).toBeGreaterThanOrEqual(0);
+		expect(JSON.stringify(diagnostic)).not.toContain(secret);
+		expect(Object.keys(diagnostic).sort()).toEqual(["diskSessionCount", "elapsedMs", "encodedBytes", "runtimeCount"]);
+	});
+
 	it("GET /api/resync captures an active snapshot cursor without broadcasting a barrier", async () => {
 		const dir = await createTempProject();
 		const hub = new EventHub();
@@ -319,6 +345,43 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(frames[0]).toContain('"type":"before_snapshot"');
 		clients[0].emit({ type: "after_snapshot" });
 		expect(frames[1]).toContain('"seq":2');
+	});
+
+	it("GET /api/runtimes/:key/hydrate returns one atomic snapshot and consumes its barrier", async () => {
+		const dir = await createTempProject();
+		const hub = new EventHub();
+		const { base, pool, clients } = await startServer({ eventHub: hub });
+		const runtime = await pool.create(dir);
+		const client = clients[0];
+		const seededAgentCalls = vi.mocked(client.listBackgroundAgents).mock.calls.length;
+
+		const res = await fetch(`${base}/api/runtimes/${runtime.key}/hydrate`);
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toMatchObject({
+			key: runtime.key,
+			state: { sessionId: "s1" },
+			messages: [],
+			backgroundAgents: [],
+			barrierSeq: 0,
+		});
+		expect(client.getDashboardSnapshot).toHaveBeenCalledOnce();
+		expect(client.getMessages).not.toHaveBeenCalled();
+		expect(client.listBackgroundAgents).toHaveBeenCalledTimes(seededAgentCalls);
+		expect(client.getState).not.toHaveBeenCalled();
+	});
+
+	it("GET /api/runtimes/:key/hydrate reports missing runtimes and snapshot failures loudly", async () => {
+		const dir = await createTempProject();
+		const { base, pool, clients } = await startServer();
+		const missing = await fetch(`${base}/api/runtimes/nope/hydrate`);
+		expect(missing.status).toBe(404);
+		await expect(missing.json()).resolves.toMatchObject({ error: "No runtime nope" });
+
+		const runtime = await pool.create(dir);
+		vi.mocked(clients[0].getDashboardSnapshot).mockRejectedValueOnce(new Error("snapshot IPC failed"));
+		const failed = await fetch(`${base}/api/runtimes/${runtime.key}/hydrate`);
+		expect(failed.status).toBe(502);
+		await expect(failed.json()).resolves.toMatchObject({ error: "snapshot IPC failed" });
 	});
 
 	it("GET /api/resync without a runtime captures the current cursor without an SSE frame", async () => {
@@ -359,6 +422,26 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(res.status).toBe(200);
 		expect(body.diskSessions).toEqual([liveSession]);
 		expect(body.diskSessions).not.toContainEqual(missingSession);
+	});
+
+	it("GET /api/sessions returns only existing disk sessions without describing runtimes", async () => {
+		const liveCwd = await createTempProject();
+		const missingCwd = join(tmpdir(), `dreb-dash-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const liveSession = { path: "/s/live.jsonl", id: "live", cwd: liveCwd };
+		const missingSession = { path: "/s/missing.jsonl", id: "missing", cwd: missingCwd };
+		const listAllSessions = vi.fn(async () => [liveSession, missingSession]);
+		const { base, clients, pool } = await startServer({ listAllSessions });
+		await pool.create(liveCwd);
+		const describe = vi.spyOn(pool, "describe");
+
+		const res = await fetch(`${base}/api/sessions`);
+		const body = (await res.json()) as { sessions: Array<{ id: string; cwd: string }> };
+
+		expect(res.status).toBe(200);
+		expect(body).toEqual({ sessions: [liveSession] });
+		expect(listAllSessions).toHaveBeenCalledTimes(1);
+		expect(describe).not.toHaveBeenCalled();
+		expect(clients[0].getState).not.toHaveBeenCalled();
 	});
 
 	it("POST /api/runtimes validates cwd and creates a runtime", async () => {
@@ -658,6 +741,7 @@ describe("dashboard server — fleet and runtimes", () => {
 		});
 		const { key } = (await create.json()) as { key: string };
 		const paths = [
+			`/api/runtimes/${key}/hydrate`,
 			`/api/runtimes/${key}/performance`,
 			`/api/runtimes/${key}/resources`,
 			`/api/runtimes/${key}/commands`,
@@ -715,6 +799,52 @@ describe("dashboard server — SSE", () => {
 		await reader.cancel();
 		expect(buffer).toContain("agent_start");
 		expect(buffer).toMatch(/id: \d+/);
+	});
+
+	it("publishes fleet snapshots as global SSE events", async () => {
+		const dir = await createTempProject();
+		const { base, pool } = await startServer({ fleetSnapshotDebounceMs: 1 });
+		const connection = await openRawSse(base);
+		try {
+			const runtime = await pool.create(dir);
+			await waitUntil(() => connection.body().includes('"type":"fleet_snapshot"'));
+			const event = parseSseEnvelopes(connection.body()).find(({ event }) => event.type === "fleet_snapshot");
+
+			expect(event).toEqual(
+				expect.objectContaining({
+					key: "",
+					event: expect.objectContaining({
+						type: "fleet_snapshot",
+						runtimes: [expect.objectContaining({ key: runtime.key })],
+					}),
+				}),
+			);
+		} finally {
+			connection.destroy();
+		}
+	});
+
+	it("excludes stopped runtimes from subsequent fleet snapshots", async () => {
+		const dir = await createTempProject();
+		const { base, pool } = await startServer({ fleetSnapshotDebounceMs: 1 });
+		const connection = await openRawSse(base);
+		try {
+			const runtime = await pool.create(dir);
+			await waitUntil(() => connection.body().includes('"type":"fleet_snapshot"'));
+			await pool.stop(runtime.key);
+			await waitUntil(
+				() =>
+					parseSseEnvelopes(connection.body()).filter(({ event }) => event.type === "fleet_snapshot").length >= 2,
+			);
+			const snapshots = parseSseEnvelopes(connection.body()).filter(({ event }) => event.type === "fleet_snapshot");
+			const latest = snapshots.at(-1)!;
+			const runtimes = latest.event.runtimes as Array<{ key: string }>;
+
+			expect(latest.key).toBe("");
+			expect(runtimes).not.toContainEqual(expect.objectContaining({ key: runtime.key }));
+		} finally {
+			connection.destroy();
+		}
 	});
 
 	it("sends unnumbered connection metadata and accepts only bounded known diagnostics", async () => {
@@ -1294,9 +1424,17 @@ describe("dashboard server — lifecycle and disk sessions", () => {
 		expect(deleteSession).not.toHaveBeenCalled();
 	});
 
-	it("DELETE /api/sessions forwards valid paths to deleteSession", async () => {
+	it("DELETE /api/sessions forwards valid paths and notifies other clients", async () => {
 		const deleteSession = vi.fn(async () => ({ method: "trash", path: "/sessions/one.jsonl" }));
-		const { base } = await startServer({ deleteSession });
+		const hub = new EventHub();
+		const frames: string[] = [];
+		hub.attach({
+			write: (frame) => {
+				frames.push(frame);
+				return true;
+			},
+		});
+		const { base } = await startServer({ deleteSession, eventHub: hub });
 
 		const res = await fetch(`${base}/api/sessions`, {
 			method: "DELETE",
@@ -1307,6 +1445,8 @@ describe("dashboard server — lifecycle and disk sessions", () => {
 		expect(res.status).toBe(200);
 		await expect(res.json()).resolves.toEqual({ method: "trash", path: "/sessions/one.jsonl" });
 		expect(deleteSession).toHaveBeenCalledWith("/sessions/one.jsonl");
+		expect(frames).toHaveLength(1);
+		expect(frames[0]).toContain('"key":"","event":{"type":"disk_sessions_changed"}');
 	});
 });
 

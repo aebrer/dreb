@@ -77,6 +77,8 @@ function saveAuthStorage(storage: AuthStorage): void {
  * For google-gemini-cli and google-antigravity, returns JSON-encoded { token, projectId }
  */
 export async function resolveApiKey(provider: string): Promise<string | undefined> {
+	if (process.env.DREB_SKIP_LIVE_API === "1") return undefined;
+
 	const storage = loadAuthStorage();
 	const entry = storage[provider];
 

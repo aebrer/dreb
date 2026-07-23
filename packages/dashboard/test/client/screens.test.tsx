@@ -15,8 +15,27 @@ vi.mock("../../src/client/api.js", () => ({
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
+		sessions: vi.fn(async () => ({ sessions: [] })),
 		resync: vi.fn(async () => ({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 })),
 		connectionDiagnostic: vi.fn(async () => ({ ok: true })),
+		hydrate: vi.fn(async (key: string) => ({
+			key,
+			state: {
+				sessionId: key,
+				tasks: [],
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			messages: [],
+			backgroundAgents: [],
+			barrierSeq: 0,
+		})),
 		messages: vi.fn(async () => ({ messages: [] })),
 		backgroundAgents: vi.fn(async () => ({ agents: [] })),
 		subagentMessages: vi.fn(async () => ({
@@ -126,6 +145,7 @@ vi.mock("../../src/client/api.js", () => ({
 		setThinking: vi.fn(async () => ({})),
 		saveSettings: vi.fn(async (settings) => settings),
 		deleteSession: vi.fn(async () => ({ ok: true })),
+		stopRuntime: vi.fn(async () => ({ ok: true })),
 		createRuntime: vi.fn(async (cwd: string) => ({
 			key: "new-key",
 			cwd,
@@ -178,7 +198,7 @@ import {
 	type TranscriptEntry,
 } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
-import { MAX_TOTAL_IMAGE_BYTES } from "../../src/shared/protocol.js";
+import { MAX_TOTAL_IMAGE_BYTES, type RuntimeInfoDto } from "../../src/shared/protocol.js";
 
 const disposers: Array<() => void> = [];
 
@@ -230,6 +250,25 @@ afterEach(() => {
 	vi.mocked(connectEvents).mockImplementation(() => () => {});
 	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
 	vi.mocked(api.fleet).mockResolvedValue({ runtimes: [], diskSessions: [] });
+	vi.mocked(api.sessions).mockResolvedValue({ sessions: [] });
+	vi.mocked(api.hydrate).mockImplementation(async (key: string) => ({
+		key,
+		state: {
+			sessionId: key,
+			tasks: [],
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "all",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		},
+		messages: [],
+		backgroundAgents: [],
+		barrierSeq: 0,
+	}));
 	vi.mocked(api.messages).mockResolvedValue({ messages: [] });
 	vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
 	vi.mocked(api.runtime).mockImplementation(async (key: string) => ({
@@ -267,6 +306,7 @@ afterEach(() => {
 	vi.mocked(api.settings).mockResolvedValue({ defaultProvider: "anthropic", defaultModel: "m1" });
 	vi.mocked(api.saveSettings).mockImplementation(async (settings) => settings);
 	vi.mocked(api.deleteSession).mockResolvedValue({ ok: true });
+	vi.mocked(api.stopRuntime).mockResolvedValue({ ok: true });
 	vi.mocked(api.createRuntime).mockImplementation(async (cwd: string) => ({
 		key: "new-key",
 		cwd,
@@ -368,6 +408,29 @@ function mountDisposable(element: () => any): { container: HTMLElement; dispose:
 function makeStore() {
 	// createAppStore touches window.location.hash — jsdom provides it.
 	return createAppStore();
+}
+
+function runtimeInfo(key: string, cwd = "/home/test/project"): RuntimeInfoDto {
+	return {
+		key,
+		cwd,
+		state: {
+			sessionId: key,
+			tasks: [],
+			thinkingLevel: "off",
+			isStreaming: false,
+			isCompacting: false,
+			steeringMode: "all",
+			followUpMode: "all",
+			autoCompactionEnabled: true,
+			messageCount: 0,
+			pendingMessageCount: 0,
+		},
+		backgroundAgents: [],
+		needsAttention: false,
+		createdAt: new Date(0).toISOString(),
+		lastActivity: new Date(0).toISOString(),
+	};
 }
 
 function stubMobile(matches = true) {
@@ -1085,12 +1148,10 @@ describe("screen smoke tests", () => {
 
 	it("session hydration aborts on unmount without surfacing an error", async () => {
 		let capturedSignal: AbortSignal | undefined;
-		vi.mocked(api.messages).mockImplementation((_key: string, signal?: AbortSignal) => {
+		vi.mocked(api.hydrate).mockImplementation((_key: string, signal?: AbortSignal) => {
 			capturedSignal = signal;
 			return rejectOnAbort(signal);
 		});
-		vi.mocked(api.backgroundAgents).mockImplementation((_key: string, signal?: AbortSignal) => rejectOnAbort(signal));
-		vi.mocked(api.runtime).mockImplementation((_key: string, signal?: AbortSignal) => rejectOnAbort(signal));
 		const store = makeStore();
 		const { container, dispose } = mountDisposable(() => <SessionScreen store={store} sessionKey="abort-session" />);
 
@@ -1122,7 +1183,7 @@ describe("screen smoke tests", () => {
 	});
 
 	it("genuine session hydration failures still surface as action errors", async () => {
-		vi.mocked(api.messages).mockRejectedValueOnce(new Error("hydrate exploded"));
+		vi.mocked(api.hydrate).mockRejectedValueOnce(new Error("hydrate exploded"));
 		const store = makeStore();
 		const el = mount(() => <SessionScreen store={store} sessionKey="bad-hydrate" />);
 
@@ -1140,6 +1201,56 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("never overwritten silently");
 		expect(el.textContent).toContain("readme.md");
 		expect(el.textContent).toContain("new session here");
+	});
+
+	it("files creates a new session in the selected directory without refetching the fleet", async () => {
+		vi.mocked(api.listFiles).mockResolvedValue({
+			path: "/workspace/selected",
+			entries: [],
+			contextTrust: { canonicalTarget: "/workspace/selected", state: "untrusted" },
+		});
+		const runtime: Awaited<ReturnType<typeof api.createRuntime>> = {
+			key: "created-here",
+			cwd: "/workspace/selected",
+			state: {
+				sessionId: "created-here",
+				tasks: [],
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			backgroundAgents: [],
+			needsAttention: false,
+			createdAt: new Date().toISOString(),
+			lastActivity: new Date().toISOString(),
+		};
+		vi.mocked(api.createRuntime).mockResolvedValueOnce(runtime);
+		const store = makeStore() as any;
+		const upsertRuntime = vi.fn();
+		const refreshDiskSessions = vi.fn(async () => {});
+		const navigate = vi.fn();
+		const el = mount(() => (
+			<FilesScreen
+				store={{ ...store, upsertRuntime, refreshDiskSessions, navigate }}
+				initialPath="/workspace/selected"
+			/>
+		));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		vi.mocked(api.fleet).mockClear();
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("new session here"))!.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.createRuntime).toHaveBeenCalledWith("/workspace/selected");
+		expect(upsertRuntime).toHaveBeenCalledWith(runtime);
+		expect(refreshDiskSessions).toHaveBeenCalledOnce();
+		expect(navigate).toHaveBeenCalledWith({ screen: "session", key: "created-here" });
+		expect(api.fleet).not.toHaveBeenCalled();
 	});
 
 	it("files trusts an untrusted folder and updates its scope immediately", async () => {
@@ -2817,13 +2928,81 @@ describe("dashboard client regressions", () => {
 		expect(el.textContent).toContain("live fleet name");
 	});
 
+	it("fleet stop stays absent when its runtime_removed SSE echo arrives", async () => {
+		const runtime = runtimeInfo("stop-from-fleet");
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		let handlers: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((next) => {
+			handlers = next;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		handlers?.onEnvelope({ seq: 1, key: runtime.key, event: { type: "agent_start" } });
+		expect(store.sessions[runtime.key]).toBeDefined();
+		const el = mount(() => <FleetScreen store={store} />);
+		vi.mocked(api.stopRuntime).mockClear();
+		vi.mocked(api.sessions).mockClear();
+		vi.mocked(api.fleet).mockClear();
+
+		(el.querySelector(".session-card .btn-danger") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.stopRuntime).toHaveBeenCalledOnce();
+		expect(api.stopRuntime).toHaveBeenCalledWith(runtime.key);
+		expect(store.fleet().runtimes).toEqual([]);
+		expect(store.sessions[runtime.key]).toBeUndefined();
+		expect(api.sessions).toHaveBeenCalledOnce();
+		expect(api.fleet).not.toHaveBeenCalled();
+
+		// The direct response wins first; its later SSE echo must take the
+		// idempotent branch rather than scanning inventory again.
+		handlers?.onEnvelope({ seq: 2, key: runtime.key, event: { type: "runtime_removed" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(store.fleet().runtimes).toEqual([]);
+		expect(store.sessions[runtime.key]).toBeUndefined();
+		expect(api.sessions).toHaveBeenCalledOnce();
+		expect(api.fleet).not.toHaveBeenCalled();
+	});
+
+	it("session stop removes local state, refreshes disk inventory, and navigates to fleet", async () => {
+		const runtime = runtimeInfo("stop-from-session");
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		const store = makeStore();
+		await store.start();
+		store.navigate({ screen: "session", key: runtime.key });
+		const el = mount(() => <SessionScreen store={store} sessionKey={runtime.key} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(store.sessions[runtime.key]).toBeDefined();
+		vi.mocked(api.stopRuntime).mockClear();
+		vi.mocked(api.sessions).mockClear();
+		vi.mocked(api.fleet).mockClear();
+
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const stop = [...el.querySelectorAll("button")].find((button) => button.textContent === "stop runtime");
+		(stop as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.stopRuntime).toHaveBeenCalledOnce();
+		expect(api.stopRuntime).toHaveBeenCalledWith(runtime.key);
+		expect(store.fleet().runtimes).toEqual([]);
+		expect(store.sessions[runtime.key]).toBeUndefined();
+		expect(api.sessions).toHaveBeenCalledOnce();
+		expect(api.fleet).not.toHaveBeenCalled();
+		expect(window.location.hash).toBe("#/");
+	});
+
 	it("fleet resumes disk sessions with their session path", async () => {
 		const store = makeStore() as any;
-		const refreshFleet = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
+		const upsertRuntime = vi.fn();
 		const navigate = vi.fn();
 		const fakeStore = {
 			...store,
-			refreshFleet,
+			refreshDiskSessions,
+			upsertRuntime,
 			navigate,
 			fleet: () => ({
 				runtimes: [],
@@ -2842,20 +3021,23 @@ describe("dashboard client regressions", () => {
 			}),
 		};
 		const el = mount(() => <FleetScreen store={fakeStore} />);
+		vi.mocked(api.fleet).mockClear();
 		(el.querySelector(".disk-row .actions .btn") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(api.createRuntime).toHaveBeenCalledWith("/repo", { sessionPath: "/sessions/resume.jsonl" });
-		expect(refreshFleet).toHaveBeenCalled();
+		expect(upsertRuntime).toHaveBeenCalledWith(expect.objectContaining({ key: "new-key" }));
+		expect(refreshDiskSessions).toHaveBeenCalled();
+		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 		expect(navigate).toHaveBeenCalledWith({ screen: "session", key: "new-key" });
 	});
 
-	it("fleet deletes disk sessions and refreshes", async () => {
+	it("fleet deletes disk sessions and refreshes inventory", async () => {
 		const store = makeStore() as any;
-		const refreshFleet = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
 		const fakeStore = {
 			...store,
-			refreshFleet,
+			refreshDiskSessions,
 			fleet: () => ({
 				runtimes: [],
 				diskSessions: [
@@ -2873,6 +3055,7 @@ describe("dashboard client regressions", () => {
 			}),
 		};
 		const el = mount(() => <FleetScreen store={fakeStore} />);
+		vi.mocked(api.fleet).mockClear();
 		const rowButtons = [...el.querySelectorAll(".disk-row .actions .btn")] as HTMLButtonElement[];
 		rowButtons.find((button) => button.textContent === "delete")?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -2881,19 +3064,62 @@ describe("dashboard client regressions", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		expect(api.deleteSession).toHaveBeenCalledWith("/sessions/delete.jsonl");
-		expect(refreshFleet).toHaveBeenCalled();
+		expect(refreshDiskSessions).toHaveBeenCalled();
+		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 	});
 
-	it("fleet shows load errors instead of the empty state", () => {
+	it("fleet polls stats every 30 seconds without an immediate round and cleans up on unmount", async () => {
+		vi.useFakeTimers();
+		const store = makeStore() as any;
+		const refreshFleetStats = vi.fn(async () => {});
+		const { dispose } = mountDisposable(() => <FleetScreen store={{ ...store, refreshFleetStats }} />);
+
+		expect(refreshFleetStats).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(refreshFleetStats).toHaveBeenCalledOnce();
+		// The screen delegates overlap control to the store's shared request.
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(refreshFleetStats).toHaveBeenCalledTimes(2);
+		dispose();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(refreshFleetStats).toHaveBeenCalledTimes(2);
+	});
+
+	it("fleet shows load and stats errors without clearing cards", () => {
 		const store = makeStore() as any;
 		const fakeStore = {
 			...store,
-			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "live",
+						cwd: "/repo",
+						state: {
+							sessionId: "live",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 0,
+							pendingMessageCount: 0,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
 			fleetError: () => "server down",
+			fleetStatsError: () => "stats down",
 		};
 		const el = mount(() => <FleetScreen store={fakeStore} />);
 		expect(el.textContent).toContain("Fleet could not be loaded: server down");
-		expect(el.textContent).not.toContain("No sessions yet");
+		expect(el.textContent).toContain("Fleet stats could not be refreshed: stats down");
+		expect(el.querySelectorAll(".session-card")).toHaveLength(1);
 	});
 
 	it("fleet shows live sessions first and collapses past sessions to three rows with an expand toggle", () => {
@@ -3341,12 +3567,13 @@ describe("dashboard client regressions", () => {
 		vi.mocked(api.fork).mockResolvedValue({ text: "original prompt", cancelled: false });
 		const store = makeStore() as any;
 		const hydrateSession = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
 		const fakeStore = {
 			...store,
 			sessions: { fork: createSessionViewState("fork") },
 			fleet: () => ({ runtimes: [], diskSessions: [] }),
 			hydrateSession,
-			refreshFleet: vi.fn(async () => {}),
+			refreshDiskSessions,
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="fork" />);
 		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
@@ -3354,10 +3581,13 @@ describe("dashboard client regressions", () => {
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(el.textContent).toContain("original prompt");
+		vi.mocked(api.fleet).mockClear();
 		(el.querySelector(".fork-message") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(api.fork).toHaveBeenCalledWith("fork", "u1");
 		expect(hydrateSession).toHaveBeenCalledWith("fork");
+		expect(refreshDiskSessions).toHaveBeenCalledOnce();
+		expect(api.fleet).not.toHaveBeenCalled();
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("original prompt");
 	});
 
@@ -3595,13 +3825,63 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector(".activity")?.textContent).toContain("last assistant preview text");
 	});
 
-	it("model selector defaults to scoped models when scopedModels are present", async () => {
+	it("fleet cards prefer the latest client assistant text over the runtime fallback", () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("preview");
+		session.entries = [
+			{ kind: "assistant", streaming: false, blocks: [{ kind: "text", text: "older assistant reply" }] },
+			{
+				kind: "assistant",
+				streaming: false,
+				blocks: [
+					{ kind: "thinking", text: "hidden" },
+					{ kind: "text", text: "latest client reply" },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { preview: session },
+			fleet: () => ({
+				runtimes: [
+					{
+						key: "preview",
+						cwd: "/repo",
+						state: {
+							sessionId: "preview",
+							thinkingLevel: "off",
+							isStreaming: false,
+							isCompacting: false,
+							steeringMode: "all",
+							followUpMode: "all",
+							autoCompactionEnabled: true,
+							messageCount: 1,
+							pendingMessageCount: 0,
+						},
+						backgroundAgents: [],
+						needsAttention: false,
+						lastAssistantText: "stale runtime fallback",
+						createdAt: new Date().toISOString(),
+						lastActivity: new Date().toISOString(),
+					},
+				],
+				diskSessions: [],
+			}),
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		expect(el.querySelector(".activity")?.textContent).toContain("latest client reply");
+		expect(el.querySelector(".activity")?.textContent).not.toContain("stale runtime fallback");
+	});
+
+	it("model selector defaults to scoped models and patches its card without a fleet fetch", async () => {
 		vi.mocked(api.models).mockResolvedValue({
 			models: [{ provider: "anthropic", id: "all-only", name: "All Only", contextWindow: 1000, reasoning: false }],
 		});
 		const store = makeStore() as any;
+		const setRuntimeModel = vi.fn();
 		const fakeStore = {
 			...store,
+			setRuntimeModel,
 			sessions: { k1: createSessionViewState("k1") },
 			fleet: () => ({
 				runtimes: [
@@ -3639,6 +3919,11 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("scoped");
 		expect(el.textContent).toContain("scoped-model");
 		expect(el.textContent).not.toContain("all-only");
+		vi.mocked(api.fleet).mockClear();
+		(el.querySelector(".model-row") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(setRuntimeModel).toHaveBeenCalledWith("k1", { provider: "test", id: "m1" });
+		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 	});
 
 	it("expanded thinking is the default for fresh browsers (opt-out, not opt-in)", async () => {
@@ -3772,10 +4057,23 @@ describe("dashboard client regressions", () => {
 		}
 	});
 
-	it("hydrateSession re-seeds background agents from the runtime registry", async () => {
-		vi.mocked(api.messages).mockResolvedValue({ messages: [] });
-		vi.mocked(api.backgroundAgents).mockResolvedValue({
-			agents: [
+	it("hydrateSession re-seeds background agents from its atomic runtime snapshot", async () => {
+		vi.mocked(api.hydrate).mockResolvedValue({
+			key: "k-reload",
+			state: {
+				sessionId: "k-reload",
+				tasks: [],
+				thinkingLevel: "off",
+				isStreaming: false,
+				isCompacting: false,
+				steeringMode: "all",
+				followUpMode: "all",
+				autoCompactionEnabled: true,
+				messageCount: 0,
+				pendingMessageCount: 0,
+			},
+			messages: [],
+			backgroundAgents: [
 				{
 					agentId: "bg7",
 					agentType: "Explore",
@@ -3784,6 +4082,7 @@ describe("dashboard client regressions", () => {
 					status: "running",
 				},
 			],
+			barrierSeq: 0,
 		});
 		const store = makeStore();
 		await store.hydrateSession("k-reload");

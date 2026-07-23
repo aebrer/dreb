@@ -242,7 +242,7 @@ function ModelSelectorModal(props: {
 	sessionKey: string;
 	state?: SessionStateDto;
 	onClose: () => void;
-	onSelected: () => void;
+	onSelected: (model: { provider: string; id: string }) => void;
 }): JSX.Element {
 	const [models, setModels] = createSignal<ModelInfoDto[]>([]);
 	const [filter, setFilter] = createSignal("");
@@ -281,8 +281,8 @@ function ModelSelectorModal(props: {
 
 	async function selectModel(model: ModelChoice) {
 		try {
-			await api.setModel(props.sessionKey, model.provider, model.id);
-			props.onSelected();
+			const selected = await api.setModel(props.sessionKey, model.provider, model.id);
+			props.onSelected(selected);
 			props.onClose();
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
@@ -590,7 +590,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				setImageAttachments((currentImages) => [...dequeuedImages, ...currentImages]);
 				imagesCommitted = true;
 			}
-			await props.store.refreshFleet();
 			queueMicrotask(() => composerRef?.focus());
 		} catch (err) {
 			if (!imagesCommitted) revokeImageAttachments(dequeuedImages);
@@ -679,7 +678,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			const result = await api.fork(props.sessionKey, entryId);
 			if (!result.cancelled) setComposerText(result.text);
 			await props.store.hydrateSession(props.sessionKey);
-			await props.store.refreshFleet();
+			await props.store.refreshDiskSessions();
 			setShowForkModal(false);
 		} catch (err) {
 			setForkError(err instanceof Error ? err.message : String(err));
@@ -857,7 +856,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			// TUI ESC parity: clear the queue and return queued messages to the
 			// composer so they don't silently restart the agent after the abort.
 			await restorePendingToComposer();
-			await props.store.refreshFleet();
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -871,6 +869,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setActionError(undefined);
 		try {
 			await api.stopRuntime(props.sessionKey);
+			await props.store.removeRuntime(props.sessionKey);
 			props.store.navigate({ screen: "fleet" });
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
@@ -1028,7 +1027,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 										THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
 									try {
 										await api.setThinking(props.sessionKey, next);
-										await props.store.refreshFleet();
+										props.store.setRuntimeThinkingLevel(props.sessionKey, next);
 									} catch (err) {
 										setActionError(err instanceof Error ? err.message : String(err));
 									}
@@ -1132,7 +1131,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 											THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
 										try {
 											await api.setThinking(props.sessionKey, next);
-											await props.store.refreshFleet();
+											props.store.setRuntimeThinkingLevel(props.sessionKey, next);
 										} catch (err) {
 											setActionError(err instanceof Error ? err.message : String(err));
 										}
@@ -1555,7 +1554,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					sessionKey={props.sessionKey}
 					state={runtime()?.state}
 					onClose={() => setShowModelSelector(false)}
-					onSelected={() => props.store.refreshFleet()}
+					onSelected={(model) => props.store.setRuntimeModel(props.sessionKey, model)}
 				/>
 			</Show>
 
@@ -1628,7 +1627,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					onRename={async (name) => {
 						try {
 							await api.rename(props.sessionKey, name);
-							await props.store.refreshFleet();
 							setShowRenameModal(false);
 						} catch (err) {
 							setActionError(err instanceof Error ? err.message : String(err));

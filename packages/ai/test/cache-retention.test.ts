@@ -24,7 +24,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 	};
 
 	describe("Anthropic Provider", () => {
-		it.skipIf(!process.env.ANTHROPIC_API_KEY)(
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
 			"should use default cache TTL (no ttl field) when DREB_CACHE_RETENTION is not set",
 			async () => {
 				const model = findModel("anthropic", "haiku")! as Model<"anthropic-messages">;
@@ -48,27 +48,30 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 			},
 		);
 
-		it.skipIf(!process.env.ANTHROPIC_API_KEY)("should use 1h cache TTL when DREB_CACHE_RETENTION=long", async () => {
-			process.env.DREB_CACHE_RETENTION = "long";
-			const model = findModel("anthropic", "haiku")! as Model<"anthropic-messages">;
-			let capturedPayload: any = null;
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.ANTHROPIC_API_KEY)(
+			"should use 1h cache TTL when DREB_CACHE_RETENTION=long",
+			async () => {
+				process.env.DREB_CACHE_RETENTION = "long";
+				const model = findModel("anthropic", "haiku")! as Model<"anthropic-messages">;
+				let capturedPayload: any = null;
 
-			const s = stream(model, context, {
-				onPayload: (payload) => {
-					capturedPayload = payload;
-				},
-			});
+				const s = stream(model, context, {
+					onPayload: (payload) => {
+						capturedPayload = payload;
+					},
+				});
 
-			// Consume the stream to trigger the request
-			for await (const _ of s) {
-				// Just consume
-			}
+				// Consume the stream to trigger the request
+				for await (const _ of s) {
+					// Just consume
+				}
 
-			expect(capturedPayload).not.toBeNull();
-			// System prompt should have cache_control with ttl: "1h"
-			expect(capturedPayload.system).toBeDefined();
-			expect(capturedPayload.system[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
-		});
+				expect(capturedPayload).not.toBeNull();
+				// System prompt should have cache_control with ttl: "1h"
+				expect(capturedPayload.system).toBeDefined();
+				expect(capturedPayload.system[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+			},
+		);
 
 		it("should not add ttl when baseUrl is not api.anthropic.com", async () => {
 			process.env.DREB_CACHE_RETENTION = "long";
@@ -195,7 +198,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 	});
 
 	describe("OpenAI Responses Provider", () => {
-		it.skipIf(!process.env.OPENAI_API_KEY)(
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
 			"should not set prompt_cache_retention when DREB_CACHE_RETENTION is not set",
 			async () => {
 				const model = getModel("openai", "gpt-4o-mini");
@@ -217,7 +220,7 @@ describe("Cache Retention (DREB_CACHE_RETENTION)", () => {
 			},
 		);
 
-		it.skipIf(!process.env.OPENAI_API_KEY)(
+		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENAI_API_KEY)(
 			"should set prompt_cache_retention to 24h when DREB_CACHE_RETENTION=long",
 			async () => {
 				process.env.DREB_CACHE_RETENTION = "long";

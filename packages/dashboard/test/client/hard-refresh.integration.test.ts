@@ -43,16 +43,6 @@ class FakeEventSource {
 	}
 }
 
-function deferred<T>() {
-	let resolve!: (value: T) => void;
-	let reject!: (reason?: unknown) => void;
-	const promise = new Promise<T>((res, rej) => {
-		resolve = res;
-		reject = rej;
-	});
-	return { promise, resolve, reject };
-}
-
 function makeRuntimeClient() {
 	const emitter = new EventEmitter();
 	const client = {
@@ -67,6 +57,26 @@ function makeRuntimeClient() {
 			return () => emitter.off("exit", listener);
 		}),
 		getState: vi.fn(),
+		getDashboardSnapshot: vi.fn(async () => {
+			emitter.emit("event", { type: "dashboard_snapshot_barrier", snapshotId: "snapshot-1" });
+			return {
+				snapshotId: "snapshot-1",
+				state: {
+					sessionId: "s1",
+					tasks: [],
+					thinkingLevel: "medium",
+					isStreaming: false,
+					isCompacting: false,
+					steeringMode: "all",
+					followUpMode: "one-at-a-time",
+					autoCompactionEnabled: true,
+					messageCount: 0,
+					pendingMessageCount: 0,
+				},
+				messages: [],
+				backgroundAgents: [],
+			};
+		}),
 		getMessages: vi.fn(async () => []),
 		getSessionStats: vi.fn(async () => ({
 			sessionFile: undefined,
@@ -81,10 +91,13 @@ function makeRuntimeClient() {
 		})),
 		getLastAssistantText: vi.fn(async () => undefined),
 		listBackgroundAgents: vi.fn(async () => []),
+		emit: (event: unknown) => emitter.emit("event", event),
 	};
 	return client as unknown as RpcClient & {
 		getState: ReturnType<typeof vi.fn>;
+		getDashboardSnapshot: ReturnType<typeof vi.fn>;
 		getMessages: ReturnType<typeof vi.fn>;
+		emit(event: unknown): void;
 	};
 }
 
@@ -137,20 +150,26 @@ describe("dashboard hard-refresh task restoration", () => {
 	it("restores non-empty tasks through the real HTTP runtime path despite startup SSE remount races", async () => {
 		const { pool, client } = await startHttpRuntime();
 		const tasks = [{ id: "restore", title: "restore task after refresh", status: "in_progress" as const }];
-		vi.mocked(client.getState).mockResolvedValue({
-			sessionId: "s1",
-			tasks,
-			thinkingLevel: "medium",
-			isStreaming: false,
-			isCompacting: false,
-			steeringMode: "all",
-			followUpMode: "one-at-a-time",
-			autoCompactionEnabled: true,
-			messageCount: 0,
-			pendingMessageCount: 0,
+		vi.mocked(client.getDashboardSnapshot).mockImplementationOnce(async () => {
+			client.emit({ type: "dashboard_snapshot_barrier", snapshotId: "snapshot-restore" });
+			return {
+				snapshotId: "snapshot-restore",
+				state: {
+					sessionId: "s1",
+					tasks,
+					thinkingLevel: "medium",
+					isStreaming: false,
+					isCompacting: false,
+					steeringMode: "all",
+					followUpMode: "one-at-a-time",
+					autoCompactionEnabled: true,
+					messageCount: 0,
+					pendingMessageCount: 0,
+				},
+				messages: [],
+				backgroundAgents: [],
+			};
 		});
-		const messages = deferred<unknown[]>();
-		client.getMessages.mockReturnValueOnce(messages.promise);
 		const handle = await pool.create("/tmp/dashboard-hard-refresh");
 		window.location.hash = `#/session/${handle.key}`;
 		const store = createAppStore();
@@ -159,16 +178,16 @@ describe("dashboard hard-refresh task restoration", () => {
 		const source = FakeEventSource.instances.at(-1);
 		if (!source) throw new Error("store did not create an EventSource");
 		const hydrate = store.hydrateSession(handle.key);
-		// A hard refresh can receive startup/live events before the REST hydrate's
-		// slower transcript request settles. Those events must not make the store
-		// drop the runtime task snapshot.
+		// A hard refresh can receive startup/live events before the atomic hydrate
+		// settles. Those events must not make the store drop the runtime task snapshot.
 		source.message({ seq: 1, key: handle.key, event: { type: "agent_start" } });
-		messages.resolve([]);
 		await hydrate;
 		// A later startup-ish event must not clear the restored task list either.
 		source.message({ seq: 2, key: handle.key, event: { type: "agent_start" } });
 
 		expect(store.sessions[handle.key]?.tasks).toEqual(tasks);
+		expect(client.getDashboardSnapshot).toHaveBeenCalledOnce();
+		expect(client.getMessages).not.toHaveBeenCalled();
 		store.stop();
 	});
 });

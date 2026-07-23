@@ -394,7 +394,9 @@ describe("Large session fixture", () => {
 // LLM integration tests (skipped without API key)
 // ============================================================================
 
-describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN)("LLM summarization", () => {
+describe.skipIf(
+	process.env.DREB_SKIP_LIVE_API === "1" || (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN),
+)("LLM summarization", () => {
 	const apiKey = process.env.ANTHROPIC_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY!;
 
 	it("should generate a compaction result for the large session", async () => {

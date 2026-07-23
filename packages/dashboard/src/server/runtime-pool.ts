@@ -10,9 +10,12 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { RpcClient, type RpcExitInfo } from "@dreb/coding-agent/rpc";
 import {
 	type BackgroundAgentDto,
+	type FleetRuntimeSnapshotDto,
+	type FleetSnapshotEventDto,
 	MAX_COMPLETED_BACKGROUND_AGENTS,
 	type RuntimeInfoDto,
 	type RuntimeStatsSummaryDto,
@@ -31,6 +34,9 @@ function formatRpcExit(info: RpcExitInfo): string {
 }
 
 export type RuntimeEventListener = (key: string, event: Record<string, unknown>) => void;
+
+/** Listener for coalesced, synchronous fleet runtime snapshots. */
+export type FleetSnapshotListener = (event: FleetSnapshotEventDto) => void;
 
 export { MAX_COMPLETED_BACKGROUND_AGENTS };
 
@@ -60,14 +66,36 @@ export interface RuntimeHandle {
 	attention: Map<string, string>;
 	/** Last runtime-level error, persisted server-side so fleet refreshes stay honest. */
 	error?: string;
-	/** Last known state, used to keep failed runtime cards renderable. */
+	/** Last authoritative state, patched only with event-derivable fields between RPC reads. */
 	lastState?: SessionStateDto;
+	/** Resume-path fallback; events must never invent or overwrite session identity. */
+	sessionFileFallback?: string;
 	/** Background agents seen via events (agentId → latest info). */
 	backgroundAgents: Map<string, BackgroundAgentDto>;
 }
 
 export const DEFAULT_DASHBOARD_BARRIER_TTL_MS = 5 * 60_000;
 export const DEFAULT_DASHBOARD_BARRIER_LIMIT = 1000;
+export const DEFAULT_FLEET_SNAPSHOT_DEBOUNCE_MS = 200;
+
+/** Events that mutate a field carried by the lightweight fleet snapshot. */
+const FLEET_SNAPSHOT_EVENT_TYPES = new Set([
+	"agent_start",
+	"agent_end",
+	"auto_compaction_start",
+	"auto_compaction_end",
+	"auto_retry_end",
+	"background_agent_start",
+	"background_agent_end",
+	"extension_ui_request",
+	"extension_ui_response_handled",
+	"message_start",
+	"parent_paused_for_background_agents",
+	"runtime_removed",
+	"session_name_changed",
+	"suggest_next",
+	"tasks_update",
+]);
 
 export interface RuntimePoolOptions {
 	cliPath?: string;
@@ -81,6 +109,8 @@ export interface RuntimePoolOptions {
 	dashboardBarrierLimit?: number;
 	/** Injectable clock for deterministic barrier-expiry tests. */
 	now?: () => number;
+	/** Coalescing delay for event-derived fleet snapshot emissions. */
+	fleetSnapshotDebounceMs?: number;
 }
 
 interface DashboardBarrier {
@@ -91,6 +121,7 @@ interface DashboardBarrier {
 export class RuntimePool {
 	private readonly runtimes = new Map<string, RuntimeHandle>();
 	private readonly listeners: RuntimeEventListener[] = [];
+	private readonly fleetSnapshotListeners: FleetSnapshotListener[] = [];
 	private readonly cliPath: string;
 	private readonly baseArgs: string[];
 	private readonly clientFactory: (options: { cliPath: string; cwd: string; args: string[] }) => RpcClient;
@@ -110,7 +141,9 @@ export class RuntimePool {
 	private readonly dashboardBarrierTtlMs: number;
 	private readonly dashboardBarrierLimit: number;
 	private readonly now: () => number;
+	private readonly fleetSnapshotDebounceMs: number;
 	private dashboardBarrierPruneTimer: ReturnType<typeof setTimeout> | undefined;
+	private fleetSnapshotTimer: ReturnType<typeof setTimeout> | undefined;
 	private closing = false;
 
 	constructor(options: RuntimePoolOptions = {}) {
@@ -122,6 +155,7 @@ export class RuntimePool {
 		this.dashboardBarrierTtlMs = options.dashboardBarrierTtlMs ?? DEFAULT_DASHBOARD_BARRIER_TTL_MS;
 		this.dashboardBarrierLimit = options.dashboardBarrierLimit ?? DEFAULT_DASHBOARD_BARRIER_LIMIT;
 		this.now = options.now ?? Date.now;
+		this.fleetSnapshotDebounceMs = options.fleetSnapshotDebounceMs ?? DEFAULT_FLEET_SNAPSHOT_DEBOUNCE_MS;
 	}
 
 	/** Subscribe to events from every runtime, tagged with the runtime key. */
@@ -131,6 +165,23 @@ export class RuntimePool {
 			const i = this.listeners.indexOf(listener);
 			if (i !== -1) this.listeners.splice(i, 1);
 		};
+	}
+
+	/** Subscribe to debounced, in-memory fleet snapshots. */
+	onFleetSnapshot(listener: FleetSnapshotListener): () => void {
+		this.fleetSnapshotListeners.push(listener);
+		return () => {
+			const i = this.fleetSnapshotListeners.indexOf(listener);
+			if (i !== -1) this.fleetSnapshotListeners.splice(i, 1);
+		};
+	}
+
+	/**
+	 * Build the fleet's live-runtime view without RPC or disk access. Map
+	 * insertion order is retained intentionally; the UI owns presentation order.
+	 */
+	fleetSnapshot(): FleetRuntimeSnapshotDto[] {
+		return [...this.runtimes.values()].map((handle) => this.describeFleetRuntime(handle));
 	}
 
 	list(): RuntimeHandle[] {
@@ -167,6 +218,10 @@ export class RuntimePool {
 		if (!barrier) {
 			throw new Error(`Dashboard snapshot ${snapshot.snapshotId} arrived without its ordering barrier`);
 		}
+		// This is an authoritative RPC baseline, so it may legitimately lower the
+		// count after a fork/rewind instead of retaining an event-derived maximum.
+		handle.lastState = snapshot.state;
+		this.scheduleFleetSnapshot();
 		return { key: handle.key, barrierSeq: barrier.seq, snapshot };
 	}
 
@@ -203,6 +258,24 @@ export class RuntimePool {
 		this.dashboardBarrierPruneTimer.unref?.();
 	}
 
+	private scheduleFleetSnapshot(): void {
+		if (this.closing) return;
+		if (this.fleetSnapshotTimer) clearTimeout(this.fleetSnapshotTimer);
+		this.fleetSnapshotTimer = setTimeout(() => {
+			this.fleetSnapshotTimer = undefined;
+			if (this.closing) return;
+			const event: FleetSnapshotEventDto = { type: "fleet_snapshot", runtimes: this.fleetSnapshot() };
+			for (const listener of this.fleetSnapshotListeners) {
+				try {
+					listener(event);
+				} catch {
+					// An SSE bridge subscriber must not break the pool's event loop.
+				}
+			}
+		}, this.fleetSnapshotDebounceMs);
+		this.fleetSnapshotTimer.unref?.();
+	}
+
 	/** Spawn a new runtime in `cwd`, optionally opening an existing session file. */
 	async create(cwd: string, sessionPath?: string): Promise<RuntimeHandle> {
 		if (this.closing) throw new Error("Runtime pool is closing");
@@ -214,9 +287,10 @@ export class RuntimePool {
 			key,
 			cwd,
 			client,
-			createdAt: Date.now(),
-			lastActivity: Date.now(),
+			createdAt: this.now(),
+			lastActivity: this.now(),
 			attention: new Map(),
+			sessionFileFallback: sessionPath,
 			backgroundAgents: new Map(),
 		};
 		client.onEvent((event) => this.handleEvent(handle, event as unknown as Record<string, unknown>));
@@ -246,6 +320,7 @@ export class RuntimePool {
 				throw new Error("Runtime pool is closing");
 			}
 			this.runtimes.set(handle.key, handle);
+			this.scheduleFleetSnapshot();
 			return handle;
 		} finally {
 			this.starting.delete(handle);
@@ -258,6 +333,7 @@ export class RuntimePool {
 		if (!handle) return false;
 		this.handleEvent(handle, { type: "runtime_removed" });
 		this.runtimes.delete(key);
+		this.scheduleFleetSnapshot();
 		await handle.client.stop();
 		return true;
 	}
@@ -280,8 +356,8 @@ export class RuntimePool {
 				key: `utility:${cwd}`,
 				cwd,
 				client,
-				createdAt: Date.now(),
-				lastActivity: Date.now(),
+				createdAt: this.now(),
+				lastActivity: this.now(),
 				attention: new Map(),
 				backgroundAgents: new Map(),
 			};
@@ -321,6 +397,9 @@ export class RuntimePool {
 		this.closing = true;
 		if (this.dashboardBarrierPruneTimer) clearTimeout(this.dashboardBarrierPruneTimer);
 		this.dashboardBarrierPruneTimer = undefined;
+		if (this.fleetSnapshotTimer) clearTimeout(this.fleetSnapshotTimer);
+		this.fleetSnapshotTimer = undefined;
+		this.fleetSnapshotListeners.length = 0;
 		this.dashboardBarriers.clear();
 		const handles = new Set<RuntimeHandle>([
 			...this.runtimes.values(),
@@ -353,8 +432,11 @@ export class RuntimePool {
 	}
 
 	private handleEvent(handle: RuntimeHandle, event: Record<string, unknown>): void {
-		handle.lastActivity = Date.now();
 		const type = event.type as string;
+		if (type !== "dashboard_snapshot_barrier") {
+			handle.lastActivity = this.now();
+			this.updateStateFromEvent(handle, event, type);
+		}
 
 		// Track needs-attention sources: extension UI requests, parent
 		// paused, error states.
@@ -387,6 +469,7 @@ export class RuntimePool {
 		}
 		if (type === "agent_end") {
 			handle.attention.delete("paused");
+			if (event.errorMessage) this.recordRuntimeError(handle, String(event.errorMessage));
 		}
 		if (type === "auto_retry_end" && event.success === false && event.finalError) {
 			this.recordRuntimeError(handle, String(event.finalError));
@@ -422,11 +505,62 @@ export class RuntimePool {
 				// A broken SSE subscriber must not break event distribution.
 			}
 		}
+		if (this.runtimes.get(handle.key) === handle && FLEET_SNAPSHOT_EVENT_TYPES.has(type)) {
+			this.scheduleFleetSnapshot();
+		}
+	}
+
+	/**
+	 * Events intentionally patch only fields they can prove. Session identity,
+	 * session file, configuration, and context usage remain from the last RPC
+	 * baseline (or the stable creation fallback) until a later reconciliation.
+	 */
+	private updateStateFromEvent(handle: RuntimeHandle, event: Record<string, unknown>, type: string): void {
+		const state = this.fallbackState(handle);
+		switch (type) {
+			case "agent_start": {
+				const model = event.model;
+				if (
+					model &&
+					typeof model === "object" &&
+					typeof (model as Record<string, unknown>).provider === "string" &&
+					typeof (model as Record<string, unknown>).id === "string"
+				) {
+					const nextModel = model as { provider: string; id: string };
+					state.model =
+						state.model?.provider === nextModel.provider && state.model.id === nextModel.id
+							? { ...state.model, ...nextModel }
+							: nextModel;
+				}
+				state.isStreaming = true;
+				break;
+			}
+			case "agent_end":
+				state.isStreaming = false;
+				break;
+			case "auto_compaction_start":
+				state.isCompacting = true;
+				break;
+			case "auto_compaction_end":
+				state.isCompacting = false;
+				break;
+			case "tasks_update":
+				if (Array.isArray(event.tasks)) state.tasks = [...event.tasks] as SessionStateDto["tasks"];
+				break;
+			case "session_name_changed":
+				if (typeof event.name === "string") state.sessionName = event.name;
+				break;
+			case "message_start":
+				state.messageCount += 1;
+				break;
+		}
+		handle.lastState = state;
 	}
 
 	private recordRuntimeError(handle: RuntimeHandle, message: string): void {
 		handle.error = message;
 		handle.attention.set("error", message);
+		if (this.runtimes.get(handle.key) === handle) this.scheduleFleetSnapshot();
 	}
 
 	private pruneCompletedBackgroundAgents(handle: RuntimeHandle): void {
@@ -445,22 +579,34 @@ export class RuntimePool {
 	}
 
 	private fallbackState(handle: RuntimeHandle): SessionStateDto {
+		const previous = handle.lastState;
 		return {
-			sessionId: handle.lastState?.sessionId ?? handle.key,
-			sessionName: handle.lastState?.sessionName,
-			tasks: handle.lastState?.tasks ?? [],
-			thinkingLevel: handle.lastState?.thinkingLevel ?? "off",
-			isStreaming: false,
-			isCompacting: false,
-			steeringMode: handle.lastState?.steeringMode ?? "all",
-			followUpMode: handle.lastState?.followUpMode ?? "all",
-			sessionFile: handle.lastState?.sessionFile,
-			autoCompactionEnabled: handle.lastState?.autoCompactionEnabled ?? false,
-			messageCount: handle.lastState?.messageCount ?? 0,
-			pendingMessageCount: handle.lastState?.pendingMessageCount ?? 0,
-			contextUsage: handle.lastState?.contextUsage,
-			model: handle.lastState?.model,
-			modelFallbackMessage: handle.lastState?.modelFallbackMessage,
+			...previous,
+			sessionId: previous?.sessionId ?? handle.key,
+			tasks: previous?.tasks ? [...previous.tasks] : [],
+			thinkingLevel: previous?.thinkingLevel ?? "off",
+			isStreaming: previous?.isStreaming ?? false,
+			isCompacting: previous?.isCompacting ?? false,
+			steeringMode: previous?.steeringMode ?? "all",
+			followUpMode: previous?.followUpMode ?? "all",
+			sessionFile: previous?.sessionFile ?? handle.sessionFileFallback,
+			autoCompactionEnabled: previous?.autoCompactionEnabled ?? false,
+			messageCount: previous?.messageCount ?? 0,
+			pendingMessageCount: previous?.pendingMessageCount ?? 0,
+		};
+	}
+
+	private describeFleetRuntime(handle: RuntimeHandle): FleetRuntimeSnapshotDto {
+		const state = this.fallbackState(handle);
+		return {
+			key: handle.key,
+			cwd: handle.cwd,
+			state,
+			backgroundAgents: [...handle.backgroundAgents.values()].map((agent) => ({ ...agent })),
+			needsAttention: handle.attention.size > 0,
+			error: handle.error,
+			createdAt: new Date(handle.createdAt).toISOString(),
+			lastActivity: new Date(handle.lastActivity).toISOString(),
 		};
 	}
 
@@ -480,10 +626,22 @@ export class RuntimePool {
 
 	/** Snapshot a runtime for the fleet endpoint. */
 	async describe(handle: RuntimeHandle): Promise<RuntimeInfoDto> {
+		const previousFleetRuntime =
+			this.runtimes.get(handle.key) === handle ? this.describeFleetRuntime(handle) : undefined;
+		let fleetRuntimeEnriched = false;
 		let state: SessionStateDto;
 		try {
-			state = (await handle.client.getState()) as unknown as SessionStateDto;
+			const authoritative = (await handle.client.getState()) as unknown as SessionStateDto;
+			const fallback = this.fallbackState(handle);
+			state = {
+				...fallback,
+				...authoritative,
+				sessionId: authoritative.sessionId ?? fallback.sessionId,
+				sessionFile: authoritative.sessionFile ?? fallback.sessionFile,
+				tasks: authoritative.tasks ?? fallback.tasks,
+			};
 			handle.lastState = state;
+			fleetRuntimeEnriched = true;
 			if (handle.error?.startsWith("RPC process")) {
 				handle.error = undefined;
 				handle.attention.delete("error");
@@ -498,6 +656,10 @@ export class RuntimePool {
 		try {
 			const sessionStats = await handle.client.getSessionStats();
 			stats = { tokensTotal: sessionStats.tokens.total, cost: sessionStats.cost };
+			if (sessionStats.contextUsage) {
+				handle.lastState = { ...this.fallbackState(handle), contextUsage: sessionStats.contextUsage };
+				fleetRuntimeEnriched = true;
+			}
 		} catch (err) {
 			this.logger(
 				`runtime ${handle.key} stats unavailable for fleet card: ${err instanceof Error ? err.message : String(err)}`,
@@ -511,6 +673,14 @@ export class RuntimePool {
 			this.logger(
 				`runtime ${handle.key} last assistant text unavailable for fleet card: ${err instanceof Error ? err.message : String(err)}`,
 			);
+		}
+		if (
+			fleetRuntimeEnriched &&
+			previousFleetRuntime &&
+			this.runtimes.get(handle.key) === handle &&
+			!isDeepStrictEqual(previousFleetRuntime, this.describeFleetRuntime(handle))
+		) {
+			this.scheduleFleetSnapshot();
 		}
 		return {
 			key: handle.key,

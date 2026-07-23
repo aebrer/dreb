@@ -4,7 +4,7 @@
  * sessions grouped by project (3 rows + expand). "+ new session" modal.
  */
 
-import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
+import { createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, StatusChip, Topbar } from "../components/common.js";
@@ -36,6 +36,23 @@ function runtimeCostLabel(runtime: RuntimeInfoDto): string | undefined {
 	return runtime.stats ? `$${runtime.stats.cost.toFixed(2)}` : undefined;
 }
 
+const ACTIVITY_PREVIEW_LIMIT = 200;
+
+function latestAssistantPreview(store: AppStore, runtime: RuntimeInfoDto): string | undefined {
+	const entries = store.sessions[runtime.key]?.entries ?? [];
+	for (let index = entries.length - 1; index >= 0; index -= 1) {
+		const entry = entries[index];
+		if (entry.kind !== "assistant") continue;
+		const text = entry.blocks
+			.filter((block) => block.kind === "text")
+			.map((block) => block.text)
+			.join("")
+			.trim();
+		if (text) return text.slice(0, ACTIVITY_PREVIEW_LIMIT);
+	}
+	return runtime.lastAssistantText;
+}
+
 function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.Element {
 	const status = () => runtimeStatus(props.runtime);
 	const session = () => props.store.sessions[props.runtime.key];
@@ -48,7 +65,7 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 		const s = session();
 		if (s?.workingText) return `▸ ${s.workingText}`;
 		if (s?.suggestedCommand) return `suggested next: ${s.suggestedCommand}`;
-		return props.runtime.lastAssistantText;
+		return latestAssistantPreview(props.store, props.runtime);
 	};
 
 	return (
@@ -128,7 +145,7 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 					class="btn btn-small btn-danger"
 					onClick={async () => {
 						await api.stopRuntime(props.runtime.key);
-						await props.store.refreshFleet();
+						await props.store.removeRuntime(props.runtime.key);
 					}}
 				>
 					stop runtime
@@ -156,7 +173,8 @@ function NewSessionModal(props: {
 			const runtime = await api.createRuntime(cwd(), {
 				firstPrompt: firstPrompt() || undefined,
 			});
-			await props.store.refreshFleet();
+			props.store.upsertRuntime(runtime);
+			await props.store.refreshDiskSessions();
 			props.onClose();
 			props.store.navigate({ screen: "session", key: runtime.key });
 		} catch (err) {
@@ -274,11 +292,17 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 		return [...paths].slice(0, 8);
 	});
 
+	onMount(() => {
+		const timer = setInterval(() => void props.store.refreshFleetStats(), 30_000);
+		onCleanup(() => clearInterval(timer));
+	});
+
 	async function resume(session: SessionInfoDto) {
 		setResumeError(undefined);
 		try {
 			const runtime = await api.createRuntime(session.cwd, { sessionPath: session.path });
-			await props.store.refreshFleet();
+			props.store.upsertRuntime(runtime);
+			await props.store.refreshDiskSessions();
 			props.store.navigate({ screen: "session", key: runtime.key });
 		} catch (err) {
 			setResumeError(`Failed to resume session: ${err instanceof Error ? err.message : String(err)}`);
@@ -311,6 +335,11 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 				<Show when={props.store.fleetError()}>
 					<div class="settings-error" role="alert">
 						Fleet could not be loaded: {props.store.fleetError()}
+					</div>
+				</Show>
+				<Show when={props.store.fleetStatsError()}>
+					<div class="settings-error" role="alert">
+						Fleet stats could not be refreshed: {props.store.fleetStatsError()}
 					</div>
 				</Show>
 
@@ -436,7 +465,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 									onClick={async () => {
 										await api.deleteSession(session().path);
 										setConfirmDelete(undefined);
-										await props.store.refreshFleet();
+										await props.store.refreshDiskSessions();
 									}}
 								>
 									delete

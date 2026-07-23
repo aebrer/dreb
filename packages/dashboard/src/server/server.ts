@@ -21,12 +21,15 @@ import type {
 	FleetDto,
 	ImageAttachmentDto,
 	PairingCodeDto,
+	RuntimeHydrationDto,
+	SessionInfoDto,
+	SessionInventoryDto,
 } from "../shared/protocol.js";
 import { MAX_CLIENT_DIAGNOSTIC_BYTES, MAX_PROMPT_BODY_BYTES } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
 import { EventHub, formatHeartbeatFrame, type SseWriteMetadata } from "./event-hub.js";
 import { defaultPlaces, FileApi } from "./files.js";
-import type { RuntimePool } from "./runtime-pool.js";
+import type { DashboardRuntimeSnapshot, RuntimePool } from "./runtime-pool.js";
 import { readSubagentMessages } from "./subagent-log.js";
 
 export interface DashboardServerOptions {
@@ -126,6 +129,7 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 		}
 		hub.publish(key, event);
 	});
+	pool.onFleetSnapshot((event) => hub.publish("", { ...event }));
 
 	const app = express();
 	app.disable("x-powered-by");
@@ -405,17 +409,49 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 	});
 
 	// -- fleet -----------------------------------------------------------------
+	const listDiskSessions = async (): Promise<SessionInfoDto[]> =>
+		((await options.listAllSessions()) as SessionInfoDto[]).filter((session) => existsSync(session.cwd));
+
 	const getFleet = async (): Promise<FleetDto> => {
 		const runtimes = await Promise.all(pool.list().map((h) => pool.describe(h)));
-		const diskSessions = ((await options.listAllSessions()) as FleetDto["diskSessions"]).filter((session) =>
-			existsSync(session.cwd),
-		);
-		return { runtimes, diskSessions };
+		return { runtimes, diskSessions: await listDiskSessions() };
 	};
 
+	/** Map the one-RPC parent snapshot consistently for recovery and drill-in hydration. */
+	const toRuntimeHydration = (snapshot: DashboardRuntimeSnapshot): RuntimeHydrationDto => ({
+		key: snapshot.key,
+		state: snapshot.snapshot.state,
+		messages: snapshot.snapshot.messages,
+		backgroundAgents: snapshot.snapshot.backgroundAgents,
+		barrierSeq: snapshot.barrierSeq,
+	});
+
 	app.get("/api/fleet", (_req, res) => {
+		const startedAt = Date.now();
 		getFleet()
-			.then((fleet) => res.json(fleet))
+			.then((fleet) => {
+				// Serialize once so the diagnostic reports the exact JSON response size
+				// without retaining or logging any fleet payload fields.
+				const body = JSON.stringify(fleet);
+				const diagnostic = {
+					elapsedMs: Date.now() - startedAt,
+					encodedBytes: Buffer.byteLength(body),
+					runtimeCount: fleet.runtimes.length,
+					diskSessionCount: fleet.diskSessions.length,
+				};
+				res.type("json").send(body);
+				log(`fleet ${JSON.stringify(diagnostic)}`);
+			})
+			.catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
+	});
+
+	/** On-disk inventory only; does not query or describe live runtimes. */
+	app.get("/api/sessions", (_req, res) => {
+		listDiskSessions()
+			.then((sessions) => {
+				const body: SessionInventoryDto = { sessions };
+				res.json(body);
+			})
 			.catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
 	});
 
@@ -456,11 +492,7 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 				const snapshot = await pool.snapshotDashboard(handle);
 				barrierSeq = snapshot.barrierSeq;
 				active = {
-					key: activeKey,
-					state: snapshot.snapshot.state,
-					messages: snapshot.snapshot.messages,
-					backgroundAgents: snapshot.snapshot.backgroundAgents,
-					barrierSeq,
+					...toRuntimeHydration(snapshot),
 					...(preBarrierSubagent ? { subagent: preBarrierSubagent } : {}),
 				};
 			} else {
@@ -522,6 +554,15 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 
 	app.get("/api/runtimes/:key", (req, res) => {
 		withRuntime(req, res, (h) => pool.describe(h));
+	});
+
+	/**
+	 * Atomic drill-in snapshot. snapshotDashboard performs exactly one RPC and
+	 * consumes its marker barrier, so no independently-read runtime fields can
+	 * describe different moments in a live turn.
+	 */
+	app.get("/api/runtimes/:key/hydrate", (req, res) => {
+		withRuntime(req, res, async (h) => toRuntimeHydration(await pool.snapshotDashboard(h)));
 	});
 
 	app.get("/api/runtimes/:key/messages", (req, res) => {
@@ -714,6 +755,7 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 			.deleteSession(path)
 			.then((result) => {
 				log(`session deleted: ${path}`);
+				hub.publish("", { type: "disk_sessions_changed" });
 				res.json(result ?? { ok: true });
 			})
 			.catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));

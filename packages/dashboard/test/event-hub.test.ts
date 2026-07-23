@@ -261,6 +261,28 @@ describe("EventHub", () => {
 		expect(projectDashboardEvent(events[7]!)).toBe(events[7]);
 	});
 
+	it("sequences and replays global fleet snapshots without transport special-casing", () => {
+		const hub = new EventHub();
+		hub.publish("", {
+			type: "fleet_snapshot",
+			runtimes: [{ key: "runtime-1", cwd: "/tmp/project" }],
+		});
+
+		const { client, envelopes } = collectClient();
+		hub.attach(client, 0);
+
+		expect(envelopes()).toEqual([
+			expect.objectContaining({
+				seq: 1,
+				key: "",
+				event: expect.objectContaining({
+					type: "fleet_snapshot",
+					runtimes: [expect.objectContaining({ key: "runtime-1" })],
+				}),
+			}),
+		]);
+	});
+
 	it("formats observable unnumbered heartbeats outside replay history", () => {
 		const frame = formatHeartbeatFrame();
 		expect(frame).toBe("event: heartbeat\ndata: {}\n\n");
