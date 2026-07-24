@@ -112,6 +112,28 @@ describe("messagesToEntries — hydration", () => {
 		expect(entries[0]).toMatchObject({ kind: "tool", status: "error", resultText: "boom" });
 	});
 
+	it("extracts tool-result image blocks on the replay path (resync recovery)", () => {
+		const entries = messagesToEntries([
+			{ role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read", arguments: { path: "/x.png" } }] },
+			{
+				role: "toolResult",
+				toolCallId: "t1",
+				toolName: "read",
+				content: [
+					{ type: "text", text: "Read image file [image/png]" },
+					{ type: "image", data: "iVBORw==", mimeType: "image/png" },
+				],
+			},
+		]);
+		const tool = entries.find((e) => e.kind === "tool");
+		expect(tool).toMatchObject({
+			toolName: "read",
+			status: "done",
+			resultText: "Read image file [image/png]",
+			images: [{ mimeType: "image/png", data: "iVBORw==" }],
+		});
+	});
+
 	it("renders bashExecution and custom messages", () => {
 		const entries = messagesToEntries([
 			{ role: "bashExecution", command: "ls", output: "a b c", timestamp: 3 } as any,
@@ -262,6 +284,257 @@ describe("applySessionEvent — streaming lifecycle", () => {
 			isError: false,
 		});
 		expect(state.entries[0]).toMatchObject({ status: "done", resultText: "done output" });
+	});
+
+	// A valid, minimal base64 payload (decodes to two bytes). Must satisfy the
+	// reducer's isLikelyBase64 gate: length %4 === 0 and base64 alphabet only.
+	const PNG_B64 = "iVBORw==";
+
+	it("extracts image blocks from a live tool_execution_end alongside the text note", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {
+				content: [
+					{ type: "text", text: "Read image file [image/png]" },
+					{ type: "image", data: PNG_B64, mimeType: "image/png" },
+				],
+			},
+			isError: false,
+		});
+		expect(state.entries[0]).toMatchObject({
+			kind: "tool",
+			status: "done",
+			resultText: "Read image file [image/png]",
+			images: [{ mimeType: "image/png", data: PNG_B64 }],
+		});
+	});
+
+	it("extracts image blocks from a live tool_execution_update", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/jpeg" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/jpeg", data: PNG_B64 }]);
+	});
+
+	it("clears stale images when a text-only tool_execution_end follows an image update", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: { content: [{ type: "text", text: "text only now" }] },
+			isError: false,
+		});
+		expect(state.entries[0]).toMatchObject({ status: "done", resultText: "text only now" });
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("clears stale images when a string tool_execution_end follows an image update", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: "plain string result",
+			isError: false,
+		});
+		expect(state.entries[0]).toMatchObject({ status: "done", resultText: "plain string result" });
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("clears stale images when the final content has only disallowed/malformed images", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {
+				content: [
+					{ type: "text", text: "note" },
+					{ type: "image", data: "<svg onload=alert(1)>", mimeType: "image/svg+xml" },
+					{ type: "image", data: "not valid base64!!", mimeType: "image/png" },
+				],
+			},
+			isError: false,
+		});
+		expect(state.entries[0]).toMatchObject({ status: "done", resultText: "note" });
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("clears stale images when the final content is an empty array", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: { content: [] },
+			isError: false,
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("preserves prior images when the final event carries no result/content (no replacement)", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {},
+			isError: false,
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+	});
+
+	it("clears stale images when a later text-only tool_execution_update supersedes an image snapshot", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "image", data: PNG_B64, mimeType: "image/png" }] },
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([{ mimeType: "image/png", data: PNG_B64 }]);
+
+		applySessionEvent(state, {
+			type: "tool_execution_update",
+			toolCallId: "t1",
+			toolName: "read",
+			partialResult: { content: [{ type: "text", text: "text snapshot" }] },
+		});
+		expect(state.entries[0]).toMatchObject({ resultText: "text snapshot" });
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("leaves images undefined for text-only tool results", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "bash",
+			result: { content: [{ type: "text", text: "no images here" }] },
+			isError: false,
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+	});
+
+	it("drops non-allowlisted mime types (e.g. svg) and malformed base64", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {
+				content: [
+					{ type: "text", text: "note" },
+					{ type: "image", data: "<svg onload=alert(1)>", mimeType: "image/svg+xml" },
+					{ type: "image", data: "not valid base64!!", mimeType: "image/png" },
+				],
+			},
+			isError: false,
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toBeUndefined();
+		expect(state.entries[0]).toMatchObject({ resultText: "note" });
+	});
+
+	it("keeps valid images while dropping invalid siblings in a mixed content array", () => {
+		// Per-item filtering must not bail on the first bad block: a valid image
+		// mixed with disallowed/malformed siblings should still surface the valid one.
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {
+				content: [
+					{ type: "text", text: "note" },
+					{ type: "image", data: "<svg onload=alert(1)>", mimeType: "image/svg+xml" },
+					{ type: "image", data: PNG_B64, mimeType: "image/png" },
+					{ type: "image", data: "not valid base64!!", mimeType: "image/png" },
+				],
+			},
+			isError: false,
+		});
+		expect(state.entries[0]).toMatchObject({
+			resultText: "note",
+			images: [{ mimeType: "image/png", data: PNG_B64 }],
+		});
+	});
+
+	it("keeps multiple valid images from a single tool result", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {
+				content: [
+					{ type: "image", data: PNG_B64, mimeType: "image/png" },
+					{ type: "image", data: PNG_B64, mimeType: "image/webp" },
+				],
+			},
+			isError: false,
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([
+			{ mimeType: "image/png", data: PNG_B64 },
+			{ mimeType: "image/webp", data: PNG_B64 },
+		]);
 	});
 
 	it("marks tool errors", () => {

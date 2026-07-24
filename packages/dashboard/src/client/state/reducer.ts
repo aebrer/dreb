@@ -48,6 +48,21 @@ export interface AssistantEntry {
 	timestamp?: number;
 }
 
+/**
+ * An image content block returned by a tool result, surfaced for inline
+ * rendering in the dashboard transcript. This is independent of whether the
+ * active model supports vision — the human viewing the dashboard always sees
+ * the image. Only allowlisted raster mime types with plausible base64 payloads
+ * are retained (see {@link contentToParts}); this is the sole sanitization
+ * boundary before the data is rendered as a `data:` URI `<img>`.
+ */
+export interface ToolResultImage {
+	/** Allowlisted raster mime type (png/jpeg/gif/webp). Never `image/svg+xml`. */
+	mimeType: string;
+	/** Base64-encoded image bytes (no data-URI prefix). */
+	data: string;
+}
+
 export interface ToolEntry {
 	kind: "tool";
 	toolCallId: string;
@@ -56,6 +71,11 @@ export interface ToolEntry {
 	status: "running" | "done" | "error";
 	/** Result text (or partial output while running). */
 	resultText: string;
+	/**
+	 * Image content blocks returned by the tool (e.g. `read` on a PNG). Rendered
+	 * inline as sanitized `data:` URIs. Absent when the result carried no images.
+	 */
+	images?: ToolResultImage[];
 	details?: unknown;
 	startedAt: number;
 	endedAt?: number;
@@ -178,13 +198,56 @@ interface MessageLike {
 	[key: string]: unknown;
 }
 
+/**
+ * Raster image mime types we are willing to render inline. Deliberately
+ * excludes `image/svg+xml` — SVG can carry embedded script, so it must never
+ * reach the `data:` URI `<img>` path.
+ */
+const ALLOWED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+/**
+ * Reject payloads that are not plausibly base64. This is a defense-in-depth
+ * check so a malformed/hostile content block cannot smuggle arbitrary text
+ * into the `src` attribute; combined with the mime allowlist and the fact that
+ * a data-URI `<img>` cannot execute script, it closes the XSS surface.
+ */
+function isLikelyBase64(value: string): boolean {
+	if (value.length === 0 || value.length % 4 !== 0) return false;
+	return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
+/**
+ * Normalize a tool-result content value into rendered parts. Text blocks are
+ * joined with newlines (mirrors the previous text-only behavior); image blocks
+ * are surfaced separately so the transcript can render them inline. Non-text,
+ * non-image parts are ignored. Image blocks are sanitized here — the only place
+ * image data crosses from the wire into render state.
+ */
+function contentToParts(content: unknown): { text: string; images: ToolResultImage[] } {
+	if (typeof content === "string") return { text: content, images: [] };
+	if (!Array.isArray(content)) return { text: "", images: [] };
+	const textParts: string[] = [];
+	const images: ToolResultImage[] = [];
+	for (const raw of content) {
+		const part = raw as { type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown };
+		if (typeof part?.text === "string") {
+			textParts.push(part.text);
+		} else if (
+			part?.type === "image" &&
+			typeof part.data === "string" &&
+			typeof part.mimeType === "string" &&
+			ALLOWED_IMAGE_MIME_TYPES.has(part.mimeType) &&
+			isLikelyBase64(part.data)
+		) {
+			images.push({ mimeType: part.mimeType, data: part.data });
+		}
+	}
+	return { text: textParts.join("\n"), images };
+}
+
+/** Text-only view of tool/message content (images and other blocks dropped). */
 function contentToText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((p): p is { type: string; text: string } => typeof (p as any)?.text === "string")
-		.map((p) => p.text)
-		.join("\n");
+	return contentToParts(content).text;
 }
 
 function parseBackgroundAgentResult(raw: string, timestamp?: number): AgentResultEntry | undefined {
@@ -260,7 +323,9 @@ export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 			const entry = toolEntries.get(String(message.toolCallId));
 			if (entry) {
 				entry.status = message.isError ? "error" : "done";
-				entry.resultText = contentToText(message.content);
+				const parts = contentToParts(message.content);
+				entry.resultText = parts.text;
+				if (parts.images.length > 0) entry.images = parts.images;
 				entry.details = message.details;
 				entry.endedAt = message.timestamp;
 			}
@@ -444,12 +509,17 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 			const entry = findTool(state, String(event.toolCallId));
 			if (entry) {
 				const partial = event.partialResult as { content?: unknown } | string | undefined;
-				entry.resultText =
-					typeof partial === "string"
-						? partial
-						: partial?.content
-							? contentToText(partial.content)
-							: entry.resultText;
+				// Each partial snapshot replaces resultText wholesale, so images
+				// follow the same snapshot semantics: when a snapshot carries
+				// content it is authoritative and stale images must be cleared.
+				if (typeof partial === "string") {
+					entry.resultText = partial;
+					entry.images = undefined;
+				} else if (partial?.content) {
+					const parts = contentToParts(partial.content);
+					entry.resultText = parts.text;
+					entry.images = parts.images.length > 0 ? parts.images : undefined;
+				}
 			}
 			break;
 		}
@@ -458,8 +528,20 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 			if (entry) {
 				entry.status = event.isError ? "error" : "done";
 				const result = event.result as { content?: unknown } | string | undefined;
-				entry.resultText =
-					typeof result === "string" ? result : result?.content ? contentToText(result.content) : entry.resultText;
+				// The final result is authoritative: when it replaces content
+				// (string body or a structured content payload) it also dictates
+				// the images. Set the valid final images, or clear any stale
+				// partial images when the authoritative content carries none. When
+				// the event has no result/content at all this is not a replacement,
+				// so prior resultText and images are preserved (fallback).
+				if (typeof result === "string") {
+					entry.resultText = result;
+					entry.images = undefined;
+				} else if (result?.content) {
+					const parts = contentToParts(result.content);
+					entry.resultText = parts.text;
+					entry.images = parts.images.length > 0 ? parts.images : undefined;
+				}
 				entry.details = (event.result as { details?: unknown } | undefined)?.details;
 				entry.endedAt = Date.now();
 			}

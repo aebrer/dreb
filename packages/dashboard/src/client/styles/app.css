@@ -786,6 +786,27 @@ details.thinking .thinking-body {
 	border-top: none;
 }
 
+.tool-images {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-2);
+}
+
+.tool-image {
+	display: block;
+	/* Bound the rendered layout size so a large image cannot dominate the
+	   transcript. This caps display dimensions only, not the underlying bytes
+	   or decoded pixels — image-producing tools other than `read` need not
+	   resize their output. */
+	max-width: 100%;
+	max-height: 480px;
+	height: auto;
+	width: auto;
+	object-fit: contain;
+	border: var(--hairline);
+	border-radius: var(--radius);
+}
+
 .tool .tool-result pre {
 	border: none;
 	padding: 0;

@@ -39,8 +39,9 @@ Open `http://127.0.0.1:5343`.
   activity/subagent text, and past-session labels wrap within cards or rows
   rather than spilling off-screen. `+ new session` anywhere.
 - **Session view** — full chat parity: markdown streaming transcript, tool
-  cards, thinking blocks, compaction summaries, per-message copy, tasks panel,
-  suggest-next chip, slash-command autocomplete, image attach/paste,
+  cards with sanitized inline PNG/JPEG/GIF/WebP result images, thinking blocks,
+  compaction summaries, per-message copy, tasks panel, suggest-next chip,
+  slash-command autocomplete, image attach/paste,
   queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
@@ -71,6 +72,16 @@ Open `http://127.0.0.1:5343`.
   system/light/dark mode selector, saved per browser), current pairing code,
   and paired-devices management.
 - **Pairing** — remote first-login rotating-code flow.
+
+### Tool-result images
+
+Image blocks returned by any tool render inline for the human viewing the
+transcript, even when the active model does not support vision. The dashboard
+accepts only PNG, JPEG, GIF, and WebP with valid base64 payloads; SVG and
+malformed blocks are dropped. Accepted images also survive refresh/resync and
+are embedded in exported HTML transcripts. Oversized live events use the
+existing SSE resync barrier and HTTP snapshot path; CSS bounds display
+dimensions but does not compress the underlying bytes.
 
 ## Fleet transport and freshness
 
