@@ -294,6 +294,36 @@ describe("HTML export — template.js image rendering & sanitization", () => {
 		}
 	});
 
+	test("(d) renders only the valid image when a tool result mixes valid and invalid images", () => {
+		// Per-item sanitization: a disallowed/malformed sibling must not suppress
+		// the valid image, and the invalid ones must not leak markup.
+		const mixedEntry = {
+			type: "message",
+			id: "r-call-mixed",
+			parentId: "a1",
+			timestamp: new Date().toISOString(),
+			message: {
+				role: "toolResult",
+				toolCallId: "call-mixed",
+				toolName: "read",
+				content: [
+					{ type: "text", text: "result for read" },
+					{ type: "image", mimeType: "image/svg+xml", data: IMAGE_BASE64 },
+					{ type: "image", mimeType: "image/png", data: IMAGE_BASE64 },
+					{ type: "image", mimeType: "image/png", data: "not valid base64!!" },
+				],
+			},
+		};
+		const { renderToolCall } = loadTemplateInternals([mixedEntry]);
+		const html = renderToolCall({ id: "call-mixed", name: "read", arguments: { path: "x.png" } });
+
+		// Exactly one sanitized <img> from the single valid block.
+		expect(html.match(/<img/g)?.length ?? 0).toBe(1);
+		expect(html).toContain(`src="data:image/png;base64,${IMAGE_BASE64}"`);
+		expect(html).not.toContain("svg");
+		expect(html).not.toContain("not valid");
+	});
+
 	test("(a) valid message image renders via renderEntry dispatch", () => {
 		const { renderEntry } = loadTemplateInternals([]);
 		const html = renderEntry({

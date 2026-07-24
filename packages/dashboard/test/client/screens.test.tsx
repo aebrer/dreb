@@ -4341,4 +4341,50 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector(".tool-image")).toBeNull();
 		expect(el.querySelector(".tool-images")).toBeNull();
 	});
+
+	it("renders only the allowed <img> when images mix allowed and disallowed mime types", () => {
+		// Per-item filtering: a disallowed sibling must not suppress the valid image.
+		const read: ToolEntry = {
+			kind: "tool",
+			toolCallId: "read-mixed",
+			toolName: "read",
+			args: { path: "/tmp/logo.png" },
+			status: "done",
+			resultText: "",
+			images: [
+				{ mimeType: "image/svg+xml", data: "PHN2Zz4=" },
+				{ mimeType: "image/png", data: "iVBORw==" },
+			],
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[read]} />);
+		const imgs = el.querySelectorAll("img.tool-image");
+
+		expect(imgs.length).toBe(1);
+		expect((imgs[0] as HTMLImageElement).getAttribute("src")).toBe("data:image/png;base64,iVBORw==");
+	});
+
+	it("renders multiple allowed images from a single tool result", () => {
+		const read: ToolEntry = {
+			kind: "tool",
+			toolCallId: "read-multi",
+			toolName: "read",
+			args: { path: "/tmp/shot.png" },
+			status: "done",
+			resultText: "",
+			images: [
+				{ mimeType: "image/png", data: "iVBORw==" },
+				{ mimeType: "image/webp", data: "UklGRg==" },
+			],
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[read]} />);
+		const imgs = Array.from(el.querySelectorAll("img.tool-image")) as HTMLImageElement[];
+
+		expect(imgs.length).toBe(2);
+		expect(imgs.map((img) => img.getAttribute("src"))).toEqual([
+			"data:image/png;base64,iVBORw==",
+			"data:image/webp;base64,UklGRg==",
+		]);
+	});
 });

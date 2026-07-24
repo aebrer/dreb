@@ -491,6 +491,52 @@ describe("applySessionEvent — streaming lifecycle", () => {
 		expect(state.entries[0]).toMatchObject({ resultText: "note" });
 	});
 
+	it("keeps valid images while dropping invalid siblings in a mixed content array", () => {
+		// Per-item filtering must not bail on the first bad block: a valid image
+		// mixed with disallowed/malformed siblings should still surface the valid one.
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {
+				content: [
+					{ type: "text", text: "note" },
+					{ type: "image", data: "<svg onload=alert(1)>", mimeType: "image/svg+xml" },
+					{ type: "image", data: PNG_B64, mimeType: "image/png" },
+					{ type: "image", data: "not valid base64!!", mimeType: "image/png" },
+				],
+			},
+			isError: false,
+		});
+		expect(state.entries[0]).toMatchObject({
+			resultText: "note",
+			images: [{ mimeType: "image/png", data: PNG_B64 }],
+		});
+	});
+
+	it("keeps multiple valid images from a single tool result", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "read", args: {} });
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: {
+				content: [
+					{ type: "image", data: PNG_B64, mimeType: "image/png" },
+					{ type: "image", data: PNG_B64, mimeType: "image/webp" },
+				],
+			},
+			isError: false,
+		});
+		expect((state.entries[0] as { images?: unknown }).images).toEqual([
+			{ mimeType: "image/png", data: PNG_B64 },
+			{ mimeType: "image/webp", data: PNG_B64 },
+		]);
+	});
+
 	it("marks tool errors", () => {
 		const state = makeState();
 		applySessionEvent(state, { type: "tool_execution_start", toolCallId: "t1", toolName: "bash", args: {} });
