@@ -66,6 +66,8 @@ export interface RuntimeHandle {
 	attention: Map<string, string>;
 	/** Last runtime-level error, persisted server-side so fleet refreshes stay honest. */
 	error?: string;
+	/** Provider error currently responsible for error/attention; retry may clear only this source. */
+	providerError?: string;
 	/** Last authoritative state, patched only with event-derivable fields between RPC reads. */
 	lastState?: SessionStateDto;
 	/** Resume-path fallback; events must never invent or overwrite session identity. */
@@ -84,11 +86,13 @@ const FLEET_SNAPSHOT_EVENT_TYPES = new Set([
 	"agent_end",
 	"auto_compaction_start",
 	"auto_compaction_end",
+	"auto_retry_start",
 	"auto_retry_end",
 	"background_agent_start",
 	"background_agent_end",
 	"extension_ui_request",
 	"extension_ui_response_handled",
+	"message_end",
 	"message_start",
 	"parent_paused_for_background_agents",
 	"runtime_removed",
@@ -458,6 +462,7 @@ export class RuntimePool {
 			handle.attention.delete("suggest");
 			handle.attention.delete("error");
 			handle.error = undefined;
+			handle.providerError = undefined;
 		}
 		if (type === "suggest_next") {
 			// suggest_next as the ending action = "your move": mark needs-attention
@@ -471,8 +476,22 @@ export class RuntimePool {
 			handle.attention.delete("paused");
 			if (event.errorMessage) this.recordRuntimeError(handle, String(event.errorMessage));
 		}
+		if (type === "message_end") {
+			const message = event.message;
+			if (message && typeof message === "object" && !Array.isArray(message)) {
+				const assistant = message as Record<string, unknown>;
+				if (assistant.role === "assistant" && assistant.stopReason === "error") {
+					const rawError = assistant.errorMessage;
+					const error = typeof rawError === "string" && rawError.trim().length > 0 ? rawError : "Unknown error";
+					this.recordProviderError(handle, error);
+				}
+			}
+		}
+		if (type === "auto_retry_start") this.clearProviderError(handle);
 		if (type === "auto_retry_end" && event.success === false && event.finalError) {
-			this.recordRuntimeError(handle, String(event.finalError));
+			this.recordProviderError(handle, String(event.finalError));
+		} else if (type === "auto_retry_end" && event.success === true) {
+			this.clearProviderError(handle);
 		}
 		if (type === "auto_compaction_end" && event.errorMessage) {
 			this.recordRuntimeError(handle, String(event.errorMessage));
@@ -560,6 +579,20 @@ export class RuntimePool {
 	private recordRuntimeError(handle: RuntimeHandle, message: string): void {
 		handle.error = message;
 		handle.attention.set("error", message);
+		if (this.runtimes.get(handle.key) === handle) this.scheduleFleetSnapshot();
+	}
+
+	private recordProviderError(handle: RuntimeHandle, message: string): void {
+		handle.providerError = message;
+		this.recordRuntimeError(handle, message);
+	}
+
+	private clearProviderError(handle: RuntimeHandle): void {
+		const providerError = handle.providerError;
+		if (providerError === undefined) return;
+		handle.providerError = undefined;
+		if (handle.error === providerError) handle.error = undefined;
+		if (handle.attention.get("error") === providerError) handle.attention.delete("error");
 		if (this.runtimes.get(handle.key) === handle) this.scheduleFleetSnapshot();
 	}
 

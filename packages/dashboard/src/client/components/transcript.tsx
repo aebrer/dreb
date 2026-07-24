@@ -585,6 +585,14 @@ function CopyButton(props: { text?: string }): JSX.Element {
 }
 
 function AssistantBlockView(props: { entry: AssistantEntry; who: string }): JSX.Element {
+	const visibleBlocks = () =>
+		props.entry.blocks.filter(
+			(block) =>
+				props.entry.streaming ||
+				props.entry.stopReason !== "error" ||
+				block.kind !== "thinking" ||
+				block.text.trim().length > 0,
+		);
 	return (
 		<div class="entry assistant">
 			<div class="entry-head">
@@ -599,7 +607,7 @@ function AssistantBlockView(props: { entry: AssistantEntry; who: string }): JSX.
 				</Show>
 				<CopyButton text={entryCopyText(props.entry)} />
 			</div>
-			<For each={props.entry.blocks}>
+			<For each={visibleBlocks()}>
 				{(block, index) => (
 					<Show
 						when={block.kind === "thinking"}
@@ -608,7 +616,7 @@ function AssistantBlockView(props: { entry: AssistantEntry; who: string }): JSX.
 								<MarkdownBody
 									text={block.text}
 									classList={{
-										"streaming-cursor": props.entry.streaming && index() === props.entry.blocks.length - 1,
+										"streaming-cursor": props.entry.streaming && index() === visibleBlocks().length - 1,
 									}}
 									throttle={props.entry.streaming}
 								/>
@@ -626,6 +634,13 @@ function AssistantBlockView(props: { entry: AssistantEntry; who: string }): JSX.
 					</Show>
 				)}
 			</For>
+			<Show when={props.entry.stopReason === "error" && props.entry.errorMessage}>
+				{(error) => (
+					<p class="assistant-error" role="alert">
+						Error: {error()}
+					</p>
+				)}
+			</Show>
 		</div>
 	);
 }

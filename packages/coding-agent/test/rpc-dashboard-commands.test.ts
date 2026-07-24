@@ -22,7 +22,13 @@ import type {
 } from "../src/modes/rpc/index.js";
 import { RpcClient } from "../src/modes/rpc/index.js";
 import * as jsonl from "../src/modes/rpc/jsonl.js";
-import { getPendingMessagesForRpc, getResourcesForRpc, getStateForRpc, runRpcMode } from "../src/modes/rpc/rpc-mode.js";
+import {
+	getDashboardMessagesForRpc,
+	getPendingMessagesForRpc,
+	getResourcesForRpc,
+	getStateForRpc,
+	runRpcMode,
+} from "../src/modes/rpc/rpc-mode.js";
 import { createTestResourceLoader, createTestSession } from "./utilities.js";
 
 const tempDirs: string[] = [];
@@ -117,6 +123,47 @@ describe("RPC dashboard state/resources DTOs", () => {
 		} finally {
 			cleanup();
 		}
+	});
+
+	it("restores persisted failed attempts in idle dashboard snapshots", () => {
+		const failed = {
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "transient provider failure",
+			content: [{ type: "text", text: "partial" }],
+		};
+		const success = {
+			role: "assistant",
+			stopReason: "stop",
+			content: [{ type: "text", text: "recovered" }],
+		};
+		const buildSessionContext = vi.fn(() => ({ messages: [failed, success] }));
+		const session = {
+			isStreaming: false,
+			isRetrying: false,
+			messages: [success],
+			sessionManager: { buildSessionContext },
+		} as never;
+
+		expect(getDashboardMessagesForRpc(session)).toEqual([failed, success]);
+		expect(buildSessionContext).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		{ state: "streaming", isStreaming: true, isRetrying: false },
+		{ state: "retrying", isStreaming: false, isRetrying: true },
+	])("uses live agent messages while $state", ({ isStreaming, isRetrying }) => {
+		const live = { role: "assistant", content: [{ type: "text", text: "live partial" }] };
+		const buildSessionContext = vi.fn(() => ({ messages: [{ role: "assistant", stopReason: "error" }] }));
+		const session = {
+			isStreaming,
+			isRetrying,
+			messages: [live],
+			sessionManager: { buildSessionContext },
+		} as never;
+
+		expect(getDashboardMessagesForRpc(session)).toEqual([live]);
+		expect(buildSessionContext).not.toHaveBeenCalled();
 	});
 
 	it("returns queued message metadata without clearing queues", () => {

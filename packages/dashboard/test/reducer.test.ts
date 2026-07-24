@@ -134,6 +134,68 @@ describe("messagesToEntries — hydration", () => {
 		});
 	});
 
+	it("attaches assistant failure metadata to the final segment around tool calls", () => {
+		const entries = messagesToEntries([
+			{
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "provider exploded",
+				content: [
+					{ type: "text", text: "before tool" },
+					{ type: "toolCall", id: "t1", name: "read", arguments: { path: "/x" } },
+					{ type: "thinking", thinking: "after thinking" },
+					{ type: "text", text: "partial after tool" },
+				],
+			},
+		]);
+
+		expect(entries.map((entry) => entry.kind)).toEqual(["assistant", "tool", "assistant"]);
+		expect(entries[0]).toMatchObject({ kind: "assistant", blocks: [{ kind: "text", text: "before tool" }] });
+		expect(entries[0]).not.toHaveProperty("errorMessage", "provider exploded");
+		expect(entries[2]).toMatchObject({
+			kind: "assistant",
+			stopReason: "error",
+			errorMessage: "provider exploded",
+			blocks: [
+				{ kind: "thinking", text: "after thinking" },
+				{ kind: "text", text: "partial after tool" },
+			],
+		});
+	});
+
+	it("creates an error-only assistant entry and falls back to Unknown error", () => {
+		const entries = messagesToEntries([
+			{
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "   ",
+				content: [{ type: "toolCall", id: "t1", name: "read", arguments: {} }],
+			},
+		]);
+
+		expect(entries.map((entry) => entry.kind)).toEqual(["tool", "assistant"]);
+		expect(entries[1]).toMatchObject({
+			kind: "assistant",
+			blocks: [],
+			stopReason: "error",
+			errorMessage: "Unknown error",
+		});
+	});
+
+	it("preserves aborted outcomes without classifying them as provider failures", () => {
+		const entries = messagesToEntries([
+			{
+				role: "assistant",
+				stopReason: "aborted",
+				errorMessage: "not a provider failure",
+				content: [{ type: "text", text: "cancelled partial" }],
+			},
+		]);
+
+		expect(entries[0]).toMatchObject({ kind: "assistant", stopReason: "aborted" });
+		expect((entries[0] as { errorMessage?: string }).errorMessage).toBeUndefined();
+	});
+
 	it("renders bashExecution and custom messages", () => {
 		const entries = messagesToEntries([
 			{ role: "bashExecution", command: "ls", output: "a b c", timestamp: 3 } as any,
@@ -254,6 +316,66 @@ describe("applySessionEvent — streaming lifecycle", () => {
 			header: "Background agent bg2 (Implement) completed.",
 			text: "result body",
 		});
+	});
+
+	it("finalizes a live provider failure with partial content and terminal session state", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "agent_start" });
+		applySessionEvent(state, { type: "message_start", message: { role: "assistant", model: "m1" } });
+		applySessionEvent(state, {
+			type: "message_update",
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+		});
+		applySessionEvent(state, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				model: "m1",
+				stopReason: "error",
+				errorMessage: "upstream 503",
+				content: [
+					{ type: "thinking", thinking: "   \n" },
+					{ type: "text", text: "partial answer" },
+				],
+			},
+		});
+
+		expect(state.entries[0]).toMatchObject({
+			kind: "assistant",
+			streaming: false,
+			stopReason: "error",
+			errorMessage: "upstream 503",
+			blocks: [
+				{ kind: "thinking", text: "   \n" },
+				{ kind: "text", text: "partial answer" },
+			],
+		});
+		expect(state.statusEntries).toContainEqual({
+			key: "provider-error",
+			text: "upstream 503",
+			tone: "error",
+		});
+		expect(state.lastError).toBe("upstream 503");
+		expect(state.needsAttention).toBe(true);
+	});
+
+	it("appends an error-only live message when message_start was absent", () => {
+		const state = makeState();
+		state.entries.push({ kind: "assistant", blocks: [{ kind: "text", text: "older" }], streaming: false });
+
+		applySessionEvent(state, {
+			type: "message_end",
+			message: { role: "assistant", stopReason: "error", content: [] },
+		});
+
+		expect(state.entries).toHaveLength(2);
+		expect(state.entries[1]).toMatchObject({
+			kind: "assistant",
+			blocks: [],
+			stopReason: "error",
+			errorMessage: "Unknown error",
+		});
+		expect(state.lastError).toBe("Unknown error");
 	});
 
 	it("tracks tool card lifecycle: start → update → end", () => {
@@ -691,6 +813,56 @@ describe("applySessionEvent — session-level events", () => {
 		applySessionEvent(state, { type: "auto_retry_end", success: false, attempt: 3, finalError: "429 rate limited" });
 		expect(state.lastError).toBe("429 rate limited");
 		expect(state.needsAttention).toBe(true);
+	});
+
+	it("transitions provider errors through retry, success, and exhausted retry without duplicates", () => {
+		const state = makeState();
+		const failure = {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "provider unavailable",
+				content: [{ type: "text", text: "partial" }],
+			},
+		};
+
+		applySessionEvent(state, failure);
+		applySessionEvent(state, { type: "agent_end", messages: [] });
+		expect(state.statusEntries.filter((entry) => entry.key === "provider-error")).toHaveLength(1);
+
+		applySessionEvent(state, {
+			type: "auto_retry_start",
+			attempt: 1,
+			maxAttempts: 2,
+			errorMessage: "provider unavailable",
+		});
+		expect(state.lastError).toBeUndefined();
+		expect(state.statusEntries).toEqual([expect.objectContaining({ key: "retry", tone: "warning" })]);
+		expect(state.needsAttention).toBe(false);
+
+		applySessionEvent(state, { type: "agent_start" });
+		applySessionEvent(state, {
+			type: "message_end",
+			message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "recovered" }] },
+		});
+		applySessionEvent(state, { type: "auto_retry_end", success: true, attempt: 1 });
+		applySessionEvent(state, { type: "agent_end", messages: [] });
+		expect(state.lastError).toBeUndefined();
+		expect(state.statusEntries.some((entry) => entry.key === "provider-error")).toBe(false);
+		expect(state.entries.filter((entry) => entry.kind === "assistant" && entry.stopReason === "error")).toHaveLength(
+			1,
+		);
+
+		applySessionEvent(state, failure);
+		applySessionEvent(state, {
+			type: "auto_retry_end",
+			success: false,
+			attempt: 2,
+			finalError: "provider unavailable",
+		});
+		expect(state.statusEntries.filter((entry) => entry.key === "provider-error")).toHaveLength(1);
+		expect(state.lastError).toBe("provider unavailable");
 	});
 
 	it("parent_paused sets a warning status cleared by agent_end", () => {

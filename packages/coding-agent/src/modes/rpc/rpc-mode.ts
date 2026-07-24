@@ -176,6 +176,21 @@ export function getStateForRpc(session: AgentSession, modelFallbackMessage?: str
 }
 
 /**
+ * Dashboard transcript snapshots use persisted branch context once the runtime
+ * is idle so failed attempts removed from the next provider request remain
+ * visible after a successful retry. During streaming/retry, the live agent
+ * state is authoritative and avoids resurrecting the provisional failed
+ * attempt as a terminal hydration state.
+ */
+export function getDashboardMessagesForRpc(session: AgentSession) {
+	return [
+		...(session.isStreaming || session.isRetrying
+			? session.messages
+			: session.sessionManager.buildSessionContext().messages),
+	];
+}
+
+/**
  * Handle the `delete_session` RPC command: wires the active session into the core
  * {@link SessionManager.deleteSession} guard and maps the result to a discriminated
  * union the handler serializes. Extracted (like {@link getPerformanceStatsData}) so the guard
@@ -1392,7 +1407,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				const data: RpcDashboardSnapshot = {
 					snapshotId,
 					state: getStateForRpc(session, modelFallbackMessage),
-					messages: [...session.messages],
+					messages: getDashboardMessagesForRpc(session),
 					backgroundAgents: getBackgroundAgents().map(toRpcBackgroundAgentInfo),
 				};
 				return success(id, "get_dashboard_snapshot", data);

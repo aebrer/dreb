@@ -22,11 +22,11 @@ import {
 	applySessionEvent,
 	capBackgroundAgents,
 	createSessionViewState,
+	deriveProviderErrorState,
 	dismissToast as dismissReducerToast,
 	messagesToEntries,
 	type SessionViewState,
 	type Toast,
-	updateAttention,
 } from "./reducer.js";
 
 export type Route =
@@ -591,7 +591,8 @@ export function createAppStore() {
 	function hydrateSnapshot(active: ActiveRuntimeSnapshotDto): void {
 		const subagent = active.subagent;
 		mutateSession(active.key, (session) => {
-			session.entries = messagesToEntries(active.messages as any[]);
+			const messages = active.messages as any[];
+			session.entries = messagesToEntries(messages);
 			session.tasks = (active.state.tasks ?? []).map((task) => ({ ...task }));
 			session.streaming = active.state.isStreaming;
 			session.compacting = active.state.isCompacting;
@@ -610,7 +611,7 @@ export function createAppStore() {
 			session.toasts = [];
 			session.title = undefined;
 			session.composerPrefill = undefined;
-			updateAttention(session);
+			deriveProviderErrorState(session, messages, active.state.isStreaming || active.state.isCompacting);
 			if (session.streaming) {
 				// The snapshot has no current-tool label or turn start time. Reset
 				// both rather than preserving stale pre-gap working metadata.
@@ -887,7 +888,8 @@ export function createAppStore() {
 				return;
 			}
 			mutateSession(key, (session) => {
-				session.entries = messagesToEntries(snapshot.messages as any[]);
+				const messages = snapshot.messages as any[];
+				session.entries = messagesToEntries(messages);
 				session.backgroundAgents = Object.fromEntries(
 					snapshot.backgroundAgents.map((agent) => [agent.agentId, agent]),
 				);
@@ -902,6 +904,7 @@ export function createAppStore() {
 					session.workingSince = undefined;
 					session.workingText = undefined;
 				}
+				deriveProviderErrorState(session, messages, snapshot.state.isStreaming || snapshot.state.isCompacting);
 			});
 			bumpTaskRevision(key);
 			// The runtime snapshot is authoritative, including a lower count after a

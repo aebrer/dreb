@@ -261,6 +261,29 @@ describe("EventHub", () => {
 		expect(projectDashboardEvent(events[7]!)).toBe(events[7]);
 	});
 
+	it("preserves assistant stop reason and provider error text on projected message_end", () => {
+		const event = {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "provider returned 500",
+				content: [{ type: "text", text: "partial" }],
+			},
+		};
+
+		expect(projectDashboardEvent(event)).toBe(event);
+		const hub = new EventHub();
+		const published = hub.publish("k", event);
+		expect(published.event).toMatchObject({
+			type: "message_end",
+			message: {
+				stopReason: "error",
+				errorMessage: "provider returned 500",
+			},
+		});
+	});
+
 	it("sequences and replays global fleet snapshots without transport special-casing", () => {
 		const hub = new EventHub();
 		hub.publish("", {

@@ -573,6 +573,109 @@ describe("RuntimePool", () => {
 		}
 	});
 
+	it("projects provider message failures to fleet state and clears them when retry starts", async () => {
+		vi.useFakeTimers();
+		try {
+			const { pool, clients } = makePool();
+			const handle = await pool.create("/tmp");
+			const snapshots: unknown[] = [];
+			pool.onFleetSnapshot((event) => snapshots.push(event));
+			await vi.advanceTimersByTimeAsync(200);
+			snapshots.length = 0;
+
+			clients[0].emit({
+				type: "message_end",
+				message: {
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: "provider overloaded",
+					content: [{ type: "text", text: "partial" }],
+				},
+			});
+			expect(handle.error).toBe("provider overloaded");
+			expect(handle.attention.get("error")).toBe("provider overloaded");
+			await vi.advanceTimersByTimeAsync(200);
+			expect(snapshots.at(-1)).toMatchObject({
+				type: "fleet_snapshot",
+				runtimes: [expect.objectContaining({ error: "provider overloaded", needsAttention: true })],
+			});
+
+			clients[0].emit({
+				type: "auto_retry_start",
+				attempt: 1,
+				maxAttempts: 3,
+				errorMessage: "provider overloaded",
+			});
+			expect(handle.error).toBeUndefined();
+			expect(handle.attention.has("error")).toBe(false);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(snapshots.at(-1)).toMatchObject({
+				type: "fleet_snapshot",
+				runtimes: [expect.not.objectContaining({ error: expect.anything() })],
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("coalesces an immediate provider failure and retry transition without a terminal fleet card", async () => {
+		vi.useFakeTimers();
+		try {
+			const { pool, clients } = makePool();
+			const handle = await pool.create("/tmp");
+			const snapshots: unknown[] = [];
+			pool.onFleetSnapshot((event) => snapshots.push(event));
+			await vi.advanceTimersByTimeAsync(200);
+			snapshots.length = 0;
+
+			clients[0].emit({
+				type: "message_end",
+				message: { role: "assistant", stopReason: "error", errorMessage: "503" },
+			});
+			clients[0].emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 2, errorMessage: "503" });
+			await vi.advanceTimersByTimeAsync(200);
+
+			expect(snapshots).toEqual([
+				{
+					type: "fleet_snapshot",
+					runtimes: [expect.objectContaining({ key: handle.key, needsAttention: false, error: undefined })],
+				},
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("retains exhausted provider errors and clears them on a new turn", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+
+		clients[0].emit({
+			type: "message_end",
+			message: { role: "assistant", stopReason: "error", errorMessage: "last 503" },
+		});
+		clients[0].emit({ type: "auto_retry_end", success: false, attempt: 3, finalError: "last 503" });
+		expect(handle.error).toBe("last 503");
+		expect(handle.attention.get("error")).toBe("last 503");
+
+		clients[0].emit({ type: "agent_start" });
+		expect(handle.error).toBeUndefined();
+		expect(handle.attention.has("error")).toBe(false);
+	});
+
+	it("uses Unknown error when a provider failure omits text", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+
+		clients[0].emit({
+			type: "message_end",
+			message: { role: "assistant", stopReason: "error", errorMessage: "  " },
+		});
+
+		expect(handle.error).toBe("Unknown error");
+		expect(handle.attention.get("error")).toBe("Unknown error");
+	});
+
 	it("tracks background agents from lifecycle events", async () => {
 		const { pool, clients } = makePool();
 		const handle = await pool.create("/tmp");

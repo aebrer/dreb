@@ -45,6 +45,10 @@ export interface AssistantEntry {
 	blocks: AssistantBlock[];
 	model?: string;
 	streaming: boolean;
+	/** Final message outcome; present after live finalization or hydration. */
+	stopReason?: string;
+	/** Provider failure text. Present only when stopReason is "error". */
+	errorMessage?: string;
 	timestamp?: number;
 }
 
@@ -184,7 +188,7 @@ export function createSessionViewState(key: string): SessionViewState {
 // Message → entries (hydration from get_messages and message_end events)
 // ---------------------------------------------------------------------------
 
-interface MessageLike {
+export interface MessageLike {
 	role: string;
 	content?: unknown;
 	timestamp?: number;
@@ -274,6 +278,13 @@ function userMessageToEntry(message: MessageLike): UserEntry | AgentResultEntry 
 	return parseBackgroundAgentResult(text, message.timestamp) ?? { kind: "user", text, timestamp: message.timestamp };
 }
 
+function providerErrorText(message: MessageLike | undefined): string | undefined {
+	if (message?.role !== "assistant" || message.stopReason !== "error") return undefined;
+	return typeof message.errorMessage === "string" && message.errorMessage.trim().length > 0
+		? message.errorMessage
+		: "Unknown error";
+}
+
 /** Convert a full message list (get_messages) into transcript entries. */
 export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 	const entries: TranscriptEntry[] = [];
@@ -284,15 +295,18 @@ export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 			entries.push(userMessageToEntry(message));
 		} else if (message.role === "assistant") {
 			let blocks: AssistantBlock[] = [];
+			const assistantSegments: AssistantEntry[] = [];
 			const flushAssistant = () => {
 				if (blocks.length === 0) return;
-				entries.push({
+				const entry: AssistantEntry = {
 					kind: "assistant",
 					blocks,
 					model: message.model,
 					streaming: false,
 					timestamp: message.timestamp,
-				});
+				};
+				assistantSegments.push(entry);
+				entries.push(entry);
 				blocks = [];
 			};
 			if (Array.isArray(message.content)) {
@@ -319,6 +333,23 @@ export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 				}
 			}
 			flushAssistant();
+			const errorMessage = providerErrorText(message);
+			if (errorMessage && assistantSegments.length === 0) {
+				const entry: AssistantEntry = {
+					kind: "assistant",
+					blocks: [],
+					model: message.model,
+					streaming: false,
+					timestamp: message.timestamp,
+				};
+				assistantSegments.push(entry);
+				entries.push(entry);
+			}
+			const finalSegment = assistantSegments.at(-1);
+			if (finalSegment) {
+				finalSegment.stopReason = message.stopReason;
+				finalSegment.errorMessage = errorMessage;
+			}
 		} else if (message.role === "toolResult") {
 			const entry = toolEntries.get(String(message.toolCallId));
 			if (entry) {
@@ -395,6 +426,38 @@ export function updateAttention(state: SessionViewState): void {
 		!!state.suggestedCommand;
 }
 
+const PROVIDER_ERROR_STATUS_KEY = "provider-error";
+
+function clearProviderErrorState(state: SessionViewState): void {
+	state.statusEntries = state.statusEntries.filter((entry) => entry.key !== PROVIDER_ERROR_STATUS_KEY);
+	state.lastError = undefined;
+}
+
+function setProviderErrorState(state: SessionViewState, error: string): void {
+	clearProviderErrorState(state);
+	state.statusEntries.push({ key: PROVIDER_ERROR_STATUS_KEY, text: error, tone: "error" });
+	state.lastError = error;
+}
+
+/**
+ * Restore current terminal provider state from an authoritative message list.
+ * Historical failed attempts stay inline; only the latest assistant outcome can
+ * make an otherwise-idle session terminal.
+ */
+export function deriveProviderErrorState(state: SessionViewState, messages: MessageLike[], active: boolean): void {
+	clearProviderErrorState(state);
+	if (!active) {
+		for (let index = messages.length - 1; index >= 0; index -= 1) {
+			const message = messages[index];
+			if (message?.role !== "assistant") continue;
+			const error = providerErrorText(message);
+			if (error) setProviderErrorState(state, error);
+			break;
+		}
+	}
+	updateAttention(state);
+}
+
 function lastAssistant(state: { entries: TranscriptEntry[] }): AssistantEntry | undefined {
 	for (let i = state.entries.length - 1; i >= 0; i--) {
 		const entry = state.entries[i];
@@ -467,17 +530,25 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 			const message = event.message as MessageLike | undefined;
 			if (message?.role === "assistant") {
 				const tail = lastAssistant(state);
+				const final = messagesToEntries([message]);
+				const finalAssistants = final.filter((entry): entry is AssistantEntry => entry.kind === "assistant");
 				if (tail?.streaming) {
-					// Replace streamed blocks with the authoritative final content.
-					const final = messagesToEntries([message]);
-					const finalAssistant = final.find((e): e is AssistantEntry => e.kind === "assistant");
-					if (finalAssistant) {
-						tail.blocks = finalAssistant.blocks;
-						tail.model = finalAssistant.model;
+					// Replace streamed blocks with the authoritative final content. Live
+					// tool cards are driven by tool_execution_* events, so message_end
+					// contributes assistant metadata only and must not duplicate them.
+					const firstSegment = finalAssistants[0];
+					const outcomeSegment = finalAssistants.at(-1);
+					if (firstSegment) {
+						tail.blocks = firstSegment.blocks;
+						tail.model = firstSegment.model;
+					}
+					if (outcomeSegment) {
+						tail.stopReason = outcomeSegment.stopReason;
+						tail.errorMessage = outcomeSegment.errorMessage;
 					}
 					tail.streaming = false;
-				} else if (!tail) {
-					state.entries.push(...messagesToEntries([message]));
+				} else {
+					state.entries.push(...final);
 				}
 			} else if (message?.role === "user") {
 				// Steered/background-delivered user messages arrive via message_end
@@ -560,7 +631,7 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 		case "agent_start": {
 			state.workingText = "working";
 			state.workingSince = Date.now();
-			state.lastError = undefined;
+			clearProviderErrorState(state);
 			state.suggestedCommand = undefined;
 			// New turn resolves prior blocking UI requests server-side.
 			state.uiRequests = [];
@@ -570,6 +641,15 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			state.workingText = undefined;
 			state.workingSince = undefined;
 			state.statusEntries = state.statusEntries.filter((s) => s.key !== "retry" && s.key !== "paused");
+			break;
+		}
+		case "message_end": {
+			const message = event.message as MessageLike | undefined;
+			if (message?.role === "assistant") {
+				const error = providerErrorText(message);
+				if (error) setProviderErrorState(state, error);
+				else clearProviderErrorState(state);
+			}
 			break;
 		}
 		case "tool_execution_start": {
@@ -599,6 +679,7 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			break;
 		}
 		case "auto_retry_start": {
+			clearProviderErrorState(state);
 			state.statusEntries = state.statusEntries.filter((s) => s.key !== "retry");
 			state.statusEntries.push({
 				key: "retry",
@@ -609,10 +690,8 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 		}
 		case "auto_retry_end": {
 			state.statusEntries = state.statusEntries.filter((s) => s.key !== "retry");
-			if (!event.success && event.finalError) {
-				state.statusEntries.push({ key: "error", text: String(event.finalError), tone: "error" });
-				state.lastError = String(event.finalError);
-			}
+			if (!event.success && event.finalError) setProviderErrorState(state, String(event.finalError));
+			else if (event.success) clearProviderErrorState(state);
 			break;
 		}
 		case "stream_retry": {

@@ -942,6 +942,23 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("No sessions yet");
 	});
 
+	it("fleet renders a terminal provider error chip and reason", () => {
+		const store = makeStore() as any;
+		const runtime = runtimeInfo("provider-error");
+		runtime.error = "provider API unavailable";
+		runtime.needsAttention = true;
+		const fakeStore = {
+			...store,
+			sessions: {},
+			fleet: () => ({ runtimes: [runtime], diskSessions: [] }),
+		};
+
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+
+		expect(el.querySelector(".session-card .chip-error")?.textContent).toContain("error");
+		expect(el.querySelector(".error-reason")?.textContent).toBe("provider API unavailable");
+	});
+
 	it("session view renders with a populated transcript and session info bar", async () => {
 		vi.mocked(api.branch).mockResolvedValue({ branch: "feature/info" });
 		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 1.25 });
@@ -2154,6 +2171,64 @@ describe("dashboard client regressions", () => {
 		expect(card?.querySelector("strong")?.textContent).toBe("complete");
 		expect(details?.open).toBe(false);
 		expect(card?.textContent).not.toContain("you");
+	});
+
+	it("renders provider failures inline while omitting finalized whitespace-only thinking", () => {
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{
+						kind: "assistant",
+						blocks: [
+							{ kind: "thinking", text: "  \n\t" },
+							{ kind: "text", text: "partial answer" },
+						],
+						streaming: false,
+						stopReason: "error",
+						errorMessage: "provider rejected request",
+					},
+				]}
+			/>
+		));
+
+		expect(el.textContent).toContain("partial answer");
+		expect(el.querySelector(".assistant-error")?.textContent).toBe("Error: provider rejected request");
+		expect(el.querySelector("details.thinking")).toBeNull();
+	});
+
+	it("keeps nonblank partial thinking alongside an inline provider failure", () => {
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{
+						kind: "assistant",
+						blocks: [{ kind: "thinking", text: "useful partial reasoning" }],
+						streaming: false,
+						stopReason: "error",
+						errorMessage: "network error",
+					},
+				]}
+			/>
+		));
+
+		expect(el.querySelector("details.thinking")?.textContent).toContain("useful partial reasoning");
+		expect(el.querySelector(".assistant-error")?.textContent).toBe("Error: network error");
+	});
+
+	it("leaves active empty thinking placeholders visible while streaming", () => {
+		const el = mount(() => (
+			<Transcript
+				entries={[
+					{
+						kind: "assistant",
+						blocks: [{ kind: "thinking", text: "" }],
+						streaming: true,
+					},
+				]}
+			/>
+		));
+
+		expect(el.querySelector("details.thinking")).not.toBeNull();
 	});
 
 	it("transcript honors the always-expand-thinking browser preference", () => {
