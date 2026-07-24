@@ -488,6 +488,7 @@ export class RuntimePool {
 			}
 		}
 		if (type === "auto_retry_start") this.clearProviderError(handle);
+		if (type === "auto_compaction_start" && event.reason === "overflow") this.clearProviderError(handle);
 		if (type === "auto_retry_end" && event.success === false && event.finalError) {
 			this.recordProviderError(handle, String(event.finalError));
 		} else if (type === "auto_retry_end" && event.success === true) {

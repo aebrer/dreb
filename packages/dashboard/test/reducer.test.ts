@@ -359,6 +359,72 @@ describe("applySessionEvent — streaming lifecycle", () => {
 		expect(state.needsAttention).toBe(true);
 	});
 
+	it("preserves live tool-split error ordering without duplicating lifecycle tool cards", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "message_start", message: { role: "assistant", model: "m1" } });
+		applySessionEvent(state, {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_start", contentIndex: 0 },
+		});
+		applySessionEvent(state, {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "before tool" },
+		});
+		applySessionEvent(state, {
+			type: "tool_execution_start",
+			toolCallId: "t1",
+			toolName: "read",
+			args: { path: "/x" },
+		});
+		applySessionEvent(state, {
+			type: "tool_execution_end",
+			toolCallId: "t1",
+			toolName: "read",
+			result: { content: [{ type: "text", text: "file body" }] },
+			isError: false,
+		});
+
+		applySessionEvent(state, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				model: "m1",
+				stopReason: "error",
+				errorMessage: "provider exploded",
+				content: [
+					{ type: "text", text: "before tool" },
+					{ type: "toolCall", id: "t1", name: "read", arguments: { path: "/x" } },
+					{ type: "thinking", thinking: "after thinking" },
+					{ type: "text", text: "partial after tool" },
+				],
+			},
+		});
+
+		expect(state.entries.map((entry) => entry.kind)).toEqual(["assistant", "tool", "assistant"]);
+		expect(state.entries[0]).toMatchObject({
+			kind: "assistant",
+			blocks: [{ kind: "text", text: "before tool" }],
+		});
+		expect(state.entries[0]).not.toHaveProperty("errorMessage");
+		expect(state.entries[1]).toMatchObject({
+			kind: "tool",
+			toolCallId: "t1",
+			status: "done",
+			resultText: "file body",
+		});
+		expect(state.entries[2]).toMatchObject({
+			kind: "assistant",
+			streaming: false,
+			stopReason: "error",
+			errorMessage: "provider exploded",
+			blocks: [
+				{ kind: "thinking", text: "after thinking" },
+				{ kind: "text", text: "partial after tool" },
+			],
+		});
+		expect(state.entries.filter((entry) => entry.kind === "tool" && entry.toolCallId === "t1")).toHaveLength(1);
+	});
+
 	it("appends an error-only live message when message_start was absent", () => {
 		const state = makeState();
 		state.entries.push({ kind: "assistant", blocks: [{ kind: "text", text: "older" }], streaming: false });
@@ -762,6 +828,41 @@ describe("applySessionEvent — session-level events", () => {
 		});
 		expect(state.compacting).toBe(false);
 		expect(state.entries[0]).toMatchObject({ kind: "summary", label: "compaction", tokensBefore: 52410 });
+	});
+
+	it("clears provisional provider state while overflow compaction recovers", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "context overflow",
+				content: [{ type: "text", text: "partial" }],
+			},
+		});
+		expect(state.lastError).toBe("context overflow");
+		expect(state.needsAttention).toBe(true);
+
+		applySessionEvent(state, { type: "auto_compaction_start", reason: "overflow" });
+
+		expect(state.compacting).toBe(true);
+		expect(state.lastError).toBeUndefined();
+		expect(state.statusEntries).toEqual([{ key: "compaction", text: "compacting context…", tone: "info" }]);
+		expect(state.needsAttention).toBe(false);
+
+		applySessionEvent(state, {
+			type: "auto_compaction_end",
+			errorMessage: "summarizer failed",
+			aborted: false,
+			willRetry: false,
+		});
+		expect(state.statusEntries).toContainEqual({
+			key: "compaction-error",
+			text: "summarizer failed",
+			tone: "error",
+		});
+		expect(state.needsAttention).toBe(true);
 	});
 
 	it("compaction errors surface an error status entry", () => {

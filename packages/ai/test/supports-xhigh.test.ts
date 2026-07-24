@@ -14,10 +14,16 @@ describe("supportsXhigh", () => {
 		expect(supportsXhigh(model!)).toBe(true);
 	});
 
-	it("returns false for non-Opus Anthropic models", () => {
-		const model = findModel("anthropic", "sonnet")!;
+	it.each(["opus", "sonnet"] as const)("returns true for Claude 5 %s models", (family) => {
+		const base = getModel("anthropic", "claude-opus-4-6");
+		const model = { ...base, id: `claude-${family}-5` };
+		expect(supportsXhigh(model)).toBe(true);
+	});
+
+	it("returns false for Sonnet 4.6, which supports max but not xhigh", () => {
+		const model = getModel("anthropic", "claude-sonnet-4-6");
 		expect(model).toBeDefined();
-		expect(supportsXhigh(model!)).toBe(false);
+		expect(supportsXhigh(model)).toBe(false);
 	});
 
 	it("returns false for Opus 4.1 (below threshold)", () => {

@@ -36,6 +36,13 @@ describe("supportsAdaptiveThinking", () => {
 		expect(supportsAdaptiveThinking(model("opus-4-10"))).toBe(true);
 	});
 
+	it.each(["claude-opus-5", "claude-sonnet-5", "anthropic.claude-opus-5", "anthropic/claude-opus-5-fast"])(
+		"returns true for Claude 5 model %s",
+		(id) => {
+			expect(supportsAdaptiveThinking(model(id))).toBe(true);
+		},
+	);
+
 	it("returns true for Bedrock-prefixed anthropic.claude-opus-4-7", () => {
 		expect(supportsAdaptiveThinking(model("anthropic.claude-opus-4-7"))).toBe(true);
 	});

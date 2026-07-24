@@ -475,6 +475,34 @@ function findTool(state: { entries: TranscriptEntry[] }, toolCallId: string): To
 }
 
 /**
+ * Replace a streaming assistant entry with the authoritative message shape.
+ * Reuse any lifecycle-driven tool cards so split assistant content keeps its
+ * exact ordering without duplicating tool execution state.
+ */
+function finalizeStreamingAssistant(
+	state: { entries: TranscriptEntry[] },
+	tail: AssistantEntry,
+	finalEntries: TranscriptEntry[],
+): void {
+	const tailIndex = state.entries.indexOf(tail);
+	if (tailIndex < 0) return;
+
+	const reusedTools = new Set<ToolEntry>();
+	const replacement = finalEntries.map((entry) => {
+		if (entry.kind !== "tool") return entry;
+		const existing = findTool(state, entry.toolCallId);
+		if (!existing) return entry;
+		reusedTools.add(existing);
+		return existing;
+	});
+	const removed = new Set<TranscriptEntry>([tail, ...reusedTools]);
+	const insertAt = state.entries.slice(0, tailIndex).filter((entry) => !removed.has(entry)).length;
+	const retained = state.entries.filter((entry) => !removed.has(entry));
+	retained.splice(insertAt, 0, ...replacement);
+	state.entries.splice(0, state.entries.length, ...retained);
+}
+
+/**
  * Apply one AgentSessionEvent to a transcript-bearing view (session or
  * subagent drill-in — both share the streaming/message/tool logic).
  */
@@ -531,25 +559,8 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 			if (message?.role === "assistant") {
 				const tail = lastAssistant(state);
 				const final = messagesToEntries([message]);
-				const finalAssistants = final.filter((entry): entry is AssistantEntry => entry.kind === "assistant");
-				if (tail?.streaming) {
-					// Replace streamed blocks with the authoritative final content. Live
-					// tool cards are driven by tool_execution_* events, so message_end
-					// contributes assistant metadata only and must not duplicate them.
-					const firstSegment = finalAssistants[0];
-					const outcomeSegment = finalAssistants.at(-1);
-					if (firstSegment) {
-						tail.blocks = firstSegment.blocks;
-						tail.model = firstSegment.model;
-					}
-					if (outcomeSegment) {
-						tail.stopReason = outcomeSegment.stopReason;
-						tail.errorMessage = outcomeSegment.errorMessage;
-					}
-					tail.streaming = false;
-				} else {
-					state.entries.push(...final);
-				}
+				if (tail?.streaming) finalizeStreamingAssistant(state, tail, final);
+				else state.entries.push(...final);
 			} else if (message?.role === "user") {
 				// Steered/background-delivered user messages arrive via message_end
 				// without a preceding message_start in some paths; dedupe by checking
@@ -565,15 +576,28 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 			break;
 		}
 		case "tool_execution_start": {
-			state.entries.push({
-				kind: "tool",
-				toolCallId: String(event.toolCallId),
-				toolName: String(event.toolName),
-				args: event.args,
-				status: "running",
-				resultText: "",
-				startedAt: Date.now(),
-			});
+			const toolCallId = String(event.toolCallId);
+			const existing = findTool(state, toolCallId);
+			if (existing) {
+				existing.toolName = String(event.toolName);
+				existing.args = event.args;
+				existing.status = "running";
+				existing.resultText = "";
+				existing.images = undefined;
+				existing.details = undefined;
+				existing.startedAt = Date.now();
+				existing.endedAt = undefined;
+			} else {
+				state.entries.push({
+					kind: "tool",
+					toolCallId,
+					toolName: String(event.toolName),
+					args: event.args,
+					status: "running",
+					resultText: "",
+					startedAt: Date.now(),
+				});
+			}
 			break;
 		}
 		case "tool_execution_update": {
@@ -658,6 +682,9 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 		}
 		case "auto_compaction_start": {
 			state.compacting = true;
+			// Context-overflow errors are provisional while automatic compaction
+			// recovers the turn, just like provider errors entering auto-retry.
+			if (event.reason === "overflow") clearProviderErrorState(state);
 			state.statusEntries.push({ key: "compaction", text: "compacting context…", tone: "info" });
 			break;
 		}

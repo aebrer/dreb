@@ -20,7 +20,7 @@ import {
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 
-import { calculateCost, supportsAdaptiveThinking } from "../models.js";
+import { calculateCost, supportsAdaptiveThinking, supportsXhigh } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -402,16 +402,9 @@ function handleContentBlockStop(
 	}
 }
 
-/** Check if a modelId contains `{family}-4-N` or `{family}-4.N` where N >= minVersion (1-2 digit minor version only, not date suffixes) */
-function isModelVersionAtLeast(modelId: string, family: string, minVersion: number): boolean {
-	const re = new RegExp(`${family}-4[.-](\\d{1,2})(?!\\d)`);
-	const match = modelId.match(re);
-	return match != null && Number.parseInt(match[1], 10) >= minVersion;
-}
-
 function mapThinkingLevelToEffort(
 	level: SimpleStreamOptions["reasoning"],
-	modelId: string,
+	model: Model<"bedrock-converse-stream">,
 ): "low" | "medium" | "high" | "max" {
 	switch (level) {
 		case "minimal":
@@ -421,9 +414,8 @@ function mapThinkingLevelToEffort(
 			return "medium";
 		case "high":
 			return "high";
-		case "xhigh": {
-			return isModelVersionAtLeast(modelId, "opus", 6) ? "max" : "high";
-		}
+		case "xhigh":
+			return supportsXhigh(model) ? "max" : "high";
 		default:
 			return "high";
 	}
@@ -730,7 +722,7 @@ export function buildAdditionalModelRequestFields(
 					}
 					return {
 						thinking,
-						output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id) },
+						output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model) },
 					};
 				})()
 			: (() => {

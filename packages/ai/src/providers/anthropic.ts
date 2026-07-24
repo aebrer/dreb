@@ -5,7 +5,7 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost, supportsAdaptiveThinking } from "../models.js";
+import { calculateCost, supportsAdaptiveThinking, supportsXhigh } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -452,18 +452,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 	return stream;
 };
 
-/** Check if a modelId contains `{family}-4-N` or `{family}-4.N` where N >= minVersion (1-2 digit minor version only, not date suffixes) */
-function isModelVersionAtLeast(modelId: string, family: string, minVersion: number): boolean {
-	const re = new RegExp(`${family}-4[.-](\\d{1,2})(?!\\d)`);
-	const match = modelId.match(re);
-	return match != null && Number.parseInt(match[1], 10) >= minVersion;
-}
-
-/**
- * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
- * Note: effort "max" is only valid on Opus 4.6+.
- */
-function mapThinkingLevelToEffort(level: SimpleStreamOptions["reasoning"], modelId: string): AnthropicEffort {
+/** Map dreb thinking levels to Anthropic adaptive-thinking effort levels. */
+function mapThinkingLevelToEffort(
+	level: SimpleStreamOptions["reasoning"],
+	model: Model<"anthropic-messages">,
+): AnthropicEffort {
 	switch (level) {
 		case "minimal":
 			return "low";
@@ -473,9 +466,8 @@ function mapThinkingLevelToEffort(level: SimpleStreamOptions["reasoning"], model
 			return "medium";
 		case "high":
 			return "high";
-		case "xhigh": {
-			return isModelVersionAtLeast(modelId, "opus", 6) ? "max" : "high";
-		}
+		case "xhigh":
+			return supportsXhigh(model) ? "max" : "high";
 		default:
 			return "high";
 	}
@@ -499,7 +491,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 	// For Opus 4.6+, Sonnet 4.6+: use adaptive thinking with effort level
 	// For older models: use budget-based thinking
 	if (supportsAdaptiveThinking(model)) {
-		const effort = mapThinkingLevelToEffort(options.reasoning, model.id);
+		const effort = mapThinkingLevelToEffort(options.reasoning, model);
 		return streamAnthropic(model, context, {
 			...base,
 			thinkingEnabled: true,

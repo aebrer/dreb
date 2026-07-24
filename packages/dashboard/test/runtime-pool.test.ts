@@ -618,6 +618,64 @@ describe("RuntimePool", () => {
 		}
 	});
 
+	it("clears provisional provider errors during overflow compaction and preserves final compaction failures", async () => {
+		vi.useFakeTimers();
+		try {
+			const { pool, clients } = makePool();
+			const handle = await pool.create("/tmp");
+			const snapshots: unknown[] = [];
+			pool.onFleetSnapshot((event) => snapshots.push(event));
+			await vi.advanceTimersByTimeAsync(200);
+			snapshots.length = 0;
+
+			clients[0].emit({
+				type: "message_end",
+				message: { role: "assistant", stopReason: "error", errorMessage: "context overflow" },
+			});
+			clients[0].emit({ type: "auto_compaction_start", reason: "overflow" });
+
+			expect(handle.error).toBeUndefined();
+			expect(handle.attention.has("error")).toBe(false);
+			expect(handle.lastState?.isCompacting).toBe(true);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(snapshots.at(-1)).toMatchObject({
+				type: "fleet_snapshot",
+				runtimes: [
+					expect.objectContaining({
+						key: handle.key,
+						needsAttention: false,
+						state: expect.objectContaining({ isCompacting: true }),
+					}),
+				],
+			});
+			expect(snapshots.at(-1)).toMatchObject({
+				runtimes: [expect.not.objectContaining({ error: expect.anything() })],
+			});
+
+			clients[0].emit({
+				type: "auto_compaction_end",
+				errorMessage: "summarizer failed",
+				aborted: false,
+				willRetry: false,
+			});
+			expect(handle.error).toBe("summarizer failed");
+			expect(handle.attention.get("error")).toBe("summarizer failed");
+			await vi.advanceTimersByTimeAsync(200);
+			expect(snapshots.at(-1)).toMatchObject({
+				type: "fleet_snapshot",
+				runtimes: [
+					expect.objectContaining({
+						error: "summarizer failed",
+						needsAttention: true,
+						state: expect.objectContaining({ isCompacting: false }),
+					}),
+				],
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("coalesces an immediate provider failure and retry transition without a terminal fleet card", async () => {
 		vi.useFakeTimers();
 		try {

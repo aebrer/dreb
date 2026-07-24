@@ -211,6 +211,46 @@ describe("app store SSE sync", () => {
 		expect(store.resyncing()).toBe(false);
 	});
 
+	it("restores terminal provider state from an idle resync baseline", async () => {
+		const snapshot = runtimeSnapshot("a", false);
+		vi.mocked(api.resync).mockResolvedValueOnce({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [
+					{
+						role: "assistant",
+						stopReason: "error",
+						errorMessage: "snapshot provider failure",
+						content: [{ type: "text", text: "snapshot partial" }],
+					},
+				],
+				backgroundAgents: [],
+				barrierSeq: 0,
+			},
+			barrierSeq: 0,
+		});
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.entries).toEqual([
+			expect.objectContaining({
+				kind: "assistant",
+				stopReason: "error",
+				errorMessage: "snapshot provider failure",
+				blocks: [{ kind: "text", text: "snapshot partial" }],
+			}),
+		]);
+		expect(store.sessions.a?.statusEntries).toEqual([
+			{ key: "provider-error", text: "snapshot provider failure", tone: "error" },
+		]);
+		expect(store.sessions.a?.lastError).toBe("snapshot provider failure");
+		expect(store.sessions.a?.needsAttention).toBe(true);
+	});
+
 	it("replays a post-barrier provider failure over a successful resync baseline", async () => {
 		const request = deferred<Awaited<ReturnType<typeof api.resync>>>();
 		vi.mocked(api.resync).mockReturnValueOnce(request.promise);

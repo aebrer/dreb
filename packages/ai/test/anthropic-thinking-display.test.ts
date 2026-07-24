@@ -20,7 +20,7 @@ function makePayloadCaptureContext(): Context {
  */
 async function capturePayload(
 	model: Model<"anthropic-messages">,
-	options: { reasoning?: "low" | "high"; thinkingDisplay?: "summarized" | "omitted" } = {},
+	options: { reasoning?: "low" | "high" | "xhigh"; thinkingDisplay?: "summarized" | "omitted" } = {},
 ): Promise<AnthropicThinkingPayload> {
 	let capturedPayload: AnthropicThinkingPayload | undefined;
 	const payloadCaptureModel: Model<"anthropic-messages"> = {
@@ -69,6 +69,14 @@ describe("Anthropic thinking display payload", () => {
 
 		expect(payload.thinking).toEqual({ type: "adaptive" });
 		expect(payload.thinking?.display).toBeUndefined();
+	});
+
+	it("maps xhigh to max effort for Claude Opus 5 adaptive thinking", async () => {
+		const base = findModel("anthropic", "claude-opus-4-6")! as Model<"anthropic-messages">;
+		const payload = await capturePayload({ ...base, id: "claude-opus-5" }, { reasoning: "xhigh" });
+
+		expect(payload.thinking).toEqual({ type: "adaptive" });
+		expect(payload.output_config).toEqual({ effort: "max" });
 	});
 
 	it("never sets display on budget-based models even when thinkingDisplay is requested", async () => {

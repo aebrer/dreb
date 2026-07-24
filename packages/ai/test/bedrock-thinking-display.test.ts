@@ -36,6 +36,16 @@ describe("Bedrock buildAdditionalModelRequestFields thinking display", () => {
 		expect(fields?.thinking.display).toBeUndefined();
 	});
 
+	it("uses adaptive thinking and max effort for Claude Opus 5 xhigh", () => {
+		const fields = buildAdditionalModelRequestFields({ ...adaptiveModel, id: "anthropic.claude-opus-5" }, {
+			reasoning: "xhigh",
+			thinkingDisplay: "summarized",
+		} satisfies BedrockOptions);
+
+		expect(fields?.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(fields?.output_config).toEqual({ effort: "max" });
+	});
+
 	it("never sets display on budget-based models even when thinkingDisplay is requested", () => {
 		const fields = buildAdditionalModelRequestFields(budgetModel, {
 			reasoning: "high",
