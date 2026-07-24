@@ -517,8 +517,8 @@ export class SettingsSelectorComponent extends Container {
 			},
 		];
 
-		// Thinking-display toggle for the current model. Only adaptive-thinking models
-		// (Opus/Sonnet 4.6+) honor this field, so the entry is gated to those models.
+		// Thinking-display toggle for the current model. Only adaptive-thinking
+		// Opus/Sonnet 4.6–4.x and Claude 5 families honor this field.
 		// Shown as on ("summarized") by default; off ("omitted") hides thinking for lower latency.
 		if (config.thinkingDisplaySupported) {
 			const hideThinkingIndex = items.findIndex((item) => item.id === "hide-thinking");

@@ -36,6 +36,13 @@ describe("supportsAdaptiveThinking", () => {
 		expect(supportsAdaptiveThinking(model("opus-4-10"))).toBe(true);
 	});
 
+	it.each(["claude-opus-5", "claude-sonnet-5", "anthropic.claude-opus-5", "anthropic/claude-opus-5-fast"])(
+		"returns true for Claude 5 model %s",
+		(id) => {
+			expect(supportsAdaptiveThinking(model(id))).toBe(true);
+		},
+	);
+
 	it("returns true for Bedrock-prefixed anthropic.claude-opus-4-7", () => {
 		expect(supportsAdaptiveThinking(model("anthropic.claude-opus-4-7"))).toBe(true);
 	});
@@ -44,8 +51,17 @@ describe("supportsAdaptiveThinking", () => {
 		expect(supportsAdaptiveThinking(model("anthropic/claude-opus-4-6"))).toBe(true);
 	});
 
+	it.each([
+		"claude-3-opus-20240229",
+		"claude-3-7-sonnet-20250219",
+		"anthropic.claude-3-opus-20240229-v1:0",
+		"us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+	])("returns false for dated legacy model %s", (id) => {
+		expect(supportsAdaptiveThinking(model(id))).toBe(false);
+	});
+
 	it("returns false for date-stamped base opus-4 (claude-opus-4-20250514)", () => {
-		// The (?!\d) negative lookahead prevents the date suffix from matching as a minor version.
+		// The bounded version groups and negative lookahead reject the date suffix.
 		expect(supportsAdaptiveThinking(model("claude-opus-4-20250514"))).toBe(false);
 	});
 

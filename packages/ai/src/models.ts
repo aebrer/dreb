@@ -143,12 +143,29 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
 	return usage.cost;
 }
 
+interface ClaudeFamilyVersion {
+	family: "opus" | "sonnet";
+	major: number;
+	minor?: number;
+}
+
+/** Parse Claude family versions without mistaking long date suffixes for versions. */
+function claudeFamilyVersion(modelId: string): ClaudeFamilyVersion | undefined {
+	const match = modelId.match(/(opus|sonnet)-(\d{1,2})(?:[.-](\d{1,2}))?(?!\d)/);
+	if (!match) return undefined;
+	return {
+		family: match[1] as ClaudeFamilyVersion["family"],
+		major: Number.parseInt(match[2], 10),
+		minor: match[3] === undefined ? undefined : Number.parseInt(match[3], 10),
+	};
+}
+
 /**
  * Check if a model supports xhigh thinking level.
  *
  * Supported today:
  * - GPT-5.2 through GPT-5.6 model families
- * - Opus 4.6+ models (xhigh maps to adaptive effort "max" on Anthropic-compatible providers)
+ * - Claude Opus 4.6–4.x and Claude 5 model families
  * - Kimi Code K3 (xhigh maps to its advertised "max" effort)
  */
 export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
@@ -163,23 +180,22 @@ export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
 		return true;
 	}
 
-	// Opus 4.6+ supports xhigh (adaptive effort "max").
-	// Match any opus-4-N or opus-4.N where N >= 6 (1-2 digit minor version, not date suffixes).
-	const opusMatch = model.id.match(/opus-4[.-](\d{1,2})(?!\d)/);
-	if (opusMatch && Number.parseInt(opusMatch[1], 10) >= 6) {
-		return true;
+	const claude = claudeFamilyVersion(model.id);
+	if (!claude) return false;
+	if (claude.family === "opus") {
+		return claude.major >= 5 || (claude.major === 4 && (claude.minor ?? 0) >= 6);
 	}
-
-	return false;
+	return claude.major >= 5;
 }
 
 /**
- * Check if a model uses adaptive thinking (Opus 4.6+, Sonnet 4.6+), where the
- * `thinkingDisplay` option is honored. Mirrors the per-provider internal checks.
+ * Check if a model uses adaptive thinking (Opus/Sonnet 4.6–4.x and Claude 5
+ * families), where the `thinkingDisplay` option is honored. Mirrors the
+ * per-provider internal checks.
  */
 export function supportsAdaptiveThinking<TApi extends Api>(model: Model<TApi>): boolean {
-	const m = model.id.match(/(opus|sonnet)-4[.-](\d{1,2})(?!\d)/);
-	return m != null && Number.parseInt(m[2], 10) >= 6;
+	const claude = claudeFamilyVersion(model.id);
+	return claude != null && (claude.major >= 5 || (claude.major === 4 && (claude.minor ?? 0) >= 6));
 }
 
 /**

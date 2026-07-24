@@ -161,6 +161,8 @@ export function getStateForRpc(session: AgentSession, modelFallbackMessage?: str
 		usingSubscription: session.model ? session.modelRegistry.isUsingOAuth(session.model) : false,
 		thinkingLevel: session.thinkingLevel,
 		isStreaming: session.isStreaming,
+		isRetrying: session.isRetrying,
+		retryAttempt: session.retryAttempt,
 		isCompacting: session.isCompacting,
 		steeringMode: session.steeringMode,
 		followUpMode: session.followUpMode,
@@ -173,6 +175,17 @@ export function getStateForRpc(session: AgentSession, modelFallbackMessage?: str
 		contextUsage: session.getContextUsage(),
 		modelFallbackMessage,
 	};
+}
+
+/**
+ * Dashboard transcript snapshots use persisted branch context whenever the
+ * runtime is not streaming so failed attempts removed from the next provider
+ * request remain visible during retry backoff and after recovery. The snapshot
+ * state carries retry activity separately, preventing those historical errors
+ * from being mistaken for terminal failures.
+ */
+export function getDashboardMessagesForRpc(session: AgentSession) {
+	return [...(session.isStreaming ? session.messages : session.sessionManager.buildSessionContext().messages)];
 }
 
 /**
@@ -1392,7 +1405,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				const data: RpcDashboardSnapshot = {
 					snapshotId,
 					state: getStateForRpc(session, modelFallbackMessage),
-					messages: [...session.messages],
+					messages: getDashboardMessagesForRpc(session),
 					backgroundAgents: getBackgroundAgents().map(toRpcBackgroundAgentInfo),
 				};
 				return success(id, "get_dashboard_snapshot", data);

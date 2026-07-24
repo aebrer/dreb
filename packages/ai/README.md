@@ -443,7 +443,7 @@ if (model.reasoning) {
 const response = await completeSimple(model, {
   messages: [{ role: 'user', content: 'Solve: 2x + 5 = 13' }]
 }, {
-  reasoning: 'medium'  // 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' (xhigh maps to 'max' on Opus 4.6+, 'high' on other Anthropic models)
+  reasoning: 'medium'  // 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' (xhigh maps to 'max' on Claude Opus 4.6–4.x and Claude 5 families; 'high' on other Anthropic models)
 });
 
 // Access thinking and text blocks
@@ -511,8 +511,8 @@ for await (const event of s) {
 
 ### Controlling Thinking Display (Anthropic adaptive models)
 
-Adaptive-thinking Claude models (Opus 4.6+, Sonnet 4.6+) support a `thinkingDisplay`
-option on `streamSimple`/`completeSimple`:
+Adaptive-thinking Claude models (Opus and Sonnet 4.6–4.x, plus Claude 5 families)
+support a `thinkingDisplay` option on `streamSimple`/`completeSimple`:
 
 ```typescript
 const s = streamSimple(model, context, {
@@ -1066,7 +1066,6 @@ Official docs: [Application Default Credentials](https://cloud.google.com/docs/a
 The quickest way to authenticate:
 
 ```bash
-npx @dreb/ai login              # interactive provider selection
 npx @dreb/ai login              # interactive provider selection
 npx @dreb/ai list               # list available providers
 ```

@@ -33,14 +33,15 @@ Open `http://127.0.0.1:5343`.
 - **Fleet** (home) — live-first: every live session in one grid at the top
   (stable order by project path, then session start time; each card shows its
   project path, status chip, current activity, live subagents, task progress,
-  ctx%, model, cost, last-assistant preview). Below, past sessions grouped by project — three
+  ctx%, model, cost, last-assistant preview, and terminal provider-error reason). Below, past sessions grouped by project — three
   compact rows each with an "all N on disk" expander — with resume/delete.
   At <=700px, cards stack; long session names, status chips, project paths,
   activity/subagent text, and past-session labels wrap within cards or rows
   rather than spilling off-screen. `+ new session` anywhere.
 - **Session view** — full chat parity: markdown streaming transcript, tool
   cards with sanitized inline PNG/JPEG/GIF/WebP result images, thinking blocks,
-  compaction summaries, per-message copy, tasks panel, suggest-next chip,
+  inline provider/API failures with partial output preserved, compaction summaries,
+  per-message copy, tasks panel, suggest-next chip,
   slash-command autocomplete, image attach/paste,
   queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
@@ -82,6 +83,22 @@ malformed blocks are dropped. Accepted images also survive refresh/resync and
 are embedded in exported HTML transcripts. Oversized live events use the
 existing SSE resync barrier and HTTP snapshot path; CSS bounds display
 dimensions but does not compress the underlying bytes.
+
+### Provider failures and retries
+
+A failed assistant attempt renders an explicit `Error: <message>` line inline,
+after any nonblank partial thinking or text. Empty finalized thinking placeholders
+are omitted. The same per-attempt failure metadata is restored from session
+history after hydration or resync; missing provider text is shown as `Unknown
+error`, and aborted messages remain distinct from failures.
+
+The latest idle assistant failure also marks the session and fleet card as a
+terminal error with its reason. If automatic retry starts, terminal session and
+fleet state clear in favor of the retry warning while the failed attempt remains
+visible in transcript history. Hydration and resync carry retry activity, so a
+refresh during backoff restores that non-terminal warning and persisted attempt.
+A later success stays clear; disabled, non-retryable, and exhausted failures
+remain terminal without duplicate status entries.
 
 ## Fleet transport and freshness
 

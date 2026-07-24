@@ -63,6 +63,8 @@ function runtimeSnapshot(key: string, streaming: boolean): RuntimeInfoDto {
 			tasks: [],
 			thinkingLevel: "off",
 			isStreaming: streaming,
+			isRetrying: false,
+			retryAttempt: 0,
 			isCompacting: false,
 			steeringMode: "all",
 			followUpMode: "all",
@@ -211,6 +213,184 @@ describe("app store SSE sync", () => {
 		expect(store.resyncing()).toBe(false);
 	});
 
+	it("restores terminal provider state from an idle resync baseline", async () => {
+		const snapshot = runtimeSnapshot("a", false);
+		vi.mocked(api.resync).mockResolvedValueOnce({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [
+					{
+						role: "assistant",
+						stopReason: "error",
+						errorMessage: "snapshot provider failure",
+						content: [{ type: "text", text: "snapshot partial" }],
+					},
+				],
+				backgroundAgents: [],
+				barrierSeq: 0,
+			},
+			barrierSeq: 0,
+		});
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.entries).toEqual([
+			expect.objectContaining({
+				kind: "assistant",
+				stopReason: "error",
+				errorMessage: "snapshot provider failure",
+				blocks: [{ kind: "text", text: "snapshot partial" }],
+			}),
+		]);
+		expect(store.sessions.a?.statusEntries).toEqual([
+			{ key: "provider-error", text: "snapshot provider failure", tone: "error" },
+		]);
+		expect(store.sessions.a?.lastError).toBe("snapshot provider failure");
+		expect(store.sessions.a?.needsAttention).toBe(true);
+	});
+
+	it("restores retry backoff without turning the failed attempt terminal during resync", async () => {
+		const snapshot = runtimeSnapshot("a", false);
+		snapshot.state.isRetrying = true;
+		snapshot.state.retryAttempt = 1;
+		vi.mocked(api.resync).mockResolvedValueOnce({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [
+					{
+						role: "assistant",
+						stopReason: "error",
+						errorMessage: "transient provider failure",
+						content: [{ type: "text", text: "failed partial" }],
+					},
+				],
+				backgroundAgents: [],
+				barrierSeq: 4,
+			},
+			barrierSeq: 4,
+		});
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.entries).toEqual([
+			expect.objectContaining({
+				kind: "assistant",
+				stopReason: "error",
+				errorMessage: "transient provider failure",
+				blocks: [{ kind: "text", text: "failed partial" }],
+			}),
+		]);
+		expect(store.sessions.a?.statusEntries).toEqual([
+			{
+				key: "retry",
+				text: "retrying (attempt 1) — transient provider failure",
+				tone: "warning",
+			},
+		]);
+		expect(store.sessions.a?.lastError).toBeUndefined();
+		expect(store.sessions.a?.needsAttention).toBe(false);
+		expect(store.fleet().runtimes[0]).toMatchObject({
+			needsAttention: false,
+			state: { isRetrying: true, retryAttempt: 1 },
+		});
+		expect(store.fleet().runtimes[0]?.error).toBeUndefined();
+	});
+
+	it("replays retry completion after a retrying resync barrier", async () => {
+		const request = deferred<Awaited<ReturnType<typeof api.resync>>>();
+		vi.mocked(api.resync).mockReturnValueOnce(request.promise);
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		emit("a", {
+			type: "auto_retry_start",
+			attempt: 1,
+			maxAttempts: 3,
+			errorMessage: "transient provider failure",
+		});
+		emit("a", { type: "auto_retry_end", success: true, attempt: 1 });
+
+		const snapshot = runtimeSnapshot("a", false);
+		snapshot.state.isRetrying = true;
+		snapshot.state.retryAttempt = 1;
+		request.resolve({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [
+					{
+						role: "assistant",
+						stopReason: "error",
+						errorMessage: "transient provider failure",
+						content: [{ type: "text", text: "failed partial" }],
+					},
+				],
+				backgroundAgents: [],
+				barrierSeq: 2,
+			},
+			barrierSeq: 2,
+		});
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.entries[0]).toMatchObject({
+			kind: "assistant",
+			stopReason: "error",
+			errorMessage: "transient provider failure",
+		});
+		expect(store.sessions.a?.statusEntries).toEqual([]);
+		expect(store.sessions.a?.lastError).toBeUndefined();
+		expect(store.sessions.a?.needsAttention).toBe(false);
+	});
+
+	it("replays a post-barrier provider failure over a successful resync baseline", async () => {
+		const request = deferred<Awaited<ReturnType<typeof api.resync>>>();
+		vi.mocked(api.resync).mockReturnValueOnce(request.promise);
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		emit("a", {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "post-barrier failure",
+				content: [{ type: "text", text: "late partial" }],
+			},
+		});
+		const snapshot = runtimeSnapshot("a", false);
+		request.resolve({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "baseline" }] }],
+				backgroundAgents: [],
+				barrierSeq: 1,
+			},
+			barrierSeq: 1,
+		});
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.entries).toHaveLength(2);
+		expect(store.sessions.a?.entries[0]).toMatchObject({ kind: "assistant", stopReason: "stop" });
+		expect(store.sessions.a?.entries[1]).toMatchObject({
+			kind: "assistant",
+			stopReason: "error",
+			errorMessage: "post-barrier failure",
+		});
+		expect(store.sessions.a?.lastError).toBe("post-barrier failure");
+		expect(store.sessions.a?.needsAttention).toBe(true);
+	});
+
 	it.each([false, true])(
 		"clears stale status, command, attention, and extension affordances when resync restores streaming=%s",
 		async (streaming) => {
@@ -242,7 +422,7 @@ describe("app store SSE sync", () => {
 			emit("a", { type: "extension_ui_request", method: "notify", message: "stale toast" });
 			emit("a", { type: "extension_ui_request", method: "setTitle", title: "stale title" });
 			emit("a", { type: "extension_ui_request", method: "set_editor_text", text: "stale draft" });
-			expect(store.sessions.a?.statusEntries.map((entry) => entry.key)).toEqual(["paused", "error"]);
+			expect(store.sessions.a?.statusEntries.map((entry) => entry.key)).toEqual(["paused", "provider-error"]);
 			expect(store.sessions.a?.suggestedCommand).toBe("try again");
 			expect(store.sessions.a?.lastError).toBe("model failed");
 			expect(store.sessions.a?.needsAttention).toBe(true);
@@ -829,6 +1009,120 @@ describe("app store hydration", () => {
 		});
 		expect(store.sessions.s1?.streaming).toBe(true);
 		expect(store.sessions.s1?.workingSince).toEqual(expect.any(Number));
+	});
+
+	it("restores an idle terminal provider failure during hydration", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.messages = [
+			{ role: "user", content: "hello" },
+			{
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "provider 500",
+				content: [{ type: "text", text: "partial answer" }],
+			},
+		];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		expect(store.sessions.s1?.entries[1]).toMatchObject({
+			kind: "assistant",
+			stopReason: "error",
+			errorMessage: "provider 500",
+		});
+		expect(store.sessions.s1?.lastError).toBe("provider 500");
+		expect(store.sessions.s1?.statusEntries).toContainEqual({
+			key: "provider-error",
+			text: "provider 500",
+			tone: "error",
+		});
+		expect(store.sessions.s1?.needsAttention).toBe(true);
+	});
+
+	it("keeps historical inline failures but clears terminal state when a later assistant succeeded", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.messages = [
+			{
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "transient 503",
+				content: [{ type: "text", text: "failed partial" }],
+			},
+			{
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "successful retry" }],
+			},
+		];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		expect(store.sessions.s1?.entries[0]).toMatchObject({
+			kind: "assistant",
+			stopReason: "error",
+			errorMessage: "transient 503",
+		});
+		expect(store.sessions.s1?.entries[1]).toMatchObject({ kind: "assistant", stopReason: "stop" });
+		expect(store.sessions.s1?.lastError).toBeUndefined();
+		expect(store.sessions.s1?.statusEntries.some((entry) => entry.key === "provider-error")).toBe(false);
+		expect(store.sessions.s1?.needsAttention).toBe(false);
+	});
+
+	it("restores retry backoff history and warning without resurrecting terminal state", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.state.isRetrying = true;
+		snapshot.state.retryAttempt = 2;
+		snapshot.messages = [
+			{
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "provider overloaded",
+				content: [{ type: "text", text: "retry partial" }],
+			},
+		];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		expect(store.sessions.s1?.entries[0]).toMatchObject({
+			kind: "assistant",
+			stopReason: "error",
+			errorMessage: "provider overloaded",
+		});
+		expect(store.sessions.s1?.statusEntries).toEqual([
+			{ key: "retry", text: "retrying (attempt 2) — provider overloaded", tone: "warning" },
+		]);
+		expect(store.sessions.s1?.lastError).toBeUndefined();
+		expect(store.sessions.s1?.needsAttention).toBe(false);
+	});
+
+	it("does not resurrect terminal state from an active authoritative snapshot", async () => {
+		const snapshot = hydrationSnapshot("s1", true);
+		snapshot.messages = [
+			{
+				role: "assistant",
+				stopReason: "error",
+				errorMessage: "retrying failure",
+				content: [],
+			},
+		];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		expect(store.sessions.s1?.entries[0]).toMatchObject({
+			kind: "assistant",
+			stopReason: "error",
+			errorMessage: "retrying failure",
+		});
+		expect(store.sessions.s1?.lastError).toBeUndefined();
+		expect(store.sessions.s1?.needsAttention).toBe(false);
 	});
 
 	it("authoritatively lowers the matching fleet count when hydrate recovers a forked session", async () => {

@@ -204,6 +204,10 @@ export interface RpcSessionState {
 	usingSubscription: boolean;
 	thinkingLevel: ThinkingLevel;
 	isStreaming: boolean;
+	/** True from retry classification through retry completion, including backoff. */
+	isRetrying: boolean;
+	/** Current automatic retry attempt, or 0 before retry start / after completion. */
+	retryAttempt: number;
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";

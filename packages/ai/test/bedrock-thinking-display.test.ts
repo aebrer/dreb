@@ -36,6 +36,16 @@ describe("Bedrock buildAdditionalModelRequestFields thinking display", () => {
 		expect(fields?.thinking.display).toBeUndefined();
 	});
 
+	it("uses adaptive thinking and max effort for Claude Opus 5 xhigh", () => {
+		const fields = buildAdditionalModelRequestFields({ ...adaptiveModel, id: "anthropic.claude-opus-5" }, {
+			reasoning: "xhigh",
+			thinkingDisplay: "summarized",
+		} satisfies BedrockOptions);
+
+		expect(fields?.thinking).toEqual({ type: "adaptive", display: "summarized" });
+		expect(fields?.output_config).toEqual({ effort: "max" });
+	});
+
 	it("never sets display on budget-based models even when thinkingDisplay is requested", () => {
 		const fields = buildAdditionalModelRequestFields(budgetModel, {
 			reasoning: "high",
@@ -44,5 +54,20 @@ describe("Bedrock buildAdditionalModelRequestFields thinking display", () => {
 
 		expect(fields?.thinking.type).toBe("enabled");
 		expect(fields?.thinking.display).toBeUndefined();
+	});
+
+	it("keeps dated Claude 3.7 IDs on budget-based thinking", () => {
+		const fields = buildAdditionalModelRequestFields(
+			{ ...budgetModel, id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0" },
+			{
+				reasoning: "xhigh",
+				thinkingDisplay: "summarized",
+			} satisfies BedrockOptions,
+		);
+
+		expect(fields?.thinking.type).toBe("enabled");
+		expect(fields?.thinking.budget_tokens).toBeTypeOf("number");
+		expect(fields?.thinking.display).toBeUndefined();
+		expect(fields?.output_config).toBeUndefined();
 	});
 });

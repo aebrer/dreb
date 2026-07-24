@@ -20,7 +20,7 @@ function makePayloadCaptureContext(): Context {
  */
 async function capturePayload(
 	model: Model<"anthropic-messages">,
-	options: { reasoning?: "low" | "high"; thinkingDisplay?: "summarized" | "omitted" } = {},
+	options: { reasoning?: "low" | "high" | "xhigh"; thinkingDisplay?: "summarized" | "omitted" } = {},
 ): Promise<AnthropicThinkingPayload> {
 	let capturedPayload: AnthropicThinkingPayload | undefined;
 	const payloadCaptureModel: Model<"anthropic-messages"> = {
@@ -71,6 +71,14 @@ describe("Anthropic thinking display payload", () => {
 		expect(payload.thinking?.display).toBeUndefined();
 	});
 
+	it("maps xhigh to max effort for Claude Opus 5 adaptive thinking", async () => {
+		const base = findModel("anthropic", "claude-opus-4-6")! as Model<"anthropic-messages">;
+		const payload = await capturePayload({ ...base, id: "claude-opus-5" }, { reasoning: "xhigh" });
+
+		expect(payload.thinking).toEqual({ type: "adaptive" });
+		expect(payload.output_config).toEqual({ effort: "max" });
+	});
+
 	it("never sets display on budget-based models even when thinkingDisplay is requested", async () => {
 		// claude-sonnet-4-5 is a reasoning model that uses budget-based (type: "enabled")
 		// thinking, NOT adaptive — thinkingDisplay must be gated out for it.
@@ -79,6 +87,22 @@ describe("Anthropic thinking display payload", () => {
 
 		expect(payload.thinking?.type).toBe("enabled");
 		expect(payload.thinking?.display).toBeUndefined();
+	});
+
+	it("keeps dated Claude 3.7 IDs on budget-based thinking", async () => {
+		const base = findModel("anthropic", "claude-sonnet-4-5")! as Model<"anthropic-messages">;
+		const payload = await capturePayload(
+			{ ...base, id: "claude-3-7-sonnet-20250219" },
+			{
+				reasoning: "xhigh",
+				thinkingDisplay: "summarized",
+			},
+		);
+
+		expect(payload.thinking?.type).toBe("enabled");
+		expect(payload.thinking?.budget_tokens).toBeTypeOf("number");
+		expect(payload.thinking?.display).toBeUndefined();
+		expect(payload.output_config).toBeUndefined();
 	});
 });
 
