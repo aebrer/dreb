@@ -95,9 +95,10 @@ error`, and aborted messages remain distinct from failures.
 The latest idle assistant failure also marks the session and fleet card as a
 terminal error with its reason. If automatic retry starts, terminal session and
 fleet state clear in favor of the retry warning while the failed attempt remains
-visible in transcript history. A later success stays clear; disabled,
-non-retryable, and exhausted failures remain terminal without duplicate status
-entries.
+visible in transcript history. Hydration and resync carry retry activity, so a
+refresh during backoff restores that non-terminal warning and persisted attempt.
+A later success stays clear; disabled, non-retryable, and exhausted failures
+remain terminal without duplicate status entries.
 
 ## Fleet transport and freshness
 

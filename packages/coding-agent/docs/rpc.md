@@ -196,6 +196,8 @@ Response:
     ],
     "thinkingLevel": "medium",
     "isStreaming": false,
+    "isRetrying": false,
+    "retryAttempt": 0,
     "isCompacting": false,
     "steeringMode": "all",
     "followUpMode": "one-at-a-time",
@@ -214,7 +216,7 @@ Response:
 }
 ```
 
-The `model` field is a full [Model](#model) object or `null`. `scopedModels` is the runtime model scope (from settings `enabledModels` / CLI `--models`) in the same order used by model cycling; it is an empty array when no scope is active. `usingSubscription` is true when the active model is using OAuth subscription credentials, matching the TUI footer's `(sub)` cost indicator. The `sessionName` field is the display name set via `set_session_name` or auto-naming, or omitted if not set.
+The `model` field is a full [Model](#model) object or `null`. `scopedModels` is the runtime model scope (from settings `enabledModels` / CLI `--models`) in the same order used by model cycling; it is an empty array when no scope is active. `usingSubscription` is true when the active model is using OAuth subscription credentials, matching the TUI footer's `(sub)` cost indicator. The `sessionName` field is the display name set via `set_session_name` or auto-naming, or omitted if not set. `isRetrying` remains true across automatic-retry classification, backoff, and execution; `retryAttempt` is the current emitted attempt, or zero before retry start and after completion.
 
 `contextUsage` carries the same numbers the TUI footer shows, computed by the session itself — clients must render these rather than deriving their own estimate. `tokens` and `percent` are `null` when usage is unknown (right after compaction, before the next LLM response). The whole field is omitted when no model is set or the model has no context window.
 

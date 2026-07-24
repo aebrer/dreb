@@ -88,6 +88,22 @@ describe("Anthropic thinking display payload", () => {
 		expect(payload.thinking?.type).toBe("enabled");
 		expect(payload.thinking?.display).toBeUndefined();
 	});
+
+	it("keeps dated Claude 3.7 IDs on budget-based thinking", async () => {
+		const base = findModel("anthropic", "claude-sonnet-4-5")! as Model<"anthropic-messages">;
+		const payload = await capturePayload(
+			{ ...base, id: "claude-3-7-sonnet-20250219" },
+			{
+				reasoning: "xhigh",
+				thinkingDisplay: "summarized",
+			},
+		);
+
+		expect(payload.thinking?.type).toBe("enabled");
+		expect(payload.thinking?.budget_tokens).toBeTypeOf("number");
+		expect(payload.thinking?.display).toBeUndefined();
+		expect(payload.output_config).toBeUndefined();
+	});
 });
 
 // Bedrock's adaptive thinking display logic is unit-tested directly in

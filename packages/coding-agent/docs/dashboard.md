@@ -162,9 +162,12 @@ terminal state.
 A provider-error `message_end` initially appears terminal because retryability is
 decided immediately afterward. When `auto_retry_start` arrives, the session and
 fleet terminal error clear and the existing retry warning takes over; the failed
-attempt remains inline. A successful retry stays clear. Disabled retry,
-non-retryable errors, and exhausted retry remain terminal, and exhausted retry
-upserts the same status instead of duplicating it.
+attempt remains inline. Authoritative hydration and resync snapshots carry retry
+activity explicitly, so a refresh during backoff restores that warning and the
+persisted failed attempt without reclassifying it as terminal. A successful
+retry stays clear. Disabled retry, non-retryable errors, and exhausted retry
+remain terminal, and exhausted retry upserts the same status instead of
+duplicating it.
 
 ## Fleet transport and freshness
 

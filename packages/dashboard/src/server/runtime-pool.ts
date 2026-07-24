@@ -564,6 +564,14 @@ export class RuntimePool {
 			case "auto_compaction_end":
 				state.isCompacting = false;
 				break;
+			case "auto_retry_start":
+				state.isRetrying = true;
+				state.retryAttempt = typeof event.attempt === "number" ? event.attempt : state.retryAttempt;
+				break;
+			case "auto_retry_end":
+				state.isRetrying = false;
+				state.retryAttempt = 0;
+				break;
 			case "tasks_update":
 				if (Array.isArray(event.tasks)) state.tasks = [...event.tasks] as SessionStateDto["tasks"];
 				break;
@@ -620,6 +628,8 @@ export class RuntimePool {
 			tasks: previous?.tasks ? [...previous.tasks] : [],
 			thinkingLevel: previous?.thinkingLevel ?? "off",
 			isStreaming: previous?.isStreaming ?? false,
+			isRetrying: previous?.isRetrying ?? false,
+			retryAttempt: previous?.retryAttempt ?? 0,
 			isCompacting: previous?.isCompacting ?? false,
 			steeringMode: previous?.steeringMode ?? "all",
 			followUpMode: previous?.followUpMode ?? "all",

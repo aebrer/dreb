@@ -181,6 +181,10 @@ export interface SessionStateDto {
 	tasks: SessionTaskDto[];
 	thinkingLevel: string;
 	isStreaming: boolean;
+	/** True while automatic retry classification, backoff, or execution is active. */
+	isRetrying?: boolean;
+	/** Current automatic retry attempt, or 0 outside an emitted retry attempt. */
+	retryAttempt?: number;
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";

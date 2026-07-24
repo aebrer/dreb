@@ -149,9 +149,9 @@ interface ClaudeFamilyVersion {
 	minor?: number;
 }
 
-/** Parse Claude family versions without mistaking long date suffixes for minors. */
+/** Parse Claude family versions without mistaking long date suffixes for versions. */
 function claudeFamilyVersion(modelId: string): ClaudeFamilyVersion | undefined {
-	const match = modelId.match(/(opus|sonnet)-(\d+)(?:[.-](\d{1,2}))?(?!\d)/);
+	const match = modelId.match(/(opus|sonnet)-(\d{1,2})(?:[.-](\d{1,2}))?(?!\d)/);
 	if (!match) return undefined;
 	return {
 		family: match[1] as ClaudeFamilyVersion["family"],

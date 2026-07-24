@@ -55,4 +55,19 @@ describe("Bedrock buildAdditionalModelRequestFields thinking display", () => {
 		expect(fields?.thinking.type).toBe("enabled");
 		expect(fields?.thinking.display).toBeUndefined();
 	});
+
+	it("keeps dated Claude 3.7 IDs on budget-based thinking", () => {
+		const fields = buildAdditionalModelRequestFields(
+			{ ...budgetModel, id: "us.anthropic.claude-3-7-sonnet-20250219-v1:0" },
+			{
+				reasoning: "xhigh",
+				thinkingDisplay: "summarized",
+			} satisfies BedrockOptions,
+		);
+
+		expect(fields?.thinking.type).toBe("enabled");
+		expect(fields?.thinking.budget_tokens).toBeTypeOf("number");
+		expect(fields?.thinking.display).toBeUndefined();
+		expect(fields?.output_config).toBeUndefined();
+	});
 });

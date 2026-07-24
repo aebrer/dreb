@@ -13,7 +13,7 @@ import type { AppStore } from "../state/store.js";
 function runtimeStatus(runtime: RuntimeInfoDto): "running" | "attention" | "idle" | "error" {
 	if (runtime.error) return "error";
 	if (runtime.needsAttention) return "attention";
-	if (runtime.state.isStreaming || runtime.state.isCompacting) return "running";
+	if (runtime.state.isStreaming || runtime.state.isRetrying || runtime.state.isCompacting) return "running";
 	return "idle";
 }
 

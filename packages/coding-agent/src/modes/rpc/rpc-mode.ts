@@ -161,6 +161,8 @@ export function getStateForRpc(session: AgentSession, modelFallbackMessage?: str
 		usingSubscription: session.model ? session.modelRegistry.isUsingOAuth(session.model) : false,
 		thinkingLevel: session.thinkingLevel,
 		isStreaming: session.isStreaming,
+		isRetrying: session.isRetrying,
+		retryAttempt: session.retryAttempt,
 		isCompacting: session.isCompacting,
 		steeringMode: session.steeringMode,
 		followUpMode: session.followUpMode,
@@ -176,18 +178,14 @@ export function getStateForRpc(session: AgentSession, modelFallbackMessage?: str
 }
 
 /**
- * Dashboard transcript snapshots use persisted branch context once the runtime
- * is idle so failed attempts removed from the next provider request remain
- * visible after a successful retry. During streaming/retry, the live agent
- * state is authoritative and avoids resurrecting the provisional failed
- * attempt as a terminal hydration state.
+ * Dashboard transcript snapshots use persisted branch context whenever the
+ * runtime is not streaming so failed attempts removed from the next provider
+ * request remain visible during retry backoff and after recovery. The snapshot
+ * state carries retry activity separately, preventing those historical errors
+ * from being mistaken for terminal failures.
  */
 export function getDashboardMessagesForRpc(session: AgentSession) {
-	return [
-		...(session.isStreaming || session.isRetrying
-			? session.messages
-			: session.sessionManager.buildSessionContext().messages),
-	];
+	return [...(session.isStreaming ? session.messages : session.sessionManager.buildSessionContext().messages)];
 }
 
 /**

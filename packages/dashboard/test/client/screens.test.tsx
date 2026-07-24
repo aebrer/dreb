@@ -959,6 +959,22 @@ describe("screen smoke tests", () => {
 		expect(el.querySelector(".error-reason")?.textContent).toBe("provider API unavailable");
 	});
 
+	it("fleet treats retry backoff as running work", () => {
+		const store = makeStore() as any;
+		const runtime = runtimeInfo("retrying");
+		runtime.state.isRetrying = true;
+		runtime.state.retryAttempt = 1;
+		const fakeStore = {
+			...store,
+			sessions: {},
+			fleet: () => ({ runtimes: [runtime], diskSessions: [] }),
+		};
+
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+
+		expect(el.querySelector(".session-card .chip-running")?.textContent).toContain("running");
+	});
+
 	it("session view renders with a populated transcript and session info bar", async () => {
 		vi.mocked(api.branch).mockResolvedValue({ branch: "feature/info" });
 		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 1.25 });

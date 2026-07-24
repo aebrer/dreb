@@ -25,6 +25,8 @@ export function makeFakeClient() {
 			tasks: [],
 			thinkingLevel: "medium",
 			isStreaming: false,
+			isRetrying: false,
+			retryAttempt: 0,
 			isCompacting: false,
 			steeringMode: "all",
 			followUpMode: "one-at-a-time",
@@ -41,6 +43,8 @@ export function makeFakeClient() {
 					tasks: [],
 					thinkingLevel: "medium",
 					isStreaming: false,
+					isRetrying: false,
+					retryAttempt: 0,
 					isCompacting: false,
 					steeringMode: "all",
 					followUpMode: "one-at-a-time",
@@ -608,11 +612,22 @@ describe("RuntimePool", () => {
 			});
 			expect(handle.error).toBeUndefined();
 			expect(handle.attention.has("error")).toBe(false);
+			expect(handle.lastState).toMatchObject({ isRetrying: true, retryAttempt: 1 });
 			await vi.advanceTimersByTimeAsync(200);
 			expect(snapshots.at(-1)).toMatchObject({
 				type: "fleet_snapshot",
+				runtimes: [
+					expect.objectContaining({
+						state: expect.objectContaining({ isRetrying: true, retryAttempt: 1 }),
+					}),
+				],
+			});
+			expect(snapshots.at(-1)).toMatchObject({
 				runtimes: [expect.not.objectContaining({ error: expect.anything() })],
 			});
+
+			clients[0].emit({ type: "auto_retry_end", success: true, attempt: 1 });
+			expect(handle.lastState).toMatchObject({ isRetrying: false, retryAttempt: 0 });
 		} finally {
 			vi.useRealTimers();
 		}

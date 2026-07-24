@@ -14,6 +14,7 @@ import type {
 	FleetRuntimeSnapshotDto,
 	FleetSnapshotEventDto,
 	RuntimeInfoDto,
+	SessionStateDto,
 	SessionStatsDto,
 } from "../../shared/protocol.js";
 import { api, connectEvents, type EventConnectionStatus } from "../api.js";
@@ -98,6 +99,27 @@ interface PendingHydration {
 	guard: HydrationGuardToken;
 	queued: EventEnvelope[];
 	queuedBytes: number;
+}
+
+function restoreSnapshotOutcomeState(session: SessionViewState, messages: any[], snapshotState: SessionStateDto): void {
+	session.statusEntries = session.statusEntries.filter((entry) => entry.key !== "retry");
+	const retryAttempt = snapshotState.retryAttempt ?? 0;
+	if (snapshotState.isRetrying && retryAttempt > 0) {
+		const failedAttempt = session.entries.findLast(
+			(entry) => entry.kind === "assistant" && entry.stopReason === "error",
+		);
+		const errorSuffix = failedAttempt?.errorMessage ? ` — ${failedAttempt.errorMessage}` : "";
+		session.statusEntries.push({
+			key: "retry",
+			text: `retrying (attempt ${retryAttempt})${errorSuffix}`,
+			tone: "warning",
+		});
+	}
+	deriveProviderErrorState(
+		session,
+		messages,
+		snapshotState.isStreaming || snapshotState.isRetrying || snapshotState.isCompacting,
+	);
 }
 
 export function createAppStore() {
@@ -611,7 +633,7 @@ export function createAppStore() {
 			session.toasts = [];
 			session.title = undefined;
 			session.composerPrefill = undefined;
-			deriveProviderErrorState(session, messages, active.state.isStreaming || active.state.isCompacting);
+			restoreSnapshotOutcomeState(session, messages, active.state);
 			if (session.streaming) {
 				// The snapshot has no current-tool label or turn start time. Reset
 				// both rather than preserving stale pre-gap working metadata.
@@ -904,7 +926,7 @@ export function createAppStore() {
 					session.workingSince = undefined;
 					session.workingText = undefined;
 				}
-				deriveProviderErrorState(session, messages, snapshot.state.isStreaming || snapshot.state.isCompacting);
+				restoreSnapshotOutcomeState(session, messages, snapshot.state);
 			});
 			bumpTaskRevision(key);
 			// The runtime snapshot is authoritative, including a lower count after a

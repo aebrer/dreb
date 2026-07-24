@@ -20,6 +20,16 @@ describe("supportsXhigh", () => {
 		expect(supportsXhigh(model)).toBe(true);
 	});
 
+	it.each([
+		"claude-3-opus-20240229",
+		"claude-3-7-sonnet-20250219",
+		"anthropic.claude-3-opus-20240229-v1:0",
+		"us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+	])("returns false for dated legacy Claude model %s", (id) => {
+		const base = getModel("anthropic", "claude-opus-4-6");
+		expect(supportsXhigh({ ...base, id })).toBe(false);
+	});
+
 	it("returns false for Sonnet 4.6, which supports max but not xhigh", () => {
 		const model = getModel("anthropic", "claude-sonnet-4-6");
 		expect(model).toBeDefined();
