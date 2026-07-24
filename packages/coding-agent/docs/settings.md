@@ -56,7 +56,8 @@ Configurable in the TUI via `/settings` → **Agent Models**. See [agent-models.
 #### modelSettings
 
 Per-model overrides keyed by model ID. Currently supports `thinkingDisplay`, which controls
-whether adaptive-thinking Claude models (Opus 4.6+, Sonnet 4.6+) return thinking summaries.
+whether adaptive-thinking Claude models (Opus and Sonnet 4.6–4.x, plus Claude 5 families)
+return thinking summaries.
 
 ```json
 {

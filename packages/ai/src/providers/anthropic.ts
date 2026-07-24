@@ -157,19 +157,19 @@ export type AnthropicEffort = "low" | "medium" | "high" | "max";
 export interface AnthropicOptions extends StreamOptions {
 	/**
 	 * Enable extended thinking.
-	 * For Opus 4.6 and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).
-	 * For older models: uses budget-based thinking with thinkingBudgetTokens.
+	 * Opus/Sonnet 4.6–4.x and Claude 5 families use adaptive thinking
+	 * (the model decides when/how much to think); older models use a token budget.
 	 */
 	thinkingEnabled?: boolean;
 	/**
 	 * Token budget for extended thinking (older models only).
-	 * Ignored for Opus 4.6 and Sonnet 4.6, which use adaptive thinking.
+	 * Ignored by adaptive-thinking Opus/Sonnet 4.6–4.x and Claude 5 families.
 	 */
 	thinkingBudgetTokens?: number;
 	/**
-	 * Effort level for adaptive thinking (Opus 4.6 and Sonnet 4.6).
+	 * Effort level for adaptive-thinking Opus/Sonnet 4.6–4.x and Claude 5 families.
 	 * Controls how much thinking Claude allocates:
-	 * - "max": Always thinks with no constraints (Opus 4.6 only)
+	 * - "max": Always thinks with no constraints (Opus 4.6–4.x and Claude 5 families)
 	 * - "high": Always thinks, deep reasoning (default)
 	 * - "medium": Moderate thinking, may skip for simple queries
 	 * - "low": Minimal thinking, skips for simple tasks
@@ -177,9 +177,10 @@ export interface AnthropicOptions extends StreamOptions {
 	 */
 	effort?: AnthropicEffort;
 	/**
-	 * Controls whether thinking text is returned for adaptive-thinking models (Opus 4.6+,
-	 * Sonnet 4.6+). "summarized" returns visible thinking; "omitted" returns only an
-	 * encrypted signature. When unset, the API default applies (Opus 4.7+ default to "omitted").
+	 * Controls whether thinking text is returned for adaptive-thinking Opus/Sonnet
+	 * 4.6–4.x and Claude 5 families. "summarized" returns visible thinking; "omitted"
+	 * returns only an encrypted signature. When unset, the API default applies
+	 * (Opus 4.7+ default to "omitted").
 	 */
 	thinkingDisplay?: "summarized" | "omitted";
 	interleavedThinking?: boolean;
@@ -488,8 +489,8 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 		return streamAnthropic(model, context, { ...base, thinkingEnabled: false } satisfies AnthropicOptions);
 	}
 
-	// For Opus 4.6+, Sonnet 4.6+: use adaptive thinking with effort level
-	// For older models: use budget-based thinking
+	// Opus/Sonnet 4.6–4.x and Claude 5 families use adaptive thinking with effort.
+	// Older models use budget-based thinking.
 	if (supportsAdaptiveThinking(model)) {
 		const effort = mapThinkingLevelToEffort(options.reasoning, model);
 		return streamAnthropic(model, context, {
@@ -541,8 +542,8 @@ function createClient(
 	optionsHeaders?: Record<string, string>,
 	dynamicHeaders?: Record<string, string>,
 ): { client: Anthropic; isOAuthToken: boolean } {
-	// Adaptive thinking models (Opus 4.6+, Sonnet 4.6+) have interleaved thinking built-in.
-	// The beta header is deprecated on these models, so skip it.
+	// Adaptive-thinking Opus/Sonnet 4.6–4.x and Claude 5 families have
+	// interleaved thinking built in. The beta header is deprecated there.
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model);
 	const firstParty = isFirstPartyAnthropic(model.baseUrl);
 
@@ -696,7 +697,7 @@ function buildParams(
 		params.tools = convertTools(context.tools, isOAuthToken);
 	}
 
-	// Configure thinking mode: adaptive (Opus 4.6 and Sonnet 4.6),
+	// Configure thinking mode: adaptive (Opus/Sonnet 4.6–4.x and Claude 5),
 	// budget-based (older models), or explicitly disabled.
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {

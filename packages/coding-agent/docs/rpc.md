@@ -317,7 +317,7 @@ Response:
 }
 ```
 
-Messages are `AgentMessage` objects (see [Message Types](#message-types)).
+Messages are `AgentMessage` objects (see [Types](#types)).
 
 ### Model
 
@@ -458,7 +458,7 @@ Set the reasoning/thinking level for models that support it.
 
 Levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`
 
-Note: `"xhigh"` is supported by OpenAI codex-max models and Anthropic Opus 4.6+ (maps to adaptive effort `"max"`).
+Note: `"xhigh"` is supported by GPT-5.2 through GPT-5.6 model families, Claude Opus 4.6–4.x and Claude 5 families (where it maps to adaptive effort `"max"`), and Kimi Code K3.
 
 Response:
 ```json

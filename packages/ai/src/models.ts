@@ -165,7 +165,7 @@ function claudeFamilyVersion(modelId: string): ClaudeFamilyVersion | undefined {
  *
  * Supported today:
  * - GPT-5.2 through GPT-5.6 model families
- * - Opus 4.6+ and Claude 5 model families
+ * - Claude Opus 4.6–4.x and Claude 5 model families
  * - Kimi Code K3 (xhigh maps to its advertised "max" effort)
  */
 export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
@@ -189,8 +189,8 @@ export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
 }
 
 /**
- * Check if a model uses adaptive thinking (Opus 4.6+, Sonnet 4.6+, and Claude
- * 5 families), where the `thinkingDisplay` option is honored. Mirrors the
+ * Check if a model uses adaptive thinking (Opus/Sonnet 4.6–4.x and Claude 5
+ * families), where the `thinkingDisplay` option is honored. Mirrors the
  * per-provider internal checks.
  */
 export function supportsAdaptiveThinking<TApi extends Api>(model: Model<TApi>): boolean {
