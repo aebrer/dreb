@@ -4263,4 +4263,128 @@ describe("dashboard client regressions", () => {
 		expect(tool?.querySelector(".suggested-command code")?.textContent).toBe("/skill:mach6-push");
 		expect(tool?.textContent).not.toContain("Suggestion registered");
 	});
+
+	it("renders tool-result image content blocks inline as sanitized data-URI <img> elements", () => {
+		// `read` is auto-open by default, so the image body mounts without interaction.
+		const read: ToolEntry = {
+			kind: "tool",
+			toolCallId: "read-png",
+			toolName: "read",
+			args: { path: "/tmp/logo.png" },
+			status: "done",
+			resultText: "",
+			images: [{ mimeType: "image/png", data: "iVBORw==" }],
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[read]} />);
+		const container = el.querySelector(".tool-images");
+
+		expect(container).not.toBeNull();
+		const img = container?.querySelector("img.tool-image") as HTMLImageElement | null;
+		expect(img).not.toBeNull();
+		expect(img?.getAttribute("src")).toBe("data:image/png;base64,iVBORw==");
+	});
+
+	it("renders tool-result images regardless of tool name (not gated on read)", () => {
+		// A non-auto-open custom tool: open it manually to mount the lazy body, then
+		// confirm the image still renders — the feature is generic, not read-only.
+		const custom: ToolEntry = {
+			kind: "tool",
+			toolCallId: "bash-png",
+			toolName: "bash",
+			args: { command: "cat logo.png" },
+			status: "done",
+			resultText: "",
+			images: [{ mimeType: "image/webp", data: "UklGRg==" }],
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[custom]} />);
+		const tool = el.querySelector("details.tool") as HTMLDetailsElement;
+		setDetailsOpen(tool, true);
+
+		const img = el.querySelector(".tool-images img.tool-image") as HTMLImageElement | null;
+		expect(img).not.toBeNull();
+		expect(img?.getAttribute("src")).toBe("data:image/webp;base64,UklGRg==");
+	});
+
+	it("renders no image element when a tool result carries no images", () => {
+		const read: ToolEntry = {
+			kind: "tool",
+			toolCallId: "read-text",
+			toolName: "read",
+			args: { path: "/tmp/notes.txt" },
+			status: "done",
+			resultText: "just some text",
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[read]} />);
+
+		expect(el.querySelector(".tool-image")).toBeNull();
+		expect(el.querySelector(".tool-images")).toBeNull();
+	});
+
+	it("does not render an <img> for a disallowed mime type (defense-in-depth)", () => {
+		// Even if a disallowed mime (e.g. SVG, which can carry script) slips into
+		// ToolEntry.images, the RENDERABLE_IMAGE_MIME_TYPES filter drops it.
+		const read: ToolEntry = {
+			kind: "tool",
+			toolCallId: "read-svg",
+			toolName: "read",
+			args: { path: "/tmp/evil.svg" },
+			status: "done",
+			resultText: "",
+			images: [{ mimeType: "image/svg+xml", data: "PHN2Zz4=" }],
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[read]} />);
+
+		expect(el.querySelector(".tool-image")).toBeNull();
+		expect(el.querySelector(".tool-images")).toBeNull();
+	});
+
+	it("renders only the allowed <img> when images mix allowed and disallowed mime types", () => {
+		// Per-item filtering: a disallowed sibling must not suppress the valid image.
+		const read: ToolEntry = {
+			kind: "tool",
+			toolCallId: "read-mixed",
+			toolName: "read",
+			args: { path: "/tmp/logo.png" },
+			status: "done",
+			resultText: "",
+			images: [
+				{ mimeType: "image/svg+xml", data: "PHN2Zz4=" },
+				{ mimeType: "image/png", data: "iVBORw==" },
+			],
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[read]} />);
+		const imgs = el.querySelectorAll("img.tool-image");
+
+		expect(imgs.length).toBe(1);
+		expect((imgs[0] as HTMLImageElement).getAttribute("src")).toBe("data:image/png;base64,iVBORw==");
+	});
+
+	it("renders multiple allowed images from a single tool result", () => {
+		const read: ToolEntry = {
+			kind: "tool",
+			toolCallId: "read-multi",
+			toolName: "read",
+			args: { path: "/tmp/shot.png" },
+			status: "done",
+			resultText: "",
+			images: [
+				{ mimeType: "image/png", data: "iVBORw==" },
+				{ mimeType: "image/webp", data: "UklGRg==" },
+			],
+			startedAt: Date.now(),
+		};
+		const el = mount(() => <Transcript entries={[read]} />);
+		const imgs = Array.from(el.querySelectorAll("img.tool-image")) as HTMLImageElement[];
+
+		expect(imgs.length).toBe(2);
+		expect(imgs.map((img) => img.getAttribute("src"))).toEqual([
+			"data:image/png;base64,iVBORw==",
+			"data:image/webp;base64,UklGRg==",
+		]);
+	});
 });
