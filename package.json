@@ -39,7 +39,7 @@
     "node": "22.x"
   },
   "packageManager": "npm@11.5.1",
-  "version": "2.44.0",
+  "version": "2.45.0",
   "dependencies": {
     "@dreb/coding-agent": "*",
     "@mariozechner/jiti": "^2.6.5",

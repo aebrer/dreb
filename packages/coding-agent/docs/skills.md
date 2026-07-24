@@ -282,11 +282,11 @@ dreb ships with **mach6**, a development workflow that orchestrates the full iss
 | `mach6-issue` | Assess an existing issue or create a new one |
 | `mach6-plan` | Explore codebase, plan, create branch and draft PR |
 | `mach6-push` | Commit, push, post progress comment |
-| `mach6-review` | Multi-agent code review with independent assessment |
+| `mach6-review` | Explicitly user-triggered multi-agent review with scope-aware independent assessment |
 | `mach6-implement` | Implement plans, fix review findings, or fix CI failures |
 | `mach6-publish` | Pre-merge checks, docs update, merge, tag, release |
 
-Built-in skills are always available and can be overridden by placing a skill with the same name in any [user or project location](#locations).
+Built-in skills are always available and can be overridden by placing a skill with the same name in any [user or project location](#locations). `mach6-review` is model-invocable when the user directly asks an agent to run it, as well as user-invocable through its slash command. Agents must never start formal review autonomously; implementation must first be committed and pushed.
 
 See [docs/mach6.md](mach6.md) for full documentation.
 
