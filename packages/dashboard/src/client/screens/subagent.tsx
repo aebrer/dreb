@@ -92,6 +92,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 							who={agent()?.agentType ?? "agent"}
 							userLabel="task from parent"
 							resetKey={`${props.sessionKey}:${props.agentId}`}
+							imageScope={{ runtimeKey: props.sessionKey, agentId: props.agentId }}
 						/>
 					</Show>
 				</div>

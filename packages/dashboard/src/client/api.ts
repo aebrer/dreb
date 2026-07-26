@@ -62,6 +62,23 @@ function json(body: unknown): RequestInit {
 	return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
 
+const DASHBOARD_IMAGE_ID_PATTERN = /^[0-9a-f]{64}$/;
+
+/** Build an encoded same-origin URL only for a validated content-addressed ID. */
+export function dashboardImageUrl(
+	runtimeKey: string,
+	id: string,
+	variant: "preview" | "original",
+	agentId?: string,
+): string | undefined {
+	if (!DASHBOARD_IMAGE_ID_PATTERN.test(id) || runtimeKey.length === 0) return undefined;
+	const runtime = encodeURIComponent(runtimeKey);
+	const scope = agentId
+		? `/api/runtimes/${runtime}/subagents/${encodeURIComponent(agentId)}/images`
+		: `/api/runtimes/${runtime}/images`;
+	return `${scope}/${id}/${variant}`;
+}
+
 export const api = {
 	auth: (signal?: AbortSignal) =>
 		request<AuthStatusDto & { needsPairing: boolean; identity?: string; error?: string }>("/api/auth", { signal }),

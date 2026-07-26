@@ -21,8 +21,9 @@ import {
 	Switch,
 	untrack,
 } from "solid-js";
+import { dashboardImageUrl } from "../api.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
-import { expandThinking, isToolAutoOpen } from "../state/preferences.js";
+import { expandThinking, imageDisplayMode, isToolAutoOpen } from "../state/preferences.js";
 import type {
 	AgentResultEntry,
 	AssistantEntry,
@@ -347,30 +348,151 @@ function editDiffText(entry: ToolEntry): string | undefined {
 	return typeof diff === "string" ? diff : undefined;
 }
 
-/**
- * Mime types we will render inline. Mirrors the reducer allowlist — SVG is
- * intentionally excluded (it can carry script). This is a second, independent
- * gate so a bug upstream cannot route an unexpected mime type into an `<img>`.
- */
 const RENDERABLE_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const IMAGE_ID_PATTERN = /^[0-9a-f]{64}$/;
+const ORIGINAL_CONFIRM_BYTES = 1024 * 1024;
 
-/**
- * Render tool-result image content blocks (e.g. `read` on a PNG) inline as
- * sanitized `data:` URIs. Shown to the human viewing the dashboard regardless
- * of whether the active model supports vision. The reducer has already
- * validated mime type + base64; we re-check the mime allowlist here as
- * defense-in-depth. Data-URI `<img>` cannot execute script.
- */
-function ToolResultImages(props: { images: ToolResultImage[] }): JSX.Element {
-	const renderable = () => props.images.filter((image) => RENDERABLE_IMAGE_MIME_TYPES.has(image.mimeType));
+export interface TranscriptImageScope {
+	runtimeKey: string;
+	agentId?: string;
+}
+
+function formatImageSize(bytes: number): string {
+	if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`;
+	return `${bytes} B`;
+}
+
+function ToolResultImageView(props: { image: ToolResultImage; scope: TranscriptImageScope }): JSX.Element {
+	const [source, setSource] = createSignal<string>();
+	const [sourceVariant, setSourceVariant] = createSignal<"preview" | "original">();
+	const [error, setError] = createSignal<string>();
+	const [lightbox, setLightbox] = createSignal(false);
+	const url = (variant: "preview" | "original") =>
+		dashboardImageUrl(props.scope.runtimeKey, props.image.id, variant, props.scope.agentId);
+	const assign = (variant: "preview" | "original") => {
+		const next = url(variant);
+		if (!next) {
+			setError("Invalid image reference");
+			return;
+		}
+		setError(undefined);
+		setSourceVariant(variant);
+		setSource(next);
+	};
+	createEffect(() => {
+		const mode = imageDisplayMode();
+		setLightbox(false);
+		setError(undefined);
+		if (mode === "previews") assign("preview");
+		else if (mode === "originals") assign("original");
+		else {
+			setSource(undefined);
+			setSourceVariant(undefined);
+		}
+	});
+	const loadOriginal = () => {
+		if (
+			props.image.size > ORIGINAL_CONFIRM_BYTES &&
+			!window.confirm(`Load the ${formatImageSize(props.image.size)} original image? This may use significant data.`)
+		) {
+			return;
+		}
+		assign("original");
+	};
+	const handleKeydown = (event: KeyboardEvent) => {
+		if (event.key === "Escape") setLightbox(false);
+	};
+	onMount(() => window.addEventListener("keydown", handleKeydown));
+	onCleanup(() => window.removeEventListener("keydown", handleKeydown));
+	return (
+		<div class="tool-image-item">
+			<Show
+				when={source()}
+				fallback={
+					<output class="tool-image-placeholder">
+						<span>
+							{props.image.mimeType.replace("image/", "").toUpperCase()} · {formatImageSize(props.image.size)}
+						</span>
+						<Show when={!error()}>
+							<button type="button" class="entry-action" onClick={() => assign("preview")}>
+								load preview
+							</button>
+						</Show>
+					</output>
+				}
+			>
+				{(src) => (
+					<button
+						type="button"
+						class="tool-image-button"
+						disabled={sourceVariant() !== "preview"}
+						onClick={() => sourceVariant() === "preview" && setLightbox(true)}
+						aria-label={sourceVariant() === "preview" ? "Enlarge image preview" : "Original tool-result image"}
+					>
+						<img
+							class="tool-image"
+							alt="Tool result"
+							src={src()}
+							loading="lazy"
+							onError={() => {
+								setError(`Could not load ${sourceVariant() ?? "image"}`);
+								setSource(undefined);
+							}}
+						/>
+					</button>
+				)}
+			</Show>
+			<div class="tool-image-actions">
+				<span>
+					{props.image.mimeType.replace("image/", "").toUpperCase()} · {formatImageSize(props.image.size)}
+				</span>
+				<Show when={sourceVariant() !== "original"}>
+					<button type="button" class="entry-action" onClick={loadOriginal}>
+						load original · {formatImageSize(props.image.size)}
+					</button>
+				</Show>
+			</div>
+			<Show when={error()}>
+				{(message) => (
+					<p class="tool-image-error" role="alert">
+						{message()}
+					</p>
+				)}
+			</Show>
+			<Show when={lightbox() && sourceVariant() === "preview" && source()}>
+				<div class="image-lightbox" role="dialog" aria-modal="true" aria-label="Image preview">
+					<button
+						type="button"
+						class="image-lightbox-backdrop"
+						aria-label="Close image preview"
+						onClick={() => setLightbox(false)}
+					/>
+					<div class="image-lightbox-content">
+						<img src={source()} alt="Enlarged tool-result preview" />
+						<button type="button" class="btn btn-small" onClick={() => setLightbox(false)}>
+							close
+						</button>
+					</div>
+				</div>
+			</Show>
+		</div>
+	);
+}
+
+function ToolResultImages(props: { images: ToolResultImage[]; scope: TranscriptImageScope }): JSX.Element {
+	const renderable = () =>
+		props.images.filter(
+			(image) =>
+				RENDERABLE_IMAGE_MIME_TYPES.has(image.mimeType) &&
+				IMAGE_ID_PATTERN.test(image.id) &&
+				Number.isSafeInteger(image.size) &&
+				image.size > 0,
+		);
 	return (
 		<Show when={renderable().length > 0}>
 			<div class="tool-images">
-				<For each={renderable()}>
-					{(image) => (
-						<img class="tool-image" alt="Tool result" src={`data:${image.mimeType};base64,${image.data}`} />
-					)}
-				</For>
+				<For each={renderable()}>{(image) => <ToolResultImageView image={image} scope={props.scope} />}</For>
 			</div>
 		</Show>
 	);
@@ -417,7 +539,7 @@ function ToolResultBody(props: {
 	);
 }
 
-function ToolCard(props: { entry: ToolEntry }): JSX.Element {
+function ToolCard(props: { entry: ToolEntry; imageScope: TranscriptImageScope }): JSX.Element {
 	const status = () => toolStatus(props.entry);
 	const args = () => props.entry.args as Record<string, unknown> | undefined;
 	const suggestDetails = () => {
@@ -523,7 +645,7 @@ function ToolCard(props: { entry: ToolEntry }): JSX.Element {
 				</For>
 				<Show when={props.entry.images?.length}>
 					<div class="tool-result">
-						<ToolResultImages images={props.entry.images!} />
+						<ToolResultImages images={props.entry.images!} scope={props.imageScope} />
 					</div>
 				</Show>
 				<Switch>
@@ -710,7 +832,12 @@ export function transcriptRenderItems(
 	return items;
 }
 
-function EntryView(props: { entry: TranscriptEntry; who: string; userLabel: string }): JSX.Element {
+function EntryView(props: {
+	entry: TranscriptEntry;
+	who: string;
+	userLabel: string;
+	imageScope: TranscriptImageScope;
+}): JSX.Element {
 	return (
 		<Switch>
 			<Match when={props.entry.kind === "user"}>
@@ -732,7 +859,7 @@ function EntryView(props: { entry: TranscriptEntry; who: string; userLabel: stri
 				<AssistantBlockView entry={props.entry as AssistantEntry} who={props.who} />
 			</Match>
 			<Match when={props.entry.kind === "tool"}>
-				<ToolCard entry={props.entry as ToolEntry} />
+				<ToolCard entry={props.entry as ToolEntry} imageScope={props.imageScope} />
 			</Match>
 			<Match when={props.entry.kind === "summary"}>
 				<div class="entry summary-card">
@@ -785,9 +912,11 @@ export function Transcript(props: {
 	who?: string;
 	userLabel?: string;
 	resetKey?: unknown;
+	imageScope?: TranscriptImageScope;
 }): JSX.Element {
 	const who = () => props.who ?? "dreb";
 	const userLabel = () => props.userLabel ?? "you";
+	const imageScope = () => props.imageScope ?? { runtimeKey: "" };
 	const renderItems = createMemo<TranscriptRenderItem[]>((previous) => transcriptRenderItems(props.entries, previous));
 	const [visibleCount, setVisibleCount] = createSignal(TRANSCRIPT_WINDOW_SIZE);
 	let lastResetKey: unknown;
@@ -824,7 +953,9 @@ export function Transcript(props: {
 						<Match when={item.kind === "assistant-turn"}>
 							<div class="assistant-turn" data-testid="assistant-turn">
 								<For each={(item as Extract<TranscriptRenderItem, { kind: "assistant-turn" }>).entries()}>
-									{(entry) => <EntryView entry={entry} who={who()} userLabel={userLabel()} />}
+									{(entry) => (
+										<EntryView entry={entry} who={who()} userLabel={userLabel()} imageScope={imageScope()} />
+									)}
 								</For>
 							</div>
 						</Match>
@@ -833,6 +964,7 @@ export function Transcript(props: {
 								entry={(item as { kind: "entry"; entry: TranscriptEntry }).entry}
 								who={who()}
 								userLabel={userLabel()}
+								imageScope={imageScope()}
 							/>
 						</Match>
 					</Switch>

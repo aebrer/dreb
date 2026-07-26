@@ -11,6 +11,7 @@
 import {
 	type BackgroundAgentDto,
 	type ContextUsageDto,
+	type DashboardImageReferenceDto,
 	MAX_COMPLETED_BACKGROUND_AGENTS,
 } from "../../shared/protocol.js";
 
@@ -52,19 +53,11 @@ export interface AssistantEntry {
 	timestamp?: number;
 }
 
-/**
- * An image content block returned by a tool result, surfaced for inline
- * rendering in the dashboard transcript. This is independent of whether the
- * active model supports vision — the human viewing the dashboard always sees
- * the image. Only allowlisted raster mime types with plausible base64 payloads
- * are retained (see {@link contentToParts}); this is the sole sanitization
- * boundary before the data is rendered as a `data:` URI `<img>`.
- */
+/** Validated browser-facing reference to a tool-result raster image. */
 export interface ToolResultImage {
-	/** Allowlisted raster mime type (png/jpeg/gif/webp). Never `image/svg+xml`. */
-	mimeType: string;
-	/** Base64-encoded image bytes (no data-URI prefix). */
-	data: string;
+	id: string;
+	mimeType: DashboardImageReferenceDto["mimeType"];
+	size: number;
 }
 
 export interface ToolEntry {
@@ -75,10 +68,7 @@ export interface ToolEntry {
 	status: "running" | "done" | "error";
 	/** Result text (or partial output while running). */
 	resultText: string;
-	/**
-	 * Image content blocks returned by the tool (e.g. `read` on a PNG). Rendered
-	 * inline as sanitized `data:` URIs. Absent when the result carried no images.
-	 */
+	/** Validated image references returned by the tool. */
 	images?: ToolResultImage[];
 	details?: unknown;
 	startedAt: number;
@@ -202,48 +192,39 @@ export interface MessageLike {
 	[key: string]: unknown;
 }
 
-/**
- * Raster image mime types we are willing to render inline. Deliberately
- * excludes `image/svg+xml` — SVG can carry embedded script, so it must never
- * reach the `data:` URI `<img>` path.
- */
-const ALLOWED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const ALLOWED_IMAGE_MIME_TYPES = new Set<DashboardImageReferenceDto["mimeType"]>([
+	"image/png",
+	"image/jpeg",
+	"image/gif",
+	"image/webp",
+]);
+const IMAGE_ID_PATTERN = /^[0-9a-f]{64}$/;
 
-/**
- * Reject payloads that are not plausibly base64. This is a defense-in-depth
- * check so a malformed/hostile content block cannot smuggle arbitrary text
- * into the `src` attribute; combined with the mime allowlist and the fact that
- * a data-URI `<img>` cannot execute script, it closes the XSS surface.
- */
-function isLikelyBase64(value: string): boolean {
-	if (value.length === 0 || value.length % 4 !== 0) return false;
-	return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
-}
-
-/**
- * Normalize a tool-result content value into rendered parts. Text blocks are
- * joined with newlines (mirrors the previous text-only behavior); image blocks
- * are surfaced separately so the transcript can render them inline. Non-text,
- * non-image parts are ignored. Image blocks are sanitized here — the only place
- * image data crosses from the wire into render state.
- */
+/** Normalize transcript content while rejecting malformed or disallowed references. */
 function contentToParts(content: unknown): { text: string; images: ToolResultImage[] } {
 	if (typeof content === "string") return { text: content, images: [] };
 	if (!Array.isArray(content)) return { text: "", images: [] };
 	const textParts: string[] = [];
 	const images: ToolResultImage[] = [];
 	for (const raw of content) {
-		const part = raw as { type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown };
+		const part = raw as { type?: unknown; text?: unknown; id?: unknown; size?: unknown; mimeType?: unknown };
 		if (typeof part?.text === "string") {
 			textParts.push(part.text);
 		} else if (
-			part?.type === "image" &&
-			typeof part.data === "string" &&
+			part?.type === "image_reference" &&
+			typeof part.id === "string" &&
+			IMAGE_ID_PATTERN.test(part.id) &&
 			typeof part.mimeType === "string" &&
-			ALLOWED_IMAGE_MIME_TYPES.has(part.mimeType) &&
-			isLikelyBase64(part.data)
+			ALLOWED_IMAGE_MIME_TYPES.has(part.mimeType as DashboardImageReferenceDto["mimeType"]) &&
+			typeof part.size === "number" &&
+			Number.isSafeInteger(part.size) &&
+			part.size > 0
 		) {
-			images.push({ mimeType: part.mimeType, data: part.data });
+			images.push({
+				id: part.id,
+				mimeType: part.mimeType as DashboardImageReferenceDto["mimeType"],
+				size: part.size,
+			});
 		}
 	}
 	return { text: textParts.join("\n"), images };

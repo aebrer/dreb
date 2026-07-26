@@ -12,6 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the API module: screens fetch on mount; smoke tests must not hit a server.
 vi.mock("../../src/client/api.js", () => ({
+	dashboardImageUrl: (runtimeKey: string, id: string, variant: string, agentId?: string) => {
+		if (!/^[0-9a-f]{64}$/.test(id) || !runtimeKey) return undefined;
+		const base = agentId
+			? `/api/runtimes/${encodeURIComponent(runtimeKey)}/subagents/${encodeURIComponent(agentId)}/images`
+			: `/api/runtimes/${encodeURIComponent(runtimeKey)}/images`;
+		return `${base}/${id}/${variant}`;
+	},
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
@@ -189,7 +196,7 @@ import {
 	reloadAppearance,
 	THEME_STORAGE_KEY,
 } from "../../src/client/state/appearance.js";
-import { setExpandThinking } from "../../src/client/state/preferences.js";
+import { setExpandThinking, setImageDisplayMode } from "../../src/client/state/preferences.js";
 import {
 	applySessionEvent,
 	createSessionViewState,
@@ -246,6 +253,7 @@ afterEach(() => {
 	document.body.innerHTML = "";
 	window.location.hash = "#/";
 	setExpandThinking(false);
+	setImageDisplayMode("previews");
 	window.localStorage.clear();
 	vi.mocked(connectEvents).mockImplementation(() => () => {});
 	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
@@ -2290,6 +2298,18 @@ describe("dashboard client regressions", () => {
 
 		expect(window.localStorage.getItem("dreb.dashboard.expandThinking")).toBe("true");
 		expect(checkbox!.checked).toBe(true);
+	});
+
+	it("settings persists the browser-local image display mode separately from model-input settings", async () => {
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const select = el.querySelector("#pref-image-display-mode") as HTMLSelectElement;
+		expect(select.value).toBe("previews");
+		select.value = "originals";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		expect(window.localStorage.getItem("dreb.dashboard.imageDisplayMode")).toBe("originals");
+		expect(el.textContent).toContain("informed network-data opt-in");
 	});
 
 	describe("settings appearance (theme gallery)", () => {
@@ -4355,127 +4375,117 @@ describe("dashboard client regressions", () => {
 		expect(tool?.textContent).not.toContain("Suggestion registered");
 	});
 
-	it("renders tool-result image content blocks inline as sanitized data-URI <img> elements", () => {
-		// `read` is auto-open by default, so the image body mounts without interaction.
-		const read: ToolEntry = {
-			kind: "tool",
-			toolCallId: "read-png",
-			toolName: "read",
-			args: { path: "/tmp/logo.png" },
-			status: "done",
-			resultText: "",
-			images: [{ mimeType: "image/png", data: "iVBORw==" }],
-			startedAt: Date.now(),
-		};
-		const el = mount(() => <Transcript entries={[read]} />);
-		const container = el.querySelector(".tool-images");
-
-		expect(container).not.toBeNull();
-		const img = container?.querySelector("img.tool-image") as HTMLImageElement | null;
-		expect(img).not.toBeNull();
-		expect(img?.getAttribute("src")).toBe("data:image/png;base64,iVBORw==");
+	const IMAGE_ID = "a".repeat(64);
+	const SECOND_IMAGE_ID = "b".repeat(64);
+	const imageEntry = (images: ToolEntry["images"], toolName = "read"): ToolEntry => ({
+		kind: "tool",
+		toolCallId: `image-${toolName}`,
+		toolName,
+		args: {},
+		status: "done",
+		resultText: "",
+		images,
+		startedAt: Date.now(),
 	});
 
-	it("renders tool-result images regardless of tool name (not gated on read)", () => {
-		// A non-auto-open custom tool: open it manually to mount the lazy body, then
-		// confirm the image still renders — the feature is generic, not read-only.
-		const custom: ToolEntry = {
-			kind: "tool",
-			toolCallId: "bash-png",
-			toolName: "bash",
-			args: { command: "cat logo.png" },
-			status: "done",
-			resultText: "",
-			images: [{ mimeType: "image/webp", data: "UklGRg==" }],
-			startedAt: Date.now(),
-		};
-		const el = mount(() => <Transcript entries={[custom]} />);
+	it("requests a bounded preview by default using a same-origin reference URL", () => {
+		const read = imageEntry([{ id: IMAGE_ID, mimeType: "image/png", size: 1234 }]);
+		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime one" }} />);
+		const img = el.querySelector("img.tool-image") as HTMLImageElement | null;
+
+		expect(img?.getAttribute("src")).toBe(`/api/runtimes/runtime%20one/images/${IMAGE_ID}/preview`);
+		expect(el.textContent).toContain("load original · 2 KB");
+	});
+
+	it("renders image references for extension tools and encoded subagent scopes", () => {
+		const custom = imageEntry([{ id: IMAGE_ID, mimeType: "image/webp", size: 10 }], "extension_image");
+		const el = mount(() => (
+			<Transcript entries={[custom]} imageScope={{ runtimeKey: "runtime", agentId: "agent/one" }} />
+		));
 		const tool = el.querySelector("details.tool") as HTMLDetailsElement;
 		setDetailsOpen(tool, true);
-
-		const img = el.querySelector(".tool-images img.tool-image") as HTMLImageElement | null;
-		expect(img).not.toBeNull();
-		expect(img?.getAttribute("src")).toBe("data:image/webp;base64,UklGRg==");
+		expect(el.querySelector("img.tool-image")?.getAttribute("src")).toBe(
+			`/api/runtimes/runtime/subagents/agent%2Fone/images/${IMAGE_ID}/preview`,
+		);
 	});
 
-	it("renders no image element when a tool result carries no images", () => {
-		const read: ToolEntry = {
-			kind: "tool",
-			toolCallId: "read-text",
-			toolName: "read",
-			args: { path: "/tmp/notes.txt" },
-			status: "done",
-			resultText: "just some text",
-			startedAt: Date.now(),
-		};
-		const el = mount(() => <Transcript entries={[read]} />);
-
-		expect(el.querySelector(".tool-image")).toBeNull();
-		expect(el.querySelector(".tool-images")).toBeNull();
+	it("placeholder mode assigns no src until preview loading is explicit", () => {
+		setImageDisplayMode("placeholders");
+		const read = imageEntry([{ id: IMAGE_ID, mimeType: "image/png", size: 1234 }]);
+		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
+		expect(el.querySelector("img.tool-image")).toBeNull();
+		const button = Array.from(el.querySelectorAll("button")).find(
+			(candidate) => candidate.textContent === "load preview",
+		)!;
+		button.click();
+		expect(el.querySelector("img.tool-image")?.getAttribute("src")).toBe(
+			`/api/runtimes/runtime/images/${IMAGE_ID}/preview`,
+		);
 	});
 
-	it("does not render an <img> for a disallowed mime type (defense-in-depth)", () => {
-		// Even if a disallowed mime (e.g. SVG, which can carry script) slips into
-		// ToolEntry.images, the RENDERABLE_IMAGE_MIME_TYPES filter drops it.
-		const read: ToolEntry = {
-			kind: "tool",
-			toolCallId: "read-svg",
-			toolName: "read",
-			args: { path: "/tmp/evil.svg" },
-			status: "done",
-			resultText: "",
-			images: [{ mimeType: "image/svg+xml", data: "PHN2Zz4=" }],
-			startedAt: Date.now(),
-		};
-		const el = mount(() => <Transcript entries={[read]} />);
-
-		expect(el.querySelector(".tool-image")).toBeNull();
-		expect(el.querySelector(".tool-images")).toBeNull();
+	it("preview click opens a lightbox with the same preview URL", () => {
+		const read = imageEntry([{ id: IMAGE_ID, mimeType: "image/png", size: 1234 }]);
+		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
+		(el.querySelector(".tool-image-button") as HTMLButtonElement).click();
+		const dialog = el.querySelector('[role="dialog"]');
+		expect(dialog?.querySelector("img")?.getAttribute("src")).toBe(
+			`/api/runtimes/runtime/images/${IMAGE_ID}/preview`,
+		);
 	});
 
-	it("renders only the allowed <img> when images mix allowed and disallowed mime types", () => {
-		// Per-item filtering: a disallowed sibling must not suppress the valid image.
-		const read: ToolEntry = {
-			kind: "tool",
-			toolCallId: "read-mixed",
-			toolName: "read",
-			args: { path: "/tmp/logo.png" },
-			status: "done",
-			resultText: "",
-			images: [
-				{ mimeType: "image/svg+xml", data: "PHN2Zz4=" },
-				{ mimeType: "image/png", data: "iVBORw==" },
-			],
-			startedAt: Date.now(),
-		};
-		const el = mount(() => <Transcript entries={[read]} />);
-		const imgs = el.querySelectorAll("img.tool-image");
-
-		expect(imgs.length).toBe(1);
-		expect((imgs[0] as HTMLImageElement).getAttribute("src")).toBe("data:image/png;base64,iVBORw==");
+	it("large explicit originals confirm before assigning their URL", () => {
+		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+		const read = imageEntry([{ id: IMAGE_ID, mimeType: "image/png", size: 2 * 1024 * 1024 }]);
+		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
+		const action = Array.from(el.querySelectorAll("button")).find((candidate) =>
+			candidate.textContent?.includes("load original"),
+		)!;
+		action.click();
+		expect(confirm).toHaveBeenCalledOnce();
+		expect(el.querySelector("img.tool-image")?.getAttribute("src")).toContain("/preview");
+		confirm.mockReturnValue(true);
+		action.click();
+		expect(el.querySelector("img.tool-image")?.getAttribute("src")).toBe(
+			`/api/runtimes/runtime/images/${IMAGE_ID}/original`,
+		);
+		confirm.mockRestore();
 	});
 
-	it("renders multiple allowed images from a single tool result", () => {
-		const read: ToolEntry = {
-			kind: "tool",
-			toolCallId: "read-multi",
-			toolName: "read",
-			args: { path: "/tmp/shot.png" },
-			status: "done",
-			resultText: "",
-			images: [
-				{ mimeType: "image/png", data: "iVBORw==" },
-				{ mimeType: "image/webp", data: "UklGRg==" },
-			],
-			startedAt: Date.now(),
-		};
-		const el = mount(() => <Transcript entries={[read]} />);
-		const imgs = Array.from(el.querySelectorAll("img.tool-image")) as HTMLImageElement[];
+	it("automatic-original mode assigns only the original without per-image confirmation", () => {
+		const confirm = vi.spyOn(window, "confirm");
+		setImageDisplayMode("originals");
+		const read = imageEntry([{ id: IMAGE_ID, mimeType: "image/gif", size: 2 * 1024 * 1024 }]);
+		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
+		expect(el.querySelector("img.tool-image")?.getAttribute("src")).toBe(
+			`/api/runtimes/runtime/images/${IMAGE_ID}/original`,
+		);
+		expect(confirm).not.toHaveBeenCalled();
+		confirm.mockRestore();
+	});
 
-		expect(imgs.length).toBe(2);
-		expect(imgs.map((img) => img.getAttribute("src"))).toEqual([
-			"data:image/png;base64,iVBORw==",
-			"data:image/webp;base64,UklGRg==",
+	it("surfaces image load errors without falling back to another variant", () => {
+		const read = imageEntry([{ id: IMAGE_ID, mimeType: "image/png", size: 1234 }]);
+		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
+		el.querySelector("img.tool-image")?.dispatchEvent(new Event("error"));
+		expect(el.querySelector('[role="alert"]')?.textContent).toContain("Could not load preview");
+		expect(el.querySelector("img.tool-image")).toBeNull();
+	});
+
+	it("rejects disallowed MIME types and malformed IDs as defense-in-depth", () => {
+		const read = imageEntry([
+			{ id: IMAGE_ID, mimeType: "image/svg+xml" as "image/png", size: 10 },
+			{ id: "bad", mimeType: "image/png", size: 10 },
 		]);
+		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
+		expect(el.querySelector(".tool-images")).toBeNull();
+	});
+
+	it("renders multiple valid image references", () => {
+		const read = imageEntry([
+			{ id: IMAGE_ID, mimeType: "image/png", size: 10 },
+			{ id: SECOND_IMAGE_ID, mimeType: "image/webp", size: 20 },
+		]);
+		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
+		expect(el.querySelectorAll("img.tool-image")).toHaveLength(2);
 	});
 });
