@@ -57,6 +57,9 @@ export type CacheRetention = "none" | "short" | "long";
 
 export type Transport = "sse" | "websocket" | "auto";
 
+/** Explicit credential transport for providers that support multiple auth schemes. */
+export type AuthMode = "api-key" | "bearer";
+
 export interface StreamOptions {
 	temperature?: number;
 	maxTokens?: number;
@@ -343,6 +346,8 @@ export interface Model<TApi extends Api> {
 	contextWindow: number;
 	maxTokens: number;
 	headers?: Record<string, string>;
+	/** Explicit auth transport. When unset, the provider's default and token heuristics apply. */
+	authMode?: AuthMode;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions"
 		? OpenAICompletionsCompat

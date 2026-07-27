@@ -194,19 +194,33 @@ Use `qwen-chat-template` instead for local Qwen-compatible servers that read `ch
 > Use `mistral-conversations` for native Mistral models.
 > If you intentionally route Mistral-compatible/custom endpoints through `openai-completions`, set `compat` flags explicitly as needed.
 
-### Auth Header
+### Bearer Auth
 
-If your provider expects `Authorization: Bearer <key>` but doesn't use a standard API, set `authHeader: true`:
+If your provider expects `Authorization: Bearer <key>`, set `authHeader: true`:
 
 ```typescript
-dreb.registerProvider("custom-api", {
-  baseUrl: "https://api.example.com",
-  apiKey: "MY_API_KEY",
-  authHeader: true,  // adds Authorization: Bearer header
-  api: "openai-completions",
+dreb.registerProvider("company-anthropic", {
+  baseUrl: "https://ai.example.com/anthropic",
+  apiKey: "COMPANY_ANTHROPIC_TOKEN",
+  authHeader: true,
+  api: "anthropic-messages",
   models: [...]
 });
 ```
+
+For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the request-time resolved credential as `Authorization` and does not also send `x-api-key`. Without `authHeader`, third-party Anthropic-compatible endpoints use `x-api-key` by default. `apiKey` can name any environment variable or use a literal or `!command`; it does not need to be named `ANTHROPIC_AUTH_TOKEN`.
+
+The same option works when redirecting an existing provider without replacing its models:
+
+```typescript
+dreb.registerProvider("anthropic", {
+  baseUrl: "https://ai.example.com/anthropic",
+  apiKey: "COMPANY_ANTHROPIC_TOKEN",
+  authHeader: true
+});
+```
+
+For custom `streamSimple` implementations with a configured `apiKey`, dreb also exposes its load-time resolved Bearer header through `model.headers`; the custom implementation remains responsible for applying those headers or using `model.authMode` with the request-time `options.apiKey`.
 
 ## OAuth Support
 
@@ -544,7 +558,7 @@ interface ProviderConfig {
   /** Custom headers to include in requests. Values can be env var names. */
   headers?: Record<string, string>;
 
-  /** If true, adds Authorization: Bearer header with the resolved API key. */
+  /** Use Authorization: Bearer with the resolved API key instead of provider API-key auth. */
   authHeader?: boolean;
 
   /** Models to register. If provided, replaces all existing models for this provider. */

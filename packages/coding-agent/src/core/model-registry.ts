@@ -143,12 +143,13 @@ ajv.addSchema(ModelsConfigSchema, "ModelsConfig");
 
 type ModelsConfig = Static<typeof ModelsConfigSchema>;
 
-/** Provider override config (baseUrl, headers, apiKey, compat) without custom models */
+/** Provider override config without custom models. */
 interface ProviderOverride {
 	baseUrl?: string;
 	headers?: Record<string, string>;
 	apiKey?: string;
 	compat?: Model<Api>["compat"];
+	authHeader?: boolean;
 }
 
 /** Result of loading custom models from models.json */
@@ -163,6 +164,42 @@ interface CustomModelsResult {
 
 function emptyCustomModelsResult(error?: string): CustomModelsResult {
 	return { models: [], overrides: new Map(), modelOverrides: new Map(), error };
+}
+
+function withoutHeader(
+	headers: Record<string, string> | undefined,
+	headerName: string,
+): Record<string, string> | undefined {
+	if (!headers) return undefined;
+	const filtered = Object.fromEntries(
+		Object.entries(headers).filter(([name]) => name.toLowerCase() !== headerName.toLowerCase()),
+	);
+	return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
+/**
+ * Apply provider-level auth configuration while preserving the materialized
+ * Authorization header used by custom stream implementations. Built-in
+ * providers can use authMode with the request-time credential instead.
+ */
+function applyProviderAuthConfig(
+	headers: Record<string, string> | undefined,
+	authHeader: boolean | undefined,
+	apiKey: string | undefined,
+	existingAuthMode?: Model<Api>["authMode"],
+): Pick<Model<Api>, "headers" | "authMode"> {
+	if (authHeader === undefined) {
+		return { headers, authMode: existingAuthMode };
+	}
+	if (!authHeader) {
+		return { headers, authMode: undefined };
+	}
+
+	const resolvedKey = apiKey ? resolveConfigValue(apiKey) : undefined;
+	return {
+		headers: resolvedKey ? { ...headers, Authorization: `Bearer ${resolvedKey}` } : headers,
+		authMode: "bearer",
+	};
 }
 
 function mergeCompat(
@@ -327,13 +364,20 @@ export class ModelRegistry {
 			return models.map((m) => {
 				let model = m;
 
-				// Apply provider-level baseUrl/headers/compat override
+				// Apply provider-level baseUrl/headers/auth/compat override
 				if (providerOverride) {
 					const resolvedHeaders = resolveHeaders(providerOverride.headers);
+					const mergedHeaders = resolvedHeaders ? { ...model.headers, ...resolvedHeaders } : model.headers;
+					const authConfig = applyProviderAuthConfig(
+						mergedHeaders,
+						providerOverride.authHeader,
+						providerOverride.apiKey,
+						model.authMode,
+					);
 					model = {
 						...model,
+						...authConfig,
 						baseUrl: providerOverride.baseUrl ?? model.baseUrl,
-						headers: resolvedHeaders ? { ...model.headers, ...resolvedHeaders } : model.headers,
 						compat: mergeCompat(model.compat, providerOverride.compat),
 					};
 				}
@@ -388,13 +432,20 @@ export class ModelRegistry {
 			const modelOverrides = new Map<string, Map<string, ModelOverride>>();
 
 			for (const [providerName, providerConfig] of Object.entries(config.providers)) {
-				// Apply provider-level baseUrl/headers/apiKey/compat override to built-in models when configured.
-				if (providerConfig.baseUrl || providerConfig.headers || providerConfig.apiKey || providerConfig.compat) {
+				// Apply provider-level overrides to built-in models when configured.
+				if (
+					providerConfig.baseUrl ||
+					providerConfig.headers ||
+					providerConfig.apiKey ||
+					providerConfig.compat ||
+					providerConfig.authHeader !== undefined
+				) {
 					overrides.set(providerName, {
 						baseUrl: providerConfig.baseUrl,
 						headers: providerConfig.headers,
 						apiKey: providerConfig.apiKey,
 						compat: providerConfig.compat,
+						authHeader: providerConfig.authHeader,
 					});
 				}
 
@@ -483,15 +534,8 @@ export class ModelRegistry {
 				const providerHeaders = resolveHeaders(providerConfig.headers);
 				const modelHeaders = resolveHeaders(modelDef.headers);
 				const compat = mergeCompat(providerConfig.compat, modelDef.compat);
-				let headers = providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined;
-
-				// If authHeader is true, add Authorization header with resolved API key
-				if (providerConfig.authHeader && providerConfig.apiKey) {
-					const resolvedKey = resolveConfigValue(providerConfig.apiKey);
-					if (resolvedKey) {
-						headers = { ...headers, Authorization: `Bearer ${resolvedKey}` };
-					}
-				}
+				const headers = providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined;
+				const authConfig = applyProviderAuthConfig(headers, providerConfig.authHeader, providerConfig.apiKey);
 
 				// Provider baseUrl is required when custom models are defined.
 				// Individual models can override it with modelDef.baseUrl.
@@ -507,7 +551,7 @@ export class ModelRegistry {
 					cost: modelDef.cost ?? defaultCost,
 					contextWindow: modelDef.contextWindow ?? 128000,
 					maxTokens: modelDef.maxTokens ?? 16384,
-					headers,
+					...authConfig,
 					compat,
 				} as Model<Api>);
 			}
@@ -650,18 +694,11 @@ export class ModelRegistry {
 			for (const modelDef of config.models) {
 				const api = modelDef.api || config.api;
 
-				// Merge headers
+				// Merge headers and provider-level auth configuration
 				const providerHeaders = resolveHeaders(config.headers);
 				const modelHeaders = resolveHeaders(modelDef.headers);
-				let headers = providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined;
-
-				// If authHeader is true, add Authorization header
-				if (config.authHeader && config.apiKey) {
-					const resolvedKey = resolveConfigValue(config.apiKey);
-					if (resolvedKey) {
-						headers = { ...headers, Authorization: `Bearer ${resolvedKey}` };
-					}
-				}
+				const headers = providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined;
+				const authConfig = applyProviderAuthConfig(headers, config.authHeader, config.apiKey);
 
 				this.models.push({
 					id: modelDef.id,
@@ -674,7 +711,7 @@ export class ModelRegistry {
 					cost: modelDef.cost,
 					contextWindow: modelDef.contextWindow,
 					maxTokens: modelDef.maxTokens,
-					headers,
+					...authConfig,
 					compat: modelDef.compat,
 				} as Model<Api>);
 			}
@@ -687,14 +724,20 @@ export class ModelRegistry {
 				}
 			}
 		} else if (config.baseUrl) {
-			// Override-only: update baseUrl/headers for existing models
+			// Override-only: update baseUrl/headers/auth for existing models
 			const resolvedHeaders = resolveHeaders(config.headers);
 			this.models = this.models.map((m) => {
 				if (m.provider !== providerName) return m;
+				const baseHeaders =
+					config.authHeader === false && m.authMode === "bearer"
+						? withoutHeader(m.headers, "authorization")
+						: m.headers;
+				const headers = resolvedHeaders ? { ...baseHeaders, ...resolvedHeaders } : baseHeaders;
+				const authConfig = applyProviderAuthConfig(headers, config.authHeader, config.apiKey, m.authMode);
 				return {
 					...m,
+					...authConfig,
 					baseUrl: config.baseUrl ?? m.baseUrl,
-					headers: resolvedHeaders ? { ...m.headers, ...resolvedHeaders } : m.headers,
 				};
 			});
 		}
@@ -710,6 +753,7 @@ export interface ProviderConfigInput {
 	api?: Api;
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
 	headers?: Record<string, string>;
+	/** Use Authorization: Bearer with the resolved API key instead of the provider's API-key auth channel. */
 	authHeader?: boolean;
 	/** OAuth provider for /login support */
 	oauth?: Omit<OAuthProviderInterface, "id">;

@@ -110,7 +110,7 @@ Set `api` at provider level (default for all models) or model level (override pe
 | `api` | API type (see above) |
 | `apiKey` | API key (see value resolution below) |
 | `headers` | Custom headers (see value resolution below) |
-| `authHeader` | Set `true` to add `Authorization: Bearer <apiKey>` automatically |
+| `authHeader` | Set `true` to use the resolved `apiKey` as `Authorization: Bearer` instead of provider API-key auth |
 | `models` | Array of model configurations |
 | `modelOverrides` | Per-model overrides for built-in models on this provider |
 
@@ -131,6 +131,44 @@ The `apiKey` and `headers` fields support three formats:
   ```json
   "apiKey": "sk-..."
   ```
+
+### Bearer Auth for Anthropic-Compatible Providers
+
+Third-party Anthropic-compatible endpoints use `x-api-key` by default. If an endpoint instead requires `Authorization: Bearer <key>`, set `authHeader: true`:
+
+```json
+{
+  "providers": {
+    "company-anthropic": {
+      "baseUrl": "https://ai.example.com/anthropic",
+      "api": "anthropic-messages",
+      "apiKey": "COMPANY_ANTHROPIC_TOKEN",
+      "authHeader": true,
+      "models": [
+        { "id": "company-claude" }
+      ]
+    }
+  }
+}
+```
+
+For the built-in `anthropic-messages` implementation, this selects Bearer-only auth: dreb sends the request-time resolved credential as `Authorization` and does not also send `x-api-key`. The credential can use any [value resolution](#value-resolution) format; the environment variable does not need a special Anthropic SDK name.
+
+The flag also works when redirecting a built-in provider without redefining its models:
+
+```json
+{
+  "providers": {
+    "anthropic": {
+      "baseUrl": "https://ai.example.com/anthropic",
+      "apiKey": "COMPANY_ANTHROPIC_TOKEN",
+      "authHeader": true
+    }
+  }
+}
+```
+
+Leave `authHeader` unset or `false` for endpoints that expect `x-api-key`.
 
 ### Custom Headers
 

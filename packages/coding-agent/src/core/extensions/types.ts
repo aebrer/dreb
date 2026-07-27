@@ -1250,7 +1250,7 @@ export interface ProviderConfig {
 	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
 	/** Custom headers to include in requests. */
 	headers?: Record<string, string>;
-	/** If true, adds Authorization: Bearer header with the resolved API key. */
+	/** Use Authorization: Bearer with the resolved API key instead of the provider's API-key auth channel. */
 	authHeader?: boolean;
 	/** Models to register. If provided, replaces all existing models for this provider. */
 	models?: ProviderModelConfig[];
