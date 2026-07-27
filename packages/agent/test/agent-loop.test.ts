@@ -94,6 +94,7 @@ describe("agentLoop with AgentMessage", () => {
 
 		const config: AgentLoopConfig = {
 			model: createModel(),
+			reasoning: "high",
 			convertToLlm: identityConverter,
 		};
 
@@ -123,6 +124,11 @@ describe("agentLoop with AgentMessage", () => {
 		// Verify event sequence
 		const eventTypes = events.map((e) => e.type);
 		expect(eventTypes).toContain("agent_start");
+		expect(events.find((event) => event.type === "agent_start")).toEqual({
+			type: "agent_start",
+			model: { provider: "openai", id: "mock" },
+			thinkingLevel: "high",
+		});
 		expect(eventTypes).toContain("turn_start");
 		expect(eventTypes).toContain("message_start");
 		expect(eventTypes).toContain("message_end");

@@ -285,10 +285,33 @@ dreb ships with **mach6**, a development workflow that orchestrates the full iss
 | `mach6-review` | Explicitly user-triggered multi-agent review with scope-aware independent assessment |
 | `mach6-implement` | Implement plans, fix review findings, or fix CI failures |
 | `mach6-publish` | Pre-merge checks, docs update, merge, tag, release |
+| `model-routing-guide` | Research scoped models and sanitized local subagent evidence into a validated routing guide |
 
 Built-in skills are always available and can be overridden by placing a skill with the same name in any [user or project location](#locations). `mach6-review` is model-invocable when the user directly asks an agent to run it, as well as user-invocable through its slash command. Agents must never start formal review autonomously; implementation must first be committed and pushed.
 
 See [docs/mach6.md](mach6.md) for full documentation.
+
+### model-routing-guide
+
+`model-routing-guide` is an explicit, potentially expensive research workflow for the model set you have deliberately scoped. Invoke it after configuring `enabledModels`:
+
+```text
+/skill:model-routing-guide
+```
+
+Or pass the same comma-separated model patterns you would use with `--models`:
+
+```text
+/skill:model-routing-guide anthropic/claude-*,openai/gpt-5.6-sol
+```
+
+The skill refuses missing/empty and effectively all-model scopes. It resolves canonical provider/model candidates, snapshots existing files under `~/.dreb/agent/subagent-sessions/`, and combines sanitized aggregate local observations with official documentation, model cards, benchmarks, issue trackers, forums, and practitioner reports. Existing unreadable or malformed child logs fail the run; a genuinely empty history is labeled cold-start.
+
+The generated `~/.dreb/agent/model-routing-guide.md` is human-readable Markdown with schema-versioned YAML frontmatter and one validated section per canonical candidate. Evidence is labeled as vendor claims, measured benchmarks, community reports, or local observations, with dates, confidence, sample counts, contrary findings, and explicit unknowns. The workflow prohibits copied prompts, outputs, tool arguments, secrets, paths, and identifying project details.
+
+Semantic local-evidence assessment uses normal dreb tools, so inspected session content is processed by the active research model's configured provider. The persisted guide is sanitized and generalized, but invoking the skill is still a decision to send the inspected evidence to that provider.
+
+Its primary routing safeguards are practical: `Explore` is for factual collection and navigation, not planning or implementation; routine lookup, extraction, repetitive file inspection, and straightforward summarization should use the least expensive scoped model demonstrated adequate by the evidence. Stage 1 generates this guide only—the optional pre-spawn arbiter consumes it in a later stage.
 
 ## Skill Repositories
 

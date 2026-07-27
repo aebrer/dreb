@@ -18,7 +18,7 @@ type AgentSessionEvent =
   | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
   | { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
-  | { type: "background_agent_end"; agentId: string; agentType: string; success: boolean }
+  | { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; model?: string; thinking?: ThinkingLevel; sessionFile?: string }
   | { type: "tasks_update"; tasks: readonly SessionTask[] }
   | { type: "suggest_next"; command: string };
 
@@ -35,7 +35,7 @@ Base events from [`AgentEvent`](https://github.com/aebrer/dreb/blob/master/packa
 ```typescript
 type AgentEvent =
   // Agent lifecycle
-  | { type: "agent_start"; model?: { provider: string; id: string } }
+  | { type: "agent_start"; model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel }
   | { type: "agent_end"; messages: AgentMessage[] }
   // Turn lifecycle
   | { type: "turn_start" }
@@ -75,7 +75,7 @@ Each line is a JSON object. The first line is the session header (`version` is t
 Followed by events as they occur:
 
 ```json
-{"type":"agent_start","model":{"provider":"anthropic","id":"claude-sonnet-4-20250514"}}
+{"type":"agent_start","model":{"provider":"anthropic","id":"claude-sonnet-4-20250514"},"thinkingLevel":"high"}
 {"type":"turn_start"}
 {"type":"message_start","message":{"role":"assistant","content":[],...}}
 {"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_delta","delta":"Hello",...}}

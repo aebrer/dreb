@@ -1574,6 +1574,17 @@ describe("formatSingleResult", () => {
 		expect(text).not.toContain("**Error**");
 		expect(text).not.toContain("(No output)");
 	});
+
+	test("renders effective model and thinking metadata", () => {
+		const text = formatSingleResult({
+			...base,
+			model: "resolved-model",
+			thinking: "high",
+			errorMessage: null,
+			output: "hello",
+		});
+		expect(text).toContain("## Agent: explore (model: resolved-model, thinking: high)");
+	});
 });
 
 /**

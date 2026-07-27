@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { closeSync, type Dirent, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import type { AgentTool } from "@dreb/agent-core";
+import type { AgentTool, ThinkingLevel } from "@dreb/agent-core";
 import { type Api, type AssistantMessage, type Context, completeSimple, type Model } from "@dreb/ai";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
@@ -14,7 +14,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { log } from "../logger.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { resolveCliModel } from "../model-resolver.js";
-import { resolveEffectiveThinkingLevel, thinkingLevelToReasoning } from "../thinking.js";
+import { resolveEffectiveThinkingLevel, thinkingLevelToReasoning, validateThinkingLevelForModel } from "../thinking.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.js";
@@ -33,6 +33,7 @@ export interface AgentTypeConfig {
 }
 
 const DEFAULT_AGENT = "Explore";
+const SUBAGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 export const DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS = 120_000;
 
 export function parseAgentFrontmatter(
@@ -143,6 +144,8 @@ export interface SubagentResult {
 	agent: string;
 	task: string;
 	model?: string;
+	/** Effective thinking level reported by the child process. */
+	thinking?: ThinkingLevel;
 	exitCode: number;
 	output: string;
 	stderr: string;
@@ -204,6 +207,8 @@ export interface ChildLineSinks {
 	onProgress?: (text: string) => void;
 	/** Called when the child reports its resolved model (`agent_start`). */
 	onModel: (modelId: string) => void;
+	/** Called when the child reports its effective thinking level (`agent_start`). */
+	onThinking?: (thinkingLevel: ThinkingLevel) => void;
 	/** Called with lines that failed to parse as JSON (often real startup errors). */
 	onPlainLine: (line: string) => void;
 	/** Mutable holder for the last tool name, shared across lines for progress text. */
@@ -240,8 +245,14 @@ export function handleChildJsonlLine(line: string, sinks: ChildLineSinks): void 
 	if (typeof event.type === "string") {
 		sinks.onEvent?.(event);
 	}
-	if (event.type === "agent_start" && event.model) {
-		sinks.onModel(event.model.id);
+	if (event.type === "agent_start") {
+		if (event.model?.id) sinks.onModel(event.model.id);
+		if (
+			typeof event.thinkingLevel === "string" &&
+			(SUBAGENT_THINKING_LEVELS as readonly string[]).includes(event.thinkingLevel)
+		) {
+			sinks.onThinking?.(event.thinkingLevel as ThinkingLevel);
+		}
 	}
 	if (event.type === "message_end" && event.message?.role === "assistant") {
 		sinks.onAssistantMessage(event.message);
@@ -265,6 +276,7 @@ async function spawnSubagent(
 	sessionDir?: string,
 	parentSessionFile?: string,
 	onChildEvent?: (event: Record<string, unknown>) => void,
+	thinkingOverride?: ThinkingLevel,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
 	log.debug(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
@@ -299,6 +311,9 @@ async function spawnSubagent(
 		if (parentProvider && !modelStr.includes("/")) {
 			args.push("--provider", parentProvider);
 		}
+	}
+	if (thinkingOverride) {
+		args.push("--thinking", thinkingOverride);
 	}
 	// Always pass --tools to ensure wait/subagent/suggest_next are excluded from child processes.
 	// filterSubagentTools always returns a non-empty string.
@@ -351,6 +366,7 @@ async function spawnSubagent(
 		const plainStdoutLines: string[] = [];
 		const toolNameRef = { current: "" };
 		let resolvedModel: string | undefined;
+		let resolvedThinking: ThinkingLevel | undefined;
 
 		// Drain stderr concurrently to avoid pipe deadlock (capped to prevent OOM from verbose subagents)
 		proc.stderr?.on("data", (chunk: Buffer) => {
@@ -376,6 +392,9 @@ async function spawnSubagent(
 					onProgress,
 					onModel: (modelId) => {
 						resolvedModel = modelId;
+					},
+					onThinking: (thinkingLevel) => {
+						resolvedThinking = thinkingLevel;
 					},
 					onPlainLine: (plain) => plainStdoutLines.push(plain),
 					toolNameRef,
@@ -479,6 +498,7 @@ async function spawnSubagent(
 							? agentConfig.model[0]
 							: agentConfig.model
 						: undefined),
+				thinking: resolvedThinking ?? (exitCode === 0 ? thinkingOverride : undefined),
 				exitCode,
 				output,
 				stderr: stderr.slice(0, 2000), // cap stderr
@@ -914,6 +934,14 @@ const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
 
+/** Resolve per-task thinking precedence for parallel and chain modes. */
+export function resolveSubagentThinkingOverride(
+	taskThinking: ThinkingLevel | undefined,
+	topLevelThinking: ThinkingLevel | undefined,
+): ThinkingLevel | undefined {
+	return taskThinking ?? topLevelThinking;
+}
+
 // Semaphore for background task concurrency — shared across all background launches
 let bgRunning = 0;
 const bgWaiters: Array<() => void> = [];
@@ -970,6 +998,7 @@ export async function executeSingle(
 	agentModels?: string[],
 	parentSessionFile?: string,
 	onChildEvent?: (event: Record<string, unknown>) => void,
+	thinkingOverride?: ThinkingLevel,
 ): Promise<SubagentResult> {
 	const name = agentName || DEFAULT_AGENT;
 	const config = agents.get(name);
@@ -999,6 +1028,7 @@ export async function executeSingle(
 	const modelSpec = modelOverride || (agentModels && agentModels.length > 0 ? agentModels : undefined) || config.model;
 	let effectiveConfig: AgentTypeConfig = modelOverride ? { ...config, model: modelOverride } : config;
 	let resolvedProvider = parentProvider;
+	let resolvedModel: Model<Api> | undefined;
 	let warning: string | undefined;
 	let skippedModels: SkippedFallbackModel[] = [];
 
@@ -1026,7 +1056,24 @@ export async function executeSingle(
 		if (resolved.provider) {
 			resolvedProvider = resolved.provider;
 		}
+		if (registry && resolvedProvider) {
+			resolvedModel = registry.find(resolvedProvider, resolved.modelId);
+		}
 		warning = resolved.warning;
+	}
+
+	if (thinkingOverride) {
+		const validation = validateThinkingLevelForModel(resolvedModel, thinkingOverride);
+		if (!validation.ok) {
+			return {
+				agent: name,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				errorMessage: validation.error,
+			};
+		}
 	}
 
 	const usedModel = effectiveConfig.model?.toString();
@@ -1041,6 +1088,7 @@ export async function executeSingle(
 		sessionDir,
 		parentSessionFile,
 		onChildEvent,
+		thinkingOverride,
 	);
 	result.output = prependModelFallbackSummary(result.output, skippedModels, result.model ?? usedModel);
 	if (warning) {
@@ -1051,7 +1099,7 @@ export async function executeSingle(
 
 async function executeChain(
 	agents: Map<string, AgentTypeConfig>,
-	chain: Array<{ agent?: string; task: string; cwd?: string; model?: string }>,
+	chain: Array<{ agent?: string; task: string; cwd?: string; model?: string; thinking?: ThinkingLevel }>,
 	defaultCwd: string,
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
@@ -1060,6 +1108,7 @@ async function executeChain(
 	sessionBaseDir?: string,
 	defaultAgent?: string,
 	defaultModel?: string,
+	defaultThinking?: ThinkingLevel,
 	parentModel?: string,
 	getAgentModelsForAgentFn?: (name: string) => string[] | undefined,
 	parentSessionFile?: string,
@@ -1119,6 +1168,7 @@ async function executeChain(
 			stepMach6Models,
 			parentSessionFile,
 			onChildEvent,
+			resolveSubagentThinkingOverride(step.thinking, defaultThinking),
 		);
 		results.push(result);
 
@@ -1489,6 +1539,18 @@ export interface SubagentToolOptions {
 // Tool schema and definition
 // ---------------------------------------------------------------------------
 
+const thinkingLevelSchema = Type.Union(
+	[
+		Type.Literal("off"),
+		Type.Literal("minimal"),
+		Type.Literal("low"),
+		Type.Literal("medium"),
+		Type.Literal("high"),
+		Type.Literal("xhigh"),
+	],
+	{ description: "Thinking level override for the child model." },
+);
+
 const taskItemSchema = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'Explore')" })),
 	task: Type.String({ description: "The task prompt for this subagent" }),
@@ -1504,6 +1566,7 @@ const taskItemSchema = Type.Object({
 				"Model override for this task. Takes precedence over agent definition model. Note: a single-string override discards the agent's fallback list.",
 		}),
 	),
+	thinking: Type.Optional(thinkingLevelSchema),
 });
 
 const subagentSchema = Type.Object({
@@ -1514,6 +1577,22 @@ const subagentSchema = Type.Object({
 			description:
 				"Model override. Takes precedence over agent definition model. Note: a single-string override discards the agent's fallback list. For parallel/chain, set per-task instead.",
 		}),
+	),
+	thinking: Type.Optional(
+		Type.Union(
+			[
+				Type.Literal("off"),
+				Type.Literal("minimal"),
+				Type.Literal("low"),
+				Type.Literal("medium"),
+				Type.Literal("high"),
+				Type.Literal("xhigh"),
+			],
+			{
+				description:
+					"Thinking level override. Per-task values take precedence in parallel and chain modes. Omit to preserve child defaults.",
+			},
+		),
 	),
 	tasks: Type.Optional(
 		Type.Array(taskItemSchema, {
@@ -1620,7 +1699,13 @@ function formatSubagentResult(
 }
 
 export function formatSingleResult(result: SubagentResult): string {
-	let text = `## Agent: ${result.agent}${result.model ? ` (model: ${result.model})` : ""}\n`;
+	const metadata = [
+		result.model ? `model: ${result.model}` : undefined,
+		result.thinking ? `thinking: ${result.thinking}` : undefined,
+	]
+		.filter((value): value is string => value !== undefined)
+		.join(", ");
+	let text = `## Agent: ${result.agent}${metadata ? ` (${metadata})` : ""}\n`;
 	if (result.exitCode !== 0) {
 		text += `**Error** (exit ${result.exitCode}): ${result.errorMessage || "Unknown error"}\n`;
 		if (result.stderr) {
@@ -1685,6 +1770,7 @@ export function createSubagentToolDefinition(
 			"Each agent notifies independently when done — completion messages include a list of any still-running agents. If you need their results before proceeding, end your current turn with no tool calls (as if you were asking the user a question and waiting for their reply). This emits `agent_end` and lets the framework deliver the completion as a new message that resumes your turn automatically. Do not call `sleep` or any other waiting action, and do not launch filler work.",
 			"Agent definitions specify a `model` field with a provider fallback list (comma-separated or YAML list). The spawner tries each in order and uses the first one that resolves for the current provider. This makes agents portable across providers.",
 			"Per-invocation `model` overrides take precedence but **discard the entire fallback list** — if the single override model isn't available on the current provider, the agent fails. Only override when you have a specific reason (e.g. escalating to a stronger tier for a complex task).",
+			"Optional `thinking` overrides accept off/minimal/low/medium/high/xhigh. Per-task values override a top-level value; unsupported levels fail before spawn. Omit thinking to preserve the child's configured default.",
 			"**Model routing** — agent definitions already specify the right tier for their role. Most subagent tasks (exploration, file discovery, grep, navigation, summarization) are handled well by the defaults. Do not override the model unless the task genuinely requires a different capability tier than what the agent definition provides.",
 			"**Model identity** — Your current model is stated in the system prompt as `You are running on: provider/id`. Use this for explicit routing decisions — e.g. delegate vision tasks if you're on a text-only model, or use a differently-architected model as a critic for tasks where diverse model perspectives improve reliability.",
 		],
@@ -1850,6 +1936,7 @@ export function createSubagentToolDefinition(
 					taskLabel: string,
 					taskCwd?: string,
 					modelOverride?: string,
+					thinkingOverride?: ThinkingLevel,
 				) => {
 					const resolvedCwd = taskCwd ?? cwd;
 					// Each background agent gets its own session subdirectory
@@ -1872,6 +1959,7 @@ export function createSubagentToolDefinition(
 							agentModels,
 							getParentSessionFile(),
 							onChildEvent,
+							thinkingOverride,
 						),
 					);
 				};
@@ -1885,6 +1973,7 @@ export function createSubagentToolDefinition(
 						`${agentName} task`,
 						undefined,
 						params.model,
+						params.thinking,
 					);
 					return {
 						content: [
@@ -1914,6 +2003,7 @@ export function createSubagentToolDefinition(
 							`${agentName} task ${i + 1}/${params.tasks.length}`,
 							cwdResult.cwd,
 							item.model || params.model,
+							resolveSubagentThinkingOverride(item.thinking, params.thinking),
 						);
 						launched.push({ id: agentId, agentName, taskText: item.task });
 					}
@@ -1966,6 +2056,7 @@ export function createSubagentToolDefinition(
 								chainSessionDir,
 								params.agent,
 								params.model,
+								params.thinking,
 								getParentModel(),
 								getAgentModelsForAgent,
 								getParentSessionFile(),

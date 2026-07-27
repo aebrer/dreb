@@ -388,7 +388,7 @@ The `subagent` tool delegates tasks to independent child agent processes. Each s
 - **Parallel** (`tasks`): Up to 8 concurrent agents (max 4 at a time)
 - **Chain** (`chain`): Sequential pipeline where each step can reference the previous step's output via `{previous}`
 
-**Agent type inheritance:** The top-level `agent` parameter is inherited by parallel tasks and chain steps that don't specify their own. Precedence: per-task `agent` > top-level `agent` > default (`"Explore"`). The `model` parameter follows the same inheritance.
+**Agent type and override inheritance:** The top-level `agent` parameter is inherited by parallel tasks and chain steps that don't specify their own. Precedence: per-task `agent` > top-level `agent` > default (`"Explore"`). The `model` and optional `thinking` parameters follow the same per-task-over-top-level inheritance. Explicit thinking accepts `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`; unsupported levels for the resolved model fail before spawn. Omit `thinking` to preserve the child's normal settings/default behavior.
 
 **Agent definitions** live in `~/.dreb/agents/` (global) and `.dreb/agents/` (project). Each is a markdown file with YAML frontmatter specifying `name`, `model` (with provider fallback list), and optional `systemPrompt`. Built-in agents include `Explore` (read-only codebase exploration), `Sandbox` (restricted to `/tmp`), `feature-dev` (strong-tier coding), and several review agents.
 
@@ -398,7 +398,7 @@ The `subagent` tool delegates tasks to independent child agent processes. Each s
 
 **Model identity in system prompt:** The parent session's running model is exposed in its own system prompt as `You are running on: provider/id`. This lets the model make self-aware routing decisions (e.g. delegate vision tasks to a multimodal subagent, or use a differently-architected model as a critic). The line updates automatically on mid-session model switches.
 
-**Session metadata:** Each child process records its agent type in the session JSONL header (`agentType` field), providing an audit trail of which agent definition executed the work.
+**Session and event metadata:** Each child process records its agent type in the session JSONL header (`agentType` field), providing an audit trail of which agent definition executed the work. Child `agent_start`, subagent results, and `background_agent_end` also expose the resolved model and effective thinking level, including defaults used when no override was supplied.
 
 **Background-agent guardrail:** Background subagents run asynchronously and return control to you while they work. To stop the parent agent from spinning ahead of results, a guardrail pauses it after `backgroundAgents.parentTurnLimit` turns (default 3) while subagents are still running. When this happens, dreb surfaces a friendly, non-error notification in the TUI and Telegram — explaining that background agents are still working and the parent paused intentionally, and that it resumes when they report back or when you send a message to steer it. This is a frontend/session event, not a model-context steer, so it can't go stale. Set `backgroundAgents.parentTurnGuardrail` to `false` to let the parent run unbounded while subagents work, or raise `parentTurnLimit` to relax the guardrail. See [settings](docs/settings.md#background-agents).
 
@@ -461,6 +461,8 @@ Skills support [content substitution](docs/skills.md#content-substitution) (`$1`
 Place in `~/.dreb/agent/skills/`, `~/.agents/skills/`, `.dreb/skills/`, or `.agents/skills/` (from `cwd` up through parent directories) or a [package](#packages) to share with others. See [docs/skills.md](docs/skills.md).
 
 dreb ships with **mach6** — a built-in development workflow (issue → plan → push → review → fix → publish) that uses GitHub as shared memory and multi-agent code review. See [docs/mach6.md](docs/mach6.md).
+
+It also ships with the explicitly invoked **`model-routing-guide`** skill. Run `/skill:model-routing-guide` after setting `enabledModels`, or pass a comma-separated scope as arguments. It researches canonical provider/model candidates, external evidence, and sanitized aggregate subagent history, then validates and writes `~/.dreb/agent/model-routing-guide.md`. See [docs/skills.md](docs/skills.md#model-routing-guide).
 
 ### Extensions
 

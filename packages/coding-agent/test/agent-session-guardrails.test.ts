@@ -704,6 +704,38 @@ describe("AgentSession background agent guardrails", () => {
 			promptSpy.mockRestore();
 		});
 
+		it("includes effective model and thinking in delivery and completion events", () => {
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+			const events: any[] = [];
+			session.subscribe((event) => events.push(event));
+
+			sessionAny._handleBackgroundComplete(
+				"bg-metadata",
+				{
+					agent: "test",
+					task: "test task",
+					model: "resolved-model",
+					thinking: "high",
+					exitCode: 0,
+					output: "done",
+					stderr: "",
+					errorMessage: null,
+				},
+				false,
+			);
+
+			const promptMsg = promptSpy.mock.calls[0][0] as any;
+			expect(promptMsg.content[0].text).toContain("Execution metadata: model: resolved-model, thinking: high");
+			expect(events.find((event) => event.type === "background_agent_end")).toMatchObject({
+				agentId: "bg-metadata",
+				model: "resolved-model",
+				thinking: "high",
+			});
+
+			promptSpy.mockRestore();
+		});
+
 		it("omits session log from completion message when sessionFile is not set", () => {
 			const sessionAny = session as any;
 			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);

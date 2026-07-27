@@ -142,7 +142,15 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string; sessionDir?: string }
-	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; sessionFile?: string }
+	| {
+			type: "background_agent_end";
+			agentId: string;
+			agentType: string;
+			success: boolean;
+			model?: string;
+			thinking?: ThinkingLevel;
+			sessionFile?: string;
+	  }
 	| {
 			type: "background_agent_event";
 			agentId: string;
@@ -741,6 +749,15 @@ export class AgentSession {
 	 */
 	_handleBackgroundComplete(agentId: string, result: SubagentResult, cancelled: boolean): void {
 		const parts: string[] = [];
+		if (result.model || result.thinking) {
+			const metadata = [
+				result.model ? `model: ${result.model}` : undefined,
+				result.thinking ? `thinking: ${result.thinking}` : undefined,
+			]
+				.filter((value): value is string => value !== undefined)
+				.join(", ");
+			parts.push(`Execution metadata: ${metadata}`);
+		}
 		if (cancelled) {
 			parts.push("This agent was cancelled by the user.");
 		}
@@ -816,6 +833,8 @@ export class AgentSession {
 				agentId,
 				agentType: result.agent,
 				success: result.exitCode === 0,
+				model: result.model,
+				thinking: result.thinking,
 				sessionFile: result.sessionFile,
 			});
 		} catch (emitErr) {

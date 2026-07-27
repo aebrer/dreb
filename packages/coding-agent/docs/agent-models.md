@@ -10,7 +10,7 @@ This applies to all subagents, including those launched by the mach6 skill workf
 
 ## Configuration
 
-Add to your `~/.dreb/settings.json`:
+Add to your `~/.dreb/agent/settings.json`:
 
 ```json
 {
@@ -35,6 +35,18 @@ When a subagent is launched, its model is resolved in this priority:
 4. **Parent session model** — used when none of the above resolve to an available model
 
 If the `agentModels.models` list is empty or undefined for a given agent, resolution falls through to the agent definition's model, then to the parent session model.
+
+## Per-request Thinking Overrides
+
+The `subagent` tool accepts an optional `thinking` value in single mode, at the top level for parallel/chain inheritance, or on an individual task/step. Per-task values win over the top-level value.
+
+Supported values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Validation happens after the child model resolves: non-`off` levels fail for non-reasoning models, and `xhigh` fails for models that do not advertise `xhigh` support. Omit the field to preserve the child's normal default/settings behavior. The child's actual effective level is reported in its `agent_start` event, result metadata, and `background_agent_end` event.
+
+## Evidence-based Routing Guide
+
+The built-in `/skill:model-routing-guide` workflow researches an explicitly scoped candidate set from `enabledModels` or skill arguments. It combines canonical provider/model documentation and public evidence with sanitized aggregate observations from local subagent session logs, then writes and validates `~/.dreb/agent/model-routing-guide.md`.
+
+The guide is intended to improve role and cost fit, especially keeping planning/implementation work out of `Explore` and reserving expensive frontier models for work that actually needs them. It does not change the model resolution order above. See [skills.md](skills.md#model-routing-guide).
 
 ## Parent Model Identity in System Prompt
 

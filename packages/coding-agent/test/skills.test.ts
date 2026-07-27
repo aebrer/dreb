@@ -466,6 +466,34 @@ describe("skills", () => {
 			expect(builtinNames).toContain("mach6-review");
 			expect(builtinNames).toContain("mach6-implement");
 			expect(builtinNames).toContain("mach6-publish");
+			expect(builtinNames).toContain("model-routing-guide");
+		});
+
+		it("model-routing-guide should remain an explicit, skill-only research workflow", () => {
+			const guide = getBuiltInSkill("model-routing-guide");
+			expect(guide.disableModelInvocation).toBe(true);
+			expect(guide.userInvocable).toBe(true);
+
+			const body = readBuiltInSkill("model-routing-guide");
+			expect(body).toContain("no special runtime support is required");
+			expect(body).toContain("stop with an actionable error before researching or writing a guide");
+			expect(body).toContain("unbounded all-model research");
+			expect(body).toContain("cold-start mode");
+			expect(body).toContain("every snapshotted file is required evidence");
+			expect(body).toContain("Agent-role fit");
+			expect(body).toContain(
+				"Planning, architecture ownership, implementation, editing, and feature development are not Explore work",
+			);
+			expect(body).toContain("least expensive/lowest-latency scoped model");
+			expect(body).toContain("Vendor claim");
+			expect(body).toContain("Measured benchmark");
+			expect(body).toContain("Community report");
+			expect(body).toContain("Local observation");
+			expect(body).toContain("active research model");
+			expect(body).toContain("do not claim the analysis remains entirely local");
+			expect(body).toContain("must never reproduce or closely paraphrase");
+			expect(body).toContain("schema_version: 1");
+			expect(body).toContain("They must be identical with no duplicates, missing entries, or extras");
 		});
 
 		it("mach6-review should remain user-controlled while supporting direct agent invocation", () => {

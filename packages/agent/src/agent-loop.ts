@@ -107,7 +107,11 @@ export async function runAgentLoop(
 		messages: [...context.messages, ...prompts],
 	};
 
-	await emit({ type: "agent_start", model: { provider: config.model.provider, id: config.model.id } });
+	await emit({
+		type: "agent_start",
+		model: { provider: config.model.provider, id: config.model.id },
+		thinkingLevel: config.reasoning ?? "off",
+	});
 	await emit({ type: "turn_start" });
 	for (const prompt of prompts) {
 		await emit({ type: "message_start", message: prompt });
@@ -136,7 +140,11 @@ export async function runAgentLoopContinue(
 	const newMessages: AgentMessage[] = [];
 	const currentContext: AgentContext = { ...context };
 
-	await emit({ type: "agent_start", model: { provider: config.model.provider, id: config.model.id } });
+	await emit({
+		type: "agent_start",
+		model: { provider: config.model.provider, id: config.model.id },
+		thinkingLevel: config.reasoning ?? "off",
+	});
 	await emit({ type: "turn_start" });
 
 	await runLoop(currentContext, newMessages, config, signal, emit, streamFn);
