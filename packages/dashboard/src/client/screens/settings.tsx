@@ -10,8 +10,10 @@ import { Modal, relativeTime, Topbar } from "../components/common.js";
 import { ThemeGallery } from "../components/theme-gallery.js";
 import {
 	expandThinking,
+	imageDisplayMode,
 	isToolAutoOpen,
 	setExpandThinking,
+	setImageDisplayMode,
 	setToolAutoExpand,
 	TOOL_AUTO_EXPAND_TOOLS,
 } from "../state/preferences.js";
@@ -788,6 +790,29 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 							</span>
 						</div>
 						<ThemeGallery />
+					</div>
+					<div class="setting-row">
+						<label class="setting-label" for="pref-image-display-mode">
+							<span class="name">tool-result images</span>
+							<span class="hint">
+								this browser only — placeholders make no automatic request, previews are bounded to 1024 px and
+								256 KiB, and originals automatically transfer full files. Choosing originals is the informed
+								network-data opt-in.
+							</span>
+						</label>
+						<span class="setting-control">
+							<select
+								id="pref-image-display-mode"
+								value={imageDisplayMode()}
+								onChange={(event) =>
+									setImageDisplayMode(event.currentTarget.value as "placeholders" | "previews" | "originals")
+								}
+							>
+								<option value="placeholders">placeholders</option>
+								<option value="previews">bounded previews</option>
+								<option value="originals">automatic originals</option>
+							</select>
+						</span>
 					</div>
 					<div class="setting-row">
 						<span class="setting-label">

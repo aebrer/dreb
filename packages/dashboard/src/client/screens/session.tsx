@@ -1168,7 +1168,11 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				<div class="chat-inner" ref={chatInnerRef}>
 					<Show when={session()} fallback={<p class="muted">loading transcript…</p>}>
 						<For each={session()!.widgets.above}>{(line) => <div class="widget-block">{line}</div>}</For>
-						<Transcript entries={session()!.entries} resetKey={props.sessionKey} />
+						<Transcript
+							entries={session()!.entries}
+							resetKey={props.sessionKey}
+							imageScope={{ runtimeKey: props.sessionKey }}
+						/>
 						<For each={session()!.widgets.below}>{(line) => <div class="widget-block">{line}</div>}</For>
 					</Show>
 				</div>

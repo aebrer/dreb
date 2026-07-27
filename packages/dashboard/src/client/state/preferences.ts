@@ -1,6 +1,8 @@
 import { createSignal } from "solid-js";
+import type { DashboardImageDisplayMode } from "../../shared/protocol.js";
 
 export const EXPAND_THINKING_KEY = "dreb.dashboard.expandThinking";
+export const IMAGE_DISPLAY_MODE_KEY = "dreb.dashboard.imageDisplayMode";
 export const TOOL_AUTO_EXPAND_KEY = "dreb.dashboard.toolAutoExpand";
 export const TOOL_AUTO_EXPAND_TOOLS = ["read", "edit", "write", "suggest_next", "bash"] as const;
 
@@ -35,6 +37,25 @@ function writeBooleanPreference(key: string, value: boolean): void {
 	}
 }
 
+function readImageDisplayMode(): DashboardImageDisplayMode {
+	if (typeof window === "undefined") return "previews";
+	try {
+		const value = window.localStorage.getItem(IMAGE_DISPLAY_MODE_KEY);
+		return value === "placeholders" || value === "previews" || value === "originals" ? value : "previews";
+	} catch {
+		return "previews";
+	}
+}
+
+function writeImageDisplayMode(value: DashboardImageDisplayMode): void {
+	if (typeof window === "undefined") return;
+	try {
+		window.localStorage.setItem(IMAGE_DISPLAY_MODE_KEY, value);
+	} catch {
+		// Keep the in-memory selection usable when persistent browser storage fails.
+	}
+}
+
 function readToolAutoExpandPreference(): ToolAutoExpandPreferences {
 	if (typeof window === "undefined") return { ...TOOL_AUTO_EXPAND_DEFAULT };
 	try {
@@ -64,14 +85,23 @@ function writeToolAutoExpandPreference(value: ToolAutoExpandPreferences): void {
 const [expandThinkingSignal, setExpandThinkingSignal] = createSignal(
 	readBooleanPreference(EXPAND_THINKING_KEY, EXPAND_THINKING_DEFAULT),
 );
+const [imageDisplayModeSignal, setImageDisplayModeSignal] = createSignal<DashboardImageDisplayMode>(
+	readImageDisplayMode(),
+);
 const [toolAutoExpandSignal, setToolAutoExpandSignal] = createSignal(readToolAutoExpandPreference());
 
 export const expandThinking = expandThinkingSignal;
+export const imageDisplayMode = imageDisplayModeSignal;
 export const toolAutoExpand = toolAutoExpandSignal;
 
 export function setExpandThinking(value: boolean): void {
 	setExpandThinkingSignal(value);
 	writeBooleanPreference(EXPAND_THINKING_KEY, value);
+}
+
+export function setImageDisplayMode(value: DashboardImageDisplayMode): void {
+	setImageDisplayModeSignal(value);
+	writeImageDisplayMode(value);
 }
 
 export function setToolAutoExpand(toolName: ToolAutoExpandTool, value: boolean): void {
@@ -87,6 +117,10 @@ export function isToolAutoOpen(toolName: string): boolean {
 
 export function reloadExpandThinkingPreference(): void {
 	setExpandThinkingSignal(readBooleanPreference(EXPAND_THINKING_KEY, EXPAND_THINKING_DEFAULT));
+}
+
+export function reloadImageDisplayModePreference(): void {
+	setImageDisplayModeSignal(readImageDisplayMode());
 }
 
 export function reloadToolAutoExpandPreference(): void {

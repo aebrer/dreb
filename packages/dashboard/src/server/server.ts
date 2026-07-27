@@ -27,10 +27,23 @@ import type {
 } from "../shared/protocol.js";
 import { MAX_CLIENT_DIAGNOSTIC_BYTES, MAX_PROMPT_BODY_BYTES } from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
+import {
+	DASHBOARD_IMAGE_ID_PATTERN,
+	DashboardImageNotFoundError,
+	DashboardImagePreviewError,
+	type DashboardImageScope,
+	DashboardImageService,
+} from "./dashboard-images.js";
 import { EventHub, formatHeartbeatFrame, type SseWriteMetadata } from "./event-hub.js";
 import { defaultPlaces, FileApi } from "./files.js";
+import { ImagePreviewWorker } from "./image-preview.js";
 import type { DashboardRuntimeSnapshot, RuntimePool } from "./runtime-pool.js";
 import { readSubagentMessages } from "./subagent-log.js";
+
+export type DashboardServerApp = express.Express & {
+	/** Close dashboard-owned services. Safe to call more than once during shutdown. */
+	closeDashboard(): Promise<void>;
+};
 
 export interface DashboardServerOptions {
 	auth: DashboardAuth;
@@ -47,6 +60,8 @@ export interface DashboardServerOptions {
 	onRestart?: () => void;
 	/** Injectable only to make SSE limits deterministic in integration tests. */
 	eventHub?: EventHub;
+	/** Injectable bounded image repository/preview service for deterministic tests and lifecycle ownership. */
+	imageService?: DashboardImageService;
 	/** Named heartbeat interval; defaults to 25 seconds. */
 	heartbeatIntervalMs?: number;
 }
@@ -113,13 +128,15 @@ interface AuthedRequest extends Request {
 	sseConnectionId?: string;
 }
 
-export function createDashboardServer(options: DashboardServerOptions): express.Express {
+export function createDashboardServer(options: DashboardServerOptions): DashboardServerApp {
 	const { auth, pool } = options;
 	const serverStartedAt = new Date().toISOString();
 	const diagnosticConnections = new Map<string, { issuedAt: number; lastAt?: number }>();
 	const log = options.logger ?? ((line: string) => console.log(`[dashboard] ${line}`));
 	const files = new FileApi((op, path, detail) => log(`file ${op}: ${path}${detail ? ` (${detail})` : ""}`));
 	const hub = options.eventHub ?? new EventHub();
+	const images = options.imageService ?? new DashboardImageService(new ImagePreviewWorker());
+	hub.setEventProjector((key, event) => (key ? images.projectEvent(event, { runtimeKey: key }) : event));
 	pool.onEvent((key, event) => {
 		if (event.type === "dashboard_snapshot_barrier" && typeof event.snapshotId === "string") {
 			// This RPC marker has no browser frame: its synchronous sequence capture
@@ -128,10 +145,16 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 			return;
 		}
 		hub.publish(key, event);
+		if (event.type === "runtime_removed") images.removeRuntime(key);
 	});
 	pool.onFleetSnapshot((event) => hub.publish("", { ...event }));
 
-	const app = express();
+	const app = express() as DashboardServerApp;
+	let closePromise: Promise<void> | undefined;
+	app.closeDashboard = () => {
+		closePromise ??= images.close();
+		return closePromise;
+	};
 	app.disable("x-powered-by");
 
 	// -- auth middleware (every route, fail-closed) ---------------------------
@@ -421,7 +444,7 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 	const toRuntimeHydration = (snapshot: DashboardRuntimeSnapshot): RuntimeHydrationDto => ({
 		key: snapshot.key,
 		state: snapshot.snapshot.state,
-		messages: snapshot.snapshot.messages,
+		messages: images.project(snapshot.snapshot.messages, { runtimeKey: snapshot.key }),
 		backgroundAgents: snapshot.snapshot.backgroundAgents,
 		barrierSeq: snapshot.barrierSeq,
 	});
@@ -485,7 +508,7 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 					preBarrierSubagent = {
 						agentId: activeAgentId,
 						agent,
-						messages,
+						messages: images.project(messages, { runtimeKey: activeKey, agentId: activeAgentId }),
 						barrierSeq: hub.currentSequence,
 					};
 				}
@@ -528,6 +551,7 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 					res.status(404).json({ error: `No runtime ${String(req.params.key)}` });
 					return;
 				}
+				images.removeRuntime(String(req.params.key));
 				log(`runtime ${String(req.params.key)} stopped`);
 				res.json({ ok: true });
 			})
@@ -566,7 +590,82 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 	});
 
 	app.get("/api/runtimes/:key/messages", (req, res) => {
-		withRuntime(req, res, async (h) => ({ messages: await h.client.getMessages() }));
+		withRuntime(req, res, async (h) => ({
+			messages: images.project(await h.client.getMessages(), { runtimeKey: h.key }),
+		}));
+	});
+
+	const sendImage = async (
+		req: Request,
+		res: Response,
+		scope: DashboardImageScope,
+		variant: "preview" | "original",
+		loadAuthoritative: () => Promise<unknown>,
+	): Promise<void> => {
+		const id = String(req.params.id);
+		if (!DASHBOARD_IMAGE_ID_PATTERN.test(id)) {
+			res.status(400).json({ error: "Invalid dashboard image ID" });
+			return;
+		}
+		try {
+			const image =
+				variant === "preview"
+					? await images.preview(scope, id, loadAuthoritative)
+					: await images.original(scope, id, loadAuthoritative);
+			res.set({
+				"Content-Type": image.mimeType,
+				"Content-Length": String(image.bytes.byteLength),
+				"X-Content-Type-Options": "nosniff",
+				"Cache-Control": "private, max-age=31536000, immutable",
+			});
+			res.send(Buffer.from(image.bytes));
+		} catch (error) {
+			if (error instanceof DashboardImageNotFoundError) {
+				res.status(404).json({ error: error.message });
+			} else if (error instanceof DashboardImagePreviewError) {
+				res.status(422).json({ error: error.message });
+			} else {
+				res.status(502).json({
+					error: `Image source unavailable: ${error instanceof Error ? error.message : String(error)}`,
+				});
+			}
+		}
+	};
+
+	app.get("/api/runtimes/:key/images/:id/:variant", (req, res) => {
+		const key = String(req.params.key);
+		const variant = String(req.params.variant);
+		if (variant !== "preview" && variant !== "original") {
+			res.status(404).json({ error: "Unknown dashboard image variant" });
+			return;
+		}
+		const handle = pool.get(key);
+		if (!handle) {
+			res.status(404).json({ error: `No runtime ${key}` });
+			return;
+		}
+		void sendImage(req, res, { runtimeKey: key }, variant, () => handle.client.getMessages());
+	});
+
+	app.get("/api/runtimes/:key/subagents/:agentId/images/:id/:variant", (req, res) => {
+		const key = String(req.params.key);
+		const agentId = String(req.params.agentId);
+		const variant = String(req.params.variant);
+		if (variant !== "preview" && variant !== "original") {
+			res.status(404).json({ error: "Unknown dashboard image variant" });
+			return;
+		}
+		const handle = pool.get(key);
+		if (!handle) {
+			res.status(404).json({ error: `No runtime ${key}` });
+			return;
+		}
+		void sendImage(req, res, { runtimeKey: key, agentId }, variant, async () => {
+			const agents = await handle.client.listBackgroundAgents();
+			const agent = agents.find((candidate) => candidate.agentId === agentId);
+			if (!agent) throw new DashboardImageNotFoundError(`No background agent ${agentId} in this runtime`);
+			return readSubagentMessages(agent);
+		});
 	});
 
 	app.get("/api/runtimes/:key/pending", (req, res) => {
@@ -726,7 +825,7 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 			const agent = agents.find((a) => a.agentId === agentId);
 			if (!agent) throw new Error(`No background agent ${agentId} in this runtime`);
 			const messages = readSubagentMessages(agent);
-			return { agent, messages };
+			return { agent, messages: images.project(messages, { runtimeKey: h.key, agentId }) };
 		});
 	});
 

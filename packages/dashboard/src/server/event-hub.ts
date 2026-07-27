@@ -98,6 +98,7 @@ export class EventHub {
 	private readonly buffer: SerializedEnvelope[] = [];
 	private readonly clients = new Set<SseClient>();
 	private readonly options: Required<EventHubOptions>;
+	private eventProjector?: (key: string, event: Record<string, unknown>) => Record<string, unknown>;
 
 	constructor(options: number | EventHubOptions = {}) {
 		this.options = {
@@ -110,9 +111,15 @@ export class EventHub {
 		};
 	}
 
+	/** Install the server-owned browser projection before frame sizing/replay retention. */
+	setEventProjector(projector: (key: string, event: Record<string, unknown>) => Record<string, unknown>): void {
+		this.eventProjector = projector;
+	}
+
 	/** Publish an event from a runtime; assigns a sequence number and fans out. */
 	publish(key: string, rawEvent: Record<string, unknown>): EventEnvelope {
-		const event = projectDashboardEvent(rawEvent);
+		const baseProjection = projectDashboardEvent(rawEvent);
+		const event = this.eventProjector ? this.eventProjector(key, baseProjection) : baseProjection;
 		const serialized = this.serialize(this.seq + 1, key, event);
 		if (serialized.bytes > this.options.eventBytes) {
 			return this.publishResync("oversized_event").envelope;

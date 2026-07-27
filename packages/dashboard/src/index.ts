@@ -18,13 +18,17 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DashboardAuth } from "./server/auth.js";
+import { DashboardImageService } from "./server/dashboard-images.js";
+import { ImagePreviewWorker } from "./server/image-preview.js";
 import { FilePairingStorage, loadOrCreateDashboardSecret } from "./server/pairing-storage.js";
 import { RuntimePool } from "./server/runtime-pool.js";
 import { createDashboardServer } from "./server/server.js";
 
 export { DashboardAuth, TailscaleStatusResolver } from "./server/auth.js";
+export { DashboardImageService } from "./server/dashboard-images.js";
 export { EventHub } from "./server/event-hub.js";
 export { canonicalizePath, FileApi } from "./server/files.js";
+export { ImagePreviewWorker } from "./server/image-preview.js";
 export { FilePairingStorage, loadOrCreateDashboardSecret } from "./server/pairing-storage.js";
 export { RuntimePool, resolveDrebCliPath } from "./server/runtime-pool.js";
 export { createDashboardServer, parseDeviceCookie } from "./server/server.js";
@@ -273,6 +277,7 @@ async function main(): Promise<void> {
 		logger: (line) => console.warn(`[dashboard-auth] ${line}`),
 	});
 	const pool = new RuntimePool();
+	const imageService = new DashboardImageService(new ImagePreviewWorker());
 
 	// Static client assets live next to the compiled server (dist/static).
 	const staticDir = join(dirname(fileURLToPath(import.meta.url)), "static");
@@ -295,13 +300,14 @@ async function main(): Promise<void> {
 	// across restart/exit).
 	let httpServer: HttpServer | HttpsServer | undefined;
 	let clearTlsReloadTimer = () => {};
+	let closeDashboard = () => imageService.close();
 	const tlsWatchers: TlsFileWatcher[] = [];
 	const beginShutdown = createShutdown({
 		log: (message) => console.log(message),
 		clearReloadTimer: () => clearTlsReloadTimer(),
 		watchers: tlsWatchers,
 		closeServer: () => httpServer?.close(),
-		stopAll: () => pool.stopAll(),
+		stopAll: () => Promise.all([pool.stopAll(), closeDashboard()]),
 		exit: (code) => process.exit(code),
 	});
 	const onRestart = () => beginShutdown("restart requested — exiting for supervisor to respawn", 1);
@@ -310,6 +316,7 @@ async function main(): Promise<void> {
 	const app = createDashboardServer({
 		auth,
 		pool,
+		imageService,
 		staticDir: existsSync(staticDir) ? staticDir : undefined,
 		serverVersion,
 		onRestart,
@@ -320,6 +327,7 @@ async function main(): Promise<void> {
 			return { method: result.method };
 		},
 	});
+	closeDashboard = () => app.closeDashboard();
 
 	const host = args.remote ? "0.0.0.0" : "127.0.0.1";
 	const scheme = args.https ? "https" : "http";

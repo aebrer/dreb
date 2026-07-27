@@ -42,7 +42,7 @@ Open `http://127.0.0.1:5343`.
   cards with sanitized inline PNG/JPEG/GIF/WebP result images, thinking blocks,
   inline provider/API failures with partial output preserved, compaction summaries,
   per-message copy, tasks panel, suggest-next chip,
-  slash-command autocomplete, image attach/paste,
+  slash-command autocomplete, image attach/paste with sent-image previews retained in user transcript entries,
   queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
@@ -66,23 +66,44 @@ Open `http://127.0.0.1:5343`.
   global + project settings so external edits appear, while read/parse/write
   failures are shown instead of stale values. Trust changes are observed by
   active processes for future lazy loads and cannot retract already injected
-  context. Also includes dashboard-local preferences (thinking expansion and
-  notification permission), an appearance section with a curated-theme gallery
+  context. Also includes dashboard-local preferences (thinking expansion,
+  transcript image display mode, and notification permission), an appearance section with a curated-theme gallery
   (entropist.ca / Dim / Solarized / Gruvbox / Caves of Qud / Van Gogh /
   Okabe-Ito / Paul Tol — the last two colorblind-safe — live preview cards,
   system/light/dark mode selector, saved per browser), current pairing code,
   and paired-devices management.
 - **Pairing** — remote first-login rotating-code flow.
 
-### Tool-result images
+### Transcript images
 
-Image blocks returned by any tool render inline for the human viewing the
-transcript, even when the active model does not support vision. The dashboard
-accepts only PNG, JPEG, GIF, and WebP with valid base64 payloads; SVG and
-malformed blocks are dropped. Accepted images also survive refresh/resync and
-are embedded in exported HTML transcripts. Oversized live events use the
-existing SSE resync barrier and HTTP snapshot path; CSS bounds display
-dimensions but does not compress the underlying bytes.
+Image blocks returned by any tool and images uploaded with a user turn render
+for the human viewing the transcript, even when the active model does not
+support vision. Before browser-facing SSE,
+replay, hydrate, resync, parent-message, or subagent-message serialization, the
+server validates exact base64, an exact PNG/JPEG/GIF/WebP MIME allowlist, and a
+matching raster signature. It stores accepted originals under a content ID and
+sends only `{id, mimeType, size}` references; SVG, malformed data, and MIME
+mismatches are dropped. Image bytes therefore never consume SSE frame/replay
+budgets or cause an `oversized_event` barrier.
+
+The browser-local `dreb.dashboard.imageDisplayMode` preference is separate from
+model-input auto-resize/block settings. **Bounded previews** are the default:
+they are generated lazily in a worker, fit within 1024 × 1024 and 256 KiB, and
+a click enlarges the same preview without fetching the original. **Placeholders**
+make no request until the user chooses one. **Automatic originals** are an
+informed Settings opt-in. Every non-original view labels the original size;
+explicit downloads above 1 MiB confirm before assigning an original URL. GIF
+previews are static PNG/JPEG frames, while the original route returns the exact
+animated GIF.
+
+Preview/original routes are authenticated and same-origin, return exact
+allowlisted content types, `Content-Length`, `X-Content-Type-Options: nosniff`,
+and private immutable caching. A 64 MiB / 2,000-record LRU deduplicates repeated
+copies. On cache miss or server restart, a route re-reads only that parent or
+subagent's authoritative transcript and fails explicitly if a transient image
+is no longer present. Stopping a runtime revokes its image scopes. Authoritative
+session history remains unchanged, so HTML exports still embed sanitized,
+full-resolution originals and remain self-contained.
 
 ### Provider failures and retries
 
@@ -138,7 +159,8 @@ The server replays reducer-relevant projected envelopes from history bounded by
 both count and bytes, with a separate byte cap for each replay. A server restart,
 sequence gap, history eviction, or over-budget replay sends only that reconnect
 a resync barrier at the current cursor, not a partial replay; an individually
-oversized event sends a global barrier because every browser missed it.
+oversized **non-image** event sends a global barrier because every browser missed it;
+tool-image bytes have already been replaced by references before frame sizing.
 
 Recovery fetches an authoritative snapshot whose HTTP `barrierSeq` was captured
 synchronously at the RPC snapshot marker, discards queued envelopes through that
@@ -275,6 +297,10 @@ Browser (SolidJS, hash-routed SPA)
 - Background subagent transcripts arrive over the same pipe via the
   `background_agent_event` relay (see `docs/rpc.md` in
   `@dreb/coding-agent`) — no session-file tailing.
+- Programmatic callers of `createDashboardServer()` must call the returned
+  app's idempotent `closeDashboard()` hook when their HTTP server stops. This
+  terminates the lazy image-preview worker without requiring access to the
+  internally created image service.
 - The visual language is `tokens.css` (`src/client/styles/tokens.css`),
   the dashboard's design system. Its defaults are unchanged; `themes.css` is
   an **additive layer** on top that overrides the design tokens only when a

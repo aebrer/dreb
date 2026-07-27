@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/dashboard",
-	"version": "2.45.2",
+	"version": "2.45.3",
 	"description": "Web dashboard for dreb — fleet overview, chat parity, subagent observability",
 	"license": "MIT",
 	"type": "module",
@@ -34,6 +34,7 @@
 	},
 	"dependencies": {
 		"@dreb/coding-agent": "*",
+		"@silvia-odwyer/photon-node": "^0.3.4",
 		"express": "^5.2.1"
 	},
 	"devDependencies": {

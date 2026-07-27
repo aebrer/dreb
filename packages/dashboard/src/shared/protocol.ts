@@ -138,6 +138,24 @@ export interface ImageAttachmentDto {
 	mimeType: string;
 }
 
+/**
+ * Browser-facing reference to a validated tool-result raster image. Original
+ * bytes remain behind authenticated runtime routes and never cross transcript
+ * JSON or SSE payloads.
+ */
+export interface DashboardImageReferenceDto {
+	type: "image_reference";
+	/** SHA-256 of the exact MIME type plus decoded original bytes. */
+	id: string;
+	/** Exact allowlisted original MIME type. */
+	mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+	/** Decoded original binary byte size. */
+	size: number;
+}
+
+export const DASHBOARD_IMAGE_DISPLAY_MODES = ["placeholders", "previews", "originals"] as const;
+export type DashboardImageDisplayMode = (typeof DASHBOARD_IMAGE_DISPLAY_MODES)[number];
+
 export interface QueuedMessageDto {
 	text: string;
 	images?: ImageAttachmentDto[];

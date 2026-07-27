@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
+import { DashboardImageService } from "../src/server/dashboard-images.js";
 import { EventHub, formatSseFrame } from "../src/server/event-hub.js";
 import { RuntimePool } from "../src/server/runtime-pool.js";
 import { createDashboardServer, MAX_SSE_BUFFERED_BYTES, parseDeviceCookie } from "../src/server/server.js";
@@ -27,6 +28,7 @@ interface TestServerOptions {
 	onRestart?: () => void;
 	logger?: (line: string) => void;
 	eventHub?: EventHub;
+	imageService?: DashboardImageService;
 	heartbeatIntervalMs?: number;
 	fleetSnapshotDebounceMs?: number;
 }
@@ -107,6 +109,7 @@ async function startServer(options: TestServerOptions = {}) {
 		onRestart: options.onRestart,
 		logger: options.logger ?? (() => {}),
 		eventHub: options.eventHub,
+		imageService: options.imageService,
 		heartbeatIntervalMs: options.heartbeatIntervalMs,
 	});
 	const server = await new Promise<Server>((resolve) => {
@@ -115,7 +118,7 @@ async function startServer(options: TestServerOptions = {}) {
 	servers.push(server);
 	const address = server.address();
 	if (address === null || typeof address === "string") throw new Error("no port");
-	return { base: `http://127.0.0.1:${address.port}`, pool, clients };
+	return { base: `http://127.0.0.1:${address.port}`, pool, clients, app };
 }
 
 describe("dashboard server — auth middleware", () => {
@@ -484,7 +487,17 @@ describe("dashboard server — fleet and runtimes", () => {
 		tempDirs.push(dir);
 		const logDir = await mkdtemp(join(tmpdir(), "dreb-dash-sublog-"));
 		tempDirs.push(logDir);
-		const message = { role: "assistant", content: [{ type: "text", text: "subagent findings" }] };
+		const subagentPng = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+			"base64",
+		);
+		const message = {
+			role: "assistant",
+			content: [
+				{ type: "text", text: "subagent findings" },
+				{ type: "image", data: subagentPng.toString("base64"), mimeType: "image/png" },
+			],
+		};
 		await writeFile(
 			join(logDir, "session.jsonl"),
 			`${JSON.stringify({ type: "session", cwd: dir })}\n${JSON.stringify({ type: "message", id: "1", message })}\n`,
@@ -508,9 +521,21 @@ describe("dashboard server — fleet and runtimes", () => {
 
 		const res = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/messages`);
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as { agent: { agentId: string }; messages: unknown[] };
+		const body = (await res.json()) as any;
 		expect(body.agent.agentId).toBe("bg1");
-		expect(body.messages).toEqual([message]);
+		expect(body.messages[0].content[0]).toEqual({ type: "text", text: "subagent findings" });
+		expect(body.messages[0].content[1]).toMatchObject({
+			type: "image_reference",
+			id: expect.stringMatching(/^[0-9a-f]{64}$/),
+			mimeType: "image/png",
+			size: subagentPng.length,
+		});
+		expect(JSON.stringify(body)).not.toContain(subagentPng.toString("base64"));
+		const original = await fetch(
+			`${base}/api/runtimes/${key}/subagents/bg1/images/${body.messages[0].content[1].id}/original`,
+		);
+		expect(original.status).toBe(200);
+		expect(Buffer.from(await original.arrayBuffer())).toEqual(subagentPng);
 
 		// Unknown agent id → loud 502 with the registry error.
 		const missing = await fetch(`${base}/api/runtimes/${key}/subagents/nope/messages`);
@@ -742,6 +767,7 @@ describe("dashboard server — fleet and runtimes", () => {
 		const { key } = (await create.json()) as { key: string };
 		const paths = [
 			`/api/runtimes/${key}/hydrate`,
+			`/api/runtimes/${key}/images/${"a".repeat(64)}/preview`,
 			`/api/runtimes/${key}/performance`,
 			`/api/runtimes/${key}/resources`,
 			`/api/runtimes/${key}/commands`,
@@ -762,6 +788,138 @@ describe("dashboard server — fleet and runtimes", () => {
 			const res = await fetch(`${base}${path}`, { headers: { origin: "https://evil.example" } });
 			expect(res.status).toBe(403);
 		}
+	});
+});
+
+describe("dashboard server — transcript images", () => {
+	const png = Buffer.from(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+		"base64",
+	);
+	const messages = [
+		{
+			role: "toolResult",
+			toolCallId: "t1",
+			content: [{ type: "image", data: png.toString("base64"), mimeType: "image/png" }],
+		},
+	];
+
+	function imageService(previewBytes = Uint8Array.of(9, 8, 7)) {
+		return new DashboardImageService({
+			generate: vi.fn(async () => ({ bytes: previewBytes, mimeType: "image/jpeg" as const, width: 1, height: 1 })),
+			close: vi.fn(async () => {}),
+		});
+	}
+
+	async function createImageRuntime(service = imageService()) {
+		const dir = await createTempProject();
+		const started = await startServer({ imageService: service });
+		const created = await fetch(`${started.base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const { key } = (await created.json()) as { key: string };
+		vi.mocked(started.clients[0].getMessages as any).mockResolvedValue(messages);
+		return { ...started, key, service };
+	}
+
+	it("exposes idempotent teardown for the server image service", async () => {
+		const close = vi.fn(async () => {});
+		const service = new DashboardImageService({
+			generate: vi.fn(async () => ({
+				bytes: Uint8Array.of(1),
+				mimeType: "image/png" as const,
+				width: 1,
+				height: 1,
+			})),
+			close,
+		});
+		const { app } = await startServer({ imageService: service });
+
+		await app.closeDashboard();
+		await app.closeDashboard();
+
+		expect(close).toHaveBeenCalledOnce();
+	});
+
+	it("projects message, hydrate, and resync HTTP transcripts to references without base64", async () => {
+		const { base, clients, key } = await createImageRuntime();
+		const client = clients[0] as any;
+		client.getDashboardSnapshot.mockImplementation(async () => {
+			client.emit({ type: "dashboard_snapshot_barrier", snapshotId: "images" });
+			return {
+				snapshotId: "images",
+				state: await client.getState(),
+				messages,
+				backgroundAgents: [],
+			};
+		});
+		for (const path of [
+			`/api/runtimes/${key}/messages`,
+			`/api/runtimes/${key}/hydrate`,
+			`/api/resync?key=${encodeURIComponent(key)}`,
+		]) {
+			const response = await fetch(`${base}${path}`);
+			expect(response.status).toBe(200);
+			const text = await response.text();
+			expect(text).toContain('"type":"image_reference"');
+			expect(text).not.toContain(png.toString("base64"));
+		}
+	});
+
+	it("serves exact originals and bounded previews with immutable private security headers", async () => {
+		const { base, key } = await createImageRuntime();
+		const projected = (await fetch(`${base}/api/runtimes/${key}/messages`).then((response) =>
+			response.json(),
+		)) as any;
+		const id = projected.messages[0].content[0].id as string;
+
+		const original = await fetch(`${base}/api/runtimes/${key}/images/${id}/original`);
+		expect(original.status).toBe(200);
+		expect(original.headers.get("content-type")).toBe("image/png");
+		expect(original.headers.get("content-length")).toBe(String(png.byteLength));
+		expect(original.headers.get("x-content-type-options")).toBe("nosniff");
+		expect(original.headers.get("cache-control")).toContain("private");
+		expect(Buffer.from(await original.arrayBuffer())).toEqual(png);
+
+		const preview = await fetch(`${base}/api/runtimes/${key}/images/${id}/preview`);
+		expect(preview.status).toBe(200);
+		expect(preview.headers.get("content-type")).toBe("image/jpeg");
+		expect(preview.headers.get("content-length")).toBe("3");
+		expect(preview.headers.get("x-content-type-options")).toBe("nosniff");
+		expect(Buffer.from(await preview.arrayBuffer())).toEqual(Buffer.from([9, 8, 7]));
+	});
+
+	it("validates IDs, reports missing runtimes/images explicitly, and recovers after eviction", async () => {
+		const evicting = new DashboardImageService(
+			{
+				generate: async () => ({ bytes: Uint8Array.of(1), mimeType: "image/png", width: 1, height: 1 }),
+				close: async () => {},
+			},
+			{ maxBytes: 0, maxRecords: 0 },
+		);
+		const { base, key } = await createImageRuntime(evicting);
+		const projected = (await fetch(`${base}/api/runtimes/${key}/messages`).then((response) =>
+			response.json(),
+		)) as any;
+		const id = projected.messages[0].content[0].id as string;
+		expect(evicting.recordCount).toBe(0);
+
+		const recovered = await fetch(`${base}/api/runtimes/${key}/images/${id}/original`);
+		expect(recovered.status).toBe(200);
+		expect(Buffer.from(await recovered.arrayBuffer())).toEqual(png);
+		expect((await fetch(`${base}/api/runtimes/${key}/images/not-an-id/original`)).status).toBe(400);
+		expect((await fetch(`${base}/api/runtimes/missing/images/${id}/original`)).status).toBe(404);
+		expect((await fetch(`${base}/api/runtimes/${key}/images/${"f".repeat(64)}/original`)).status).toBe(404);
+	});
+
+	it("revokes cached scopes when a runtime is removed", async () => {
+		const { base, key, service } = await createImageRuntime();
+		await fetch(`${base}/api/runtimes/${key}/messages`);
+		expect(service.recordCount).toBe(1);
+		expect((await fetch(`${base}/api/runtimes/${key}`, { method: "DELETE" })).status).toBe(200);
+		expect(service.recordCount).toBe(0);
 	});
 });
 

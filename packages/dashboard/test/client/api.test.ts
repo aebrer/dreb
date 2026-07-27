@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	connectEvents,
+	dashboardImageUrl,
 	type EventConnectionStatus,
 	type EventSourceLike,
 	type EventStreamDependencies,
@@ -98,6 +99,17 @@ function setup(overrides: Partial<EventStreamDependencies> = {}) {
 }
 
 afterEach(() => vi.useRealTimers());
+
+describe("dashboardImageUrl", () => {
+	it("builds encoded same-origin parent and subagent URLs only for validated IDs", () => {
+		const id = "a".repeat(64);
+		expect(dashboardImageUrl("runtime one", id, "preview")).toBe(`/api/runtimes/runtime%20one/images/${id}/preview`);
+		expect(dashboardImageUrl("runtime", id, "original", "agent/one")).toBe(
+			`/api/runtimes/runtime/subagents/agent%2Fone/images/${id}/original`,
+		);
+		expect(dashboardImageUrl("runtime", "../bad", "preview")).toBeUndefined();
+	});
+});
 
 describe("connectEvents lifecycle", () => {
 	it("applies before advancing the cursor and preserves it across a guarded retry", async () => {

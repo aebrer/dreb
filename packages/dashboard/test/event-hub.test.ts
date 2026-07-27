@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { applySessionEvent, createSessionViewState } from "../src/client/state/reducer.js";
+import { DashboardImageService } from "../src/server/dashboard-images.js";
 import { EventHub, formatHeartbeatFrame, formatSseFrame, projectDashboardEvent } from "../src/server/event-hub.js";
 
 function collectClient() {
@@ -203,6 +204,57 @@ describe("EventHub", () => {
 		});
 		hub.publish("k", { type: "small" });
 		expect(envelopes().map((event) => event.event.type)).toEqual(["dashboard_resync", "small"]);
+	});
+
+	it("projects large image bytes before sizing so image size alone never emits an oversized barrier", () => {
+		const validPng = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+			"base64",
+		);
+		const bytes = Buffer.concat([validPng, Buffer.alloc(1_100_000, 7)]);
+		const images = new DashboardImageService({
+			generate: async () => ({ bytes: Uint8Array.of(1), mimeType: "image/png", width: 1, height: 1 }),
+			close: async () => {},
+		});
+		const hub = new EventHub({ eventBytes: 2048 });
+		hub.setEventProjector((key, event) => images.projectEvent(event, { runtimeKey: key }));
+		const envelope = hub.publish("k", {
+			type: "tool_execution_end",
+			result: { content: [{ type: "image", data: bytes.toString("base64"), mimeType: "image/png" }] },
+		});
+		expect(envelope.event.type).toBe("tool_execution_end");
+		expect(JSON.stringify(envelope)).not.toContain(bytes.toString("base64").slice(0, 100));
+		expect(JSON.stringify(envelope)).toContain("image_reference");
+	});
+
+	it("removes base64 from every live image-bearing event path, including nested background events", () => {
+		const bytes = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+			"base64",
+		);
+		const image = { type: "image", data: bytes.toString("base64"), mimeType: "image/png" };
+		const events = [
+			{ type: "tool_execution_update", partialResult: { content: [image] } },
+			{ type: "tool_execution_end", result: { content: [image] } },
+			{ type: "message_start", message: { role: "toolResult", content: [image] } },
+			{ type: "message_end", message: { role: "toolResult", content: [image] } },
+			{
+				type: "background_agent_event",
+				agentId: "child",
+				event: { type: "tool_execution_end", result: { content: [image] } },
+			},
+		];
+		const images = new DashboardImageService({
+			generate: async () => ({ bytes: Uint8Array.of(1), mimeType: "image/png", width: 1, height: 1 }),
+			close: async () => {},
+		});
+		const hub = new EventHub();
+		hub.setEventProjector((key, event) => images.projectEvent(event, { runtimeKey: key }));
+		for (const event of events) {
+			const projected = hub.publish("runtime", event);
+			expect(JSON.stringify(projected)).not.toContain(image.data);
+			expect(JSON.stringify(projected)).toContain("image_reference");
+		}
 	});
 
 	it("projects only reducer-unused cumulative fields and preserves reducer behavior", () => {

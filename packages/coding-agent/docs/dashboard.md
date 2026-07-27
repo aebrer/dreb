@@ -120,28 +120,58 @@ networking window above.
 | Screen | What it does |
 |---|---|
 | **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Live cards keep a deterministic order by project path, then session start time; needs-attention cards badge the browser tab without jumping around. Below the grid: past sessions grouped by project, three compact rows per group with an "all N on disk" expander, resume and delete. |
-| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, subagent strip, status line with elapsed time plus ■ stop and compaction/retry aborts, a persistent session-header live indicator, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, median tok/s, and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests (select/confirm/input/editor) render as modals; notifications as toasts. |
+| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, subagent strip, status line with elapsed time plus ■ stop and compaction/retry aborts, a persistent session-header live indicator, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, median tok/s, and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests (select/confirm/input/editor) render as modals; notifications as toasts. |
 | **Subagent view** | Read-only transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the view survives browser reloads. Shows the task, streaming output, and tool activity. No composer — subagents can't be steered yet; the parent session controls them. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. It also shows the **effective global nested-context trust** for the displayed canonical directory: untrusted, trusted by that root, inherited from a granting root, or global expert trust-all. You can trust the displayed folder and descendants, or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all descendants. |
-| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions; context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards and a system/light/dark mode selector, saved per browser. Shows the current rotating pairing code on the host/local dashboard, plus the paired-devices list with unpair. |
+| **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions; context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, transcript image display mode, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards and a system/light/dark mode selector, saved per browser. Shows the current rotating pairing code on the host/local dashboard, plus the paired-devices list with unpair. |
 | **Pairing** | Remote first-login: identity echo, rotating-code entry, and the security copy explaining what pairing grants. |
 
-### Tool-result images
+### Transcript images
 
-Tool results containing PNG, JPEG, GIF, or WebP image blocks render inline in
-any tool card, not only `read`. This human-facing rendering is independent of
-model vision support: a text-only model can omit an image from its own context
-while the dashboard still shows it. MIME types use an exact raster allowlist,
-SVG is rejected, and payloads must be valid base64 before the client builds a
-`data:` URI. HTML transcript exports apply the same rules and embed accepted
-images.
+Tool results containing PNG, JPEG, GIF, or WebP image blocks are available in
+any tool card, not only `read`. Images uploaded with a user turn also remain
+visible as previews in that transcript entry after sending. This human-facing
+rendering is independent of model vision support: a text-only model can omit a
+tool image from its own context while the dashboard still shows it. At the dashboard-server projection boundary,
+exact base64, an exact raster MIME allowlist, and matching byte signatures are
+required. SVG, malformed payloads, and MIME/signature mismatches are rejected.
+Accepted originals are content-addressed from the exact MIME type and decoded
+bytes, then browser-facing live events, replay, hydrate/resync, parent messages,
+and subagent messages carry only an ID, MIME type, and original binary size.
+Authoritative RPC/session history is not changed.
 
-Small results arrive in their normal live event. If an image makes an event
-exceed the SSE per-event byte budget, the existing resync barrier restores the
-full persisted result over HTTP; refresh and subagent hydration use the same
-image-aware transcript path. Display dimensions are bounded, but the underlying
-bytes are not compressed by the dashboard. Lower-bandwidth thumbnail and HD
-loading behavior is tracked separately.
+The browser-local `dreb.dashboard.imageDisplayMode` setting has three modes:
+
+- **placeholders** — assign no image `src` and make no request until preview or
+  original loading is explicit;
+- **bounded previews** (default) — lazily request a preview no larger than
+  **1024 × 1024** or **256 KiB**. Clicking opens an accessible lightbox that
+  reuses the same preview URL and does not fetch the original;
+- **automatic originals** — load only originals for mounted images. Selecting
+  this in Settings is the informed network-data opt-in.
+
+Every non-original view labels the original binary size. Explicit originals
+above **1 MiB** require confirmation before any original URL is assigned.
+These dashboard display choices are separate from `images.autoResize` and
+`images.blockImages`, which control images sent as model input. GIF previews
+are static first-frame PNG/JPEG encodings; the original route preserves the
+exact animated GIF bytes.
+
+Preview/original routes are authenticated, same-origin, content-addressed, and
+return an exact allowlisted `Content-Type`, `Content-Length`,
+`X-Content-Type-Options: nosniff`, and private immutable caching. Originals and
+previews share a **64 MiB / 2,000-record LRU** and duplicate transcript copies
+deduplicate. Preview generation is lazy, single-flight, and worker-backed, so
+resize work does not block ordered SSE publication. After eviction or server
+restart, a request scans only the referenced parent transcript or registered
+subagent log, recomputes the ID, and repopulates the cache; unavailable
+transient images fail explicitly rather than substituting other bytes. Runtime
+removal revokes its scopes.
+
+Image bytes never enter browser-facing SSE frames, so image size alone cannot
+cause `oversized_event` or consume replay history. HTML export still reads the
+unchanged authoritative session data, applies its raster sanitization, and
+embeds full-resolution originals in a self-contained transcript.
 
 ### Provider failures and retries
 
@@ -201,7 +231,7 @@ calls. Replay and resync retain their ordering guarantees below.
 
 The top bar and persistent session header expose the live-stream state as an accessible text `output`, not color alone: **connecting**, **connected**, **retrying** (including its delay), **resyncing**, **disconnected**, or **auth failed**. The session-header indicator remains visible when the session details or composer controls are collapsed. This is the state of the dashboard's single SSE connection, not the state of an individual agent.
 
-Events are `{seq, key, event}` envelopes. The server retains a **projected** form of reducer-relevant events in a ring bounded by both entry count and encoded bytes; a reconnect can replay only a separately byte-bounded range. Projection removes cumulative fields the browser reducer does not use, rather than silently truncating an event. If history is too old or the requested replay exceeds budget, only that reconnect receives a `dashboard_resync` barrier at the current cursor; healthy browsers are not interrupted. A projected event that is itself oversized emits a global barrier because every browser missed it. A slow client's write buffer is bounded too: backpressure closes that SSE connection, then the normal recovery path takes over.
+Events are `{seq, key, event}` envelopes. The server retains a **projected** form of reducer-relevant events in a ring bounded by both entry count and encoded bytes; a reconnect can replay only a separately byte-bounded range. Projection removes cumulative fields the browser reducer does not use, rather than silently truncating an event. If history is too old or the requested replay exceeds budget, only that reconnect receives a `dashboard_resync` barrier at the current cursor; healthy browsers are not interrupted. A projected event whose **non-image content** is itself oversized emits a global barrier because every browser missed it; image blocks have already become small references before frame sizing. A slow client's write buffer is bounded too: backpressure closes that SSE connection, then the normal recovery path takes over.
 
 On a barrier, protocol error, reducer error, server restart, sequence gap, or stalled stream, the browser fetches the authoritative `/api/resync` snapshot. For an active runtime, its state (including the atomically replaced task list), transcript, and background-agent registry are paired with the EventHub sequence captured synchronously at the RPC snapshot marker. The HTTP response carries that `barrierSeq`; the browser discards queued envelopes through it, then applies strictly later envelopes. A viewed subagent transcript has its own earlier disk-read boundary so relays between the disk and parent snapshot are also restored. This ordering prevents duplicate or missing transcript/task changes and restores tasks after a hard refresh or recovery gap. The barrier is an ordering contract, not a timing delay; see [Dashboard snapshots](rpc.md#get_dashboard_snapshot).
 
