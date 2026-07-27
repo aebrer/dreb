@@ -466,6 +466,169 @@ describe("ModelRegistry", () => {
 		});
 	});
 
+	describe("authHeader", () => {
+		test("custom model uses Bearer mode with an arbitrary environment variable", async () => {
+			const envName = "DREB_TEST_CUSTOM_BEARER_TOKEN";
+			const original = process.env[envName];
+			process.env[envName] = "env-bearer-key";
+
+			try {
+				writeRawModelsJson({
+					"custom-bearer": {
+						...providerConfig("https://proxy.example.com", [{ id: "bearer-model" }]),
+						apiKey: envName,
+						authHeader: true,
+					},
+				});
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				const model = registry.find("custom-bearer", "bearer-model");
+
+				expect(model?.authMode).toBe("bearer");
+				expect(model?.headers?.Authorization).toBe("Bearer env-bearer-key");
+				expect(await registry.getApiKeyForProvider("custom-bearer")).toBe("env-bearer-key");
+			} finally {
+				if (original === undefined) delete process.env[envName];
+				else process.env[envName] = original;
+			}
+		});
+
+		test("custom models preserve literal and command-backed Bearer credentials", async () => {
+			writeRawModelsJson({
+				"literal-bearer": {
+					...providerConfig("https://literal.example.com", [{ id: "literal-model" }]),
+					apiKey: "literal-bearer-key",
+					authHeader: true,
+				},
+				"command-bearer": {
+					...providerConfig("https://command.example.com", [{ id: "command-model" }]),
+					apiKey: "!printf command-bearer-key",
+					authHeader: true,
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const literal = registry.find("literal-bearer", "literal-model");
+			const command = registry.find("command-bearer", "command-model");
+
+			expect(literal?.authMode).toBe("bearer");
+			expect(literal?.headers?.Authorization).toBe("Bearer literal-bearer-key");
+			expect(await registry.getApiKeyForProvider("literal-bearer")).toBe("literal-bearer-key");
+			expect(command?.authMode).toBe("bearer");
+			expect(command?.headers?.Authorization).toBe("Bearer command-bearer-key");
+			expect(await registry.getApiKeyForProvider("command-bearer")).toBe("command-bearer-key");
+		});
+
+		test("false or absent authHeader preserves the provider default", () => {
+			writeRawModelsJson({
+				"explicit-default": {
+					...providerConfig("https://default.example.com", [{ id: "explicit-model" }]),
+					authHeader: false,
+				},
+				"implicit-default": providerConfig("https://implicit.example.com", [{ id: "implicit-model" }]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			for (const model of [
+				registry.find("explicit-default", "explicit-model"),
+				registry.find("implicit-default", "implicit-model"),
+			]) {
+				expect(model?.authMode).toBeUndefined();
+				expect(model?.headers?.Authorization).toBeUndefined();
+			}
+		});
+
+		test("models.json applies Bearer mode to override-only built-in providers", () => {
+			writeRawModelsJson({
+				anthropic: {
+					baseUrl: "https://bearer-proxy.example.com",
+					apiKey: "override-bearer-key",
+					authHeader: true,
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const models = getModelsForProvider(registry, "anthropic");
+
+			expect(models.length).toBeGreaterThan(0);
+			for (const model of models) {
+				expect(model.baseUrl).toBe("https://bearer-proxy.example.com");
+				expect(model.authMode).toBe("bearer");
+				expect(model.headers?.Authorization).toBe("Bearer override-bearer-key");
+			}
+		});
+
+		test("refresh clears Bearer mode when authHeader is disabled", () => {
+			writeRawModelsJson({
+				anthropic: {
+					baseUrl: "https://bearer-proxy.example.com",
+					apiKey: "override-bearer-key",
+					authHeader: true,
+				},
+			});
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(getModelsForProvider(registry, "anthropic")[0].authMode).toBe("bearer");
+
+			writeRawModelsJson({
+				anthropic: {
+					baseUrl: "https://api-key-proxy.example.com",
+					apiKey: "override-api-key",
+					authHeader: false,
+				},
+			});
+			registry.refresh();
+
+			for (const model of getModelsForProvider(registry, "anthropic")) {
+				expect(model.authMode).toBeUndefined();
+				expect(model.headers?.Authorization).toBeUndefined();
+			}
+		});
+
+		test("registerProvider applies Bearer mode to custom and override-only providers", () => {
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			registry.registerProvider("dynamic-bearer", {
+				baseUrl: "https://dynamic.example.com",
+				apiKey: "dynamic-bearer-key",
+				api: "anthropic-messages",
+				authHeader: true,
+				models: [
+					{
+						id: "dynamic-model",
+						name: "Dynamic Model",
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 128000,
+						maxTokens: 4096,
+					},
+				],
+			});
+			registry.registerProvider("anthropic", {
+				baseUrl: "https://dynamic-override.example.com",
+				apiKey: "dynamic-override-key",
+				authHeader: true,
+			});
+
+			const custom = registry.find("dynamic-bearer", "dynamic-model");
+			expect(custom?.authMode).toBe("bearer");
+			expect(custom?.headers?.Authorization).toBe("Bearer dynamic-bearer-key");
+			for (const model of getModelsForProvider(registry, "anthropic")) {
+				expect(model.authMode).toBe("bearer");
+				expect(model.headers?.Authorization).toBe("Bearer dynamic-override-key");
+			}
+
+			registry.registerProvider("anthropic", {
+				baseUrl: "https://dynamic-api-key.example.com",
+				apiKey: "dynamic-api-key",
+				authHeader: false,
+			});
+			for (const model of getModelsForProvider(registry, "anthropic")) {
+				expect(model.authMode).toBeUndefined();
+				expect(model.headers?.Authorization).toBeUndefined();
+			}
+		});
+	});
+
 	// Dynamically find a provider with ≥2 built-in models for override tests.
 	// This avoids hardcoding provider/model IDs that may disappear from the generated registry.
 	const testProvider = getProviders().find((p) => getModels(p).length >= 2)!;

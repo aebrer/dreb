@@ -6,6 +6,7 @@
  * - Custom streamSimple implementation
  * - OAuth support for /login
  * - API key support via environment variable
+ * - Explicit SDK API-key versus Bearer auth selection
  * - Two model definitions
  *
  * Usage:
@@ -359,9 +360,11 @@ function streamCustomAnthropic(
 
 		try {
 			const apiKey = options?.apiKey ?? "";
-			const isOAuth = isOAuthToken(apiKey);
+			const configuredBearer = model.authMode === "bearer";
+			const isOAuth = !configuredBearer && isOAuthToken(apiKey);
 
-			// Configure client based on auth type
+			// Configure exactly one SDK auth channel. Explicitly nulling the other
+			// prevents the SDK from injecting ANTHROPIC_AUTH_TOKEN from the environment.
 			const betaFeatures = ["fine-grained-tool-streaming-2025-05-14", "interleaved-thinking-2025-05-14"];
 			const clientOptions: any = {
 				baseURL: model.baseUrl,
@@ -379,7 +382,8 @@ function streamCustomAnthropic(
 					"x-app": "cli",
 				};
 			} else {
-				clientOptions.apiKey = apiKey;
+				clientOptions.apiKey = configuredBearer ? null : apiKey;
+				clientOptions.authToken = configuredBearer ? apiKey : null;
 				clientOptions.defaultHeaders = {
 					accept: "application/json",
 					"anthropic-dangerous-direct-browser-access": "true",

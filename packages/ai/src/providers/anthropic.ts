@@ -203,6 +203,17 @@ function mergeHeaders(...headerSources: (Record<string, string> | undefined)[]):
 	return merged;
 }
 
+function withoutHeader(
+	headers: Record<string, string> | undefined,
+	headerName: string,
+): Record<string, string> | undefined {
+	if (!headers) return undefined;
+	const filtered = Object.fromEntries(
+		Object.entries(headers).filter(([name]) => name.toLowerCase() !== headerName.toLowerCase()),
+	);
+	return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
 export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -546,6 +557,10 @@ function createClient(
 	// interleaved thinking built in. The beta header is deprecated there.
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model);
 	const firstParty = isFirstPartyAnthropic(model.baseUrl);
+	const bearerAuth = model.authMode === "bearer";
+	// authHeader materializes a load-time Authorization header for custom stream
+	// compatibility. The built-in provider must use the request-time credential.
+	const modelHeaders = bearerAuth ? withoutHeader(model.headers, "authorization") : model.headers;
 
 	// Copilot: Bearer auth, selective betas (no fine-grained-tool-streaming)
 	if (model.provider === "github-copilot") {
@@ -565,7 +580,7 @@ function createClient(
 					...(firstParty ? { "anthropic-dangerous-direct-browser-access": "true" } : {}),
 					...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
 				},
-				model.headers,
+				modelHeaders,
 				dynamicHeaders,
 				optionsHeaders,
 			),
@@ -577,13 +592,14 @@ function createClient(
 	// Third-party Anthropic-compatible endpoints: minimal headers, no Anthropic-specific features
 	if (!firstParty) {
 		const client = new Anthropic({
-			apiKey,
+			apiKey: bearerAuth ? null : apiKey,
+			authToken: bearerAuth ? apiKey : null,
 			baseURL: model.baseUrl,
 			defaultHeaders: mergeHeaders(
 				{
 					accept: "application/json",
 				},
-				model.headers,
+				modelHeaders,
 				optionsHeaders,
 			),
 		});
@@ -596,8 +612,8 @@ function createClient(
 		betaFeatures.push("interleaved-thinking-2025-05-14");
 	}
 
-	// OAuth: Bearer auth, Claude Code identity headers
-	if (isOAuthToken(apiKey)) {
+	// OAuth: Bearer auth, Claude Code identity headers. Explicit authMode wins over token heuristics.
+	if (model.authMode === undefined && isOAuthToken(apiKey)) {
 		const client = new Anthropic({
 			apiKey: null,
 			authToken: apiKey,
@@ -611,7 +627,7 @@ function createClient(
 					"user-agent": `claude-cli/${claudeCodeVersion}`,
 					"x-app": "cli",
 				},
-				model.headers,
+				modelHeaders,
 				optionsHeaders,
 			),
 		});
@@ -619,9 +635,10 @@ function createClient(
 		return { client, isOAuthToken: true };
 	}
 
-	// API key auth (first-party Anthropic)
+	// API key or explicitly configured Bearer auth (first-party Anthropic)
 	const client = new Anthropic({
-		apiKey,
+		apiKey: bearerAuth ? null : apiKey,
+		authToken: bearerAuth ? apiKey : null,
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: mergeHeaders(
@@ -630,7 +647,7 @@ function createClient(
 				"anthropic-dangerous-direct-browser-access": "true",
 				"anthropic-beta": betaFeatures.join(","),
 			},
-			model.headers,
+			modelHeaders,
 			optionsHeaders,
 		),
 	});
