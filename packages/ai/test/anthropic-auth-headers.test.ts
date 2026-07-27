@@ -115,6 +115,21 @@ describe("Anthropic final auth headers", () => {
 		expect(headers.get("x-custom-header")).toBe("preserved");
 	});
 
+	it("lets a caller Authorization header override generated and stale Bearer credentials", async () => {
+		const model = createModel("https://proxy.example.com", {
+			authMode: "bearer",
+			headers: { aUtHoRiZaTiOn: "Bearer stale-load-time-key" },
+		});
+
+		const headers = await captureRequestHeaders(model, {
+			apiKey: "request-time-key",
+			headers: { Authorization: "Bearer caller-key" },
+		});
+
+		expect(headers.get("authorization")).toBe("Bearer caller-key");
+		expect(headers.has("x-api-key")).toBe(false);
+	});
+
 	it("does not mix an ambient Bearer token into first-party API-key auth", async () => {
 		vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "ambient-token-that-must-not-leak");
 
