@@ -15,7 +15,17 @@ const PNG_BYTES = Buffer.from(
 	"base64",
 );
 const GIF_BYTES = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
-const imageBlock = (bytes = PNG_BYTES, mimeType = "image/png") => ({
+
+function jpegWithTrailingMetadata(): Buffer {
+	const source = new photon.PhotonImage(Uint8Array.of(255, 0, 0, 255), 1, 1);
+	try {
+		return Buffer.concat([Buffer.from(source.get_bytes_jpeg(90)), Buffer.from("phone auxiliary metadata")]);
+	} finally {
+		source.free();
+	}
+}
+
+const imageBlock = (bytes: Uint8Array = PNG_BYTES, mimeType = "image/png") => ({
 	type: "image",
 	data: Buffer.from(bytes).toString("base64"),
 	mimeType,
@@ -45,6 +55,33 @@ describe("dashboard image projection and repository", () => {
 		expect(decodeDashboardImage(PNG_BYTES.toString("base64"), "image/jpeg")).toBeUndefined();
 		expect(decodeDashboardImage(PNG_BYTES.toString("base64"), "image/svg+xml")).toBeUndefined();
 		expect(decodeDashboardImage("AAAA", "image/png")).toBeUndefined();
+		expect(
+			decodeDashboardImage(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 2]).toString("base64"), "image/jpeg"),
+		).toBeUndefined();
+	});
+
+	it("projects phone JPEG uploads that retain auxiliary bytes after EOI", async () => {
+		const service = new DashboardImageService(new FakePreviewGenerator());
+		const jpeg = jpegWithTrailingMetadata();
+		const projected = service.projectEvent(
+			{
+				type: "message_start",
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "describe this" }, imageBlock(jpeg, "image/jpeg")],
+				},
+			},
+			scope,
+		) as {
+			message: { content: Array<{ type: string; id?: string; mimeType?: string; size?: number }> };
+		};
+		const reference = projected.message.content[1];
+
+		expect(reference).toMatchObject({ type: "image_reference", mimeType: "image/jpeg", size: jpeg.length });
+		expect(reference?.id).toMatch(/^[0-9a-f]{64}$/);
+		const original = await service.original(scope, reference!.id!, async () => []);
+		expect(original.bytes).toEqual(jpeg);
+		expect(generateImagePreview(jpeg)).toMatchObject({ width: 1, height: 1 });
 	});
 
 	it("uses exact MIME and decoded bytes for stable content IDs", () => {

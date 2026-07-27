@@ -47,6 +47,7 @@ interface CachedImage {
 }
 
 const DROP = Symbol("drop-dashboard-image");
+const JPEG_EOI = Buffer.from([0xff, 0xd9]);
 
 function scopeKey(scope: DashboardImageScope): string {
 	return `${scope.runtimeKey}\0${scope.agentId ?? ""}`;
@@ -71,15 +72,14 @@ function hasRasterSignature(mimeType: DashboardImageReferenceDto["mimeType"], by
 				buffer.indexOf(Buffer.from("IEND"), 24) >= 0
 			);
 		}
-		case "image/jpeg":
-			return (
-				bytes.length >= 4 &&
-				bytes[0] === 0xff &&
-				bytes[1] === 0xd8 &&
-				bytes[2] === 0xff &&
-				bytes[bytes.length - 2] === 0xff &&
-				bytes[bytes.length - 1] === 0xd9
-			);
+		case "image/jpeg": {
+			if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) return false;
+			// EOI does not have to be the final byte. Phone JPEGs commonly append
+			// auxiliary gain-map, motion-photo, or vendor metadata after the primary
+			// image. Browsers and Photon decode the JPEG through EOI and preserve the
+			// trailing bytes when the exact original is requested.
+			return buffer.lastIndexOf(JPEG_EOI) >= 2;
+		}
 		case "image/gif": {
 			const header = buffer.subarray(0, 6).toString("ascii");
 			return (
