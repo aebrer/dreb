@@ -45,21 +45,32 @@ afterAll(async () => {
 	if (server) await new Promise<void>((resolveClosed) => server.close(() => resolveClosed()));
 });
 
-async function open(mode: "placeholders" | "previews" | "originals", size?: number) {
+async function open(mode: "placeholders" | "previews" | "originals", size?: number, entry: "tool" | "user" = "tool") {
 	const page = await browser.newPage();
 	const requests: string[] = [];
 	await page.route("**/api/runtimes/**/images/**", async (route) => {
 		requests.push(route.request().url());
 		await route.fulfill({ status: 200, contentType: "image/png", body: png });
 	});
-	const query = new URLSearchParams({ mode });
+	const query = new URLSearchParams({ mode, entry });
 	if (size !== undefined) query.set("size", String(size));
 	await page.goto(`${base}/test/client/tool-result-images.browser.html?${query}`);
-	await page.locator("details.tool").waitFor();
+	await page.locator(entry === "user" ? ".entry.user" : "details.tool").waitFor();
 	return { page, requests };
 }
 
-describe("tool-result image browser requests", () => {
+describe("transcript image browser requests", () => {
+	it("retains a sent user upload as a bounded transcript preview", async () => {
+		const { page, requests } = await open("previews", undefined, "user");
+		const image = page.getByAltText("Uploaded image");
+		await image.waitFor();
+
+		expect(await image.getAttribute("src")).toContain("/preview");
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toContain("/preview");
+		await page.close();
+	});
+
 	it("placeholder mode makes no request before explicit preview loading", async () => {
 		const { page, requests } = await open("placeholders");
 		await page.locator(".tool-image-placeholder").waitFor();

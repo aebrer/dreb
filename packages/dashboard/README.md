@@ -42,7 +42,7 @@ Open `http://127.0.0.1:5343`.
   cards with sanitized inline PNG/JPEG/GIF/WebP result images, thinking blocks,
   inline provider/API failures with partial output preserved, compaction summaries,
   per-message copy, tasks panel, suggest-next chip,
-  slash-command autocomplete, image attach/paste,
+  slash-command autocomplete, image attach/paste with sent-image previews retained in user transcript entries,
   queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
@@ -67,17 +67,18 @@ Open `http://127.0.0.1:5343`.
   failures are shown instead of stale values. Trust changes are observed by
   active processes for future lazy loads and cannot retract already injected
   context. Also includes dashboard-local preferences (thinking expansion,
-  tool-result image display mode, and notification permission), an appearance section with a curated-theme gallery
+  transcript image display mode, and notification permission), an appearance section with a curated-theme gallery
   (entropist.ca / Dim / Solarized / Gruvbox / Caves of Qud / Van Gogh /
   Okabe-Ito / Paul Tol — the last two colorblind-safe — live preview cards,
   system/light/dark mode selector, saved per browser), current pairing code,
   and paired-devices management.
 - **Pairing** — remote first-login rotating-code flow.
 
-### Tool-result images
+### Transcript images
 
-Image blocks returned by any tool render for the human viewing the transcript,
-even when the active model does not support vision. Before browser-facing SSE,
+Image blocks returned by any tool and images uploaded with a user turn render
+for the human viewing the transcript, even when the active model does not
+support vision. Before browser-facing SSE,
 replay, hydrate, resync, parent-message, or subagent-message serialization, the
 server validates exact base64, an exact PNG/JPEG/GIF/WebP MIME allowlist, and a
 matching raster signature. It stores accepted originals under a content ID and
@@ -296,6 +297,10 @@ Browser (SolidJS, hash-routed SPA)
 - Background subagent transcripts arrive over the same pipe via the
   `background_agent_event` relay (see `docs/rpc.md` in
   `@dreb/coding-agent`) — no session-file tailing.
+- Programmatic callers of `createDashboardServer()` must call the returned
+  app's idempotent `closeDashboard()` hook when their HTTP server stops. This
+  terminates the lazy image-preview worker without requiring access to the
+  internally created image service.
 - The visual language is `tokens.css` (`src/client/styles/tokens.css`),
   the dashboard's design system. Its defaults are unchanged; `themes.css` is
   an **additive layer** on top that overrides the design tokens only when a

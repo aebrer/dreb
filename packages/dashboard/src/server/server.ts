@@ -40,6 +40,11 @@ import { ImagePreviewWorker } from "./image-preview.js";
 import type { DashboardRuntimeSnapshot, RuntimePool } from "./runtime-pool.js";
 import { readSubagentMessages } from "./subagent-log.js";
 
+export type DashboardServerApp = express.Express & {
+	/** Close dashboard-owned services. Safe to call more than once during shutdown. */
+	closeDashboard(): Promise<void>;
+};
+
 export interface DashboardServerOptions {
 	auth: DashboardAuth;
 	pool: RuntimePool;
@@ -123,7 +128,7 @@ interface AuthedRequest extends Request {
 	sseConnectionId?: string;
 }
 
-export function createDashboardServer(options: DashboardServerOptions): express.Express {
+export function createDashboardServer(options: DashboardServerOptions): DashboardServerApp {
 	const { auth, pool } = options;
 	const serverStartedAt = new Date().toISOString();
 	const diagnosticConnections = new Map<string, { issuedAt: number; lastAt?: number }>();
@@ -144,7 +149,12 @@ export function createDashboardServer(options: DashboardServerOptions): express.
 	});
 	pool.onFleetSnapshot((event) => hub.publish("", { ...event }));
 
-	const app = express();
+	const app = express() as DashboardServerApp;
+	let closePromise: Promise<void> | undefined;
+	app.closeDashboard = () => {
+		closePromise ??= images.close();
+		return closePromise;
+	};
 	app.disable("x-powered-by");
 
 	// -- auth middleware (every route, fail-closed) ---------------------------

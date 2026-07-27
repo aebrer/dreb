@@ -118,7 +118,7 @@ async function startServer(options: TestServerOptions = {}) {
 	servers.push(server);
 	const address = server.address();
 	if (address === null || typeof address === "string") throw new Error("no port");
-	return { base: `http://127.0.0.1:${address.port}`, pool, clients };
+	return { base: `http://127.0.0.1:${address.port}`, pool, clients, app };
 }
 
 describe("dashboard server — auth middleware", () => {
@@ -823,6 +823,25 @@ describe("dashboard server — transcript images", () => {
 		vi.mocked(started.clients[0].getMessages as any).mockResolvedValue(messages);
 		return { ...started, key, service };
 	}
+
+	it("exposes idempotent teardown for the server image service", async () => {
+		const close = vi.fn(async () => {});
+		const service = new DashboardImageService({
+			generate: vi.fn(async () => ({
+				bytes: Uint8Array.of(1),
+				mimeType: "image/png" as const,
+				width: 1,
+				height: 1,
+			})),
+			close,
+		});
+		const { app } = await startServer({ imageService: service });
+
+		await app.closeDashboard();
+		await app.closeDashboard();
+
+		expect(close).toHaveBeenCalledOnce();
+	});
 
 	it("projects message, hydrate, and resync HTTP transcripts to references without base64", async () => {
 		const { base, clients, key } = await createImageRuntime();

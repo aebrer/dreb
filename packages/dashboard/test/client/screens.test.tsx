@@ -203,6 +203,7 @@ import {
 	type SessionViewState,
 	type ToolEntry,
 	type TranscriptEntry,
+	type UserEntry,
 } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
 import { MAX_TOTAL_IMAGE_BYTES, type RuntimeInfoDto } from "../../src/shared/protocol.js";
@@ -4397,6 +4398,19 @@ describe("dashboard client regressions", () => {
 		expect(el.textContent).toContain("load original · 2 KB");
 	});
 
+	it("renders photo-button uploads as previews in user transcript entries", () => {
+		const user: UserEntry = {
+			kind: "user",
+			text: "describe this",
+			images: [{ id: IMAGE_ID, mimeType: "image/png", size: 1234 }],
+		};
+		const el = mount(() => <Transcript entries={[user]} imageScope={{ runtimeKey: "runtime" }} />);
+		const image = el.querySelector(".entry.user img.tool-image") as HTMLImageElement | null;
+
+		expect(image?.alt).toBe("Uploaded image");
+		expect(image?.getAttribute("src")).toBe(`/api/runtimes/runtime/images/${IMAGE_ID}/preview`);
+	});
+
 	it("renders image references for extension tools and encoded subagent scopes", () => {
 		const custom = imageEntry([{ id: IMAGE_ID, mimeType: "image/webp", size: 10 }], "extension_image");
 		const el = mount(() => (
@@ -4433,6 +4447,17 @@ describe("dashboard client regressions", () => {
 		);
 	});
 
+	it("closes the image lightbox with Escape", () => {
+		const read = imageEntry([{ id: IMAGE_ID, mimeType: "image/png", size: 1234 }]);
+		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
+		(el.querySelector(".tool-image-button") as HTMLButtonElement).click();
+		expect(el.querySelector('[role="dialog"]')).not.toBeNull();
+
+		window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+
+		expect(el.querySelector('[role="dialog"]')).toBeNull();
+	});
+
 	it("large explicit originals confirm before assigning their URL", () => {
 		const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
 		const read = imageEntry([{ id: IMAGE_ID, mimeType: "image/png", size: 2 * 1024 * 1024 }]);
@@ -4463,12 +4488,28 @@ describe("dashboard client regressions", () => {
 		confirm.mockRestore();
 	});
 
-	it("surfaces image load errors without falling back to another variant", () => {
+	it("keeps preview fallback and original retry actions after an original load fails", () => {
 		const read = imageEntry([{ id: IMAGE_ID, mimeType: "image/png", size: 1234 }]);
 		const el = mount(() => <Transcript entries={[read]} imageScope={{ runtimeKey: "runtime" }} />);
+		const original = Array.from(el.querySelectorAll("button")).find((candidate) =>
+			candidate.textContent?.includes("load original"),
+		)!;
+		original.click();
 		el.querySelector("img.tool-image")?.dispatchEvent(new Event("error"));
-		expect(el.querySelector('[role="alert"]')?.textContent).toContain("Could not load preview");
+
+		expect(el.querySelector('[role="alert"]')?.textContent).toContain("Could not load original");
 		expect(el.querySelector("img.tool-image")).toBeNull();
+		expect(el.textContent).toContain("retry preview");
+		expect(el.textContent).toContain("load original");
+
+		const retryPreview = Array.from(el.querySelectorAll("button")).find(
+			(candidate) => candidate.textContent === "retry preview",
+		)!;
+		retryPreview.click();
+		expect(el.querySelector("img.tool-image")?.getAttribute("src")).toBe(
+			`/api/runtimes/runtime/images/${IMAGE_ID}/preview`,
+		);
+		expect(el.querySelector('[role="alert"]')).toBeNull();
 	});
 
 	it("rejects disallowed MIME types and malformed IDs as defense-in-depth", () => {

@@ -28,8 +28,9 @@ import type {
 	AgentResultEntry,
 	AssistantEntry,
 	ToolEntry,
-	ToolResultImage,
 	TranscriptEntry,
+	TranscriptImage,
+	UserEntry,
 } from "../state/reducer.js";
 
 const STREAM_RENDER_THROTTLE_MS = 150;
@@ -363,7 +364,29 @@ function formatImageSize(bytes: number): string {
 	return `${bytes} B`;
 }
 
-function ToolResultImageView(props: { image: ToolResultImage; scope: TranscriptImageScope }): JSX.Element {
+interface TranscriptImageLabels {
+	alt: string;
+	originalAriaLabel: string;
+	enlargedAlt: string;
+}
+
+const TOOL_RESULT_IMAGE_LABELS: TranscriptImageLabels = {
+	alt: "Tool result",
+	originalAriaLabel: "Original tool-result image",
+	enlargedAlt: "Enlarged tool-result preview",
+};
+
+const USER_UPLOAD_IMAGE_LABELS: TranscriptImageLabels = {
+	alt: "Uploaded image",
+	originalAriaLabel: "Original uploaded image",
+	enlargedAlt: "Enlarged uploaded-image preview",
+};
+
+function TranscriptImageView(props: {
+	image: TranscriptImage;
+	scope: TranscriptImageScope;
+	labels: TranscriptImageLabels;
+}): JSX.Element {
 	const [source, setSource] = createSignal<string>();
 	const [sourceVariant, setSourceVariant] = createSignal<"preview" | "original">();
 	const [error, setError] = createSignal<string>();
@@ -414,11 +437,9 @@ function ToolResultImageView(props: { image: ToolResultImage; scope: TranscriptI
 						<span>
 							{props.image.mimeType.replace("image/", "").toUpperCase()} · {formatImageSize(props.image.size)}
 						</span>
-						<Show when={!error()}>
-							<button type="button" class="entry-action" onClick={() => assign("preview")}>
-								load preview
-							</button>
-						</Show>
+						<button type="button" class="entry-action" onClick={() => assign("preview")}>
+							{error() ? "retry preview" : "load preview"}
+						</button>
 					</output>
 				}
 			>
@@ -428,16 +449,17 @@ function ToolResultImageView(props: { image: ToolResultImage; scope: TranscriptI
 						class="tool-image-button"
 						disabled={sourceVariant() !== "preview"}
 						onClick={() => sourceVariant() === "preview" && setLightbox(true)}
-						aria-label={sourceVariant() === "preview" ? "Enlarge image preview" : "Original tool-result image"}
+						aria-label={sourceVariant() === "preview" ? "Enlarge image preview" : props.labels.originalAriaLabel}
 					>
 						<img
 							class="tool-image"
-							alt="Tool result"
+							alt={props.labels.alt}
 							src={src()}
 							loading="lazy"
 							onError={() => {
 								setError(`Could not load ${sourceVariant() ?? "image"}`);
 								setSource(undefined);
+								setSourceVariant(undefined);
 							}}
 						/>
 					</button>
@@ -469,7 +491,7 @@ function ToolResultImageView(props: { image: ToolResultImage; scope: TranscriptI
 						onClick={() => setLightbox(false)}
 					/>
 					<div class="image-lightbox-content">
-						<img src={source()} alt="Enlarged tool-result preview" />
+						<img src={source()} alt={props.labels.enlargedAlt} />
 						<button type="button" class="btn btn-small" onClick={() => setLightbox(false)}>
 							close
 						</button>
@@ -480,7 +502,11 @@ function ToolResultImageView(props: { image: ToolResultImage; scope: TranscriptI
 	);
 }
 
-function ToolResultImages(props: { images: ToolResultImage[]; scope: TranscriptImageScope }): JSX.Element {
+function TranscriptImages(props: {
+	images: TranscriptImage[];
+	scope: TranscriptImageScope;
+	labels: TranscriptImageLabels;
+}): JSX.Element {
 	const renderable = () =>
 		props.images.filter(
 			(image) =>
@@ -492,7 +518,9 @@ function ToolResultImages(props: { images: ToolResultImage[]; scope: TranscriptI
 	return (
 		<Show when={renderable().length > 0}>
 			<div class="tool-images">
-				<For each={renderable()}>{(image) => <ToolResultImageView image={image} scope={props.scope} />}</For>
+				<For each={renderable()}>
+					{(image) => <TranscriptImageView image={image} scope={props.scope} labels={props.labels} />}
+				</For>
 			</div>
 		</Show>
 	);
@@ -645,7 +673,11 @@ function ToolCard(props: { entry: ToolEntry; imageScope: TranscriptImageScope })
 				</For>
 				<Show when={props.entry.images?.length}>
 					<div class="tool-result">
-						<ToolResultImages images={props.entry.images!} scope={props.imageScope} />
+						<TranscriptImages
+							images={props.entry.images!}
+							scope={props.imageScope}
+							labels={TOOL_RESULT_IMAGE_LABELS}
+						/>
 					</div>
 				</Show>
 				<Switch>
@@ -843,13 +875,20 @@ function EntryView(props: {
 			<Match when={props.entry.kind === "user"}>
 				<div class="entry user">
 					<div class="entry-head">
-						<Show when={skillName((props.entry as { text: string }).text)}>
+						<Show when={skillName((props.entry as UserEntry).text)}>
 							{(name) => <span class="skill-badge">skill: {name()}</span>}
 						</Show>
 						<CopyButton text={entryCopyText(props.entry)} />
 						<span>{props.userLabel}</span>
 					</div>
-					<div class="entry-body">{(props.entry as { text: string }).text}</div>
+					<div class="entry-body">{(props.entry as UserEntry).text}</div>
+					<Show when={(props.entry as UserEntry).images?.length}>
+						<TranscriptImages
+							images={(props.entry as UserEntry).images!}
+							scope={props.imageScope}
+							labels={USER_UPLOAD_IMAGE_LABELS}
+						/>
+					</Show>
 				</div>
 			</Match>
 			<Match when={props.entry.kind === "agent-result"}>

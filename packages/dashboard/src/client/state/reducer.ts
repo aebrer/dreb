@@ -22,6 +22,8 @@ import {
 export interface UserEntry {
 	kind: "user";
 	text: string;
+	/** Validated references for images uploaded with this turn. */
+	images?: TranscriptImage[];
 	timestamp?: number;
 }
 
@@ -53,8 +55,8 @@ export interface AssistantEntry {
 	timestamp?: number;
 }
 
-/** Validated browser-facing reference to a tool-result raster image. */
-export interface ToolResultImage {
+/** Validated browser-facing reference to a transcript raster image. */
+export interface TranscriptImage {
 	id: string;
 	mimeType: DashboardImageReferenceDto["mimeType"];
 	size: number;
@@ -69,7 +71,7 @@ export interface ToolEntry {
 	/** Result text (or partial output while running). */
 	resultText: string;
 	/** Validated image references returned by the tool. */
-	images?: ToolResultImage[];
+	images?: TranscriptImage[];
 	details?: unknown;
 	startedAt: number;
 	endedAt?: number;
@@ -201,11 +203,11 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set<DashboardImageReferenceDto["mimeType"]>
 const IMAGE_ID_PATTERN = /^[0-9a-f]{64}$/;
 
 /** Normalize transcript content while rejecting malformed or disallowed references. */
-function contentToParts(content: unknown): { text: string; images: ToolResultImage[] } {
+function contentToParts(content: unknown): { text: string; images: TranscriptImage[] } {
 	if (typeof content === "string") return { text: content, images: [] };
 	if (!Array.isArray(content)) return { text: "", images: [] };
 	const textParts: string[] = [];
-	const images: ToolResultImage[] = [];
+	const images: TranscriptImage[] = [];
 	for (const raw of content) {
 		const part = raw as { type?: unknown; text?: unknown; id?: unknown; size?: unknown; mimeType?: unknown };
 		if (typeof part?.text === "string") {
@@ -255,8 +257,15 @@ function parseBackgroundAgentResult(raw: string, timestamp?: number): AgentResul
 }
 
 function userMessageToEntry(message: MessageLike): UserEntry | AgentResultEntry {
-	const text = contentToText(message.content);
-	return parseBackgroundAgentResult(text, message.timestamp) ?? { kind: "user", text, timestamp: message.timestamp };
+	const { text, images } = contentToParts(message.content);
+	return (
+		parseBackgroundAgentResult(text, message.timestamp) ?? {
+			kind: "user",
+			text,
+			images: images.length > 0 ? images : undefined,
+			timestamp: message.timestamp,
+		}
+	);
 }
 
 function providerErrorText(message: MessageLike | undefined): string | undefined {
@@ -550,7 +559,12 @@ function applyTranscriptEvent(state: { entries: TranscriptEntry[]; streaming: bo
 				const entry = userMessageToEntry(message);
 				if (entry.kind === "agent-result") {
 					if (!(last?.kind === "agent-result" && last.raw === entry.raw)) state.entries.push(entry);
-				} else if (!(last?.kind === "user" && last.text === entry.text)) {
+				} else if (last?.kind === "user" && last.text === entry.text) {
+					// message_start normally carries the complete turn. If a transport
+					// supplies image references only with message_end, enrich that same
+					// transcript entry instead of dropping the attachments during dedupe.
+					if (entry.images) last.images = entry.images;
+				} else {
 					state.entries.push(entry);
 				}
 			}

@@ -547,6 +547,10 @@ body,
 	justify-content: flex-end;
 }
 
+.entry.user > .tool-images {
+	margin-top: var(--space-2);
+}
+
 .entry.assistant {
 	max-width: 100%;
 }

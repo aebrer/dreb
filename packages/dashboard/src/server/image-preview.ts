@@ -43,6 +43,11 @@ export class ImagePreviewWorker implements ImagePreviewGenerator {
 		{ resolve: (preview: GeneratedImagePreview) => void; reject: (error: Error) => void }
 	>();
 
+	constructor(
+		/** Injectable worker URL keeps abnormal-exit handling deterministic in tests. */
+		private readonly workerUrl = new URL("./image-preview-worker.js", import.meta.url),
+	) {}
+
 	async generate(bytes: Uint8Array, mimeType: string): Promise<GeneratedImagePreview> {
 		if (this.closed) throw new Error("Image preview worker is closed");
 		const worker = this.getWorker();
@@ -67,7 +72,7 @@ export class ImagePreviewWorker implements ImagePreviewGenerator {
 
 	private getWorker(): Worker {
 		if (this.worker) return this.worker;
-		const worker = new Worker(new URL("./image-preview-worker.js", import.meta.url));
+		const worker = new Worker(this.workerUrl);
 		worker.on("message", (reply: WorkerReply) => {
 			const pending = this.pending.get(reply.id);
 			if (!pending) return;

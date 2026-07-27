@@ -300,13 +300,14 @@ async function main(): Promise<void> {
 	// across restart/exit).
 	let httpServer: HttpServer | HttpsServer | undefined;
 	let clearTlsReloadTimer = () => {};
+	let closeDashboard = () => imageService.close();
 	const tlsWatchers: TlsFileWatcher[] = [];
 	const beginShutdown = createShutdown({
 		log: (message) => console.log(message),
 		clearReloadTimer: () => clearTlsReloadTimer(),
 		watchers: tlsWatchers,
 		closeServer: () => httpServer?.close(),
-		stopAll: () => Promise.all([pool.stopAll(), imageService.close()]),
+		stopAll: () => Promise.all([pool.stopAll(), closeDashboard()]),
 		exit: (code) => process.exit(code),
 	});
 	const onRestart = () => beginShutdown("restart requested — exiting for supervisor to respawn", 1);
@@ -326,6 +327,7 @@ async function main(): Promise<void> {
 			return { method: result.method };
 		},
 	});
+	closeDashboard = () => app.closeDashboard();
 
 	const host = args.remote ? "0.0.0.0" : "127.0.0.1";
 	const scheme = args.https ? "https" : "http";

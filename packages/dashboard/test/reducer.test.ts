@@ -69,6 +69,25 @@ describe("messagesToEntries — hydration", () => {
 		});
 	});
 
+	it("retains uploaded-image references on hydrated user transcript entries", () => {
+		const entries = messagesToEntries([
+			{
+				role: "user",
+				content: [{ type: "text", text: "describe this" }, imageRef("image/png")],
+				timestamp: 1,
+			},
+		]);
+
+		expect(entries).toEqual([
+			{
+				kind: "user",
+				text: "describe this",
+				images: [reducedImage("image/png")],
+				timestamp: 1,
+			},
+		]);
+	});
+
 	it("preserves assistant content order around tool calls", () => {
 		const entries = messagesToEntries([
 			{
@@ -304,6 +323,30 @@ describe("applySessionEvent — streaming lifecycle", () => {
 			],
 		});
 		expect(state.entries[1]).toMatchObject({ kind: "tool", toolCallId: "t1" });
+	});
+
+	it("keeps uploaded images on the live user entry without duplicating message_end", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "message_start",
+			message: { role: "user", content: [{ type: "text", text: "describe this" }] },
+		});
+		applySessionEvent(state, {
+			type: "message_end",
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "describe this" }, imageRef("image/png")],
+			},
+		});
+
+		expect(state.entries).toEqual([
+			{
+				kind: "user",
+				text: "describe this",
+				images: [reducedImage("image/png")],
+				timestamp: undefined,
+			},
+		]);
 	});
 
 	it("renders live background-agent completion messages as agent-result entries", () => {
