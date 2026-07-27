@@ -18,7 +18,7 @@ type AgentSessionEvent =
   | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
   | { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
-  | { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; model?: string; thinking?: ThinkingLevel; sessionFile?: string }
+  | { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; model?: string; thinking?: ThinkingLevel; steps?: SubagentStepMetadata[]; sessionFile?: string }
   | { type: "tasks_update"; tasks: readonly SessionTask[] }
   | { type: "suggest_next"; command: string };
 
@@ -27,6 +27,14 @@ interface SessionTask {
   id: string;
   title: string;
   status: "pending" | "in_progress" | "completed";
+}
+
+interface SubagentStepMetadata {
+  step: number;
+  agent: string;
+  success: boolean;
+  model?: string; // canonical provider/model
+  thinking?: ThinkingLevel;
 }
 ```
 

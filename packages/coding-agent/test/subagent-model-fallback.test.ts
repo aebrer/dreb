@@ -570,6 +570,18 @@ const probeModels: Model<"anthropic-messages">[] = [
 		maxTokens: 8192,
 	},
 	{
+		id: "reasoning-fallback-model",
+		name: "Reasoning Fallback Model",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 2, output: 6, cacheRead: 0.2, cacheWrite: 2 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	},
+	{
 		id: "parent-model",
 		name: "Parent Model",
 		api: "anthropic-messages",
@@ -1004,6 +1016,68 @@ describe("spawn-time model availability probing", () => {
 		);
 		expect(spawn).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(spawn).mock.calls[0][1]).toContain("parent-model");
+	});
+
+	test("executeSingle validates thinking against the non-reasoning model selected after probing", async () => {
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(assistantResult("error", "primary unavailable"))
+			.mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"parent-model",
+			undefined,
+			undefined,
+			undefined,
+			"high",
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.errorMessage).toContain("non-reasoning model");
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	test("executeSingle passes thinking once to the reasoning model selected after probing", async () => {
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(assistantResult("error", "primary unavailable"))
+			.mockResolvedValueOnce(assistantResult("stop"));
+		mockSpawnSubagentResult({ model: "reasoning-fallback-model", output: "child output" });
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "reasoning-fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"parent-model",
+			undefined,
+			undefined,
+			undefined,
+			"high",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const args = vi.mocked(spawn).mock.calls[0][1];
+		expect(args).toContain("reasoning-fallback-model");
+		expect(args.filter((arg) => arg === "--thinking")).toHaveLength(1);
+		expect(args).toContain("high");
 	});
 
 	test("executeSingle includes skipped model details when model resolution fails", async () => {

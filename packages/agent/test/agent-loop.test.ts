@@ -136,6 +136,40 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("agent_end");
 	});
 
+	it("should report off when no reasoning level is configured", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "Hi" }]),
+				});
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+		await stream.result();
+
+		expect(events.find((event) => event.type === "agent_start")).toEqual({
+			type: "agent_start",
+			model: { provider: "openai", id: "mock" },
+			thinkingLevel: "off",
+		});
+	});
+
 	it("should set durationMs > 0 on successful assistant responses", async () => {
 		const context: AgentContext = {
 			systemPrompt: "You are helpful.",
@@ -638,6 +672,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 
 		const config: AgentLoopConfig = {
 			model: createModel(),
+			reasoning: "low",
 			convertToLlm: identityConverter,
 		};
 
@@ -662,6 +697,12 @@ describe("agentLoopContinue with AgentMessage", () => {
 		// Should only return the new assistant message (not the existing user message)
 		expect(messages.length).toBe(1);
 		expect(messages[0].role).toBe("assistant");
+
+		expect(events.find((event) => event.type === "agent_start")).toEqual({
+			type: "agent_start",
+			model: { provider: "openai", id: "mock" },
+			thinkingLevel: "low",
+		});
 
 		// Should NOT have user message events (that's the key difference from agentLoop)
 		const messageEndEvents = events.filter((e) => e.type === "message_end");

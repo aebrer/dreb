@@ -140,12 +140,25 @@ function loadAgentsFromDir(dir: string, agents: Map<string, AgentTypeConfig>): v
 // Subagent process spawning
 // ---------------------------------------------------------------------------
 
-export interface SubagentResult {
+export interface SubagentStepMetadata {
+	step: number;
 	agent: string;
-	task: string;
+	success: boolean;
+	/** Canonical provider/model identity reported by the child process. */
 	model?: string;
 	/** Effective thinking level reported by the child process. */
 	thinking?: ThinkingLevel;
+}
+
+export interface SubagentResult {
+	agent: string;
+	task: string;
+	/** Canonical provider/model identity reported by the child process. */
+	model?: string;
+	/** Effective thinking level reported by the child process. */
+	thinking?: ThinkingLevel;
+	/** Ordered effective metadata for chain steps. */
+	steps?: SubagentStepMetadata[];
 	exitCode: number;
 	output: string;
 	stderr: string;
@@ -205,14 +218,19 @@ export interface ChildLineSinks {
 	onAssistantMessage: (message: { role: string; content: any[] }) => void;
 	/** Called with human-readable progress lines (tool start/end). */
 	onProgress?: (text: string) => void;
-	/** Called when the child reports its resolved model (`agent_start`). */
-	onModel: (modelId: string) => void;
+	/** Called when the child reports its canonical resolved model (`agent_start`). */
+	onModel: (modelRef: string) => void;
 	/** Called when the child reports its effective thinking level (`agent_start`). */
 	onThinking?: (thinkingLevel: ThinkingLevel) => void;
 	/** Called with lines that failed to parse as JSON (often real startup errors). */
 	onPlainLine: (line: string) => void;
 	/** Mutable holder for the last tool name, shared across lines for progress text. */
 	toolNameRef: { current: string };
+}
+
+function canonicalModelRef(provider: string | undefined, modelId: string): string {
+	if (!provider || modelId.startsWith(`${provider}/`)) return modelId;
+	return `${provider}/${modelId}`;
 }
 
 /**
@@ -246,7 +264,10 @@ export function handleChildJsonlLine(line: string, sinks: ChildLineSinks): void 
 		sinks.onEvent?.(event);
 	}
 	if (event.type === "agent_start") {
-		if (event.model?.id) sinks.onModel(event.model.id);
+		if (typeof event.model?.id === "string") {
+			const provider = typeof event.model.provider === "string" ? event.model.provider : undefined;
+			sinks.onModel(canonicalModelRef(provider, event.model.id));
+		}
 		if (
 			typeof event.thinkingLevel === "string" &&
 			(SUBAGENT_THINKING_LEVELS as readonly string[]).includes(event.thinkingLevel)
@@ -390,8 +411,8 @@ async function spawnSubagent(
 					onEvent: onChildEvent,
 					onAssistantMessage: (message) => collectedMessages.push(message),
 					onProgress,
-					onModel: (modelId) => {
-						resolvedModel = modelId;
+					onModel: (modelRef) => {
+						resolvedModel = modelRef;
 					},
 					onThinking: (thinkingLevel) => {
 						resolvedThinking = thinkingLevel;
@@ -487,17 +508,14 @@ async function spawnSubagent(
 
 			// Discover the session file written by the child process
 			const sessionFile = sessionDir ? discoverSessionFile(sessionDir, agentConfig.name) : undefined;
+			const configuredModel = Array.isArray(agentConfig.model) ? agentConfig.model[0] : agentConfig.model;
 
 			resolvePromise({
 				agent: agentConfig.name,
 				task,
 				model:
 					resolvedModel ??
-					(exitCode === 0
-						? Array.isArray(agentConfig.model)
-							? agentConfig.model[0]
-							: agentConfig.model
-						: undefined),
+					(exitCode === 0 && configuredModel ? canonicalModelRef(parentProvider, configuredModel) : undefined),
 				thinking: resolvedThinking ?? (exitCode === 0 ? thinkingOverride : undefined),
 				exitCode,
 				output,
@@ -1023,9 +1041,13 @@ export async function executeSingle(
 			errorMessage: `Task prompt too long (${task.length} chars, max ${MAX_TASK_LENGTH}). Shorten the prompt.`,
 		};
 	}
-	// Per-invocation model override takes precedence over agent settings, which take precedence over agent definition model.
+	// Per-invocation model override takes precedence over agent settings, which take precedence over agent definition model,
+	// then the parent model. Resolve inherited parent models explicitly so thinking overrides are validated against the same
+	// concrete model that the child receives.
 	// Override is always a single string; agentModels and agent config may be arrays.
-	const modelSpec = modelOverride || (agentModels && agentModels.length > 0 ? agentModels : undefined) || config.model;
+	const configuredModelSpec =
+		modelOverride || (agentModels && agentModels.length > 0 ? agentModels : undefined) || config.model;
+	const modelSpec = configuredModelSpec || parentModel;
 	let effectiveConfig: AgentTypeConfig = modelOverride ? { ...config, model: modelOverride } : config;
 	let resolvedProvider = parentProvider;
 	let resolvedModel: Model<Api> | undefined;
@@ -1039,7 +1061,8 @@ export async function executeSingle(
 	// an additional best-effort 1-token probe before spawn so runtime-unavailable
 	// models are skipped before committing to a child process.
 	if (modelSpec) {
-		const resolved = await resolveModelForSubagentSpawn(modelSpec, parentProvider, registry, parentModel, signal);
+		const parentFallback = configuredModelSpec ? parentModel : undefined;
+		const resolved = await resolveModelForSubagentSpawn(modelSpec, parentProvider, registry, parentFallback, signal);
 		skippedModels = resolved.skippedModels;
 		if (!resolved.ok) {
 			const skippedDetails = formatSkippedModelFailureDetails(skippedModels);
@@ -1060,6 +1083,17 @@ export async function executeSingle(
 			resolvedModel = registry.find(resolvedProvider, resolved.modelId);
 		}
 		warning = resolved.warning;
+	}
+
+	if (thinkingOverride && thinkingOverride !== "off" && !modelSpec) {
+		return {
+			agent: name,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: "",
+			errorMessage: `Cannot validate thinking level "${thinkingOverride}" because agent "${name}" has no configured model and no parent model is available. Set a model on the agent or pass a per-call model override.`,
+		};
 	}
 
 	if (thinkingOverride) {
@@ -2070,6 +2104,13 @@ export function createSubagentToolDefinition(
 							return {
 								agent: agentName,
 								task: taskSummary,
+								steps: results.map((result, index) => ({
+									step: index + 1,
+									agent: result.agent,
+									success: result.exitCode === 0,
+									model: result.model,
+									thinking: result.thinking,
+								})),
 								exitCode: failed.length > 0 ? 1 : 0,
 								output: resultText,
 								stderr: "",

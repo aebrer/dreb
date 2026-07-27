@@ -89,6 +89,7 @@ import {
 	getRunningBackgroundAgents,
 	type SessionTask,
 	type SubagentResult,
+	type SubagentStepMetadata,
 } from "./tools/index.js";
 import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
@@ -149,6 +150,7 @@ export type AgentSessionEvent =
 			success: boolean;
 			model?: string;
 			thinking?: ThinkingLevel;
+			steps?: SubagentStepMetadata[];
 			sessionFile?: string;
 	  }
 	| {
@@ -835,6 +837,7 @@ export class AgentSession {
 				success: result.exitCode === 0,
 				model: result.model,
 				thinking: result.thinking,
+				steps: result.steps,
 				sessionFile: result.sessionFile,
 			});
 		} catch (emitErr) {

@@ -83,7 +83,11 @@ describe("handleChildJsonlLine — event relay", () => {
 	it("keeps existing extraction behavior alongside the relay", () => {
 		const sinks = makeSinks();
 		handleChildJsonlLine(
-			JSON.stringify({ type: "agent_start", model: { id: "claude-x" }, thinkingLevel: "high" }),
+			JSON.stringify({
+				type: "agent_start",
+				model: { provider: "anthropic", id: "claude-x" },
+				thinkingLevel: "high",
+			}),
 			sinks,
 		);
 		handleChildJsonlLine(
@@ -96,10 +100,19 @@ describe("handleChildJsonlLine — event relay", () => {
 		handleChildJsonlLine(JSON.stringify({ type: "tool_execution_start", toolName: "bash" }), sinks);
 		handleChildJsonlLine(JSON.stringify({ type: "tool_execution_end" }), sinks);
 
-		expect(sinks.models).toEqual(["claude-x"]);
+		expect(sinks.models).toEqual(["anthropic/claude-x"]);
 		expect(sinks.thinkings).toEqual(["high"]);
 		expect(sinks.messages).toHaveLength(1);
 		expect(sinks.progress).toEqual(["Using bash...", "bash done"]);
+	});
+
+	it("preserves provider identity for model IDs that contain slashes", () => {
+		const sinks = makeSinks();
+		handleChildJsonlLine(
+			JSON.stringify({ type: "agent_start", model: { provider: "openrouter", id: "org/model" } }),
+			sinks,
+		);
+		expect(sinks.models).toEqual(["openrouter/org/model"]);
 	});
 
 	it("ignores invalid thinking metadata while relaying the event", () => {

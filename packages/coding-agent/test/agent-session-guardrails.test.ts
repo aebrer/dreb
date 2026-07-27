@@ -736,6 +736,48 @@ describe("AgentSession background agent guardrails", () => {
 			promptSpy.mockRestore();
 		});
 
+		it("includes structured chain-step metadata in completion events", () => {
+			const sessionAny = session as any;
+			vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+			const events: any[] = [];
+			session.subscribe((event) => events.push(event));
+			const steps = [
+				{
+					step: 1,
+					agent: "Explore",
+					success: true,
+					model: "anthropic/claude-sonnet",
+					thinking: "low",
+				},
+				{
+					step: 2,
+					agent: "feature-dev",
+					success: true,
+					model: "openai/gpt-5.6-sol",
+					thinking: "high",
+				},
+			];
+
+			sessionAny._handleBackgroundComplete(
+				"bg-chain-metadata",
+				{
+					agent: "Explore",
+					task: "2-step chain",
+					steps,
+					exitCode: 0,
+					output: "done",
+					stderr: "",
+					errorMessage: null,
+				},
+				false,
+			);
+
+			expect(events.find((event) => event.type === "background_agent_end")).toMatchObject({
+				agentId: "bg-chain-metadata",
+				steps,
+			});
+		});
+
 		it("omits session log from completion message when sessionFile is not set", () => {
 			const sessionAny = session as any;
 			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);

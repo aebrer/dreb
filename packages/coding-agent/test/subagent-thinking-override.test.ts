@@ -14,6 +14,7 @@ import {
 	createSubagentToolDefinition,
 	executeSingle,
 	resolveSubagentThinkingOverride,
+	type SubagentResult,
 	subagentToolDefinition,
 } from "../src/core/tools/subagent.js";
 
@@ -58,8 +59,12 @@ const registry = {
 
 let tempCwd: string;
 
-function mockSpawnResult(thinkingLevel: ThinkingLevel = "medium", output = "done"): void {
+function mockSpawnResult(thinkingLevels: ThinkingLevel | ThinkingLevel[] = "medium", output = "done"): void {
+	let spawnIndex = 0;
 	vi.mocked(spawn).mockImplementation((() => {
+		const thinkingLevel = Array.isArray(thinkingLevels)
+			? (thinkingLevels[spawnIndex++] ?? thinkingLevels[thinkingLevels.length - 1])
+			: thinkingLevels;
 		const stdout = new PassThrough();
 		const stderr = new PassThrough();
 		const proc = new EventEmitter() as ReturnType<typeof spawn> & {
@@ -94,7 +99,7 @@ function mockSpawnResult(thinkingLevel: ThinkingLevel = "medium", output = "done
 	}) as typeof spawn);
 }
 
-function testAgents(model: string): Map<string, AgentTypeConfig> {
+function testAgents(model?: string): Map<string, AgentTypeConfig> {
 	return new Map([
 		[
 			"thinking-test",
@@ -157,8 +162,8 @@ describe("thinking precedence", () => {
 });
 
 describe("executeSingle thinking validation and child arguments", () => {
-	test("passes an explicit supported level and captures effective child metadata", async () => {
-		mockSpawnResult("high");
+	test("passes the requested level but reports the child-effective metadata", async () => {
+		mockSpawnResult("low");
 		const result = await executeSingle(
 			testAgents("test-provider/gpt-5.6-test"),
 			"thinking-test",
@@ -178,7 +183,8 @@ describe("executeSingle thinking validation and child arguments", () => {
 		);
 
 		expect(result.exitCode).toBe(0);
-		expect(result.thinking).toBe("high");
+		expect(result.model).toBe("test-provider/gpt-5.6-test");
+		expect(result.thinking).toBe("low");
 		const args = vi.mocked(spawn).mock.calls[0][1];
 		expect(args.filter((arg) => arg === "--thinking")).toHaveLength(1);
 		expect(args).toContain("high");
@@ -200,6 +206,61 @@ describe("executeSingle thinking validation and child arguments", () => {
 
 		expect(result.thinking).toBe("medium");
 		expect(vi.mocked(spawn).mock.calls[0][1]).not.toContain("--thinking");
+	});
+
+	test("resolves an inherited parent model before validating thinking", async () => {
+		mockSpawnResult("high");
+		const result = await executeSingle(
+			testAgents(),
+			"thinking-test",
+			"do work",
+			tempCwd,
+			undefined,
+			undefined,
+			undefined,
+			"test-provider",
+			registry,
+			undefined,
+			reasoningModel.id,
+			undefined,
+			undefined,
+			undefined,
+			"high",
+		);
+
+		expect(result.exitCode).toBe(0);
+		const args = vi.mocked(spawn).mock.calls[0][1];
+		expect(args).toContain("--model");
+		expect(args).toContain(reasoningModel.id);
+		expect(args).toContain("--provider");
+		expect(args).toContain(reasoningModel.provider);
+		expect(args.filter((arg) => arg === "--thinking")).toHaveLength(1);
+		expect(args).toContain("high");
+	});
+
+	test("gives an actionable error when neither agent nor parent has a model", async () => {
+		const result = await executeSingle(
+			testAgents(),
+			"thinking-test",
+			"do work",
+			tempCwd,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			registry,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"high",
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.errorMessage).toContain('agent "thinking-test" has no configured model and no parent model');
+		expect(result.errorMessage).toContain("pass a per-call model override");
+		expect(spawn).not.toHaveBeenCalled();
 	});
 
 	test("rejects non-off thinking for non-reasoning models before spawn", async () => {
@@ -252,12 +313,12 @@ describe("executeSingle thinking validation and child arguments", () => {
 });
 
 describe("parallel and chain inheritance", () => {
-	function createTool(onComplete: (thinking: ThinkingLevel | undefined) => void) {
+	function createTool(onComplete: (result: SubagentResult) => void) {
 		return createSubagentToolDefinition(tempCwd, {
 			parentProvider: () => "test-provider",
 			parentModel: () => reasoningModel.id,
 			modelRegistry: registry,
-			onBackgroundComplete: (_agentId, result) => onComplete(result.thinking),
+			onBackgroundComplete: (_agentId, result) => onComplete(result),
 		});
 	}
 
@@ -268,8 +329,8 @@ describe("parallel and chain inheritance", () => {
 		const done = new Promise<void>((resolve) => {
 			resolveDone = resolve;
 		});
-		const tool = createTool((thinking) => {
-			completions.push(thinking);
+		const tool = createTool((result) => {
+			completions.push(result.thinking);
 			if (completions.length === 2) resolveDone();
 		});
 
@@ -294,13 +355,37 @@ describe("parallel and chain inheritance", () => {
 		expect(completions).toHaveLength(2);
 	});
 
-	test("chain steps use per-step thinking over the top-level value", async () => {
+	test("background completion preserves child-effective thinking over the requested level", async () => {
 		mockSpawnResult("low");
-		let resolveDone!: () => void;
-		const done = new Promise<void>((resolve) => {
+		let resolveDone!: (result: SubagentResult) => void;
+		const done = new Promise<SubagentResult>((resolve) => {
 			resolveDone = resolve;
 		});
-		const tool = createTool(() => resolveDone());
+		const tool = createTool(resolveDone);
+
+		await tool.execute(
+			"background-effective",
+			{ agent: "thinking-test", task: "work", thinking: "high" },
+			undefined,
+			undefined,
+			{} as ExtensionContext,
+		);
+		const result = await done;
+
+		const args = vi.mocked(spawn).mock.calls[0][1];
+		expect(args).toContain("--thinking");
+		expect(args).toContain("high");
+		expect(result.thinking).toBe("low");
+		expect(result.model).toBe("test-provider/gpt-5.6-test");
+	});
+
+	test("chain steps use per-step thinking and preserve structured completion metadata", async () => {
+		mockSpawnResult(["low", "high"]);
+		let resolveDone!: (result: SubagentResult) => void;
+		const done = new Promise<SubagentResult>((resolve) => {
+			resolveDone = resolve;
+		});
+		const tool = createTool(resolveDone);
 
 		await tool.execute(
 			"chain-call",
@@ -313,12 +398,30 @@ describe("parallel and chain inheritance", () => {
 			undefined,
 			{} as ExtensionContext,
 		);
-		await done;
+		const result = await done;
 
 		const thinkingArgs = vi.mocked(spawn).mock.calls.map((call) => {
 			const index = call[1].indexOf("--thinking");
 			return index === -1 ? undefined : call[1][index + 1];
 		});
 		expect(thinkingArgs).toEqual(["low", "high"]);
+		expect(result.model).toBeUndefined();
+		expect(result.thinking).toBeUndefined();
+		expect(result.steps).toEqual([
+			{
+				step: 1,
+				agent: "thinking-test",
+				success: true,
+				model: "test-provider/gpt-5.6-test",
+				thinking: "low",
+			},
+			{
+				step: 2,
+				agent: "thinking-test",
+				success: true,
+				model: "test-provider/gpt-5.6-test",
+				thinking: "high",
+			},
+		]);
 	});
 });

@@ -1601,7 +1601,7 @@ Response:
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
 | `background_agent_start` | Background subagent launched (includes `sessionDir`) |
-| `background_agent_end` | Background subagent finished (model/thinking and `sessionFile` when known) |
+| `background_agent_end` | Background subagent finished (canonical model/thinking, per-step chain metadata, and `sessionFile` when known) |
 | `background_agent_event` | Relayed event from a background subagent's own stream |
 | `parent_paused_for_background_agents` | Parent paused waiting on background agents |
 | `session_name_changed` | Session display name changed (manual rename, extension rename, or auto-title) |
@@ -1822,7 +1822,7 @@ Lifecycle and live-observability events for background subagents (the `subagent`
 }
 ```
 
-`background_agent_end` fires after the result is delivered to the parent agent. It includes the resolved model and effective thinking level when the child reported them; `sessionFile` is the child's session JSONL path when one was written:
+`background_agent_end` fires after the result is delivered to the parent agent. For a single child it includes the canonical resolved `provider/model` and effective thinking level when reported; `sessionFile` is the child's session JSONL path when one was written:
 
 ```json
 {
@@ -1830,9 +1830,24 @@ Lifecycle and live-observability events for background subagents (the `subagent`
   "agentId": "a1b2c3d4e5f6",
   "agentType": "Explore",
   "success": true,
-  "model": "claude-sonnet-4-20250514",
+  "model": "anthropic/claude-sonnet-4-20250514",
   "thinking": "medium",
   "sessionFile": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6/2026-07-07T12-00-00-000Z_uuid.jsonl"
+}
+```
+
+Chain completions omit ambiguous scalar model/thinking fields and instead include ordered per-step metadata, since steps may use different agents, providers, models, or thinking levels:
+
+```json
+{
+  "type": "background_agent_end",
+  "agentId": "a1b2c3d4e5f6",
+  "agentType": "Explore",
+  "success": true,
+  "steps": [
+    {"step": 1, "agent": "Explore", "success": true, "model": "anthropic/claude-sonnet-4-6", "thinking": "low"},
+    {"step": 2, "agent": "feature-dev", "success": true, "model": "openai/gpt-5.6-sol", "thinking": "high"}
+  ]
 }
 ```
 
