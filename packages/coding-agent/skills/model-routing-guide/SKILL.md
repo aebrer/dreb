@@ -1,6 +1,6 @@
 ---
 name: model-routing-guide
-description: Research the explicitly scoped models and generate a local evidence-based guide for choosing subagent roles, models, and thinking levels. This is a user-triggered, potentially expensive research workflow.
+description: Research model patterns passed as skill arguments, or enabledModels when no arguments are supplied, and generate an evidence-based subagent routing guide. This is a user-triggered, potentially expensive workflow.
 argument-hint: "[comma-separated model patterns]"
 disable-model-invocation: true
 user-invocable: true
@@ -12,28 +12,37 @@ user-invocable: true
 
 Generate or replace `~/.dreb/agent/model-routing-guide.md`. This is a deep research workflow, not a quick opinion. Use normal dreb tools (`read`, `bash`, `find`, `grep`, `web_search`, `web_fetch`, and the Reddit reader when applicable); no special runtime support is required.
 
+The candidate scope has exactly two supported sources: non-empty skill arguments, or the effective non-empty `enabledModels` setting when no arguments were supplied. Once one source is selected, it is authoritative. Do not search for a separate runtime, session, or "scoped models" value.
+
 ## Non-negotiable routing goals
 
 The guide must help a later dispatcher make two especially important corrections:
 
 1. **Agent-role fit:** `Explore` is for factual collection, codebase navigation, file discovery, web research, and answering bounded questions. Planning, architecture ownership, implementation, editing, and feature development are not Explore work. Explicitly call out examples such as a planning workflow delegating its plan to Explore, or a feature-development task being sent to Explore.
-2. **Capability/cost fit:** routine fact checks, repetitive inspection of many mundane files, lookup, extraction, and straightforward summarization should use the least expensive/lowest-latency scoped model that the evidence shows is adequate. Reserve frontier or strongest-tier models for tasks whose complexity, ambiguity, risk, or demonstrated failure rate justifies them.
+2. **Capability/cost fit:** routine fact checks, repetitive inspection of many mundane files, lookup, extraction, and straightforward summarization should use the least expensive/lowest-latency selected candidate that the evidence shows is adequate. Reserve frontier or strongest-tier models for tasks whose complexity, ambiguity, risk, or demonstrated failure rate justifies them.
 
-Do not turn the guide into a generalized policy engine. Research the user's actual scoped provider/model combinations and give practical recommendations for the existing dreb agent roles.
+Do not turn the guide into a generalized policy engine. Research the selected canonical provider/model candidates and give practical recommendations for the existing dreb agent roles.
 
-## Step 1: Establish the exact explicit scope
+## Step 1: Select the one authoritative scope source
 
-1. If the text after `Explicit model patterns, when supplied:` is non-empty, treat it as the authoritative comma-separated model-pattern scope. This supports passing the same patterns used with `--models`.
-2. Otherwise read `enabledModels` from the normal readable settings files:
-   - global: `~/.dreb/agent/settings.json`
-   - project: `.dreb/settings.json` in the current working directory, when present (project settings override the global value)
-3. Do not infer a scope from the current model, agent-definition defaults, all authenticated models, or `agentModels.models`.
-4. If there is no non-empty explicit pattern list, **stop with an actionable error before researching or writing a guide**.
-5. List the available models with the installed dreb CLI and resolve every pattern to canonical `provider/model` IDs using dreb's normal case-insensitive exact/glob matching semantics. Preserve provider identity: the same upstream model through two providers is two candidates.
-6. Fail loudly if any supplied pattern resolves to no candidate or if the model listing cannot be obtained.
-7. Compare the resolved candidate set with the complete available-model set. If they are equal, or the explicit patterns otherwise amount to unbounded all-model research (for example a bare `*`), **refuse and ask the user for a narrower scope**.
+There are exactly two supported scope sources. Apply these rules in order, choose one source, and then stop looking for scope:
 
-Keep the canonical candidate list. It is the coverage checklist for every later step.
+1. Read the text after `Explicit model patterns, when supplied:`.
+   - If it is non-empty after trimming, split it as a comma-separated model-pattern list.
+   - That argument list is the complete authoritative scope. Do not read `enabledModels` and do not search session state for another scope.
+2. Only when the skill arguments are empty, read the effective `enabledModels` value from the normal settings files:
+   - Start with `enabledModels` from `~/.dreb/agent/settings.json`, when present.
+   - If `.dreb/settings.json` in the current working directory explicitly defines `enabledModels`, that project array replaces the global array; if it does not define the key, retain the global array.
+   - A non-empty effective `enabledModels` array is the complete authoritative scope. Stop looking for scope as soon as it is found.
+3. This skill-only workflow does **not** receive the current session's runtime `--models` value or later in-session scope changes. Never try to discover them from session logs, process state, the current model, or another file. If the user wants the runtime `--models` scope, they must pass the same comma-separated patterns as skill arguments.
+4. Do not infer scope from the current model, agent-definition defaults, all authenticated models, `agentModels.models`, or subagent session history.
+5. If neither source provides a non-empty pattern list, **stop with an actionable error before researching or writing a guide**. Tell the user to pass skill arguments or configure `enabledModels`.
+6. Run `dreb --list-models` to obtain the complete available-model listing. If the command fails or returns no usable listing, stop loudly.
+7. Resolve every selected pattern against that listing using the same normal model-pattern semantics as `--models`, including case-insensitive canonical/exact matching, fuzzy single-model matching, and globs. Preserve provider identity: the same upstream model through two providers is two candidates.
+8. Fail loudly and name every selected pattern that resolves to no available candidate.
+9. Compare the resolved candidate set with the complete `dreb --list-models` set. If they are equal, or the selected patterns otherwise amount to unbounded all-model research (for example a bare `*`), **refuse and ask the user for a narrower scope**.
+
+Keep the canonical candidate list. It is the coverage checklist for every later step. From this point onward, "selected candidates" means only that list; it never means an undiscovered runtime/session scope.
 
 ## Step 2: Snapshot and validate local subagent evidence
 

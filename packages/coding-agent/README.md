@@ -462,7 +462,7 @@ Place in `~/.dreb/agent/skills/`, `~/.agents/skills/`, `.dreb/skills/`, or `.age
 
 dreb ships with **mach6** — a built-in development workflow (issue → plan → push → review → fix → publish) that uses GitHub as shared memory and multi-agent code review. See [docs/mach6.md](docs/mach6.md).
 
-It also ships with the explicitly invoked **`model-routing-guide`** skill. Run `/skill:model-routing-guide` after setting `enabledModels`, or pass a comma-separated scope as arguments. It researches canonical provider/model candidates, external evidence, and sanitized aggregate subagent history, then validates and writes `~/.dreb/agent/model-routing-guide.md`. See [docs/skills.md](docs/skills.md#model-routing-guide).
+It also ships with the explicitly invoked **`model-routing-guide`** skill. Pass comma-separated model patterns as arguments, or run it without arguments to use the effective non-empty `enabledModels` array. Those are its only scope sources: it cannot discover a session's runtime `--models` value, so pass those same patterns explicitly when that is the intended scope. It researches canonical provider/model candidates, external evidence, and sanitized aggregate subagent history, then validates and writes `~/.dreb/agent/model-routing-guide.md`. See [docs/skills.md](docs/skills.md#model-routing-guide).
 
 ### Extensions
 

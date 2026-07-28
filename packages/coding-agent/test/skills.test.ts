@@ -473,6 +473,7 @@ describe("skills", () => {
 			const guide = getBuiltInSkill("model-routing-guide");
 			expect(guide.disableModelInvocation).toBe(true);
 			expect(guide.userInvocable).toBe(true);
+			expect(guide.description).toContain("skill arguments, or enabledModels when no arguments are supplied");
 
 			const body = readBuiltInSkill("model-routing-guide");
 			expect(body).toContain("no special runtime support is required");
@@ -488,7 +489,7 @@ describe("skills", () => {
 			expect(body).toContain(
 				"Planning, architecture ownership, implementation, editing, and feature development are not Explore work",
 			);
-			expect(body).toContain("least expensive/lowest-latency scoped model");
+			expect(body).toContain("least expensive/lowest-latency selected candidate");
 			expect(body).toContain("Vendor claim");
 			expect(body).toContain("Measured benchmark");
 			expect(body).toContain("Community report");
@@ -498,6 +499,19 @@ describe("skills", () => {
 			expect(body).toContain("must never reproduce or closely paraphrase");
 			expect(body).toContain("schema_version: 1");
 			expect(body).toContain("They must be identical with no duplicates, missing entries, or extras");
+		});
+
+		it("model-routing-guide should select one factual scope source without searching session state", () => {
+			const body = readBuiltInSkill("model-routing-guide");
+			expect(body).toContain("exactly two supported scope sources");
+			expect(body).toContain("choose one source, and then stop looking for scope");
+			expect(body).toContain("That argument list is the complete authoritative scope");
+			expect(body).toContain("A non-empty effective `enabledModels` array is the complete authoritative scope");
+			expect(body).toContain("does **not** receive the current session's runtime `--models` value");
+			expect(body).toContain("they must pass the same comma-separated patterns as skill arguments");
+			expect(body).toContain("Run `dreb --list-models`");
+			expect(body).toContain("it never means an undiscovered runtime/session scope");
+			expect(body).not.toContain("user's actual scoped provider/model combinations");
 		});
 
 		it("mach6-review should remain user-controlled while supporting direct agent invocation", () => {

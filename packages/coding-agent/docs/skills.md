@@ -293,19 +293,23 @@ See [docs/mach6.md](mach6.md) for full documentation.
 
 ### model-routing-guide
 
-`model-routing-guide` is an explicit, potentially expensive research workflow for the model set you have deliberately scoped. Invoke it after configuring `enabledModels`:
+`model-routing-guide` is an explicit, potentially expensive research workflow with exactly two supported scope sources.
 
-```text
-/skill:model-routing-guide
-```
-
-Or pass the same comma-separated model patterns you would use with `--models`:
+Pass comma-separated model patterns directly to make them authoritative:
 
 ```text
 /skill:model-routing-guide anthropic/claude-*,openai/gpt-5.6-sol
 ```
 
-The skill refuses missing/empty and effectively all-model scopes. It resolves canonical provider/model candidates, snapshots existing files under `~/.dreb/agent/subagent-sessions/`, and combines sanitized aggregate local observations with official documentation, model cards, benchmarks, issue trackers, forums, and practitioner reports. Existing unreadable or malformed child logs fail the run; a genuinely empty history is labeled cold-start.
+Or invoke it without arguments to use the effective non-empty `enabledModels` array:
+
+```text
+/skill:model-routing-guide
+```
+
+Arguments take precedence over `enabledModels`; the skill selects one source and does not search for any other runtime or session scope. Because this Stage 1 workflow is implemented only as a skill, it cannot discover the current session's `--models` value or later in-session scope changes. To research that runtime scope, pass the same comma-separated patterns as skill arguments.
+
+The skill refuses missing/empty and effectively all-model scopes. It obtains available candidates with `dreb --list-models`, resolves the selected patterns to canonical provider/model IDs, snapshots existing files under `~/.dreb/agent/subagent-sessions/`, and combines sanitized aggregate local observations with official documentation, model cards, benchmarks, issue trackers, forums, and practitioner reports. Existing unreadable or malformed child logs fail the run; a genuinely empty history is labeled cold-start.
 
 The generated `~/.dreb/agent/model-routing-guide.md` is human-readable Markdown with schema-versioned YAML frontmatter and one validated section per canonical candidate. Evidence is labeled as vendor claims, measured benchmarks, community reports, or local observations, with dates, confidence, sample counts, contrary findings, and explicit unknowns. The workflow prohibits copied prompts, outputs, tool arguments, secrets, paths, and identifying project details.
 

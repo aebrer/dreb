@@ -44,7 +44,9 @@ Supported values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Val
 
 ## Evidence-based Routing Guide
 
-The built-in `/skill:model-routing-guide` workflow researches an explicitly scoped candidate set from `enabledModels` or skill arguments. It combines canonical provider/model documentation and public evidence with sanitized aggregate observations from local subagent session logs, then writes and validates `~/.dreb/agent/model-routing-guide.md`.
+The built-in `/skill:model-routing-guide` workflow has exactly two scope sources: non-empty comma-separated skill arguments, or the effective non-empty `enabledModels` array when invoked without arguments. Once it selects either source, it treats that list as authoritative and does not search for another session scope.
+
+Because Stage 1 is a skill-only workflow, it cannot discover a session's runtime `--models` value or later in-session scope changes. Pass the same patterns as skill arguments when that runtime scope is the intended research set. The workflow resolves candidates against `dreb --list-models`, combines canonical provider/model documentation and public evidence with sanitized aggregate observations from local subagent session logs, then writes and validates `~/.dreb/agent/model-routing-guide.md`.
 
 The guide is intended to improve role and cost fit, especially keeping planning/implementation work out of `Explore` and reserving expensive frontier models for work that actually needs them. It does not change the model resolution order above. See [skills.md](skills.md#model-routing-guide).
 
