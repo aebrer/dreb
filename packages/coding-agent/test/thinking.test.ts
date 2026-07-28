@@ -47,6 +47,15 @@ describe("resolveEffectiveThinkingLevel", () => {
 	test("non-reasoning model clamps to off", () => {
 		expect(resolveEffectiveThinkingLevel(nonReasoningModel, "high")).toBe("off");
 	});
+
+	test("unsupported xhigh clamps to high for normal session defaults", () => {
+		expect(resolveEffectiveThinkingLevel(reasoningModel, "xhigh")).toBe("high");
+	});
+
+	test("xhigh-capable models preserve xhigh for normal session defaults", () => {
+		const xhighModel = { ...reasoningModel, id: "gpt-5.6-test" } as Model<any>;
+		expect(resolveEffectiveThinkingLevel(xhighModel, "xhigh")).toBe("xhigh");
+	});
 });
 
 describe("thinkingLevelToReasoning", () => {

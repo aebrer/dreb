@@ -711,13 +711,13 @@ describe("spawn-time model availability probing", () => {
 				systemPrompt: "Reply with the single word OK.",
 				messages: [expect.objectContaining({ role: "user", content: "hi" })],
 			}),
-			expect.objectContaining({ apiKey: "test-key", maxRetryDelayMs: 0, reasoning: "xhigh" }),
+			expect.objectContaining({ apiKey: "test-key", maxRetryDelayMs: 0, reasoning: "high" }),
 		);
 		// Must NOT pass maxTokens — normal model defaults are used, which avoids
 		// tripping reasoning model minimums (e.g. OpenAI o-series with maxTokens:1).
 		const callOptions = vi.mocked(completeSimple).mock.calls[0][2];
 		expect(callOptions).not.toHaveProperty("maxTokens");
-		expect(callOptions).toHaveProperty("reasoning", "xhigh");
+		expect(callOptions).toHaveProperty("reasoning", "high");
 	});
 
 	test("probeModelAvailability reports thrown errors", async () => {

@@ -478,8 +478,12 @@ describe("skills", () => {
 			expect(body).toContain("no special runtime support is required");
 			expect(body).toContain("stop with an actionable error before researching or writing a guide");
 			expect(body).toContain("unbounded all-model research");
+			expect(body).toContain("directory does not exist or contains no session JSONL files");
 			expect(body).toContain("cold-start mode");
 			expect(body).toContain("every snapshotted file is required evidence");
+			expect(body).toContain("every non-empty JSONL line parses");
+			expect(body).toContain("stop loudly and identify the affected file");
+			expect(body).toContain("do not silently skip it and do not call the run cold-start");
 			expect(body).toContain("Agent-role fit");
 			expect(body).toContain(
 				"Planning, architecture ownership, implementation, editing, and feature development are not Explore work",

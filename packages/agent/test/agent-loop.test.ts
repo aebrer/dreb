@@ -51,6 +51,15 @@ function createModel(): Model<"openai-responses"> {
 	};
 }
 
+function createReasoningModel(): Model<"openai-responses"> {
+	return {
+		...createModel(),
+		id: "ordinary-reasoning-model",
+		name: "ordinary reasoning model",
+		reasoning: true,
+	};
+}
+
 function createAssistantMessage(
 	content: AssistantMessage["content"],
 	stopReason: AssistantMessage["stopReason"] = "stop",
@@ -93,7 +102,7 @@ describe("agentLoop with AgentMessage", () => {
 		const userPrompt: AgentMessage = createUserMessage("Hello");
 
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: createReasoningModel(),
 			reasoning: "high",
 			convertToLlm: identityConverter,
 		};
@@ -126,7 +135,7 @@ describe("agentLoop with AgentMessage", () => {
 		expect(eventTypes).toContain("agent_start");
 		expect(events.find((event) => event.type === "agent_start")).toEqual({
 			type: "agent_start",
-			model: { provider: "openai", id: "mock" },
+			model: { provider: "openai", id: "ordinary-reasoning-model" },
 			thinkingLevel: "high",
 		});
 		expect(eventTypes).toContain("turn_start");
@@ -167,6 +176,76 @@ describe("agentLoop with AgentMessage", () => {
 			type: "agent_start",
 			model: { provider: "openai", id: "mock" },
 			thinkingLevel: "off",
+		});
+	});
+
+	it("reports off when a non-reasoning model receives a reasoning level", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			reasoning: "high",
+			convertToLlm: identityConverter,
+		};
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "Hi" }]),
+				});
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+		await stream.result();
+
+		expect(events.find((event) => event.type === "agent_start")).toEqual({
+			type: "agent_start",
+			model: { provider: "openai", id: "mock" },
+			thinkingLevel: "off",
+		});
+	});
+
+	it("reports high when a normal loop clamps unsupported xhigh", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createReasoningModel(),
+			reasoning: "xhigh",
+			convertToLlm: identityConverter,
+		};
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "Hi" }]),
+				});
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Hello")], context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+		await stream.result();
+
+		expect(events.find((event) => event.type === "agent_start")).toEqual({
+			type: "agent_start",
+			model: { provider: "openai", id: "ordinary-reasoning-model" },
+			thinkingLevel: "high",
 		});
 	});
 
@@ -671,7 +750,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 		};
 
 		const config: AgentLoopConfig = {
-			model: createModel(),
+			model: createReasoningModel(),
 			reasoning: "low",
 			convertToLlm: identityConverter,
 		};
@@ -700,7 +779,7 @@ describe("agentLoopContinue with AgentMessage", () => {
 
 		expect(events.find((event) => event.type === "agent_start")).toEqual({
 			type: "agent_start",
-			model: { provider: "openai", id: "mock" },
+			model: { provider: "openai", id: "ordinary-reasoning-model" },
 			thinkingLevel: "low",
 		});
 
@@ -708,6 +787,41 @@ describe("agentLoopContinue with AgentMessage", () => {
 		const messageEndEvents = events.filter((e) => e.type === "message_end");
 		expect(messageEndEvents.length).toBe(1);
 		expect((messageEndEvents[0] as any).message.role).toBe("assistant");
+	});
+
+	it("reports high when a continuation loop clamps unsupported xhigh", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [createUserMessage("Hello")],
+			tools: [],
+		};
+		const config: AgentLoopConfig = {
+			model: createReasoningModel(),
+			reasoning: "xhigh",
+			convertToLlm: identityConverter,
+		};
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "stop",
+					message: createAssistantMessage([{ type: "text", text: "Response" }]),
+				});
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoopContinue(context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+		await stream.result();
+
+		expect(events.find((event) => event.type === "agent_start")).toEqual({
+			type: "agent_start",
+			model: { provider: "openai", id: "ordinary-reasoning-model" },
+			thinkingLevel: "high",
+		});
 	});
 
 	it("should allow custom message types as last message (caller responsibility)", async () => {

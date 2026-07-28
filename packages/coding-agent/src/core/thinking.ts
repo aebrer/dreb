@@ -12,7 +12,8 @@ export function resolveEffectiveThinkingLevel(
 	defaultThinkingLevel: AgentThinkingLevel = DEFAULT_THINKING_LEVEL,
 ): AgentThinkingLevel {
 	const effectiveThinkingLevel = thinkingLevel ?? defaultThinkingLevel;
-	return model?.reasoning ? effectiveThinkingLevel : "off";
+	if (!model?.reasoning) return "off";
+	return effectiveThinkingLevel === "xhigh" && !supportsXhigh(model) ? "high" : effectiveThinkingLevel;
 }
 
 /** Convert an effective thinking level into the reasoning option passed to streamSimple. */

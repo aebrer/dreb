@@ -4,11 +4,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import type { ThinkingLevel } from "@dreb/agent-core";
+import { Agent, type ThinkingLevel } from "@dreb/agent-core";
 import type { Model } from "@dreb/ai";
 import { Value } from "@sinclair/typebox/value";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { AgentSession } from "../src/core/agent-session.js";
+import { AuthStorage } from "../src/core/auth-storage.js";
 import type { ExtensionContext } from "../src/core/extensions/types.js";
+import { ModelRegistry } from "../src/core/model-registry.js";
+import { SessionManager } from "../src/core/session-manager.js";
+import { SettingsManager } from "../src/core/settings-manager.js";
 import {
 	type AgentTypeConfig,
 	createSubagentToolDefinition,
@@ -17,6 +22,7 @@ import {
 	type SubagentResult,
 	subagentToolDefinition,
 } from "../src/core/tools/subagent.js";
+import { createTestResourceLoader } from "./utilities.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:child_process")>();
@@ -59,12 +65,20 @@ const registry = {
 
 let tempCwd: string;
 
-function mockSpawnResult(thinkingLevels: ThinkingLevel | ThinkingLevel[] = "medium", output = "done"): void {
+function mockSpawnResult(
+	thinkingLevels: ThinkingLevel | ThinkingLevel[] = "medium",
+	output = "done",
+	reportedModels: Model<any> | Model<any>[] = reasoningModel,
+): void {
 	let spawnIndex = 0;
 	vi.mocked(spawn).mockImplementation((() => {
+		const currentIndex = spawnIndex++;
 		const thinkingLevel = Array.isArray(thinkingLevels)
-			? (thinkingLevels[spawnIndex++] ?? thinkingLevels[thinkingLevels.length - 1])
+			? (thinkingLevels[currentIndex] ?? thinkingLevels[thinkingLevels.length - 1])
 			: thinkingLevels;
+		const reportedModel = Array.isArray(reportedModels)
+			? (reportedModels[currentIndex] ?? reportedModels[reportedModels.length - 1])
+			: reportedModels;
 		const stdout = new PassThrough();
 		const stderr = new PassThrough();
 		const proc = new EventEmitter() as ReturnType<typeof spawn> & {
@@ -81,7 +95,7 @@ function mockSpawnResult(thinkingLevels: ThinkingLevel | ThinkingLevel[] = "medi
 			stdout.write(
 				`${JSON.stringify({
 					type: "agent_start",
-					model: { provider: reasoningModel.provider, id: reasoningModel.id },
+					model: { provider: reportedModel.provider, id: reportedModel.id },
 					thinkingLevel,
 				})}\n`,
 			);
@@ -111,6 +125,33 @@ function testAgents(model?: string): Map<string, AgentTypeConfig> {
 			},
 		],
 	]);
+}
+
+function createParentCompletionHarness() {
+	const parentAgent = new Agent({
+		getApiKey: () => "test-key",
+		initialState: {
+			model: reasoningModel,
+			systemPrompt: "Parent test prompt",
+			tools: [],
+		},
+	});
+	const sessionManager = SessionManager.inMemory();
+	const settingsManager = SettingsManager.create(tempCwd, tempCwd);
+	const authStorage = AuthStorage.create(join(tempCwd, "parent-auth.json"));
+	const modelRegistry = new ModelRegistry(authStorage, tempCwd);
+	const session = new AgentSession({
+		agent: parentAgent,
+		sessionManager,
+		settingsManager,
+		cwd: tempCwd,
+		modelRegistry,
+		resourceLoader: createTestResourceLoader(),
+	});
+	const promptSpy = vi.spyOn(parentAgent, "prompt").mockResolvedValue(undefined as never);
+	const events: any[] = [];
+	session.subscribe((event) => events.push(event));
+	return { session, promptSpy, events };
 }
 
 beforeEach(() => {
@@ -162,6 +203,43 @@ describe("thinking precedence", () => {
 });
 
 describe("executeSingle thinking validation and child arguments", () => {
+	test.each([
+		["off", nonReasoningModel],
+		["minimal", reasoningModel],
+		["low", reasoningModel],
+		["medium", reasoningModel],
+		["high", reasoningModel],
+		["xhigh", reasoningModel],
+	] satisfies Array<[ThinkingLevel, Model<any>]>)(
+		"passes explicit %s as exactly one child argument pair",
+		async (thinking, model) => {
+			mockSpawnResult(thinking);
+			const result = await executeSingle(
+				testAgents(`${model.provider}/${model.id}`),
+				"thinking-test",
+				"do work",
+				tempCwd,
+				undefined,
+				undefined,
+				undefined,
+				model.provider,
+				registry,
+				undefined,
+				model.id,
+				undefined,
+				undefined,
+				undefined,
+				thinking,
+			);
+
+			expect(result.exitCode).toBe(0);
+			const args = vi.mocked(spawn).mock.calls[0][1];
+			const thinkingIndexes = args.flatMap((arg, index) => (arg === "--thinking" ? [index] : []));
+			expect(thinkingIndexes).toHaveLength(1);
+			expect(args.slice(thinkingIndexes[0], thinkingIndexes[0] + 2)).toEqual(["--thinking", thinking]);
+		},
+	);
+
 	test("passes the requested level but reports the child-effective metadata", async () => {
 		mockSpawnResult("low");
 		const result = await executeSingle(
@@ -377,6 +455,108 @@ describe("parallel and chain inheritance", () => {
 		expect(args).toContain("high");
 		expect(result.thinking).toBe("low");
 		expect(result.model).toBe("test-provider/gpt-5.6-test");
+	});
+
+	test("delivers child-effective metadata through the parent completion path", async () => {
+		mockSpawnResult("low");
+		const { session, promptSpy, events } = createParentCompletionHarness();
+		let resolveDone!: (result: SubagentResult) => void;
+		const done = new Promise<SubagentResult>((resolve) => {
+			resolveDone = resolve;
+		});
+		const tool = createSubagentToolDefinition(tempCwd, {
+			parentProvider: () => "test-provider",
+			parentModel: () => reasoningModel.id,
+			modelRegistry: registry,
+			onBackgroundComplete: (agentId, result, cancelled) => {
+				session._handleBackgroundComplete(agentId, result, cancelled);
+				resolveDone(result);
+			},
+		});
+
+		try {
+			await tool.execute(
+				"parent-completion-effective",
+				{ agent: "thinking-test", task: "work", thinking: "high" },
+				undefined,
+				undefined,
+				{} as ExtensionContext,
+			);
+			await done;
+
+			const promptMessage = promptSpy.mock.calls[0][0] as any;
+			expect(promptMessage.content[0].text).toContain(
+				"Execution metadata: model: test-provider/gpt-5.6-test, thinking: low",
+			);
+			expect(events.find((event) => event.type === "background_agent_end")).toMatchObject({
+				model: "test-provider/gpt-5.6-test",
+				thinking: "low",
+			});
+		} finally {
+			session.dispose();
+		}
+	});
+
+	test("delivers heterogeneous child-effective chain metadata through the parent completion path", async () => {
+		mockSpawnResult(["minimal", "low"], "done", [reasoningModel, nonXhighModel]);
+		const { session, promptSpy, events } = createParentCompletionHarness();
+		let resolveDone!: (result: SubagentResult) => void;
+		const done = new Promise<SubagentResult>((resolve) => {
+			resolveDone = resolve;
+		});
+		const tool = createSubagentToolDefinition(tempCwd, {
+			parentProvider: () => "test-provider",
+			parentModel: () => reasoningModel.id,
+			modelRegistry: registry,
+			onBackgroundComplete: (agentId, result, cancelled) => {
+				session._handleBackgroundComplete(agentId, result, cancelled);
+				resolveDone(result);
+			},
+		});
+
+		try {
+			await tool.execute(
+				"parent-chain-effective",
+				{
+					agent: "thinking-test",
+					thinking: "high",
+					chain: [
+						{ task: "first" },
+						{
+							task: "second {previous}",
+							model: `${nonXhighModel.provider}/${nonXhighModel.id}`,
+							thinking: "medium",
+						},
+					],
+				},
+				undefined,
+				undefined,
+				{} as ExtensionContext,
+			);
+			await done;
+
+			const promptMessage = promptSpy.mock.calls[0][0] as any;
+			expect(promptMessage.content[0].text).toContain("model: test-provider/gpt-5.6-test, thinking: minimal");
+			expect(promptMessage.content[0].text).toContain(
+				"model: test-provider/ordinary-reasoning-model, thinking: low",
+			);
+			expect(events.find((event) => event.type === "background_agent_end")).toMatchObject({
+				steps: [
+					{
+						step: 1,
+						model: "test-provider/gpt-5.6-test",
+						thinking: "minimal",
+					},
+					{
+						step: 2,
+						model: "test-provider/ordinary-reasoning-model",
+						thinking: "low",
+					},
+				],
+			});
+		} finally {
+			session.dispose();
+		}
 	});
 
 	test("chain steps use per-step thinking and preserve structured completion metadata", async () => {
