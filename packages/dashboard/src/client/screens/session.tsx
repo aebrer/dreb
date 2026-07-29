@@ -212,10 +212,43 @@ function AskUiInline(props: {
 	const submit = () => {
 		if (canSubmit()) respond(answer());
 	};
+	const skip = () => respond({ cancelled: true });
+
+	// Escape-to-skip, matching the TUI. A skip is always safe.
+	const onKeyDown = (event: KeyboardEvent) => {
+		if (event.key === "Escape") {
+			event.preventDefault();
+			skip();
+		}
+	};
+	onMount(() => window.addEventListener("keydown", onKeyDown));
+	onCleanup(() => window.removeEventListener("keydown", onKeyDown));
+
+	// Optional visible countdown. The host also auto-resolves on timeout; this
+	// mirrors the TUI countdown and auto-skips as a client-side backstop.
+	const [remaining, setRemaining] = createSignal(props.request.timeout ? Math.ceil(props.request.timeout / 1000) : 0);
+	if (props.request.timeout && props.request.timeout > 0) {
+		const interval = setInterval(() => {
+			setRemaining((current) => {
+				const next = current - 1;
+				if (next <= 0) {
+					clearInterval(interval);
+					skip();
+				}
+				return next;
+			});
+		}, 1000);
+		onCleanup(() => clearInterval(interval));
+	}
 
 	return (
 		<section class="ask-inline" aria-label={props.request.title}>
-			<header class="ask-inline-header">{props.request.title}</header>
+			<header class="ask-inline-header">
+				{props.request.title}
+				<Show when={props.request.timeout && props.request.timeout > 0}>
+					<span class="ask-inline-countdown"> (auto-skips in {remaining()}s)</span>
+				</Show>
+			</header>
 			<Show when={props.request.question}>
 				<p class="ask-inline-question">{props.request.question}</p>
 			</Show>
@@ -264,7 +297,7 @@ function AskUiInline(props: {
 				</div>
 			</Show>
 			<div class="ask-inline-actions">
-				<button type="button" class="btn btn-small" onClick={() => respond({ cancelled: true })}>
+				<button type="button" class="btn btn-small" onClick={skip}>
 					skip
 				</button>
 				<button type="button" class="btn btn-small btn-primary" disabled={!canSubmit()} onClick={submit}>

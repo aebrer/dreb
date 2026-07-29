@@ -529,6 +529,18 @@ describe("RuntimePool", () => {
 		expect(handle.attention.size).toBe(0);
 	});
 
+	it("tracks needs-attention from an ask_user request and clears when handled", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+		// The `ask` method must be in the needs-attention allowlist just like the
+		// other blocking dialog methods, so fleet snapshots surface an open
+		// ask_user question.
+		clients[0].emit({ type: "extension_ui_request", id: "ask-1", method: "ask" });
+		expect(handle.attention.get("ui:ask-1")).toBe("extension ask awaiting response");
+		clients[0].emit({ type: "extension_ui_response_handled", id: "ask-1" });
+		expect(handle.attention.size).toBe(0);
+	});
+
 	it("tracks needs-attention from parent_paused and clears on agent_end", async () => {
 		const { pool, clients } = makePool();
 		const handle = await pool.create("/tmp");

@@ -1173,6 +1173,135 @@ describe("screen smoke tests", () => {
 		expect(resolveUiRequest).toHaveBeenCalledWith("k-ask-retry", "a-retry");
 	});
 
+	it("retains a selected + typed answer across a failed send and resends it on retry", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-state");
+		session.uiRequests = [
+			{
+				id: "a-state",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				allowFreeText: true,
+			},
+		];
+		const resolveUiRequest = vi.fn();
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-state": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+			resolveUiRequest,
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		vi.mocked(api.extensionUiResponse).mockRejectedValueOnce(new Error("offline"));
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-state" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Choose an option and type free text, then fail the send.
+		const radio = el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]');
+		if (!radio) throw new Error("radio missing");
+		radio.click();
+		const custom = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		if (!custom) throw new Error("free-text field missing");
+		custom.value = "extra";
+		custom.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const submitButton = () => [...el.querySelectorAll("button")].find((b) => b.textContent === "submit");
+		submitButton()?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Failure keeps the question and preserves the entered answer state.
+		expect(resolveUiRequest).not.toHaveBeenCalled();
+		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]')?.checked).toBe(true);
+		expect(el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]')?.value).toBe("extra");
+
+		// Retry succeeds and sends the same retained answer, not a stateless skip.
+		vi.mocked(api.extensionUiResponse).mockResolvedValueOnce({ ok: true });
+		submitButton()?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenLastCalledWith(
+			"k-ask-state",
+			expect.objectContaining({ id: "a-state", selected: ["A"], customText: "extra" }),
+		);
+		expect(resolveUiRequest).toHaveBeenCalledWith("k-ask-state", "a-state");
+	});
+
+	it("suppresses duplicate sends while a response POST is still in flight", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-dedup");
+		session.uiRequests = [{ id: "a-dedup", method: "ask", title: "Pick", question: "Which?", options: ["A", "B"] }];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-dedup": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		let release!: () => void;
+		vi.mocked(api.extensionUiResponse).mockReturnValueOnce(
+			new Promise((resolve) => {
+				release = () => resolve({ ok: true });
+			}),
+		);
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-dedup" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const radio = el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]');
+		if (!radio) throw new Error("radio missing");
+		radio.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const submitButton = () => [...el.querySelectorAll("button")].find((b) => b.textContent === "submit");
+		// Three rapid clicks while the first POST is still pending.
+		submitButton()?.click();
+		submitButton()?.click();
+		submitButton()?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		release();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+
+	it("skips an ask request when Escape is pressed and shows a timeout countdown", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-esc");
+		session.uiRequests = [
+			{
+				id: "a-esc",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				timeout: 30_000,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-esc": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-esc" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// A visible auto-skip countdown mirrors the TUI.
+		expect(el.textContent).toContain("auto-skips in");
+
+		// Escape skips, matching the TUI keyboard model.
+		window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-esc",
+			expect.objectContaining({ type: "extension_ui_response", id: "a-esc", cancelled: true }),
+		);
+	});
+
 	it("ask_user tool card stays collapsed while running (unlike other running tools)", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-collapse");

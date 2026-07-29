@@ -2230,6 +2230,11 @@ details.thinking .thinking-body {
 	color: var(--text);
 }
 
+.ask-inline-countdown {
+	font-weight: 400;
+	color: var(--muted);
+}
+
 .ask-inline-question {
 	margin: 0 0 var(--space-2);
 	color: var(--text);

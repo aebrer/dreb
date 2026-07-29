@@ -64,6 +64,15 @@ const askUserSchema = Type.Object({
 			description: "Use a large multi-line text area for open-ended answers.",
 		}),
 	),
+	timeoutSeconds: Type.Optional(
+		Type.Number({
+			minimum: 5,
+			maximum: 3600,
+			description:
+				"Optional: auto-skip the question after this many seconds if the user does not respond. " +
+				"Shows a live countdown. Omit to wait indefinitely.",
+		}),
+	),
 });
 
 export type AskUserInput = Static<typeof askUserSchema>;
@@ -181,14 +190,24 @@ export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSche
 		],
 
 		async execute(_toolCallId, input: AskUserInput, signal, _onUpdate, ctx?: ExtensionContext) {
+			const hasOptions = (input.options?.length ?? 0) > 0;
 			const request: AskRequest = {
 				question: input.question,
 				title: input.title,
 				options: input.options,
-				allowFreeText: input.allowFreeText,
-				multiSelect: input.multiSelect,
-				multiline: input.multiline,
+				// Guarantee at least one answer control: with no options, free text
+				// must be offered regardless of the requested flag, otherwise both
+				// surfaces would render only a Skip button and no way to answer.
+				allowFreeText: hasOptions ? input.allowFreeText : true,
+				// multiSelect is only meaningful with options; multiline only with
+				// free text — normalize away impossible combinations.
+				multiSelect: hasOptions ? input.multiSelect : undefined,
+				multiline: hasOptions ? (input.allowFreeText === false ? undefined : input.multiline) : input.multiline,
 			};
+
+			// Optional auto-skip timeout, forwarded to every UI surface (TUI
+			// countdown, RPC/Dashboard). Model-facing units are seconds.
+			const timeout = input.timeoutSeconds && input.timeoutSeconds > 0 ? input.timeoutSeconds * 1000 : undefined;
 
 			// Headless / print / no-host modes: never block on an unreachable UI.
 			if (!ctx?.hasUI) {
@@ -200,7 +219,7 @@ export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSche
 				// without ever opening the UI.
 				if (signal?.aborted) return skippedResult(input);
 				try {
-					const answer = await ctx.ui.ask(request, { signal });
+					const answer = await ctx.ui.ask(request, { signal, timeout });
 					if (!answer || (answer.selected.length === 0 && !answer.customText?.trim())) {
 						return skippedResult(input);
 					}

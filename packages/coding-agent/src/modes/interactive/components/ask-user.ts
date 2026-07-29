@@ -119,7 +119,9 @@ export class AskUserComponent extends Container implements Focusable {
 			this.addChild(this.fieldLabel);
 			if (this.multiline && opts?.tui) {
 				this.editor = new Editor(opts.tui, getEditorTheme(), {});
-				this.editor.onSubmit = () => this.submit();
+				// The Editor clears its own state before invoking onSubmit, so we must
+				// use the text it hands us rather than re-reading the now-empty editor.
+				this.editor.onSubmit = (text) => this.submit(text);
 				this.addChild(this.editor);
 			} else {
 				this.input = new Input();
@@ -178,14 +180,14 @@ export class AskUserComponent extends Container implements Focusable {
 		this.syncFieldFocus();
 	}
 
-	private fieldText(): string {
-		if (this.editor) return this.editor.getText().trim();
+	private fieldText(editorTextOverride?: string): string {
+		if (this.editor) return (editorTextOverride ?? this.editor.getText()).trim();
 		if (this.input) return this.input.getValue().trim();
 		return "";
 	}
 
-	private currentAnswer(): AskResult | undefined {
-		const customText = this.fieldText() || undefined;
+	private currentAnswer(editorTextOverride?: string): AskResult | undefined {
+		const customText = this.fieldText(editorTextOverride) || undefined;
 		if (this.multiSelect) {
 			const selected = this.options.filter((_, i) => this.checked[i]);
 			if (selected.length === 0 && !customText) return undefined;
@@ -202,9 +204,9 @@ export class AskUserComponent extends Container implements Focusable {
 		return option ? { selected: [option], customText } : undefined;
 	}
 
-	private submit(): void {
+	private submit(editorTextOverride?: string): void {
 		if (this.submitted) return;
-		const answer = this.currentAnswer();
+		const answer = this.currentAnswer(editorTextOverride);
 		if (!answer) return; // Nothing to submit yet — Esc skips instead.
 		this.submitted = true;
 		this.onSubmitCallback(answer);

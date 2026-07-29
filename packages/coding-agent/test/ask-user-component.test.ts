@@ -1,5 +1,6 @@
-import { setKeybindings } from "@dreb/tui";
+import { setKeybindings, TUI } from "@dreb/tui";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { VirtualTerminal } from "../../tui/test/virtual-terminal.js";
 import type { AskRequest, AskResult } from "../src/core/extensions/types.js";
 import { KeybindingsManager } from "../src/core/keybindings.js";
 import { AskUserComponent } from "../src/modes/interactive/components/ask-user.js";
@@ -25,6 +26,16 @@ function mount(request: AskRequest) {
 	const component = new AskUserComponent(request, onSubmit, onCancel);
 	component.focused = true;
 	return { component, onSubmit, onCancel };
+}
+
+/** Mount with a real TUI so the multiline `Editor` branch is exercised. */
+function mountWithTui(request: AskRequest) {
+	const tui = new TUI(new VirtualTerminal(80, 24));
+	const onSubmit = vi.fn<(result: AskResult) => void>();
+	const onCancel = vi.fn<() => void>();
+	const component = new AskUserComponent(request, onSubmit, onCancel, { tui });
+	component.focused = true;
+	return { component, onSubmit, onCancel, tui };
 }
 
 function type(component: AskUserComponent, text: string) {
@@ -128,5 +139,36 @@ describe("AskUserComponent", () => {
 		component.handleInput(UP);
 		component.handleInput(ENTER);
 		expect(onSubmit).toHaveBeenCalledWith({ selected: ["a"], customText: undefined });
+	});
+
+	describe("multiline (real Editor branch)", () => {
+		const CR = "\r"; // Enter → submit in the Editor
+		const LF = "\n"; // bare LF → insert a newline in the Editor
+
+		it("inserts newlines without submitting, then submits the multi-line answer", () => {
+			const { component, onSubmit } = mountWithTui({ question: "Describe", multiline: true });
+			type(component, "line1");
+			component.handleInput(LF); // newline, not a submit
+			type(component, "line2");
+			expect(onSubmit).not.toHaveBeenCalled();
+			component.handleInput(CR); // Enter submits
+			expect(onSubmit).toHaveBeenCalledWith({ selected: [], customText: "line1\nline2" });
+		});
+
+		it("submits only once even if Enter is pressed repeatedly (one-time teardown)", () => {
+			const { component, onSubmit } = mountWithTui({ question: "Describe", multiline: true });
+			type(component, "hello");
+			component.handleInput(CR);
+			component.handleInput(CR);
+			expect(onSubmit).toHaveBeenCalledTimes(1);
+		});
+
+		it("dispose is safe and idempotent", () => {
+			const { component } = mountWithTui({ question: "Describe", multiline: true });
+			expect(() => {
+				component.dispose();
+				component.dispose();
+			}).not.toThrow();
+		});
 	});
 });
