@@ -762,6 +762,24 @@ describe("RuntimePool", () => {
 		expect(handle.backgroundAgents.get("bg1")?.status).toBe("running");
 		expect(handle.backgroundAgents.get("bg1")?.sessionDir).toBe("/subagent-sessions/bg1");
 
+		clients[0].emit({
+			type: "subagent_arbitration",
+			agentId: "bg1",
+			status: "success",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+			changed: ["agent", "model", "thinking"],
+		});
+		expect(handle.backgroundAgents.get("bg1")).toMatchObject({
+			agentType: "feature-dev",
+			arbitrations: [
+				{
+					status: "success",
+					final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+				},
+			],
+		});
+
 		clients[0].emit({ type: "background_agent_end", agentId: "bg1", success: true, sessionFile: "/s/bg1.jsonl" });
 		expect(handle.backgroundAgents.get("bg1")?.status).toBe("completed");
 		expect(handle.backgroundAgents.get("bg1")?.sessionFile).toBe("/s/bg1.jsonl");

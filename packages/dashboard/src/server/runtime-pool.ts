@@ -20,6 +20,7 @@ import {
 	type RuntimeInfoDto,
 	type RuntimeStatsSummaryDto,
 	type SessionStateDto,
+	type SubagentArbitrationDto,
 } from "../shared/protocol.js";
 
 /** Resolve the absolute path to the dreb CLI (RpcClient defaults to a cwd-relative path). */
@@ -90,6 +91,7 @@ const FLEET_SNAPSHOT_EVENT_TYPES = new Set([
 	"auto_retry_end",
 	"background_agent_start",
 	"background_agent_end",
+	"subagent_arbitration",
 	"extension_ui_request",
 	"extension_ui_response_handled",
 	"message_end",
@@ -508,6 +510,22 @@ export class RuntimePool {
 				status: "running",
 				sessionDir: event.sessionDir as string | undefined,
 			});
+		}
+		if (type === "subagent_arbitration") {
+			const existing = handle.backgroundAgents.get(event.agentId as string);
+			if (existing) {
+				const record: SubagentArbitrationDto = {
+					status: event.status as SubagentArbitrationDto["status"],
+					proposed: event.proposed as SubagentArbitrationDto["proposed"],
+					final: (event.final as SubagentArbitrationDto["final"]) ?? null,
+					changed: (event.changed as SubagentArbitrationDto["changed"]) ?? [],
+					step: event.step as number | undefined,
+					errorCode: event.errorCode as string | undefined,
+					errorMessage: event.errorMessage as string | undefined,
+				};
+				existing.arbitrations = [...(existing.arbitrations ?? []), record];
+				if (record.status === "success" && record.final) existing.agentType = record.final.agent;
+			}
 		}
 		if (type === "background_agent_end") {
 			const existing = handle.backgroundAgents.get(event.agentId as string);

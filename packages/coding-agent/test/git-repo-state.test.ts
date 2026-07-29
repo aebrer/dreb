@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { getGitRepoState } from "../src/core/git-repo-state.js";
+import { getGitRepoState, getGitStatusMetadata } from "../src/core/git-repo-state.js";
 
 describe("getGitRepoState", () => {
 	describe("real repo tests", () => {
@@ -20,6 +20,12 @@ describe("getGitRepoState", () => {
 		test("has dirtyCount as a number >= 0", () => {
 			expect(typeof state!.dirtyCount).toBe("number");
 			expect(state!.dirtyCount).toBeGreaterThanOrEqual(0);
+		});
+
+		test("provides a current metadata-only status projection", () => {
+			const status = getGitStatusMetadata(process.cwd());
+			expect(status).toEqual({ branch: expect.any(String), dirtyCount: expect.any(Number) });
+			expect(Object.keys(status!)).toEqual(["branch", "dirtyCount"]);
 		});
 
 		test("has recentCommits as a non-empty array with hash and subject", () => {

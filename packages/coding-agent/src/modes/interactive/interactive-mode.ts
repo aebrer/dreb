@@ -43,6 +43,7 @@ import { BuddyManager, checkOllama } from "../../core/buddy/buddy-manager.js";
 import { Rarity, Stat } from "../../core/buddy/buddy-types.js";
 import { BuddyController } from "../../core/buddy/index.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
+import { formatDispatchArbitrationRecord } from "../../core/dispatch-arbiter.js";
 import {
 	acquireDreamLock,
 	buildDreamPrompt,
@@ -65,6 +66,7 @@ import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.js";
 import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.js";
+import { loadAndValidateModelRoutingGuide } from "../../core/model-routing-guide.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import type { ResourceDiagnostic } from "../../core/resource-loader.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
@@ -72,7 +74,7 @@ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import { restoreStderr, type StderrCallback, takeOverStderr } from "../../core/stderr-guard.js";
 import { TabTitleGenerator } from "../../core/tab-title.js";
-import { resolveThinkingDisplay } from "../../core/thinking.js";
+import { resolveThinkingDisplay, validateThinkingLevelForModel } from "../../core/thinking.js";
 import { resolveToCwd } from "../../core/tools/path-utils.js";
 import { abortBackgroundAgents, discoverAgentTypes, getRunningBackgroundAgents } from "../../core/tools/subagent.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
@@ -2785,6 +2787,14 @@ export class InteractiveMode {
 				break;
 			}
 
+			case "subagent_arbitration": {
+				const message = formatDispatchArbitrationRecord(event);
+				if (event.status === "failure") this.showWarning(message);
+				else this.showStatus(message);
+				this.updateBackgroundAgentStatus();
+				break;
+			}
+
 			case "background_agent_start":
 			case "background_agent_end": {
 				this.updateBackgroundAgentStatus();
@@ -3741,6 +3751,7 @@ export class InteractiveMode {
 					agentModels: this.settingsManager.getAgentModels(),
 					agentNames: agentNames,
 					availableModelIds,
+					subagentArbiter: this.settingsManager.getGlobalSubagentArbiterSettings() ?? {},
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -3860,6 +3871,51 @@ export class InteractiveMode {
 						if (this.editor !== this.defaultEditor && this.editor.setAutocompleteMaxVisible !== undefined) {
 							this.editor.setAutocompleteMaxVisible(maxVisible);
 						}
+					},
+					onSubagentArbiterChange: (settings) => {
+						if (settings.enabled) {
+							if (!settings.model) {
+								this.showError("Choose an exact Dispatch Arbiter model before enabling it.");
+								return false;
+							}
+							const slash = settings.model.indexOf("/");
+							const arbiterModel =
+								slash > 0
+									? this.session.modelRegistry.find(
+											settings.model.slice(0, slash),
+											settings.model.slice(slash + 1),
+										)
+									: undefined;
+							if (!arbiterModel) {
+								this.showError(`Dispatch Arbiter model "${settings.model}" is not available.`);
+								return false;
+							}
+							const thinking = settings.thinking ?? "off";
+							const thinkingValidation = validateThinkingLevelForModel(arbiterModel, thinking);
+							if (!thinkingValidation.ok) {
+								this.showError(thinkingValidation.error);
+								return false;
+							}
+							try {
+								loadAndValidateModelRoutingGuide(
+									settings.guidePath,
+									process.cwd(),
+									this.session.scopedModels.map(({ model }) => `${model.provider}/${model.id}`),
+								);
+							} catch (error) {
+								this.showError(
+									`Dispatch Arbiter is not ready: ${error instanceof Error ? error.message : String(error)}`,
+								);
+								return false;
+							}
+						}
+						this.settingsManager.setGlobalSubagentArbiterSettings(settings);
+						this.showStatus(
+							settings.enabled
+								? `Dispatch Arbiter enabled (${settings.model}, thinking ${settings.thinking ?? "off"}).`
+								: "Dispatch Arbiter disabled.",
+						);
+						return true;
 					},
 					onAgentModelsChange: (agentName, models) => {
 						const shadowedByProject = this.settingsManager.hasProjectAgentModelOverride(agentName);

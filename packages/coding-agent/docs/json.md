@@ -18,6 +18,7 @@ type AgentSessionEvent =
   | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
   | { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
+  | { type: "subagent_arbitration"; agentId: string; status: "success" | "failure"; proposed: DispatchRoute; final: DispatchRoute | null; changed: ("agent" | "model" | "thinking")[]; step?: number; errorCode?: string; errorMessage?: string }
   | { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; model?: string; thinking?: ThinkingLevel; steps?: SubagentStepMetadata[]; sessionFile?: string }
   | { type: "tasks_update"; tasks: readonly SessionTask[] }
   | { type: "suggest_next"; command: string };
@@ -35,6 +36,12 @@ interface SubagentStepMetadata {
   success: boolean;
   model?: string; // canonical provider/model
   thinking?: ThinkingLevel;
+}
+
+interface DispatchRoute {
+  agent: string;
+  model: string; // canonical provider/model
+  thinking: ThinkingLevel;
 }
 ```
 
@@ -92,6 +99,14 @@ Followed by events as they occur:
 {"type":"agent_end","messages":[...]}
 ```
 
+With global Dispatch Arbiter enabled, each background start is followed before child events/spawn by one safe structured decision. Unchanged decisions use an empty `changed`; failed decisions use `final: null`, prevent spawn, and carry only host-generated errors. Chain decisions also include `step`.
+
+```json
+{"type":"subagent_arbitration","agentId":"a1b2c3","status":"success","proposed":{"agent":"Explore","model":"provider/frontier","thinking":"high"},"final":{"agent":"feature-dev","model":"provider/worker","thinking":"medium"},"changed":["agent","model","thinking"]}
+```
+
+The event never contains the arbiter prompt, response, reasoning, guide, task, or conversation excerpt. The matching parent session persists the same safe fields as a non-context custom JSONL entry.
+
 ## Error handling
 
 Errors surface as events, not as broken JSON or exit codes:
@@ -112,7 +127,7 @@ Events are emitted in a predictable sequence:
 
 `message_update` events stream as chunks arrive — expect many per message. `tool_execution_update` events are optional (only emitted for tools that report progress).
 
-Auto-compaction and auto-retry events can appear between turns.
+Auto-compaction and auto-retry events can appear between turns. Background lifecycle events are asynchronous: `background_agent_start` is emitted immediately, then an enabled `subagent_arbitration` record appears before that child's first `background_agent_event`; a failed arbitration is followed by `background_agent_end` without any child event.
 
 ## Example
 

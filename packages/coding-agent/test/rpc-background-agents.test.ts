@@ -198,6 +198,14 @@ describe("toRpcBackgroundAgentInfo", () => {
 			status: "running",
 			sessionDir: "/home/u/.dreb/agent/subagent-sessions/a1b2c3",
 			cwd: "/home/u/project",
+			arbitrations: [
+				{
+					status: "success",
+					proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+					final: { agent: "feature-dev", model: "provider/worker", thinking: "medium" },
+					changed: ["agent", "model", "thinking"],
+				},
+			],
 		};
 		expect(toRpcBackgroundAgentInfo(info)).toEqual({
 			agentId: "a1b2c3",
@@ -208,6 +216,14 @@ describe("toRpcBackgroundAgentInfo", () => {
 			sessionDir: "/home/u/.dreb/agent/subagent-sessions/a1b2c3",
 			sessionFile: undefined,
 			cwd: "/home/u/project",
+			arbitrations: [
+				{
+					status: "success",
+					proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+					final: { agent: "feature-dev", model: "provider/worker", thinking: "medium" },
+					changed: ["agent", "model", "thinking"],
+				},
+			],
 		});
 	});
 });

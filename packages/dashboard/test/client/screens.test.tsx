@@ -1170,6 +1170,14 @@ describe("screen smoke tests", () => {
 		const store = makeStore() as any;
 		const session = populatedSession("k1");
 		applySessionEvent(session, {
+			type: "subagent_arbitration",
+			agentId: "bg1",
+			status: "success",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+			changed: ["agent", "model", "thinking"],
+		});
+		applySessionEvent(session, {
 			type: "background_agent_event",
 			agentId: "bg1",
 			event: {
@@ -1184,6 +1192,8 @@ describe("screen smoke tests", () => {
 		};
 		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k1" agentId="bg1" />);
 		expect(el.textContent).toContain("subagent says hi");
+		expect(el.textContent).toContain("agent, model, thinking changed");
+		expect(el.textContent).toContain("feature-dev · provider/cheap · low");
 		expect(el.textContent).toContain("subagents can't be steered yet");
 		expect(el.querySelector("textarea")).toBeNull(); // no composer
 	});
@@ -1450,6 +1460,135 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("already injected content cannot be retracted");
 		expect(el.textContent).toContain("default model");
 		expect(el.textContent).toContain("devices");
+	});
+
+	it("settings exposes complete global Dispatch Arbiter controls and readiness", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: {
+				enabled: true,
+				model: "provider/router",
+				thinking: "medium",
+				guidePath: "~/routing.md",
+			},
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		expect(section).not.toBeNull();
+		expect(section.textContent).toContain("Global-only");
+		expect(section.textContent).toContain("enabled");
+		expect(section.textContent).toContain("arbiter model");
+		expect(section.textContent).toContain("arbiter thinking");
+		expect(section.textContent).toContain("routing guide path");
+		expect(section.textContent).toContain("live scope and guide are validated before every child spawn");
+		expect((section.querySelector("#dispatch-arbiter-guide-path") as HTMLInputElement).value).toBe("~/routing.md");
+	});
+
+	it("settings refuses to enable the Dispatch Arbiter until a model is selected", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ subagentArbiter: { enabled: false } });
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const select = enabledRow.querySelector("select") as HTMLSelectElement;
+		select.value = "on";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector(".settings-error")?.textContent).toContain("Choose an exact Dispatch Arbiter model");
+		expect(select.value).toBe("off");
+		expect(api.saveSettings).not.toHaveBeenCalled();
+		expect(el.textContent).toContain("select Dispatch Arbiter model");
+	});
+
+	it("settings model picker and toggle persist the exact global Dispatch Arbiter policy", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: { enabled: false, thinking: "medium", guidePath: "~/routing.md" },
+		});
+		vi.mocked(api.settingsModels).mockResolvedValue({
+			models: [{ provider: "provider", id: "router", name: "Router", contextWindow: 128000, reasoning: true }],
+		});
+		vi.mocked(api.saveSettings).mockImplementation(async (update) => ({
+			subagentArbiter: {
+				enabled: false,
+				thinking: "medium",
+				guidePath: "~/routing.md",
+				...(update.subagentArbiter ?? {}),
+			},
+		}));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		(section.querySelector(".model-picker-button") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		(el.querySelector(".model-row") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: {
+				enabled: false,
+				model: "provider/router",
+				thinking: "medium",
+				guidePath: "~/routing.md",
+			},
+		});
+
+		const refreshedSection = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...refreshedSection.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const select = enabledRow.querySelector("select") as HTMLSelectElement;
+		select.value = "on";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenLastCalledWith({
+			subagentArbiter: {
+				enabled: true,
+				model: "provider/router",
+				thinking: "medium",
+				guidePath: "~/routing.md",
+			},
+		});
+	});
+
+	it("settings persists Dispatch Arbiter thinking and guide-path controls", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "off" },
+		});
+		vi.mocked(api.saveSettings).mockImplementation(async (update) => update);
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		let section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const thinkingRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("arbiter thinking"),
+		)!;
+		const thinking = thinkingRow.querySelector("select") as HTMLSelectElement;
+		thinking.value = "high";
+		thinking.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "high" },
+		});
+
+		section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const path = section.querySelector("#dispatch-arbiter-guide-path") as HTMLInputElement;
+		path.value = "~/custom-guide.md";
+		path.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenLastCalledWith({
+			subagentArbiter: {
+				enabled: false,
+				model: "provider/router",
+				thinking: "high",
+				guidePath: "~/custom-guide.md",
+			},
+		});
 	});
 
 	it("settings reports an initial durable-load failure", async () => {

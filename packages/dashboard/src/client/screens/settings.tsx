@@ -24,7 +24,7 @@ const QUEUE_MODES = ["all", "one-at-a-time"] as const;
 const TRANSPORTS = ["sse", "websocket", "auto"] as const;
 
 type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
-type ModelPickerTarget = { kind: "default" } | { kind: "agent"; agentName: string };
+type ModelPickerTarget = { kind: "default" } | { kind: "arbiter" } | { kind: "agent"; agentName: string };
 
 function modelKey(model: Pick<ModelInfoDto, "provider" | "id">): string {
 	return `${model.provider}/${model.id}`;
@@ -92,9 +92,15 @@ function moveItem<T>(items: T[], index: number, delta: -1 | 1): T[] {
 	return next;
 }
 
-function OnOffSelect(props: { value: boolean; onChange: (value: boolean) => void }): JSX.Element {
+function OnOffSelect(props: { value: boolean; onChange: (value: boolean) => unknown }): JSX.Element {
 	return (
-		<select value={props.value ? "on" : "off"} onChange={(e) => props.onChange(e.currentTarget.value === "on")}>
+		<select
+			value={props.value ? "on" : "off"}
+			onChange={(event) => {
+				const accepted = props.onChange(event.currentTarget.value === "on");
+				if (accepted === false) event.currentTarget.value = props.value ? "on" : "off";
+			}}
+		>
 			<option value="on">on</option>
 			<option value="off">off</option>
 		</select>
@@ -339,6 +345,19 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		return settings()?.agentModels?.[agentName] ?? [];
 	}
 
+	function arbiterReadiness(current: SettingsDto): { ready: boolean; message: string } {
+		const arbiter = current.subagentArbiter;
+		if (arbiter?.enabled !== true) return { ready: false, message: "disabled" };
+		if (!arbiter.model) return { ready: false, message: "not ready — choose an arbiter model" };
+		if (!arbiter.guidePath?.trim()) {
+			return {
+				ready: true,
+				message: "enabled — using ~/.dreb/agent/model-routing-guide.md; live scope/guide checked at dispatch",
+			};
+		}
+		return { ready: true, message: "enabled — live scope and guide are validated before every child spawn" };
+	}
+
 	async function requestNotifications() {
 		if (typeof Notification === "undefined") return;
 		setNotificationPermission(await Notification.requestPermission());
@@ -355,9 +374,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 			<main class="container settings-wrap">
 				<h1>settings</h1>
 				<p class="settings-intro">
-					Ordinary defaults apply only to new sessions. Context trust changes apply to subsequent lazy loads in
-					live sessions; already injected content cannot be retracted. Writes go to the global settings file on the
-					host.
+					Ordinary defaults apply only to new sessions. Dispatch Arbiter changes apply to subsequent child spawns.
+					Context trust changes apply to subsequent lazy loads in live sessions; already injected content cannot be
+					retracted. Writes go to the global settings file on the host.
 				</p>
 
 				<Show when={error()}>
@@ -432,6 +451,107 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 											</For>
 										</select>
 									</span>
+								</div>
+							</section>
+
+							<section class="settings-section dispatch-arbiter-settings">
+								<h2>dispatch arbiter</h2>
+								<p class="muted small" style={{ "margin-bottom": "8px" }}>
+									Global-only, fully headless pre-spawn routing. Project settings cannot change it. When
+									enabled, invalid model, scope, guide, inference, or output prevents the affected child from
+									spawning.
+								</p>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">enabled</span>
+										<span class="hint">disabled by default; fail closed when enabled</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().subagentArbiter?.enabled === true}
+											onChange={(enabled) => {
+												const arbiter = current().subagentArbiter ?? {};
+												if (enabled && !arbiter.model) {
+													setError("Choose an exact Dispatch Arbiter model before enabling it.");
+													setModelPickerTarget({ kind: "arbiter" });
+													return false;
+												}
+												void save({ subagentArbiter: { ...arbiter, enabled } });
+												return true;
+											}}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">arbiter model</span>
+										<span class="hint">exact authenticated provider/model; no fallback</span>
+									</span>
+									<span class="setting-control">
+										<button
+											type="button"
+											class="btn btn-small model-picker-button"
+											onClick={() => setModelPickerTarget({ kind: "arbiter" })}
+										>
+											{current().subagentArbiter?.model ?? "choose model…"}
+										</button>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">arbiter thinking</span>
+										<span class="hint">validated against the selected arbiter model</span>
+									</span>
+									<span class="setting-control">
+										<select
+											value={current().subagentArbiter?.thinking ?? "off"}
+											onChange={(event) =>
+												void save({
+													subagentArbiter: {
+														...(current().subagentArbiter ?? {}),
+														thinking: event.currentTarget.value as
+															| "off"
+															| "minimal"
+															| "low"
+															| "medium"
+															| "high"
+															| "xhigh",
+													},
+												})
+											}
+										>
+											<For each={THINKING_LEVELS}>{(level) => <option value={level}>{level}</option>}</For>
+										</select>
+									</span>
+								</div>
+								<div class="setting-row">
+									<label class="setting-label" for="dispatch-arbiter-guide-path">
+										<span class="name">routing guide path</span>
+										<span class="hint">blank uses ~/.dreb/agent/model-routing-guide.md</span>
+									</label>
+									<span class="setting-control">
+										<input
+											id="dispatch-arbiter-guide-path"
+											type="text"
+											value={current().subagentArbiter?.guidePath ?? ""}
+											placeholder="~/.dreb/agent/model-routing-guide.md"
+											onChange={(event) => {
+												const guidePath = event.currentTarget.value.trim();
+												void save({
+													subagentArbiter: {
+														...(current().subagentArbiter ?? {}),
+														guidePath: guidePath || undefined,
+													},
+												});
+											}}
+										/>
+									</span>
+								</div>
+								<div
+									class={arbiterReadiness(current()).ready ? "settings-warning" : "muted small"}
+									data-testid="dispatch-arbiter-readiness"
+								>
+									<strong>status:</strong> {arbiterReadiness(current()).message}
 								</div>
 							</section>
 
@@ -1003,7 +1123,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 				{(target) => {
 					const pickerTitle = () => {
 						const active = target();
-						return active.kind === "default" ? "select default model" : `add model for ${active.agentName}`;
+						if (active.kind === "default") return "select default model";
+						if (active.kind === "arbiter") return "select Dispatch Arbiter model";
+						return `add model for ${active.agentName}`;
 					};
 					const selectedKeys = () => {
 						const active = target();
@@ -1011,6 +1133,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 							return settings()?.defaultProvider && settings()?.defaultModel
 								? [`${settings()!.defaultProvider}/${settings()!.defaultModel}`]
 								: [];
+						}
+						if (active.kind === "arbiter") {
+							return settings()?.subagentArbiter?.model ? [settings()!.subagentArbiter!.model!] : [];
 						}
 						return currentAgentModels(active.agentName);
 					};
@@ -1025,6 +1150,15 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 								setModelPickerTarget(undefined);
 								if (active.kind === "default") {
 									void save({ defaultProvider: model.provider, defaultModel: model.id });
+									return;
+								}
+								if (active.kind === "arbiter") {
+									void save({
+										subagentArbiter: {
+											...(settings()?.subagentArbiter ?? {}),
+											model: modelKey(model),
+										},
+									});
 									return;
 								}
 								const entry = modelKey(model);

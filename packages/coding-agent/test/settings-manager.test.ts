@@ -888,6 +888,49 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("global-only subagent arbiter settings", () => {
+		it("ignores project attempts to enable or reconfigure arbitration", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ subagentArbiter: { enabled: false, model: "provider/global" } }),
+			);
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ subagentArbiter: { enabled: true, model: "provider/project", thinking: "high" } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getGlobalSubagentArbiterSettings()).toEqual({
+				enabled: false,
+				model: "provider/global",
+			});
+		});
+
+		it("persists the complete arbiter policy only to global settings", async () => {
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ subagentArbiter: { enabled: true, model: "provider/project" } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setGlobalSubagentArbiterSettings({
+				enabled: true,
+				model: "provider/router",
+				thinking: "medium",
+				guidePath: "~/guide.md",
+			});
+			await manager.flush();
+
+			const global = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			const project = JSON.parse(readFileSync(join(projectDir, ".dreb", "settings.json"), "utf-8"));
+			expect(global.subagentArbiter).toEqual({
+				enabled: true,
+				model: "provider/router",
+				thinking: "medium",
+				guidePath: "~/guide.md",
+			});
+			expect(project.subagentArbiter.model).toBe("provider/project");
+		});
+	});
+
 	describe("background-agent guardrail settings", () => {
 		it("defaults to enabled with the shared default turn limit", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

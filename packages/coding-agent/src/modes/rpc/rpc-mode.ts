@@ -36,6 +36,7 @@ import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js
 import { SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager, TransportSetting } from "../../core/settings-manager.js";
 import { TabTitleGenerator } from "../../core/tab-title.js";
+import { validateThinkingLevelForModel } from "../../core/thinking.js";
 import {
 	type BackgroundAgentInfo,
 	discoverAgentTypes,
@@ -231,6 +232,7 @@ export function toRpcBackgroundAgentInfo(a: Readonly<BackgroundAgentInfo>): RpcB
 		sessionDir: a.sessionDir,
 		sessionFile: a.sessionFile,
 		cwd: a.cwd,
+		arbitrations: a.arbitrations?.map((record) => structuredClone(record)),
 	};
 }
 
@@ -259,6 +261,7 @@ type SettingsReader = Pick<
 	| "getTransport"
 	| "getHideThinkingBlock"
 	| "getAgentModels"
+	| "getGlobalSubagentArbiterSettings"
 >;
 
 type SettingsRefresher = SettingsReader &
@@ -288,6 +291,7 @@ type SettingsWriter = SettingsRefresher &
 		| "setAgentModelsForAgent"
 		| "removeAgentModelsForAgent"
 		| "hasProjectAgentModelOverride"
+		| "setGlobalSubagentArbiterSettings"
 	>;
 
 /**
@@ -318,6 +322,7 @@ export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsS
 		transport: settingsManager.getTransport(),
 		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
 		agentModels: settingsManager.getAgentModels(),
+		subagentArbiter: settingsManager.getGlobalSubagentArbiterSettings(),
 	};
 }
 
@@ -393,6 +398,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"transport",
 	"hideThinkingBlock",
 	"agentModels",
+	"subagentArbiter",
 ] as const;
 
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
@@ -717,6 +723,61 @@ export async function setSettingsForRpc(
 		}
 	}
 
+	let subagentArbiter = update.subagentArbiter === null ? undefined : update.subagentArbiter;
+	if (subagentArbiter !== undefined) {
+		if (!isPlainObject(subagentArbiter)) {
+			return { ok: false, error: "subagentArbiter must be an object or null" };
+		}
+		const validKeys = ["enabled", "model", "thinking", "guidePath"];
+		const unknownArbiterKeys = Object.keys(subagentArbiter).filter((key) => !validKeys.includes(key));
+		if (unknownArbiterKeys.length > 0) {
+			return { ok: false, error: `Unknown subagentArbiter key(s): ${unknownArbiterKeys.join(", ")}` };
+		}
+		if (subagentArbiter.enabled !== undefined && typeof subagentArbiter.enabled !== "boolean") {
+			return { ok: false, error: "subagentArbiter.enabled must be a boolean" };
+		}
+		if (
+			subagentArbiter.model !== undefined &&
+			(typeof subagentArbiter.model !== "string" || !subagentArbiter.model.trim())
+		) {
+			return { ok: false, error: "subagentArbiter.model must be a non-empty exact provider/model string" };
+		}
+		if (
+			subagentArbiter.thinking !== undefined &&
+			(typeof subagentArbiter.thinking !== "string" || !isValidThinkingLevel(subagentArbiter.thinking))
+		) {
+			return {
+				ok: false,
+				error: `Invalid subagentArbiter.thinking: ${JSON.stringify(subagentArbiter.thinking)}. Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
+			};
+		}
+		if (
+			subagentArbiter.guidePath !== undefined &&
+			(typeof subagentArbiter.guidePath !== "string" || !subagentArbiter.guidePath.trim())
+		) {
+			return { ok: false, error: "subagentArbiter.guidePath must be a non-empty string" };
+		}
+		if (subagentArbiter.enabled === true && !subagentArbiter.model) {
+			return { ok: false, error: "Enabling subagentArbiter requires an exact provider/model" };
+		}
+		if (subagentArbiter.model) {
+			const slash = subagentArbiter.model.indexOf("/");
+			if (slash <= 0 || slash === subagentArbiter.model.length - 1) {
+				return { ok: false, error: "subagentArbiter.model must be an exact provider/model" };
+			}
+			const provider = subagentArbiter.model.slice(0, slash);
+			const modelId = subagentArbiter.model.slice(slash + 1);
+			const models = await modelRegistry.getAvailable();
+			const model = models.find((candidate) => candidate.provider === provider && candidate.id === modelId);
+			if (!model) return { ok: false, error: `Arbiter model not found: ${subagentArbiter.model}` };
+			if (subagentArbiter.thinking !== undefined) {
+				const validation = validateThinkingLevelForModel(model, subagentArbiter.thinking);
+				if (!validation.ok) return validation;
+			}
+		}
+		subagentArbiter = { ...subagentArbiter };
+	}
+
 	let trustedContextFolders: string[] | undefined;
 	if (update.trustedContextFolders !== undefined) {
 		try {
@@ -807,6 +868,9 @@ export async function setSettingsForRpc(
 			}
 
 			const warnings: string[] = [];
+			if (update.subagentArbiter !== undefined) {
+				settingsManager.setGlobalSubagentArbiterSettings(subagentArbiter);
+			}
 			if (update.agentModels !== undefined) {
 				for (const [agentName, models] of Object.entries(update.agentModels)) {
 					if (settingsManager.hasProjectAgentModelOverride(agentName)) {

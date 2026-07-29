@@ -48,7 +48,25 @@ The built-in `/skill:model-routing-guide` workflow has exactly two scope sources
 
 Because Stage 1 is a skill-only workflow, it cannot discover a session's runtime `--models` value or later in-session scope changes. Pass the same patterns as skill arguments when that runtime scope is the intended research set. The workflow resolves candidates against `dreb --list-models`, combines canonical provider/model documentation and public evidence with sanitized aggregate observations from local subagent session logs, then writes and validates `~/.dreb/agent/model-routing-guide.md`.
 
-The guide is intended to improve role and cost fit, especially keeping planning/implementation work out of `Explore` and reserving expensive frontier models for work that actually needs them. It does not change the model resolution order above. See [skills.md](skills.md#model-routing-guide).
+The guide is intended to improve role and cost fit, especially keeping planning/implementation work out of `Explore` and reserving expensive frontier models for work that actually needs them. Guide generation alone does not change routing; the optional Dispatch Arbiter below consumes it. See [skills.md](skills.md#model-routing-guide).
+
+## Dispatch Arbiter
+
+`subagentArbiter` is an opt-in, global-only pre-spawn control. Users configure it through interactive `/settings`, dashboard Settings, global `settings.json`, or the RPC settings API; both normal UIs expose enable/disable, exact model, thinking, guide path, and loud readiness/validation feedback. Project settings cannot shadow any field. The normal resolution order above first produces one concrete proposal. The arbiter then runs once before each actual child spawn—single, every parallel item, and every chain step after `{previous}` substitution—and returns exactly:
+
+```json
+{"agent":"feature-dev","model":"provider/model-id","thinking":"high"}
+```
+
+The host accepts only those three exact fields. The agent must already be available through the parent's `subagent` tool, the model must be an exact canonical member of the current live explicit scope, and thinking must be supported by that model. The selected existing definition supplies its system prompt and filtered tool configuration verbatim. Task, cwd, chain-substituted content, parent linkage, and every non-routing field remain unchanged.
+
+The arbiter follows the tab/session-title setter's small headless pattern: `AgentSession` maintains a bounded `RollingContextBuffer`, then the control path makes a direct `completeSimple()` call with the configured model/API key, timeout, and no tools or child process. There is no parent-model fallback. One malformed JSON response may be retried once; all configuration, guide, scope, auth/provider, timeout, parse, agent, model, and thinking failures prevent spawn.
+
+The validated input contains the immutable task/cwd, proposed route, safe summaries of all available definitions (name, description, effective tools, model defaults), exact live candidates, the matching guide, bounded first/latest user intent and recent labeled parent activity, parent model/session title, metadata-only repository/cwd/branch/dirty count, and lineage identifiers. All strings are untrusted prompt data and the serialized package is secret-scrubbed before remote inference. No environment, diff, file contents, credentials, or arbiter tools are included. The child still receives the original unsanitized task/cwd exactly as provided.
+
+Every enabled attempt emits and persists a safe `subagent_arbitration` record with proposed/final routes, changed fields, success/failure, optional chain step, and host-generated errors. Raw arbiter prompt/output/reasoning is never persisted or inserted into either model context. The TUI, JSON/RPC, and dashboard consume the same typed record; dashboard agent identity updates to the final selected agent before child events arrive.
+
+Configuration and failure details are in [settings.md](settings.md#dispatch-arbiter); event shapes are in [json.md](json.md) and [rpc.md](rpc.md).
 
 ## Parent Model Identity in System Prompt
 

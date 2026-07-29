@@ -1079,6 +1079,24 @@ describe("applySessionEvent — subagent relay", () => {
 		});
 		expect(state.backgroundAgents.bg1).toMatchObject({ status: "running", sessionDir: "/dir" });
 
+		applySessionEvent(state, {
+			type: "subagent_arbitration",
+			agentId: "bg1",
+			status: "success",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+			changed: ["agent", "model", "thinking"],
+		});
+		expect(state.backgroundAgents.bg1).toMatchObject({
+			agentType: "feature-dev",
+			arbitrations: [
+				{
+					status: "success",
+					final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+				},
+			],
+		});
+
 		applySessionEvent(state, { type: "background_agent_event", agentId: "bg1", event: { type: "session", id: "s" } });
 		applySessionEvent(state, {
 			type: "background_agent_event",

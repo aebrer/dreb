@@ -35,6 +35,7 @@ import {
 } from "./compaction/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
+import { DispatchArbiter, type DispatchArbiterDeps } from "./dispatch-arbiter.js";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.js";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
 import {
@@ -65,7 +66,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.js";
 import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./forbidden-commands.js";
-import { type GitRepoState, getGitRepoState } from "./git-repo-state.js";
+import { type GitRepoState, getGitRepoState, getGitStatusMetadata } from "./git-repo-state.js";
 import { log } from "./logger.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -88,6 +89,7 @@ import {
 	discoverAgentTypes,
 	getRunningBackgroundAgents,
 	type SessionTask,
+	type SubagentArbitrationEvent,
 	type SubagentResult,
 	type SubagentStepMetadata,
 } from "./tools/index.js";
@@ -132,6 +134,7 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| AgentEvent
+	| SubagentArbitrationEvent
 	| { type: "auto_compaction_start"; reason: "threshold" | "overflow" }
 	| {
 			type: "auto_compaction_end";
@@ -199,6 +202,8 @@ export interface AgentSessionConfig {
 	uiType?: string;
 	/** Optional performance tracker override, primarily for isolated tests. */
 	performanceTracker?: PerformanceTracker;
+	/** Inject the headless arbiter completion seam for deterministic, offline integration tests. */
+	dispatchArbiterComplete?: DispatchArbiterDeps["complete"];
 }
 
 export interface ExtensionBindings {
@@ -368,6 +373,9 @@ export class AgentSession {
 	// Git repo state captured once at session start
 	private _gitRepoState: GitRepoState | undefined;
 
+	// Fully headless pre-spawn router. It owns only bounded parent activity context.
+	private _dispatchArbiter: DispatchArbiter;
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -398,6 +406,26 @@ export class AgentSession {
 		// Capture git repo state once at session start (before building runtime/system prompt)
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
 
+		this._dispatchArbiter = new DispatchArbiter({
+			getSettings: () => this.settingsManager.getGlobalSubagentArbiterSettings(),
+			getCandidateModels: () => this._scopedModels,
+			getModelRegistry: () => this._modelRegistry,
+			getMessages: () => this.agent.state.messages,
+			getParentModel: () => this.model,
+			getSessionTitle: () => this.sessionName,
+			getRepoMetadata: () => {
+				const currentStatus = getGitStatusMetadata(this._cwd) ?? this._gitRepoState;
+				return {
+					repo: basename(this._cwd),
+					cwd: this._cwd,
+					branch: currentStatus?.branch,
+					dirtyCount: currentStatus?.dirtyCount,
+				};
+			},
+			getExtraSecretPatterns: () => this._compileExtraSecretPatterns(),
+			complete: config.dispatchArbiterComplete,
+		});
+
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
@@ -418,6 +446,25 @@ export class AgentSession {
 	/** Performance tracker for recording and querying model throughput */
 	getPerformanceTracker(): PerformanceTracker {
 		return this.performanceTracker;
+	}
+
+	private _compileExtraSecretPatterns(): SecretPattern[] | undefined {
+		return this.settingsManager.getSecretOutputPatterns()?.flatMap((pattern) => {
+			if (!pattern.pattern || typeof pattern.pattern !== "string" || pattern.pattern.trim() === "") {
+				console.warn(
+					`[secret-scrubber] Skipping empty or invalid pattern in secretOutputPatterns: "${pattern.name}"`,
+				);
+				return [];
+			}
+			try {
+				return [{ name: pattern.name, pattern: new RegExp(pattern.pattern, "g") }];
+			} catch (error) {
+				console.warn(
+					`[secret-scrubber] Skipping invalid regex in secretOutputPatterns "${pattern.name}": ${pattern.pattern} — ${error instanceof Error ? error.message : String(error)}`,
+				);
+				return [];
+			}
+		});
 	}
 
 	/**
@@ -511,21 +558,7 @@ export class AgentSession {
 		this.agent.setAfterToolCall(async ({ toolCall, args, result, isError }) => {
 			// Scrub secrets from tool output — runs before extensions, cannot be bypassed
 			let scrubbedContent = result.content;
-			const extraSecretPatterns = this.settingsManager?.getSecretOutputPatterns();
-			const compiledExtras: SecretPattern[] | undefined = extraSecretPatterns?.flatMap((p) => {
-				if (!p.pattern || typeof p.pattern !== "string" || p.pattern.trim() === "") {
-					console.warn(`[secret-scrubber] Skipping empty or invalid pattern in secretOutputPatterns: "${p.name}"`);
-					return [];
-				}
-				try {
-					return [{ name: p.name, pattern: new RegExp(p.pattern, "g") }];
-				} catch (err) {
-					console.warn(
-						`[secret-scrubber] Skipping invalid regex in secretOutputPatterns "${p.name}": ${p.pattern} — ${err instanceof Error ? err.message : String(err)}`,
-					);
-					return [];
-				}
-			});
+			const compiledExtras = this._compileExtraSecretPatterns();
 			let totalRedactions = 0;
 			scrubbedContent = scrubbedContent.map((item) => {
 				if (item.type === "text" && item.text) {
@@ -1011,6 +1044,17 @@ export class AgentSession {
 
 		// Notify all listeners
 		this._emit(event);
+
+		// Keep a small, mode-independent rolling context for the headless arbiter.
+		if (event.type === "message_end") {
+			this._dispatchArbiter.onMessageEnd(event.message);
+		} else if (event.type === "tool_execution_end") {
+			this._dispatchArbiter.onToolEnd({
+				toolName: event.toolName,
+				isError: event.isError,
+				result: event.result,
+			});
+		}
 
 		// Handle session persistence
 		if (event.type === "message_end") {
@@ -1976,6 +2020,7 @@ export class AgentSession {
 		this._disconnectFromAgent();
 		await this.abort();
 		this.agent.reset();
+		this._dispatchArbiter.clearContext();
 		this.sessionManager.newSession({ parentSession: options?.parentSession });
 		this.agent.sessionId = this.sessionManager.getSessionId();
 		this._steeringMessages = [];
@@ -3009,6 +3054,12 @@ export class AgentSession {
 						parentSessionFile: () => this.sessionFile,
 						modelRegistry: this._modelRegistry,
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
+						defaultThinkingLevel: () => this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+						arbitrate: (request, signal) => this._dispatchArbiter.arbitrate(request, signal),
+						onArbitration: (event) => {
+							this.sessionManager.appendCustomEntry("subagent_arbitration", event);
+							this._emit(event);
+						},
 						onBackgroundStart: (agentId, agentType, taskSummary, sessionDir) => {
 							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary, sessionDir });
 						},
@@ -3380,6 +3431,7 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this._pendingNextTurnMessages = [];
+		this._dispatchArbiter.clearContext();
 
 		// Set new session
 		this.sessionManager.setSessionFile(sessionPath);

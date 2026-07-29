@@ -315,7 +315,9 @@ The generated `~/.dreb/agent/model-routing-guide.md` is human-readable Markdown 
 
 Semantic local-evidence assessment uses normal dreb tools, so inspected session content is processed by the active research model's configured provider. The persisted guide is sanitized and generalized, but invoking the skill is still a decision to send the inspected evidence to that provider.
 
-Its primary routing safeguards are practical: `Explore` is for factual collection and navigation, not planning or implementation; routine lookup, extraction, repetitive file inspection, and straightforward summarization should use the least expensive scoped model demonstrated adequate by the evidence. Stage 1 generates this guide only—the optional pre-spawn arbiter consumes it in a later stage.
+Its primary routing safeguards are practical: `Explore` is for factual collection and navigation, not planning or implementation; routine lookup, extraction, repetitive file inspection, and straightforward summarization should use the least expensive scoped model demonstrated adequate by the evidence.
+
+The optional global-only [Dispatch Arbiter](agent-models.md#dispatch-arbiter) now consumes this file before every subagent spawn. Its live scope is the current session's exact explicit candidate set, so guide frontmatter and model headings must match that set exactly. A guide generated from `enabledModels` will work when the session uses the same resolved scope; for runtime `--models`, pass those patterns to the skill. Missing/stale/malformed guide coverage fails the child launch rather than bypassing arbitration.
 
 ## Skill Repositories
 
