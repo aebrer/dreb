@@ -196,7 +196,10 @@ export class AskUserComponent extends Container implements Focusable {
 			return { selected: [], customText };
 		}
 		const option = this.options[this.cursorIndex];
-		return option ? { selected: [option], customText: undefined } : undefined;
+		// Single-select: submit the highlighted option together with any typed
+		// free text, matching the Dashboard, which combines a radio selection with
+		// custom text (and the tool's own combined-answer result formatting).
+		return option ? { selected: [option], customText } : undefined;
 	}
 
 	private submit(): void {

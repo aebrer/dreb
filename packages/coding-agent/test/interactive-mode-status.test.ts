@@ -512,6 +512,134 @@ describe("InteractiveMode extension dialog queue", () => {
 	});
 });
 
+describe("InteractiveMode.showExtensionAsk lifecycle", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	type AskFakeThis = {
+		ui: { setFocus: ReturnType<typeof vi.fn>; requestRender: ReturnType<typeof vi.fn> };
+		editorContainer: Container;
+		extensionAsk: unknown;
+		restoreEditorComponent: ReturnType<typeof vi.fn>;
+		hideExtensionAsk: unknown;
+	};
+
+	function createAskFakeThis(): AskFakeThis {
+		const fakeThis: AskFakeThis = {
+			ui: { setFocus: vi.fn(), requestRender: vi.fn() },
+			editorContainer: new Container(),
+			extensionAsk: undefined,
+			restoreEditorComponent: vi.fn(),
+			hideExtensionAsk: (InteractiveMode as any).prototype.hideExtensionAsk,
+		};
+		return fakeThis;
+	}
+
+	function show(fakeThis: AskFakeThis, request: object, opts?: object) {
+		return (InteractiveMode as any).prototype.showExtensionAsk.call(fakeThis, request, opts);
+	}
+
+	test("mounts the question, focuses it, and resolves the submitted answer, then restores the editor", async () => {
+		const fakeThis = createAskFakeThis();
+		const p = show(fakeThis, { question: "DB?", options: ["a", "b"] });
+
+		// Mounted into the shared editor container and focused exactly once.
+		expect(fakeThis.editorContainer.children).toHaveLength(1);
+		expect(fakeThis.ui.setFocus).toHaveBeenCalledWith(fakeThis.extensionAsk);
+		expect(fakeThis.extensionAsk).toBeDefined();
+
+		// Submit the highlighted option.
+		(fakeThis.extensionAsk as any).handleInput("\n");
+
+		await expect(p).resolves.toEqual({ selected: ["a"], customText: undefined });
+		// Torn down exactly once: component disposed/cleared and editor restored.
+		expect(fakeThis.extensionAsk).toBeUndefined();
+		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+	});
+
+	test("Esc skips and resolves undefined without leaving a mounted component", async () => {
+		const fakeThis = createAskFakeThis();
+		const p = show(fakeThis, { question: "DB?", options: ["a", "b"] });
+		(fakeThis.extensionAsk as any).handleInput("\x1b"); // Esc
+		await expect(p).resolves.toBeUndefined();
+		expect(fakeThis.extensionAsk).toBeUndefined();
+		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+	});
+
+	test("aborting while pending resolves undefined, disposes, and restores the editor (no orphaned promise)", async () => {
+		const fakeThis = createAskFakeThis();
+		const controller = new AbortController();
+		const p = show(fakeThis, { question: "DB?", options: ["a"] }, { signal: controller.signal });
+		expect(fakeThis.extensionAsk).toBeDefined();
+
+		controller.abort();
+		await expect(p).resolves.toBeUndefined();
+		expect(fakeThis.extensionAsk).toBeUndefined();
+		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+	});
+
+	test("an already-aborted signal resolves undefined without mounting or focusing", async () => {
+		const fakeThis = createAskFakeThis();
+		const controller = new AbortController();
+		controller.abort();
+		const p = show(fakeThis, { question: "DB?", options: ["a"] }, { signal: controller.signal });
+		await expect(p).resolves.toBeUndefined();
+		expect(fakeThis.editorContainer.children).toHaveLength(0);
+		expect(fakeThis.ui.setFocus).not.toHaveBeenCalled();
+		expect(fakeThis.extensionAsk).toBeUndefined();
+	});
+
+	test("a multiline request builds the editor branch and tears down cleanly on abort", async () => {
+		// The multiline Editor is only constructed when a real TUI is provided.
+		const terminal = new VirtualTerminal(60, 16);
+		const ui = new TUI(terminal);
+		const fakeThis: any = {
+			ui,
+			editorContainer: new Container(),
+			extensionAsk: undefined,
+			restoreEditorComponent: vi.fn(),
+			hideExtensionAsk: (InteractiveMode as any).prototype.hideExtensionAsk,
+		};
+		const controller = new AbortController();
+		const p = (InteractiveMode as any).prototype.showExtensionAsk.call(
+			fakeThis,
+			{ question: "Notes?", multiline: true },
+			{ signal: controller.signal },
+		);
+		// Constructed and mounted without throwing (exercises the Editor branch).
+		expect(fakeThis.editorContainer.children).toHaveLength(1);
+		expect(fakeThis.extensionAsk).toBeDefined();
+
+		controller.abort();
+		await expect(p).resolves.toBeUndefined();
+		expect(fakeThis.extensionAsk).toBeUndefined();
+		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+	});
+
+	test("a timeout builds a countdown that expires to a skip and disposes the interval", async () => {
+		vi.useFakeTimers();
+		try {
+			const fakeThis = createAskFakeThis();
+			const p = show(fakeThis, { question: "DB?", options: ["a"] }, { timeout: 3000 });
+			expect(fakeThis.extensionAsk).toBeDefined();
+
+			// The countdown ticks every second and expires at 0 → skip (undefined).
+			vi.advanceTimersByTime(3000);
+			await expect(p).resolves.toBeUndefined();
+			expect(fakeThis.extensionAsk).toBeUndefined();
+			expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+
+			// Interval disposed: no further ticks drive renders after teardown.
+			const rendersAfter = fakeThis.ui.requestRender.mock.calls.length;
+			vi.advanceTimersByTime(5000);
+			expect(fakeThis.ui.requestRender.mock.calls.length).toBe(rendersAfter);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
 describe("InteractiveMode.showLoadedResources", () => {
 	beforeAll(() => {
 		initTheme("dark");

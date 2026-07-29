@@ -48,6 +48,18 @@ describe("AskUserComponent", () => {
 		expect(onSubmit).toHaveBeenCalledWith({ selected: [], customText: "duckdb" });
 	});
 
+	it("single-select: submits the highlighted option together with typed free text", () => {
+		// Parity with the Dashboard, which combines a radio selection with custom
+		// text. Type in the field, move back up to an option, then submit.
+		const { component, onSubmit } = mount({ question: "DB?", options: ["SQLite", "Postgres"] });
+		component.handleInput(DOWN); // Postgres
+		component.handleInput(DOWN); // free-text row
+		type(component, "duckdb");
+		component.handleInput(UP); // back to Postgres, keeping the typed text
+		component.handleInput(ENTER);
+		expect(onSubmit).toHaveBeenCalledWith({ selected: ["Postgres"], customText: "duckdb" });
+	});
+
 	it("multi-select: Space toggles checkboxes and Enter submits the combined answer", () => {
 		const { component, onSubmit } = mount({
 			question: "Checks?",

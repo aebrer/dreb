@@ -1010,48 +1010,16 @@ export async function navigateTreeForRpc(
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
-export async function runRpcMode(session: AgentSession, modelFallbackMessage?: string): Promise<never> {
-	takeOverStdout();
-
-	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
-		writeRawStdout(serializeJsonLine(obj));
-	};
-
-	const success = <T extends RpcCommand["type"]>(
-		id: string | undefined,
-		command: T,
-		data?: object | null,
-	): RpcResponse => {
-		if (data === undefined) {
-			return { id, type: "response", command, success: true } as RpcResponse;
-		}
-		return { id, type: "response", command, success: true, data } as RpcResponse;
-	};
-
-	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
-		return { id, type: "response", command, success: false, error: message };
-	};
-
-	if (session.sessionFile && session.messages.length > 0) {
-		const rehydratedCount = rehydrateBackgroundAgentsFromDisk(session.sessionFile);
-		if (rehydratedCount > 0) {
-			console.error(
-				`[rpc] Rehydrated ${rehydratedCount} background subagent${rehydratedCount === 1 ? "" : "s"} from disk`,
-			);
-		}
-	}
-
-	// Pending extension UI requests waiting for response
-	const pendingExtensionRequests = new Map<
-		string,
-		{ resolve: (value: any) => void; reject: (error: Error) => void }
-	>();
-
-	// Shutdown request flag
-	let shutdownRequested = false;
-	let dailyCostTracker: DailyCostTracker | undefined;
-	let dailyCostTrackerPrimed = false;
-
+/**
+ * Build the RPC-mode extension UI context. Extracted from `runRpcMode` so the
+ * dialog request emission and response mapping (select/confirm/input/ask/editor)
+ * can be unit-tested without spawning the CLI. `output` is the JSONL sink and
+ * `pendingExtensionRequests` is the shared map keyed by request id.
+ */
+export function createRpcExtensionUIContext(
+	output: (obj: RpcResponse | RpcExtensionUIRequest | object) => void,
+	pendingExtensionRequests: Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>,
+): ExtensionUIContext {
 	/** Helper for dialog methods with signal/timeout support */
 	function createDialogPromise<T>(
 		opts: ExtensionUIDialogOptions | undefined,
@@ -1110,7 +1078,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	/**
 	 * Create an extension UI context that uses the RPC protocol.
 	 */
-	const createExtensionUIContext = (): ExtensionUIContext => ({
+	return {
 		select: (title, options, opts) =>
 			createDialogPromise(opts, undefined, { method: "select", title, options, timeout: opts?.timeout }, (r) =>
 				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
@@ -1276,7 +1244,55 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		setToolsExpanded(_expanded: boolean) {
 			// Tool expansion not supported in RPC mode - no TUI
 		},
-	});
+	};
+}
+
+export async function runRpcMode(session: AgentSession, modelFallbackMessage?: string): Promise<never> {
+	takeOverStdout();
+
+	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
+		writeRawStdout(serializeJsonLine(obj));
+	};
+
+	const success = <T extends RpcCommand["type"]>(
+		id: string | undefined,
+		command: T,
+		data?: object | null,
+	): RpcResponse => {
+		if (data === undefined) {
+			return { id, type: "response", command, success: true } as RpcResponse;
+		}
+		return { id, type: "response", command, success: true, data } as RpcResponse;
+	};
+
+	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
+		return { id, type: "response", command, success: false, error: message };
+	};
+
+	if (session.sessionFile && session.messages.length > 0) {
+		const rehydratedCount = rehydrateBackgroundAgentsFromDisk(session.sessionFile);
+		if (rehydratedCount > 0) {
+			console.error(
+				`[rpc] Rehydrated ${rehydratedCount} background subagent${rehydratedCount === 1 ? "" : "s"} from disk`,
+			);
+		}
+	}
+
+	// Pending extension UI requests waiting for response
+	const pendingExtensionRequests = new Map<
+		string,
+		{ resolve: (value: any) => void; reject: (error: Error) => void }
+	>();
+
+	// Shutdown request flag
+	let shutdownRequested = false;
+	let dailyCostTracker: DailyCostTracker | undefined;
+	let dailyCostTrackerPrimed = false;
+
+	// Extension UI context uses the RPC protocol; built by a module-scope
+	// factory so the dialog round trip is unit-testable (see createRpcExtensionUIContext).
+	const createExtensionUIContext = (): ExtensionUIContext =>
+		createRpcExtensionUIContext(output, pendingExtensionRequests);
 
 	// Set up extensions with RPC-based UI context
 	await session.bindExtensions({
