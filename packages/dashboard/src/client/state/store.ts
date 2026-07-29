@@ -25,10 +25,12 @@ import {
 	createSessionViewState,
 	deriveProviderErrorState,
 	dismissToast as dismissReducerToast,
+	extensionUiRequestFromEvent,
 	messagesToEntries,
 	resolveUiRequest as resolveReducerUiRequest,
 	type SessionViewState,
 	type Toast,
+	updateAttention,
 } from "./reducer.js";
 
 export type Route =
@@ -622,11 +624,12 @@ export function createAppStore() {
 			session.sessionName = active.state.sessionName;
 			session.model = active.state.model?.id;
 			session.contextUsage = active.state.contextUsage;
-			// Authoritative recovery snapshots do not carry transient reducer UI
-			// state. Clear pre-gap extension/status affordances so the restored
-			// transcript/runtime state is the source of truth until replay applies
-			// post-barrier events below.
-			session.uiRequests = [];
+			// Restore blocking dialogs from the same authoritative RPC boundary as
+			// transcript/state. Other transient affordances are still cleared until
+			// post-barrier replay applies newer events below.
+			session.uiRequests = (active.pendingExtensionUiRequests ?? [])
+				.map((request) => extensionUiRequestFromEvent(request))
+				.filter((request) => request !== undefined);
 			session.statusEntries = [];
 			session.suggestedCommand = undefined;
 			session.lastError = undefined;
@@ -659,6 +662,7 @@ export function createAppStore() {
 					streaming: agent.status === "running",
 				};
 			}
+			updateAttention(session);
 		});
 		bumpTaskRevision(active.key);
 	}

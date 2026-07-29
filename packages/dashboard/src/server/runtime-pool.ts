@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { RpcClient, type RpcExitInfo } from "@dreb/coding-agent/rpc";
+import { RpcClient, type RpcDashboardSnapshot, type RpcExitInfo } from "@dreb/coding-agent/rpc";
 import {
 	type BackgroundAgentDto,
 	type FleetRuntimeSnapshotDto,
@@ -39,13 +39,6 @@ export type RuntimeEventListener = (key: string, event: Record<string, unknown>)
 export type FleetSnapshotListener = (event: FleetSnapshotEventDto) => void;
 
 export { MAX_COMPLETED_BACKGROUND_AGENTS };
-
-interface RpcDashboardSnapshot {
-	snapshotId: string;
-	state: SessionStateDto;
-	messages: unknown[];
-	backgroundAgents: BackgroundAgentDto[];
-}
 
 type DashboardSnapshotClient = RpcClient & { getDashboardSnapshot(): Promise<RpcDashboardSnapshot> };
 

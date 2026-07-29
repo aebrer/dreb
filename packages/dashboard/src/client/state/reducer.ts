@@ -120,6 +120,34 @@ export interface ExtensionUiRequest {
 	multiline?: boolean;
 }
 
+export function extensionUiRequestFromEvent(event: any): ExtensionUiRequest | undefined {
+	const method = event?.method as string | undefined;
+	if (method === "select" || method === "confirm" || method === "input" || method === "editor") {
+		return {
+			id: String(event.id),
+			method,
+			title: String(event.title ?? ""),
+			message: event.message as string | undefined,
+			options: event.options as string[] | undefined,
+			prefill: event.prefill as string | undefined,
+			placeholder: event.placeholder as string | undefined,
+		};
+	}
+	if (method === "ask") {
+		return {
+			id: String(event.id),
+			method: "ask",
+			title: String(event.title ?? "Question"),
+			question: String(event.question ?? ""),
+			options: event.options as string[] | undefined,
+			allowFreeText: event.allowFreeText as boolean | undefined,
+			multiSelect: event.multiSelect as boolean | undefined,
+			multiline: event.multiline as boolean | undefined,
+		};
+	}
+	return undefined;
+}
+
 export interface Toast {
 	id: number;
 	text: string;
@@ -809,27 +837,9 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 		}
 		case "extension_ui_request": {
 			const method = event.method as string;
-			if (method === "select" || method === "confirm" || method === "input" || method === "editor") {
-				state.uiRequests.push({
-					id: String(event.id),
-					method,
-					title: String(event.title ?? ""),
-					message: event.message as string | undefined,
-					options: event.options as string[] | undefined,
-					prefill: event.prefill as string | undefined,
-					placeholder: event.placeholder as string | undefined,
-				});
-			} else if (method === "ask") {
-				state.uiRequests.push({
-					id: String(event.id),
-					method: "ask",
-					title: String(event.title ?? "Question"),
-					question: String(event.question ?? ""),
-					options: event.options as string[] | undefined,
-					allowFreeText: event.allowFreeText as boolean | undefined,
-					multiSelect: event.multiSelect as boolean | undefined,
-					multiline: event.multiline as boolean | undefined,
-				});
+			const blockingRequest = extensionUiRequestFromEvent(event);
+			if (blockingRequest) {
+				state.uiRequests.push(blockingRequest);
 			} else if (method === "notify") {
 				toastCounter += 1;
 				const tone = (event.notifyType as "info" | "warning" | "error" | undefined) ?? "info";

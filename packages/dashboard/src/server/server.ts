@@ -446,6 +446,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		state: snapshot.snapshot.state,
 		messages: images.project(snapshot.snapshot.messages, { runtimeKey: snapshot.key }),
 		backgroundAgents: snapshot.snapshot.backgroundAgents,
+		pendingExtensionUiRequests: snapshot.snapshot.pendingExtensionUiRequests ?? [],
 		barrierSeq: snapshot.barrierSeq,
 	});
 

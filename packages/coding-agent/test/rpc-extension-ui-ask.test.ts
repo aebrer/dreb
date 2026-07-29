@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AskResult } from "../src/core/extensions/types.js";
-import { createRpcExtensionUIContext } from "../src/modes/rpc/rpc-mode.js";
+import {
+	cancelPendingRpcExtensionRequests,
+	createRpcExtensionUIContext,
+	type PendingRpcExtensionRequest,
+} from "../src/modes/rpc/rpc-mode.js";
 import type { RpcExtensionUIRequest, RpcExtensionUIResponse } from "../src/modes/rpc/rpc-types.js";
-
-type Pending = { resolve: (value: any) => void; reject: (error: Error) => void };
 
 /**
  * Round-trip tests for the RPC `ask` dialog: request emission, response
@@ -14,7 +16,7 @@ type Pending = { resolve: (value: any) => void; reject: (error: Error) => void }
 function harness() {
 	const emitted: RpcExtensionUIRequest[] = [];
 	const handled: string[] = [];
-	const pending = new Map<string, Pending>();
+	const pending = new Map<string, PendingRpcExtensionRequest>();
 	const output = (obj: any) => {
 		if (obj?.type === "extension_ui_request") emitted.push(obj as RpcExtensionUIRequest);
 		else if (obj?.type === "extension_ui_response_handled") handled.push(obj.id as string);
@@ -60,6 +62,15 @@ describe("RPC ask round trip", () => {
 		const h = harness();
 		const p = h.ctx.ask({ title: "Pick storage", question: "Which DB?", options: ["a"] });
 		expect((h.emitted[0] as any).title).toBe("Pick storage");
+		h.respond({ selected: ["a"] } as any);
+		await p;
+	});
+
+	it("retains the emitted request payload while waiting for a response", async () => {
+		const h = harness();
+		const p = h.ctx.ask({ question: "Which?", options: ["a", "b"] });
+		const id = h.lastRequestId();
+		expect(h.pending.get(id)?.request).toBe(h.emitted[0]);
 		h.respond({ selected: ["a"] } as any);
 		await p;
 	});
@@ -121,6 +132,23 @@ describe("RPC ask round trip", () => {
 		await expect(p).resolves.toBeUndefined();
 		expect(h.handled).toEqual([id]);
 		expect(h.pending.has(id)).toBe(false);
+	});
+
+	it("cancels pending dialogs exactly once during RPC shutdown", async () => {
+		const h = harness();
+		const first = h.ctx.ask({ question: "First?", options: ["a"] });
+		const firstId = h.lastRequestId();
+		const second = h.ctx.ask({ question: "Second?", options: ["b"] });
+		const secondId = h.lastRequestId();
+
+		cancelPendingRpcExtensionRequests(h.pending);
+
+		await expect(first).resolves.toBeUndefined();
+		await expect(second).resolves.toBeUndefined();
+		expect(h.pending.size).toBe(0);
+		expect(h.handled).toEqual([firstId, secondId]);
+		cancelPendingRpcExtensionRequests(h.pending);
+		expect(h.handled).toEqual([firstId, secondId]);
 	});
 
 	it("resolves undefined on timeout and emits the handled event", async () => {

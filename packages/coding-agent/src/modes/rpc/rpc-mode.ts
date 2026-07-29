@@ -47,6 +47,7 @@ import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
 	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,
+	RpcBlockingExtensionUIRequest,
 	RpcCommand,
 	RpcContextTrustEvaluation,
 	RpcContextTrustMutationResult,
@@ -1016,9 +1017,15 @@ export async function navigateTreeForRpc(
  * can be unit-tested without spawning the CLI. `output` is the JSONL sink and
  * `pendingExtensionRequests` is the shared map keyed by request id.
  */
+export interface PendingRpcExtensionRequest {
+	request: RpcBlockingExtensionUIRequest;
+	resolve: (value: any) => void;
+	reject: (error: Error) => void;
+}
+
 export function createRpcExtensionUIContext(
 	output: (obj: RpcResponse | RpcExtensionUIRequest | object) => void,
-	pendingExtensionRequests: Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>,
+	pendingExtensionRequests: Map<string, PendingRpcExtensionRequest>,
 ): ExtensionUIContext {
 	/** Helper for dialog methods with signal/timeout support */
 	function createDialogPromise<T>(
@@ -1057,7 +1064,13 @@ export function createRpcExtensionUIContext(
 				}, opts.timeout);
 			}
 
+			const rpcRequest = {
+				type: "extension_ui_request",
+				id,
+				...request,
+			} as RpcBlockingExtensionUIRequest;
 			pendingExtensionRequests.set(id, {
+				request: rpcRequest,
 				resolve: (response: RpcExtensionUIResponse) => {
 					if (!cleanup()) return;
 					try {
@@ -1071,7 +1084,7 @@ export function createRpcExtensionUIContext(
 					reject(error);
 				},
 			});
-			output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
+			output(rpcRequest);
 		});
 	}
 
@@ -1247,6 +1260,15 @@ export function createRpcExtensionUIContext(
 	};
 }
 
+/** Cancel every pending dialog during RPC host teardown. */
+export function cancelPendingRpcExtensionRequests(
+	pendingExtensionRequests: Map<string, PendingRpcExtensionRequest>,
+): void {
+	for (const [id, pending] of [...pendingExtensionRequests]) {
+		pending.resolve({ type: "extension_ui_response", id, cancelled: true });
+	}
+}
+
 export async function runRpcMode(session: AgentSession, modelFallbackMessage?: string): Promise<never> {
 	takeOverStdout();
 
@@ -1278,11 +1300,10 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		}
 	}
 
-	// Pending extension UI requests waiting for response
-	const pendingExtensionRequests = new Map<
-		string,
-		{ resolve: (value: any) => void; reject: (error: Error) => void }
-	>();
+	// Pending extension UI requests waiting for response. Keep the emitted
+	// payload alongside its callbacks so recovery snapshots can reconstruct the
+	// answer UI after a Dashboard reload or replay gap.
+	const pendingExtensionRequests = new Map<string, PendingRpcExtensionRequest>();
 
 	// Shutdown request flag
 	let shutdownRequested = false;
@@ -1447,6 +1468,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 					state: getStateForRpc(session, modelFallbackMessage),
 					messages: getDashboardMessagesForRpc(session),
 					backgroundAgents: getBackgroundAgents().map(toRpcBackgroundAgentInfo),
+					pendingExtensionUiRequests: [...pendingExtensionRequests.values()].map(({ request }) => request),
 				};
 				return success(id, "get_dashboard_snapshot", data);
 			}
@@ -1845,9 +1867,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	let detachInput = () => {};
 
 	async function shutdown(): Promise<never> {
-		for (const [id, pending] of [...pendingExtensionRequests]) {
-			pending.resolve({ type: "extension_ui_response", id, cancelled: true });
-		}
+		cancelPendingRpcExtensionRequests(pendingExtensionRequests);
 
 		const currentRunner = session.extensionRunner;
 		if (currentRunner?.hasHandlers("session_shutdown")) {

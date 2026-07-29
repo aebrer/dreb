@@ -486,6 +486,48 @@ describe("app store SSE sync", () => {
 		expect(store.sessions.a?.needsAttention).toBe(false);
 	});
 
+	it("restores a pending ask and attention from the authoritative resync", async () => {
+		const snapshot = runtimeSnapshot("a", true);
+		vi.mocked(api.resync).mockResolvedValueOnce({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [],
+				backgroundAgents: [],
+				pendingExtensionUiRequests: [
+					{
+						type: "extension_ui_request",
+						id: "ask-pending",
+						method: "ask",
+						title: "Choose a database",
+						question: "Which one?",
+						options: ["SQLite", "Postgres"],
+						allowFreeText: true,
+						multiSelect: false,
+						multiline: false,
+					},
+				],
+				barrierSeq: 20,
+			},
+			barrierSeq: 20,
+		});
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.uiRequests).toEqual([
+			expect.objectContaining({
+				id: "ask-pending",
+				method: "ask",
+				question: "Which one?",
+				options: ["SQLite", "Postgres"],
+			}),
+		]);
+		expect(store.sessions.a?.needsAttention).toBe(true);
+	});
+
 	it("resolveUiRequest optimistically dismisses an ask request and clears attention", async () => {
 		const store = await makeStartedStore();
 

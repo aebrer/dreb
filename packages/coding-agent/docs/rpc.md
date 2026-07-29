@@ -224,17 +224,17 @@ The `model` field is a full [Model](#model) object or `null`. `scopedModels` is 
 
 #### get_dashboard_snapshot
 
-Capture the dashboard-visible parent-session state, full parent transcript, and background-agent registry at one RPC command boundary. This is for authoritative recovery, not ordinary incremental refreshes.
+Capture the dashboard-visible parent-session state, full parent transcript, background-agent registry, and blocking extension UI requests at one RPC command boundary. This is for authoritative recovery, not ordinary incremental refreshes.
 
 ```json
 {"id": "snapshot-7", "type": "get_dashboard_snapshot"}
 ```
 
-The `RpcDashboardSnapshot` result is a `snapshotId`, a complete `RpcSessionState` (including `tasks`), `messages`, and `backgroundAgents`. The RPC child writes a `RpcDashboardSnapshotBarrierEvent` to stdout **immediately before** the matching response line:
+The `RpcDashboardSnapshot` result is a `snapshotId`, a complete `RpcSessionState` (including `tasks`), `messages`, `backgroundAgents`, and `pendingExtensionUiRequests`. The last field contains every blocking `select`, `confirm`, `input`, `editor`, or `ask` request still awaiting a host response, so a recovering Dashboard can restore the answer UI instead of leaving the runtime blocked. The RPC child writes a `RpcDashboardSnapshotBarrierEvent` to stdout **immediately before** the matching response line:
 
 ```json
 {"type":"dashboard_snapshot_barrier","snapshotId":"snapshot-7"}
-{"id":"snapshot-7","type":"response","command":"get_dashboard_snapshot","success":true,"data":{"snapshotId":"snapshot-7","state":{...},"messages":[...],"backgroundAgents":[...]}}
+{"id":"snapshot-7","type":"response","command":"get_dashboard_snapshot","success":true,"data":{"snapshotId":"snapshot-7","state":{...},"messages":[...],"backgroundAgents":[...],"pendingExtensionUiRequests":[...]}}
 ```
 
 Stdout JSONL ordering is the contract: a relay records its current event-stream sequence when the marker arrives, before resolving the response, and pairs the snapshot only with that exact marker. The dashboard returns that captured sequence as `/api/resync.barrierSeq`; consumers discard queued events through it and replay only later events. The marker itself is not broadcast as another browser event, so one recovering client does not interrupt healthy clients. Do not infer ordering from request/response timing; see [dashboard recovery](dashboard.md#live-connection-and-recovery).
