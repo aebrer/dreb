@@ -266,6 +266,101 @@ describe("pre-spawn subagent arbitration", () => {
 		expect(args[args.length - 1]).toBe(originalTask);
 	});
 
+	test.each([
+		{
+			label: "agent only",
+			decision: { agent: "arbiter-b", model: "provider/worker", thinking: "high" },
+			changed: ["agent"],
+			expectedTools: "read,edit,write",
+			expectedPrompt: "B prompt",
+			unexpectedPrompt: "A prompt",
+		},
+		{
+			label: "model only",
+			decision: { agent: "arbiter-a", model: "gateway/vendor/worker", thinking: "high" },
+			changed: ["model"],
+			expectedTools: "read,grep",
+			expectedPrompt: "A prompt",
+			unexpectedPrompt: "B prompt",
+		},
+		{
+			label: "thinking only",
+			decision: { agent: "arbiter-a", model: "provider/worker", thinking: "low" },
+			changed: ["thinking"],
+			expectedTools: "read,grep",
+			expectedPrompt: "A prompt",
+			unexpectedPrompt: "B prompt",
+		},
+	] as const)("applies an arbitration change to $label", async (route) => {
+		const records: DispatchArbitrationRecord[] = [];
+		const result = await executeSingle(
+			agents(),
+			"arbiter-a",
+			"change one route field",
+			tempCwd,
+			undefined,
+			undefined,
+			undefined,
+			"provider",
+			registry,
+			join(tempCwd, "session"),
+			"worker",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				arbitrate: async () => ({
+					enabled: true,
+					ok: true,
+					decision: route.decision,
+					changed: [...route.changed],
+				}),
+				onRecord: (record) => records.push(record),
+				defaultThinkingLevel: "high",
+			},
+		);
+
+		expect(result).toMatchObject({
+			exitCode: 0,
+			agent: route.decision.agent,
+			model: route.decision.model,
+			thinking: route.decision.thinking,
+		});
+		expect(records).toEqual([
+			expect.objectContaining({
+				status: "success",
+				proposed: { agent: "arbiter-a", model: "provider/worker", thinking: "high" },
+				final: route.decision,
+				changed: [...route.changed],
+			}),
+		]);
+		const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+		const [expectedProvider, ...modelParts] = route.decision.model.split("/");
+		expect(args).toContain(route.decision.agent);
+		expect(args.slice(args.indexOf("--provider"), args.indexOf("--provider") + 2)).toEqual([
+			"--provider",
+			expectedProvider,
+		]);
+		expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual([
+			"--model",
+			modelParts.join("/"),
+		]);
+		expect(args.slice(args.indexOf("--thinking"), args.indexOf("--thinking") + 2)).toEqual([
+			"--thinking",
+			route.decision.thinking,
+		]);
+		expect(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2)).toEqual([
+			"--tools",
+			route.expectedTools,
+		]);
+		expect(args.slice(args.indexOf("--append-system-prompt"), args.indexOf("--append-system-prompt") + 2)).toEqual([
+			"--append-system-prompt",
+			route.expectedPrompt,
+		]);
+		expect(args).not.toContain(route.unexpectedPrompt);
+	});
+
 	test("preserves the exact selected provider when the raw model ID contains a slash", async () => {
 		const result = await executeSingle(
 			agents(),

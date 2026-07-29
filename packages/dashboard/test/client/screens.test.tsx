@@ -1552,6 +1552,39 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("select Dispatch Arbiter model");
 	});
 
+	it("settings explicitly disables even when retained fields are malformed", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: {
+				enabled: true,
+				model: "malformed-model-id",
+				thinking: "invalid-thinking",
+				guidePath: "",
+			} as never,
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const enabled = enabledRow.querySelector("select") as HTMLSelectElement;
+
+		enabled.value = "off";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: {
+				enabled: false,
+				model: "malformed-model-id",
+				thinking: "invalid-thinking",
+				guidePath: "",
+			},
+		});
+		expect(enabled.value).toBe("off");
+	});
+
 	it("settings model picker and toggle persist the exact global Dispatch Arbiter policy", async () => {
 		vi.mocked(api.settings).mockResolvedValue({
 			subagentArbiter: { enabled: false, thinking: "medium", guidePath: "~/routing.md" },

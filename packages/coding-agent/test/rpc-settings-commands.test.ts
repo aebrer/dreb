@@ -504,7 +504,7 @@ describe("setSettingsForRpc validation", () => {
 		expect(invalidKey).toMatchObject({ ok: false, error: expect.stringContaining("Unknown subagentArbiter") });
 	});
 
-	it("always permits disabling a policy whose configured model is no longer available", async () => {
+	it("always permits explicit disablement with malformed retained fields", async () => {
 		const manager = SettingsManager.inMemory({
 			subagentArbiter: {
 				enabled: true,
@@ -518,10 +518,10 @@ describe("setSettingsForRpc validation", () => {
 		const result = await setSettingsForRpc(manager, registry, {
 			subagentArbiter: {
 				enabled: false,
-				model: "retired-provider/retired-model",
-				thinking: "xhigh",
-				guidePath: "~/routing.md",
-			},
+				model: "malformed-model-id",
+				thinking: "invalid-thinking",
+				guidePath: "",
+			} as never,
 		});
 
 		expect(result).toMatchObject({
@@ -529,14 +529,19 @@ describe("setSettingsForRpc validation", () => {
 			settings: {
 				subagentArbiter: {
 					enabled: false,
-					model: "retired-provider/retired-model",
-					thinking: "xhigh",
-					guidePath: "~/routing.md",
+					model: "malformed-model-id",
+					thinking: "invalid-thinking",
+					guidePath: "",
 				},
 			},
 		});
 		expect(registry.getAvailable).not.toHaveBeenCalled();
-		expect(manager.getGlobalSubagentArbiterSettings()).toMatchObject({ enabled: false });
+		expect(manager.getGlobalSubagentArbiterSettings()).toEqual({
+			enabled: false,
+			model: "malformed-model-id",
+			thinking: "invalid-thinking",
+			guidePath: "",
+		});
 	});
 
 	it("applies nothing when any field is invalid (atomicity)", async () => {

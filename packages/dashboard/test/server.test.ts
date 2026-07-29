@@ -537,6 +537,32 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(original.status).toBe(200);
 		expect(Buffer.from(await original.arrayBuffer())).toEqual(subagentPng);
 
+		// A fail-closed pre-spawn arbitration has metadata but no child log.
+		const failedAgent = {
+			agentId: "bg-failed",
+			agentType: "Explore",
+			taskSummary: "blocked before spawn",
+			startedAt: new Date().toISOString(),
+			status: "failed",
+			arbitrations: [
+				{
+					status: "failure",
+					proposed: { agent: "Explore", model: "provider/worker", thinking: "high" },
+					final: null,
+					changed: [],
+					errorCode: "invalid_guide",
+					errorMessage: "Routing guide is invalid.",
+				},
+			],
+		};
+		(clients[0].listBackgroundAgents as ReturnType<typeof vi.fn>).mockResolvedValue([failedAgent]);
+		const failed = await fetch(`${base}/api/runtimes/${key}/subagents/bg-failed/messages`);
+		expect(failed.status).toBe(200);
+		await expect(failed.json()).resolves.toMatchObject({
+			agent: { agentId: "bg-failed", arbitrations: [{ status: "failure", final: null }] },
+			messages: [],
+		});
+
 		// Unknown agent id → loud 502 with the registry error.
 		const missing = await fetch(`${base}/api/runtimes/${key}/subagents/nope/messages`);
 		expect(missing.status).toBe(502);

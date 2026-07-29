@@ -31,9 +31,18 @@ function guide(
 		schemaVersion?: number;
 		omitRootHeading?: boolean;
 		omitSafeguards?: boolean;
+		localEvidence?: "available" | "cold-start";
+		dateStart?: string | null;
+		dateEnd?: string | null;
 	} = {},
 ): string {
 	const headingModelIds = options.headingModelIds ?? modelIds;
+	const localEvidence = options.localEvidence ?? "cold-start";
+	const dateStart =
+		options.dateStart === undefined ? (localEvidence === "available" ? "2026-07-01" : null) : options.dateStart;
+	const dateEnd =
+		options.dateEnd === undefined ? (localEvidence === "available" ? "2026-07-28" : null) : options.dateEnd;
+	const yamlDate = (value: string | null) => (value === null ? "null" : `"${value}"`);
 	const sections = headingModelIds
 		.map(
 			(modelId) =>
@@ -47,12 +56,12 @@ schema_version: ${options.schemaVersion ?? 1}
 generated_at: "2026-07-28T00:00:00Z"
 covered_model_ids:
 ${modelIds.map((id) => `  - "${id}"`).join("\n")}
-local_evidence: "cold-start"
+local_evidence: "${localEvidence}"
 analyzed_session_directories:
   - "~/.dreb/agent/subagent-sessions/"
 session_date_range:
-  start: null
-  end: null
+  start: ${yamlDate(dateStart)}
+  end: ${yamlDate(dateEnd)}
 ---
 ${options.omitRootHeading ? "" : "# Model Routing Guide"}
 ${options.omitSafeguards ? "" : "## Routing safeguards\nUse role and cost fit."}
@@ -75,6 +84,45 @@ describe("model routing guide validation", () => {
 		]);
 		expect(result.coveredModelIds).toEqual(["provider/model-a", "other/model-b"]);
 		expect(result.localEvidence).toBe("cold-start");
+	});
+
+	test("accepts a guide backed by available local-history evidence", () => {
+		const result = validateModelRoutingGuideContent(
+			guide(["provider/model-a"], {
+				localEvidence: "available",
+				dateStart: "2026-07-01",
+				dateEnd: "2026-07-28",
+			}),
+			["provider/model-a"],
+		);
+		expect(result.localEvidence).toBe("available");
+	});
+
+	test.each([
+		[
+			"available evidence without a start date",
+			{ localEvidence: "available", dateStart: null },
+			/non-null session date-range bounds/,
+		],
+		[
+			"available evidence without an end date",
+			{ localEvidence: "available", dateEnd: null },
+			/non-null session date-range bounds/,
+		],
+		[
+			"cold-start evidence with a start date",
+			{ localEvidence: "cold-start", dateStart: "2026-07-01" },
+			/null session date-range bounds/,
+		],
+		[
+			"cold-start evidence with an end date",
+			{ localEvidence: "cold-start", dateEnd: "2026-07-28" },
+			/null session date-range bounds/,
+		],
+	] as const)("rejects %s", (_label, options, expected) => {
+		expect(() =>
+			validateModelRoutingGuideContent(guide(["provider/model-a"], options), ["provider/model-a"]),
+		).toThrow(expected);
 	});
 
 	test.each([

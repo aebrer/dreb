@@ -736,40 +736,41 @@ export async function setSettingsForRpc(
 		if (subagentArbiter.enabled !== undefined && typeof subagentArbiter.enabled !== "boolean") {
 			return { ok: false, error: "subagentArbiter.enabled must be a boolean" };
 		}
-		if (
-			subagentArbiter.model !== undefined &&
-			(typeof subagentArbiter.model !== "string" || !subagentArbiter.model.trim())
-		) {
-			return { ok: false, error: "subagentArbiter.model must be a non-empty exact provider/model string" };
-		}
-		if (
-			subagentArbiter.thinking !== undefined &&
-			(typeof subagentArbiter.thinking !== "string" || !isValidThinkingLevel(subagentArbiter.thinking))
-		) {
-			return {
-				ok: false,
-				error: `Invalid subagentArbiter.thinking: ${JSON.stringify(subagentArbiter.thinking)}. Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
-			};
-		}
-		if (
-			subagentArbiter.guidePath !== undefined &&
-			(typeof subagentArbiter.guidePath !== "string" || !subagentArbiter.guidePath.trim())
-		) {
-			return { ok: false, error: "subagentArbiter.guidePath must be a non-empty string" };
-		}
-		if (subagentArbiter.enabled === true && !subagentArbiter.model) {
-			return { ok: false, error: "Enabling subagentArbiter requires an exact provider/model" };
-		}
-		if (subagentArbiter.model) {
-			const slash = subagentArbiter.model.indexOf("/");
-			if (slash <= 0 || slash === subagentArbiter.model.length - 1 || /\s/.test(subagentArbiter.model)) {
-				return { ok: false, error: "subagentArbiter.model must be an exact provider/model" };
+		if (subagentArbiter.enabled === false) {
+			// Explicit disablement is the recovery path for fail-closed policies.
+			// Preserve retained fields without validating them so malformed manual
+			// edits cannot trap users in a policy that blocks every child spawn.
+			subagentArbiter = { ...subagentArbiter };
+		} else {
+			if (
+				subagentArbiter.model !== undefined &&
+				(typeof subagentArbiter.model !== "string" || !subagentArbiter.model.trim())
+			) {
+				return { ok: false, error: "subagentArbiter.model must be a non-empty exact provider/model string" };
 			}
-			// A stale configured model must never prevent users from disabling a
-			// fail-closed arbiter. Preserve shape and canonical-ID validation, but
-			// require current availability and thinking capability only when the
-			// policy is not explicitly disabled. Re-enabling validates them again.
-			if (subagentArbiter.enabled !== false) {
+			if (
+				subagentArbiter.thinking !== undefined &&
+				(typeof subagentArbiter.thinking !== "string" || !isValidThinkingLevel(subagentArbiter.thinking))
+			) {
+				return {
+					ok: false,
+					error: `Invalid subagentArbiter.thinking: ${JSON.stringify(subagentArbiter.thinking)}. Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
+				};
+			}
+			if (
+				subagentArbiter.guidePath !== undefined &&
+				(typeof subagentArbiter.guidePath !== "string" || !subagentArbiter.guidePath.trim())
+			) {
+				return { ok: false, error: "subagentArbiter.guidePath must be a non-empty string" };
+			}
+			if (subagentArbiter.enabled === true && !subagentArbiter.model) {
+				return { ok: false, error: "Enabling subagentArbiter requires an exact provider/model" };
+			}
+			if (subagentArbiter.model) {
+				const slash = subagentArbiter.model.indexOf("/");
+				if (slash <= 0 || slash === subagentArbiter.model.length - 1 || /\s/.test(subagentArbiter.model)) {
+					return { ok: false, error: "subagentArbiter.model must be an exact provider/model" };
+				}
 				const provider = subagentArbiter.model.slice(0, slash);
 				const modelId = subagentArbiter.model.slice(slash + 1);
 				const models = await modelRegistry.getAvailable();
@@ -780,8 +781,8 @@ export async function setSettingsForRpc(
 					if (!validation.ok) return validation;
 				}
 			}
+			subagentArbiter = { ...subagentArbiter };
 		}
-		subagentArbiter = { ...subagentArbiter };
 	}
 
 	let trustedContextFolders: string[] | undefined;
