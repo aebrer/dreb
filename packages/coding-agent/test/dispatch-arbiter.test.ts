@@ -160,8 +160,9 @@ describe("DispatchArbiter", () => {
 	test("uses a direct tool-less call with rolling context, scrubbing, and a validated changed route", async () => {
 		complete.mockResolvedValue(response({ agent: "feature-dev", model: "other/cheap", thinking: "off" }));
 		const arbiter = createArbiter();
+		const toolOutput = `TOOL_OUTPUT_START_${"x".repeat(2_500)}_TOOL_OUTPUT_END`;
 		arbiter.onMessageEnd({ role: "assistant", content: [{ type: "text", text: "Inspected source files" }] });
-		arbiter.onToolEnd({ toolName: "read", result: { content: "done" } });
+		arbiter.onToolEnd({ toolName: "read", result: { content: toolOutput } });
 
 		const result = await arbiter.arbitrate(request);
 		expect(result).toEqual({
@@ -175,7 +176,9 @@ describe("DispatchArbiter", () => {
 		expect(calledModel).toBe(arbiterModel);
 		expect(context.tools).toBeUndefined();
 		expect(context.messages[0].content).toContain("Inspected source files");
-		expect(context.messages[0].content).toContain("Tool read completed");
+		expect(context.messages[0].content).toContain("Tool read completed: TOOL_OUTPUT_START_");
+		expect(context.messages[0].content).toContain("...[truncated]");
+		expect(context.messages[0].content).not.toContain("TOOL_OUTPUT_END");
 		expect(context.messages[0].content).not.toContain("sk-123456789012345678901234567890");
 		expect(options.apiKey).toBe("api-key");
 		expect(options.reasoning).toBe("medium");
@@ -298,6 +301,18 @@ describe("DispatchArbiter", () => {
 
 		settings = { enabled: true, model: "other/cheap", thinking: "high", guidePath };
 		expect(await createArbiter().arbitrate(request)).toMatchObject({ code: "arbiter_thinking" });
+		expect(complete).not.toHaveBeenCalled();
+	});
+
+	test.each([
+		["root heading", "# Model Routing Guide", "# Renamed Routing Guide"],
+		["routing safeguards", "## Routing safeguards", "## Renamed safeguards"],
+	] as const)("rejects a guide missing its required %s before inference", async (_label, required, replacement) => {
+		writeFileSync(guidePath, guide(["provider/worker", "other/cheap"]).replace(required, replacement));
+
+		const result = await createArbiter().arbitrate(request);
+
+		expect(result).toMatchObject({ enabled: true, ok: false, code: "invalid_guide" });
 		expect(complete).not.toHaveBeenCalled();
 	});
 

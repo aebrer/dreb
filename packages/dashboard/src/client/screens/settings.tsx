@@ -347,9 +347,11 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 					mutate({ ...savedSettings, subagentArbiter: pendingArbiterPolicy });
 				}
 			} catch (err) {
-				// RPC validation errors surface verbatim — no silent retry.
-				setError(err instanceof Error ? err.message : String(err));
+				// Refetch clears the shared error signal, so restore the authoritative
+				// validation error after rollback instead of silently hiding it.
+				const saveError = err instanceof Error ? err.message : String(err);
 				const refreshed = await refetch();
+				setError(saveError);
 				if (pendingArbiterPolicy === nextPolicy) {
 					pendingArbiterPolicy = refreshed?.subagentArbiter ?? undefined;
 				} else if (refreshed) {

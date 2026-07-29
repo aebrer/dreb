@@ -29,6 +29,8 @@ function guide(
 		omit?: string;
 		headingModelIds?: string[];
 		schemaVersion?: number;
+		omitRootHeading?: boolean;
+		omitSafeguards?: boolean;
 	} = {},
 ): string {
 	const headingModelIds = options.headingModelIds ?? modelIds;
@@ -52,9 +54,8 @@ session_date_range:
   start: null
   end: null
 ---
-# Model Routing Guide
-## Routing safeguards
-Use role and cost fit.
+${options.omitRootHeading ? "" : "# Model Routing Guide"}
+${options.omitSafeguards ? "" : "## Routing safeguards\nUse role and cost fit."}
 ${sections}
 ${options.duplicateHeading ? sections : ""}
 `;
@@ -101,6 +102,15 @@ describe("model routing guide validation", () => {
 		expect(() =>
 			validateModelRoutingGuideContent(guide(["provider/model-a"], { schemaVersion: 2 }), ["provider/model-a"]),
 		).toThrow(/schema_version must be 1/);
+	});
+
+	test.each([
+		["root heading", { omitRootHeading: true }, /requires the heading "# Model Routing Guide"/],
+		["routing safeguards", { omitSafeguards: true }, /requires the section "## Routing safeguards"/],
+	] as const)("rejects a guide missing its required %s", (_label, options, expected) => {
+		expect(() =>
+			validateModelRoutingGuideContent(guide(["provider/model-a"], options), ["provider/model-a"]),
+		).toThrow(expected);
 	});
 
 	test("rejects duplicate model headings", () => {

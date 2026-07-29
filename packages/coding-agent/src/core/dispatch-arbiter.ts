@@ -92,7 +92,7 @@ export interface DispatchArbiterDeps {
 	getMessages: () => Array<{ role: string; content?: unknown }>;
 	getParentModel: () => Model<Api> | undefined;
 	getSessionTitle: () => string | undefined;
-	getRepoMetadata: () => { repo?: string; cwd: string; branch?: string; dirtyCount?: number };
+	getRepoMetadata: (cwd: string) => { repo?: string; cwd: string; branch?: string; dirtyCount?: number };
 	getExtraSecretPatterns?: () => SecretPattern[] | undefined;
 	complete?: typeof completeSimple;
 	timeoutMs?: number;
@@ -414,7 +414,7 @@ export class DispatchArbiter {
 		const last = userTexts[userTexts.length - 1];
 		const userIntent = first ? (last && last !== first ? [first, last] : [first]) : [];
 		const parentModel = this.deps.getParentModel();
-		const repository = this.deps.getRepoMetadata();
+		const repository = this.deps.getRepoMetadata(request.cwd);
 
 		return {
 			instruction:

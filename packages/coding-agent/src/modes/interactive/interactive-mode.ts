@@ -70,6 +70,7 @@ import { loadAndValidateModelRoutingGuide } from "../../core/model-routing-guide
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import type { ResourceDiagnostic } from "../../core/resource-loader.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
+import type { SubagentArbiterSettings } from "../../core/settings-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import { restoreStderr, type StderrCallback, takeOverStderr } from "../../core/stderr-guard.js";
@@ -3709,6 +3710,47 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private handleSubagentArbiterSettingsChange(settings: SubagentArbiterSettings): boolean {
+		if (settings.enabled) {
+			if (!settings.model) {
+				this.showError("Choose an exact Dispatch Arbiter model before enabling it.");
+				return false;
+			}
+			const slash = settings.model.indexOf("/");
+			const arbiterModel =
+				slash > 0
+					? this.session.modelRegistry.find(settings.model.slice(0, slash), settings.model.slice(slash + 1))
+					: undefined;
+			if (!arbiterModel) {
+				this.showError(`Dispatch Arbiter model "${settings.model}" is not available.`);
+				return false;
+			}
+			const thinking = settings.thinking ?? "off";
+			const thinkingValidation = validateThinkingLevelForModel(arbiterModel, thinking);
+			if (!thinkingValidation.ok) {
+				this.showError(thinkingValidation.error);
+				return false;
+			}
+			try {
+				loadAndValidateModelRoutingGuide(
+					settings.guidePath,
+					process.cwd(),
+					this.session.scopedModels.map(({ model }) => `${model.provider}/${model.id}`),
+				);
+			} catch (error) {
+				this.showError(`Dispatch Arbiter is not ready: ${error instanceof Error ? error.message : String(error)}`);
+				return false;
+			}
+		}
+		this.settingsManager.setGlobalSubagentArbiterSettings(settings);
+		this.showStatus(
+			settings.enabled
+				? `Dispatch Arbiter enabled (${settings.model}, thinking ${settings.thinking ?? "off"}).`
+				: "Dispatch Arbiter disabled.",
+		);
+		return true;
+	}
+
 	private showSettingsSelector(): void {
 		this.showSelector((done) => {
 			// Discover agent types for agent models section
@@ -3872,51 +3914,7 @@ export class InteractiveMode {
 							this.editor.setAutocompleteMaxVisible(maxVisible);
 						}
 					},
-					onSubagentArbiterChange: (settings) => {
-						if (settings.enabled) {
-							if (!settings.model) {
-								this.showError("Choose an exact Dispatch Arbiter model before enabling it.");
-								return false;
-							}
-							const slash = settings.model.indexOf("/");
-							const arbiterModel =
-								slash > 0
-									? this.session.modelRegistry.find(
-											settings.model.slice(0, slash),
-											settings.model.slice(slash + 1),
-										)
-									: undefined;
-							if (!arbiterModel) {
-								this.showError(`Dispatch Arbiter model "${settings.model}" is not available.`);
-								return false;
-							}
-							const thinking = settings.thinking ?? "off";
-							const thinkingValidation = validateThinkingLevelForModel(arbiterModel, thinking);
-							if (!thinkingValidation.ok) {
-								this.showError(thinkingValidation.error);
-								return false;
-							}
-							try {
-								loadAndValidateModelRoutingGuide(
-									settings.guidePath,
-									process.cwd(),
-									this.session.scopedModels.map(({ model }) => `${model.provider}/${model.id}`),
-								);
-							} catch (error) {
-								this.showError(
-									`Dispatch Arbiter is not ready: ${error instanceof Error ? error.message : String(error)}`,
-								);
-								return false;
-							}
-						}
-						this.settingsManager.setGlobalSubagentArbiterSettings(settings);
-						this.showStatus(
-							settings.enabled
-								? `Dispatch Arbiter enabled (${settings.model}, thinking ${settings.thinking ?? "off"}).`
-								: "Dispatch Arbiter disabled.",
-						);
-						return true;
-					},
+					onSubagentArbiterChange: (settings) => this.handleSubagentArbiterSettingsChange(settings),
 					onAgentModelsChange: (agentName, models) => {
 						const shadowedByProject = this.settingsManager.hasProjectAgentModelOverride(agentName);
 						if (models.length > 0) {

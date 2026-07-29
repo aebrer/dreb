@@ -1653,6 +1653,38 @@ describe("screen smoke tests", () => {
 		expect(el.querySelector("[data-testid='dispatch-arbiter-readiness']")?.textContent).toContain("status: enabled");
 	});
 
+	it("rolls back an optimistic Dispatch Arbiter edit when the durable save is rejected", async () => {
+		vi.mocked(api.settings).mockClear();
+		vi.mocked(api.saveSettings).mockClear();
+		const durableSettings = {
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "off" as const },
+		};
+		vi.mocked(api.settings).mockResolvedValue(durableSettings);
+		vi.mocked(api.saveSettings).mockRejectedValueOnce(new Error("arbiter policy rejected by server"));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const enabled = enabledRow.querySelector("select") as HTMLSelectElement;
+
+		enabled.value = "on";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+		expect(enabled.value).toBe("on");
+
+		await vi.waitFor(() =>
+			expect(el.querySelector(".settings-error")?.textContent).toContain("arbiter policy rejected by server"),
+		);
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "off" },
+		});
+		expect(api.settings).toHaveBeenCalledTimes(2);
+		expect(enabled.value).toBe("off");
+		expect(el.querySelector("[data-testid='dispatch-arbiter-readiness']")?.textContent).toContain("status: disabled");
+	});
+
 	it("settings persists Dispatch Arbiter thinking and guide-path controls", async () => {
 		vi.mocked(api.settings).mockResolvedValue({
 			subagentArbiter: { enabled: false, model: "provider/router", thinking: "off" },

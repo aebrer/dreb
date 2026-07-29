@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -197,11 +197,13 @@ describe("pre-spawn subagent arbitration", () => {
 		const records: DispatchArbitrationRecord[] = [];
 		let arbitrationRequest: DispatchArbitrationRequest | undefined;
 		const originalTask = "Implement exactly this task";
+		const childCwd = join(tempCwd, "direct-child");
+		mkdirSync(childCwd);
 		const result = await executeSingle(
 			agents(),
 			"arbiter-a",
 			originalTask,
-			tempCwd,
+			childCwd,
 			undefined,
 			undefined,
 			undefined,
@@ -234,6 +236,8 @@ describe("pre-spawn subagent arbitration", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.agent).toBe("arbiter-b");
 		expect(result.task).toBe(originalTask);
+		expect(arbitrationRequest?.cwd).toBe(childCwd);
+		expect(vi.mocked(spawn).mock.calls[0][2]).toMatchObject({ cwd: childCwd });
 		expect(arbitrationRequest?.agents.find((agent) => agent.name === "arbiter-b")?.tools).toEqual([
 			"read",
 			"edit",
@@ -388,6 +392,10 @@ describe("pre-spawn subagent arbitration", () => {
 	test("AgentSession persists safe arbitration metadata outside reconstructed LLM context", async () => {
 		const guidePath = join(tempCwd, "routing-guide.md");
 		writeFileSync(guidePath, routingGuide("provider/worker"));
+		const childRepo = join(tempCwd, "child-repo");
+		const init = spawnSync("git", ["init", "--initial-branch=child-route", childRepo], { encoding: "utf8" });
+		expect(init.status, init.stderr).toBe(0);
+		writeFileSync(join(childRepo, "untracked.txt"), "child repository change");
 		const parentAgent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model: workerModel, systemPrompt: "parent", tools: [] },
@@ -431,12 +439,25 @@ describe("pre-spawn subagent arbitration", () => {
 		expect(tool).toBeDefined();
 		await tool!.execute(
 			"call",
-			{ agent: "arbiter-a", task: "inspect CUSTOM_SECRET_123" },
+			{ tasks: [{ agent: "arbiter-a", task: "inspect CUSTOM_SECRET_123", cwd: childRepo }] },
 			new AbortController().signal,
 			() => {},
 		);
 		const event = await eventPromise;
+		const providerMessage = (providerContext as { messages: Array<{ content: string }> }).messages[0].content;
+		const arbiterInput = JSON.parse(providerMessage.slice(providerMessage.indexOf("\n") + 1)) as {
+			child: { cwd: string };
+			repository: { repo: string; cwd: string; branch: string; dirtyCount: number };
+		};
 
+		expect(arbiterInput.child.cwd).toBe(childRepo);
+		expect(arbiterInput.repository).toEqual({
+			repo: "child-repo",
+			cwd: childRepo,
+			branch: "child-route",
+			dirtyCount: 1,
+		});
+		expect(vi.mocked(spawn).mock.calls[0][2]).toMatchObject({ cwd: childRepo });
 		expect(JSON.stringify(providerContext)).not.toContain("CUSTOM_SECRET_123");
 		expect(JSON.stringify(providerContext)).toContain("<REDACTED:custom_arbiter_secret>");
 		expect(event).toMatchObject({ status: "success", agentId: expect.any(String), changed: [] });
@@ -615,6 +636,10 @@ describe("pre-spawn subagent arbitration", () => {
 				if ((mode === "parallel" && completions.length === 2) || mode === "chain") resolveComplete();
 			},
 		});
+		const chainCwds = [join(tempCwd, "chain-first"), join(tempCwd, "chain-second")];
+		if (mode === "chain") {
+			for (const cwd of chainCwds) mkdirSync(cwd);
+		}
 		const params =
 			mode === "parallel"
 				? {
@@ -625,8 +650,8 @@ describe("pre-spawn subagent arbitration", () => {
 					}
 				: {
 						chain: [
-							{ agent: "arbiter-a", task: "first" },
-							{ agent: "arbiter-a", task: "use {previous} now" },
+							{ agent: "arbiter-a", task: "first", cwd: chainCwds[0] },
+							{ agent: "arbiter-a", task: "use {previous} now", cwd: chainCwds[1] },
 						],
 					};
 		await tool.execute("call", params, new AbortController().signal, () => {}, undefined as never);
@@ -641,6 +666,8 @@ describe("pre-spawn subagent arbitration", () => {
 		if (mode === "chain") {
 			expect(requests[0].step).toBe(1);
 			expect(requests[1].step).toBe(2);
+			expect(requests.map((request) => request.cwd)).toEqual(chainCwds);
+			expect(vi.mocked(spawn).mock.calls.map((call) => call[2]?.cwd)).toEqual(chainCwds);
 			expect(requests[1].task).toContain("FIRST_OUTPUT");
 			expect(requests[1].task).not.toContain("{previous}");
 		}

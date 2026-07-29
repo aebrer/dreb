@@ -413,11 +413,12 @@ export class AgentSession {
 			getMessages: () => this.agent.state.messages,
 			getParentModel: () => this.model,
 			getSessionTitle: () => this.sessionName,
-			getRepoMetadata: () => {
-				const currentStatus = getGitStatusMetadata(this._cwd) ?? this._gitRepoState;
+			getRepoMetadata: (cwd) => {
+				const isSessionCwd = resolve(cwd) === resolve(this._cwd);
+				const currentStatus = getGitStatusMetadata(cwd) ?? (isSessionCwd ? this._gitRepoState : undefined);
 				return {
-					repo: basename(this._cwd),
-					cwd: this._cwd,
+					repo: basename(cwd),
+					cwd,
 					branch: currentStatus?.branch,
 					dirtyCount: currentStatus?.dirtyCount,
 				};
