@@ -2901,10 +2901,16 @@ export class AgentSession {
 			? wrapRegisteredTools(allCustomTools, this._extensionRunner)
 			: [];
 
+		// Give base tools a per-execution extension context so built-ins like
+		// ask_user can reach ctx.ui. createContext() snapshots hasUI at call time,
+		// so print/RPC-without-host modes degrade to the no-op UI (hasUI === false).
+		const baseToolCtxFactory = this._extensionRunner
+			? () => (this._extensionRunner as ExtensionRunner).createContext()
+			: undefined;
 		const toolRegistry = new Map(
 			Array.from(this._baseToolDefinitions.values()).map((definition) => [
 				definition.name,
-				wrapToolDefinition(definition),
+				wrapToolDefinition(definition, baseToolCtxFactory),
 			]),
 		);
 		for (const tool of wrappedExtensionTools as AgentTool[]) {

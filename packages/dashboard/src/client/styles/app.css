@@ -2207,6 +2207,62 @@ details.thinking .thinking-body {
 	outline: none;
 }
 
+/* ------------------------------------------------------------- ask_user dialog */
+
+.ask-options {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: 0 0 var(--space-3);
+	padding: 0;
+	border: 0;
+	min-width: 0;
+}
+
+.ask-options-legend {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+.ask-option {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: var(--space-2) var(--space-3);
+	cursor: pointer;
+	color: var(--text);
+}
+
+.ask-option:hover {
+	border-color: var(--text);
+}
+
+.ask-option.selected {
+	border-color: var(--status-running);
+	background: color-mix(in srgb, var(--status-running) 12%, transparent);
+}
+
+.ask-option input {
+	width: auto;
+	margin: 0;
+	accent-color: var(--status-running);
+	cursor: pointer;
+}
+
+.ask-custom-label {
+	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
 .recent-projects {
 	display: flex;
 	flex-direction: column;

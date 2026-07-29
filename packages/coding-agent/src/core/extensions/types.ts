@@ -84,6 +84,37 @@ export interface ExtensionUIDialogOptions {
 	timeout?: number;
 }
 
+/**
+ * A rich question for {@link ExtensionUIContext.ask}. Presents optional
+ * suggested options (single- or multi-select) alongside an optional free-text
+ * field, rendered natively in every surface (TUI, Dashboard, RPC host).
+ */
+export interface AskRequest {
+	/** The question to ask the user. */
+	question: string;
+	/** Short bold header. Defaults to a generic prompt title when omitted. */
+	title?: string;
+	/** 2-4 suggested options. */
+	options?: string[];
+	/** Offer a "type your own answer" field. Defaults to true. */
+	allowFreeText?: boolean;
+	/** Render options as checkboxes (multiple answers) instead of radios. */
+	multiSelect?: boolean;
+	/** Use a multi-line text area for the free-text field. */
+	multiline?: boolean;
+}
+
+/**
+ * The user's answer to an {@link AskRequest}. A cancelled/skipped/timed-out
+ * question resolves to `undefined` instead of an {@link AskResult}.
+ */
+export interface AskResult {
+	/** Options the user selected (empty when only free text was provided). */
+	selected: string[];
+	/** Free-text answer, when the user typed one. */
+	customText?: string;
+}
+
 /** Placement for extension widgets. */
 export type WidgetPlacement = "aboveEditor" | "belowEditor";
 
@@ -109,6 +140,13 @@ export interface ExtensionUIContext {
 
 	/** Show a text input dialog. */
 	input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
+
+	/**
+	 * Show a rich question with suggested options, optional free text, and
+	 * single- or multi-select. Resolves to the user's answer, or `undefined`
+	 * when the question is skipped, cancelled, or times out.
+	 */
+	ask(request: AskRequest, opts?: ExtensionUIDialogOptions): Promise<AskResult | undefined>;
 
 	/** Show a notification to the user. */
 	notify(message: string, type?: "info" | "warning" | "error"): void;

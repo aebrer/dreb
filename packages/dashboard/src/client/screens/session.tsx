@@ -182,6 +182,103 @@ function ExtensionUiModal(props: {
 	);
 }
 
+function AskUiModal(props: {
+	request: ExtensionUiRequest;
+	onRespond: (response: Record<string, unknown>) => void;
+}): JSX.Element {
+	const options = () => props.request.options ?? [];
+	const allowFreeText = () => props.request.allowFreeText !== false;
+	const multiSelect = () => props.request.multiSelect === true && options().length > 0;
+	const [selected, setSelected] = createSignal<string[]>([]);
+	const [customText, setCustomText] = createSignal("");
+	const respond = (body: Record<string, unknown>) =>
+		props.onRespond({ type: "extension_ui_response", id: props.request.id, ...body });
+
+	const toggle = (option: string) => {
+		if (multiSelect()) {
+			setSelected((current) =>
+				current.includes(option) ? current.filter((value) => value !== option) : [...current, option],
+			);
+		} else {
+			setSelected([option]);
+		}
+	};
+
+	const answer = () => {
+		const text = customText().trim();
+		return { selected: selected(), customText: text ? text : undefined };
+	};
+	const canSubmit = () => answer().selected.length > 0 || answer().customText !== undefined;
+	const submit = () => {
+		if (canSubmit()) respond(answer());
+	};
+
+	return (
+		<Modal
+			title={props.request.title}
+			onDismiss={() => respond({ cancelled: true })}
+			actions={
+				<>
+					<button type="button" class="btn btn-small" onClick={() => respond({ cancelled: true })}>
+						skip
+					</button>
+					<button type="button" class="btn btn-small btn-primary" disabled={!canSubmit()} onClick={submit}>
+						submit
+					</button>
+				</>
+			}
+		>
+			<Show when={props.request.question}>
+				<p style={{ "margin-bottom": "12px" }}>{props.request.question}</p>
+			</Show>
+			<Show when={options().length > 0}>
+				<fieldset class="ask-options">
+					<legend class="ask-options-legend">Answer options</legend>
+					<For each={options()}>
+						{(option) => (
+							<label class="ask-option" classList={{ selected: selected().includes(option) }}>
+								<input
+									type={multiSelect() ? "checkbox" : "radio"}
+									name={`ask-${props.request.id}`}
+									checked={selected().includes(option)}
+									onChange={() => toggle(option)}
+								/>
+								<span>{option}</span>
+							</label>
+						)}
+					</For>
+				</fieldset>
+			</Show>
+			<Show when={allowFreeText()}>
+				<div class="field">
+					<label class="ask-custom-label" for={`ask-custom-${props.request.id}`}>
+						{options().length > 0 ? "Or type your own answer" : "Your answer"}
+					</label>
+					<Show
+						when={props.request.multiline}
+						fallback={
+							<input
+								id={`ask-custom-${props.request.id}`}
+								type="text"
+								value={customText()}
+								placeholder="Type a different answer…"
+								onInput={(e) => setCustomText(e.currentTarget.value)}
+							/>
+						}
+					>
+						<textarea
+							id={`ask-custom-${props.request.id}`}
+							rows="5"
+							value={customText()}
+							onInput={(e) => setCustomText(e.currentTarget.value)}
+						/>
+					</Show>
+				</div>
+			</Show>
+		</Modal>
+	);
+}
+
 function LoadedContextModal(props: { resources?: ResourcesDto; error?: string; onClose: () => void }): JSX.Element {
 	const section = (title: string, items: JSX.Element[]) => (
 		<section class="context-section">
@@ -1539,18 +1636,23 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			</footer>
 
 			<Show when={session()?.uiRequests[0]}>
-				{(request) => (
-					<ExtensionUiModal
-						request={request()}
-						onRespond={async (response) => {
-							try {
-								await api.extensionUiResponse(props.sessionKey, response);
-							} catch (err) {
-								setActionError(err instanceof Error ? err.message : String(err));
-							}
-						}}
-					/>
-				)}
+				{(request) => {
+					const onRespond = async (response: Record<string, unknown>) => {
+						try {
+							await api.extensionUiResponse(props.sessionKey, response);
+						} catch (err) {
+							setActionError(err instanceof Error ? err.message : String(err));
+						}
+					};
+					return (
+						<Show
+							when={request().method === "ask"}
+							fallback={<ExtensionUiModal request={request()} onRespond={onRespond} />}
+						>
+							<AskUiModal request={request()} onRespond={onRespond} />
+						</Show>
+					);
+				}}
 			</Show>
 
 			<Show when={showModelSelector()}>

@@ -104,12 +104,20 @@ export interface StatusLineEntry {
 
 export interface ExtensionUiRequest {
 	id: string;
-	method: "select" | "confirm" | "input" | "editor";
+	method: "select" | "confirm" | "input" | "editor" | "ask";
 	title: string;
 	message?: string;
 	options?: string[];
 	prefill?: string;
 	placeholder?: string;
+	/** ask: the question body shown under the title. */
+	question?: string;
+	/** ask: offer a free-text field (defaults true). */
+	allowFreeText?: boolean;
+	/** ask: render options as checkboxes instead of radios. */
+	multiSelect?: boolean;
+	/** ask: use a multi-line text area for free text. */
+	multiline?: boolean;
 }
 
 export interface Toast {
@@ -806,6 +814,17 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 					options: event.options as string[] | undefined,
 					prefill: event.prefill as string | undefined,
 					placeholder: event.placeholder as string | undefined,
+				});
+			} else if (method === "ask") {
+				state.uiRequests.push({
+					id: String(event.id),
+					method: "ask",
+					title: String(event.title ?? "Question"),
+					question: String(event.question ?? ""),
+					options: event.options as string[] | undefined,
+					allowFreeText: event.allowFreeText as boolean | undefined,
+					multiSelect: event.multiSelect as boolean | undefined,
+					multiline: event.multiline as boolean | undefined,
 				});
 			} else if (method === "notify") {
 				toastCounter += 1;

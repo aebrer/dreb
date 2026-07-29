@@ -21,6 +21,7 @@ vi.mock("../../src/client/api.js", () => ({
 	},
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
+		extensionUiResponse: vi.fn(async () => ({ ok: true })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
 		sessions: vi.fn(async () => ({ sessions: [] })),
 		resync: vi.fn(async () => ({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 })),
@@ -1058,6 +1059,82 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k2" />);
 		expect(el.textContent).not.toContain("■ stop");
 		expect(el.textContent).not.toContain("follow-up");
+	});
+
+	it("ask_user dialog: native checkboxes + free text combine into one response", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask");
+		session.uiRequests = [
+			{
+				id: "a1",
+				method: "ask",
+				title: "Choose validation",
+				question: "Which checks?",
+				options: ["unit", "browser"],
+				multiSelect: true,
+				allowFreeText: true,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(el.textContent).toContain("Which checks?");
+		const checkboxes = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="checkbox"]');
+		expect(checkboxes.length).toBe(2);
+		expect(el.querySelector('.ask-option input[type="radio"]')).toBeNull();
+
+		checkboxes[0].click(); // check "unit"
+		const custom = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		if (!custom) throw new Error("free-text field missing");
+		custom.value = "lint";
+		custom.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const submit = [...el.querySelectorAll("button")].find((b) => b.textContent === "submit");
+		submit?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask",
+			expect.objectContaining({
+				type: "extension_ui_response",
+				id: "a1",
+				selected: ["unit"],
+				customText: "lint",
+			}),
+		);
+	});
+
+	it("ask_user dialog: single-select renders radios and skip cancels", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask2");
+		session.uiRequests = [{ id: "a2", method: "ask", title: "Pick", question: "Which one?", options: ["A", "B"] }];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask2": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask2" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const radios = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="radio"]');
+		expect(radios.length).toBe(2);
+
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const skip = [...el.querySelectorAll("button")].find((b) => b.textContent === "skip");
+		skip?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask2",
+			expect.objectContaining({ type: "extension_ui_response", id: "a2", cancelled: true }),
+		);
 	});
 
 	it("session header prefers live session_name_changed state", () => {

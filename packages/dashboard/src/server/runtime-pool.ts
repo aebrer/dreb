@@ -446,7 +446,13 @@ export class RuntimePool {
 		// paused, error states.
 		if (type === "extension_ui_request") {
 			const method = event.method as string;
-			if (method === "select" || method === "confirm" || method === "input" || method === "editor") {
+			if (
+				method === "select" ||
+				method === "confirm" ||
+				method === "input" ||
+				method === "editor" ||
+				method === "ask"
+			) {
 				handle.attention.set(`ui:${event.id}`, `extension ${method} awaiting response`);
 			}
 		}

@@ -1114,6 +1114,28 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
 			),
 
+		ask: (request, opts) =>
+			createDialogPromise(
+				opts,
+				undefined,
+				{
+					method: "ask",
+					title: request.title ?? "Question",
+					question: request.question,
+					options: request.options,
+					allowFreeText: request.allowFreeText,
+					multiSelect: request.multiSelect,
+					multiline: request.multiline,
+					timeout: opts?.timeout,
+				},
+				(r) =>
+					"cancelled" in r && r.cancelled
+						? undefined
+						: "selected" in r
+							? { selected: r.selected, customText: r.customText }
+							: undefined,
+			),
+
 		notify(message: string, type?: "info" | "warning" | "error"): void {
 			// Fire and forget - no response needed
 			output({

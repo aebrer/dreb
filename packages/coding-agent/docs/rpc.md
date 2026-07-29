@@ -1874,7 +1874,7 @@ Extensions can request user interaction via `ctx.ui.select()`, `ctx.ui.confirm()
 
 There are two categories of extension UI methods:
 
-- **Dialog methods** (`select`, `confirm`, `input`, `editor`): emit an `extension_ui_request` on stdout and block until the client sends back an `extension_ui_response` on stdin with the matching `id`.
+- **Dialog methods** (`select`, `confirm`, `input`, `editor`, `ask`): emit an `extension_ui_request` on stdout and block until the client sends back an `extension_ui_response` on stdin with the matching `id`.
 - **Fire-and-forget methods** (`notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`): emit an `extension_ui_request` on stdout but do not expect a response. The client can display the information or ignore it.
 
 If a dialog method includes a `timeout` field, the agent-side will auto-resolve with a default value when the timeout expires. The client does not need to track timeouts.
@@ -1960,6 +1960,31 @@ Open a multi-line text editor with optional prefilled content.
 ```
 
 Expected response: `extension_ui_response` with `value` (the edited text) or `cancelled: true`.
+
+#### ask
+
+Ask the user a rich clarifying question with optional single- or multi-select options and an optional free-text field. This powers the built-in `ask_user` tool. `options` (2-4) is optional; `allowFreeText` (default `true`), `multiSelect`, and `multiline` are optional booleans.
+
+```json
+{
+  "type": "extension_ui_request",
+  "id": "uuid-5",
+  "method": "ask",
+  "title": "Choose a database",
+  "question": "Which persistence strategy should I use?",
+  "options": ["SQLite", "PostgreSQL", "Keep the JSON file"],
+  "allowFreeText": true,
+  "multiSelect": false,
+  "multiline": false,
+  "timeout": 60000
+}
+```
+
+Expected response: `extension_ui_response` with `selected` (array of chosen option strings, possibly empty) and optional `customText` (the typed answer), or `cancelled: true` to skip. The client should treat an empty `selected` with no `customText` as a skip.
+
+```json
+{ "type": "extension_ui_response", "id": "uuid-5", "selected": ["SQLite"], "customText": "with WAL enabled" }
+```
 
 #### notify
 

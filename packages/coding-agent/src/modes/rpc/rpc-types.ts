@@ -646,6 +646,18 @@ export type RpcExtensionUIRequest =
 	| {
 			type: "extension_ui_request";
 			id: string;
+			method: "ask";
+			title: string;
+			question: string;
+			options?: string[];
+			allowFreeText?: boolean;
+			multiSelect?: boolean;
+			multiline?: boolean;
+			timeout?: number;
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
 			method: "notify";
 			message: string;
 			notifyType?: "info" | "warning" | "error";
@@ -676,6 +688,7 @@ export type RpcExtensionUIRequest =
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
+	| { type: "extension_ui_response"; id: string; selected: string[]; customText?: string }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 
 // ============================================================================

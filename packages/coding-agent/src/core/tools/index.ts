@@ -1,4 +1,9 @@
 export {
+	type AskUserDetails,
+	type AskUserInput,
+	createAskUserToolDefinition,
+} from "./ask-user.js";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -157,6 +162,7 @@ export {
 
 import type { AgentTool } from "@dreb/agent-core";
 import type { ToolDefinition } from "../extensions/types.js";
+import { createAskUserToolDefinition } from "./ask-user.js";
 import {
 	type BashToolOptions,
 	bashTool,
@@ -211,6 +217,8 @@ export const readOnlyTools: Tool[] = [readTool, grepTool, findTool, lsTool];
 const tmpReadToolDefinition = createTmpReadToolDefinition();
 const tmpReadTool = wrapToolDefinition(tmpReadToolDefinition);
 const waitTool = wrapToolDefinition(waitToolDefinition);
+const askUserToolDefinition = createAskUserToolDefinition();
+const askUserTool = wrapToolDefinition(askUserToolDefinition);
 
 export const allTools = {
 	read: readTool,
@@ -226,6 +234,7 @@ export const allTools = {
 	tmp_read: tmpReadTool,
 	wait: waitTool,
 	search: searchTool,
+	ask_user: askUserTool,
 };
 
 export const allToolDefinitions = {
@@ -242,6 +251,7 @@ export const allToolDefinitions = {
 	tmp_read: tmpReadToolDefinition,
 	wait: waitToolDefinition,
 	search: searchToolDefinition,
+	ask_user: askUserToolDefinition,
 };
 
 export type ToolName = keyof typeof allTools;
@@ -288,6 +298,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		tmp_read: createTmpReadToolDefinition(options?.read),
 		wait: createWaitToolDefinition({ getRunningAgents: getRunningBackgroundAgents }),
 		search: createSearchToolDefinition(cwd),
+		ask_user: createAskUserToolDefinition(),
 	};
 	if (options?.skill) {
 		tools.skill = createSkillToolDefinition(cwd, options.skill);
@@ -329,6 +340,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		tmp_read: wrapToolDefinition(createTmpReadToolDefinition(options?.read)),
 		wait: wrapToolDefinition(createWaitToolDefinition({ getRunningAgents: getRunningBackgroundAgents })),
 		search: createSearchTool(cwd),
+		ask_user: wrapToolDefinition(createAskUserToolDefinition()),
 	};
 	if (options?.skill) {
 		tools.skill = createSkillTool(cwd, options.skill);

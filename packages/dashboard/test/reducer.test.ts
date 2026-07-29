@@ -958,6 +958,36 @@ describe("applySessionEvent — extension UI", () => {
 		expect(state.needsAttention).toBe(false);
 	});
 
+	it("ask requests populate uiRequests with question/options and set attention", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "extension_ui_request",
+			id: "a1",
+			method: "ask",
+			title: "Choose a database",
+			question: "Which persistence strategy?",
+			options: ["SQLite", "Postgres"],
+			multiSelect: true,
+			multiline: false,
+			allowFreeText: true,
+		});
+		expect(state.uiRequests).toHaveLength(1);
+		expect(state.uiRequests[0]).toMatchObject({
+			id: "a1",
+			method: "ask",
+			title: "Choose a database",
+			question: "Which persistence strategy?",
+			options: ["SQLite", "Postgres"],
+			multiSelect: true,
+			allowFreeText: true,
+		});
+		expect(state.needsAttention).toBe(true);
+
+		resolveUiRequest(state, "a1");
+		expect(state.uiRequests).toHaveLength(0);
+		expect(state.needsAttention).toBe(false);
+	});
+
 	it("agent_start clears pending UI requests (server resolved them)", () => {
 		const state = makeState();
 		applySessionEvent(state, {
