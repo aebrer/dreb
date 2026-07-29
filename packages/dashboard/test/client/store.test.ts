@@ -1080,6 +1080,37 @@ describe("app store hydration", () => {
 		expect(store.sessions.s1?.workingSince).toEqual(expect.any(Number));
 	});
 
+	it("restores a pending ask and attention when drilling into a session", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.pendingExtensionUiRequests = [
+			{
+				type: "extension_ui_request",
+				id: "ask-pending",
+				method: "ask",
+				title: "Choose a database",
+				question: "Which one?",
+				options: ["SQLite", "Postgres"],
+				allowFreeText: true,
+				multiSelect: false,
+				multiline: false,
+			},
+		];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		expect(store.sessions.s1?.uiRequests).toEqual([
+			expect.objectContaining({
+				id: "ask-pending",
+				method: "ask",
+				question: "Which one?",
+				options: ["SQLite", "Postgres"],
+			}),
+		]);
+		expect(store.sessions.s1?.needsAttention).toBe(true);
+	});
+
 	it("restores an idle terminal provider failure during hydration", async () => {
 		const snapshot = hydrationSnapshot("s1", false);
 		snapshot.messages = [

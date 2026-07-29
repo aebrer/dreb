@@ -1302,6 +1302,47 @@ describe("screen smoke tests", () => {
 		);
 	});
 
+	it("auto-skips an ask request exactly once when the client-side countdown reaches zero", async () => {
+		vi.useFakeTimers();
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-timeout");
+		session.uiRequests = [
+			{
+				id: "a-timeout",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				timeout: 30_000,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-timeout": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-timeout" />);
+		await vi.advanceTimersByTimeAsync(0);
+
+		// Not yet fired one tick before the deadline.
+		await vi.advanceTimersByTimeAsync(29_000);
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+
+		// The countdown backstop auto-skips with a single cancelled response at zero.
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-timeout",
+			expect.objectContaining({ type: "extension_ui_response", id: "a-timeout", cancelled: true }),
+		);
+
+		// clearInterval on fire prevents any repeated auto-skip.
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+	});
+
 	it("ask_user tool card stays collapsed while running (unlike other running tools)", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-collapse");

@@ -931,7 +931,16 @@ export function createAppStore() {
 					session.workingSince = undefined;
 					session.workingText = undefined;
 				}
+				// Restore blocking dialogs from the same authoritative RPC boundary as
+				// the recovery snapshot path (hydrateSnapshot). Without this a drill-in
+				// into a session with a pending ask_user question would silently drop
+				// the only answer UI, leaving the agent blocked on an unreachable
+				// promise. Post-barrier replay below applies any newer resolve/request.
+				session.uiRequests = (snapshot.pendingExtensionUiRequests ?? [])
+					.map((request) => extensionUiRequestFromEvent(request))
+					.filter((request) => request !== undefined);
 				restoreSnapshotOutcomeState(session, messages, snapshot.state);
+				updateAttention(session);
 			});
 			bumpTaskRevision(key);
 			// The runtime snapshot is authoritative, including a lower count after a
