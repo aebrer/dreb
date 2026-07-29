@@ -1141,6 +1141,38 @@ describe("screen smoke tests", () => {
 		);
 	});
 
+	it("keeps an ask request recoverable when sending the response fails", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-retry");
+		session.uiRequests = [
+			{ id: "a-retry", method: "ask", title: "Retry", question: "Still there?", options: ["A", "B"] },
+		];
+		const resolveUiRequest = vi.fn();
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-retry": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+			resolveUiRequest,
+		};
+		vi.mocked(api.extensionUiResponse).mockRejectedValueOnce(new Error("offline"));
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-retry" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const skip = [...el.querySelectorAll("button")].find((button) => button.textContent === "skip");
+		skip?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(resolveUiRequest).not.toHaveBeenCalled();
+		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.textContent).toContain("offline");
+
+		vi.mocked(api.extensionUiResponse).mockResolvedValueOnce({ ok: true });
+		skip?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(resolveUiRequest).toHaveBeenCalledWith("k-ask-retry", "a-retry");
+	});
+
 	it("ask_user tool card stays collapsed while running (unlike other running tools)", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-collapse");

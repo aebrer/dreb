@@ -803,6 +803,10 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			});
 			break;
 		}
+		case "extension_ui_response_handled": {
+			resolveUiRequest(state, String(event.id));
+			break;
+		}
 		case "extension_ui_request": {
 			const method = event.method as string;
 			if (method === "select" || method === "confirm" || method === "input" || method === "editor") {

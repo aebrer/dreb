@@ -2063,7 +2063,7 @@ Set the text in the input editor. Fire-and-forget.
 
 ### Extension UI Responses (stdin)
 
-Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`). The `id` must match the request.
+Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`, `ask`). The `id` must match the request.
 
 #### Value response (select, input, editor)
 
@@ -2084,6 +2084,17 @@ Dismiss any dialog method. The extension receives `undefined` (for select/input/
 ```json
 {"type": "extension_ui_response", "id": "uuid-3", "cancelled": true}
 ```
+
+After any dialog settles, RPC emits a lifecycle event on stdout so hosts can
+remove the matching UI even when the dialog ended locally because of timeout,
+abort, or runtime shutdown:
+
+```json
+{"type": "extension_ui_response_handled", "id": "uuid-3"}
+```
+
+Hosts should treat this event as idempotent; it can arrive after the host has
+already removed a successfully answered request.
 
 ## Error Handling
 

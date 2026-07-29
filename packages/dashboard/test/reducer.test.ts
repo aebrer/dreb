@@ -958,6 +958,16 @@ describe("applySessionEvent — extension UI", () => {
 		expect(state.needsAttention).toBe(false);
 	});
 
+	it("handled events dismiss requests that timed out or aborted in the runtime", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "extension_ui_request", id: "u1", method: "confirm", title: "Proceed?" });
+
+		applySessionEvent(state, { type: "extension_ui_response_handled", id: "u1" });
+
+		expect(state.uiRequests).toHaveLength(0);
+		expect(state.needsAttention).toBe(false);
+	});
+
 	it("ask requests populate uiRequests with question/options and set attention", () => {
 		const state = makeState();
 		applySessionEvent(state, {

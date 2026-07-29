@@ -560,19 +560,21 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
-	// Answer or skip an extension UI request. Dismiss the dialog optimistically
-	// so it disappears immediately — the response is fire-and-forget and the
-	// server emits no acknowledgement event, so nothing else would clear it
-	// until the next agent_start (that's why skip previously appeared stuck).
+	// Keep a question visible until the server accepts its response. Removing it
+	// before the POST succeeds would leave an unreachable RPC promise on network
+	// or authentication failure. The in-flight set also prevents duplicate sends.
+	const uiResponsesInFlight = new Set<string>();
 	const respondToUiRequest = async (response: Record<string, unknown>) => {
-		const id = response.id;
-		if (typeof id === "string") {
-			props.store.resolveUiRequest(props.sessionKey, id);
-		}
+		const id = typeof response.id === "string" ? response.id : undefined;
+		if (id && uiResponsesInFlight.has(id)) return;
+		if (id) uiResponsesInFlight.add(id);
 		try {
 			await api.extensionUiResponse(props.sessionKey, response);
+			if (id) props.store.resolveUiRequest(props.sessionKey, id);
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
+		} finally {
+			if (id) uiResponsesInFlight.delete(id);
 		}
 	};
 

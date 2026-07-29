@@ -258,6 +258,7 @@ export class InteractiveMode {
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
 	private extensionAsk: AskUserComponent | undefined = undefined;
+	private extensionDialogQueue: Promise<void> = Promise.resolve();
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
 	// Extension widgets (components rendered above/below the editor)
@@ -1781,10 +1782,26 @@ export class InteractiveMode {
 	 */
 	private createExtensionUIContext(): ExtensionUIContext {
 		return {
-			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
-			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
-			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
-			ask: (request, opts) => this.showExtensionAsk(request, opts),
+			select: (title, options, opts) =>
+				this.enqueueExtensionDialog(() => this.showExtensionSelector(title, options, opts), {
+					signal: opts?.signal,
+					abortedValue: undefined,
+				}),
+			confirm: (title, message, opts) =>
+				this.enqueueExtensionDialog(() => this.showExtensionConfirm(title, message, opts), {
+					signal: opts?.signal,
+					abortedValue: false,
+				}),
+			input: (title, placeholder, opts) =>
+				this.enqueueExtensionDialog(() => this.showExtensionInput(title, placeholder, opts), {
+					signal: opts?.signal,
+					abortedValue: undefined,
+				}),
+			ask: (request, opts) =>
+				this.enqueueExtensionDialog(() => this.showExtensionAsk(request, opts), {
+					signal: opts?.signal,
+					abortedValue: undefined,
+				}),
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
@@ -1793,11 +1810,11 @@ export class InteractiveMode {
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => this.ui.terminal.setTitle(title),
-			custom: (factory, options) => this.showExtensionCustom(factory, options),
+			custom: (factory, options) => this.enqueueExtensionDialog(() => this.showExtensionCustom(factory, options)),
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
 			setEditorText: (text) => this.editor.setText(text),
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
-			editor: (title, prefill) => this.showExtensionEditor(title, prefill),
+			editor: (title, prefill) => this.enqueueExtensionDialog(() => this.showExtensionEditor(title, prefill)),
 			setEditorComponent: (factory) => this.setCustomEditorComponent(factory),
 			get theme() {
 				return theme;
@@ -1822,6 +1839,20 @@ export class InteractiveMode {
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
 		};
+	}
+
+	/** Serialize every blocking extension dialog that can take over keyboard focus. */
+	private enqueueExtensionDialog<T>(
+		open: () => Promise<T>,
+		opts?: { signal?: AbortSignal; abortedValue: T },
+	): Promise<T> {
+		const run = () => (opts?.signal?.aborted ? Promise.resolve(opts.abortedValue) : open());
+		const result = this.extensionDialogQueue.then(run, run);
+		this.extensionDialogQueue = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		return result;
 	}
 
 	/**

@@ -480,6 +480,38 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 	});
 });
 
+describe("InteractiveMode extension dialog queue", () => {
+	test("serializes ask with other blocking extension dialogs", async () => {
+		let resolveSelector!: (value: string | undefined) => void;
+		const showExtensionSelector = vi.fn(
+			() =>
+				new Promise<string | undefined>((resolve) => {
+					resolveSelector = resolve;
+				}),
+		);
+		const showExtensionAsk = vi.fn(async () => ({ selected: ["yes"] }));
+		const fakeThis: any = {
+			extensionDialogQueue: Promise.resolve(),
+			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
+			showExtensionSelector,
+			showExtensionAsk,
+		};
+		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
+
+		const selector = uiContext.select("First", ["a", "b"]);
+		const ask = uiContext.ask({ question: "Second?", options: ["yes", "no"] });
+		await Promise.resolve();
+
+		expect(showExtensionSelector).toHaveBeenCalledTimes(1);
+		expect(showExtensionAsk).not.toHaveBeenCalled();
+
+		resolveSelector("a");
+		await expect(selector).resolves.toBe("a");
+		await expect(ask).resolves.toEqual({ selected: ["yes"] });
+		expect(showExtensionAsk).toHaveBeenCalledTimes(1);
+	});
+});
+
 describe("InteractiveMode.showLoadedResources", () => {
 	beforeAll(() => {
 		initTheme("dark");

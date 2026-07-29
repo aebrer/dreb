@@ -520,12 +520,12 @@ describe("RuntimePool", () => {
 		expect(seen).toEqual([[handle.key, { type: "agent_start" }]]);
 	});
 
-	it("tracks needs-attention from extension UI requests and clears on agent_start", async () => {
+	it("tracks needs-attention from extension UI requests and clears when handled", async () => {
 		const { pool, clients } = makePool();
 		const handle = await pool.create("/tmp");
 		clients[0].emit({ type: "extension_ui_request", id: "u1", method: "confirm" });
 		expect(handle.attention.size).toBe(1);
-		clients[0].emit({ type: "agent_start" });
+		clients[0].emit({ type: "extension_ui_response_handled", id: "u1" });
 		expect(handle.attention.size).toBe(0);
 	});
 

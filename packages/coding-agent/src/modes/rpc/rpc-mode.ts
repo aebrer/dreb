@@ -1064,32 +1064,44 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		const id = crypto.randomUUID();
 		return new Promise((resolve, reject) => {
 			let timeoutId: ReturnType<typeof setTimeout> | undefined;
+			let settled = false;
 
-			const cleanup = () => {
+			const cleanup = (): boolean => {
+				if (settled) return false;
+				settled = true;
 				if (timeoutId) clearTimeout(timeoutId);
 				opts?.signal?.removeEventListener("abort", onAbort);
 				pendingExtensionRequests.delete(id);
+				output({ type: "extension_ui_response_handled", id });
+				return true;
 			};
 
 			const onAbort = () => {
-				cleanup();
+				if (!cleanup()) return;
 				resolve(defaultValue);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
 			if (opts?.timeout) {
 				timeoutId = setTimeout(() => {
-					cleanup();
+					if (!cleanup()) return;
 					resolve(defaultValue);
 				}, opts.timeout);
 			}
 
 			pendingExtensionRequests.set(id, {
 				resolve: (response: RpcExtensionUIResponse) => {
-					cleanup();
-					resolve(parseResponse(response));
+					if (!cleanup()) return;
+					try {
+						resolve(parseResponse(response));
+					} catch (error) {
+						reject(error);
+					}
 				},
-				reject,
+				reject: (error) => {
+					if (!cleanup()) return;
+					reject(error);
+				},
 			});
 			output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 		});
@@ -1226,24 +1238,14 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			return "";
 		},
 
-		async editor(title: string, prefill?: string): Promise<string | undefined> {
-			const id = crypto.randomUUID();
-			return new Promise((resolve, reject) => {
-				pendingExtensionRequests.set(id, {
-					resolve: (response: RpcExtensionUIResponse) => {
-						if ("cancelled" in response && response.cancelled) {
-							resolve(undefined);
-						} else if ("value" in response) {
-							resolve(response.value);
-						} else {
-							resolve(undefined);
-						}
-					},
-					reject,
-				});
-				output({ type: "extension_ui_request", id, method: "editor", title, prefill } as RpcExtensionUIRequest);
-			});
-		},
+		editor: (title, prefill) =>
+			createDialogPromise(undefined, undefined, { method: "editor", title, prefill }, (response) =>
+				"cancelled" in response && response.cancelled
+					? undefined
+					: "value" in response
+						? response.value
+						: undefined,
+			),
 
 		setEditorComponent(): void {
 			// Custom editor components not supported in RPC mode
@@ -1827,6 +1829,10 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	let detachInput = () => {};
 
 	async function shutdown(): Promise<never> {
+		for (const [id, pending] of [...pendingExtensionRequests]) {
+			pending.resolve({ type: "extension_ui_response", id, cancelled: true });
+		}
+
 		const currentRunner = session.extensionRunner;
 		if (currentRunner?.hasHandlers("session_shutdown")) {
 			await currentRunner.emit({ type: "session_shutdown" });
