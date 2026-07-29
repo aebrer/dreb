@@ -671,7 +671,23 @@ describe("app store integration", () => {
 					pendingMessageCount: 0,
 				},
 				messages: [{ role: "assistant", content: [{ type: "text", text: "fresh transcript" }] }],
-				backgroundAgents: [],
+				backgroundAgents: [
+					{
+						agentId: "resynced-route",
+						agentType: "feature-dev",
+						taskSummary: "resynced routing",
+						startedAt: new Date().toISOString(),
+						status: "completed",
+						arbitrations: [
+							{
+								status: "success",
+								proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+								final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+								changed: ["agent", "model", "thinking"],
+							},
+						],
+					},
+				],
 				barrierSeq: 3,
 			},
 			barrierSeq: 3,
@@ -689,6 +705,10 @@ describe("app store integration", () => {
 
 		expect(api.resync).toHaveBeenCalledWith("k-resync", undefined, expect.any(AbortSignal));
 		expect(store.sessions["k-resync"]?.entries[0]?.kind).toBe("assistant");
+		expect(store.sessions["k-resync"]?.backgroundAgents["resynced-route"]).toMatchObject({
+			agentType: "feature-dev",
+			arbitrations: [{ final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" } }],
+		});
 	});
 
 	it("touch scrolling the transcript suspends stick-to-bottom while streaming", async () => {
@@ -1196,6 +1216,32 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("feature-dev · provider/cheap · low");
 		expect(el.textContent).toContain("subagents can't be steered yet");
 		expect(el.querySelector("textarea")).toBeNull(); // no composer
+	});
+
+	it("subagent drill-in renders failed arbitration with safe host metadata", () => {
+		const store = makeStore() as any;
+		const session = populatedSession("k-failed-arbitration");
+		applySessionEvent(session, {
+			type: "subagent_arbitration",
+			agentId: "bg1",
+			status: "failure",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: null,
+			changed: [],
+			errorCode: "invalid_guide",
+			errorMessage: "Routing guide coverage is stale.",
+			rawResponse: "RAW ARBITER MODEL OUTPUT",
+		});
+		const fakeStore = {
+			...store,
+			sessions: { "k-failed-arbitration": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+		};
+
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-failed-arbitration" agentId="bg1" />);
+
+		expect(el.textContent).toContain("arbiter: failed — Routing guide coverage is stale.");
+		expect(el.textContent).not.toContain("RAW ARBITER MODEL OUTPUT");
 	});
 
 	it("session hydration aborts on unmount without surfacing an error", async () => {
@@ -4378,10 +4424,18 @@ describe("dashboard client regressions", () => {
 			backgroundAgents: [
 				{
 					agentId: "bg7",
-					agentType: "Explore",
+					agentType: "feature-dev",
 					taskSummary: "registry-seeded task",
 					startedAt: new Date().toISOString(),
 					status: "running",
+					arbitrations: [
+						{
+							status: "success",
+							proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+							final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+							changed: ["agent", "model", "thinking"],
+						},
+					],
 				},
 			],
 			barrierSeq: 0,
@@ -4389,7 +4443,15 @@ describe("dashboard client regressions", () => {
 		const store = makeStore();
 		await store.hydrateSession("k-reload");
 
-		expect(store.sessions["k-reload"]?.backgroundAgents.bg7?.taskSummary).toBe("registry-seeded task");
+		expect(store.sessions["k-reload"]?.backgroundAgents.bg7).toMatchObject({
+			agentType: "feature-dev",
+			taskSummary: "registry-seeded task",
+			arbitrations: [{ final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" } }],
+		});
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-reload" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("feature-dev — registry-seeded task");
+		expect(el.textContent).toContain("provider/cheap @ low");
 	});
 
 	it("tool cards render full inputs expanded (subagent task markdown, generic long args)", () => {

@@ -22,8 +22,17 @@ const REQUIRED_SUBSECTIONS = [
 	"Sources",
 ];
 
-function guide(modelIds = ["provider/model-a"], options: { duplicateHeading?: boolean; omit?: string } = {}): string {
-	const sections = modelIds
+function guide(
+	modelIds = ["provider/model-a"],
+	options: {
+		duplicateHeading?: boolean;
+		omit?: string;
+		headingModelIds?: string[];
+		schemaVersion?: number;
+	} = {},
+): string {
+	const headingModelIds = options.headingModelIds ?? modelIds;
+	const sections = headingModelIds
 		.map(
 			(modelId) =>
 				`## Model: ${modelId}\n${REQUIRED_SUBSECTIONS.filter((name) => name !== options.omit)
@@ -32,7 +41,7 @@ function guide(modelIds = ["provider/model-a"], options: { duplicateHeading?: bo
 		)
 		.join("\n");
 	return `---
-schema_version: 1
+schema_version: ${options.schemaVersion ?? 1}
 generated_at: "2026-07-28T00:00:00Z"
 covered_model_ids:
 ${modelIds.map((id) => `  - "${id}"`).join("\n")}
@@ -70,8 +79,28 @@ describe("model routing guide validation", () => {
 	test.each([
 		["missing", ["provider/model-a", "other/model-b"], ["provider/model-a"]],
 		["extra", ["provider/model-a"], ["provider/model-a", "other/model-b"]],
-	] as const)("rejects %s frontmatter and heading coverage", (_label, covered, active) => {
-		expect(() => validateModelRoutingGuideContent(guide([...covered]), [...active])).toThrow(/does not match/);
+	] as const)("rejects %s frontmatter coverage", (_label, covered, active) => {
+		expect(() => validateModelRoutingGuideContent(guide([...covered]), [...active])).toThrow(
+			/Routing guide frontmatter coverage does not match/,
+		);
+	});
+
+	test.each([
+		["missing", []],
+		["extra", ["provider/model-a", "other/model-b"]],
+		["mismatched", ["other/model-b"]],
+	] as const)("rejects %s model-heading coverage independently of valid frontmatter", (_label, headingModelIds) => {
+		expect(() =>
+			validateModelRoutingGuideContent(guide(["provider/model-a"], { headingModelIds: [...headingModelIds] }), [
+				"provider/model-a",
+			]),
+		).toThrow(/Routing guide model headings does not match/);
+	});
+
+	test("rejects unsupported schema versions", () => {
+		expect(() =>
+			validateModelRoutingGuideContent(guide(["provider/model-a"], { schemaVersion: 2 }), ["provider/model-a"]),
+		).toThrow(/schema_version must be 1/);
 	});
 
 	test("rejects duplicate model headings", () => {

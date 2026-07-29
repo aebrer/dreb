@@ -128,6 +128,7 @@ function createArbiter(
 		getParentModel: () => workerModel,
 		getSessionTitle: () => "Implement routing",
 		getRepoMetadata: () => ({ repo: "project", cwd: "/tmp/project", branch: "feature/test", dirtyCount: 2 }),
+		getExtraSecretPatterns: () => [{ name: "auth_secret", pattern: /AUTH_SECRET_[0-9]+/g }],
 		complete: complete as never,
 		timeoutMs,
 	});
@@ -192,6 +193,24 @@ describe("DispatchArbiter", () => {
 		expect(retryContext.messages[1].content).not.toContain("```json");
 	});
 
+	test("rejects otherwise valid decisions containing model-authored extra keys", async () => {
+		complete.mockResolvedValue(
+			response({
+				agent: "Explore",
+				model: "provider/worker",
+				thinking: "high",
+				rationale: "RAW MODEL RATIONALE",
+			}),
+		);
+
+		const result = await createArbiter().arbitrate(request);
+
+		expect(result).toMatchObject({ enabled: true, ok: false, code: "malformed_output" });
+		expect(complete).toHaveBeenCalledTimes(2);
+		expect(JSON.stringify(result)).not.toContain("RAW MODEL RATIONALE");
+		expect(JSON.stringify(complete.mock.calls[1][1])).not.toContain("RAW MODEL RATIONALE");
+	});
+
 	test("bounds injected calls with timeout and parent abort before child spawn", async () => {
 		complete.mockImplementation(() => new Promise(() => {}));
 		expect(await createArbiter(undefined, 5).arbitrate(request)).toMatchObject({
@@ -201,13 +220,31 @@ describe("DispatchArbiter", () => {
 		});
 
 		complete.mockReset();
+		complete.mockImplementation(() => new Promise(() => {}));
 		const controller = new AbortController();
+		const inFlight = createArbiter().arbitrate(request, controller.signal);
+		await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
 		controller.abort();
-		expect(await createArbiter().arbitrate(request, controller.signal)).toMatchObject({
+		expect(await inFlight).toMatchObject({
 			enabled: true,
 			ok: false,
 			code: "aborted",
 		});
+	});
+
+	test("fails closed and scrubs errors when arbiter authentication fails", async () => {
+		vi.mocked(registry.getApiKey).mockRejectedValue(new Error("credential lookup failed for AUTH_SECRET_123"));
+
+		const result = await createArbiter().arbitrate(request);
+
+		expect(result).toMatchObject({
+			enabled: true,
+			ok: false,
+			code: "arbiter_model",
+			error: expect.stringContaining("<REDACTED:auth_secret>"),
+		});
+		expect(JSON.stringify(result)).not.toContain("AUTH_SECRET_123");
+		expect(complete).not.toHaveBeenCalled();
 	});
 
 	test("treats resolved provider error messages as inference failures without retry", async () => {

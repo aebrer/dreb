@@ -1011,6 +1011,44 @@ describe("app store hydration", () => {
 		expect(store.sessions.s1?.workingSince).toEqual(expect.any(Number));
 	});
 
+	it("preserves final routed identity and ordered arbitration history during hydration", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.backgroundAgents = [
+			{
+				...agentSnapshot("routed", "completed"),
+				agentType: "feature-dev",
+				arbitrations: [
+					{
+						status: "success",
+						proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+						final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+						changed: ["agent", "model", "thinking"],
+						step: 1,
+					},
+					{
+						status: "success",
+						proposed: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+						final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+						changed: [],
+						step: 2,
+					},
+				],
+			},
+		];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		const routed = store.sessions.s1?.backgroundAgents.routed;
+		expect(routed?.agentType).toBe("feature-dev");
+		expect(routed?.arbitrations?.map((record) => record.step)).toEqual([1, 2]);
+		expect(routed?.arbitrations?.[0]).toMatchObject({
+			changed: ["agent", "model", "thinking"],
+			final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+		});
+	});
+
 	it("restores an idle terminal provider failure during hydration", async () => {
 		const snapshot = hydrationSnapshot("s1", false);
 		snapshot.messages = [

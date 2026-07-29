@@ -1068,6 +1068,41 @@ describe("applySessionEvent — extension UI", () => {
 });
 
 describe("applySessionEvent — subagent relay", () => {
+	it("retains failed arbitration metadata without changing the requested agent identity", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "background_agent_start",
+			agentId: "failed-route",
+			agentType: "Explore",
+			taskSummary: "look",
+		});
+		applySessionEvent(state, {
+			type: "subagent_arbitration",
+			agentId: "failed-route",
+			status: "failure",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: null,
+			changed: [],
+			errorCode: "invalid_guide",
+			errorMessage: "Routing guide coverage is stale.",
+			rawResponse: "RAW ARBITER MODEL OUTPUT",
+		});
+
+		expect(state.backgroundAgents["failed-route"]).toMatchObject({
+			agentType: "Explore",
+			arbitrations: [
+				{
+					status: "failure",
+					final: null,
+					changed: [],
+					errorCode: "invalid_guide",
+					errorMessage: "Routing guide coverage is stale.",
+				},
+			],
+		});
+		expect(JSON.stringify(state.backgroundAgents["failed-route"])).not.toContain("RAW ARBITER MODEL OUTPUT");
+	});
+
 	it("background lifecycle events track agents; relayed events build a live sub-transcript", () => {
 		const state = makeState();
 		applySessionEvent(state, {

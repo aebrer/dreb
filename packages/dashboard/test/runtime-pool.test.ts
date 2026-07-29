@@ -785,6 +785,46 @@ describe("RuntimePool", () => {
 		expect(handle.backgroundAgents.get("bg1")?.sessionFile).toBe("/s/bg1.jsonl");
 	});
 
+	it("projects failed arbitration records without replacing the requested identity", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+		clients[0].emit({
+			type: "background_agent_start",
+			agentId: "failed-route",
+			agentType: "Explore",
+			taskSummary: "look around",
+		});
+		clients[0].emit({
+			type: "subagent_arbitration",
+			agentId: "failed-route",
+			status: "failure",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: null,
+			changed: [],
+			errorCode: "invalid_guide",
+			errorMessage: "Routing guide coverage is stale.",
+			rawResponse: "RAW ARBITER MODEL OUTPUT",
+		});
+
+		expect(handle.backgroundAgents.get("failed-route")).toMatchObject({
+			agentType: "Explore",
+			arbitrations: [
+				{
+					status: "failure",
+					final: null,
+					errorCode: "invalid_guide",
+					errorMessage: "Routing guide coverage is stale.",
+				},
+			],
+		});
+		const info = await pool.describe(handle);
+		expect(info.backgroundAgents.find((agent) => agent.agentId === "failed-route")).toMatchObject({
+			agentType: "Explore",
+			arbitrations: [{ status: "failure", final: null, errorCode: "invalid_guide" }],
+		});
+		expect(JSON.stringify(info.backgroundAgents)).not.toContain("RAW ARBITER MODEL OUTPUT");
+	});
+
 	it("caps completed background agents from lifecycle events while preserving running agents", async () => {
 		vi.useFakeTimers();
 		try {

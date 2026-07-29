@@ -762,17 +762,23 @@ export async function setSettingsForRpc(
 		}
 		if (subagentArbiter.model) {
 			const slash = subagentArbiter.model.indexOf("/");
-			if (slash <= 0 || slash === subagentArbiter.model.length - 1) {
+			if (slash <= 0 || slash === subagentArbiter.model.length - 1 || /\s/.test(subagentArbiter.model)) {
 				return { ok: false, error: "subagentArbiter.model must be an exact provider/model" };
 			}
-			const provider = subagentArbiter.model.slice(0, slash);
-			const modelId = subagentArbiter.model.slice(slash + 1);
-			const models = await modelRegistry.getAvailable();
-			const model = models.find((candidate) => candidate.provider === provider && candidate.id === modelId);
-			if (!model) return { ok: false, error: `Arbiter model not found: ${subagentArbiter.model}` };
-			if (subagentArbiter.thinking !== undefined) {
-				const validation = validateThinkingLevelForModel(model, subagentArbiter.thinking);
-				if (!validation.ok) return validation;
+			// A stale configured model must never prevent users from disabling a
+			// fail-closed arbiter. Preserve shape and canonical-ID validation, but
+			// require current availability and thinking capability only when the
+			// policy is not explicitly disabled. Re-enabling validates them again.
+			if (subagentArbiter.enabled !== false) {
+				const provider = subagentArbiter.model.slice(0, slash);
+				const modelId = subagentArbiter.model.slice(slash + 1);
+				const models = await modelRegistry.getAvailable();
+				const model = models.find((candidate) => candidate.provider === provider && candidate.id === modelId);
+				if (!model) return { ok: false, error: `Arbiter model not found: ${subagentArbiter.model}` };
+				if (subagentArbiter.thinking !== undefined) {
+					const validation = validateThinkingLevelForModel(model, subagentArbiter.thinking);
+					if (!validation.ok) return validation;
+				}
 			}
 		}
 		subagentArbiter = { ...subagentArbiter };

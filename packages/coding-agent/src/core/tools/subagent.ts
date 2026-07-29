@@ -366,10 +366,10 @@ async function spawnSubagent(
 	const modelStr = Array.isArray(agentConfig.model) ? agentConfig.model[0] : agentConfig.model;
 	if (modelStr) {
 		args.push("--model", modelStr);
-		// When the model string doesn't already specify a provider (no "/"),
-		// inherit the parent's provider to prevent fuzzy matching from picking
-		// an unauthenticated provider (e.g. Bedrock instead of Anthropic).
-		if (parentProvider && !modelStr.includes("/")) {
+		// executeSingle resolves the model and provider independently. Always pass
+		// that exact provider because raw model IDs may themselves contain slashes
+		// (for example, OpenRouter IDs such as "openai/gpt-oss-120b").
+		if (parentProvider) {
 			args.push("--provider", parentProvider);
 		}
 	}

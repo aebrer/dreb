@@ -39,7 +39,7 @@ afterEach(async () => {
 
 function stubRegistry(models: Array<{ provider: string; id: string }>) {
 	return {
-		getAvailable: () => models as Model<any>[],
+		getAvailable: vi.fn(() => models as Model<any>[]),
 	};
 }
 
@@ -502,6 +502,41 @@ describe("setSettingsForRpc validation", () => {
 			subagentArbiter: { enabled: false, extra: true } as never,
 		});
 		expect(invalidKey).toMatchObject({ ok: false, error: expect.stringContaining("Unknown subagentArbiter") });
+	});
+
+	it("always permits disabling a policy whose configured model is no longer available", async () => {
+		const manager = SettingsManager.inMemory({
+			subagentArbiter: {
+				enabled: true,
+				model: "retired-provider/retired-model",
+				thinking: "xhigh",
+				guidePath: "~/routing.md",
+			},
+		});
+		const registry = stubRegistry([]);
+
+		const result = await setSettingsForRpc(manager, registry, {
+			subagentArbiter: {
+				enabled: false,
+				model: "retired-provider/retired-model",
+				thinking: "xhigh",
+				guidePath: "~/routing.md",
+			},
+		});
+
+		expect(result).toMatchObject({
+			ok: true,
+			settings: {
+				subagentArbiter: {
+					enabled: false,
+					model: "retired-provider/retired-model",
+					thinking: "xhigh",
+					guidePath: "~/routing.md",
+				},
+			},
+		});
+		expect(registry.getAvailable).not.toHaveBeenCalled();
+		expect(manager.getGlobalSubagentArbiterSettings()).toMatchObject({ enabled: false });
 	});
 
 	it("applies nothing when any field is invalid (atomicity)", async () => {

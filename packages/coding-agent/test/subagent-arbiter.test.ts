@@ -17,6 +17,7 @@ import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import {
 	type AgentTypeConfig,
+	abortBackgroundAgents,
 	createSubagentToolDefinition,
 	executeSingle,
 	type SubagentArbitrationEvent,
@@ -47,7 +48,19 @@ const cheapModel: Model<"openai-responses"> = {
 	name: "Cheap",
 	reasoning: false,
 };
-const models = [workerModel, cheapModel];
+const slashfulModel: Model<"openai-responses"> = {
+	...workerModel,
+	provider: "gateway",
+	id: "vendor/worker",
+	name: "Gateway Worker",
+};
+const ambiguousSlashModel: Model<"openai-responses"> = {
+	...workerModel,
+	provider: "vendor",
+	id: "worker",
+	name: "Vendor Worker",
+};
+const models = [workerModel, cheapModel, slashfulModel, ambiguousSlashModel];
 const GUIDE_SUBSECTIONS = [
 	"Capabilities and thinking support",
 	"Strengths",
@@ -172,6 +185,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	abortBackgroundAgents();
 	rmSync(tempCwd, { recursive: true, force: true });
 	vi.restoreAllMocks();
 });
@@ -240,7 +254,46 @@ describe("pre-spawn subagent arbitration", () => {
 		expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "cheap"]);
 		expect(args.slice(args.indexOf("--thinking"), args.indexOf("--thinking") + 2)).toEqual(["--thinking", "off"]);
 		expect(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2)).toEqual(["--tools", "read,edit,write"]);
+		expect(args.slice(args.indexOf("--append-system-prompt"), args.indexOf("--append-system-prompt") + 2)).toEqual([
+			"--append-system-prompt",
+			"B prompt",
+		]);
+		expect(args).not.toContain("A prompt");
 		expect(args[args.length - 1]).toBe(originalTask);
+	});
+
+	test("preserves the exact selected provider when the raw model ID contains a slash", async () => {
+		const result = await executeSingle(
+			agents(),
+			"arbiter-a",
+			"route exactly",
+			tempCwd,
+			undefined,
+			undefined,
+			undefined,
+			"provider",
+			registry,
+			join(tempCwd, "session"),
+			"worker",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{
+				arbitrate: async () => ({
+					enabled: true,
+					ok: true,
+					decision: { agent: "arbiter-b", model: "gateway/vendor/worker", thinking: "high" },
+					changed: ["agent", "model"],
+				}),
+				onRecord: vi.fn(),
+			},
+		);
+
+		expect(result).toMatchObject({ exitCode: 0, model: "gateway/vendor/worker" });
+		const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+		expect(args.slice(args.indexOf("--provider"), args.indexOf("--provider") + 2)).toEqual(["--provider", "gateway"]);
+		expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 2)).toEqual(["--model", "vendor/worker"]);
 	});
 
 	test("fails closed and never spawns when arbitration fails", async () => {
@@ -395,6 +448,121 @@ describe("pre-spawn subagent arbitration", () => {
 		session.dispose();
 	});
 
+	test("AgentSession persists a scrubbed authentication failure and never spawns", async () => {
+		const guidePath = join(tempCwd, "routing-guide.md");
+		writeFileSync(guidePath, routingGuide("provider/worker"));
+		const parentAgent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: workerModel, systemPrompt: "parent", tools: [] },
+		});
+		vi.spyOn(parentAgent, "prompt").mockResolvedValue(undefined as never);
+		const sessionManager = SessionManager.inMemory();
+		const settingsManager = SettingsManager.inMemory({
+			subagentArbiter: { enabled: true, model: "provider/worker", thinking: "high", guidePath },
+			secretOutputPatterns: [{ name: "auth_secret", pattern: "AUTH_SECRET_[0-9]+" }],
+		});
+		const failingRegistry = {
+			...registry,
+			getApiKey: vi.fn().mockRejectedValue(new Error("credential lookup failed: AUTH_SECRET_123")),
+		};
+		const complete = vi.fn();
+		const session = new AgentSession({
+			agent: parentAgent,
+			sessionManager,
+			settingsManager,
+			cwd: tempCwd,
+			modelRegistry: failingRegistry as never,
+			resourceLoader: createTestResourceLoader(),
+			scopedModels: [{ model: workerModel }],
+			initialActiveToolNames: ["subagent"],
+			dispatchArbiterComplete: complete,
+		});
+		let resolveEvent!: (event: SubagentArbitrationEvent) => void;
+		const eventPromise = new Promise<SubagentArbitrationEvent>((resolve) => {
+			resolveEvent = resolve;
+		});
+		session.subscribe((event) => {
+			if (event.type === "subagent_arbitration") resolveEvent(event);
+		});
+
+		const tool = parentAgent.state.tools.find((candidate) => candidate.name === "subagent");
+		expect(tool).toBeDefined();
+		await tool!.execute("call", { agent: "arbiter-a", task: "inspect auth" }, new AbortController().signal, () => {});
+		const event = await eventPromise;
+
+		expect(event).toMatchObject({
+			status: "failure",
+			final: null,
+			errorCode: "arbiter_model",
+			errorMessage: expect.stringContaining("<REDACTED:auth_secret>"),
+		});
+		expect(JSON.stringify(event)).not.toContain("AUTH_SECRET_123");
+		expect(complete).not.toHaveBeenCalled();
+		expect(spawn).not.toHaveBeenCalled();
+		const persisted = sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "custom" && entry.customType === "subagent_arbitration");
+		expect(persisted).toMatchObject({
+			type: "custom",
+			data: { status: "failure", final: null, errorCode: "arbiter_model" },
+		});
+		expect(JSON.stringify(persisted)).not.toContain("AUTH_SECRET_123");
+		expect(JSON.stringify(sessionManager.buildSessionContext().messages)).not.toContain("subagent_arbitration");
+		session.dispose();
+	});
+
+	test("aborts in-flight arbitration through the background lifecycle before spawn", async () => {
+		let markStarted!: () => void;
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		let resolveCompleted!: (value: { result: SubagentResult; cancelled: boolean }) => void;
+		const completed = new Promise<{ result: SubagentResult; cancelled: boolean }>((resolve) => {
+			resolveCompleted = resolve;
+		});
+		const events: SubagentArbitrationEvent[] = [];
+		const tool = createSubagentToolDefinition(tempCwd, {
+			parentProvider: () => "provider",
+			parentModel: () => "worker",
+			modelRegistry: registry,
+			arbitrate: async (_request, signal) => {
+				markStarted();
+				return new Promise<DispatchArbitrationResult>((resolve) => {
+					if (!signal) throw new Error("expected background abort signal");
+					signal.addEventListener(
+						"abort",
+						() =>
+							resolve({
+								enabled: true,
+								ok: false,
+								code: "aborted",
+								error: "Dispatch arbitration was aborted before child spawn.",
+							}),
+						{ once: true },
+					);
+				});
+			},
+			onArbitration: (event) => events.push(event),
+			onBackgroundComplete: (_id, result, cancelled) => resolveCompleted({ result, cancelled }),
+		});
+
+		await tool.execute(
+			"call",
+			{ agent: "arbiter-a", task: "cancel while routing" },
+			new AbortController().signal,
+			() => {},
+			undefined as never,
+		);
+		await started;
+		abortBackgroundAgents();
+		const completion = await completed;
+
+		expect(completion.cancelled).toBe(true);
+		expect(completion.result).toMatchObject({ exitCode: 1, errorMessage: expect.stringContaining("aborted") });
+		expect(events).toMatchObject([{ status: "failure", errorCode: "aborted", final: null }]);
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
 	test("rejects an escaping cwd before arbitration and child spawn", async () => {
 		const arbitrate = vi.fn();
 		const tool = createSubagentToolDefinition(tempCwd, {
@@ -476,6 +644,63 @@ describe("pre-spawn subagent arbitration", () => {
 			expect(requests[1].task).toContain("FIRST_OUTPUT");
 			expect(requests[1].task).not.toContain("{previous}");
 		}
+	});
+
+	test("bounds pending parallel arbitration with the background concurrency gate", async () => {
+		let active = 0;
+		let maxActive = 0;
+		let startedCount = 0;
+		const releases: Array<() => void> = [];
+		const events: SubagentArbitrationEvent[] = [];
+		let completedCount = 0;
+		let resolveCompleted!: () => void;
+		const completed = new Promise<void>((resolve) => {
+			resolveCompleted = resolve;
+		});
+		const tool = createSubagentToolDefinition(tempCwd, {
+			parentProvider: () => "provider",
+			parentModel: () => "worker",
+			modelRegistry: registry,
+			defaultThinkingLevel: () => "high",
+			arbitrate: async (request) => {
+				active += 1;
+				startedCount += 1;
+				maxActive = Math.max(maxActive, active);
+				await new Promise<void>((resolve) => releases.push(resolve));
+				active -= 1;
+				return { enabled: true, ok: true, decision: request.proposed, changed: [] };
+			},
+			onArbitration: (event) => events.push(event),
+			onBackgroundComplete: () => {
+				completedCount += 1;
+				if (completedCount === 8) resolveCompleted();
+			},
+		});
+
+		await tool.execute(
+			"call",
+			{
+				tasks: Array.from({ length: 8 }, (_, index) => ({
+					agent: "arbiter-a",
+					task: `parallel-${index}`,
+				})),
+			},
+			new AbortController().signal,
+			() => {},
+			undefined as never,
+		);
+
+		await vi.waitFor(() => expect(startedCount).toBe(4));
+		expect(maxActive).toBe(4);
+		for (const release of releases.splice(0, 4)) release();
+		await vi.waitFor(() => expect(startedCount).toBe(8));
+		expect(maxActive).toBe(4);
+		for (const release of releases.splice(0)) release();
+		await completed;
+
+		expect(maxActive).toBe(4);
+		expect(events).toHaveLength(8);
+		expect(spawn).toHaveBeenCalledTimes(8);
 	});
 
 	test("stops a chain before the failed arbitration spawn and every later step", async () => {
