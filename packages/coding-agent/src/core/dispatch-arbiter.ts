@@ -241,7 +241,15 @@ export class DispatchArbiter {
 	}
 
 	async arbitrate(request: DispatchArbitrationRequest, signal?: AbortSignal): Promise<DispatchArbitrationResult> {
-		const settings = this.deps.getSettings();
+		let settings: SubagentArbiterSettings | undefined;
+		try {
+			settings = this.deps.getSettings();
+		} catch (error) {
+			return this.failure(
+				"invalid_config",
+				`Could not read global Dispatch Arbiter settings: ${this.safeError(error)}`,
+			);
+		}
 		if (settings === undefined) return { enabled: false };
 		if (typeof settings !== "object" || settings === null || Array.isArray(settings)) {
 			return this.failure("invalid_config", "subagentArbiter must be an object.");

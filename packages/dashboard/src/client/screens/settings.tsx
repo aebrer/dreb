@@ -4,7 +4,13 @@
  */
 
 import { createMemo, createResource, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
-import type { AgentTypeDto, ModelInfoDto, PairingCodeDto, SettingsDto } from "../../shared/protocol.js";
+import type {
+	AgentTypeDto,
+	ModelInfoDto,
+	PairingCodeDto,
+	SettingsDto,
+	SubagentArbiterSettingsDto,
+} from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
 import { ThemeGallery } from "../components/theme-gallery.js";
@@ -308,6 +314,52 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		}
 	}
 
+	let arbiterSaveQueue: Promise<void> = Promise.resolve();
+	let pendingArbiterPolicy: SubagentArbiterSettingsDto | undefined;
+
+	function currentArbiterPolicy(): SubagentArbiterSettingsDto {
+		return pendingArbiterPolicy ?? settings()?.subagentArbiter ?? {};
+	}
+
+	function saveArbiterPolicy(update: Partial<SubagentArbiterSettingsDto>): void {
+		const nextPolicy = { ...currentArbiterPolicy(), ...update };
+		pendingArbiterPolicy = nextPolicy;
+
+		const currentSettings = settings();
+		if (currentSettings) mutate({ ...currentSettings, subagentArbiter: nextPolicy });
+
+		arbiterSaveQueue = arbiterSaveQueue.then(async () => {
+			setError(undefined);
+			setWarnings([]);
+			setSaved(false);
+			try {
+				const savedSettings = await api.saveSettings({ subagentArbiter: nextPolicy });
+				setWarnings(savedSettings.warnings ?? []);
+				setSaved(true);
+				setTimeout(() => setSaved(false), 2000);
+
+				if (pendingArbiterPolicy === nextPolicy) {
+					pendingArbiterPolicy = savedSettings.subagentArbiter ?? undefined;
+					mutate(savedSettings);
+				} else {
+					// A newer edit is queued. Keep that optimistic policy visible while this
+					// authoritative response supplies every unrelated settings field.
+					mutate({ ...savedSettings, subagentArbiter: pendingArbiterPolicy });
+				}
+			} catch (err) {
+				// RPC validation errors surface verbatim — no silent retry.
+				setError(err instanceof Error ? err.message : String(err));
+				const refreshed = await refetch();
+				if (pendingArbiterPolicy === nextPolicy) {
+					pendingArbiterPolicy = refreshed?.subagentArbiter ?? undefined;
+				} else if (refreshed) {
+					// Do not let a failed older request erase a newer queued edit.
+					mutate({ ...refreshed, subagentArbiter: pendingArbiterPolicy });
+				}
+			}
+		});
+	}
+
 	async function saveAgentModels(agentName: string, nextList: string[]) {
 		await save({ agentModels: { [agentName]: nextList } });
 	}
@@ -470,13 +522,13 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										<OnOffSelect
 											value={current().subagentArbiter?.enabled === true}
 											onChange={(enabled) => {
-												const arbiter = current().subagentArbiter ?? {};
+												const arbiter = currentArbiterPolicy();
 												if (enabled && !arbiter.model) {
 													setError("Choose an exact Dispatch Arbiter model before enabling it.");
 													setModelPickerTarget({ kind: "arbiter" });
 													return false;
 												}
-												void save({ subagentArbiter: { ...arbiter, enabled } });
+												saveArbiterPolicy({ enabled });
 												return true;
 											}}
 										/>
@@ -506,17 +558,14 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										<select
 											value={current().subagentArbiter?.thinking ?? "off"}
 											onChange={(event) =>
-												void save({
-													subagentArbiter: {
-														...(current().subagentArbiter ?? {}),
-														thinking: event.currentTarget.value as
-															| "off"
-															| "minimal"
-															| "low"
-															| "medium"
-															| "high"
-															| "xhigh",
-													},
+												saveArbiterPolicy({
+													thinking: event.currentTarget.value as
+														| "off"
+														| "minimal"
+														| "low"
+														| "medium"
+														| "high"
+														| "xhigh",
 												})
 											}
 										>
@@ -537,12 +586,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 											placeholder="~/.dreb/agent/model-routing-guide.md"
 											onChange={(event) => {
 												const guidePath = event.currentTarget.value.trim();
-												void save({
-													subagentArbiter: {
-														...(current().subagentArbiter ?? {}),
-														guidePath: guidePath || undefined,
-													},
-												});
+												saveArbiterPolicy({ guidePath: guidePath || undefined });
 											}}
 										/>
 									</span>
@@ -1153,12 +1197,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 									return;
 								}
 								if (active.kind === "arbiter") {
-									void save({
-										subagentArbiter: {
-											...(settings()?.subagentArbiter ?? {}),
-											model: modelKey(model),
-										},
-									});
+									saveArbiterPolicy({ model: modelKey(model) });
 									return;
 								}
 								const entry = modelKey(model);

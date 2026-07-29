@@ -1556,6 +1556,57 @@ describe("screen smoke tests", () => {
 		});
 	});
 
+	it("serializes overlapping Dispatch Arbiter edits without restoring stale disabled state", async () => {
+		vi.mocked(api.saveSettings).mockClear();
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "off" },
+		});
+		let resolveFirst!: (value: Awaited<ReturnType<typeof api.saveSettings>>) => void;
+		let resolveSecond!: (value: Awaited<ReturnType<typeof api.saveSettings>>) => void;
+		const firstSave = new Promise<Awaited<ReturnType<typeof api.saveSettings>>>((resolve) => {
+			resolveFirst = resolve;
+		});
+		const secondSave = new Promise<Awaited<ReturnType<typeof api.saveSettings>>>((resolve) => {
+			resolveSecond = resolve;
+		});
+		vi.mocked(api.saveSettings)
+			.mockImplementationOnce(() => firstSave)
+			.mockImplementationOnce(() => secondSave);
+
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const enabled = enabledRow.querySelector("select") as HTMLSelectElement;
+		enabled.value = "on";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+
+		const thinkingRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("arbiter thinking"),
+		)!;
+		const thinking = thinkingRow.querySelector("select") as HTMLSelectElement;
+		thinking.value = "high";
+		thinking.dispatchEvent(new Event("change", { bubbles: true }));
+		await Promise.resolve();
+
+		expect(api.saveSettings).toHaveBeenCalledTimes(1);
+		expect(api.saveSettings).toHaveBeenNthCalledWith(1, {
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "off" },
+		});
+		resolveFirst({ subagentArbiter: { enabled: true, model: "provider/router", thinking: "off" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(api.saveSettings).toHaveBeenNthCalledWith(2, {
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" },
+		});
+
+		resolveSecond({ subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(el.querySelector("[data-testid='dispatch-arbiter-readiness']")?.textContent).toContain("status: enabled");
+	});
+
 	it("settings persists Dispatch Arbiter thinking and guide-path controls", async () => {
 		vi.mocked(api.settings).mockResolvedValue({
 			subagentArbiter: { enabled: false, model: "provider/router", thinking: "off" },

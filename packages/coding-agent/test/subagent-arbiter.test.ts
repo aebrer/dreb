@@ -343,7 +343,9 @@ describe("pre-spawn subagent arbitration", () => {
 		const sessionManager = SessionManager.inMemory();
 		const settingsManager = SettingsManager.inMemory({
 			subagentArbiter: { enabled: true, model: "provider/worker", thinking: "high", guidePath },
+			secretOutputPatterns: [{ name: "custom_arbiter_secret", pattern: "CUSTOM_SECRET_[0-9]+" }],
 		});
+		let providerContext: unknown;
 		const session = new AgentSession({
 			agent: parentAgent,
 			sessionManager,
@@ -353,15 +355,17 @@ describe("pre-spawn subagent arbitration", () => {
 			resourceLoader: createTestResourceLoader(),
 			scopedModels: [{ model: workerModel }],
 			initialActiveToolNames: ["subagent"],
-			dispatchArbiterComplete: async () =>
-				({
+			dispatchArbiterComplete: async (_model, context) => {
+				providerContext = context;
+				return {
 					content: [
 						{
 							type: "text",
 							text: JSON.stringify({ agent: "arbiter-a", model: "provider/worker", thinking: "high" }),
 						},
 					],
-				}) as AssistantMessage,
+				} as AssistantMessage;
+			},
 		});
 		let resolveEvent!: (event: SubagentArbitrationEvent) => void;
 		const eventPromise = new Promise<SubagentArbitrationEvent>((resolve) => {
@@ -372,9 +376,16 @@ describe("pre-spawn subagent arbitration", () => {
 		});
 		const tool = parentAgent.state.tools.find((candidate) => candidate.name === "subagent");
 		expect(tool).toBeDefined();
-		await tool!.execute("call", { agent: "arbiter-a", task: "inspect" }, new AbortController().signal, () => {});
+		await tool!.execute(
+			"call",
+			{ agent: "arbiter-a", task: "inspect CUSTOM_SECRET_123" },
+			new AbortController().signal,
+			() => {},
+		);
 		const event = await eventPromise;
 
+		expect(JSON.stringify(providerContext)).not.toContain("CUSTOM_SECRET_123");
+		expect(JSON.stringify(providerContext)).toContain("<REDACTED:custom_arbiter_secret>");
 		expect(event).toMatchObject({ status: "success", agentId: expect.any(String), changed: [] });
 		const persisted = sessionManager
 			.getEntries()
@@ -465,5 +476,57 @@ describe("pre-spawn subagent arbitration", () => {
 			expect(requests[1].task).toContain("FIRST_OUTPUT");
 			expect(requests[1].task).not.toContain("{previous}");
 		}
+	});
+
+	test("stops a chain before the failed arbitration spawn and every later step", async () => {
+		outputs = ["FIRST_OUTPUT"];
+		vi.mocked(spawn).mockReset();
+		mockSpawn();
+		const requests: DispatchArbitrationRequest[] = [];
+		const events: SubagentArbitrationEvent[] = [];
+		let finalResult: SubagentResult | undefined;
+		let resolveComplete!: () => void;
+		const completed = new Promise<void>((resolve) => {
+			resolveComplete = resolve;
+		});
+		const tool = createSubagentToolDefinition(tempCwd, {
+			parentProvider: () => "provider",
+			parentModel: () => "worker",
+			modelRegistry: registry,
+			defaultThinkingLevel: () => "high",
+			arbitrate: async (request) => {
+				requests.push(request);
+				if (request.step === 2) {
+					return { enabled: true, ok: false, code: "invalid_guide", error: "guide changed" };
+				}
+				return { enabled: true, ok: true, decision: request.proposed, changed: [] };
+			},
+			onArbitration: (event) => events.push(event),
+			onBackgroundComplete: (_id, result) => {
+				finalResult = result;
+				resolveComplete();
+			},
+		});
+
+		await tool.execute(
+			"call",
+			{
+				chain: [
+					{ agent: "arbiter-a", task: "first" },
+					{ agent: "arbiter-a", task: "use {previous} second" },
+					{ agent: "arbiter-a", task: "never run {previous}" },
+				],
+			},
+			new AbortController().signal,
+			() => {},
+			undefined as never,
+		);
+		await completed;
+
+		expect(requests.map((request) => request.step)).toEqual([1, 2]);
+		expect(requests[1].task).toContain("FIRST_OUTPUT");
+		expect(events.map((event) => event.status)).toEqual(["success", "failure"]);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		expect(finalResult).toMatchObject({ exitCode: 1, errorMessage: expect.stringContaining("guide changed") });
 	});
 });

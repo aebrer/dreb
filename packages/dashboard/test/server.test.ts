@@ -680,6 +680,45 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[1].getDailyCost).toHaveBeenCalled();
 	});
 
+	it("round-trips an enabled Dispatch Arbiter policy through the settings utility runtime", async () => {
+		const { base, clients } = await startServer();
+		await fetch(`${base}/api/settings`);
+		const utility = clients[0];
+		if (!utility) throw new Error("utility runtime was not created");
+		const baselineSettings = await utility.getSettings();
+		let arbiterPolicy: NonNullable<typeof baselineSettings.subagentArbiter> = {
+			enabled: false,
+			model: "provider/router",
+			thinking: "off",
+		};
+		vi.mocked(utility.getSettings).mockImplementation(async () => ({
+			...baselineSettings,
+			subagentArbiter: arbiterPolicy,
+		}));
+		vi.mocked(utility.setSettings).mockImplementation(async (update) => {
+			arbiterPolicy = {
+				...arbiterPolicy,
+				...(update.subagentArbiter ?? {}),
+			};
+			return { ...baselineSettings, subagentArbiter: arbiterPolicy };
+		});
+
+		const saved = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" },
+			}),
+		});
+		expect(saved.status).toBe(200);
+		await expect(saved.json()).resolves.toMatchObject({
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" },
+		});
+		await expect(fetch(`${base}/api/settings`).then((response) => response.json())).resolves.toMatchObject({
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" },
+		});
+	});
+
 	it("GET /api/settings/models and /api/settings/agent-types use a stable utility runtime", async () => {
 		const dir = await createTempProject();
 		const { base, clients } = await startServer();

@@ -525,6 +525,28 @@ export class SettingsManager {
 		return true;
 	}
 
+	private refreshGlobalSubagentArbiterFromStorage(): void {
+		// Keep a locally selected policy effective until its queued write completes;
+		// otherwise re-read the global slice so long-lived sessions observe dashboard
+		// and TUI changes made by another runtime.
+		if (this.storage instanceof InMemorySettingsStorage || this.modifiedFields.has("subagentArbiter")) {
+			return;
+		}
+
+		const loaded = SettingsManager.tryLoadFromStorage(this.storage, "global");
+		if (loaded.error) {
+			this.recordError("global", loaded.error);
+			this.globalSettings = { ...this.globalSettings, subagentArbiter: undefined };
+			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+			throw new Error(`Could not reload global Dispatch Arbiter settings: ${loaded.error.message}`);
+		}
+
+		// This refresh owns only the global-only arbiter slice. Preserve unrelated
+		// in-memory settings, including writes that are queued but not yet durable.
+		this.globalSettings = { ...this.globalSettings, subagentArbiter: loaded.settings.subagentArbiter };
+		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+	}
+
 	private clearModifiedScope(scope: SettingsScope): void {
 		if (scope === "global") {
 			this.modifiedFields.clear();
@@ -1225,8 +1247,13 @@ export class SettingsManager {
 		return this.settings.secretOutputPatterns;
 	}
 
-	/** Read only the global arbiter policy; project settings are intentionally ignored. */
+	/**
+	 * Read only the global arbiter policy; project settings are intentionally ignored.
+	 * File-backed managers refresh this slice for every dispatch so independently
+	 * running sessions observe dashboard and TUI writes without a restart.
+	 */
 	getGlobalSubagentArbiterSettings(): SubagentArbiterSettings | undefined {
+		this.refreshGlobalSubagentArbiterFromStorage();
 		return this.globalSettings.subagentArbiter ? structuredClone(this.globalSettings.subagentArbiter) : undefined;
 	}
 

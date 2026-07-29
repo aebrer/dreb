@@ -112,9 +112,13 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-function createArbiter(candidateModels = [{ model: workerModel }, { model: cheapModel }], timeoutMs?: number) {
+function createArbiter(
+	candidateModels = [{ model: workerModel }, { model: cheapModel }],
+	timeoutMs?: number,
+	getSettings: () => SubagentArbiterSettings | undefined = () => settings,
+) {
 	return new DispatchArbiter({
-		getSettings: () => settings,
+		getSettings,
 		getCandidateModels: () => candidateModels,
 		getModelRegistry: () => registry,
 		getMessages: () => [
@@ -135,6 +139,20 @@ describe("DispatchArbiter", () => {
 		rmSync(guidePath);
 		const result = await createArbiter().arbitrate(request);
 		expect(result).toEqual({ enabled: false });
+		expect(complete).not.toHaveBeenCalled();
+	});
+
+	test("turns global settings refresh errors into actionable fail-closed configuration failures", async () => {
+		const result = await createArbiter(undefined, undefined, () => {
+			throw new Error("settings file is unreadable");
+		}).arbitrate(request);
+
+		expect(result).toMatchObject({
+			enabled: true,
+			ok: false,
+			code: "invalid_config",
+			error: expect.stringContaining("settings file is unreadable"),
+		});
 		expect(complete).not.toHaveBeenCalled();
 	});
 
@@ -214,6 +232,22 @@ describe("DispatchArbiter", () => {
 		complete.mockResolvedValue(response(decision));
 		const result = await createArbiter().arbitrate(request);
 		expect(result).toMatchObject({ enabled: true, ok: false, code });
+	});
+
+	test("rejects an oversized aggregate package before provider inference", async () => {
+		const oversizedRequest: DispatchArbitrationRequest = {
+			...request,
+			agents: Array.from({ length: 200 }, (_, index) => ({
+				name: `agent-${index}`,
+				description: "x".repeat(1_000),
+				tools: ["read", "grep"],
+				modelDefaults: ["provider/worker"],
+			})),
+		};
+
+		const result = await createArbiter().arbitrate(oversizedRequest);
+		expect(result).toMatchObject({ enabled: true, ok: false, code: "context_too_large" });
+		expect(complete).not.toHaveBeenCalled();
 	});
 
 	test("fails before inference for missing scope, guide, model, and unsupported arbiter thinking", async () => {

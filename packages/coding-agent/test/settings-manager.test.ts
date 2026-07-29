@@ -889,6 +889,49 @@ describe("SettingsManager", () => {
 	});
 
 	describe("global-only subagent arbiter settings", () => {
+		it("refreshes enable, disable, and policy changes written by another runtime", async () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ subagentArbiter: { enabled: false, model: "provider/old" } }),
+			);
+			const activeSession = SettingsManager.create(projectDir, agentDir);
+			const dashboardRuntime = SettingsManager.create(projectDir, agentDir);
+
+			dashboardRuntime.setGlobalSubagentArbiterSettings({
+				enabled: true,
+				model: "provider/router",
+				thinking: "high",
+				guidePath: "~/routing.md",
+			});
+			await dashboardRuntime.flush();
+			expect(activeSession.getGlobalSubagentArbiterSettings()).toEqual({
+				enabled: true,
+				model: "provider/router",
+				thinking: "high",
+				guidePath: "~/routing.md",
+			});
+
+			dashboardRuntime.setGlobalSubagentArbiterSettings({ enabled: false, model: "provider/second" });
+			await dashboardRuntime.flush();
+			expect(activeSession.getGlobalSubagentArbiterSettings()).toEqual({
+				enabled: false,
+				model: "provider/second",
+			});
+		});
+
+		it("fails loudly instead of retaining stale policy when the global file becomes corrupt", () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ subagentArbiter: { enabled: true, model: "provider/router" } }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getGlobalSubagentArbiterSettings()?.enabled).toBe(true);
+
+			writeFileSync(settingsPath, "{ corrupt");
+			expect(() => manager.getGlobalSubagentArbiterSettings()).toThrow(
+				"Could not reload global Dispatch Arbiter settings",
+			);
+			expect(manager.drainErrors().some((entry) => entry.scope === "global")).toBe(true);
+		});
+
 		it("ignores project attempts to enable or reconfigure arbitration", () => {
 			writeFileSync(
 				join(agentDir, "settings.json"),
