@@ -483,6 +483,13 @@ describe("skills", () => {
 			const { skills } = loadSkills({ agentDir: emptyAgentDir, cwd: emptyCwd });
 			const graphify = skills.find((skill) => skill.name === "graphify-structural");
 			const skillSource = readFileSync(graphifySkillPath, "utf-8");
+			const bashLines = Array.from(skillSource.matchAll(/```bash\n([\s\S]*?)```/g)).flatMap(([, block]) =>
+				block
+					.trim()
+					.split("\n")
+					.map((line) => line.trim())
+					.filter(Boolean),
+			);
 
 			expect(graphify).toMatchObject({ userInvocable: true, disableModelInvocation: false });
 			// AST-only extraction and clustering; Graphify is never invoked by this test.
@@ -497,6 +504,24 @@ describe("skills", () => {
 			expect(skillSource).toMatch(/graphify\s+path\s+"<source-symbol>"\s+"<target-symbol>"/);
 			expect(skillSource).toMatch(/GRAPHIFY_QUERY_LOG_DISABLE=1\s+graphify\s+query\b[^\n]*--budget\s+800/);
 			expect(skillSource).toMatch(/graphify\s+update\s+\./);
+			expect(bashLines).toEqual([
+				"command -v graphify",
+				"graphify --help",
+				"graphify extract --help",
+				"graphify cluster-only --help",
+				"graphify god-nodes --help",
+				"graphify affected --help",
+				"graphify path --help",
+				"graphify query --help",
+				"graphify update --help",
+				"graphify extract . --code-only --no-cluster --max-workers 8",
+				"graphify cluster-only . --no-viz --no-label",
+				"graphify god-nodes --top 15",
+				"graphify affected <symbol> --depth 2",
+				'graphify path "<source-symbol>" "<target-symbol>"',
+				'GRAPHIFY_QUERY_LOG_DISABLE=1 graphify query "<concrete structural question>" --budget 800',
+				"graphify update .",
+			]);
 
 			// Every unavailable or failed command is explicit and non-blocking.
 			expect(skillSource).toMatch(/Graphify status: unavailable or incompatible — skipped/i);
@@ -538,6 +563,19 @@ describe("skills", () => {
 			expect(review).toMatch(/explicitly opted in.*concrete changed-symbol question/is);
 			expect(review).toMatch(/Give the same compact packet to every reviewer/i);
 			expect(review).toMatch(/independently verify every Graphify-derived claim/i);
+
+			const graphifyMentions = [
+				"mach6-issue",
+				"mach6-plan",
+				"mach6-implement",
+				"mach6-push",
+				"mach6-review",
+				"mach6-publish",
+			].flatMap((skill) => {
+				const matches = source(skill).match(/\/skill:graphify-structural/g) ?? [];
+				return matches.map(() => skill);
+			});
+			expect(graphifyMentions.sort()).toEqual(["mach6-implement", "mach6-issue", "mach6-plan", "mach6-review"]);
 		});
 
 		it("should copy built-in skill and agent sidecars without a Bun binary", () => {
