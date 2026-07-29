@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
-import { dirname, join, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 
 // =============================================================================
@@ -91,18 +91,20 @@ export function getPackageDir(): string {
 		return dirname(process.execPath);
 	}
 	// Node.js: walk up from __dirname until we find package.json.
-	// Build directories (e.g. dist/) may contain a copied package.json,
-	// so prefer the directory that also has src/, node_modules/, or agents/,
-	// which indicates the real package root rather than a build output.
-	// agents/ is always shipped in the files array and never copied into dist/,
-	// so it reliably identifies the package root even when src/ is absent and
-	// node_modules/ is hoisted (e.g. npm-installed local dependencies).
+	// Build directories (e.g. dist/) may contain a copied package.json and
+	// binary sidecars (agents/ and skills/). Skip that exact directory when
+	// running under Node.js, but retain agents/ as a marker for npm packages
+	// whose dependencies are hoisted by their consumer.
 	let dir = __dirname;
 	let candidate = __dirname;
 	while (dir !== dirname(dir)) {
 		if (existsSync(join(dir, "package.json"))) {
 			candidate = dir;
-			if (existsSync(join(dir, "src")) || existsSync(join(dir, "node_modules")) || existsSync(join(dir, "agents"))) {
+			if (
+				existsSync(join(dir, "src")) ||
+				existsSync(join(dir, "node_modules")) ||
+				(basename(dir) !== "dist" && existsSync(join(dir, "agents")))
+			) {
 				return dir;
 			}
 		}

@@ -8,7 +8,7 @@ disable-model-invocation: false
 
 # Graphify Structural Evidence
 
-Use this built-in skill only for **deliberate, bounded structural evidence**. It is both user-invocable (`/skill:graphify-structural`) and model-invocable, but never automatic: proceed only when the user explicitly opts in or a MACH6 stage supplies one concrete structural question. Direct source and test evidence remains authoritative.
+Use this built-in skill only for **deliberate, bounded structural evidence**. It is both user-invocable (`/skill:graphify-structural`) and model-invocable, but never automatic: proceed only after the user explicitly opts in and supplies, or approves, one concrete structural question. A MACH6 stage may propose a question but cannot authorize Graphify itself. Direct source and test evidence remains authoritative.
 
 ## Safety boundary
 
@@ -71,6 +71,7 @@ Rules for that allowlist:
 - Run at most one bounded query for the recorded concrete question, always with `GRAPHIFY_QUERY_LOG_DISABLE=1` and budget `800`. Do not log, persist, or replay queries.
 - `graphify update .` is permitted only when Graphify was already opted in **and** source files changed after the prior graph evidence. Never use it to start an ordinary workflow or when no source changed.
 - Do not add flags, paths, commands, loops, retries, or broad follow-up analysis beyond this allowlist. If the answer remains unclear, mark it ambiguous and inspect source/tests instead.
+- If an allowed command fails, stop Graphify work immediately. Record the exact command, non-zero status, and a bounded error excerpt in the evidence packet; state `Graphify status: failed — direct source and test evidence continued.` Do not retry, substitute another command, or present missing graph output as ambiguity.
 
 ## Evidence and verification
 
@@ -80,15 +81,18 @@ Preserve the provenance of every statement; never upgrade a label without new di
 - **INFERRED** — a conclusion drawn from one or more extracted results.
 - **AMBIGUOUS** — incomplete, dynamic, generated, reflective, or otherwise unresolved structure.
 
+Copy Graphify's `confidence_score` when it is present; never replace its relationship label or score with a stronger claim.
+
 Verify every **INFERRED** and **AMBIGUOUS** statement against the relevant source and tests before using it in a plan, implementation decision, review finding, or recommendation. If source/tests disagree with Graphify, source/tests win and the packet must say so. EXTRACTED evidence is still structural only; it does not prove runtime behavior.
 
 Return one compact evidence packet; do not paste raw graph output:
 
 ```markdown
 ### Graphify structural evidence
-- **Status:** used | unavailable | incompatible | not requested
+- **Status:** used | unavailable | incompatible | failed | not requested
 - **Question:** <one concrete question, symbol, or path>
 - **Commands:** <exact allowlisted commands run, or none>
+- **Failure:** <exact failed command, exit status, and bounded error excerpt; omit when none>
 - **Bounds:** AST-only; code-only; max workers 8; <applicable depth/top/path/query budget>; no query log
 - **Claims:**
   - **EXTRACTED:** <fact>
@@ -98,4 +102,4 @@ Return one compact evidence packet; do not paste raw graph output:
 - **Limitations:** <staleness, dynamic dispatch, generated code, missing CLI, or other gap>
 ```
 
-Omit claim categories that have no evidence, but always include status, commands, bounds, confidence, and limitations. For unavailable or incompatible preflight, use `Commands: none` and explicitly state direct-source continuation.
+Omit claim categories that have no evidence, but always include status, commands, bounds, confidence, and limitations. For unavailable or incompatible preflight, use `Commands: none` and explicitly state direct-source continuation. For a failed allowed command, include `Failure` and explicitly state direct-source continuation.

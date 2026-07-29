@@ -47,15 +47,57 @@ describe("getPackageDir (mocked filesystem)", () => {
 			fileURLToPath: () => "/fake/pkg/dist/config.js",
 		}));
 		vi.doMock("node:fs", () => ({
-			// /fake/pkg/dist has package.json but NO src/node_modules/agents.
-			// /fake/pkg has package.json AND agents/ (the package-root marker).
+			// /fake/pkg/dist has package.json but NO src/node_modules.
+			// /fake/pkg has package.json AND src/ (the package-root marker).
 			existsSync: (p: string) =>
-				p === "/fake/pkg/dist/package.json" || p === "/fake/pkg/package.json" || p === "/fake/pkg/agents",
+				p === "/fake/pkg/dist/package.json" || p === "/fake/pkg/package.json" || p === "/fake/pkg/src",
 			readFileSync: () => '{"version":"0.0.0","drebConfig":{}}',
 		}));
 
 		const { getPackageDir: getPackageDirMocked } = await import("../src/config.js");
 		expect(getPackageDirMocked()).toBe("/fake/pkg");
+	});
+
+	it("skips binary sidecars when locating a Node.js package root", async () => {
+		// __dirname -> /fake/pkg/dist; binary asset copying supplies package.json,
+		// agents/, and skills/ there, but no Node.js package-root marker.
+		vi.resetModules();
+		vi.doMock("node:url", () => ({
+			fileURLToPath: () => "/fake/pkg/dist/config.js",
+		}));
+		vi.doMock("node:fs", () => ({
+			existsSync: (p: string) =>
+				p === "/fake/pkg/dist/package.json" ||
+				p === "/fake/pkg/dist/agents" ||
+				p === "/fake/pkg/dist/skills" ||
+				p === "/fake/pkg/package.json" ||
+				p === "/fake/pkg/src",
+			readFileSync: () => '{"version":"0.0.0","drebConfig":{}}',
+		}));
+
+		const { getPackageDir: getPackageDirMocked } = await import("../src/config.js");
+		expect(getPackageDirMocked()).toBe("/fake/pkg");
+	});
+
+	it("uses agents as a package-root marker when dependencies are hoisted", async () => {
+		// A published package can have no src/ or nested node_modules/ while its
+		// consuming application has both a package.json and node_modules/.
+		vi.resetModules();
+		vi.doMock("node:url", () => ({
+			fileURLToPath: () => "/fake/app/node_modules/@dreb/coding-agent/dist/config.js",
+		}));
+		vi.doMock("node:fs", () => ({
+			existsSync: (p: string) =>
+				p === "/fake/app/node_modules/@dreb/coding-agent/dist/package.json" ||
+				p === "/fake/app/node_modules/@dreb/coding-agent/package.json" ||
+				p === "/fake/app/node_modules/@dreb/coding-agent/agents" ||
+				p === "/fake/app/package.json" ||
+				p === "/fake/app/node_modules",
+			readFileSync: () => '{"version":"0.0.0","drebConfig":{}}',
+		}));
+
+		const { getPackageDir: getPackageDirMocked } = await import("../src/config.js");
+		expect(getPackageDirMocked()).toBe("/fake/app/node_modules/@dreb/coding-agent");
 	});
 
 	it("falls back to the last package.json-containing directory when no markers are found", async () => {
@@ -67,7 +109,7 @@ describe("getPackageDir (mocked filesystem)", () => {
 			fileURLToPath: () => "/fake/pkg/dist/config.js",
 		}));
 		vi.doMock("node:fs", () => ({
-			// Two package.json dirs, neither has src/node_modules/agents.
+			// Two package.json dirs, neither has src/node_modules.
 			existsSync: (p: string) => p === "/fake/pkg/dist/package.json" || p === "/fake/pkg/package.json",
 			readFileSync: () => '{"version":"0.0.0","drebConfig":{}}',
 		}));

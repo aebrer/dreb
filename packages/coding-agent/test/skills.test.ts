@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -480,43 +480,64 @@ describe("skills", () => {
 		});
 
 		it("should keep graphify-structural's static safety contract", () => {
+			const { skills } = loadSkills({ agentDir: emptyAgentDir, cwd: emptyCwd });
+			const graphify = skills.find((skill) => skill.name === "graphify-structural");
 			const skillSource = readFileSync(graphifySkillPath, "utf-8");
 
+			expect(graphify).toMatchObject({ userInvocable: true, disableModelInvocation: false });
 			// AST-only extraction and clustering; Graphify is never invoked by this test.
 			expect(skillSource).toMatch(/\bAST-only\b/i);
+			expect(skillSource).toMatch(/user explicitly opts in/i);
 			expect(skillSource).toMatch(
 				/graphify\s+extract\s+\.[^\n]*--code-only[^\n]*--no-cluster[^\n]*--max-workers\s+8/,
 			);
 			expect(skillSource).toMatch(/graphify\s+cluster-only\s+\.[^\n]*--no-viz[^\n]*--no-label/);
-			expect(skillSource).toMatch(/graphify\s+update\s+\./);
+			expect(skillSource).toMatch(/graphify\s+god-nodes\s+--top\s+15/);
+			expect(skillSource).toMatch(/graphify\s+affected\s+<symbol>\s+--depth\s+2/);
 			expect(skillSource).toMatch(/graphify\s+path\s+"<source-symbol>"\s+"<target-symbol>"/);
-			expect(skillSource).toMatch(/GRAPHIFY_QUERY_LOG_DISABLE=1\s+graphify\s+query\b[^\n]*--budget(?:\s|=)\d+\b/);
+			expect(skillSource).toMatch(/GRAPHIFY_QUERY_LOG_DISABLE=1\s+graphify\s+query\b[^\n]*--budget\s+800/);
+			expect(skillSource).toMatch(/graphify\s+update\s+\./);
 
-			// Missing or incompatible CLIs are explicitly non-blocking, so direct-source work continues.
-			expect(skillSource).toMatch(/\bmissing\b/i);
-			expect(skillSource).toMatch(/\bincompatible\b/i);
-			expect(skillSource).toMatch(/\bnon[- ]blocking\b/i);
-			expect(skillSource).toMatch(/\bdirect[- ]source\b/i);
+			// Every unavailable or failed command is explicit and non-blocking.
+			expect(skillSource).toMatch(/Graphify status: unavailable or incompatible — skipped/i);
+			expect(skillSource).toMatch(/Graphify status: failed — direct source and test evidence continued/i);
+			expect(skillSource).toMatch(/exact command, non-zero status, and a bounded error excerpt/i);
 
-			// Preserve Graphify's uncertainty labels and make its prohibited operations explicit.
-			expect(skillSource).toMatch(/\bconfidence\b/i);
+			// Preserve Graphify's uncertainty labels and prohibit every unsafe integration path.
 			expect(skillSource).toMatch(/\bEXTRACTED\b/);
 			expect(skillSource).toMatch(/\bINFERRED\b/);
 			expect(skillSource).toMatch(/\bAMBIGUOUS\b/);
-			expect(skillSource).toMatch(/\b(?:prohibited|forbidden|must not|never)\b/i);
-			for (const operation of [
-				/install/i,
-				/semantic/i,
-				/model/i,
-				/API/i,
-				/MCP/i,
-				/watch/i,
-				/hook/i,
-				/persistent/i,
-				/ignore/i,
+			expect(skillSource).toMatch(/confidence_score/);
+			for (const rule of [
+				/semantic analysis, models, APIs, or MCP/i,
+				/`watch`, hooks, persistent processes, or instruction modes/i,
+				/package installation or updates/i,
+				/`graphify add`/i,
+				/automatic `\.gitignore` changes/i,
+				/Do not stage Graphify artifacts/i,
 			]) {
-				expect(skillSource).toMatch(operation);
+				expect(skillSource).toMatch(rule);
 			}
+		});
+
+		it("should keep MACH6 Graphify handoffs explicitly opted in and source-verified", () => {
+			const source = (skill: string) => readFileSync(join(packageDir, "skills", skill, "SKILL.md"), "utf-8");
+
+			for (const skill of ["mach6-issue", "mach6-plan"]) {
+				const content = source(skill);
+				expect(content).toMatch(/only after the user explicitly opted in \*\*and\*\*/i);
+				expect(content).toMatch(/direct source\/tests remain authoritative/i);
+			}
+
+			const implement = source("mach6-implement");
+			expect(implement).toMatch(/already explicitly opted in.*source files changed/is);
+			expect(implement).toMatch(/`graphify update \.`/);
+			expect(implement).toMatch(/INFERRED or AMBIGUOUS claim/i);
+
+			const review = source("mach6-review");
+			expect(review).toMatch(/explicitly opted in.*concrete changed-symbol question/is);
+			expect(review).toMatch(/Give the same compact packet to every reviewer/i);
+			expect(review).toMatch(/independently verify every Graphify-derived claim/i);
 		});
 
 		it("should copy built-in skill and agent sidecars without a Bun binary", () => {
@@ -525,7 +546,13 @@ describe("skills", () => {
 			mkdirSync(distDir, { recursive: true });
 			const preservedDir = mkdtempSync(join(distDir, "copy-binary-assets-test-"));
 			const preservedAsset = join(preservedDir, "preserved.txt");
+			const staleSkill = join(distDir, "skills", "stale-skill", "SKILL.md");
+			const staleAgent = join(distDir, "agents", "stale-agent.md");
 			writeFileSync(preservedAsset, "preserve this asset");
+			mkdirSync(dirname(staleSkill), { recursive: true });
+			mkdirSync(dirname(staleAgent), { recursive: true });
+			writeFileSync(staleSkill, "stale skill");
+			writeFileSync(staleAgent, "stale agent");
 
 			try {
 				execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "copy-binary-assets"], {
@@ -536,6 +563,8 @@ describe("skills", () => {
 				const sidecarSkillPath = join(distDir, "skills", "graphify-structural", "SKILL.md");
 				const sidecarAgentPath = join(distDir, "agents", "code-reviewer.md");
 				expect(readFileSync(preservedAsset, "utf-8")).toBe("preserve this asset");
+				expect(existsSync(staleSkill)).toBe(false);
+				expect(existsSync(staleAgent)).toBe(false);
 				expect(readFileSync(sidecarSkillPath, "utf-8")).toBe(readFileSync(graphifySkillPath, "utf-8"));
 				expect(readFileSync(sidecarAgentPath, "utf-8")).toBe(
 					readFileSync(join(packageDir, "agents", "code-reviewer.md"), "utf-8"),

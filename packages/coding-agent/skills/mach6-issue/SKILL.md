@@ -59,7 +59,7 @@ Launch 2-3 Explore subagents in parallel targeting different aspects. Agent defi
 
 Each agent should return 5-10 key files. After agents complete, read all identified files.
 
-**Optional Graphify handoff:** Request `/skill:graphify-structural` only when the user explicitly opted in or this assessment has one concrete structural question. Attach its compact evidence packet to the assessment; an unavailable or incompatible CLI is non-blocking and direct source/tests remain authoritative. Do not request Graphify for ordinary exploration.
+**Optional Graphify handoff:** Request `/skill:graphify-structural` only after the user explicitly opted in **and** this assessment has one concrete structural question. Attach its compact evidence packet to the assessment; an unavailable, incompatible, or failed CLI command is non-blocking and direct source/tests remain authoritative. Do not request Graphify for ordinary exploration.
 
 Update task: explore → completed, assess → in_progress.
 

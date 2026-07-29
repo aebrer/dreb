@@ -59,7 +59,7 @@ Read the PR description, ALL comments (plans, progress updates, prior reviews, d
 
 Update task: prepare → completed, review → in_progress.
 
-**Optional Graphify handoff:** If Graphify was explicitly opted in for this PR or a concrete changed-symbol question is present, request `/skill:graphify-structural` for at most one bounded changed-symbol evidence packet. Give the same compact packet to every reviewer. If it is unavailable or incompatible, record direct-source continuation and proceed normally; do not create a graph for ordinary review.
+**Optional Graphify handoff:** Only if Graphify was explicitly opted in for this PR **and** a concrete changed-symbol question is present, request `/skill:graphify-structural` for at most one bounded changed-symbol evidence packet. Give the same compact packet to every reviewer. If it is unavailable, incompatible, or an allowed command fails, record direct-source continuation and proceed normally; do not create a graph for ordinary review.
 
 ## Step 4: Select and run review agents
 

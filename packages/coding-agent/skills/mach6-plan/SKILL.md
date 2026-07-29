@@ -60,7 +60,7 @@ Launch 2-3 Explore subagents in parallel. Agent definitions specify their own mo
 
 Include project conventions in each agent's context. Each agent returns 5-10 key files. Read all identified files.
 
-**Optional Graphify handoff:** Request `/skill:graphify-structural` only when the user explicitly opted in or the plan needs one concrete structural answer. Include its compact evidence packet in the plan context; missing or incompatible CLI is non-blocking and direct source/tests remain authoritative. Do not use Graphify for ordinary planning.
+**Optional Graphify handoff:** Request `/skill:graphify-structural` only after the user explicitly opted in **and** the plan needs one concrete structural answer. Include its compact evidence packet in the plan context; a missing, incompatible, or failed CLI command is non-blocking and direct source/tests remain authoritative. Do not use Graphify for ordinary planning.
 
 Update task: explore → completed, plan → in_progress.
 
