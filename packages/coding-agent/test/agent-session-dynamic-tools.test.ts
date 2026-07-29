@@ -91,6 +91,33 @@ describe("AgentSession dynamic tool registration", () => {
 		session.dispose();
 	});
 
+	it("keeps ask_user active and binds UI context when no extensions are installed", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		const sessionManager = SessionManager.inMemory();
+		const resourceLoader = new DefaultResourceLoader({ cwd: tempDir, agentDir, settingsManager });
+		await resourceLoader.reload();
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: findModel("anthropic", "sonnet")!,
+			settingsManager,
+			sessionManager,
+			resourceLoader,
+		});
+
+		expect(session.getActiveToolNames()).toContain("ask_user");
+		expect(session.extensionRunner).toBeDefined();
+		expect(session.extensionRunner?.hasUI()).toBe(false);
+
+		const ask = async () => ({ selected: ["SQLite"] });
+		await session.bindExtensions({ uiContext: { ask } as any });
+		expect(session.extensionRunner?.hasUI()).toBe(true);
+		expect(session.extensionRunner?.createContext().ui.ask).toBe(ask);
+
+		session.dispose();
+	});
+
 	it("returns source metadata for SDK custom tools", async () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.inMemory();

@@ -449,6 +449,16 @@ export class ExtensionRunner {
 		}
 	}
 
+	/**
+	 * Whether any extensions are loaded. The runner is now created
+	 * unconditionally so built-in tools (e.g. ask_user) always have a UI
+	 * context, but when no extensions are present there are no event handlers
+	 * to run — callers can skip the async emit path entirely.
+	 */
+	get hasExtensions(): boolean {
+		return this.extensions.length > 0;
+	}
+
 	hasHandlers(eventType: string): boolean {
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get(eventType);

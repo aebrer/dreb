@@ -277,6 +277,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		"web_fetch",
 		"subagent",
 		"wait",
+		"ask_user",
 	];
 	const initialActiveToolNames: string[] = options.tools
 		? [...options.tools.map((t) => t.name).filter((n): n is ToolName => n in allTools), ...alwaysActiveBuiltins]

@@ -2209,6 +2209,37 @@ details.thinking .thinking-body {
 
 /* ------------------------------------------------------------- ask_user dialog */
 
+/* Inline ask card — flows at the end of the transcript so the whole chat area
+   stays scrollable while the agent waits for an answer. */
+.ask-inline {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: var(--space-3) 0;
+	padding: var(--space-3);
+	border: var(--hairline);
+	border-left: 3px solid var(--status-running);
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--status-running) 6%, var(--surface, transparent));
+}
+
+.ask-inline-header {
+	font-weight: 600;
+	color: var(--text);
+}
+
+.ask-inline-question {
+	margin: 0 0 var(--space-2);
+	color: var(--text);
+}
+
+.ask-inline-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-2);
+	margin-top: var(--space-1);
+}
+
 .ask-options {
 	display: flex;
 	flex-direction: column;

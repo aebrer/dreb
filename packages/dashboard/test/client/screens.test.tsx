@@ -1085,6 +1085,10 @@ describe("screen smoke tests", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		expect(el.textContent).toContain("Which checks?");
+		// ask_user renders inline in the transcript flow (scrollable), not as a
+		// blocking modal overlay.
+		expect(el.querySelector(".chat-inner .ask-inline")).not.toBeNull();
+		expect(el.querySelector(".modal-backdrop")).toBeNull();
 		const checkboxes = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="checkbox"]');
 		expect(checkboxes.length).toBe(2);
 		expect(el.querySelector('.ask-option input[type="radio"]')).toBeNull();

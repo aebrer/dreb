@@ -486,6 +486,33 @@ describe("app store SSE sync", () => {
 		expect(store.sessions.a?.needsAttention).toBe(false);
 	});
 
+	it("resolveUiRequest optimistically dismisses an ask request and clears attention", async () => {
+		const store = await makeStartedStore();
+
+		emit("a", {
+			type: "extension_ui_request",
+			method: "ask",
+			id: "ask-1",
+			title: "Choose a database",
+			question: "Which one?",
+			options: ["SQLite", "Postgres"],
+		});
+		expect(store.sessions.a?.uiRequests).toMatchObject([{ id: "ask-1", method: "ask" }]);
+		expect(store.sessions.a?.needsAttention).toBe(true);
+
+		// Skipping/answering removes the dialog immediately — there is no server
+		// acknowledgement event, so without this the dialog would linger until
+		// the next agent_start.
+		store.resolveUiRequest("a", "ask-1");
+
+		expect(store.sessions.a?.uiRequests).toEqual([]);
+		expect(store.sessions.a?.needsAttention).toBe(false);
+
+		// Idempotent — resolving an already-removed id is a safe no-op.
+		store.resolveUiRequest("a", "ask-1");
+		expect(store.sessions.a?.uiRequests).toEqual([]);
+	});
+
 	it("clears stale extension UI state before replaying post-barrier requests", async () => {
 		const snapshot = runtimeSnapshot("a", false);
 		const request = deferred<Awaited<ReturnType<typeof api.resync>>>();

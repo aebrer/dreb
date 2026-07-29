@@ -182,7 +182,7 @@ function ExtensionUiModal(props: {
 	);
 }
 
-function AskUiModal(props: {
+function AskUiInline(props: {
 	request: ExtensionUiRequest;
 	onRespond: (response: Record<string, unknown>) => void;
 }): JSX.Element {
@@ -214,22 +214,10 @@ function AskUiModal(props: {
 	};
 
 	return (
-		<Modal
-			title={props.request.title}
-			onDismiss={() => respond({ cancelled: true })}
-			actions={
-				<>
-					<button type="button" class="btn btn-small" onClick={() => respond({ cancelled: true })}>
-						skip
-					</button>
-					<button type="button" class="btn btn-small btn-primary" disabled={!canSubmit()} onClick={submit}>
-						submit
-					</button>
-				</>
-			}
-		>
+		<section class="ask-inline" aria-label={props.request.title}>
+			<header class="ask-inline-header">{props.request.title}</header>
 			<Show when={props.request.question}>
-				<p style={{ "margin-bottom": "12px" }}>{props.request.question}</p>
+				<p class="ask-inline-question">{props.request.question}</p>
 			</Show>
 			<Show when={options().length > 0}>
 				<fieldset class="ask-options">
@@ -275,7 +263,15 @@ function AskUiModal(props: {
 					</Show>
 				</div>
 			</Show>
-		</Modal>
+			<div class="ask-inline-actions">
+				<button type="button" class="btn btn-small" onClick={() => respond({ cancelled: true })}>
+					skip
+				</button>
+				<button type="button" class="btn btn-small btn-primary" disabled={!canSubmit()} onClick={submit}>
+					submit
+				</button>
+			</div>
+		</section>
 	);
 }
 
@@ -563,6 +559,22 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			setActionError(err instanceof Error ? err.message : String(err));
 		}
 	}
+
+	// Answer or skip an extension UI request. Dismiss the dialog optimistically
+	// so it disappears immediately — the response is fire-and-forget and the
+	// server emits no acknowledgement event, so nothing else would clear it
+	// until the next agent_start (that's why skip previously appeared stuck).
+	const respondToUiRequest = async (response: Record<string, unknown>) => {
+		const id = response.id;
+		if (typeof id === "string") {
+			props.store.resolveUiRequest(props.sessionKey, id);
+		}
+		try {
+			await api.extensionUiResponse(props.sessionKey, response);
+		} catch (err) {
+			setActionError(err instanceof Error ? err.message : String(err));
+		}
+	};
 
 	function bytesFromBase64(data: string): Uint8Array<ArrayBuffer> {
 		const binary = atob(data);
@@ -1270,6 +1282,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							resetKey={props.sessionKey}
 							imageScope={{ runtimeKey: props.sessionKey }}
 						/>
+						<Show when={session()!.uiRequests[0]} keyed>
+							{(request) => (
+								<Show when={request.method === "ask"}>
+									<AskUiInline request={request} onRespond={respondToUiRequest} />
+								</Show>
+							)}
+						</Show>
 						<For each={session()!.widgets.below}>{(line) => <div class="widget-block">{line}</div>}</For>
 					</Show>
 				</div>
@@ -1635,24 +1654,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</Show>
 			</footer>
 
-			<Show when={session()?.uiRequests[0]}>
-				{(request) => {
-					const onRespond = async (response: Record<string, unknown>) => {
-						try {
-							await api.extensionUiResponse(props.sessionKey, response);
-						} catch (err) {
-							setActionError(err instanceof Error ? err.message : String(err));
-						}
-					};
-					return (
-						<Show
-							when={request().method === "ask"}
-							fallback={<ExtensionUiModal request={request()} onRespond={onRespond} />}
-						>
-							<AskUiModal request={request()} onRespond={onRespond} />
-						</Show>
-					);
-				}}
+			<Show when={session()?.uiRequests[0]} keyed>
+				{(request) => (
+					// ask_user renders inline in the transcript (see .chat-inner); only
+					// the other extension UI methods use a blocking modal overlay.
+					<Show when={request.method !== "ask"}>
+						<ExtensionUiModal request={request} onRespond={respondToUiRequest} />
+					</Show>
+				)}
 			</Show>
 
 			<Show when={showModelSelector()}>

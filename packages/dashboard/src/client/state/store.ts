@@ -26,6 +26,7 @@ import {
 	deriveProviderErrorState,
 	dismissToast as dismissReducerToast,
 	messagesToEntries,
+	resolveUiRequest as resolveReducerUiRequest,
 	type SessionViewState,
 	type Toast,
 } from "./reducer.js";
@@ -991,6 +992,15 @@ export function createAppStore() {
 		start,
 		stop,
 		dismissToast,
+		/**
+		 * Optimistically dismiss an extension UI request (ask/select/confirm/…)
+		 * as soon as the user answers or skips, so the dialog disappears
+		 * immediately without waiting for a server round-trip or the next
+		 * agent_start. Safe to call for an already-removed id (no-op).
+		 */
+		resolveUiRequest(key: string, id: string): void {
+			mutateSession(key, (session) => resolveReducerUiRequest(session, id));
+		},
 		hydrateSession,
 		hydrateSubagent,
 	};
