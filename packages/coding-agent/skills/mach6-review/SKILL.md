@@ -14,7 +14,7 @@ argument-hint: "<pr-number> [code|errors|tests|completeness|simplify]"
 2. **HTML markers** — Use `<!-- mach6-review -->` and `<!-- mach6-assessment -->` as the first line of comment bodies.
 3. **No `#N` in comment bodies** — Use "finding 3", "item 3", "stage 2" etc. instead.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
-5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 **Important: Do NOT fix any issues in this session. Fixes happen via `/skill:mach6-implement`.**
 
@@ -59,6 +59,8 @@ Read the PR description, ALL comments (plans, progress updates, prior reviews, d
 
 Update task: prepare → completed, review → in_progress.
 
+**Optional Graphify handoff:** If Graphify was explicitly opted in for this PR or a concrete changed-symbol question is present, request `/skill:graphify-structural` for at most one bounded changed-symbol evidence packet. Give the same compact packet to every reviewer. If it is unavailable or incompatible, record direct-source continuation and proceed normally; do not create a graph for ordinary review.
+
 ## Step 4: Select and run review agents
 
 **Available review agents:**
@@ -85,7 +87,8 @@ These agents are **pre-existing agent definitions** shipped with dreb — do not
 Provide each agent with:
 - The list of changed files with paths
 - The PR description and linked issue context
-- Instructions to read the actual changed files for full context
+- The compact Graphify evidence packet, if one was requested
+- Instructions to read the actual changed files for full context and treat Graphify claims as structural evidence only
 
 All agents use confidence scoring (0-100, only report findings ≥ 80).
 
@@ -96,7 +99,7 @@ Update task: review → completed, post-review → in_progress.
 Compile all findings from all agents into a single structured comment:
 
 ```bash
-GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-review -->
 ## Code Review
@@ -112,6 +115,9 @@ cat > "$GH_BODY" << 'MACH6_EOF'
 
 ### Strengths
 <notable positive observations>
+
+### Graphify Structural Evidence (optional)
+<compact evidence packet when explicitly requested; omit this section otherwise>
 
 **Agents run:** <list of agents>
 
@@ -138,7 +144,8 @@ Launch a subagent with `agent: "independent-assessor"`. This is a **pre-existing
 Provide the assessor with:
 - The full review text
 - The PR context (title, body, comments)
-- Instructions to **read the actual code** for each finding and verify independently
+- The compact Graphify evidence packet, if one was used
+- Instructions to **read the actual code and tests** for each finding, independently verify every Graphify-derived claim, and treat source/tests as authoritative
 
 The assessor classifies each finding as:
 - **Genuine issue** — Real problem, should fix before merge. Explain why.
@@ -157,7 +164,7 @@ Update task: assess → completed, post-assess → in_progress.
 ## Step 7: Post assessment
 
 ```bash
-GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-assessment -->
 ## Review Assessment
@@ -191,7 +198,7 @@ Present to the user:
 
 If any findings were classified as **deferred**, ask the user if they want to create issues for them:
 ```bash
-GH_BODY="$(mktemp /tmp/gh-body.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-body.XXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <body referencing PR and finding>
 MACH6_EOF

@@ -18,7 +18,7 @@ This command is strictly for **planning**. Do NOT implement any code changes —
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
 5. **Task tracking** — Use the `tasks_update` tool to show progress through multi-step commands.
 6. **Project conventions** — Check for CLAUDE.md, AGENTS.md, .dreb/CONTEXT.md, and CONTRIBUTING.md before planning.
-7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 ## Step 1: Set up task tracking
 
@@ -60,6 +60,8 @@ Launch 2-3 Explore subagents in parallel. Agent definitions specify their own mo
 
 Include project conventions in each agent's context. Each agent returns 5-10 key files. Read all identified files.
 
+**Optional Graphify handoff:** Request `/skill:graphify-structural` only when the user explicitly opted in or the plan needs one concrete structural answer. Include its compact evidence packet in the plan context; missing or incompatible CLI is non-blocking and direct source/tests remain authoritative. Do not use Graphify for ordinary planning.
+
 Update task: explore → completed, plan → in_progress.
 
 ## Step 5: Draft the plan
@@ -98,7 +100,7 @@ git commit --allow-empty -m "chore: open PR for issue <N>"
 git push -u origin feature/issue-<N>-<slug>
 
 # Open draft PR
-GH_BODY="$(mktemp /tmp/gh-body.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-body.XXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 Closes #<N>
 
@@ -114,7 +116,7 @@ Update task: branch → completed, post → in_progress.
 ## Step 7: Post plan to PR
 
 ```bash
-GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-plan -->
 ## Implementation Plan

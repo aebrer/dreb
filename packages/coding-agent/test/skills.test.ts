@@ -1,5 +1,7 @@
-import { homedir } from "os";
-import { join, resolve } from "path";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ResourceDiagnostic } from "../src/core/diagnostics.js";
 import { formatSkillsForPrompt, loadSkills, loadSkillsFromDir, type Skill } from "../src/core/skills.js";
@@ -7,6 +9,9 @@ import { createSyntheticSourceInfo } from "../src/core/source-info.js";
 
 const fixturesDir = resolve(__dirname, "fixtures/skills");
 const collisionFixturesDir = resolve(__dirname, "fixtures/skills-collision");
+const packageDir = resolve(__dirname, "..");
+const graphifySkillPath = join(packageDir, "skills", "graphify-structural", "SKILL.md");
+const graphifySkillDir = dirname(graphifySkillPath);
 
 function createTestSkill(options: {
 	name: string;
@@ -454,6 +459,104 @@ describe("skills", () => {
 			expect(builtinNames).toContain("mach6-review");
 			expect(builtinNames).toContain("mach6-implement");
 			expect(builtinNames).toContain("mach6-publish");
+		});
+
+		it("should discover graphify-structural as a built-in with its source metadata", () => {
+			const { skills } = loadSkills({ agentDir: emptyAgentDir, cwd: emptyCwd });
+			const graphify = skills.find((skill) => skill.name === "graphify-structural");
+
+			expect(graphify).toMatchObject({
+				name: "graphify-structural",
+				filePath: graphifySkillPath,
+				baseDir: graphifySkillDir,
+				sourceInfo: {
+					path: graphifySkillPath,
+					source: "builtin",
+					scope: "user",
+					origin: "top-level",
+					baseDir: graphifySkillDir,
+				},
+			});
+		});
+
+		it("should keep graphify-structural's static safety contract", () => {
+			const skillSource = readFileSync(graphifySkillPath, "utf-8");
+
+			// AST-only extraction and clustering; Graphify is never invoked by this test.
+			expect(skillSource).toMatch(/\bAST-only\b/i);
+			expect(skillSource).toMatch(
+				/graphify\s+extract\s+\.[^\n]*--code-only[^\n]*--no-cluster[^\n]*--max-workers\s+8/,
+			);
+			expect(skillSource).toMatch(/graphify\s+cluster-only\s+\.[^\n]*--no-viz[^\n]*--no-label/);
+			expect(skillSource).toMatch(/graphify\s+update\s+\./);
+			expect(skillSource).toMatch(/graphify\s+path\s+"<source-symbol>"\s+"<target-symbol>"/);
+			expect(skillSource).toMatch(/GRAPHIFY_QUERY_LOG_DISABLE=1\s+graphify\s+query\b[^\n]*--budget(?:\s|=)\d+\b/);
+
+			// Missing or incompatible CLIs are explicitly non-blocking, so direct-source work continues.
+			expect(skillSource).toMatch(/\bmissing\b/i);
+			expect(skillSource).toMatch(/\bincompatible\b/i);
+			expect(skillSource).toMatch(/\bnon[- ]blocking\b/i);
+			expect(skillSource).toMatch(/\bdirect[- ]source\b/i);
+
+			// Preserve Graphify's uncertainty labels and make its prohibited operations explicit.
+			expect(skillSource).toMatch(/\bconfidence\b/i);
+			expect(skillSource).toMatch(/\bEXTRACTED\b/);
+			expect(skillSource).toMatch(/\bINFERRED\b/);
+			expect(skillSource).toMatch(/\bAMBIGUOUS\b/);
+			expect(skillSource).toMatch(/\b(?:prohibited|forbidden|must not|never)\b/i);
+			for (const operation of [
+				/install/i,
+				/semantic/i,
+				/model/i,
+				/API/i,
+				/MCP/i,
+				/watch/i,
+				/hook/i,
+				/persistent/i,
+				/ignore/i,
+			]) {
+				expect(skillSource).toMatch(operation);
+			}
+		});
+
+		it("should copy built-in skill and agent sidecars without a Bun binary", () => {
+			const distDir = join(packageDir, "dist");
+			const originalPackageDir = process.env.DREB_PACKAGE_DIR;
+			mkdirSync(distDir, { recursive: true });
+			const preservedDir = mkdtempSync(join(distDir, "copy-binary-assets-test-"));
+			const preservedAsset = join(preservedDir, "preserved.txt");
+			writeFileSync(preservedAsset, "preserve this asset");
+
+			try {
+				execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "copy-binary-assets"], {
+					cwd: packageDir,
+					stdio: "pipe",
+				});
+
+				const sidecarSkillPath = join(distDir, "skills", "graphify-structural", "SKILL.md");
+				const sidecarAgentPath = join(distDir, "agents", "code-reviewer.md");
+				expect(readFileSync(preservedAsset, "utf-8")).toBe("preserve this asset");
+				expect(readFileSync(sidecarSkillPath, "utf-8")).toBe(readFileSync(graphifySkillPath, "utf-8"));
+				expect(readFileSync(sidecarAgentPath, "utf-8")).toBe(
+					readFileSync(join(packageDir, "agents", "code-reviewer.md"), "utf-8"),
+				);
+
+				process.env.DREB_PACKAGE_DIR = distDir;
+				const { skills } = loadSkills({ agentDir: emptyAgentDir, cwd: emptyCwd });
+				const sidecarGraphify = skills.find((skill) => skill.name === "graphify-structural");
+				expect(sidecarGraphify).toMatchObject({
+					filePath: sidecarSkillPath,
+					sourceInfo: { source: "builtin", scope: "user", path: sidecarSkillPath },
+				});
+			} finally {
+				if (originalPackageDir === undefined) {
+					delete process.env.DREB_PACKAGE_DIR;
+				} else {
+					process.env.DREB_PACKAGE_DIR = originalPackageDir;
+				}
+				expect(process.env.DREB_PACKAGE_DIR).toBe(originalPackageDir);
+				rmSync(preservedDir, { recursive: true, force: true });
+			}
 		});
 
 		it("should allow user/project skills to override built-ins (built-ins are lowest priority)", () => {

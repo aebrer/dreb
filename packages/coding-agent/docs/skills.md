@@ -286,9 +286,15 @@ dreb ships with **mach6**, a development workflow that orchestrates the full iss
 | `mach6-implement` | Implement plans, fix review findings, or fix CI failures |
 | `mach6-publish` | Pre-merge checks, docs update, merge, tag, release |
 
-Built-in skills are always available and can be overridden by placing a skill with the same name in any [user or project location](#locations).
+### Optional structural-analysis skill
 
-See [docs/mach6.md](mach6.md) for full documentation.
+| Skill | What it does |
+|---|---|
+| `graphify-structural` | Optional mach6 structural analysis when a compatible local Graphify CLI is already installed |
+
+`graphify-structural` is not a seventh mach6 lifecycle skill. Like the other built-ins, it remains overrideable by placing a skill with the same name in any [user or project location](#locations).
+
+See [docs/mach6.md](mach6.md) for mach6 and Graphify capability details.
 
 ## Skill Repositories
 

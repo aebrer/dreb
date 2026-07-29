@@ -111,6 +111,16 @@ Pre-merge checks, version bump, docs update, merge, tag, and release.
 - Merges with `--squash --delete-branch`
 - Optionally creates a git tag and GitHub release
 
+## Optional Graphify Structural Analysis
+
+When a compatible `graphify` CLI is already installed locally, mach6 may use it as **supplemental, AST-only structural evidence**. It is deliberately bounded to `mach6-issue` assessment, `mach6-plan` exploration, and `mach6-review`; it is not a general repository analysis service.
+
+- Direct inspection of source and tests takes precedence over Graphify output.
+- Relationship confidence reported by Graphify is preserved as reported; mach6 does not promote uncertain relationships to facts.
+- After an implementation or fix changes source, mach6 may make at most one post-change update to refresh that structural evidence. It does not watch the repository or continually re-index it.
+- The capability is non-blocking: if the CLI is absent or incompatible, mach6 continues without Graphify evidence.
+- mach6 does not install or bundle Graphify, perform automatic semantic extraction, call a Graphify API or MCP server, or register watches or hooks for it.
+
 ## Agents
 
 ### feature-dev

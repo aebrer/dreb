@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findModel } from "../src/models.js";
+import { getModel } from "../src/models.js";
 import { streamSimple } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
 
@@ -48,8 +48,10 @@ async function capturePayload(
 }
 
 describe("Anthropic thinking display payload", () => {
+	const adaptiveModel = getModel("anthropic", "claude-opus-4-6") as Model<"anthropic-messages">;
+
 	it("sends thinking.display=summarized for adaptive models when requested", async () => {
-		const payload = await capturePayload(findModel("anthropic", "opus")! as Model<"anthropic-messages">, {
+		const payload = await capturePayload(adaptiveModel, {
 			thinkingDisplay: "summarized",
 		});
 
@@ -57,7 +59,7 @@ describe("Anthropic thinking display payload", () => {
 	});
 
 	it("sends thinking.display=omitted for adaptive models when requested", async () => {
-		const payload = await capturePayload(findModel("anthropic", "opus")! as Model<"anthropic-messages">, {
+		const payload = await capturePayload(adaptiveModel, {
 			thinkingDisplay: "omitted",
 		});
 
@@ -65,7 +67,7 @@ describe("Anthropic thinking display payload", () => {
 	});
 
 	it("omits the display field for adaptive models when thinkingDisplay is unset", async () => {
-		const payload = await capturePayload(findModel("anthropic", "opus")! as Model<"anthropic-messages">);
+		const payload = await capturePayload(adaptiveModel);
 
 		expect(payload.thinking).toEqual({ type: "adaptive" });
 		expect(payload.thinking?.display).toBeUndefined();
@@ -74,7 +76,7 @@ describe("Anthropic thinking display payload", () => {
 	it("never sets display on budget-based models even when thinkingDisplay is requested", async () => {
 		// claude-sonnet-4-5 is a reasoning model that uses budget-based (type: "enabled")
 		// thinking, NOT adaptive — thinkingDisplay must be gated out for it.
-		const model = findModel("anthropic", "claude-sonnet-4-5")! as Model<"anthropic-messages">;
+		const model = getModel("anthropic", "claude-sonnet-4-5") as Model<"anthropic-messages">;
 		const payload = await capturePayload(model, { thinkingDisplay: "summarized" });
 
 		expect(payload.thinking?.type).toBe("enabled");

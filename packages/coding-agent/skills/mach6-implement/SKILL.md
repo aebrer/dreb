@@ -18,7 +18,7 @@ This skill has two modes:
 2. **No `#N` in comment bodies** — Use "finding 3", "item 3" etc. instead.
 3. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
-5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 ## Step 1: Parse input
 
@@ -89,6 +89,8 @@ Use the `feature-dev` subagent to implement each deliverable. `feature-dev` is a
 Update task tracking as each deliverable completes.
 
 ### Step 7i: Verify
+
+If Graphify was already explicitly opted in for this PR **and** source files changed after its prior evidence, request `/skill:graphify-structural` to run only its permitted `graphify update .` refresh before verification. Capture its compact packet and directly verify every INFERRED or AMBIGUOUS claim in source/tests. Do not create or refresh a graph without both prior opt-in and source changes; unavailable or incompatible CLI remains non-blocking.
 
 After all `feature-dev` agents complete:
 - Run the project's test suite
