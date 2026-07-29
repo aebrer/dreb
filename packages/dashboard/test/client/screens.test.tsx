@@ -1141,6 +1141,47 @@ describe("screen smoke tests", () => {
 		);
 	});
 
+	it("ask_user tool card stays collapsed while running (unlike other running tools)", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-collapse");
+		session.entries = [
+			{
+				kind: "tool",
+				toolCallId: "ask-tc",
+				toolName: "ask_user",
+				args: { title: "Favorite Composer", options: ["Bach", "Mozart"] },
+				status: "running",
+				resultText: "",
+				startedAt: Date.now(),
+			},
+			{
+				kind: "tool",
+				toolCallId: "bash-tc",
+				toolName: "bash",
+				args: { command: "pwd" },
+				status: "running",
+				resultText: "",
+				startedAt: Date.now(),
+			},
+		] as any;
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-collapse": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-collapse" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const cards = [...el.querySelectorAll<HTMLDetailsElement>("details.tool")];
+		const askCard = cards.find((c) => c.querySelector(".tool-name")?.textContent === "ask_user");
+		const bashCard = cards.find((c) => c.querySelector(".tool-name")?.textContent === "bash");
+		if (!askCard || !bashCard) throw new Error("expected both tool cards to render");
+		// The still-running ask_user card is collapsed; a normal running tool (bash) auto-opens.
+		expect(askCard.open).toBe(false);
+		expect(bashCard.open).toBe(true);
+	});
+
 	it("session header prefers live session_name_changed state", () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-live");

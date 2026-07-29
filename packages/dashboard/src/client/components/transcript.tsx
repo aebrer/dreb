@@ -590,7 +590,12 @@ function ToolCard(props: { entry: ToolEntry; imageScope: TranscriptImageScope })
 	const isBash = () => props.entry.toolName === "bash" || props.entry.toolName === "bash (user)";
 	const inputSections = () => toolInputSections(props.entry);
 	const autoOpen = () => isToolAutoOpen(props.entry.toolName);
-	const [open, setOpen] = createSignal(autoOpen() || props.entry.status === "running");
+	// ask_user "runs" for the entire time it waits on the user, and its body
+	// (the raw options JSON) is redundant with the inline question card. Keep it
+	// collapsed by default and let the user expand/collapse freely instead of
+	// force-opening it while running like other in-flight tools.
+	const forceOpenWhileRunning = props.entry.toolName !== "ask_user";
+	const [open, setOpen] = createSignal(autoOpen() || (props.entry.status === "running" && forceOpenWhileRunning));
 	let wasRunning = props.entry.status === "running";
 	let userToggled = false;
 	let suppressToggle = false;
@@ -608,7 +613,7 @@ function ToolCard(props: { entry: ToolEntry; imageScope: TranscriptImageScope })
 	createEffect(() => {
 		const running = props.entry.status === "running";
 		const shouldAutoOpen = autoOpen();
-		if (running) {
+		if (running && forceOpenWhileRunning) {
 			userToggled = false;
 			setProgrammaticOpen(true);
 		} else if (wasRunning) {
@@ -632,7 +637,7 @@ function ToolCard(props: { entry: ToolEntry; imageScope: TranscriptImageScope })
 					setOpen(next);
 					return;
 				}
-				if (props.entry.status === "running" && !next) {
+				if (props.entry.status === "running" && forceOpenWhileRunning && !next) {
 					suppressToggle = true;
 					event.currentTarget.open = true;
 					setOpen(true);

@@ -2218,9 +2218,11 @@ details.thinking .thinking-body {
 	margin: var(--space-3) 0;
 	padding: var(--space-3);
 	border: var(--hairline);
-	border-left: 3px solid var(--status-running);
+	/* Match the needs-attention accent (orange in the default theme) — an
+	   unanswered question is the primary "your move" signal for the session. */
+	border-left: 3px solid var(--status-attention);
 	border-radius: var(--radius);
-	background: color-mix(in srgb, var(--status-running) 6%, var(--surface, transparent));
+	background: color-mix(in srgb, var(--status-attention) 6%, var(--surface, transparent));
 }
 
 .ask-inline-header {
