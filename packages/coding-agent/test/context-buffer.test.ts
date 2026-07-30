@@ -55,6 +55,16 @@ describe("RollingContextBuffer", () => {
 		expect(result.endsWith("b".repeat(30))).toBe(true);
 	});
 
+	it("buildWithTruncationMarker labels omitted older activity", () => {
+		const buf = new RollingContextBuffer({ maxChars: 50 });
+		buf.append("a".repeat(30));
+		buf.append("b".repeat(30));
+		const result = buf.buildWithTruncationMarker("[truncated]");
+		expect(result).toHaveLength(50);
+		expect(result.startsWith("[truncated]\n")).toBe(true);
+		expect(result.endsWith("b".repeat(30))).toBe(true);
+	});
+
 	it("individual entries are capped to 2000 chars", () => {
 		const buf = new RollingContextBuffer();
 		const longEntry = "x".repeat(5000);

@@ -307,7 +307,16 @@ Or invoke it without arguments to use the effective non-empty `enabledModels` ar
 /skill:model-routing-guide
 ```
 
-Arguments take precedence over `enabledModels`; the skill selects one source and does not search for any other runtime or session scope. Because this Stage 1 workflow is implemented only as a skill, it cannot discover the current session's `--models` value or later in-session scope changes. To research that runtime scope, pass the same comma-separated patterns as skill arguments.
+When model scope rotates, update the existing guide incrementally instead of regenerating every retained entry:
+
+```text
+/skill:model-routing-guide update
+/skill:model-routing-guide update anthropic/claude-*,openai/gpt-5.6-sol
+```
+
+`update` must be the first argument. The skill validates the existing guide against its own coverage, diffs that coverage against the newly resolved authoritative scope, preserves retained model sections, removes unscoped sections and summary references, and researches only newly added canonical models. It refreshes scope/local-evidence metadata and performs the same complete final validation before atomically replacing the guide. A missing or malformed existing guide fails loudly and requires normal generation.
+
+Model-pattern arguments after the optional `update` keyword take precedence over `enabledModels`; the skill selects one source and does not search for any other runtime or session scope. Because this Stage 1 workflow is implemented only as a skill, it cannot discover the current session's `--models` value or later in-session scope changes. To research that runtime scope, pass the same comma-separated patterns as skill arguments.
 
 The skill refuses missing/empty and effectively all-model scopes. It obtains available candidates with `dreb --list-models`, resolves the selected patterns to canonical provider/model IDs, snapshots existing files under `~/.dreb/agent/subagent-sessions/`, and combines sanitized aggregate local observations with official documentation, model cards, benchmarks, issue trackers, forums, and practitioner reports. Existing unreadable or malformed child logs fail the run; a genuinely empty history is labeled cold-start.
 
@@ -315,7 +324,9 @@ The generated `~/.dreb/agent/model-routing-guide.md` is human-readable Markdown 
 
 Semantic local-evidence assessment uses normal dreb tools, so inspected session content is processed by the active research model's configured provider. The persisted guide is sanitized and generalized, but invoking the skill is still a decision to send the inspected evidence to that provider.
 
-Its primary routing safeguards are practical: `Explore` is for factual collection and navigation, not planning or implementation; routine lookup, extraction, repetitive file inspection, and straightforward summarization should use the least expensive scoped model demonstrated adequate by the evidence. Stage 1 generates this guide only—the optional pre-spawn arbiter consumes it in a later stage.
+Its primary routing safeguards are practical: `Explore` is for factual collection and navigation, not planning or implementation; routine lookup, extraction, repetitive file inspection, and straightforward summarization should use the least expensive scoped model demonstrated adequate by the evidence.
+
+The optional global-only [Dispatch Arbiter](agent-models.md#dispatch-arbiter) now consumes this file before every subagent spawn. Its live scope is the current session's exact explicit candidate set, so guide frontmatter and model headings must match that set exactly. A guide generated from `enabledModels` will work when the session uses the same resolved scope; for runtime `--models`, pass those patterns to the skill. Missing/stale/malformed guide coverage fails the child launch rather than bypassing arbitration.
 
 ## Skill Repositories
 

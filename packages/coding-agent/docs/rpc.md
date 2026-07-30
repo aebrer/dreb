@@ -1243,17 +1243,18 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 ### Settings
 
-Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with one security-policy exception:
+Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with global-only control/security-policy exceptions:
 
 - **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
 - **Global nested-context trust policy** (`autoLoadNestedContext`, `trustedContextFolders`, `effectiveTrustedContextRoots`, and the trust commands below): this is read from `~/.dreb/agent/settings.json` only, never project settings. Active main/subagent processes observe it for **future lazy nested/out-of-cwd loads**; it cannot remove content already injected into a conversation. It does not govern the separate initial upward context scan from the launch cwd.
+- **Global Dispatch Arbiter policy** (`subagentArbiter`): the complete object is read/written globally and project settings cannot shadow it. Enabled runtimes consume it before future subagent spawns; it does not rewrite already-started children.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
 
 A dashboard settings tab typically reads `get_state` for what is active now and `get_settings` for persistent defaults plus the current global context-trust policy.
 
 #### get_settings
 
-Get persistent settings. Before replying, RPC flushes pending settings writes, reloads durable global and project settings, and then reads the merged view; reopening dashboard Settings therefore sees external file edits. A pending write failure, unreadable file, parse error, or reload failure returns an explicit RPC error rather than a stale snapshot. Ordinary fields are the merged global + project view; the nested-context trust fields are always global-only.
+Get persistent settings. Before replying, RPC flushes pending settings writes, reloads durable global and project settings, and then reads the merged view; reopening dashboard Settings therefore sees external file edits. A pending write failure, unreadable file, parse error, or reload failure returns an explicit RPC error rather than a stale snapshot. Ordinary fields are the merged global + project view; nested-context trust and `subagentArbiter` are always global-only.
 
 ```json
 {"type": "get_settings"}
@@ -1283,6 +1284,12 @@ Response:
     "hideThinkingBlock": false,
     "agentModels": {
       "Explore": ["anthropic/sonnet", "openai/gpt-5"]
+    },
+    "subagentArbiter": {
+      "enabled": true,
+      "model": "anthropic/claude-sonnet-4-5",
+      "thinking": "medium",
+      "guidePath": "~/.dreb/agent/model-routing-guide.md"
     }
   }
 }
@@ -1291,6 +1298,8 @@ Response:
 `defaultProvider`, `defaultModel`, and `defaultThinkingLevel` are absent if never set. `agentModels` is the merged global + project view; project entries win per agent name.
 
 `trustedContextFolders` is the raw global configured list, including invalid legacy paths that are ignored fail-closed. `effectiveTrustedContextRoots` is the canonical, existing root set actually enforced after `~` expansion, native `realpath`, deduplication, and ancestor subsumption. `autoLoadNestedContext` defaults to `false`; when `true` it is global expert trust-all for every resolvable target, not a project override. Project `.dreb/settings.json` cannot affect any of these three fields.
+
+`subagentArbiter` is absent when unconfigured. It is always the global object; project `.dreb/settings.json` cannot enable, disable, or alter it.
 
 #### set_settings
 
@@ -1329,6 +1338,14 @@ Setting per-agent model fallback lists:
 ```
 
 For `agentModels`, a non-empty array writes the global fallback list for that agent. An empty array removes the global entry, so that agent uses its agent-definition default unless a project-level override exists.
+
+Replace the complete global-only Dispatch Arbiter policy (exact model is validated; explicit thinking is capability-validated):
+
+```json
+{"type":"set_settings","settings":{"subagentArbiter":{"enabled":true,"model":"anthropic/claude-sonnet-4-5","thinking":"medium","guidePath":"~/.dreb/agent/model-routing-guide.md"}}}
+```
+
+Set `subagentArbiter: null` to remove the global policy. Enabling requires `model`; `guidePath` defaults to the standard guide path and omitted thinking runs the arbiter call with thinking off. Runtime guide/scope validation still occurs at each spawn because the live explicit scope can change.
 
 Response is the full settings snapshot after the write (same shape as `get_settings`), plus `warnings` when the write was accepted but a project-level override shadows part of it:
 
@@ -1406,6 +1423,7 @@ Valid keys and values:
 | `transport` | `"sse"`, `"websocket"`, `"auto"` |
 | `hideThinkingBlock` | boolean |
 | `agentModels` | Plain object mapping agent names to arrays of non-empty model id strings; empty arrays remove the global entry for that agent |
+| `subagentArbiter` | Complete global-only object or `null`. Keys: `enabled` boolean, exact available `model`, optional valid/capability-supported `thinking`, non-empty `guidePath`. Enabling requires `model`. Unknown nested keys are rejected. |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
 
@@ -1419,6 +1437,7 @@ Errors are explicit `success: false` responses (nothing is applied on any of the
 - Invalid trusted-root list: `trustedContextFolders must be an array of non-empty path strings` or `Invalid trustedContextFolders[0]: path must be absolute after ~ expansion` / `path must be an existing directory`
 - Provider without model (or vice versa): `defaultProvider and defaultModel must be set together`
 - Unavailable model: `Model not found: provider/model-id`
+- Invalid arbiter policy: `Enabling subagentArbiter requires an exact provider/model`, `Arbiter model not found: ...`, or a nested-key/type/thinking capability error
 - Corrupt settings file: `Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)` — without this guard the write would silently no-op
 - Write failure (I/O error): `Failed to persist settings: ...`
 
@@ -1806,9 +1825,9 @@ On final failure (max retries exceeded):
 }
 ```
 
-### background_agent_start / background_agent_end / background_agent_event
+### background_agent_start / subagent_arbitration / background_agent_end / background_agent_event
 
-Lifecycle and live-observability events for background subagents (the `subagent` tool's background mode).
+Lifecycle, pre-spawn routing, and live-observability events for background subagents (the `subagent` tool's background mode).
 
 `background_agent_start` fires at launch. `sessionDir` is the directory the child will write its session JSONL into (per-launch, known before spawn):
 
@@ -1821,6 +1840,21 @@ Lifecycle and live-observability events for background subagents (the `subagent`
   "sessionDir": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6"
 }
 ```
+
+When the global Dispatch Arbiter is enabled, `subagent_arbitration` fires after the requested route is made concrete and before child spawn/events. It appears for changed and unchanged successful decisions, and for failures that prevent spawn. Chain records include `step`; failures have `final: null` and bounded host-generated `errorCode`/`errorMessage`.
+
+```json
+{
+  "type": "subagent_arbitration",
+  "agentId": "a1b2c3d4e5f6",
+  "status": "success",
+  "proposed": {"agent": "Explore", "model": "provider/frontier", "thinking": "high"},
+  "final": {"agent": "feature-dev", "model": "provider/worker", "thinking": "medium"},
+  "changed": ["agent", "model", "thinking"]
+}
+```
+
+The event is deliberately safe and programmatic: it never contains the task, guide, conversation context, prompt, raw response, or model reasoning. The parent session persists the same fields as a non-context `custom` entry. Consumers should update displayed background-agent identity from `final.agent` before child events arrive.
 
 `background_agent_end` fires after the result is delivered to the parent agent. For a single child it includes the canonical resolved `provider/model` and effective thinking level when reported; `sessionFile` is the child's session JSONL path when one was written:
 

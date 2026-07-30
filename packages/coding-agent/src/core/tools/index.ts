@@ -88,6 +88,7 @@ export {
 	getBackgroundAgents,
 	getRunningBackgroundAgents,
 	pruneBackgroundAgents,
+	type SubagentArbitrationEvent,
 	type SubagentResult,
 	type SubagentStepMetadata,
 	type SubagentToolDetails,

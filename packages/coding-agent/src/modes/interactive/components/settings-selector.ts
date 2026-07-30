@@ -3,8 +3,10 @@ import type { Transport } from "@dreb/ai";
 import {
 	type Component,
 	Container,
+	type Focusable,
 	getCapabilities,
 	getKeybindings,
+	Input,
 	type RankedItem,
 	RankedList,
 	type RankedListTheme,
@@ -16,6 +18,7 @@ import {
 	Spacer,
 	Text,
 } from "@dreb/tui";
+import type { SubagentArbiterSettings } from "../../../core/settings-manager.js";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 
@@ -65,6 +68,8 @@ export interface SettingsConfig {
 	agentNames: string[];
 	/** Available model IDs for selection in the ranked list */
 	availableModelIds: string[];
+	/** Global-only Dispatch Arbiter policy. */
+	subagentArbiter: SubagentArbiterSettings;
 }
 
 export interface SettingsCallbacks {
@@ -89,6 +94,7 @@ export interface SettingsCallbacks {
 	onQuietStartupChange: (enabled: boolean) => void;
 	onAutoLoadNestedContextChange: (enabled: boolean) => void;
 	onAgentModelsChange: (agentName: string, models: string[]) => void;
+	onSubagentArbiterChange: (settings: SubagentArbiterSettings) => boolean | Promise<boolean>;
 	onCancel: () => void;
 }
 
@@ -156,6 +162,48 @@ class SelectSubmenu extends Container {
 
 	handleInput(data: string): void {
 		this.selectList.handleInput(data);
+	}
+}
+
+class TextInputSubmenu extends Container implements Focusable {
+	private readonly input = new Input();
+	private readonly onSubmit: (value: string) => void;
+	private readonly onCancel: () => void;
+	private _focused = false;
+
+	get focused(): boolean {
+		return this._focused;
+	}
+	set focused(value: boolean) {
+		this._focused = value;
+		this.input.focused = value;
+	}
+
+	constructor(
+		title: string,
+		description: string,
+		currentValue: string,
+		onSubmit: (value: string) => void,
+		onCancel: () => void,
+	) {
+		super();
+		this.onSubmit = onSubmit;
+		this.onCancel = onCancel;
+		this.addChild(new Text(theme.bold(theme.fg("accent", title)), 0, 0));
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("muted", description), 0, 0));
+		this.addChild(new Spacer(1));
+		this.input.setValue(currentValue);
+		this.addChild(this.input);
+		this.addChild(new Spacer(1));
+		this.addChild(new Text(theme.fg("dim", "  Enter to save · Esc to go back"), 0, 0));
+	}
+
+	handleInput(data: string): void {
+		const kb = getKeybindings();
+		if (kb.matches(data, "tui.select.confirm") || data === "\n") this.onSubmit(this.input.getValue());
+		else if (kb.matches(data, "tui.select.cancel")) this.onCancel();
+		else this.input.handleInput(data);
 	}
 }
 
@@ -396,6 +444,13 @@ export class SettingsSelectorComponent extends Container {
 		super();
 
 		const supportsImages = getCapabilities().images;
+		let arbiterSettings = { ...config.subagentArbiter };
+		const updateArbiter = async (patch: Partial<SubagentArbiterSettings>): Promise<boolean> => {
+			const next = { ...arbiterSettings, ...patch };
+			if (!(await callbacks.onSubagentArbiterChange(next))) return false;
+			arbiterSettings = next;
+			return true;
+		};
 
 		const items: SettingItem[] = [
 			{
@@ -530,6 +585,90 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			});
 		}
+
+		items.push(
+			{
+				id: "dispatch-arbiter-enabled",
+				label: "Dispatch Arbiter",
+				description: arbiterSettings.model
+					? "Global-only fail-closed pre-spawn routing (configure model, thinking, and guide below)"
+					: "Global-only; choose an arbiter model before enabling",
+				currentValue: arbiterSettings.enabled === true ? "true" : "false",
+				submenu: (currentValue, done) =>
+					new SelectSubmenu(
+						"Dispatch Arbiter",
+						"Enable only when the exact model, live scope, and guide are ready; failures do not persist",
+						[
+							{ value: "false", label: "off", description: "Disabled (default)" },
+							{ value: "true", label: "on", description: "Fail closed before every child spawn" },
+						],
+						currentValue,
+						async (value) => {
+							if (await updateArbiter({ enabled: value === "true" })) done(value);
+							else done();
+						},
+						() => done(),
+					),
+			},
+			{
+				id: "dispatch-arbiter-model",
+				label: "Dispatch Arbiter model",
+				description: "Exact authenticated provider/model; no fallback",
+				currentValue: arbiterSettings.model ?? "not set",
+				submenu: (currentValue, done) =>
+					new SelectSubmenu(
+						"Dispatch Arbiter Model",
+						"Select the exact model used for the tool-less pre-spawn decision",
+						config.availableModelIds.map((model) => ({ value: model, label: model })),
+						currentValue,
+						async (value) => {
+							if (await updateArbiter({ model: value })) done(value);
+							else done();
+						},
+						() => done(),
+					),
+			},
+			{
+				id: "dispatch-arbiter-thinking",
+				label: "Dispatch Arbiter thinking",
+				description: "Reasoning level for the arbiter call; validated against its model",
+				currentValue: arbiterSettings.thinking ?? "off",
+				submenu: (currentValue, done) =>
+					new SelectSubmenu(
+						"Dispatch Arbiter Thinking",
+						"Select reasoning depth for the headless arbiter call",
+						(["off", "minimal", "low", "medium", "high", "xhigh"] as ThinkingLevel[]).map((level) => ({
+							value: level,
+							label: level,
+							description: THINKING_DESCRIPTIONS[level],
+						})),
+						currentValue,
+						async (value) => {
+							if (await updateArbiter({ thinking: value as ThinkingLevel })) done(value);
+							else done();
+						},
+						() => done(),
+					),
+			},
+			{
+				id: "dispatch-arbiter-guide",
+				label: "Dispatch Arbiter guide",
+				description: "Routing-guide path; blank uses ~/.dreb/agent/model-routing-guide.md",
+				currentValue: arbiterSettings.guidePath ?? "default",
+				submenu: (currentValue, done) =>
+					new TextInputSubmenu(
+						"Dispatch Arbiter Guide Path",
+						"Enter a path, or leave blank for ~/.dreb/agent/model-routing-guide.md",
+						currentValue === "default" ? "" : currentValue,
+						async (value) => {
+							const guidePath = value.trim();
+							if (await updateArbiter({ guidePath: guidePath || undefined })) done(guidePath || "default");
+							else done();
+						},
+						() => done(),
+					),
+			},
+		);
 
 		// Single "Agent Models" entry that opens the agent picker submenu
 		if (config.agentNames.length > 0) {
