@@ -2367,6 +2367,11 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// Re-derive the K3 context tier: the compacted context is small again,
+			// so the session returns to the cheaper 256k wire tier.
+			if (this.model) {
+				this.agent.setModel(this._applyContextTier(this.model));
+			}
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2453,10 +2458,7 @@ export class AgentSession {
 			if (this._tryUpgradeK3ContextTier()) {
 				// Remove the error message from agent state (it IS saved to session
 				// for history, but we don't want it in context for the retry)
-				const messages = this.agent.state.messages;
-				if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-					this.agent.replaceMessages(messages.slice(0, -1));
-				}
+				this._removeLastAssistantMessage();
 				setTimeout(() => {
 					this.agent.continue().catch((err) => {
 						this.warnInSession(
@@ -2484,17 +2486,12 @@ export class AgentSession {
 			this._overflowRecoveryAttempted = true;
 			// Remove the error message from agent state (it IS saved to session for history,
 			// but we don't want it in context for the retry)
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.replaceMessages(messages.slice(0, -1));
-			}
+			this._removeLastAssistantMessage();
 			await this._runAutoCompaction("overflow", true);
 			return;
 		}
 
 		// Case 2: Threshold - context is getting large
-		if (!settings.enabled) return;
-
 		// For error messages (no usage data), estimate from last successful response.
 		// This ensures sessions that hit persistent API errors (e.g. 529) can still compact.
 		let contextTokens: number;
@@ -2519,12 +2516,25 @@ export class AgentSession {
 		}
 
 		// K3 auto context tier: reaching the 256k cutoff upgrades to the 1M tier
-		// instead of compacting. The cutoff is fixed at the default compaction
-		// threshold of the 256k window, so a user-lowered compaction threshold
-		// fires first and effectively disables the upgrade.
-		if (shouldUpgradeK3Tier(this.model, contextTokens) && this._tryUpgradeK3ContextTier()) {
-			contextWindow = this.model?.contextWindow ?? contextWindow;
+		// instead of compacting. This is model-capability management, not context
+		// reduction, so it applies even when compaction is disabled. The cutoff is
+		// fixed at the default compaction threshold of the 256k window; a
+		// user-lowered compaction threshold takes precedence and effectively
+		// disables the upgrade.
+		if (shouldUpgradeK3Tier(this.model, contextTokens)) {
+			// A user-lowered compaction threshold takes precedence over the
+			// upgrade: if the user's compact point for the 256k window sits below
+			// the default cutoff and is already exceeded, compact instead.
+			const userCompactPoint = K3_256K_CONTEXT_WINDOW - settings.reserveTokens;
+			const userThresholdPreempts =
+				settings.enabled && userCompactPoint < K3_UPGRADE_CUTOFF_TOKENS && contextTokens > userCompactPoint;
+			if (!userThresholdPreempts) {
+				this._tryUpgradeK3ContextTier();
+				contextWindow = this.model?.contextWindow ?? contextWindow;
+			}
 		}
+
+		if (!settings.enabled) return;
 
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
 			await this._runAutoCompaction("threshold", false);
@@ -2539,6 +2549,14 @@ export class AgentSession {
 	 */
 	private _applyContextTier(model: Model<any>): Model<any> {
 		return deriveK3ContextTierModel(model, estimateContextTokens(this.agent.state.messages).tokens);
+	}
+
+	/** Remove the last message from agent state when it is an assistant message. */
+	private _removeLastAssistantMessage(): void {
+		const messages = this.agent.state.messages;
+		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+			this.agent.replaceMessages(messages.slice(0, -1));
+		}
 	}
 
 	/**
@@ -2648,6 +2666,11 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// Re-derive the K3 context tier: the compacted context is small again,
+			// so the session returns to the cheaper 256k wire tier.
+			if (this.model) {
+				this.agent.setModel(this._applyContextTier(this.model));
+			}
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as

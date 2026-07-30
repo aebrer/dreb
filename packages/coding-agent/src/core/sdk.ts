@@ -4,6 +4,7 @@ import type { Message, Model } from "@dreb/ai";
 import { getAgentDir, getDocsPath } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
+import { estimateContextTokens } from "./compaction/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ExtensionRunner, LoadExtensionsResult, ToolDefinition } from "./extensions/index.js";
 import { deriveK3ContextTierModel } from "./k3-context-tier.js";
@@ -328,9 +329,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	agent = new Agent({
 		initialState: {
 			systemPrompt: "",
-			// New sessions start with empty context, so K3 starts in the
-			// cheaper 256k wire tier (upgrades automatically past the cutoff).
-			model: deriveK3ContextTierModel(model, 0),
+			// K3 auto context tier: new sessions start on the cheaper 256k wire
+			// tier; a resumed session derives the tier from its restored context.
+			model: deriveK3ContextTierModel(
+				model,
+				hasExistingSession ? estimateContextTokens(existingSession.messages).tokens : 0,
+			),
 			thinkingLevel,
 			tools: [],
 		},

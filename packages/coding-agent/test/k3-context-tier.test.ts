@@ -103,4 +103,19 @@ describe("k3-context-tier", () => {
 	it("passes undefined through", () => {
 		expect(deriveK3ContextTierModel(undefined, 0)).toBeUndefined();
 	});
+
+	it("never replaces a user-customized context window (models.json override)", () => {
+		const overridden = k3Model({ contextWindow: 131072 });
+		expect(deriveK3ContextTierModel(overridden, 0)).toBe(overridden);
+		expect(deriveK3ContextTierModel(overridden, K3_UPGRADE_CUTOFF_TOKENS + 1)).toBe(overridden);
+		expect(shouldUpgradeK3Tier(overridden, K3_UPGRADE_CUTOFF_TOKENS + 1)).toBe(false);
+	});
+
+	it("resumes tiering after a derived model returns to the stock 1M shape", () => {
+		const tier256k = deriveK3ContextTierModel(k3Model(), 0);
+		const backTo1m = deriveK3ContextTierModel(tier256k, K3_UPGRADE_CUTOFF_TOKENS + 1);
+		// The 1M tier is the stock shape again, so a fresh derivation keeps working.
+		const redegraded = deriveK3ContextTierModel(backTo1m, 100);
+		expect(redegraded.wireModelId).toBe(K3_256K_WIRE_MODEL_ID);
+	});
 });

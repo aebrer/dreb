@@ -67,7 +67,9 @@ export function isK3256kTier(model: Model<any> | null | undefined): boolean {
  * on the wire (the Kimi backend upgrades the cache seamlessly).
  *
  * Returns the input unchanged for non-K3 models and is idempotent for
- * already-derived models.
+ * already-derived models. A K3 model whose context window was customized
+ * (e.g. a models.json override) is also returned unchanged — automatic
+ * tiering never silently replaces user-configured limits.
  */
 export function deriveK3ContextTierModel<TApi extends Api>(model: Model<TApi>, contextTokens: number): Model<TApi>;
 export function deriveK3ContextTierModel<TApi extends Api>(
@@ -79,12 +81,15 @@ export function deriveK3ContextTierModel<TApi extends Api>(
 	contextTokens: number,
 ): Model<TApi> | undefined {
 	if (!model || !isK3Model(model)) return model;
+	const isStock = model.contextWindow === K3_1M_CONTEXT_WINDOW && model.wireModelId === undefined;
+	const isDerived256k = model.contextWindow === K3_256K_CONTEXT_WINDOW && model.wireModelId === K3_256K_WIRE_MODEL_ID;
+	if (!isStock && !isDerived256k) return model;
 	if (contextTokens > K3_UPGRADE_CUTOFF_TOKENS) {
-		if (model.wireModelId === undefined && model.contextWindow === K3_1M_CONTEXT_WINDOW) return model;
+		if (isStock) return model;
 		const { wireModelId: _droppedWireModelId, ...rest } = model;
 		return { ...rest, contextWindow: K3_1M_CONTEXT_WINDOW };
 	}
-	if (model.wireModelId === K3_256K_WIRE_MODEL_ID && model.contextWindow === K3_256K_CONTEXT_WINDOW) return model;
+	if (isDerived256k) return model;
 	return { ...model, contextWindow: K3_256K_CONTEXT_WINDOW, wireModelId: K3_256K_WIRE_MODEL_ID };
 }
 

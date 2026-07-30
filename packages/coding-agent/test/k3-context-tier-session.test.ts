@@ -163,7 +163,30 @@ describe("AgentSession K3 auto context tier", () => {
 
 		expect(session.model?.contextWindow).toBe(K3_1M_CONTEXT_WINDOW);
 		expect(session.model?.wireModelId).toBeUndefined();
-		expect(events.some((e) => e.type === "context_window_upgrade")).toBe(true);
+		const upgradeEvents = events.filter((e) => e.type === "context_window_upgrade");
+		expect(upgradeEvents).toHaveLength(1);
+		expect(upgradeEvents[0]).toMatchObject({
+			provider: "kimi-coding-oauth",
+			modelId: "k3",
+			fromContextWindow: K3_256K_CONTEXT_WINDOW,
+			toContextWindow: K3_1M_CONTEXT_WINDOW,
+		});
+		expect(events.some((e) => e.type === "auto_compaction_start")).toBe(false);
+	});
+
+	it("upgrades on the threshold path even when compaction is disabled", async () => {
+		await selectK3();
+		// Apply after setModel: setModel persists the default model, which
+		// rebuilds settings from the on-disk layers.
+		settingsManager.applyOverrides({ compaction: { enabled: false } });
+
+		await checkCompaction(
+			assistantMessage({ usage: { ...assistantMessage().usage, totalTokens: K3_UPGRADE_CUTOFF_TOKENS + 1 } }),
+		);
+
+		expect(session.model?.contextWindow).toBe(K3_1M_CONTEXT_WINDOW);
+		expect(session.model?.wireModelId).toBeUndefined();
+		expect(events.filter((e) => e.type === "context_window_upgrade")).toHaveLength(1);
 		expect(events.some((e) => e.type === "auto_compaction_start")).toBe(false);
 	});
 
@@ -195,6 +218,39 @@ describe("AgentSession K3 auto context tier", () => {
 		expect(session.model?.contextWindow).toBe(K3_256K_CONTEXT_WINDOW);
 	});
 
+	it("honors the lowered threshold even when one response jumps straight past the cutoff", async () => {
+		await selectK3();
+		settingsManager.applyOverrides({ compaction: { reserveTokens: 100000 } });
+
+		// 250k tokens: past the 256k upgrade cutoff AND past the user-lowered
+		// threshold (162144). The user's threshold preempts the upgrade.
+		await checkCompaction(assistantMessage({ usage: { ...assistantMessage().usage, totalTokens: 250000 } }));
+
+		expect(events.some((e) => e.type === "auto_compaction_start")).toBe(true);
+		expect(events.some((e) => e.type === "context_window_upgrade")).toBe(false);
+		expect(session.model?.contextWindow).toBe(K3_256K_CONTEXT_WINDOW);
+	});
+
+	it("upgrades via the pre-prompt check for an aborted response (skipAbortedCheck=false)", async () => {
+		await selectK3();
+
+		await (
+			session as unknown as {
+				_checkCompaction: (msg: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
+			}
+		)._checkCompaction(
+			assistantMessage({
+				stopReason: "aborted",
+				usage: { ...assistantMessage().usage, totalTokens: K3_UPGRADE_CUTOFF_TOKENS + 1 },
+			}),
+			false,
+		);
+
+		expect(session.model?.contextWindow).toBe(K3_1M_CONTEXT_WINDOW);
+		expect(events.filter((e) => e.type === "context_window_upgrade")).toHaveLength(1);
+		expect(events.some((e) => e.type === "auto_compaction_start")).toBe(false);
+	});
+
 	it("upgrades instead of compacting when the 256k tier overflows", async () => {
 		vi.useFakeTimers();
 		await selectK3();
@@ -221,7 +277,7 @@ describe("AgentSession K3 auto context tier", () => {
 		// Apply after setModel: setModel persists the default model, which
 		// rebuilds settings from the on-disk layers.
 		settingsManager.applyOverrides({ compaction: { enabled: false } });
-		vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 
 		await checkCompaction(
 			assistantMessage({
@@ -233,6 +289,64 @@ describe("AgentSession K3 auto context tier", () => {
 
 		expect(session.model?.contextWindow).toBe(K3_1M_CONTEXT_WINDOW);
 		expect(events.some((e) => e.type === "context_window_upgrade")).toBe(true);
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(events.some((e) => e.type === "auto_compaction_start")).toBe(false);
+	});
+
+	it("returns to the cheaper 256k tier after auto-compaction", async () => {
+		await selectK3();
+		// Upgrade to the 1M tier first.
+		await checkCompaction(
+			assistantMessage({ usage: { ...assistantMessage().usage, totalTokens: K3_UPGRADE_CUTOFF_TOKENS + 1 } }),
+		);
+		expect(session.model?.contextWindow).toBe(K3_1M_CONTEXT_WINDOW);
+
+		// Context keeps growing past the 1M compaction threshold (1M - reserve).
+		await checkCompaction(
+			assistantMessage({ usage: { ...assistantMessage().usage, totalTokens: K3_1M_CONTEXT_WINDOW - 1000 } }),
+		);
+
+		expect(events.some((e) => e.type === "auto_compaction_start")).toBe(true);
+		expect(session.model?.contextWindow).toBe(K3_256K_CONTEXT_WINDOW);
+		expect(session.model?.wireModelId).toBe(K3_256K_WIRE_MODEL_ID);
+	});
+
+	it("leaves a k3 model with a user-overridden context window untouched", async () => {
+		const k3 = { ...findModel("kimi-coding-oauth", "k3")!, contextWindow: 131072 };
+		await session.setModel(k3);
+
+		expect(session.model?.contextWindow).toBe(131072);
+		expect(session.model?.wireModelId).toBeUndefined();
+
+		await checkCompaction(
+			assistantMessage({ usage: { ...assistantMessage().usage, totalTokens: K3_UPGRADE_CUTOFF_TOKENS + 1 } }),
+		);
+		expect(session.model?.contextWindow).toBe(131072);
+		expect(events.some((e) => e.type === "context_window_upgrade")).toBe(false);
+	});
+
+	it("does nothing for a non-K3 overflow when compaction is disabled (gate-move regression)", async () => {
+		vi.useFakeTimers();
+		// Default session model is anthropic; disable compaction after any model persistence.
+		settingsManager.applyOverrides({ compaction: { enabled: false } });
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const modelBefore = session.model;
+
+		await checkCompaction(
+			assistantMessage({
+				provider: "anthropic",
+				model: modelBefore!.id,
+				api: "anthropic-messages",
+				stopReason: "error",
+				errorMessage: "prompt is too long: 250000 tokens > 200000 maximum",
+			}),
+		);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(events.some((e) => e.type === "auto_compaction_start")).toBe(false);
+		expect(events.some((e) => e.type === "context_window_upgrade")).toBe(false);
+		expect(continueSpy).not.toHaveBeenCalled();
+		expect(session.model).toBe(modelBefore);
 	});
 
 	it("does not upgrade on overflow once already in the 1M tier", async () => {
