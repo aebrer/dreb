@@ -261,7 +261,13 @@ Extension state persistence. Does NOT participate in LLM context.
 {"type":"custom","id":"h8i9j0k1","parentId":"g7h8i9j0","timestamp":"2024-12-03T14:20:00.000Z","customType":"my-extension","data":{"count":42}}
 ```
 
-Use `customType` to identify your extension's entries on reload.
+Use `customType` to identify your extension's entries on reload. Core host features can use the same non-context channel. When the Dispatch Arbiter is enabled, every attempted pre-spawn decision is stored as `customType: "subagent_arbitration"` with only safe host-validated metadata:
+
+```json
+{"type":"custom","customType":"subagent_arbitration","data":{"type":"subagent_arbitration","agentId":"a1b2c3","status":"success","proposed":{"agent":"Explore","model":"provider/frontier","thinking":"high"},"final":{"agent":"feature-dev","model":"provider/worker","thinking":"medium"},"changed":["agent","model","thinking"]}}
+```
+
+Failure records have `final: null` plus bounded host-generated `errorCode`/`errorMessage`; chain records include `step`. Arbiter prompts, raw responses, and reasoning are never stored. Because this is `custom`, replay/build-context skips it and neither the parent nor child model receives the record.
 
 ### CustomMessageEntry
 

@@ -15,6 +15,23 @@ const SPAWN_OPTS: { encoding: "utf8"; timeout: number; stdio: ["ignore", "pipe",
 	stdio: ["ignore", "pipe", "ignore"],
 };
 
+/** Current branch and status count only: no paths, diff, contents, tags, commits, or network calls. */
+export function getGitStatusMetadata(cwd: string): Pick<GitRepoState, "branch" | "dirtyCount"> | null {
+	if (!findGitRoot(cwd)) return null;
+	const result = spawnSync("git", ["status", "--porcelain=v1", "--branch"], { ...SPAWN_OPTS, cwd });
+	if (result.status !== 0 || !result.stdout) return null;
+	const [header, ...entries] = result.stdout.trimEnd().split("\n");
+	if (!header?.startsWith("## ")) return null;
+	const branchText = header.slice(3);
+	const branch = branchText.startsWith("HEAD ")
+		? "detached"
+		: branchText
+				.split("...")[0]
+				.replace(/^No commits yet on /, "")
+				.trim() || "detached";
+	return { branch, dirtyCount: entries.filter(Boolean).length };
+}
+
 export function getGitRepoState(cwd: string): GitRepoState | null {
 	if (!findGitRoot(cwd)) return null;
 

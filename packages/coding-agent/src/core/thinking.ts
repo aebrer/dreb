@@ -1,5 +1,5 @@
 import type { ThinkingLevel as AgentThinkingLevel } from "@dreb/agent-core";
-import { type ThinkingLevel as AiThinkingLevel, type Model, supportsAdaptiveThinking } from "@dreb/ai";
+import { type ThinkingLevel as AiThinkingLevel, type Model, supportsAdaptiveThinking, supportsXhigh } from "@dreb/ai";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 
 /**
@@ -12,12 +12,49 @@ export function resolveEffectiveThinkingLevel(
 	defaultThinkingLevel: AgentThinkingLevel = DEFAULT_THINKING_LEVEL,
 ): AgentThinkingLevel {
 	const effectiveThinkingLevel = thinkingLevel ?? defaultThinkingLevel;
-	return model?.reasoning ? effectiveThinkingLevel : "off";
+	if (!model?.reasoning) return "off";
+	return effectiveThinkingLevel === "xhigh" && !supportsXhigh(model) ? "high" : effectiveThinkingLevel;
 }
 
 /** Convert an effective thinking level into the reasoning option passed to streamSimple. */
 export function thinkingLevelToReasoning(thinkingLevel: AgentThinkingLevel): AiThinkingLevel | undefined {
 	return thinkingLevel === "off" ? undefined : (thinkingLevel as AiThinkingLevel);
+}
+
+export type ThinkingLevelValidation = { ok: true } | { ok: false; error: string };
+
+/**
+ * Validate an explicit thinking override against a resolved model.
+ *
+ * Normal session defaults are still capability-clamped for backward compatibility.
+ * Explicit subagent/arbiter choices use this stricter path so an unsupported request
+ * fails before spawn instead of silently changing levels in the child.
+ */
+export function validateThinkingLevelForModel(
+	model: Model<any> | undefined,
+	thinkingLevel: AgentThinkingLevel,
+): ThinkingLevelValidation {
+	if (thinkingLevel === "off") return { ok: true };
+	if (!model) {
+		return {
+			ok: false,
+			error: `Cannot validate thinking level "${thinkingLevel}" because no concrete child model was resolved.`,
+		};
+	}
+	const modelRef = `${model.provider}/${model.id}`;
+	if (!model.reasoning) {
+		return {
+			ok: false,
+			error: `Thinking level "${thinkingLevel}" is not supported by non-reasoning model "${modelRef}". Use "off" or choose a reasoning model.`,
+		};
+	}
+	if (thinkingLevel === "xhigh" && !supportsXhigh(model)) {
+		return {
+			ok: false,
+			error: `Thinking level "xhigh" is not supported by model "${modelRef}". Use "high" or choose an xhigh-capable model.`,
+		};
+	}
+	return { ok: true };
 }
 
 /**

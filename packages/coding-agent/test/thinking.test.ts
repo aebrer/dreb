@@ -5,6 +5,7 @@ import {
 	resolveEffectiveThinkingLevel,
 	resolveThinkingDisplay,
 	thinkingLevelToReasoning,
+	validateThinkingLevelForModel,
 } from "../src/core/thinking.js";
 
 const reasoningModel: Model<"anthropic-messages"> = {
@@ -46,6 +47,15 @@ describe("resolveEffectiveThinkingLevel", () => {
 	test("non-reasoning model clamps to off", () => {
 		expect(resolveEffectiveThinkingLevel(nonReasoningModel, "high")).toBe("off");
 	});
+
+	test("unsupported xhigh clamps to high for normal session defaults", () => {
+		expect(resolveEffectiveThinkingLevel(reasoningModel, "xhigh")).toBe("high");
+	});
+
+	test("xhigh-capable models preserve xhigh for normal session defaults", () => {
+		const xhighModel = { ...reasoningModel, id: "gpt-5.6-test" } as Model<any>;
+		expect(resolveEffectiveThinkingLevel(xhighModel, "xhigh")).toBe("xhigh");
+	});
 });
 
 describe("thinkingLevelToReasoning", () => {
@@ -59,6 +69,38 @@ describe("thinkingLevelToReasoning", () => {
 			expect(thinkingLevelToReasoning(thinkingLevel)).toBe(thinkingLevel);
 		},
 	);
+});
+
+describe("validateThinkingLevelForModel", () => {
+	const xhighModel = { ...reasoningModel, id: "gpt-5.6-test" } as Model<any>;
+
+	test("accepts off without a resolved model", () => {
+		expect(validateThinkingLevelForModel(undefined, "off")).toEqual({ ok: true });
+	});
+
+	test.each(["minimal", "low", "medium", "high"] satisfies AgentThinkingLevel[])(
+		"accepts %s for reasoning models",
+		(thinkingLevel) => {
+			expect(validateThinkingLevelForModel(reasoningModel, thinkingLevel)).toEqual({ ok: true });
+		},
+	);
+
+	test("accepts xhigh only for xhigh-capable models", () => {
+		expect(validateThinkingLevelForModel(xhighModel, "xhigh")).toEqual({ ok: true });
+		expect(validateThinkingLevelForModel(reasoningModel, "xhigh")).toMatchObject({ ok: false });
+	});
+
+	test("rejects non-off thinking for non-reasoning models", () => {
+		const result = validateThinkingLevelForModel(nonReasoningModel, "high");
+		expect(result).toMatchObject({ ok: false });
+		if (!result.ok) expect(result.error).toContain("non-reasoning model");
+	});
+
+	test("rejects non-off thinking without a concrete model", () => {
+		const result = validateThinkingLevelForModel(undefined, "high");
+		expect(result).toMatchObject({ ok: false });
+		if (!result.ok) expect(result.error).toContain("no concrete child model");
+	});
 });
 
 describe("resolveThinkingDisplay", () => {

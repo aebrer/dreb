@@ -123,7 +123,7 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 
 | Event | Description |
 |-------|-------------|
-| `agent_start` | Agent begins processing |
+| `agent_start` | Agent begins processing; includes resolved model and effective thinking level |
 | `agent_end` | Agent completes with all new messages |
 | `turn_start` | New turn begins (one LLM call + tool executions) |
 | `turn_end` | Turn completes with assistant message and tool results |
@@ -135,6 +135,12 @@ The last message in context must be `user` or `toolResult` (not `assistant`).
 | `tool_execution_start` | Tool begins |
 | `tool_execution_update` | Tool streams progress |
 | `tool_execution_end` | Tool completes |
+
+`agent_start` carries the provider/model identity and the effective thinking level sent to the provider for that run:
+
+```typescript
+{ type: "agent_start", model: { provider: "anthropic", id: "claude-sonnet-4-6" }, thinkingLevel: "high" }
+```
 
 ## Agent Options
 

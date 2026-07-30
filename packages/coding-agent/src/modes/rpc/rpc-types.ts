@@ -10,8 +10,10 @@ import type { ImageContent, Model, Transport } from "@dreb/ai";
 import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
+import type { DispatchArbitrationRecord } from "../../core/dispatch-arbiter.js";
 import type { ContextUsage } from "../../core/extensions/types.js";
 import type { SessionEntry } from "../../core/session-manager.js";
+import type { SubagentArbiterSettings } from "../../core/settings-manager.js";
 import type { SourceInfo } from "../../core/source-info.js";
 
 // ============================================================================
@@ -491,6 +493,8 @@ export interface RpcBackgroundAgentInfo {
 	sessionFile?: string;
 	/** Working directory the agent runs in */
 	cwd?: string;
+	/** Safe pre-spawn arbitration records, ordered by attempt/chain step. */
+	arbitrations?: DispatchArbitrationRecord[];
 }
 
 /** Agent type metadata returned by list_agent_types */
@@ -569,6 +573,8 @@ export interface RpcSettingsSnapshot {
 	hideThinkingBlock?: boolean;
 	/** Per-agent model fallback lists, merged global + project with project entries winning */
 	agentModels?: Record<string, string[]>;
+	/** Global-only fail-closed Dispatch Arbiter configuration. */
+	subagentArbiter?: SubagentArbiterSettings;
 }
 
 /** Settings snapshot returned by `set_settings`; warnings are present for loud shadowing notices. */
@@ -624,6 +630,8 @@ export interface RpcSettingsUpdate {
 	transport?: Transport;
 	hideThinkingBlock?: boolean;
 	agentModels?: Record<string, string[]>;
+	/** Replaces the complete global-only arbiter configuration. */
+	subagentArbiter?: SubagentArbiterSettings | null;
 }
 
 // ============================================================================

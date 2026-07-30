@@ -39,6 +39,14 @@ export class RollingContextBuffer {
 		return joined.length <= this.maxChars ? joined : joined.slice(-this.maxChars);
 	}
 
+	/** Build like {@link build}, but make total-cap truncation explicit to model consumers. */
+	buildWithTruncationMarker(marker = "[... older activity truncated ...]"): string {
+		const joined = this.entries.join("\n");
+		if (joined.length <= this.maxChars) return joined;
+		const available = Math.max(0, this.maxChars - marker.length - 1);
+		return `${marker}\n${joined.slice(-available)}`;
+	}
+
 	/** Current number of entries in the buffer. */
 	get size(): number {
 		return this.entries.length;

@@ -5,12 +5,23 @@
  * the parent controls this agent.
  */
 
-import { createEffect, createMemo, createSignal, type JSX, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import type { SubagentArbitrationDto } from "../../shared/protocol.js";
 import { StatusChip } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import type { AppStore } from "../state/store.js";
+
+function arbitrationLabel(record: SubagentArbitrationDto): string {
+	const step = record.step !== undefined ? `step ${record.step}: ` : "";
+	if (record.status === "failure")
+		return `${step}failed — ${record.errorMessage ?? record.errorCode ?? "unknown error"}`;
+	if (!record.final || record.changed.length === 0) {
+		return `${step}kept ${record.proposed.agent} · ${record.proposed.model} · ${record.proposed.thinking}`;
+	}
+	return `${step}${record.changed.join(", ")} changed → ${record.final.agent} · ${record.final.model} · ${record.final.thinking}`;
+}
 
 export function SubagentScreen(props: { store: AppStore; sessionKey: string; agentId: string }): JSX.Element {
 	const parent = () => props.store.sessions[props.sessionKey];
@@ -74,6 +85,17 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 
 			<main class="chat" ref={chatRef}>
 				<div class="chat-inner" ref={chatInnerRef}>
+					<Show when={(agent()?.arbitrations?.length ?? 0) > 0}>
+						<div class="status-line arbitration-history">
+							<For each={agent()?.arbitrations ?? []}>
+								{(record) => (
+									<span class={record.status === "failure" ? "error-reason" : "muted"}>
+										arbiter: {arbitrationLabel(record)}
+									</span>
+								)}
+							</For>
+						</div>
+					</Show>
 					<Show when={hydrateError()}>
 						<p class="pair-error">{hydrateError()}</p>
 					</Show>

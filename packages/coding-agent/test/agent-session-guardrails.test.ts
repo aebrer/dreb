@@ -704,6 +704,80 @@ describe("AgentSession background agent guardrails", () => {
 			promptSpy.mockRestore();
 		});
 
+		it("includes effective model and thinking in delivery and completion events", () => {
+			const sessionAny = session as any;
+			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+			const events: any[] = [];
+			session.subscribe((event) => events.push(event));
+
+			sessionAny._handleBackgroundComplete(
+				"bg-metadata",
+				{
+					agent: "test",
+					task: "test task",
+					model: "resolved-model",
+					thinking: "high",
+					exitCode: 0,
+					output: "done",
+					stderr: "",
+					errorMessage: null,
+				},
+				false,
+			);
+
+			const promptMsg = promptSpy.mock.calls[0][0] as any;
+			expect(promptMsg.content[0].text).toContain("Execution metadata: model: resolved-model, thinking: high");
+			expect(events.find((event) => event.type === "background_agent_end")).toMatchObject({
+				agentId: "bg-metadata",
+				model: "resolved-model",
+				thinking: "high",
+			});
+
+			promptSpy.mockRestore();
+		});
+
+		it("includes structured chain-step metadata in completion events", () => {
+			const sessionAny = session as any;
+			vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);
+			const events: any[] = [];
+			session.subscribe((event) => events.push(event));
+			const steps = [
+				{
+					step: 1,
+					agent: "Explore",
+					success: true,
+					model: "anthropic/claude-sonnet",
+					thinking: "low",
+				},
+				{
+					step: 2,
+					agent: "feature-dev",
+					success: true,
+					model: "openai/gpt-5.6-sol",
+					thinking: "high",
+				},
+			];
+
+			sessionAny._handleBackgroundComplete(
+				"bg-chain-metadata",
+				{
+					agent: "Explore",
+					task: "2-step chain",
+					steps,
+					exitCode: 0,
+					output: "done",
+					stderr: "",
+					errorMessage: null,
+				},
+				false,
+			);
+
+			expect(events.find((event) => event.type === "background_agent_end")).toMatchObject({
+				agentId: "bg-chain-metadata",
+				steps,
+			});
+		});
+
 		it("omits session log from completion message when sessionFile is not set", () => {
 			const sessionAny = session as any;
 			const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as any);

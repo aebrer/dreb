@@ -466,6 +466,67 @@ describe("skills", () => {
 			expect(builtinNames).toContain("mach6-review");
 			expect(builtinNames).toContain("mach6-implement");
 			expect(builtinNames).toContain("mach6-publish");
+			expect(builtinNames).toContain("model-routing-guide");
+		});
+
+		it("model-routing-guide should remain an explicit, skill-only research workflow", () => {
+			const guide = getBuiltInSkill("model-routing-guide");
+			expect(guide.disableModelInvocation).toBe(true);
+			expect(guide.userInvocable).toBe(true);
+			expect(guide.description).toContain("skill arguments, or enabledModels when no arguments are supplied");
+
+			const body = readBuiltInSkill("model-routing-guide");
+			expect(body).toContain("no special runtime support is required");
+			expect(body).toContain("stop with an actionable error before researching or writing a guide");
+			expect(body).toContain("unbounded all-model research");
+			expect(body).toContain("directory does not exist or contains no session JSONL files");
+			expect(body).toContain("cold-start mode");
+			expect(body).toContain("every snapshotted file is required evidence");
+			expect(body).toContain("every non-empty JSONL line parses");
+			expect(body).toContain("stop loudly and identify the affected file");
+			expect(body).toContain("do not silently skip it and do not call the run cold-start");
+			expect(body).toContain("Agent-role fit");
+			expect(body).toContain(
+				"Planning, architecture ownership, implementation, editing, and feature development are not Explore work",
+			);
+			expect(body).toContain("least expensive/lowest-latency selected candidate");
+			expect(body).toContain("Vendor claim");
+			expect(body).toContain("Measured benchmark");
+			expect(body).toContain("Community report");
+			expect(body).toContain("Local observation");
+			expect(body).toContain("active research model");
+			expect(body).toContain("do not claim the analysis remains entirely local");
+			expect(body).toContain("must never reproduce or closely paraphrase");
+			expect(body).toContain("schema_version: 1");
+			expect(body).toContain("They must be identical with no duplicates, missing entries, or extras");
+		});
+
+		it("model-routing-guide should select one factual scope source without searching session state", () => {
+			const body = readBuiltInSkill("model-routing-guide");
+			expect(body).toContain("exactly two supported scope sources");
+			expect(body).toContain("choose one source, and then stop looking for scope");
+			expect(body).toContain("That argument list is the complete authoritative scope");
+			expect(body).toContain("A non-empty effective `enabledModels` array is the complete authoritative scope");
+			expect(body).toContain("does **not** receive the current session's runtime `--models` value");
+			expect(body).toContain("they must pass the same comma-separated patterns as skill arguments");
+			expect(body).toContain("Run `dreb --list-models`");
+			expect(body).toContain("it never means an undiscovered runtime/session scope");
+			expect(body).not.toContain("user's actual scoped provider/model combinations");
+		});
+
+		it("model-routing-guide should incrementally update rotated model scopes", () => {
+			const guide = getBuiltInSkill("model-routing-guide");
+			expect(guide.argumentHint).toContain("update");
+
+			const body = readBuiltInSkill("model-routing-guide");
+			expect(body).toContain("optional first argument `update` selects UPDATE mode");
+			expect(body).toContain("validate its internal coverage against its own `covered_model_ids`");
+			expect(body).toContain("**retained**");
+			expect(body).toContain("**removed**");
+			expect(body).toContain("**added**");
+			expect(body).toContain("Preserve retained model sections");
+			expect(body).toContain("Fully research every added canonical provider/model");
+			expect(body).toContain("atomically replace the old file");
 		});
 
 		it("mach6-review should remain user-controlled while supporting direct agent invocation", () => {

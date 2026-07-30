@@ -570,6 +570,18 @@ const probeModels: Model<"anthropic-messages">[] = [
 		maxTokens: 8192,
 	},
 	{
+		id: "reasoning-fallback-model",
+		name: "Reasoning Fallback Model",
+		api: "anthropic-messages",
+		provider: "anthropic",
+		baseUrl: "https://api.anthropic.com",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 2, output: 6, cacheRead: 0.2, cacheWrite: 2 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	},
+	{
 		id: "parent-model",
 		name: "Parent Model",
 		api: "anthropic-messages",
@@ -699,13 +711,13 @@ describe("spawn-time model availability probing", () => {
 				systemPrompt: "Reply with the single word OK.",
 				messages: [expect.objectContaining({ role: "user", content: "hi" })],
 			}),
-			expect.objectContaining({ apiKey: "test-key", maxRetryDelayMs: 0, reasoning: "xhigh" }),
+			expect.objectContaining({ apiKey: "test-key", maxRetryDelayMs: 0, reasoning: "high" }),
 		);
 		// Must NOT pass maxTokens — normal model defaults are used, which avoids
 		// tripping reasoning model minimums (e.g. OpenAI o-series with maxTokens:1).
 		const callOptions = vi.mocked(completeSimple).mock.calls[0][2];
 		expect(callOptions).not.toHaveProperty("maxTokens");
-		expect(callOptions).toHaveProperty("reasoning", "xhigh");
+		expect(callOptions).toHaveProperty("reasoning", "high");
 	});
 
 	test("probeModelAvailability reports thrown errors", async () => {
@@ -970,6 +982,9 @@ describe("spawn-time model availability probing", () => {
 		expect(prependModelFallbackSummary("child output", skipped, "fallback-model")).toBe(
 			'[MODEL FALLBACK: skipped 1 unavailable model(s); using "fallback-model".]\n- primary-model: 429 rate limit\n\nchild output',
 		);
+		expect(formatModelFallbackSummary(skipped, "proposal-model", "final-model")).toBe(
+			'[MODEL FALLBACK: skipped 1 unavailable model(s); proposal resolved to "proposal-model" before arbitration selected "final-model".]\n- primary-model: 429 rate limit',
+		);
 		expect(prependModelFallbackSummary("child output", [], "fallback-model")).toBe("child output");
 	});
 
@@ -1004,6 +1019,68 @@ describe("spawn-time model availability probing", () => {
 		);
 		expect(spawn).toHaveBeenCalledTimes(1);
 		expect(vi.mocked(spawn).mock.calls[0][1]).toContain("parent-model");
+	});
+
+	test("executeSingle validates thinking against the non-reasoning model selected after probing", async () => {
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(assistantResult("error", "primary unavailable"))
+			.mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"parent-model",
+			undefined,
+			undefined,
+			undefined,
+			"high",
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.errorMessage).toContain("non-reasoning model");
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	test("executeSingle passes thinking once to the reasoning model selected after probing", async () => {
+		vi.mocked(completeSimple)
+			.mockResolvedValueOnce(assistantResult("error", "primary unavailable"))
+			.mockResolvedValueOnce(assistantResult("stop"));
+		mockSpawnSubagentResult({ model: "reasoning-fallback-model", output: "child output" });
+
+		const result = await executeSingle(
+			makeAgents(["primary-model", "reasoning-fallback-model"]),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			"anthropic",
+			probeRegistry(),
+			undefined,
+			"parent-model",
+			undefined,
+			undefined,
+			undefined,
+			"high",
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(completeSimple).toHaveBeenCalledTimes(2);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const args = vi.mocked(spawn).mock.calls[0][1];
+		expect(args).toContain("reasoning-fallback-model");
+		expect(args.filter((arg) => arg === "--thinking")).toHaveLength(1);
+		expect(args).toContain("high");
 	});
 
 	test("executeSingle includes skipped model details when model resolution fails", async () => {
@@ -1573,6 +1650,17 @@ describe("formatSingleResult", () => {
 		expect(text).toContain("\nhello");
 		expect(text).not.toContain("**Error**");
 		expect(text).not.toContain("(No output)");
+	});
+
+	test("renders effective model and thinking metadata", () => {
+		const text = formatSingleResult({
+			...base,
+			model: "resolved-model",
+			thinking: "high",
+			errorMessage: null,
+			output: "hello",
+		});
+		expect(text).toContain("## Agent: explore (model: resolved-model, thinking: high)");
 	});
 });
 

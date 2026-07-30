@@ -13,6 +13,7 @@ import {
 	type ContextUsageDto,
 	type DashboardImageReferenceDto,
 	MAX_COMPLETED_BACKGROUND_AGENTS,
+	type SubagentArbitrationDto,
 } from "../../shared/protocol.js";
 
 // ---------------------------------------------------------------------------
@@ -760,6 +761,23 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 				status: "running",
 				sessionDir: event.sessionDir as string | undefined,
 			};
+			break;
+		}
+		case "subagent_arbitration": {
+			const agent = state.backgroundAgents[String(event.agentId)];
+			if (agent) {
+				const record: SubagentArbitrationDto = {
+					status: event.status as SubagentArbitrationDto["status"],
+					proposed: event.proposed as SubagentArbitrationDto["proposed"],
+					final: (event.final as SubagentArbitrationDto["final"]) ?? null,
+					changed: (event.changed as SubagentArbitrationDto["changed"]) ?? [],
+					step: event.step as number | undefined,
+					errorCode: event.errorCode as string | undefined,
+					errorMessage: event.errorMessage as string | undefined,
+				};
+				agent.arbitrations = [...(agent.arbitrations ?? []), record];
+				if (record.status === "success" && record.final) agent.agentType = record.final.agent;
+			}
 			break;
 		}
 		case "background_agent_end": {
