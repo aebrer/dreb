@@ -372,7 +372,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [showOverflow, setShowOverflow] = createSignal(false);
 	const [topChromeCollapsed, setTopChromeCollapsed] = createSignal(false);
 	const [bottomDockCollapsed, setBottomDockCollapsed] = createSignal(false);
-	const [subagentPanelCollapsed, setSubagentPanelCollapsed] = createSignal(false);
 	const [showCompactModal, setShowCompactModal] = createSignal(false);
 	const [showRenameModal, setShowRenameModal] = createSignal(false);
 	const [showContextModal, setShowContextModal] = createSignal(false);
@@ -895,6 +894,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 
 	const liveAgents = () => Object.values(session()?.backgroundAgents ?? {}).filter((a) => a.status === "running");
 	const doneAgents = () => Object.values(session()?.backgroundAgents ?? {}).filter((a) => a.status !== "running");
+	// Newest spawned subagent first, oldest last. Array.prototype.sort is stable,
+	// so equal timestamps keep spawn (insertion) order.
+	const sortedAgents = () =>
+		Object.values(session()?.backgroundAgents ?? {}).sort(
+			(a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt),
+		);
 	const tasks = () => session()?.tasks ?? [];
 	const tasksDone = () => tasks().filter((t) => t.status === "completed").length;
 	const ctx = () => runtime()?.state.contextUsage ?? stats()?.contextUsage;
@@ -1224,47 +1229,38 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						</Show>
 
 						<Show when={liveAgents().length + doneAgents().length > 0}>
-							<div class="subagent-strip" classList={{ collapsed: subagentPanelCollapsed() }}>
-								<button
-									type="button"
-									class="subagent-toggle"
-									title={subagentPanelCollapsed() ? "show subagents" : "hide subagents"}
-									onClick={() => setSubagentPanelCollapsed(!subagentPanelCollapsed())}
-								>
-									{subagentPanelCollapsed() ? "subagents ▴" : "subagents ▾"}
-								</button>
-								<span class="count">
-									⚡ {liveAgents().length} running · {doneAgents().length} done
-								</span>
-								<Show when={subagentPanelCollapsed()}>
-									<span class="collapsed-hint">subagent panel hidden</span>
-								</Show>
-								<Show when={!subagentPanelCollapsed()}>
-									<For each={[...liveAgents(), ...doneAgents()].slice(0, 4)}>
+							<details class="tasks subagents" open={!isMobile()}>
+								<summary>
+									subagents — {liveAgents().length} running · {doneAgents().length} done
+								</summary>
+								<ul class="subagent-list">
+									<For each={sortedAgents()}>
 										{(agent) => (
-											<button
-												type="button"
-												class="agent-chip"
-												title="view this subagent's session"
-												onClick={() =>
-													props.store.navigate({
-														screen: "subagent",
-														key: props.sessionKey,
-														agentId: agent.agentId,
-													})
-												}
-											>
-												<span class={agent.status === "running" ? "live" : "done"}>
-													{agent.status === "running" ? "●" : agent.status === "completed" ? "✓" : "✕"}
-												</span>
-												<span class="task">
-													{agent.agentType} — {agent.taskSummary}
-												</span>
-											</button>
+											<li>
+												<button
+													type="button"
+													class="agent-chip"
+													title="view this subagent's session"
+													onClick={() =>
+														props.store.navigate({
+															screen: "subagent",
+															key: props.sessionKey,
+															agentId: agent.agentId,
+														})
+													}
+												>
+													<span class={agent.status === "running" ? "live" : "done"}>
+														{agent.status === "running" ? "●" : agent.status === "completed" ? "✓" : "✕"}
+													</span>
+													<span class="task">
+														{agent.agentType} — {agent.taskSummary}
+													</span>
+												</button>
+											</li>
 										)}
 									</For>
-								</Show>
-							</div>
+								</ul>
+							</details>
 						</Show>
 
 						<Show when={showStopControls() || (session()?.statusEntries.length ?? 0) > 0 || actionError()}>
