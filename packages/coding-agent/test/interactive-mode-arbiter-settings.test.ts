@@ -60,6 +60,10 @@ function invokeHandler(fakeThis: object, settings: SubagentArbiterSettings): boo
 	return (InteractiveMode as any).prototype.handleSubagentArbiterSettingsChange.call(fakeThis, settings);
 }
 
+async function invokeEvent(fakeThis: object, event: object): Promise<void> {
+	await (InteractiveMode as any).prototype.handleEvent.call(fakeThis, event);
+}
+
 function makeFakeThis(params: { scopedModels?: Array<{ model: Model<Api> }>; routerModel?: Model<Api> } = {}) {
 	const routerModel = params.routerModel ?? model();
 	return {
@@ -151,5 +155,62 @@ describe("InteractiveMode Dispatch Arbiter settings callback", () => {
 		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).toHaveBeenCalledWith(settings);
 		expect(fakeThis.showError).not.toHaveBeenCalled();
 		expect(fakeThis.showStatus).toHaveBeenCalledWith("Dispatch Arbiter enabled (provider/router, thinking high).");
+	});
+});
+
+describe("InteractiveMode Dispatch Arbiter event rendering", () => {
+	function makeEventFake() {
+		return {
+			isInitialized: true,
+			footer: { invalidate: vi.fn() },
+			showStatus: vi.fn(),
+			showWarning: vi.fn(),
+			updateBackgroundAgentStatus: vi.fn(),
+		};
+	}
+
+	test("renders changed and unchanged decisions as status updates", async () => {
+		const changed = makeEventFake();
+		await invokeEvent(changed, {
+			type: "subagent_arbitration",
+			agentId: "agent-1",
+			status: "success",
+			proposed: { agent: "Explore", model: "provider/router", thinking: "high" },
+			final: { agent: "feature-dev", model: "provider/router", thinking: "high" },
+			changed: ["agent"],
+		});
+		expect(changed.showStatus).toHaveBeenCalledWith("Arbitration changed agent Explore → feature-dev.");
+		expect(changed.showWarning).not.toHaveBeenCalled();
+		expect(changed.updateBackgroundAgentStatus).toHaveBeenCalledOnce();
+
+		const unchanged = makeEventFake();
+		await invokeEvent(unchanged, {
+			type: "subagent_arbitration",
+			agentId: "agent-2",
+			status: "success",
+			proposed: { agent: "Explore", model: "provider/router", thinking: "high" },
+			final: { agent: "Explore", model: "provider/router", thinking: "high" },
+			changed: [],
+		});
+		expect(unchanged.showStatus).toHaveBeenCalledWith("Arbitration kept the proposed route.");
+		expect(unchanged.showWarning).not.toHaveBeenCalled();
+		expect(unchanged.updateBackgroundAgentStatus).toHaveBeenCalledOnce();
+	});
+
+	test("renders failed decisions as warnings and refreshes background status", async () => {
+		const fakeThis = makeEventFake();
+		await invokeEvent(fakeThis, {
+			type: "subagent_arbitration",
+			agentId: "agent-3",
+			status: "failure",
+			proposed: { agent: "Explore", model: "provider/router", thinking: "high" },
+			final: null,
+			changed: [],
+			errorCode: "invalid_guide",
+			errorMessage: "Routing guide coverage is stale.",
+		});
+		expect(fakeThis.showWarning).toHaveBeenCalledWith("Arbitration failed: Routing guide coverage is stale.");
+		expect(fakeThis.showStatus).not.toHaveBeenCalled();
+		expect(fakeThis.updateBackgroundAgentStatus).toHaveBeenCalledOnce();
 	});
 });

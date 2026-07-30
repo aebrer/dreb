@@ -536,12 +536,19 @@ describe("setSettingsForRpc validation", () => {
 			},
 		});
 		expect(registry.getAvailable).not.toHaveBeenCalled();
-		expect(manager.getGlobalSubagentArbiterSettings()).toEqual({
+		const disabledPolicy = {
 			enabled: false,
 			model: "malformed-model-id",
 			thinking: "invalid-thinking",
 			guidePath: "",
+		} as const;
+		expect(manager.getGlobalSubagentArbiterSettings()).toEqual(disabledPolicy);
+
+		const reEnabled = await setSettingsForRpc(manager, registry, {
+			subagentArbiter: { ...disabledPolicy, enabled: true } as never,
 		});
+		expect(reEnabled).toMatchObject({ ok: false, error: expect.stringContaining("Invalid subagentArbiter") });
+		expect(manager.getGlobalSubagentArbiterSettings()).toEqual(disabledPolicy);
 	});
 
 	it("applies nothing when any field is invalid (atomicity)", async () => {

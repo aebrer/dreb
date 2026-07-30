@@ -20,6 +20,7 @@ import {
 	abortBackgroundAgents,
 	createSubagentToolDefinition,
 	executeSingle,
+	getBackgroundAgents,
 	type SubagentArbitrationEvent,
 	type SubagentResult,
 } from "../src/core/tools/subagent.js";
@@ -490,7 +491,11 @@ describe("pre-spawn subagent arbitration", () => {
 		const childRepo = join(tempCwd, "child-repo");
 		const init = spawnSync("git", ["init", "--initial-branch=child-route", childRepo], { encoding: "utf8" });
 		expect(init.status, init.stderr).toBe(0);
-		writeFileSync(join(childRepo, "untracked.txt"), "child repository change");
+		const childCwd = join(childRepo, "packages", "nested");
+		mkdirSync(childCwd, { recursive: true });
+		writeFileSync(join(childCwd, "untracked.txt"), "child repository change");
+		const nonGitCwd = join(tempCwd, "not-a-repo");
+		mkdirSync(nonGitCwd);
 		const parentAgent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model: workerModel, systemPrompt: "parent", tools: [] },
@@ -501,7 +506,7 @@ describe("pre-spawn subagent arbitration", () => {
 			subagentArbiter: { enabled: true, model: "provider/worker", thinking: "high", guidePath },
 			secretOutputPatterns: [{ name: "custom_arbiter_secret", pattern: "CUSTOM_SECRET_[0-9]+" }],
 		});
-		let providerContext: unknown;
+		const providerContexts: unknown[] = [];
 		const session = new AgentSession({
 			agent: parentAgent,
 			sessionManager,
@@ -512,7 +517,7 @@ describe("pre-spawn subagent arbitration", () => {
 			scopedModels: [{ model: workerModel }],
 			initialActiveToolNames: ["subagent"],
 			dispatchArbiterComplete: async (_model, context) => {
-				providerContext = context;
+				providerContexts.push(context);
 				return {
 					content: [
 						{
@@ -523,39 +528,58 @@ describe("pre-spawn subagent arbitration", () => {
 				} as AssistantMessage;
 			},
 		});
-		let resolveEvent!: (event: SubagentArbitrationEvent) => void;
-		const eventPromise = new Promise<SubagentArbitrationEvent>((resolve) => {
-			resolveEvent = resolve;
+		const events: SubagentArbitrationEvent[] = [];
+		let resolveEvents!: () => void;
+		const eventsPromise = new Promise<void>((resolve) => {
+			resolveEvents = resolve;
 		});
 		session.subscribe((event) => {
-			if (event.type === "subagent_arbitration") resolveEvent(event);
+			if (event.type !== "subagent_arbitration") return;
+			events.push(event);
+			if (events.length === 2) resolveEvents();
 		});
 		const tool = parentAgent.state.tools.find((candidate) => candidate.name === "subagent");
 		expect(tool).toBeDefined();
 		await tool!.execute(
 			"call",
-			{ tasks: [{ agent: "arbiter-a", task: "inspect CUSTOM_SECRET_123", cwd: childRepo }] },
+			{
+				tasks: [
+					{ agent: "arbiter-a", task: "inspect CUSTOM_SECRET_123", cwd: childCwd },
+					{ agent: "arbiter-a", task: "inspect a non-git directory", cwd: nonGitCwd },
+				],
+			},
 			new AbortController().signal,
 			() => {},
 		);
-		const event = await eventPromise;
-		const providerMessage = (providerContext as { messages: Array<{ content: string }> }).messages[0].content;
-		const arbiterInput = JSON.parse(providerMessage.slice(providerMessage.indexOf("\n") + 1)) as {
-			child: { cwd: string };
-			repository: { repo: string; cwd: string; branch: string; dirtyCount: number };
-		};
+		await eventsPromise;
+		const arbiterInputs = providerContexts.map((providerContext) => {
+			const providerMessage = (providerContext as { messages: Array<{ content: string }> }).messages[0].content;
+			return JSON.parse(providerMessage.slice(providerMessage.indexOf("\n") + 1)) as {
+				child: { cwd: string };
+				repository: { repo?: string; cwd: string; branch?: string; dirtyCount?: number };
+			};
+		});
+		const nestedRepoInput = arbiterInputs.find((input) => input.child.cwd === childCwd);
+		const nonGitInput = arbiterInputs.find((input) => input.child.cwd === nonGitCwd);
 
-		expect(arbiterInput.child.cwd).toBe(childRepo);
-		expect(arbiterInput.repository).toEqual({
+		expect(nestedRepoInput?.repository).toEqual({
 			repo: "child-repo",
-			cwd: childRepo,
+			cwd: childCwd,
 			branch: "child-route",
 			dirtyCount: 1,
 		});
-		expect(vi.mocked(spawn).mock.calls[0][2]).toMatchObject({ cwd: childRepo });
-		expect(JSON.stringify(providerContext)).not.toContain("CUSTOM_SECRET_123");
-		expect(JSON.stringify(providerContext)).toContain("<REDACTED:custom_arbiter_secret>");
-		expect(event).toMatchObject({ status: "success", agentId: expect.any(String), changed: [] });
+		expect(nonGitInput?.repository).toEqual({ cwd: nonGitCwd });
+		expect(vi.mocked(spawn).mock.calls.map((call) => call[2]?.cwd)).toEqual(
+			expect.arrayContaining([childCwd, nonGitCwd]),
+		);
+		expect(JSON.stringify(providerContexts)).not.toContain("CUSTOM_SECRET_123");
+		expect(JSON.stringify(providerContexts)).toContain("<REDACTED:custom_arbiter_secret>");
+		expect(events).toHaveLength(2);
+		expect(events).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ status: "success", agentId: expect.any(String), changed: [] }),
+			]),
+		);
 		const persisted = sessionManager
 			.getEntries()
 			.find((entry) => entry.type === "custom" && entry.customType === "subagent_arbitration");
@@ -625,6 +649,51 @@ describe("pre-spawn subagent arbitration", () => {
 		expect(JSON.stringify(persisted)).not.toContain("AUTH_SECRET_123");
 		expect(JSON.stringify(sessionManager.buildSessionContext().messages)).not.toContain("subagent_arbitration");
 		session.dispose();
+	});
+
+	test("updates the background registry to the final agent before child lifecycle events", async () => {
+		let agentId: string | undefined;
+		let registryAtArbitration: ReturnType<typeof getBackgroundAgents>[number] | undefined;
+		let resolveCompleted!: (result: SubagentResult) => void;
+		const completed = new Promise<SubagentResult>((resolve) => {
+			resolveCompleted = resolve;
+		});
+		const tool = createSubagentToolDefinition(tempCwd, {
+			parentProvider: () => "provider",
+			parentModel: () => "worker",
+			modelRegistry: registry,
+			defaultThinkingLevel: () => "high",
+			arbitrate: async () => ({
+				enabled: true,
+				ok: true,
+				decision: { agent: "arbiter-b", model: "provider/cheap", thinking: "off" },
+				changed: ["agent", "model", "thinking"],
+			}),
+			onBackgroundStart: (id) => {
+				agentId = id;
+			},
+			onArbitration: () => {
+				registryAtArbitration = getBackgroundAgents().find((entry) => entry.agentId === agentId);
+			},
+			onBackgroundComplete: (_id, result) => resolveCompleted(result),
+		});
+
+		await tool.execute(
+			"call",
+			{ agent: "arbiter-a", task: "route to the implementation agent" },
+			new AbortController().signal,
+			() => {},
+			undefined as never,
+		);
+		const result = await completed;
+
+		expect(registryAtArbitration).toMatchObject({
+			agentId,
+			agentType: "arbiter-b",
+			status: "running",
+			arbitrations: [{ status: "success", final: { agent: "arbiter-b" } }],
+		});
+		expect(result).toMatchObject({ agent: "arbiter-b", exitCode: 0 });
 	});
 
 	test("aborts in-flight arbitration through the background lifecycle before spawn", async () => {

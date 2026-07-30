@@ -514,6 +514,21 @@ describe("skills", () => {
 			expect(body).not.toContain("user's actual scoped provider/model combinations");
 		});
 
+		it("model-routing-guide should incrementally update rotated model scopes", () => {
+			const guide = getBuiltInSkill("model-routing-guide");
+			expect(guide.argumentHint).toContain("update");
+
+			const body = readBuiltInSkill("model-routing-guide");
+			expect(body).toContain("optional first argument `update` selects UPDATE mode");
+			expect(body).toContain("validate its internal coverage against its own `covered_model_ids`");
+			expect(body).toContain("**retained**");
+			expect(body).toContain("**removed**");
+			expect(body).toContain("**added**");
+			expect(body).toContain("Preserve retained model sections");
+			expect(body).toContain("Fully research every added canonical provider/model");
+			expect(body).toContain("atomically replace the old file");
+		});
+
 		it("mach6-review should remain user-controlled while supporting direct agent invocation", () => {
 			const review = getBuiltInSkill("mach6-review");
 			expect(review.disableModelInvocation).toBe(false);

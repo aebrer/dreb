@@ -67,6 +67,7 @@ import {
 } from "./extensions/index.js";
 import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./forbidden-commands.js";
 import { type GitRepoState, getGitRepoState, getGitStatusMetadata } from "./git-repo-state.js";
+import { findGitRoot } from "./git-root.js";
 import { log } from "./logger.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -414,10 +415,13 @@ export class AgentSession {
 			getParentModel: () => this.model,
 			getSessionTitle: () => this.sessionName,
 			getRepoMetadata: (cwd) => {
+				const gitRoot = findGitRoot(cwd);
 				const isSessionCwd = resolve(cwd) === resolve(this._cwd);
-				const currentStatus = getGitStatusMetadata(cwd) ?? (isSessionCwd ? this._gitRepoState : undefined);
+				const currentStatus = gitRoot
+					? (getGitStatusMetadata(cwd) ?? (isSessionCwd ? this._gitRepoState : undefined))
+					: undefined;
 				return {
-					repo: basename(cwd),
+					repo: gitRoot ? basename(gitRoot) : undefined,
 					cwd,
 					branch: currentStatus?.branch,
 					dirtyCount: currentStatus?.dirtyCount,

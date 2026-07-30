@@ -26,6 +26,7 @@ function guide(
 	modelIds = ["provider/model-a"],
 	options: {
 		duplicateHeading?: boolean;
+		duplicateCoveredId?: boolean;
 		omit?: string;
 		headingModelIds?: string[];
 		schemaVersion?: number;
@@ -55,7 +56,7 @@ function guide(
 schema_version: ${options.schemaVersion ?? 1}
 generated_at: "2026-07-28T00:00:00Z"
 covered_model_ids:
-${modelIds.map((id) => `  - "${id}"`).join("\n")}
+${[...modelIds, ...(options.duplicateCoveredId ? [modelIds[0]] : [])].map((id) => `  - "${id}"`).join("\n")}
 local_evidence: "${localEvidence}"
 analyzed_session_directories:
   - "~/.dreb/agent/subagent-sessions/"
@@ -159,6 +160,14 @@ describe("model routing guide validation", () => {
 		expect(() =>
 			validateModelRoutingGuideContent(guide(["provider/model-a"], options), ["provider/model-a"]),
 		).toThrow(expected);
+	});
+
+	test("rejects duplicate covered_model_ids before scope comparison", () => {
+		expect(() =>
+			validateModelRoutingGuideContent(guide(["provider/model-a"], { duplicateCoveredId: true }), [
+				"provider/model-a",
+			]),
+		).toThrow(/covered_model_ids contains duplicates/);
 	});
 
 	test("rejects duplicate model headings", () => {

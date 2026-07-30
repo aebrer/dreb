@@ -1585,6 +1585,38 @@ describe("screen smoke tests", () => {
 		expect(enabled.value).toBe("off");
 	});
 
+	it("keeps the disable control reachable with a non-string retained guide path", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: {
+				enabled: true,
+				model: "provider/router",
+				thinking: "high",
+				guidePath: 123,
+			} as never,
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const enabled = enabledRow.querySelector("select") as HTMLSelectElement;
+
+		expect((section.querySelector("#dispatch-arbiter-guide-path") as HTMLInputElement).value).toBe("");
+		expect(section.querySelector("[data-testid='dispatch-arbiter-readiness']")?.textContent).toContain(
+			"routing guide path is invalid",
+		);
+		enabled.value = "off";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "high", guidePath: 123 },
+		});
+		expect(enabled.value).toBe("off");
+	});
+
 	it("settings model picker and toggle persist the exact global Dispatch Arbiter policy", async () => {
 		vi.mocked(api.settings).mockResolvedValue({
 			subagentArbiter: { enabled: false, thinking: "medium", guidePath: "~/routing.md" },

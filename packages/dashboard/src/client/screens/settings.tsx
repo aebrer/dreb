@@ -402,7 +402,15 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 	function arbiterReadiness(current: SettingsDto): { ready: boolean; message: string } {
 		const arbiter = current.subagentArbiter;
 		if (arbiter?.enabled !== true) return { ready: false, message: "disabled" };
-		if (!arbiter.model) return { ready: false, message: "not ready — choose an arbiter model" };
+		if (typeof arbiter.model !== "string" || !arbiter.model.trim()) {
+			return { ready: false, message: "not ready — choose an arbiter model" };
+		}
+		if (arbiter.thinking !== undefined && !THINKING_LEVELS.some((level) => level === arbiter.thinking)) {
+			return { ready: false, message: "not ready — arbiter thinking setting is invalid" };
+		}
+		if (arbiter.guidePath !== undefined && typeof arbiter.guidePath !== "string") {
+			return { ready: false, message: "not ready — routing guide path is invalid" };
+		}
 		if (!arbiter.guidePath?.trim()) {
 			return {
 				ready: true,
@@ -525,7 +533,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 											value={current().subagentArbiter?.enabled === true}
 											onChange={(enabled) => {
 												const arbiter = currentArbiterPolicy();
-												if (enabled && !arbiter.model) {
+												if (enabled && (typeof arbiter.model !== "string" || !arbiter.model.trim())) {
 													setError("Choose an exact Dispatch Arbiter model before enabling it.");
 													setModelPickerTarget({ kind: "arbiter" });
 													return false;
@@ -547,7 +555,9 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 											class="btn btn-small model-picker-button"
 											onClick={() => setModelPickerTarget({ kind: "arbiter" })}
 										>
-											{current().subagentArbiter?.model ?? "choose model…"}
+											{typeof current().subagentArbiter?.model === "string"
+												? current().subagentArbiter?.model
+												: "choose model…"}
 										</button>
 									</span>
 								</div>
@@ -558,7 +568,12 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 									</span>
 									<span class="setting-control">
 										<select
-											value={current().subagentArbiter?.thinking ?? "off"}
+											value={
+												typeof current().subagentArbiter?.thinking === "string" &&
+												THINKING_LEVELS.some((level) => level === current().subagentArbiter?.thinking)
+													? current().subagentArbiter?.thinking
+													: "off"
+											}
 											onChange={(event) =>
 												saveArbiterPolicy({
 													thinking: event.currentTarget.value as
@@ -584,7 +599,11 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 										<input
 											id="dispatch-arbiter-guide-path"
 											type="text"
-											value={current().subagentArbiter?.guidePath ?? ""}
+											value={
+												typeof current().subagentArbiter?.guidePath === "string"
+													? current().subagentArbiter?.guidePath
+													: ""
+											}
 											placeholder="~/.dreb/agent/model-routing-guide.md"
 											onChange={(event) => {
 												const guidePath = event.currentTarget.value.trim();

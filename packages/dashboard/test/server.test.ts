@@ -563,6 +563,19 @@ describe("dashboard server — fleet and runtimes", () => {
 			messages: [],
 		});
 
+		// An ordinary registered agent with a missing log must still fail loudly.
+		const missingLogAgent = {
+			agentId: "bg-missing-log",
+			agentType: "Explore",
+			taskSummary: "spawned without a durable log",
+			startedAt: new Date().toISOString(),
+			status: "failed",
+		};
+		(clients[0].listBackgroundAgents as ReturnType<typeof vi.fn>).mockResolvedValue([missingLogAgent]);
+		const missingLog = await fetch(`${base}/api/runtimes/${key}/subagents/bg-missing-log/messages`);
+		expect(missingLog.status).toBe(502);
+		await expect(missingLog.json()).resolves.toMatchObject({ error: expect.stringContaining("session log") });
+
 		// Unknown agent id → loud 502 with the registry error.
 		const missing = await fetch(`${base}/api/runtimes/${key}/subagents/nope/messages`);
 		expect(missing.status).toBe(502);
