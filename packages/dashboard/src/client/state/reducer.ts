@@ -118,8 +118,10 @@ export interface ExtensionUiRequest {
 	multiSelect?: boolean;
 	/** ask: use a multi-line text area for free text. */
 	multiline?: boolean;
-	/** ask: auto-skip after this many milliseconds; drives the visible countdown. */
+	/** ask: original auto-skip duration in milliseconds. */
 	timeout?: number;
+	/** ask: absolute runtime deadline; survives reload/resync/drill-in recovery. */
+	expiresAt?: number;
 }
 
 export function extensionUiRequestFromEvent(event: any): ExtensionUiRequest | undefined {
@@ -146,6 +148,7 @@ export function extensionUiRequestFromEvent(event: any): ExtensionUiRequest | un
 			multiSelect: event.multiSelect as boolean | undefined,
 			multiline: event.multiline as boolean | undefined,
 			timeout: typeof event.timeout === "number" ? (event.timeout as number) : undefined,
+			expiresAt: typeof event.expiresAt === "number" ? (event.expiresAt as number) : undefined,
 		};
 	}
 	return undefined;

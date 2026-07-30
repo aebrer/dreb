@@ -28,6 +28,8 @@ export interface AskUserDetails {
 	skipped: boolean;
 	/** True when no interactive UI was available (headless/print mode). */
 	unavailable: boolean;
+	/** True when the UI host or response protocol failed. */
+	failed?: boolean;
 }
 
 // ============================================================================
@@ -43,10 +45,10 @@ const askUserSchema = Type.Object({
 		}),
 	),
 	options: Type.Optional(
-		Type.Array(Type.String(), {
+		Type.Array(Type.String({ minLength: 1, pattern: "\\S" }), {
 			minItems: 2,
 			maxItems: 4,
-			description: "2-4 suggested answers the user can pick from.",
+			description: "2-4 nonblank suggested answers the user can pick from.",
 		}),
 	),
 	allowFreeText: Type.Optional(
@@ -108,6 +110,20 @@ function skippedResult(input: AskUserInput) {
 	});
 }
 
+function failedResult(input: AskUserInput) {
+	return textResult(
+		"The question could not be delivered because the interactive UI or response protocol failed. " +
+			"Continue without this input.",
+		{
+			...baseDetails(input),
+			selected: [],
+			skipped: false,
+			unavailable: false,
+			failed: true,
+		},
+	);
+}
+
 function answeredResult(input: AskUserInput, answer: AskResult) {
 	const customText = answer.customText?.trim() || undefined;
 	const selected = answer.selected;
@@ -140,6 +156,7 @@ function formatCall(args: { question?: string; title?: string } | undefined, the
 
 function formatResult(details: AskUserDetails, theme: any): string {
 	if (details.unavailable) return theme.fg("toolOutput", "no interactive UI — continued without asking");
+	if (details.failed) return theme.fg("toolOutput", "interactive UI failed — continued without an answer");
 	if (details.skipped) return theme.fg("toolOutput", "user skipped");
 	const parts: string[] = [];
 	if (details.selected.length > 0) parts.push(details.selected.join(", "));
@@ -225,8 +242,9 @@ export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSche
 					}
 					return answeredResult(input, answer);
 				} catch {
-					// Host failure must still release the queue and never deadlock.
-					return skippedResult(input);
+					// Host/protocol failure must still release the queue and never
+					// deadlock, but it must not masquerade as an intentional user skip.
+					return failedResult(input);
 				}
 			});
 		},

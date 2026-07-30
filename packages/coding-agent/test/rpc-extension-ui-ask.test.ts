@@ -58,20 +58,25 @@ describe("RPC ask round trip", () => {
 		await p;
 	});
 
-	it("emits the auto-skip timeout in the ask request when one is provided", async () => {
-		const h = harness();
-		const p = h.ctx.ask({ question: "Which?", options: ["a"] }, { timeout: 30_000 });
-		// The Dashboard countdown and client auto-skip backstop are driven by this
-		// field; without it in the emitted request the browser never counts down.
-		expect((h.emitted[0] as any).timeout).toBe(30_000);
-		h.respond({ selected: ["a"] } as any);
-		await p;
+	it("emits the auto-skip duration and absolute deadline in the ask request", async () => {
+		const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+		try {
+			const h = harness();
+			const p = h.ctx.ask({ question: "Which?", options: ["a"] }, { timeout: 30_000 });
+			// The absolute deadline keeps a recovered Dashboard countdown aligned
+			// with the already-running authoritative RPC timer.
+			expect(h.emitted[0]).toMatchObject({ timeout: 30_000, expiresAt: 1_030_000 });
+			h.respond({ selected: ["a"] } as any);
+			await p;
+		} finally {
+			now.mockRestore();
+		}
 	});
 
-	it("omits the timeout in the ask request when none is provided", async () => {
+	it("omits the timeout and deadline when none is provided", async () => {
 		const h = harness();
 		const p = h.ctx.ask({ question: "Which?", options: ["a"] });
-		expect((h.emitted[0] as any).timeout).toBeUndefined();
+		expect(h.emitted[0]).toMatchObject({ timeout: undefined, expiresAt: undefined });
 		h.respond({ selected: ["a"] } as any);
 		await p;
 	});
@@ -106,6 +111,21 @@ describe("RPC ask round trip", () => {
 		const p = h.ctx.ask({ question: "Which?", options: ["a"] });
 		h.respond({ cancelled: true } as any);
 		await expect(p).resolves.toBeUndefined();
+	});
+
+	it.each([
+		{ selected: null },
+		{ selected: ["a", 2] },
+		{ selected: ["a"], customText: 42 },
+		{ value: "wrong response variant" },
+	])("rejects a malformed ask response: %o", async (response) => {
+		const h = harness();
+		const p = h.ctx.ask({ question: "Which?", options: ["a"] });
+		const id = h.lastRequestId();
+		h.pending.get(id)?.resolve({ type: "extension_ui_response", id, ...response } as any);
+		await expect(p).rejects.toThrow("Invalid RPC ask response");
+		expect(h.handled).toEqual([id]);
+		expect(h.pending.has(id)).toBe(false);
 	});
 
 	it("emits extension_ui_response_handled exactly once on response and clears the pending entry", async () => {

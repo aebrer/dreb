@@ -1976,11 +1976,14 @@ Ask the user a rich clarifying question with optional single- or multi-select op
   "allowFreeText": true,
   "multiSelect": false,
   "multiline": false,
-  "timeout": 60000
+  "timeout": 60000,
+  "expiresAt": 1785434460000
 }
 ```
 
-Expected response: `extension_ui_response` with `selected` (array of chosen option strings, possibly empty) and optional `customText` (the typed answer), or `cancelled: true` to skip. The client should treat an empty `selected` with no `customText` as a skip.
+`timeout` is the original duration in milliseconds. `expiresAt` is the corresponding absolute Unix timestamp in milliseconds; Dashboard clients should use it for the visible countdown so reload, resync, or drill-in recovery does not restart the full duration.
+
+Expected response: `extension_ui_response` with `selected` (an array of strings, possibly empty) and optional string `customText` (the typed answer), or `cancelled: true` to skip. The client should treat an empty `selected` with no `customText` as a skip. Malformed ask responses are rejected as protocol failures rather than being reported to the model as user skips.
 
 ```json
 { "type": "extension_ui_response", "id": "uuid-5", "selected": ["SQLite"], "customText": "with WAL enabled" }

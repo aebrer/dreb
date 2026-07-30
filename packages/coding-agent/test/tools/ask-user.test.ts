@@ -1,3 +1,4 @@
+import { Value } from "@sinclair/typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import type { AskRequest, AskResult, ExtensionContext } from "../../src/core/extensions/types.js";
 import { type AskUserDetails, createAskUserToolDefinition } from "../../src/core/tools/ask-user.js";
@@ -41,12 +42,15 @@ describe("ask_user tool", () => {
 		expect(guidelines).toContain("skip");
 	});
 
-	it("validates option bounds (2-4) in its schema", () => {
+	it("validates option bounds (2-4) and rejects blank options in its schema", () => {
 		const def = createAskUserToolDefinition();
 		const props = (def.parameters as any).properties;
 		expect(props.options.minItems).toBe(2);
 		expect(props.options.maxItems).toBe(4);
 		expect(props.question.type).toBe("string");
+		expect(Value.Check(def.parameters, { question: "Pick", options: ["A", "B"] })).toBe(true);
+		expect(Value.Check(def.parameters, { question: "Pick", options: ["", "B"] })).toBe(false);
+		expect(Value.Check(def.parameters, { question: "Pick", options: ["   ", "B"] })).toBe(false);
 	});
 
 	it("returns a graceful non-blocking result when no UI is available", async () => {
@@ -118,13 +122,16 @@ describe("ask_user tool", () => {
 		expect(result.details?.unavailable).toBe(false);
 	});
 
-	it("resolves gracefully when the host throws", async () => {
+	it("reports a host failure distinctly from an intentional user skip", async () => {
 		const def = createAskUserToolDefinition();
 		const ctx = makeCtx(async () => {
 			throw new Error("host exploded");
 		});
 		const result = await run(def, { question: "Which?" }, ctx);
-		expect(result.details?.skipped).toBe(true);
+		expect(result.details?.failed).toBe(true);
+		expect(result.details?.skipped).toBe(false);
+		expect(result.content[0].text).toContain("interactive UI or response protocol failed");
+		expect(result.content[0].text).not.toContain("user skipped");
 	});
 
 	it("serializes concurrent calls strictly one at a time (FIFO)", async () => {
@@ -165,7 +172,8 @@ describe("ask_user tool", () => {
 			run(def, { question: "ok" }, ctx),
 		]);
 		expect(calls).toBe(2);
-		expect(first.details?.skipped).toBe(true);
+		expect(first.details?.failed).toBe(true);
+		expect(first.details?.skipped).toBe(false);
 		expect(second.details?.selected).toEqual(["ok"]);
 	});
 

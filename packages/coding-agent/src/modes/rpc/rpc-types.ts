@@ -656,6 +656,8 @@ export type RpcExtensionUIRequest =
 			multiSelect?: boolean;
 			multiline?: boolean;
 			timeout?: number;
+			/** Absolute Unix timestamp in milliseconds when the RPC-side timeout fires. */
+			expiresAt?: number;
 	  }
 	| {
 			type: "extension_ui_request";

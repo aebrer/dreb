@@ -510,6 +510,44 @@ describe("InteractiveMode extension dialog queue", () => {
 		await expect(ask).resolves.toEqual({ selected: ["yes"] });
 		expect(showExtensionAsk).toHaveBeenCalledTimes(1);
 	});
+
+	test("settles a queued ask immediately on abort without opening it or reordering later dialogs", async () => {
+		let resolveSelector!: (value: string | undefined) => void;
+		const showExtensionSelector = vi.fn(
+			() =>
+				new Promise<string | undefined>((resolve) => {
+					resolveSelector = resolve;
+				}),
+		);
+		const showExtensionAsk = vi.fn(async (request: { question: string }) => ({ selected: [request.question] }));
+		const fakeThis: any = {
+			extensionDialogQueue: Promise.resolve(),
+			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
+			showExtensionSelector,
+			showExtensionAsk,
+		};
+		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
+		const controller = new AbortController();
+
+		const selector = uiContext.select("First", ["a", "b"]);
+		const abortedAsk = uiContext.ask({ question: "aborted" }, { signal: controller.signal });
+		const laterAsk = uiContext.ask({ question: "later" });
+		await Promise.resolve();
+		expect(showExtensionSelector).toHaveBeenCalledTimes(1);
+		expect(showExtensionAsk).not.toHaveBeenCalled();
+
+		controller.abort();
+		// This must settle before the unrelated selector does; the old queue only
+		// observed the abort after the selector released its slot.
+		await expect(abortedAsk).resolves.toBeUndefined();
+		expect(showExtensionAsk).not.toHaveBeenCalled();
+
+		resolveSelector("a");
+		await expect(selector).resolves.toBe("a");
+		await expect(laterAsk).resolves.toEqual({ selected: ["later"] });
+		expect(showExtensionAsk).toHaveBeenCalledTimes(1);
+		expect(showExtensionAsk).toHaveBeenCalledWith({ question: "later" }, undefined);
+	});
 });
 
 describe("InteractiveMode.showExtensionAsk lifecycle", () => {

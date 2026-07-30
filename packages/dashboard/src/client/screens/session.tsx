@@ -224,28 +224,43 @@ function AskUiInline(props: {
 	onMount(() => window.addEventListener("keydown", onKeyDown));
 	onCleanup(() => window.removeEventListener("keydown", onKeyDown));
 
-	// Optional visible countdown. The host also auto-resolves on timeout; this
-	// mirrors the TUI countdown and auto-skips as a client-side backstop.
-	const [remaining, setRemaining] = createSignal(props.request.timeout ? Math.ceil(props.request.timeout / 1000) : 0);
-	if (props.request.timeout && props.request.timeout > 0) {
-		const interval = setInterval(() => {
-			setRemaining((current) => {
-				const next = current - 1;
-				if (next <= 0) {
-					clearInterval(interval);
-					skip();
-				}
-				return next;
-			});
-		}, 1000);
-		onCleanup(() => clearInterval(interval));
+	// Optional visible countdown. `expiresAt` is the authoritative RPC-side
+	// deadline and survives reload/resync/drill-in recovery. Fall back to a
+	// local deadline for older runtimes that only send the original duration.
+	const expiresAt =
+		typeof props.request.expiresAt === "number"
+			? props.request.expiresAt
+			: props.request.timeout && props.request.timeout > 0
+				? Date.now() + props.request.timeout
+				: undefined;
+	const secondsRemaining = () =>
+		expiresAt === undefined ? 0 : Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+	const [remaining, setRemaining] = createSignal(secondsRemaining());
+	if (expiresAt !== undefined) {
+		let interval: ReturnType<typeof setInterval> | undefined;
+		const updateCountdown = () => {
+			const next = secondsRemaining();
+			setRemaining(next);
+			if (next <= 0) {
+				if (interval !== undefined) clearInterval(interval);
+				interval = undefined;
+				skip();
+			}
+		};
+		onMount(() => {
+			updateCountdown();
+			if (expiresAt > Date.now()) interval = setInterval(updateCountdown, 1000);
+		});
+		onCleanup(() => {
+			if (interval !== undefined) clearInterval(interval);
+		});
 	}
 
 	return (
 		<section class="ask-inline" aria-label={props.request.title}>
 			<header class="ask-inline-header">
 				{props.request.title}
-				<Show when={props.request.timeout && props.request.timeout > 0}>
+				<Show when={expiresAt !== undefined}>
 					<span class="ask-inline-countdown"> (auto-skips in {remaining()}s)</span>
 				</Show>
 			</header>

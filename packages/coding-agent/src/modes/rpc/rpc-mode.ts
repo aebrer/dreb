@@ -1120,13 +1120,23 @@ export function createRpcExtensionUIContext(
 					multiSelect: request.multiSelect,
 					multiline: request.multiline,
 					timeout: opts?.timeout,
+					// Preserve the authoritative deadline across Dashboard reload,
+					// resync, and drill-in hydration instead of restarting the full
+					// duration whenever the question component remounts.
+					expiresAt: opts?.timeout ? Date.now() + opts.timeout : undefined,
 				},
-				(r) =>
-					"cancelled" in r && r.cancelled
-						? undefined
-						: "selected" in r
-							? { selected: r.selected, customText: r.customText }
-							: undefined,
+				(response) => {
+					if ("cancelled" in response && response.cancelled) return undefined;
+					const selected = (response as { selected?: unknown }).selected;
+					const customText = (response as { customText?: unknown }).customText;
+					if (!Array.isArray(selected) || !selected.every((value) => typeof value === "string")) {
+						throw new Error("Invalid RPC ask response: selected must be an array of strings");
+					}
+					if (customText !== undefined && typeof customText !== "string") {
+						throw new Error("Invalid RPC ask response: customText must be a string");
+					}
+					return { selected, customText };
+				},
 			),
 
 		notify(message: string, type?: "info" | "warning" | "error"): void {

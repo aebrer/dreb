@@ -1343,6 +1343,44 @@ describe("screen smoke tests", () => {
 		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
 	});
 
+	it("uses the authoritative remaining deadline after a timed ask is recovered", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-07-30T18:00:00Z"));
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-recovered-timeout");
+		session.uiRequests = [
+			{
+				id: "a-recovered-timeout",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				timeout: 30_000,
+				// Twenty-five seconds elapsed before reload; only five remain.
+				expiresAt: Date.now() + 5_000,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-recovered-timeout": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-recovered-timeout" />);
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(el.textContent).toContain("auto-skips in 5s");
+		await vi.advanceTimersByTimeAsync(4_000);
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-recovered-timeout",
+			expect.objectContaining({ type: "extension_ui_response", id: "a-recovered-timeout", cancelled: true }),
+		);
+	});
+
 	it("ask_user tool card stays collapsed while running (unlike other running tools)", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-collapse");

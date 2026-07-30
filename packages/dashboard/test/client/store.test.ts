@@ -506,6 +506,8 @@ describe("app store SSE sync", () => {
 						allowFreeText: true,
 						multiSelect: false,
 						multiline: false,
+						timeout: 30_000,
+						expiresAt: 1_030_000,
 					},
 				],
 				barrierSeq: 20,
@@ -523,6 +525,8 @@ describe("app store SSE sync", () => {
 				method: "ask",
 				question: "Which one?",
 				options: ["SQLite", "Postgres"],
+				timeout: 30_000,
+				expiresAt: 1_030_000,
 			}),
 		]);
 		expect(store.sessions.a?.needsAttention).toBe(true);
@@ -1093,6 +1097,8 @@ describe("app store hydration", () => {
 				allowFreeText: true,
 				multiSelect: false,
 				multiline: false,
+				timeout: 30_000,
+				expiresAt: 1_030_000,
 			},
 		];
 		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
@@ -1106,6 +1112,8 @@ describe("app store hydration", () => {
 				method: "ask",
 				question: "Which one?",
 				options: ["SQLite", "Postgres"],
+				timeout: 30_000,
+				expiresAt: 1_030_000,
 			}),
 		]);
 		expect(store.sessions.s1?.needsAttention).toBe(true);

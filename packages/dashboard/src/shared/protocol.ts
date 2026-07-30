@@ -283,6 +283,8 @@ export interface ExtensionUiRequestDto {
 	multiSelect?: boolean;
 	multiline?: boolean;
 	timeout?: number;
+	/** Absolute Unix timestamp in milliseconds when the runtime timeout fires. */
+	expiresAt?: number;
 }
 
 /**

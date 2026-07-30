@@ -1846,13 +1846,35 @@ export class InteractiveMode {
 		open: () => Promise<T>,
 		opts?: { signal?: AbortSignal; abortedValue: T },
 	): Promise<T> {
-		const run = () => (opts?.signal?.aborted ? Promise.resolve(opts.abortedValue) : open());
-		const result = this.extensionDialogQueue.then(run, run);
-		this.extensionDialogQueue = result.then(
+		if (!opts?.signal) {
+			const result = this.extensionDialogQueue.then(open, open);
+			this.extensionDialogQueue = result.then(
+				() => undefined,
+				() => undefined,
+			);
+			return result;
+		}
+		const { signal, abortedValue } = opts;
+		if (signal.aborted) return Promise.resolve(abortedValue);
+
+		// Settle the caller as soon as a queued dialog aborts, even if an earlier
+		// unbounded dialog still owns the UI. Its queue slot remains as a no-op so
+		// later dialogs keep their FIFO order.
+		let onQueuedAbort!: () => void;
+		const aborted = new Promise<T>((resolve) => {
+			onQueuedAbort = () => resolve(abortedValue);
+			signal.addEventListener("abort", onQueuedAbort, { once: true });
+		});
+		const run = () => {
+			signal.removeEventListener("abort", onQueuedAbort);
+			return signal.aborted ? Promise.resolve(abortedValue) : open();
+		};
+		const queued = this.extensionDialogQueue.then(run, run);
+		this.extensionDialogQueue = queued.then(
 			() => undefined,
 			() => undefined,
 		);
-		return result;
+		return Promise.race([queued, aborted]).finally(() => signal.removeEventListener("abort", onQueuedAbort));
 	}
 
 	/**
