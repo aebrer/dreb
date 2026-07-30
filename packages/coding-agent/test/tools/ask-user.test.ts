@@ -206,6 +206,35 @@ describe("ask_user tool", () => {
 		expect(received?.allowFreeText).toBe(true);
 	});
 
+	it("drops multiline when options exist and free text is disabled", async () => {
+		const def = createAskUserToolDefinition();
+		let received: AskRequest | undefined;
+		const ctx = makeCtx(async (request) => {
+			received = request;
+			return { selected: ["a"] };
+		});
+		// With options and no free-text field there is no text area to make
+		// multiline; the flag must be dropped rather than forwarded meaninglessly.
+		await run(def, { question: "Pick?", options: ["a", "b"], allowFreeText: false, multiline: true }, ctx);
+		expect(received?.multiline).toBeUndefined();
+		expect(received?.allowFreeText).toBe(false);
+	});
+
+	it("preserves multiline for an open-ended question with no options", async () => {
+		const def = createAskUserToolDefinition();
+		let received: AskRequest | undefined;
+		const ctx = makeCtx(async (request) => {
+			received = request;
+			return { selected: [], customText: "line1\nline2" };
+		});
+		// No options → free text is always offered, so a multiline request must
+		// survive normalization (otherwise open-ended answers silently collapse
+		// to a single-line input on both surfaces).
+		await run(def, { question: "Describe the bug", multiline: true }, ctx);
+		expect(received?.multiline).toBe(true);
+		expect(received?.allowFreeText).toBe(true);
+	});
+
 	it("exposes a validated optional timeoutSeconds field in its schema", () => {
 		const def = createAskUserToolDefinition();
 		const props = (def.parameters as any).properties;

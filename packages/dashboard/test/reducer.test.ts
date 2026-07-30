@@ -998,6 +998,37 @@ describe("applySessionEvent — extension UI", () => {
 		expect(state.needsAttention).toBe(false);
 	});
 
+	it("extracts a numeric ask timeout onto the ui request (drives the countdown)", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "extension_ui_request",
+			id: "a-timeout",
+			method: "ask",
+			title: "Choose",
+			question: "Which?",
+			options: ["a", "b"],
+			timeout: 30_000,
+		});
+		// The visible countdown and client auto-skip backstop read this value; if
+		// the reducer drops it, the Dashboard never counts down even though the
+		// runtime auto-skips.
+		expect(state.uiRequests[0]?.timeout).toBe(30_000);
+	});
+
+	it("ignores a non-numeric ask timeout (guards against malformed events)", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "extension_ui_request",
+			id: "a-bad-timeout",
+			method: "ask",
+			title: "Choose",
+			question: "Which?",
+			options: ["a"],
+			timeout: "soon",
+		});
+		expect(state.uiRequests[0]?.timeout).toBeUndefined();
+	});
+
 	it("agent_start clears pending UI requests (server resolved them)", () => {
 		const state = makeState();
 		applySessionEvent(state, {

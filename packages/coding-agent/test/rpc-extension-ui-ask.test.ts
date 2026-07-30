@@ -58,6 +58,24 @@ describe("RPC ask round trip", () => {
 		await p;
 	});
 
+	it("emits the auto-skip timeout in the ask request when one is provided", async () => {
+		const h = harness();
+		const p = h.ctx.ask({ question: "Which?", options: ["a"] }, { timeout: 30_000 });
+		// The Dashboard countdown and client auto-skip backstop are driven by this
+		// field; without it in the emitted request the browser never counts down.
+		expect((h.emitted[0] as any).timeout).toBe(30_000);
+		h.respond({ selected: ["a"] } as any);
+		await p;
+	});
+
+	it("omits the timeout in the ask request when none is provided", async () => {
+		const h = harness();
+		const p = h.ctx.ask({ question: "Which?", options: ["a"] });
+		expect((h.emitted[0] as any).timeout).toBeUndefined();
+		h.respond({ selected: ["a"] } as any);
+		await p;
+	});
+
 	it("uses the provided title when set", async () => {
 		const h = harness();
 		const p = h.ctx.ask({ title: "Pick storage", question: "Which DB?", options: ["a"] });
