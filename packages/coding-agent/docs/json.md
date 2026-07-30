@@ -17,9 +17,12 @@ type AgentSessionEvent =
   | { type: "auto_compaction_end"; result: CompactionResult | undefined; aborted: boolean; willRetry: boolean; errorMessage?: string }
   | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-  | { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string }
+  | { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string; sessionDir?: string }
   | { type: "subagent_arbitration"; agentId: string; status: "success" | "failure"; proposed: DispatchRoute; final: DispatchRoute | null; changed: ("agent" | "model" | "thinking")[]; step?: number; errorCode?: string; errorMessage?: string }
   | { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; model?: string; thinking?: ThinkingLevel; steps?: SubagentStepMetadata[]; sessionFile?: string }
+  | { type: "background_agent_event"; agentId: string; event: Record<string, unknown> }
+  | { type: "parent_paused_for_background_agents"; runningAgentCount: number; turnsUsed: number; turnLimit: number }
+  | { type: "session_name_changed"; name: string }
   | { type: "tasks_update"; tasks: readonly SessionTask[] }
   | { type: "suggest_next"; command: string };
 
