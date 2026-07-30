@@ -269,6 +269,58 @@ describe("pre-spawn subagent arbitration", () => {
 
 	test.each([
 		{
+			label: "keeps the fallback proposal",
+			decision: { agent: "arbiter-a", model: "provider/worker", thinking: "high" },
+			changed: [],
+			expectedSummary: 'using "provider/worker".',
+		},
+		{
+			label: "changes the fallback proposal",
+			decision: { agent: "arbiter-a", model: "provider/cheap", thinking: "off" },
+			changed: ["model"],
+			expectedSummary: 'proposal resolved to "provider/worker" before arbitration selected "provider/cheap".',
+		},
+	] as const)("preserves loud proposal fallback diagnostics when arbitration $label", async (route) => {
+		const result = await executeSingle(
+			agents(),
+			"arbiter-a",
+			"route after fallback",
+			tempCwd,
+			undefined,
+			undefined,
+			undefined,
+			"provider",
+			registry,
+			join(tempCwd, "session"),
+			"worker",
+			["provider/missing"],
+			undefined,
+			undefined,
+			undefined,
+			{
+				arbitrate: async () => ({
+					enabled: true,
+					ok: true,
+					decision: route.decision,
+					changed: [...route.changed],
+				}),
+				onRecord: vi.fn(),
+				defaultThinkingLevel: "high",
+			},
+		);
+
+		expect(result).toMatchObject({ exitCode: 0, model: route.decision.model });
+		expect(result.output).toContain(
+			'[WARNING: Proposal resolution: Agent preferred models were unavailable. Falling back to parent model "worker".]',
+		);
+		expect(result.output).toContain("[MODEL FALLBACK: skipped 1 unavailable model(s);");
+		expect(result.output).toContain(route.expectedSummary);
+		expect(result.output).toContain("- provider/missing:");
+		expect(result.output).toContain("done");
+	});
+
+	test.each([
+		{
 			label: "agent only",
 			decision: { agent: "arbiter-b", model: "provider/worker", thinking: "high" },
 			changed: ["agent"],

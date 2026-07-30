@@ -982,6 +982,9 @@ describe("spawn-time model availability probing", () => {
 		expect(prependModelFallbackSummary("child output", skipped, "fallback-model")).toBe(
 			'[MODEL FALLBACK: skipped 1 unavailable model(s); using "fallback-model".]\n- primary-model: 429 rate limit\n\nchild output',
 		);
+		expect(formatModelFallbackSummary(skipped, "proposal-model", "final-model")).toBe(
+			'[MODEL FALLBACK: skipped 1 unavailable model(s); proposal resolved to "proposal-model" before arbitration selected "final-model".]\n- primary-model: 429 rate limit',
+		);
 		expect(prependModelFallbackSummary("child output", [], "fallback-model")).toBe("child output");
 	});
 

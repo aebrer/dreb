@@ -56,7 +56,7 @@ ${REQUIRED_SUBSECTIONS.map((heading) => `### ${heading}\nUnknown`).join("\n")}
 `;
 }
 
-function invokeHandler(fakeThis: object, settings: SubagentArbiterSettings): boolean {
+async function invokeHandler(fakeThis: object, settings: SubagentArbiterSettings): Promise<boolean> {
 	return (InteractiveMode as any).prototype.handleSubagentArbiterSettingsChange.call(fakeThis, settings);
 }
 
@@ -75,7 +75,13 @@ function makeFakeThis(params: { scopedModels?: Array<{ model: Model<Api> }>; rou
 			},
 			scopedModels: params.scopedModels ?? [{ model: routerModel }],
 		},
-		settingsManager: { setGlobalSubagentArbiterSettings: vi.fn() },
+		settingsManager: {
+			setGlobalSubagentArbiterSettings: vi.fn(),
+			hasGlobalSettingsLoadError: vi.fn(() => false),
+			flush: vi.fn(async () => {}),
+			drainErrors: vi.fn(() => [] as Array<{ scope: string; error: Error }>),
+			reload: vi.fn(),
+		},
 		showError: vi.fn(),
 		showStatus: vi.fn(),
 	};
@@ -96,54 +102,87 @@ afterEach(() => {
 });
 
 describe("InteractiveMode Dispatch Arbiter settings callback", () => {
-	test("rejects an invalid guide loudly without persisting enablement", () => {
+	test("rejects an invalid guide loudly without persisting enablement", async () => {
 		const fakeThis = makeFakeThis();
 
-		expect(
+		await expect(
 			invokeHandler(fakeThis, {
 				enabled: true,
 				model: "provider/router",
 				thinking: "high",
 				guidePath: join(tempDir, "missing.md"),
 			}),
-		).toBe(false);
+		).resolves.toBe(false);
 		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("Dispatch Arbiter is not ready"));
 		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).not.toHaveBeenCalled();
 	});
 
-	test("rejects an empty live scope loudly without persisting enablement", () => {
+	test("rejects an empty live scope loudly without persisting enablement", async () => {
 		const fakeThis = makeFakeThis({ scopedModels: [] });
 
-		expect(
+		await expect(
 			invokeHandler(fakeThis, {
 				enabled: true,
 				model: "provider/router",
 				thinking: "high",
 				guidePath,
 			}),
-		).toBe(false);
+		).resolves.toBe(false);
 		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("non-empty explicit live model scope"));
 		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).not.toHaveBeenCalled();
 	});
 
-	test("rejects unsupported thinking loudly without persisting enablement", () => {
+	test("rejects unsupported thinking loudly without persisting enablement", async () => {
 		const nonReasoningModel = model(false);
 		const fakeThis = makeFakeThis({ routerModel: nonReasoningModel, scopedModels: [{ model: nonReasoningModel }] });
 
-		expect(
+		await expect(
 			invokeHandler(fakeThis, {
 				enabled: true,
 				model: "provider/router",
 				thinking: "high",
 				guidePath,
 			}),
-		).toBe(false);
+		).resolves.toBe(false);
 		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("not supported by non-reasoning model"));
 		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).not.toHaveBeenCalled();
 	});
 
-	test("persists a complete valid global policy and reports readiness", () => {
+	test("rejects a corrupt global settings file before reporting success", async () => {
 		const fakeThis = makeFakeThis();
+		fakeThis.settingsManager.hasGlobalSettingsLoadError.mockReturnValue(true);
+
+		await expect(invokeHandler(fakeThis, { enabled: false })).resolves.toBe(false);
+		expect(fakeThis.showError).toHaveBeenCalledWith(expect.stringContaining("global settings file failed to load"));
+		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).not.toHaveBeenCalled();
+		expect(fakeThis.settingsManager.flush).not.toHaveBeenCalled();
+		expect(fakeThis.showStatus).not.toHaveBeenCalled();
+	});
+
+	test("restores durable settings and reports a queued write failure", async () => {
+		const fakeThis = makeFakeThis();
+		fakeThis.settingsManager.drainErrors
+			.mockReturnValueOnce([])
+			.mockReturnValueOnce([{ scope: "global", error: new Error("disk full") }]);
+
+		await expect(invokeHandler(fakeThis, { enabled: false })).resolves.toBe(false);
+		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).toHaveBeenCalledWith({ enabled: false });
+		expect(fakeThis.settingsManager.flush).toHaveBeenCalledOnce();
+		expect(fakeThis.settingsManager.reload).toHaveBeenCalledOnce();
+		expect(fakeThis.showError).toHaveBeenCalledWith(
+			expect.stringContaining("Failed to persist Dispatch Arbiter settings: global: disk full"),
+		);
+		expect(fakeThis.showStatus).not.toHaveBeenCalled();
+	});
+
+	test("persists a complete valid global policy before reporting readiness", async () => {
+		const fakeThis = makeFakeThis();
+		let finishFlush: (() => void) | undefined;
+		fakeThis.settingsManager.flush.mockReturnValue(
+			new Promise<void>((resolve) => {
+				finishFlush = resolve;
+			}),
+		);
 		const settings: SubagentArbiterSettings = {
 			enabled: true,
 			model: "provider/router",
@@ -151,8 +190,12 @@ describe("InteractiveMode Dispatch Arbiter settings callback", () => {
 			guidePath,
 		};
 
-		expect(invokeHandler(fakeThis, settings)).toBe(true);
+		const pending = invokeHandler(fakeThis, settings);
 		expect(fakeThis.settingsManager.setGlobalSubagentArbiterSettings).toHaveBeenCalledWith(settings);
+		expect(fakeThis.settingsManager.flush).toHaveBeenCalledOnce();
+		expect(fakeThis.showStatus).not.toHaveBeenCalled();
+		finishFlush?.();
+		await expect(pending).resolves.toBe(true);
 		expect(fakeThis.showError).not.toHaveBeenCalled();
 		expect(fakeThis.showStatus).toHaveBeenCalledWith("Dispatch Arbiter enabled (provider/router, thinking high).");
 	});

@@ -156,7 +156,7 @@ describe("SettingsSelectorComponent — Dispatch Arbiter controls", () => {
 		});
 	});
 
-	test("rejected enablement stays off instead of presenting an unpersisted state", () => {
+	test("rejected enablement stays off instead of presenting an unpersisted state", async () => {
 		const callbacks = makeCallbacks();
 		vi.mocked(callbacks.onSubagentArbiterChange).mockReturnValue(false);
 		const component = new SettingsSelectorComponent(
@@ -169,7 +169,7 @@ describe("SettingsSelectorComponent — Dispatch Arbiter controls", () => {
 		list.handleInput("\x1b[B");
 		list.handleInput(ENTER);
 		expect(callbacks.onSubagentArbiterChange).toHaveBeenCalledWith({ enabled: true, model: "provider/router" });
-		expect(list.render(120).join("\n")).toContain("false");
+		await vi.waitFor(() => expect(list.render(120).join("\n")).toContain("false"));
 	});
 
 	test("enable toggle emits the complete current global arbiter policy", () => {

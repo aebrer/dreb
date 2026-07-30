@@ -3710,7 +3710,13 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private handleSubagentArbiterSettingsChange(settings: SubagentArbiterSettings): boolean {
+	private async handleSubagentArbiterSettingsChange(settings: SubagentArbiterSettings): Promise<boolean> {
+		if (this.settingsManager.hasGlobalSettingsLoadError()) {
+			this.showError(
+				"Cannot write Dispatch Arbiter settings: the global settings file failed to load. Fix or remove the corrupt settings.json first.",
+			);
+			return false;
+		}
 		if (settings.enabled) {
 			if (!settings.model) {
 				this.showError("Choose an exact Dispatch Arbiter model before enabling it.");
@@ -3742,7 +3748,33 @@ export class InteractiveMode {
 				return false;
 			}
 		}
-		this.settingsManager.setGlobalSubagentArbiterSettings(settings);
+
+		this.settingsManager.drainErrors();
+		try {
+			this.settingsManager.setGlobalSubagentArbiterSettings(settings);
+			await this.settingsManager.flush();
+		} catch (error) {
+			try {
+				this.settingsManager.reload();
+			} catch {}
+			this.showError(
+				`Failed to persist Dispatch Arbiter settings: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return false;
+		}
+		const writeErrors = this.settingsManager.drainErrors();
+		if (writeErrors.length > 0) {
+			try {
+				this.settingsManager.reload();
+			} catch {}
+			this.showError(
+				`Failed to persist Dispatch Arbiter settings: ${writeErrors
+					.map((entry) => `${entry.scope}: ${entry.error.message}`)
+					.join("; ")}`,
+			);
+			return false;
+		}
+
 		this.showStatus(
 			settings.enabled
 				? `Dispatch Arbiter enabled (${settings.model}, thinking ${settings.thinking ?? "off"}).`

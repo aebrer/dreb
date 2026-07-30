@@ -94,7 +94,7 @@ export interface SettingsCallbacks {
 	onQuietStartupChange: (enabled: boolean) => void;
 	onAutoLoadNestedContextChange: (enabled: boolean) => void;
 	onAgentModelsChange: (agentName: string, models: string[]) => void;
-	onSubagentArbiterChange: (settings: SubagentArbiterSettings) => boolean;
+	onSubagentArbiterChange: (settings: SubagentArbiterSettings) => boolean | Promise<boolean>;
 	onCancel: () => void;
 }
 
@@ -445,9 +445,9 @@ export class SettingsSelectorComponent extends Container {
 
 		const supportsImages = getCapabilities().images;
 		let arbiterSettings = { ...config.subagentArbiter };
-		const updateArbiter = (patch: Partial<SubagentArbiterSettings>): boolean => {
+		const updateArbiter = async (patch: Partial<SubagentArbiterSettings>): Promise<boolean> => {
 			const next = { ...arbiterSettings, ...patch };
-			if (!callbacks.onSubagentArbiterChange(next)) return false;
+			if (!(await callbacks.onSubagentArbiterChange(next))) return false;
 			arbiterSettings = next;
 			return true;
 		};
@@ -603,8 +603,8 @@ export class SettingsSelectorComponent extends Container {
 							{ value: "true", label: "on", description: "Fail closed before every child spawn" },
 						],
 						currentValue,
-						(value) => {
-							if (updateArbiter({ enabled: value === "true" })) done(value);
+						async (value) => {
+							if (await updateArbiter({ enabled: value === "true" })) done(value);
 							else done();
 						},
 						() => done(),
@@ -621,8 +621,8 @@ export class SettingsSelectorComponent extends Container {
 						"Select the exact model used for the tool-less pre-spawn decision",
 						config.availableModelIds.map((model) => ({ value: model, label: model })),
 						currentValue,
-						(value) => {
-							if (updateArbiter({ model: value })) done(value);
+						async (value) => {
+							if (await updateArbiter({ model: value })) done(value);
 							else done();
 						},
 						() => done(),
@@ -643,8 +643,8 @@ export class SettingsSelectorComponent extends Container {
 							description: THINKING_DESCRIPTIONS[level],
 						})),
 						currentValue,
-						(value) => {
-							if (updateArbiter({ thinking: value as ThinkingLevel })) done(value);
+						async (value) => {
+							if (await updateArbiter({ thinking: value as ThinkingLevel })) done(value);
 							else done();
 						},
 						() => done(),
@@ -660,9 +660,9 @@ export class SettingsSelectorComponent extends Container {
 						"Dispatch Arbiter Guide Path",
 						"Enter a path, or leave blank for ~/.dreb/agent/model-routing-guide.md",
 						currentValue === "default" ? "" : currentValue,
-						(value) => {
+						async (value) => {
 							const guidePath = value.trim();
-							if (updateArbiter({ guidePath: guidePath || undefined })) done(guidePath || "default");
+							if (await updateArbiter({ guidePath: guidePath || undefined })) done(guidePath || "default");
 							else done();
 						},
 						() => done(),

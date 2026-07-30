@@ -967,19 +967,25 @@ export async function resolveModelForSubagentSpawn(
 
 export function formatModelFallbackSummary(
 	skippedModels: SkippedFallbackModel[],
-	selectedModel: string | undefined,
+	proposalModel: string | undefined,
+	finalModel?: string,
 ): string | undefined {
 	if (skippedModels.length === 0) return undefined;
 	const skipped = skippedModels.map((s) => `- ${s.model}: ${s.reason}`).join("\n");
-	return `[MODEL FALLBACK: skipped ${skippedModels.length} unavailable model(s); using "${selectedModel ?? "unknown"}".]\n${skipped}`;
+	const routeSummary =
+		finalModel && finalModel !== proposalModel
+			? `proposal resolved to "${proposalModel ?? "unknown"}" before arbitration selected "${finalModel}".`
+			: `using "${finalModel ?? proposalModel ?? "unknown"}".`;
+	return `[MODEL FALLBACK: skipped ${skippedModels.length} unavailable model(s); ${routeSummary}]\n${skipped}`;
 }
 
 export function prependModelFallbackSummary(
 	output: string,
 	skippedModels: SkippedFallbackModel[],
-	selectedModel: string | undefined,
+	proposalModel: string | undefined,
+	finalModel?: string,
 ): string {
-	const fallbackSummary = formatModelFallbackSummary(skippedModels, selectedModel);
+	const fallbackSummary = formatModelFallbackSummary(skippedModels, proposalModel, finalModel);
 	return fallbackSummary ? `${fallbackSummary}\n\n${output}` : output;
 }
 
@@ -1133,15 +1139,14 @@ export async function executeSingle(
 		};
 	}
 
+	const proposalModelId = Array.isArray(effectiveConfig.model) ? effectiveConfig.model[0] : effectiveConfig.model;
+	const proposalSelectedModel = proposalModelId ? canonicalModelRef(resolvedProvider, proposalModelId) : undefined;
 	let finalThinking = thinkingOverride;
 	let arbitrationEnabled = false;
 	if (arbitration) {
-		const proposedModelId = effectiveConfig.model?.toString() ?? "";
-		const proposedModel =
-			resolvedProvider && proposedModelId ? `${resolvedProvider}/${proposedModelId}` : proposedModelId;
 		const proposed: DispatchRoute = {
 			agent: name,
-			model: proposedModel,
+			model: proposalSelectedModel ?? "",
 			thinking: resolveEffectiveThinkingLevel(resolvedModel, thinkingOverride, arbitration.defaultThinkingLevel),
 		};
 		let arbitrationResult: DispatchArbitrationResult;
@@ -1268,8 +1273,6 @@ export async function executeSingle(
 			resolvedProvider = selectedModel.provider;
 			resolvedModel = selectedModel;
 			finalThinking = decision.thinking;
-			skippedModels = [];
-			warning = undefined;
 
 			try {
 				arbitration.onRecord({
@@ -1320,9 +1323,16 @@ export async function executeSingle(
 		onChildEvent,
 		finalThinking,
 	);
-	if (!arbitrationEnabled) {
-		result.output = prependModelFallbackSummary(result.output, skippedModels, result.model ?? usedModel);
-		if (warning) result.output = `[WARNING: ${warning}]\n\n${result.output}`;
+	const finalSelectedModel = result.model ?? (usedModel ? canonicalModelRef(resolvedProvider, usedModel) : undefined);
+	result.output = prependModelFallbackSummary(
+		result.output,
+		skippedModels,
+		arbitrationEnabled ? proposalSelectedModel : finalSelectedModel,
+		arbitrationEnabled ? finalSelectedModel : undefined,
+	);
+	if (warning) {
+		const warningContext = arbitrationEnabled ? `Proposal resolution: ${warning}` : warning;
+		result.output = `[WARNING: ${warningContext}]\n\n${result.output}`;
 	}
 	return result;
 }
