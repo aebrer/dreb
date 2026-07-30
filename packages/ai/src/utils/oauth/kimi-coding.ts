@@ -811,8 +811,11 @@ export const kimiCodingOAuthProvider: OAuthProviderInterface = {
 
 		// The official client treats only the explicit "anthropic" protocol as a
 		// separate wire format; absent and future values use the default Kimi route.
+		// `k3-256k` is the cheaper 256k wire variant of `k3`; dreb surfaces both
+		// through the single user-facing `k3` model (auto context tier), so it
+		// must not appear as a separate selectable model.
 		const supportedDiscovered = discovered.filter(
-			(info) => info.supports_tool_use !== false && info.protocol !== "anthropic",
+			(info) => info.supports_tool_use !== false && info.protocol !== "anthropic" && info.id !== "k3-256k",
 		);
 		const result: Model<Api>[] = [];
 		const seen = new Set<string>();

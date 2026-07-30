@@ -2814,6 +2814,16 @@ export class InteractiveMode {
 				}
 				break;
 			}
+
+			case "context_window_upgrade": {
+				// Auto context tier upgrade (e.g. Kimi K3 256k → 1M); cache is
+				// preserved server-side and no compaction occurred.
+				this.showStatus(
+					`${event.modelId} context window upgraded: ${Math.round(event.fromContextWindow / 1024)}k → ${Math.round(event.toContextWindow / 1048576)}M (cache preserved)`,
+				);
+				this.footer.invalidate();
+				break;
+			}
 		}
 	}
 

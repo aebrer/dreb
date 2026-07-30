@@ -346,6 +346,13 @@ export interface Model<TApi extends Api> {
 	contextWindow: number;
 	maxTokens: number;
 	headers?: Record<string, string>;
+	/**
+	 * Model identifier sent to the API when it differs from the registry id.
+	 * Used by context-tiered models such as Kimi K3, where dreb exposes a
+	 * single user-facing model (`k3`) but sends the cheaper 256k variant
+	 * (`k3-256k`) on the wire until the session context outgrows it.
+	 */
+	wireModelId?: string;
 	/** Explicit auth transport. When unset, the provider's default and token heuristics apply. */
 	authMode?: AuthMode;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
