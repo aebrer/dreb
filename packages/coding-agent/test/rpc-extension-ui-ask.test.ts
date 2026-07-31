@@ -206,11 +206,13 @@ describe("RPC ask batch round trip", () => {
 	});
 
 	it("cancels pending dialogs exactly once during RPC shutdown", async () => {
+		// Uses two non-serialized dialog types so both are concurrently pending;
+		// ask requests serialize (covered separately below).
 		const h = harness();
-		const first = h.ctx.ask({ questions: [{ question: "First?", options: ["a"] }] });
-		const firstId = h.lastRequestId();
-		const second = h.ctx.ask({ questions: [{ question: "Second?", options: ["b"] }] });
-		const secondId = h.lastRequestId();
+		const first = h.ctx.select("Pick", ["a", "b"]);
+		const firstId = h.emitted[0]!.id;
+		const second = h.ctx.input("Name");
+		const secondId = h.emitted[1]!.id;
 
 		cancelPendingRpcExtensionRequests(h.pending);
 
@@ -220,6 +222,54 @@ describe("RPC ask batch round trip", () => {
 		expect(h.handled).toEqual([firstId, secondId]);
 		cancelPendingRpcExtensionRequests(h.pending);
 		expect(h.handled).toEqual([firstId, secondId]);
+	});
+
+	it("serializes concurrent ask requests so only one wizard is pending at a time", async () => {
+		// Regression for the concurrent-ask hang: tool execution is parallel, so a
+		// turn can issue several ask_user calls at once. Only one ask request may be
+		// emitted at a time (mirroring the TUI's single-dialog queue) so the Dashboard,
+		// which renders a single pending ask, never leaves a question invisible/hung.
+		const h = harness();
+		const first = h.ctx.ask({ questions: [{ question: "First?", options: ["a"] }] });
+		expect(h.emitted).toHaveLength(1);
+		const firstId = h.emitted[0]!.id;
+
+		const second = h.ctx.ask({ questions: [{ question: "Second?", options: ["b"] }] });
+		// The second ask is queued and must NOT emit while the first is pending.
+		expect(h.emitted).toHaveLength(1);
+		expect(h.pending.size).toBe(1);
+
+		// Answering the first lets the queued second emit.
+		h.pending
+			.get(firstId)!
+			.resolve({ type: "extension_ui_response", id: firstId, answers: [{ selected: ["a"] }] } as any);
+		await first;
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(h.emitted).toHaveLength(2);
+		const secondId = h.emitted[1]!.id;
+		expect(secondId).not.toBe(firstId);
+
+		h.pending
+			.get(secondId)!
+			.resolve({ type: "extension_ui_response", id: secondId, answers: [{ selected: ["b"] }] } as any);
+		await expect(second).resolves.toEqual({ answers: [{ selected: ["b"], customText: undefined, skipped: false }] });
+	});
+
+	it("settles a queued concurrent ask without emitting when the turn signal aborts", async () => {
+		const h = harness();
+		const controller = new AbortController();
+		const first = h.ctx.ask({ questions: [{ question: "First?", options: ["a"] }] }, { signal: controller.signal });
+		const second = h.ctx.ask({ questions: [{ question: "Second?", options: ["b"] }] }, { signal: controller.signal });
+		expect(h.emitted).toHaveLength(1); // second is queued behind the first
+
+		controller.abort(); // turn stop / shutdown aborts the shared signal
+
+		await expect(first).resolves.toBeUndefined();
+		await expect(second).resolves.toBeUndefined();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// The queued second never emitted — no orphaned request, no hang.
+		expect(h.emitted).toHaveLength(1);
+		expect(h.pending.size).toBe(0);
 	});
 
 	it("resolves undefined on timeout and emits the handled event", async () => {

@@ -1228,6 +1228,88 @@ describe("screen smoke tests", () => {
 		expect(activePanel?.textContent).toContain("Second body");
 	});
 
+	it("ask_user wizard: ArrowRight/ArrowLeft/Tab navigate tabs with wrap-around", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-kbnav");
+		session.uiRequests = [
+			{
+				id: "kbnav",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First body", title: "Alpha", options: ["A", "B"] },
+					{ question: "Second body", title: "Beta", options: ["C", "D"] },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-kbnav": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-kbnav" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Tabs: [question 0, question 1, Submit/review] → indices 0,1,2.
+		const activeIndex = () =>
+			[...el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab")].findIndex(
+				(t) => t.getAttribute("aria-selected") === "true",
+			);
+		const key = async (k: string) => {
+			window.dispatchEvent(new KeyboardEvent("keydown", { key: k }));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		};
+
+		expect(activeIndex()).toBe(0);
+		await key("ArrowRight");
+		expect(activeIndex()).toBe(1);
+		await key("ArrowRight");
+		expect(activeIndex()).toBe(2); // Submit/review tab
+		await key("ArrowRight");
+		expect(activeIndex()).toBe(0); // wraps forward past the review tab
+		await key("ArrowLeft");
+		expect(activeIndex()).toBe(2); // wraps backward to the review tab
+		await key("Tab");
+		expect(activeIndex()).toBe(0); // Tab advances and wraps
+	});
+
+	it("ask_user wizard: digit/Enter typed into a text field do not toggle options or submit", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-defer");
+		session.uiRequests = [
+			{
+				id: "defer",
+				method: "ask",
+				title: "Setup",
+				questions: [{ question: "Pick one", title: "Solo", options: ["A", "B"], multiline: true }],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-defer": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-defer" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const textarea = el.querySelector<HTMLTextAreaElement>(".ask-custom-field textarea");
+		expect(textarea).not.toBeNull();
+
+		// A digit typed into the free-text field must NOT toggle option 2.
+		textarea?.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const options = el.querySelectorAll<HTMLInputElement>(".ask-option input");
+		expect([...options].some((o) => o.checked)).toBe(false);
+
+		// Enter inside the textarea must NOT submit the single-question wizard.
+		textarea?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+	});
+
 	it("ask_user wizard: digit keys toggle options and Submit all sends one answer per question", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-digits");

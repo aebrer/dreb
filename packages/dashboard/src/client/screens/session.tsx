@@ -299,7 +299,9 @@ function AskWizard(props: {
 			return;
 		}
 		if (hasReview() && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Tab")) {
-			if (isTextEntryTarget(event) && event.key === "Tab") return;
+			// Never hijack navigation keys while a text field is focused: arrows must
+			// move the caret and Tab must do its normal thing, not switch wizard tabs.
+			if (isTextEntryTarget(event)) return;
 			const last = count();
 			const delta = event.key === "ArrowLeft" ? -1 : 1;
 			event.preventDefault();

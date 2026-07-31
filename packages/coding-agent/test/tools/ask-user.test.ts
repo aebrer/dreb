@@ -327,4 +327,31 @@ describe("ask_user tool", () => {
 		);
 		expect(result).toBeDefined();
 	});
+
+	it("renders multi-question call label and per-batch result summary", () => {
+		const def = createAskUserToolDefinition();
+		const call = def.renderCall?.(
+			{ questions: [{ question: "A?" }, { question: "B?" }] } as any,
+			mockTheme as any,
+			{ lastComponent: undefined } as any,
+		);
+		expect(call?.render(80).join("\n")).toContain("2 questions");
+
+		const result = def.renderResult?.(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: {
+					answers: [
+						{ question: "A?", selected: ["x"], skipped: false },
+						{ question: "B?", selected: [], skipped: true },
+					],
+					unavailable: false,
+				},
+			} as any,
+			{} as any,
+			mockTheme as any,
+			{ lastComponent: undefined } as any,
+		);
+		expect(result?.render(80).join("\n")).toContain("answered 1 of 2");
+	});
 });

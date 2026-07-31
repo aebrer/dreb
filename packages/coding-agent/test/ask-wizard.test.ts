@@ -94,6 +94,16 @@ describe("AskWizardComponent", () => {
 			component.handleInput(ENTER);
 			expect(onSubmit).toHaveBeenCalledTimes(1);
 		});
+
+		it("empty Enter on a single field-only question submits one skipped answer (does not stop)", () => {
+			// A field-only question (no options) has nothing selected; pressing Enter
+			// with the field empty submits the batch with that question skipped rather
+			// than being a no-op or stopping the turn.
+			const { component, onSubmit, onStop } = mount({ questions: [{ question: "Anything else?" }] });
+			component.handleInput(ENTER);
+			expect(onSubmit).toHaveBeenCalledWith({ answers: [{ selected: [], skipped: true }] });
+			expect(onStop).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("multiple questions (tabbed)", () => {
@@ -228,6 +238,16 @@ describe("AskWizardComponent", () => {
 			component.handleInput(RIGHT); // -> tab 1
 			expect(stripAnsi(component.render(80).join("\n"))).toContain("Which checks?");
 			component.handleInput(LEFT); // -> tab 0
+			expect(stripAnsi(component.render(80).join("\n"))).toContain("Pick a DB");
+		});
+
+		it("←/→ do NOT switch tabs while the cursor is on the free-text field", () => {
+			const { component } = mount(twoQuestions);
+			component.handleInput(DOWN); // -> Postgres
+			component.handleInput(DOWN); // -> free-text field row
+			component.handleInput(RIGHT); // should edit the field, not switch tabs
+			expect(stripAnsi(component.render(80).join("\n"))).toContain("Pick a DB");
+			component.handleInput(LEFT);
 			expect(stripAnsi(component.render(80).join("\n"))).toContain("Pick a DB");
 		});
 	});
