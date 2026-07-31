@@ -565,6 +565,7 @@ global, npm global prefix). Discover them:
 ```bash
 command -v node                         # → /opt/homebrew/bin/node
 realpath "$(command -v dreb-dashboard)"   # → /opt/homebrew/lib/node_modules/@dreb/dashboard/dist/index.js
+# If `realpath` is not found, install coreutils: brew install coreutils
 ```
 
 Replace `/ABSOLUTE/PATH/TO/node` and `/ABSOLUTE/PATH/TO/@dreb/dashboard/dist/index.js`

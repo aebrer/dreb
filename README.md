@@ -187,7 +187,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now dreb-dashboard
 ```
 
-For auto-restart on macOS, create a LaunchAgent. Launchd runs with a minimal `PATH`, so invoke `node` directly on the resolved entry point (use `command -v node` and `realpath "$(command -v dreb-dashboard)"` — paths vary by install method):
+For auto-restart on macOS, create a LaunchAgent. Launchd runs with a minimal `PATH`, so invoke `node` directly on the resolved entry point (use `command -v node` and `realpath "$(command -v dreb-dashboard)"` — paths vary by install method; if `realpath` is not found, `brew install coreutils`):
 
 Save as `~/Library/LaunchAgents/com.dreb.dashboard.plist`:
 
