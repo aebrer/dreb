@@ -185,6 +185,8 @@ function ExtensionUiModal(props: {
 function AskUiInline(props: {
 	request: ExtensionUiRequest;
 	onRespond: (response: Record<string, unknown>) => void;
+	onStop: () => void;
+	stopping: boolean;
 }): JSX.Element {
 	const options = () => props.request.options ?? [];
 	const allowFreeText = () => props.request.allowFreeText !== false;
@@ -212,13 +214,17 @@ function AskUiInline(props: {
 	const submit = () => {
 		if (canSubmit()) respond(answer());
 	};
-	const skip = () => respond({ cancelled: true });
+	const stop = () => {
+		if (!props.stopping) props.onStop();
+	};
 
-	// Escape-to-skip, matching the TUI. A skip is always safe.
+	// Escape stops the whole agent turn, matching the explicit action in this
+	// card and keeping cancellation accessible when the mobile layout obscures
+	// the dock-level stop control.
 	const onKeyDown = (event: KeyboardEvent) => {
 		if (event.key === "Escape") {
 			event.preventDefault();
-			skip();
+			stop();
 		}
 	};
 	onMount(() => window.addEventListener("keydown", onKeyDown));
@@ -244,7 +250,7 @@ function AskUiInline(props: {
 			if (next <= 0) {
 				if (interval !== undefined) clearInterval(interval);
 				interval = undefined;
-				skip();
+				stop();
 			}
 		};
 		onMount(() => {
@@ -261,7 +267,7 @@ function AskUiInline(props: {
 			<header class="ask-inline-header">
 				{props.request.title}
 				<Show when={expiresAt !== undefined}>
-					<span class="ask-inline-countdown"> (auto-skips in {remaining()}s)</span>
+					<span class="ask-inline-countdown"> (auto-stops in {remaining()}s)</span>
 				</Show>
 			</header>
 			<Show when={props.request.question}>
@@ -312,8 +318,8 @@ function AskUiInline(props: {
 				</div>
 			</Show>
 			<div class="ask-inline-actions">
-				<button type="button" class="btn btn-small" onClick={skip}>
-					skip
+				<button type="button" class="btn btn-small btn-danger" disabled={props.stopping} onClick={stop}>
+					{props.stopping ? "stopping…" : "■ stop agent"}
 				</button>
 				<button type="button" class="btn btn-small btn-primary" disabled={!canSubmit()} onClick={submit}>
 					submit
@@ -1335,7 +1341,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						<Show when={session()!.uiRequests[0]} keyed>
 							{(request) => (
 								<Show when={request.method === "ask"}>
-									<AskUiInline request={request} onRespond={respondToUiRequest} />
+									<AskUiInline
+										request={request}
+										onRespond={respondToUiRequest}
+										onStop={() => void abort()}
+										stopping={stopping()}
+									/>
 								</Show>
 							)}
 						</Show>

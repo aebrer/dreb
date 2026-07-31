@@ -1097,6 +1097,7 @@ export interface PendingRpcExtensionRequest {
 export function createRpcExtensionUIContext(
 	output: (obj: RpcResponse | RpcExtensionUIRequest | object) => void,
 	pendingExtensionRequests: Map<string, PendingRpcExtensionRequest>,
+	onAskStop: () => void = () => {},
 ): ExtensionUIContext {
 	/** Helper for dialog methods with signal/timeout support */
 	function createDialogPromise<T>(
@@ -1104,6 +1105,7 @@ export function createRpcExtensionUIContext(
 		defaultValue: T,
 		request: Record<string, unknown>,
 		parseResponse: (response: RpcExtensionUIResponse) => T,
+		onTimeout?: () => void,
 	): Promise<T> {
 		if (opts?.signal?.aborted) return Promise.resolve(defaultValue);
 
@@ -1131,6 +1133,7 @@ export function createRpcExtensionUIContext(
 			if (opts?.timeout) {
 				timeoutId = setTimeout(() => {
 					if (!cleanup()) return;
+					onTimeout?.();
 					resolve(defaultValue);
 				}, opts.timeout);
 			}
@@ -1197,7 +1200,10 @@ export function createRpcExtensionUIContext(
 					expiresAt: opts?.timeout ? Date.now() + opts.timeout : undefined,
 				},
 				(response) => {
-					if ("cancelled" in response && response.cancelled) return undefined;
+					if ("cancelled" in response && response.cancelled) {
+						onAskStop();
+						return undefined;
+					}
 					const selected = (response as { selected?: unknown }).selected;
 					const customText = (response as { customText?: unknown }).customText;
 					if (!Array.isArray(selected) || !selected.every((value) => typeof value === "string")) {
@@ -1206,8 +1212,13 @@ export function createRpcExtensionUIContext(
 					if (customText !== undefined && typeof customText !== "string") {
 						throw new Error("Invalid RPC ask response: customText must be a string");
 					}
+					if (selected.length === 0 && !customText?.trim()) {
+						onAskStop();
+						return undefined;
+					}
 					return { selected, customText };
 				},
+				onAskStop,
 			),
 
 		notify(message: string, type?: "info" | "warning" | "error"): void {
@@ -1394,7 +1405,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	// Extension UI context uses the RPC protocol; built by a module-scope
 	// factory so the dialog round trip is unit-testable (see createRpcExtensionUIContext).
 	const createExtensionUIContext = (): ExtensionUIContext =>
-		createRpcExtensionUIContext(output, pendingExtensionRequests);
+		createRpcExtensionUIContext(output, pendingExtensionRequests, () => void session.abort());
 
 	// Set up extensions with RPC-based UI context
 	await session.bindExtensions({

@@ -105,8 +105,8 @@ export interface AskRequest {
 }
 
 /**
- * The user's answer to an {@link AskRequest}. A cancelled/skipped/timed-out
- * question resolves to `undefined` instead of an {@link AskResult}.
+ * The user's answer to an {@link AskRequest}. Stopping or timing out the
+ * question stops the current agent turn and resolves to `undefined`.
  */
 export interface AskResult {
 	/** Options the user selected (empty when only free text was provided). */
@@ -144,7 +144,7 @@ export interface ExtensionUIContext {
 	/**
 	 * Show a rich question with suggested options, optional free text, and
 	 * single- or multi-select. Resolves to the user's answer, or `undefined`
-	 * when the question is skipped, cancelled, or times out.
+	 * while stopping the current agent turn when dismissed or timed out.
 	 */
 	ask(request: AskRequest, opts?: ExtensionUIDialogOptions): Promise<AskResult | undefined>;
 

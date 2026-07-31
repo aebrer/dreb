@@ -164,9 +164,9 @@ export default function (dreb: ExtensionAPI) {
 
     // ctx.ui.ask — a rich clarifying question with options + free text,
     // rendered natively in the TUI and Dashboard (and over RPC). Resolves to
-    // { selected: string[], customText?: string }, or undefined when skipped,
-    // cancelled, or timed out. This is the same primitive that powers the
-    // built-in `ask_user` tool.
+    // { selected: string[], customText?: string }. Dismissing or timing out an
+    // ask stops the current agent turn and resolves undefined. This is the same
+    // primitive that powers the built-in `ask_user` tool.
     const answer = await ctx.ui.ask(
       {
         title: "Choose a database",
@@ -179,7 +179,7 @@ export default function (dreb: ExtensionAPI) {
       { signal, timeout: 60000 }, // both optional; absent user never deadlocks
     );
     if (!answer) {
-      // user skipped / cancelled / timed out — continue gracefully
+      // The ask was dismissed or timed out; the current agent turn is stopping.
     }
   });
 
@@ -613,7 +613,7 @@ In the default parallel tool execution mode, sibling tool calls from the same as
 import { isToolCallEventType } from "@dreb/coding-agent";
 
 dreb.on("tool_call", async (event, ctx) => {
-  // event.toolName - "bash", "read", "write", "edit", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "wait", "search", "skill", "tasks_update", "suggest_next", or custom tool names
+  // event.toolName - "bash", "read", "write", "edit", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "wait", "search", "ask_user", "skill", "tasks_update", "suggest_next", or custom tool names
   // event.toolCallId
   // event.input - tool parameters
 
@@ -1518,7 +1518,7 @@ async execute(toolCallId, params) {
 
 ### Overriding Built-in Tools
 
-Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `search`) by registering a tool with the same name. Interactive mode displays a warning when this happens. The factory-only tools (`skill`, `tasks_update`, `suggest_next`) can also be overridden.
+Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `search`, `ask_user`) by registering a tool with the same name. Interactive mode displays a warning when this happens. The factory-only tools (`skill`, `tasks_update`, `suggest_next`) can also be overridden.
 
 ```bash
 # Extension's read tool replaces built-in read
@@ -1802,8 +1802,8 @@ const ok = await ctx.ui.confirm("Delete?", "This cannot be undone");
 // Text input
 const name = await ctx.ui.input("Name:", "placeholder");
 
-// Rich question: question text supports Markdown, options and free text can be
-// combined, and undefined means skipped
+// Rich question: question text supports Markdown and options can be combined
+// with free text. Dismissal stops the current agent turn and returns undefined.
 const answer = await ctx.ui.ask({
   title: "Choose a database",
   question: "Which persistence strategy should I use?",
@@ -1841,7 +1841,7 @@ if (confirmed) {
 - `select()` returns `undefined`
 - `confirm()` returns `false`
 - `input()` returns `undefined`
-- `ask()` returns `undefined`
+- `ask()` returns `undefined` and stops the current agent turn
 
 #### Manual Dismissal with AbortSignal
 

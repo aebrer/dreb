@@ -17,18 +17,19 @@ function harness() {
 	const emitted: RpcExtensionUIRequest[] = [];
 	const handled: string[] = [];
 	const pending = new Map<string, PendingRpcExtensionRequest>();
+	const onAskStop = vi.fn();
 	const output = (obj: any) => {
 		if (obj?.type === "extension_ui_request") emitted.push(obj as RpcExtensionUIRequest);
 		else if (obj?.type === "extension_ui_response_handled") handled.push(obj.id as string);
 	};
-	const ctx = createRpcExtensionUIContext(output, pending);
+	const ctx = createRpcExtensionUIContext(output, pending, onAskStop);
 	// The only emitted request in these tests is the ask, so its id is the map key.
 	const lastRequestId = () => emitted[emitted.length - 1]!.id;
 	const respond = (response: Omit<RpcExtensionUIResponse, "id" | "type">) => {
 		const id = lastRequestId();
 		pending.get(id)?.resolve({ type: "extension_ui_response", id, ...response } as RpcExtensionUIResponse);
 	};
-	return { ctx, emitted, handled, pending, lastRequestId, respond };
+	return { ctx, emitted, handled, pending, onAskStop, lastRequestId, respond };
 }
 
 describe("RPC ask round trip", () => {
@@ -106,12 +107,24 @@ describe("RPC ask round trip", () => {
 		expect(result).toEqual({ selected: ["b"], customText: "duckdb" });
 	});
 
-	it("maps a cancelled response to undefined (skip)", async () => {
+	it("stops the agent when the host cancels an ask response", async () => {
 		const h = harness();
 		const p = h.ctx.ask({ question: "Which?", options: ["a"] });
 		h.respond({ cancelled: true } as any);
 		await expect(p).resolves.toBeUndefined();
+		expect(h.onAskStop).toHaveBeenCalledTimes(1);
 	});
+
+	it.each([{ selected: [] }, { selected: [], customText: "   " }])(
+		"stops the agent when the host sends an empty ask response: %o",
+		async (response) => {
+			const h = harness();
+			const p = h.ctx.ask({ question: "Which?", options: ["a"] });
+			h.respond(response as any);
+			await expect(p).resolves.toBeUndefined();
+			expect(h.onAskStop).toHaveBeenCalledTimes(1);
+		},
+	);
 
 	it.each([
 		{ selected: null },
@@ -199,6 +212,7 @@ describe("RPC ask round trip", () => {
 			await expect(p).resolves.toBeUndefined();
 			expect(h.handled).toEqual([id]);
 			expect(h.pending.has(id)).toBe(false);
+			expect(h.onAskStop).toHaveBeenCalledTimes(1);
 		} finally {
 			vi.useRealTimers();
 		}
