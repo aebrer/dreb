@@ -329,6 +329,68 @@ function AskUiInline(props: {
 	);
 }
 
+/**
+ * Render one or more pending `ask_user` questions. With `askUserMode: "tabbed"`
+ * multiple questions can be open concurrently; each is a switchable tab. Every
+ * question stays mounted so its typed answer, selection, and countdown persist
+ * while another tab is active. In `"sequential"` mode there is only ever one
+ * pending question, so no tab strip is shown.
+ */
+function AskUiTabs(props: {
+	requests: ExtensionUiRequest[];
+	onRespond: (response: Record<string, unknown>) => void;
+	onStop: () => void;
+	stopping: boolean;
+}): JSX.Element {
+	const [activeId, setActiveId] = createSignal<string | undefined>(undefined);
+	const active = () => {
+		const current = props.requests.find((r) => r.id === activeId());
+		return current ?? props.requests[0];
+	};
+	// Keep a valid active tab as questions arrive and resolve: when the active
+	// one is answered/removed, fall back to the first remaining question.
+	createEffect(() => {
+		if (!props.requests.some((r) => r.id === activeId())) {
+			setActiveId(props.requests[0]?.id);
+		}
+	});
+
+	return (
+		<div class="ask-tabs">
+			<Show when={props.requests.length > 1}>
+				<div class="ask-tab-strip" role="tablist" aria-label="pending questions">
+					<For each={props.requests}>
+						{(request, index) => (
+							<button
+								type="button"
+								role="tab"
+								class="ask-tab"
+								aria-selected={active()?.id === request.id}
+								classList={{ selected: active()?.id === request.id }}
+								onClick={() => setActiveId(request.id)}
+							>
+								{index() + 1}. {request.title}
+							</button>
+						)}
+					</For>
+				</div>
+			</Show>
+			<For each={props.requests}>
+				{(request) => (
+					<div classList={{ "ask-tab-panel": true, hidden: active()?.id !== request.id }}>
+						<AskUiInline
+							request={request}
+							onRespond={props.onRespond}
+							onStop={props.onStop}
+							stopping={props.stopping}
+						/>
+					</div>
+				)}
+			</For>
+		</div>
+	);
+}
+
 function LoadedContextModal(props: { resources?: ResourcesDto; error?: string; onClose: () => void }): JSX.Element {
 	const section = (title: string, items: JSX.Element[]) => (
 		<section class="context-section">
@@ -1338,17 +1400,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							resetKey={props.sessionKey}
 							imageScope={{ runtimeKey: props.sessionKey }}
 						/>
-						<Show when={session()!.uiRequests[0]} keyed>
-							{(request) => (
-								<Show when={request.method === "ask"}>
-									<AskUiInline
-										request={request}
-										onRespond={respondToUiRequest}
-										onStop={() => void abort()}
-										stopping={stopping()}
-									/>
-								</Show>
-							)}
+						<Show when={session()!.uiRequests.filter((r) => r.method === "ask").length > 0}>
+							<AskUiTabs
+								requests={session()!.uiRequests.filter((r) => r.method === "ask")}
+								onRespond={respondToUiRequest}
+								onStop={() => void abort()}
+								stopping={stopping()}
+							/>
 						</Show>
 						<For each={session()!.widgets.below}>{(line) => <div class="widget-block">{line}</div>}</For>
 					</Show>
@@ -1722,13 +1780,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</Show>
 			</footer>
 
-			<Show when={session()?.uiRequests[0]} keyed>
+			<Show when={session()?.uiRequests.find((r) => r.method !== "ask")} keyed>
 				{(request) => (
-					// ask_user renders inline in the transcript (see .chat-inner); only
-					// the other extension UI methods use a blocking modal overlay.
-					<Show when={request.method !== "ask"}>
-						<ExtensionUiModal request={request} onRespond={respondToUiRequest} />
-					</Show>
+					// ask_user renders inline in the transcript (see .chat-inner) and,
+					// in tabbed mode, as concurrent tabs; only the other extension UI
+					// methods use a blocking modal overlay (still one at a time).
+					<ExtensionUiModal request={request} onRespond={respondToUiRequest} />
 				)}
 			</Show>
 

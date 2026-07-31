@@ -513,6 +513,8 @@ describe("InteractiveMode extension dialog queue", () => {
 		const showExtensionAsk = vi.fn(async () => ({ selected: ["yes"] }));
 		const fakeThis: any = {
 			extensionDialogQueue: Promise.resolve(),
+			extensionDialogActive: 0,
+			session: { askUserMode: "sequential" },
 			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
 			showExtensionSelector,
 			showExtensionAsk,
@@ -543,6 +545,8 @@ describe("InteractiveMode extension dialog queue", () => {
 		const showExtensionAsk = vi.fn(async (request: { question: string }) => ({ selected: [request.question] }));
 		const fakeThis: any = {
 			extensionDialogQueue: Promise.resolve(),
+			extensionDialogActive: 0,
+			session: { askUserMode: "sequential" },
 			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
 			showExtensionSelector,
 			showExtensionAsk,
@@ -568,6 +572,35 @@ describe("InteractiveMode extension dialog queue", () => {
 		await expect(laterAsk).resolves.toEqual({ selected: ["later"] });
 		expect(showExtensionAsk).toHaveBeenCalledTimes(1);
 		expect(showExtensionAsk).toHaveBeenCalledWith({ question: "later" }, undefined);
+	});
+
+	test("tabbed mode routes ask to the concurrent tab host, bypassing the single-slot queue", async () => {
+		// A selector holds the single-slot dialog queue open forever; in tabbed
+		// mode an ask must NOT wait behind it — it opens concurrently via the tab
+		// host instead of showExtensionAsk.
+		const showExtensionSelector = vi.fn(() => new Promise<string | undefined>(() => {}));
+		const showExtensionAsk = vi.fn(async () => ({ selected: ["queued"] }));
+		const showTabbedAsk = vi.fn(async () => ({ selected: ["tabbed"] }));
+		const fakeThis: any = {
+			extensionDialogQueue: Promise.resolve(),
+			extensionDialogActive: 0,
+			session: { askUserMode: "tabbed" },
+			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
+			showExtensionSelector,
+			showExtensionAsk,
+			showTabbedAsk,
+		};
+		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
+
+		uiContext.select("First", ["a", "b"]); // occupies the queue indefinitely
+		const ask = uiContext.ask({ question: "Concurrent?", options: ["yes", "no"] });
+		await Promise.resolve();
+
+		// The ask resolved via the tab host without waiting on the selector, and
+		// the serialized single-slot ask path was never used.
+		await expect(ask).resolves.toEqual({ selected: ["tabbed"] });
+		expect(showTabbedAsk).toHaveBeenCalledTimes(1);
+		expect(showExtensionAsk).not.toHaveBeenCalled();
 	});
 });
 

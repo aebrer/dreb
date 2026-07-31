@@ -1138,6 +1138,82 @@ describe("screen smoke tests", () => {
 		);
 	});
 
+	it("tabbed ask_user: renders one switchable tab per concurrent question, showing only the active panel", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-tabs");
+		session.uiRequests = [
+			{ id: "t1", method: "ask", title: "First question", question: "Q one?", options: ["A", "B"] },
+			{ id: "t2", method: "ask", title: "Second question", question: "Q two?", options: ["C", "D"] },
+			{ id: "t3", method: "ask", title: "Third question", question: "Q three?", options: ["E", "F"] },
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-tabs": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-tabs" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// A tab strip with one button per pending question.
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		expect(tabs.length).toBe(3);
+		expect(tabs[0].textContent).toContain("First question");
+		expect(tabs[2].textContent).toContain("Third question");
+
+		// All three question cards are mounted (so their state/countdown persist)
+		// but only the active one is visible.
+		const panels = el.querySelectorAll(".ask-tab-panel");
+		expect(panels.length).toBe(3);
+		const visible = [...panels].filter((p) => !p.classList.contains("hidden"));
+		expect(visible.length).toBe(1);
+	});
+
+	it("tabbed ask_user: clicking a tab switches the active question", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-switch");
+		session.uiRequests = [
+			{ id: "s1", method: "ask", title: "Alpha", question: "First body", options: ["A", "B"] },
+			{ id: "s2", method: "ask", title: "Beta", question: "Second body", options: ["C", "D"] },
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-switch": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-switch" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab");
+		// First question active by default.
+		expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+		let activePanel = [...el.querySelectorAll(".ask-tab-panel")].find((p) => !p.classList.contains("hidden"));
+		expect(activePanel?.textContent).toContain("First body");
+
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+		activePanel = [...el.querySelectorAll(".ask-tab-panel")].find((p) => !p.classList.contains("hidden"));
+		expect(activePanel?.textContent).toContain("Second body");
+	});
+
+	it("tabbed ask_user: no tab strip is shown for a single pending question", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-one");
+		session.uiRequests = [{ id: "o1", method: "ask", title: "Solo", question: "Only one?", options: ["A", "B"] }];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-one": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-one" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(el.querySelector(".ask-tab-strip")).toBeNull();
+		expect(el.querySelector(".ask-inline")).not.toBeNull();
+	});
+
 	it("ask_user dialog: single-select keeps stop-agent accessible in the mobile question card", async () => {
 		stubMobile(true);
 		const store = makeStore() as any;

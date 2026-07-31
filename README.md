@@ -74,7 +74,7 @@ bunx --force dreb
 
 ### Tools and interaction
 
-dreb ships with 13 built-in tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `search` (semantic codebase search), and `ask_user` (pause and ask the user a structured multiple-choice or free-text question with Markdown-formatted question text and an in-card Stop agent action, rendered natively in the TUI and Dashboard). Two more tools are always active: `skill` for loading workflows, and `tasks_update` for visible task tracking. `suggest_next` (ghost text command suggestions, Tab to accept) is active by default but excluded when `--tools` is specified.
+dreb ships with 13 built-in tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `search` (semantic codebase search), and `ask_user` (pause and ask the user a structured multiple-choice or free-text question with Markdown-formatted question text and an in-card Stop agent action, rendered natively in the TUI and Dashboard, with an optional `askUserMode: "tabbed"` for surfacing concurrent questions as switchable tabs). Two more tools are always active: `skill` for loading workflows, and `tasks_update` for visible task tracking. `suggest_next` (ghost text command suggestions, Tab to accept) is active by default but excluded when `--tools` is specified.
 
 Interactive mode adds slash commands such as `/model`, `/settings`, `/resume`, `/tree`, `/fork`, `/compact`, `/dream`, `/buddy`, `/export`, `/reload`, and `/hotkeys`. The message queue lets you steer a running agent or queue follow-up work without waiting for the current turn to finish.
 

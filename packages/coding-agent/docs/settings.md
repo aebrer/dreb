@@ -262,7 +262,7 @@ Only host-validated decision metadata is persisted/emitted. Raw arbiter prompts,
 |---------|------|---------|-------------|
 | `steeringMode` | string | `"one-at-a-time"` | How steering messages are sent: `"all"` or `"one-at-a-time"` |
 | `followUpMode` | string | `"one-at-a-time"` | How follow-up messages are sent: `"all"` or `"one-at-a-time"` |
-| `askUserMode` | string | `"sequential"` | How concurrent `ask_user` questions are surfaced: `"sequential"` (strict one-at-a-time FIFO) or `"tabbed"` (multiple questions open concurrently as switchable tabs) |
+| `askUserMode` | string | `"sequential"` | How concurrent `ask_user` questions are surfaced: `"sequential"` (strict one-at-a-time FIFO) or `"tabbed"` (multiple questions open concurrently as switchable tabs — `Tab`/`Shift+Tab` in the TUI, a tab strip in the Dashboard; each keeps its own countdown and resolves independently) |
 | `transport` | string | `"sse"` | Preferred transport for providers that support multiple transports: `"sse"`, `"websocket"`, or `"auto"` |
 
 ### Terminal & Images

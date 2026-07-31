@@ -459,6 +459,18 @@ export function updateAttention(state: SessionViewState): void {
 		!!state.suggestedCommand;
 }
 
+/**
+ * Human-readable attention reason for pending questions, reflecting ALL pending
+ * `ask_user` requests rather than just the first. Returns `undefined` when none
+ * are pending so callers can fall back to other attention sources (errors etc.).
+ * With `askUserMode: "tabbed"` several questions can be pending at once.
+ */
+export function pendingQuestionsReason(requests: readonly ExtensionUiRequest[]): string | undefined {
+	if (requests.length === 0) return undefined;
+	if (requests.length === 1) return `waiting for input — ${requests[0].title}`;
+	return `waiting for input — ${requests.length} questions`;
+}
+
 const PROVIDER_ERROR_STATUS_KEY = "provider-error";
 
 function clearProviderErrorState(state: SessionViewState): void {

@@ -2225,6 +2225,51 @@ details.thinking .thinking-body {
 	background: color-mix(in srgb, var(--status-attention) 6%, var(--surface, transparent));
 }
 
+/* Tabbed ask_user host (askUserMode: "tabbed") — a strip of switchable pending
+   questions above the active question card. Only shown with 2+ questions. */
+.ask-tabs {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	margin: var(--space-3) 0;
+}
+
+.ask-tab-strip {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+}
+
+.ask-tab {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--muted);
+	padding: 2px var(--space-2);
+	cursor: pointer;
+	font-family: inherit;
+	font-size: var(--fs-small);
+	max-width: 22ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ask-tab.selected {
+	border-left: 3px solid var(--status-attention);
+	background: color-mix(in srgb, var(--status-attention) 12%, var(--surface, transparent));
+	color: var(--text);
+}
+
+.ask-tab-panel.hidden {
+	display: none;
+}
+
+/* The active question inside the tab host owns the outer margin from .ask-tabs. */
+.ask-tabs .ask-inline {
+	margin: 0;
+}
+
 .ask-inline-header {
 	font-weight: 600;
 	color: var(--text);

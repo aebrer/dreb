@@ -3,8 +3,10 @@ import {
 	applySessionEvent,
 	createSessionViewState,
 	dismissToast,
+	type ExtensionUiRequest,
 	MAX_COMPLETED_BACKGROUND_AGENTS,
 	messagesToEntries,
+	pendingQuestionsReason,
 	resolveUiRequest,
 } from "../src/client/state/reducer.js";
 import type { BackgroundAgentDto } from "../src/shared/protocol.js";
@@ -946,6 +948,24 @@ describe("applySessionEvent — session-level events", () => {
 	});
 });
 
+describe("pendingQuestionsReason", () => {
+	const ask = (id: string, title: string): ExtensionUiRequest => ({ id, method: "ask", title });
+
+	it("returns undefined when nothing is pending", () => {
+		expect(pendingQuestionsReason([])).toBeUndefined();
+	});
+
+	it("names the single pending question", () => {
+		expect(pendingQuestionsReason([ask("a1", "Choose a database")])).toBe("waiting for input — Choose a database");
+	});
+
+	it("summarizes the count when multiple questions are pending (tabbed mode)", () => {
+		expect(pendingQuestionsReason([ask("a1", "One"), ask("a2", "Two"), ask("a3", "Three")])).toBe(
+			"waiting for input — 3 questions",
+		);
+	});
+});
+
 describe("applySessionEvent — extension UI", () => {
 	it("blocking requests queue as modals; resolveUiRequest dismisses; attention follows", () => {
 		const state = makeState();
@@ -954,6 +974,23 @@ describe("applySessionEvent — extension UI", () => {
 		expect(state.needsAttention).toBe(true);
 
 		resolveUiRequest(state, "u1");
+		expect(state.uiRequests).toHaveLength(0);
+		expect(state.needsAttention).toBe(false);
+	});
+
+	it("keeps concurrent ask requests independent; resolving one removes only that request (tabbed mode)", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "extension_ui_request", id: "a1", method: "ask", title: "First" });
+		applySessionEvent(state, { type: "extension_ui_request", id: "a2", method: "ask", title: "Second" });
+		applySessionEvent(state, { type: "extension_ui_request", id: "a3", method: "ask", title: "Third" });
+		expect(state.uiRequests.map((r) => r.id)).toEqual(["a1", "a2", "a3"]);
+
+		resolveUiRequest(state, "a2");
+		expect(state.uiRequests.map((r) => r.id)).toEqual(["a1", "a3"]);
+		expect(state.needsAttention).toBe(true);
+
+		resolveUiRequest(state, "a1");
+		resolveUiRequest(state, "a3");
 		expect(state.uiRequests).toHaveLength(0);
 		expect(state.needsAttention).toBe(false);
 	});
