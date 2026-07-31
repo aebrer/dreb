@@ -2014,7 +2014,7 @@ Expected response: `extension_ui_response` with `value` (the edited text) or `ca
 
 #### ask
 
-Ask the user a rich clarifying question with optional single- or multi-select options and an optional free-text field. This powers the built-in `ask_user` tool. `options` (2-4) is optional; `allowFreeText` (default `true`), `multiSelect`, and `multiline` are optional booleans.
+Ask the user a rich clarifying question with optional single- or multi-select options and an optional free-text field. This powers the built-in `ask_user` tool. `options` (2-4 nonblank strings) is optional; `allowFreeText` (default `true`), `multiSelect`, and `multiline` are optional booleans.
 
 ```json
 {

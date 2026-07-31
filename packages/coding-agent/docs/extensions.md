@@ -1802,6 +1802,14 @@ const ok = await ctx.ui.confirm("Delete?", "This cannot be undone");
 // Text input
 const name = await ctx.ui.input("Name:", "placeholder");
 
+// Rich question: options and free text can be combined; undefined means skipped
+const answer = await ctx.ui.ask({
+  title: "Choose a database",
+  question: "Which persistence strategy should I use?",
+  options: ["SQLite", "PostgreSQL"],
+  allowFreeText: true,
+});
+
 // Multi-line editor
 const text = await ctx.ui.editor("Edit:", "prefilled text");
 
@@ -1832,6 +1840,7 @@ if (confirmed) {
 - `select()` returns `undefined`
 - `confirm()` returns `false`
 - `input()` returns `undefined`
+- `ask()` returns `undefined`
 
 #### Manual Dismissal with AbortSignal
 
