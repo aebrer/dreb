@@ -300,6 +300,24 @@ describe("AskWizardComponent", () => {
 			expect(rendered).toContain("✔ SQLite");
 		});
 
+		it("shows the full title for the active tab and truncates the rest", () => {
+			const { component } = mount({
+				questions: [
+					{ question: "Q1", title: "Cooking vs. Order or Delivery" },
+					{ question: "Q2", title: "Effort Level and Time Available" },
+				],
+			});
+			// Tab 0 active: its full title shows, tab 1 truncates with an ellipsis.
+			let rendered = stripAnsi(component.render(120).join("\n"));
+			expect(rendered).toContain("Cooking vs. Order or Delivery");
+			expect(rendered).toContain("…");
+			expect(rendered).not.toContain("Effort Level and Time Available");
+			// Switch to tab 1: now its full title shows.
+			component.handleInput("\t");
+			rendered = stripAnsi(component.render(120).join("\n"));
+			expect(rendered).toContain("Effort Level and Time Available");
+		});
+
 		it("still renders checkboxes for multi-select options", () => {
 			const { component } = mount({
 				questions: [{ question: "Checks?", options: ["unit", "types"], multiSelect: true }],

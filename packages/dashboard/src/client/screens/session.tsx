@@ -369,8 +369,12 @@ function AskWizard(props: {
 						{(option, optionIndex) => (
 							<label class="ask-option" classList={{ selected: drafts()[index]?.selected.includes(option) }}>
 								<span class="ask-option-index">{optionIndex() + 1}</span>
+								{/* Single-select hides the native radio — the row highlight + trailing
+								    ✔ carry the state; multi-select keeps a visible checkbox to signal
+								    multi-pick. The input stays in the DOM for keyboard/AT support. */}
 								<input
 									type={isMultiSelect(index) ? "checkbox" : "radio"}
+									class={isMultiSelect(index) ? undefined : "ask-option-input--hidden"}
 									name={`ask-${props.request.id}-${index}`}
 									checked={drafts()[index]?.selected.includes(option)}
 									onChange={() => toggleOption(index, option)}
@@ -440,11 +444,17 @@ function AskWizard(props: {
 								role="tab"
 								class="ask-tab"
 								aria-selected={activeTab() === index()}
-								classList={{ selected: activeTab() === index() }}
+								classList={{ selected: activeTab() === index(), answered: isAnswered(index()) }}
 								onClick={() => setActiveTab(index())}
 							>
-								<span class="ask-tab-marker">{isAnswered(index()) ? "●" : "○"}</span>
 								{index() + 1}. {question.title ?? question.question}
+								{/* Answered state reads through label weight/color + this trailing
+								    check rather than a terminal-style colored dot. */}
+								<Show when={isAnswered(index())}>
+									<span class="ask-tab-check" role="img" aria-label="answered">
+										✓
+									</span>
+								</Show>
 							</button>
 						)}
 					</For>

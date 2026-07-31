@@ -2272,11 +2272,20 @@ details.thinking .thinking-body {
 	border-left: 3px solid var(--status-attention);
 	background: color-mix(in srgb, var(--status-attention) 12%, var(--surface, transparent));
 	color: var(--text);
+	/* The active tab shows its full title; inactive tabs stay capped + ellipsized. */
+	max-width: none;
+	overflow: visible;
+	text-overflow: clip;
 }
 
-/* Answered-state marker in each tab: ○ unanswered, ● answered. */
-.ask-tab-marker {
-	color: var(--status-running);
+/* Answered (but not active) tabs read as complete via normal text weight/color
+   plus a trailing check — no terminal-style colored dot. */
+.ask-tab.answered {
+	color: var(--text);
+}
+
+.ask-tab-check {
+	color: var(--status-attention);
 	font-size: var(--fs-small);
 }
 
@@ -2345,15 +2354,29 @@ details.thinking .thinking-body {
 }
 
 .ask-option.selected {
-	border-color: var(--status-running);
-	background: color-mix(in srgb, var(--status-running) 12%, transparent);
+	border-color: var(--status-attention);
+	background: color-mix(in srgb, var(--status-attention) 10%, transparent);
 }
 
 .ask-option input {
 	width: auto;
 	margin: 0;
-	accent-color: var(--status-running);
+	accent-color: var(--status-attention);
 	cursor: pointer;
+}
+
+/* Single-select hides the native radio while keeping it accessible: the row
+   highlight + trailing ✔ convey the choice. */
+.ask-option-input--hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
 }
 
 /* Leading 1-9 keyboard hint number for each option. */
@@ -2373,7 +2396,7 @@ details.thinking .thinking-body {
 
 .ask-option-check {
 	flex: 0 0 auto;
-	color: var(--status-running);
+	color: var(--status-attention);
 }
 
 .ask-custom-field {

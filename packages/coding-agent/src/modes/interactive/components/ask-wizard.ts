@@ -33,6 +33,7 @@ import {
 	Input,
 	Markdown,
 	matchesKey,
+	Spacer,
 	Text,
 	type TUI,
 } from "@dreb/tui";
@@ -48,11 +49,12 @@ export interface AskWizardComponentOptions {
 }
 
 /**
- * Left-indents a child component (e.g. the free-text Input/Editor) so it aligns
- * with the wizard body instead of jutting out to the terminal margin. Focus and
- * input still route to the wrapped field directly; only rendering is shifted.
+ * Left-indents a child component (the question Markdown, or the free-text
+ * Input/Editor) so it aligns with the wizard's answer block instead of jutting
+ * out to the terminal margin. Focus and input still route to the wrapped field
+ * directly; only rendering is shifted.
  */
-class IndentedField implements Component {
+class Indented implements Component {
 	constructor(
 		private child: Component,
 		private pad: number,
@@ -67,6 +69,10 @@ class IndentedField implements Component {
 		this.child.invalidate?.();
 	}
 }
+
+/** Left indent (columns) aligning the question and free-text field with the
+ * answer block (past the cursor gutter and the "N." number). */
+const BODY_INDENT = 3;
 
 /** Per-question draft state (selection + cursor). Free text lives in `fields`. */
 interface Draft {
@@ -180,9 +186,14 @@ export class AskWizardComponent extends Container implements Focusable {
 		return this.drafts[i].selected.length > 0 || this.fieldText(i).trim().length > 0;
 	}
 
-	private shortTitle(i: number): string {
+	/** Full (untruncated) tab title, whitespace-normalized. */
+	private fullTitle(i: number): string {
 		const q = this.questions[i];
-		const raw = (q.title?.trim() || q.question || "").replace(/\s+/g, " ");
+		return (q.title?.trim() || q.question || "").replace(/\s+/g, " ");
+	}
+
+	private shortTitle(i: number): string {
+		const raw = this.fullTitle(i);
 		return raw.length > 18 ? `${raw.slice(0, 17)}…` : raw;
 	}
 
@@ -224,7 +235,10 @@ export class AskWizardComponent extends Container implements Focusable {
 		const n = this.questions.length;
 		const parts = this.questions.map((_, i) => {
 			const marker = this.isAnswered(i) ? "●" : "○";
-			const label = `${i + 1}.${marker} ${this.shortTitle(i)}`;
+			// The active tab shows its full title; the rest stay truncated so the
+			// strip stays compact.
+			const title = i === this.activeTab ? this.fullTitle(i) : this.shortTitle(i);
+			const label = `${i + 1}.${marker} ${title}`;
 			return i === this.activeTab ? theme.fg("accent", theme.bold(label)) : theme.fg("muted", label);
 		});
 		const submitLabel = "✔ Submit";
@@ -238,7 +252,11 @@ export class AskWizardComponent extends Container implements Focusable {
 		const opts = this.optionsFor(i);
 		const multiSelect = this.isMultiSelect(i);
 
-		this.addChild(new Markdown(q.question, 1, 0, getMarkdownTheme(), undefined, true));
+		// Blank line + indented question aligned with the answer block below, so
+		// the prompt reads as a heading over its options rather than crowding them.
+		this.addChild(new Spacer(1));
+		this.addChild(new Indented(new Markdown(q.question, 0, 0, getMarkdownTheme(), undefined, true), BODY_INDENT));
+		this.addChild(new Spacer(1));
 
 		for (let j = 0; j < opts.length; j++) {
 			const focused = draft.cursorIndex === j;
@@ -269,7 +287,7 @@ export class AskWizardComponent extends Container implements Focusable {
 			// Indent the field so it aligns under the label instead of sitting at the
 			// terminal margin like the main prompt — keeps focus visually inside the
 			// wizard, consistent with the option rows.
-			if (field) this.addChild(new IndentedField(field, 3));
+			if (field) this.addChild(new Indented(field, BODY_INDENT));
 		}
 
 		this.addChild(new Text(this.buildHint(i), 1, 0));

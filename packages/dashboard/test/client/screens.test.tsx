@@ -1172,10 +1172,10 @@ describe("screen smoke tests", () => {
 		expect(tabs[2].textContent).toContain("Third question");
 		expect(tabs[3].textContent).toContain("Submit");
 
-		// Every question starts unanswered (○ marker).
-		const markers = el.querySelectorAll(".ask-tab-marker");
-		expect(markers.length).toBe(3);
-		expect([...markers].every((m) => m.textContent === "○")).toBe(true);
+		// Every question starts unanswered (no answered class, no check).
+		const questionTabs = [...tabs].filter((t) => !t.classList.contains("ask-tab-submit"));
+		expect(questionTabs.every((t) => !t.classList.contains("answered"))).toBe(true);
+		expect(el.querySelectorAll(".ask-tab-check").length).toBe(0);
 
 		// All question panels + the review panel are mounted (so their state
 		// persists) but only the active question is visible.
@@ -1184,10 +1184,12 @@ describe("screen smoke tests", () => {
 		const visible = [...panels].filter((p) => !p.classList.contains("hidden"));
 		expect(visible.length).toBe(1);
 
-		// Answering the active question flips its marker to ●.
+		// Answering the active question marks its tab answered (class + trailing check).
 		el.querySelectorAll<HTMLInputElement>('.ask-option input[type="radio"]')[0].click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(el.querySelectorAll(".ask-tab-marker")[0].textContent).toBe("●");
+		const answeredTabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		expect(answeredTabs[0].classList.contains("answered")).toBe(true);
+		expect(answeredTabs[0].querySelector(".ask-tab-check")).not.toBeNull();
 	});
 
 	it("ask_user wizard: clicking a tab switches the active question", async () => {
