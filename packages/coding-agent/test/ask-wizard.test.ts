@@ -281,4 +281,31 @@ describe("AskWizardComponent", () => {
 			}).not.toThrow();
 		});
 	});
+
+	describe("visual polish", () => {
+		it("bounds the wizard with accent horizontal rules top and bottom", () => {
+			const { component } = mount({ questions: [{ question: "DB?", options: ["a", "b"] }] });
+			const lines = component.render(80);
+			expect(stripAnsi(lines[0])).toMatch(/^─+$/);
+			expect(stripAnsi(lines[lines.length - 1])).toMatch(/^─+$/);
+		});
+
+		it("does not draw a radio glyph for single-select options (checkmark only)", () => {
+			const { component } = mount({ questions: [{ question: "DB?", options: ["SQLite", "Postgres"] }] });
+			let rendered = stripAnsi(component.render(80).join("\n"));
+			expect(rendered).not.toContain("(•)");
+			expect(rendered).not.toContain("( )");
+			component.handleInput("1"); // choose SQLite
+			rendered = stripAnsi(component.render(80).join("\n"));
+			expect(rendered).toContain("✔ SQLite");
+		});
+
+		it("still renders checkboxes for multi-select options", () => {
+			const { component } = mount({
+				questions: [{ question: "Checks?", options: ["unit", "types"], multiSelect: true }],
+			});
+			const rendered = stripAnsi(component.render(80).join("\n"));
+			expect(rendered).toContain("[ ] unit");
+		});
+	});
 });

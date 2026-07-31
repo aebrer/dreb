@@ -25,6 +25,7 @@
  */
 
 import {
+	type Component,
 	Container,
 	Editor,
 	type Focusable,
@@ -38,11 +39,33 @@ import {
 import type { AskAnswer, AskQuestion, AskRequest, AskResult } from "../../../core/extensions/types.js";
 import { getEditorTheme, getMarkdownTheme, theme } from "../theme/theme.js";
 import { CountdownTimer } from "./countdown-timer.js";
+import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint, rawKeyHint } from "./keybinding-hints.js";
 
 export interface AskWizardComponentOptions {
 	tui?: TUI;
 	timeout?: number;
+}
+
+/**
+ * Left-indents a child component (e.g. the free-text Input/Editor) so it aligns
+ * with the wizard body instead of jutting out to the terminal margin. Focus and
+ * input still route to the wrapped field directly; only rendering is shifted.
+ */
+class IndentedField implements Component {
+	constructor(
+		private child: Component,
+		private pad: number,
+	) {}
+
+	render(width: number): string[] {
+		const prefix = " ".repeat(this.pad);
+		return this.child.render(Math.max(1, width - this.pad)).map((line) => prefix + line);
+	}
+
+	invalidate(): void {
+		this.child.invalidate?.();
+	}
 }
 
 /** Per-question draft state (selection + cursor). Free text lives in `fields`. */
@@ -169,20 +192,27 @@ export class AskWizardComponent extends Container implements Focusable {
 
 	// --- Rendering ------------------------------------------------------------
 
+	/** Full-width accent rule bounding the wizard, à la Claude Code. */
+	private rule(): Component {
+		return new DynamicBorder((s) => theme.fg("accent", s));
+	}
+
 	private rebuild(): void {
 		this.clear();
 		const n = this.questions.length;
+		this.addChild(this.rule());
 		if (n === 1) {
 			this.addChild(new Text(this.singleHeader(0), 1, 0));
 			this.addQuestionPanel(0);
-			return;
-		}
-		this.addChild(new Text(this.buildTabStrip(), 1, 0));
-		if (this.activeTab < n) {
-			this.addQuestionPanel(this.activeTab);
 		} else {
-			this.addReviewPanel();
+			this.addChild(new Text(this.buildTabStrip(), 1, 0));
+			if (this.activeTab < n) {
+				this.addQuestionPanel(this.activeTab);
+			} else {
+				this.addReviewPanel();
+			}
 		}
+		this.addChild(this.rule());
 	}
 
 	private singleHeader(i: number): string {
@@ -215,11 +245,17 @@ export class AskWizardComponent extends Container implements Focusable {
 			const chosen = draft.selected.includes(opts[j]);
 			const cursor = focused ? theme.fg("accent", "→ ") : "  ";
 			const num = `${j + 1}.`;
-			const glyph = multiSelect ? (chosen ? "[x]" : "[ ]") : focused ? "(•)" : "( )";
-			const glyphColored = chosen || (!multiSelect && focused) ? theme.fg("accent", glyph) : glyph;
-			const check = chosen ? theme.fg("accent", "✔ ") : "";
+			// Multi-select keeps checkboxes; single-select drops the radio glyph and
+			// relies on the green check + accent label to mark the chosen answer.
+			let marker: string;
+			if (multiSelect) {
+				const box = chosen ? "[x]" : "[ ]";
+				marker = chosen ? theme.fg("accent", box) : box;
+			} else {
+				marker = chosen ? theme.fg("accent", "✔") : " ";
+			}
 			const label = focused || chosen ? theme.fg("accent", opts[j]) : theme.fg("text", opts[j]);
-			this.addChild(new Text(`${cursor}${num} ${glyphColored} ${check}${label}`, 1, 0));
+			this.addChild(new Text(`${cursor}${num} ${marker} ${label}`, 1, 0));
 		}
 
 		if (this.allowFreeText(i)) {
@@ -230,7 +266,10 @@ export class AskWizardComponent extends Container implements Focusable {
 				new Text(prefix + (onField ? theme.fg("accent", labelText) : theme.fg("muted", labelText)), 1, 0),
 			);
 			const field = this.fields[i];
-			if (field) this.addChild(field);
+			// Indent the field so it aligns under the label instead of sitting at the
+			// terminal margin like the main prompt — keeps focus visually inside the
+			// wizard, consistent with the option rows.
+			if (field) this.addChild(new IndentedField(field, 3));
 		}
 
 		this.addChild(new Text(this.buildHint(i), 1, 0));
