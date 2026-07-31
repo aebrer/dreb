@@ -47,10 +47,12 @@ describe("ask_user tool", () => {
 		const props = (def.parameters as any).properties;
 		expect(props.options.minItems).toBe(2);
 		expect(props.options.maxItems).toBe(4);
+		expect(props.options.items.pattern).toBe("^.*[^ \\t\\r\\n].*$");
 		expect(props.question.type).toBe("string");
 		expect(Value.Check(def.parameters, { question: "Pick", options: ["A", "B"] })).toBe(true);
 		expect(Value.Check(def.parameters, { question: "Pick", options: ["", "B"] })).toBe(false);
 		expect(Value.Check(def.parameters, { question: "Pick", options: ["   ", "B"] })).toBe(false);
+		expect(Value.Check(def.parameters, { question: "Pick", options: ["\t\r", "B"] })).toBe(false);
 	});
 
 	it("returns a graceful non-blocking result when no UI is available", async () => {
