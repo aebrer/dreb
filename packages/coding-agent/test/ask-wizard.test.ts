@@ -250,6 +250,28 @@ describe("AskWizardComponent", () => {
 			component.handleInput(LEFT);
 			expect(stripAnsi(component.render(80).join("\n"))).toContain("Pick a DB");
 		});
+
+		it("review tab: ← selects the final question and → wraps to the first", () => {
+			const { component } = mount(twoQuestions);
+			// Reach the review tab (tab0 -> tab1 -> review).
+			component.handleInput(TAB);
+			component.handleInput(TAB);
+			expect(stripAnsi(component.render(80).join("\n"))).toContain("Review your answers");
+
+			// ← from the review tab steps back to the final question tab.
+			component.handleInput(LEFT);
+			let rendered = stripAnsi(component.render(80).join("\n"));
+			expect(rendered).toContain("Which checks?"); // last question
+			expect(rendered).not.toContain("Review your answers");
+
+			// Return to the review tab, then → wraps forward past it to the first question.
+			component.handleInput(TAB); // last question -> review
+			expect(stripAnsi(component.render(80).join("\n"))).toContain("Review your answers");
+			component.handleInput(RIGHT);
+			rendered = stripAnsi(component.render(80).join("\n"));
+			expect(rendered).toContain("Pick a DB"); // first question
+			expect(rendered).not.toContain("Review your answers");
+		});
 	});
 
 	describe("stopping", () => {

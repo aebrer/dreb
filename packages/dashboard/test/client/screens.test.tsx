@@ -1310,6 +1310,128 @@ describe("screen smoke tests", () => {
 		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
 	});
 
+	it("ask_user wizard: single-question Enter submits only from its own field, not Stop or outside inputs", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-enter-scope");
+		session.uiRequests = [
+			{
+				id: "enter-scope",
+				method: "ask",
+				title: "Solo",
+				questions: [{ question: "Only one?", options: ["A", "B"], allowFreeText: true }],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-enter-scope": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-enter-scope" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const fire = async (target: EventTarget, key: string) => {
+			target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		};
+
+		// Enter on the wizard's own Stop button must NOT submit a skipped answer —
+		// the button keeps its native Enter-to-click (abort) behavior instead.
+		const stop = [...el.querySelectorAll("button")].find((b) => b.textContent === "■ stop agent");
+		expect(stop).toBeTruthy();
+		await fire(stop!, "Enter");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+
+		// Enter on an unrelated single-line input elsewhere on the page (e.g. the
+		// model filter or rename field) must be left completely alone.
+		const outside = document.createElement("input");
+		outside.type = "text";
+		document.body.appendChild(outside);
+		await fire(outside, "Enter");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+		outside.remove();
+
+		// Enter from the wizard's OWN single-line answer field does submit.
+		const field = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		expect(field).toBeTruthy();
+		field!.value = "typed answer";
+		field!.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await fire(field!, "Enter");
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-enter-scope",
+			expect.objectContaining({
+				type: "extension_ui_response",
+				id: "enter-scope",
+				answers: [expect.objectContaining({ customText: "typed answer" })],
+			}),
+		);
+	});
+
+	it("ask_user wizard: arrow/Tab in a focused field do not switch tabs (N>=2)", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-kbnav-field");
+		session.uiRequests = [
+			{
+				id: "kbnav-field",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First body", title: "Alpha", options: ["A", "B"], allowFreeText: true },
+					{ question: "Second body", title: "Beta", multiline: true },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-kbnav-field": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-kbnav-field" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const activeIndex = () =>
+			[...el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab")].findIndex(
+				(t) => t.getAttribute("aria-selected") === "true",
+			);
+		const fireFrom = async (target: EventTarget, k: string) => {
+			target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		};
+
+		// Start on the first question tab.
+		expect(activeIndex()).toBe(0);
+
+		// A focused single-line input on question 0: arrows move the caret and Tab
+		// does its normal thing — none may switch the active wizard tab.
+		const input = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		expect(input).toBeTruthy();
+		await fireFrom(input!, "ArrowLeft");
+		expect(activeIndex()).toBe(0);
+		await fireFrom(input!, "ArrowRight");
+		expect(activeIndex()).toBe(0);
+		await fireFrom(input!, "Tab");
+		expect(activeIndex()).toBe(0);
+
+		// Switch to question 1 (a multiline textarea) and repeat from the textarea.
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(activeIndex()).toBe(1);
+
+		const textarea = el.querySelector<HTMLTextAreaElement>(".ask-custom-field textarea");
+		expect(textarea).toBeTruthy();
+		await fireFrom(textarea!, "ArrowLeft");
+		expect(activeIndex()).toBe(1);
+		await fireFrom(textarea!, "ArrowRight");
+		expect(activeIndex()).toBe(1);
+		await fireFrom(textarea!, "Tab");
+		expect(activeIndex()).toBe(1);
+	});
+
 	it("ask_user wizard: digit keys toggle options and Submit all sends one answer per question", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-digits");

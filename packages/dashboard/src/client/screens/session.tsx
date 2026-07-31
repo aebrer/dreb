@@ -213,6 +213,11 @@ function AskWizard(props: {
 	const count = () => questions().length;
 	const hasReview = () => count() >= 2;
 
+	// Ref to this wizard's root element. The window-level Enter shortcut uses it
+	// to submit only when focus is inside THIS wizard's own field — never from the
+	// Stop button or unrelated page inputs (model filter, rename) elsewhere.
+	let wizardEl: HTMLElement | undefined;
+
 	const [drafts, setDrafts] = createSignal<AskDraft[]>(questions().map(() => ({ selected: [], customText: "" })));
 	// Re-seed drafts if the underlying question set changes shape (defensive —
 	// ask requests serialize, so a wizard normally sees one stable request).
@@ -283,7 +288,8 @@ function AskWizard(props: {
 
 	// Keyboard: Esc stops the turn anywhere; 1-9 select/toggle the option at that
 	// index in the active question; ←/→ or Tab move between tabs (when N>=2);
-	// Enter submits when there is a single question and focus is not in a textarea.
+	// Enter submits a single-question wizard, but only from its own answer field —
+	// not the Stop button, a textarea, or unrelated page inputs.
 	const onKeyDown = (event: KeyboardEvent) => {
 		if (event.key === "Escape") {
 			event.preventDefault();
@@ -292,7 +298,12 @@ function AskWizard(props: {
 		}
 		if (event.key === "Enter" && count() === 1 && !reviewing()) {
 			const target = event.target as HTMLElement | null;
-			if (target?.tagName !== "TEXTAREA") {
+			// Scope the Enter-to-submit shortcut to THIS wizard's own controls.
+			// Buttons keep their native Enter-to-click behavior (so Enter on Stop
+			// aborts the turn instead of submitting a skipped answer); textareas
+			// insert newlines; and inputs elsewhere on the page (the model filter or
+			// rename field) are left completely alone.
+			if (target && wizardEl?.contains(target) && target.tagName !== "TEXTAREA" && target.tagName !== "BUTTON") {
 				event.preventDefault();
 				submit();
 			}
@@ -430,7 +441,7 @@ function AskWizard(props: {
 	);
 
 	return (
-		<section class="ask-wizard" aria-label={props.request.title}>
+		<section class="ask-wizard" aria-label={props.request.title} ref={wizardEl}>
 			<header class="ask-wizard-header">
 				<span class="ask-wizard-title">{props.request.title}</span>
 				<Show when={expiresAt !== undefined}>
