@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findModel } from "@dreb/ai";
 import { Type } from "@sinclair/typebox";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
@@ -87,6 +87,63 @@ describe("AgentSession dynamic tool registration", () => {
 		expect(session.getActiveToolNames()).toContain("dynamic_tool");
 		expect(session.systemPrompt).toContain("- dynamic_tool: Run dynamic test behavior");
 		expect(session.systemPrompt).toContain("- Use dynamic_tool when the user asks for dynamic behavior tests.");
+
+		session.dispose();
+	});
+
+	it("keeps ask_user active and binds UI context when no extensions are installed", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		const sessionManager = SessionManager.inMemory();
+		const resourceLoader = new DefaultResourceLoader({ cwd: tempDir, agentDir, settingsManager });
+		await resourceLoader.reload();
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: findModel("anthropic", "sonnet")!,
+			settingsManager,
+			sessionManager,
+			resourceLoader,
+		});
+
+		expect(session.getActiveToolNames()).toContain("ask_user");
+		expect(session.extensionRunner).toBeDefined();
+		expect(session.extensionRunner?.hasUI()).toBe(false);
+
+		const executeAskUser = async () => {
+			const tool = session.agent.state.tools.find((candidate) => candidate.name === "ask_user");
+			expect(tool).toBeDefined();
+			return tool!.execute(
+				"ask-call",
+				{ question: "Which database?", options: ["SQLite", "Postgres"] },
+				new AbortController().signal,
+				() => {},
+			);
+		};
+
+		// The actual session-wrapped tool must receive the no-host context rather
+		// than calling an unreachable UI implementation.
+		await expect(executeAskUser()).resolves.toMatchObject({
+			details: { unavailable: true, skipped: true },
+		});
+
+		const firstAsk = vi.fn(async () => ({ selected: ["SQLite"] }));
+		await session.bindExtensions({ uiContext: { ask: firstAsk } as any });
+		await expect(executeAskUser()).resolves.toMatchObject({
+			details: { selected: ["SQLite"], unavailable: false, skipped: false },
+		});
+		expect(firstAsk).toHaveBeenCalledWith(
+			expect.objectContaining({ question: "Which database?" }),
+			expect.objectContaining({ signal: expect.any(AbortSignal) }),
+		);
+
+		// Context is resolved for each execution, so rebinding the host UI must
+		// not leave the base-tool wrapper pointing at the previous implementation.
+		const secondAsk = vi.fn(async () => ({ selected: ["Postgres"] }));
+		await session.bindExtensions({ uiContext: { ask: secondAsk } as any });
+		await expect(executeAskUser()).resolves.toMatchObject({ details: { selected: ["Postgres"] } });
+		expect(firstAsk).toHaveBeenCalledTimes(1);
+		expect(secondAsk).toHaveBeenCalledTimes(1);
 
 		session.dispose();
 	});

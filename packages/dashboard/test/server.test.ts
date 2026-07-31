@@ -537,6 +537,45 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(original.status).toBe(200);
 		expect(Buffer.from(await original.arrayBuffer())).toEqual(subagentPng);
 
+		// A fail-closed pre-spawn arbitration has metadata but no child log.
+		const failedAgent = {
+			agentId: "bg-failed",
+			agentType: "Explore",
+			taskSummary: "blocked before spawn",
+			startedAt: new Date().toISOString(),
+			status: "failed",
+			arbitrations: [
+				{
+					status: "failure",
+					proposed: { agent: "Explore", model: "provider/worker", thinking: "high" },
+					final: null,
+					changed: [],
+					errorCode: "invalid_guide",
+					errorMessage: "Routing guide is invalid.",
+				},
+			],
+		};
+		(clients[0].listBackgroundAgents as ReturnType<typeof vi.fn>).mockResolvedValue([failedAgent]);
+		const failed = await fetch(`${base}/api/runtimes/${key}/subagents/bg-failed/messages`);
+		expect(failed.status).toBe(200);
+		await expect(failed.json()).resolves.toMatchObject({
+			agent: { agentId: "bg-failed", arbitrations: [{ status: "failure", final: null }] },
+			messages: [],
+		});
+
+		// An ordinary registered agent with a missing log must still fail loudly.
+		const missingLogAgent = {
+			agentId: "bg-missing-log",
+			agentType: "Explore",
+			taskSummary: "spawned without a durable log",
+			startedAt: new Date().toISOString(),
+			status: "failed",
+		};
+		(clients[0].listBackgroundAgents as ReturnType<typeof vi.fn>).mockResolvedValue([missingLogAgent]);
+		const missingLog = await fetch(`${base}/api/runtimes/${key}/subagents/bg-missing-log/messages`);
+		expect(missingLog.status).toBe(502);
+		await expect(missingLog.json()).resolves.toMatchObject({ error: expect.stringContaining("session log") });
+
 		// Unknown agent id → loud 502 with the registry error.
 		const missing = await fetch(`${base}/api/runtimes/${key}/subagents/nope/messages`);
 		expect(missing.status).toBe(502);
@@ -678,6 +717,45 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[0].abortCompaction).toHaveBeenCalled();
 		expect(clients[0].abortRetry).toHaveBeenCalled();
 		expect(clients[1].getDailyCost).toHaveBeenCalled();
+	});
+
+	it("round-trips an enabled Dispatch Arbiter policy through the settings utility runtime", async () => {
+		const { base, clients } = await startServer();
+		await fetch(`${base}/api/settings`);
+		const utility = clients[0];
+		if (!utility) throw new Error("utility runtime was not created");
+		const baselineSettings = await utility.getSettings();
+		let arbiterPolicy: NonNullable<typeof baselineSettings.subagentArbiter> = {
+			enabled: false,
+			model: "provider/router",
+			thinking: "off",
+		};
+		vi.mocked(utility.getSettings).mockImplementation(async () => ({
+			...baselineSettings,
+			subagentArbiter: arbiterPolicy,
+		}));
+		vi.mocked(utility.setSettings).mockImplementation(async (update) => {
+			arbiterPolicy = {
+				...arbiterPolicy,
+				...(update.subagentArbiter ?? {}),
+			};
+			return { ...baselineSettings, subagentArbiter: arbiterPolicy };
+		});
+
+		const saved = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" },
+			}),
+		});
+		expect(saved.status).toBe(200);
+		await expect(saved.json()).resolves.toMatchObject({
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" },
+		});
+		await expect(fetch(`${base}/api/settings`).then((response) => response.json())).resolves.toMatchObject({
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" },
+		});
 	});
 
 	it("GET /api/settings/models and /api/settings/agent-types use a stable utility runtime", async () => {

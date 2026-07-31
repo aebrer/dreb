@@ -3,18 +3,25 @@ import { randomBytes } from "node:crypto";
 import { closeSync, type Dirent, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import type { AgentTool } from "@dreb/agent-core";
+import type { AgentTool, ThinkingLevel } from "@dreb/agent-core";
 import { type Api, type AssistantMessage, type Context, completeSimple, type Model } from "@dreb/ai";
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { CONFIG_DIR_NAME, getPackageDir, getSubagentSessionsDir } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.js";
+import type {
+	DispatchAgentSummary,
+	DispatchArbitrationRecord,
+	DispatchArbitrationRequest,
+	DispatchArbitrationResult,
+	DispatchRoute,
+} from "../dispatch-arbiter.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { log } from "../logger.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { resolveCliModel } from "../model-resolver.js";
-import { resolveEffectiveThinkingLevel, thinkingLevelToReasoning } from "../thinking.js";
+import { resolveEffectiveThinkingLevel, thinkingLevelToReasoning, validateThinkingLevelForModel } from "../thinking.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult } from "./truncate.js";
@@ -33,6 +40,7 @@ export interface AgentTypeConfig {
 }
 
 const DEFAULT_AGENT = "Explore";
+const SUBAGENT_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 export const DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS = 120_000;
 
 export function parseAgentFrontmatter(
@@ -139,10 +147,30 @@ function loadAgentsFromDir(dir: string, agents: Map<string, AgentTypeConfig>): v
 // Subagent process spawning
 // ---------------------------------------------------------------------------
 
+export interface SubagentStepMetadata {
+	step: number;
+	agent: string;
+	success: boolean;
+	/** Canonical provider/model identity reported by the child process. */
+	model?: string;
+	/** Effective thinking level reported by the child process. */
+	thinking?: ThinkingLevel;
+}
+
+export interface SubagentArbitrationEvent extends DispatchArbitrationRecord {
+	type: "subagent_arbitration";
+	agentId: string;
+}
+
 export interface SubagentResult {
 	agent: string;
 	task: string;
+	/** Canonical provider/model identity reported by the child process. */
 	model?: string;
+	/** Effective thinking level reported by the child process. */
+	thinking?: ThinkingLevel;
+	/** Ordered effective metadata for chain steps. */
+	steps?: SubagentStepMetadata[];
 	exitCode: number;
 	output: string;
 	stderr: string;
@@ -169,6 +197,7 @@ const SUBAGENT_EXCLUDED_TOOLS = ["wait", "subagent", "suggest_next"] as const;
 // the child process adds them unconditionally regardless of --tools.
 // Internal tools (tmp_read) are also excluded.
 const SUBAGENT_DEFAULT_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch"];
+const SUBAGENT_ALWAYS_ACTIVE_TOOLS = ["search", "skill", "tasks_update"];
 
 /**
  * Filter a comma-separated tools string, removing any tools in SUBAGENT_EXCLUDED_TOOLS.
@@ -183,6 +212,33 @@ export function filterSubagentTools(tools: string | undefined): string {
 		.filter((t) => !(SUBAGENT_EXCLUDED_TOOLS as readonly string[]).includes(t))
 		.join(",");
 	return filtered || SUBAGENT_DEFAULT_TOOLS.join(",");
+}
+
+function summarizeAgentsForArbitration(
+	agents: Map<string, AgentTypeConfig>,
+	getAgentModelsForAgent?: (name: string) => string[] | undefined,
+): DispatchAgentSummary[] {
+	return [...agents.values()].map((agent) => {
+		const settingsModels = getAgentModelsForAgent?.(agent.name);
+		return {
+			name: agent.name,
+			description: agent.description,
+			tools: [
+				...new Set([
+					...filterSubagentTools(agent.tools).split(",").filter(Boolean),
+					...SUBAGENT_ALWAYS_ACTIVE_TOOLS,
+				]),
+			],
+			modelDefaults:
+				settingsModels && settingsModels.length > 0
+					? [...settingsModels]
+					: agent.model
+						? Array.isArray(agent.model)
+							? [...agent.model]
+							: [agent.model]
+						: [],
+		};
+	});
 }
 
 // TODO: Support PATH-based binary discovery.
@@ -202,12 +258,19 @@ export interface ChildLineSinks {
 	onAssistantMessage: (message: { role: string; content: any[] }) => void;
 	/** Called with human-readable progress lines (tool start/end). */
 	onProgress?: (text: string) => void;
-	/** Called when the child reports its resolved model (`agent_start`). */
-	onModel: (modelId: string) => void;
+	/** Called when the child reports its canonical resolved model (`agent_start`). */
+	onModel: (modelRef: string) => void;
+	/** Called when the child reports its effective thinking level (`agent_start`). */
+	onThinking?: (thinkingLevel: ThinkingLevel) => void;
 	/** Called with lines that failed to parse as JSON (often real startup errors). */
 	onPlainLine: (line: string) => void;
 	/** Mutable holder for the last tool name, shared across lines for progress text. */
 	toolNameRef: { current: string };
+}
+
+function canonicalModelRef(provider: string | undefined, modelId: string): string {
+	if (!provider || modelId.startsWith(`${provider}/`)) return modelId;
+	return `${provider}/${modelId}`;
 }
 
 /**
@@ -240,8 +303,17 @@ export function handleChildJsonlLine(line: string, sinks: ChildLineSinks): void 
 	if (typeof event.type === "string") {
 		sinks.onEvent?.(event);
 	}
-	if (event.type === "agent_start" && event.model) {
-		sinks.onModel(event.model.id);
+	if (event.type === "agent_start") {
+		if (typeof event.model?.id === "string") {
+			const provider = typeof event.model.provider === "string" ? event.model.provider : undefined;
+			sinks.onModel(canonicalModelRef(provider, event.model.id));
+		}
+		if (
+			typeof event.thinkingLevel === "string" &&
+			(SUBAGENT_THINKING_LEVELS as readonly string[]).includes(event.thinkingLevel)
+		) {
+			sinks.onThinking?.(event.thinkingLevel as ThinkingLevel);
+		}
 	}
 	if (event.type === "message_end" && event.message?.role === "assistant") {
 		sinks.onAssistantMessage(event.message);
@@ -265,6 +337,7 @@ async function spawnSubagent(
 	sessionDir?: string,
 	parentSessionFile?: string,
 	onChildEvent?: (event: Record<string, unknown>) => void,
+	thinkingOverride?: ThinkingLevel,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
 	log.debug(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
@@ -293,12 +366,15 @@ async function spawnSubagent(
 	const modelStr = Array.isArray(agentConfig.model) ? agentConfig.model[0] : agentConfig.model;
 	if (modelStr) {
 		args.push("--model", modelStr);
-		// When the model string doesn't already specify a provider (no "/"),
-		// inherit the parent's provider to prevent fuzzy matching from picking
-		// an unauthenticated provider (e.g. Bedrock instead of Anthropic).
-		if (parentProvider && !modelStr.includes("/")) {
+		// executeSingle resolves the model and provider independently. Always pass
+		// that exact provider because raw model IDs may themselves contain slashes
+		// (for example, OpenRouter IDs such as "openai/gpt-oss-120b").
+		if (parentProvider) {
 			args.push("--provider", parentProvider);
 		}
+	}
+	if (thinkingOverride) {
+		args.push("--thinking", thinkingOverride);
 	}
 	// Always pass --tools to ensure wait/subagent/suggest_next are excluded from child processes.
 	// filterSubagentTools always returns a non-empty string.
@@ -351,6 +427,7 @@ async function spawnSubagent(
 		const plainStdoutLines: string[] = [];
 		const toolNameRef = { current: "" };
 		let resolvedModel: string | undefined;
+		let resolvedThinking: ThinkingLevel | undefined;
 
 		// Drain stderr concurrently to avoid pipe deadlock (capped to prevent OOM from verbose subagents)
 		proc.stderr?.on("data", (chunk: Buffer) => {
@@ -374,8 +451,11 @@ async function spawnSubagent(
 					onEvent: onChildEvent,
 					onAssistantMessage: (message) => collectedMessages.push(message),
 					onProgress,
-					onModel: (modelId) => {
-						resolvedModel = modelId;
+					onModel: (modelRef) => {
+						resolvedModel = modelRef;
+					},
+					onThinking: (thinkingLevel) => {
+						resolvedThinking = thinkingLevel;
 					},
 					onPlainLine: (plain) => plainStdoutLines.push(plain),
 					toolNameRef,
@@ -468,17 +548,15 @@ async function spawnSubagent(
 
 			// Discover the session file written by the child process
 			const sessionFile = sessionDir ? discoverSessionFile(sessionDir, agentConfig.name) : undefined;
+			const configuredModel = Array.isArray(agentConfig.model) ? agentConfig.model[0] : agentConfig.model;
 
 			resolvePromise({
 				agent: agentConfig.name,
 				task,
 				model:
 					resolvedModel ??
-					(exitCode === 0
-						? Array.isArray(agentConfig.model)
-							? agentConfig.model[0]
-							: agentConfig.model
-						: undefined),
+					(exitCode === 0 && configuredModel ? canonicalModelRef(parentProvider, configuredModel) : undefined),
+				thinking: resolvedThinking ?? (exitCode === 0 ? thinkingOverride : undefined),
 				exitCode,
 				output,
 				stderr: stderr.slice(0, 2000), // cap stderr
@@ -889,19 +967,25 @@ export async function resolveModelForSubagentSpawn(
 
 export function formatModelFallbackSummary(
 	skippedModels: SkippedFallbackModel[],
-	selectedModel: string | undefined,
+	proposalModel: string | undefined,
+	finalModel?: string,
 ): string | undefined {
 	if (skippedModels.length === 0) return undefined;
 	const skipped = skippedModels.map((s) => `- ${s.model}: ${s.reason}`).join("\n");
-	return `[MODEL FALLBACK: skipped ${skippedModels.length} unavailable model(s); using "${selectedModel ?? "unknown"}".]\n${skipped}`;
+	const routeSummary =
+		finalModel && finalModel !== proposalModel
+			? `proposal resolved to "${proposalModel ?? "unknown"}" before arbitration selected "${finalModel}".`
+			: `using "${finalModel ?? proposalModel ?? "unknown"}".`;
+	return `[MODEL FALLBACK: skipped ${skippedModels.length} unavailable model(s); ${routeSummary}]\n${skipped}`;
 }
 
 export function prependModelFallbackSummary(
 	output: string,
 	skippedModels: SkippedFallbackModel[],
-	selectedModel: string | undefined,
+	proposalModel: string | undefined,
+	finalModel?: string,
 ): string {
-	const fallbackSummary = formatModelFallbackSummary(skippedModels, selectedModel);
+	const fallbackSummary = formatModelFallbackSummary(skippedModels, proposalModel, finalModel);
 	return fallbackSummary ? `${fallbackSummary}\n\n${output}` : output;
 }
 
@@ -913,6 +997,14 @@ function formatSkippedModelFailureDetails(skippedModels: SkippedFallbackModel[])
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
+
+/** Resolve per-task thinking precedence for parallel and chain modes. */
+export function resolveSubagentThinkingOverride(
+	taskThinking: ThinkingLevel | undefined,
+	topLevelThinking: ThinkingLevel | undefined,
+): ThinkingLevel | undefined {
+	return taskThinking ?? topLevelThinking;
+}
 
 // Semaphore for background task concurrency — shared across all background launches
 let bgRunning = 0;
@@ -955,6 +1047,14 @@ function clampCwd(defaultCwd: string, itemCwd?: string): { ok: true; cwd: string
 	return { ok: true, cwd: resolved };
 }
 
+export interface SubagentArbitrationHooks {
+	arbitrate: (request: DispatchArbitrationRequest, signal?: AbortSignal) => Promise<DispatchArbitrationResult>;
+	onRecord: (record: DispatchArbitrationRecord) => void;
+	step?: number;
+	defaultThinkingLevel?: ThinkingLevel;
+	getAgentModelsForAgent?: (name: string) => string[] | undefined;
+}
+
 export async function executeSingle(
 	agents: Map<string, AgentTypeConfig>,
 	agentName: string | undefined,
@@ -970,9 +1070,11 @@ export async function executeSingle(
 	agentModels?: string[],
 	parentSessionFile?: string,
 	onChildEvent?: (event: Record<string, unknown>) => void,
+	thinkingOverride?: ThinkingLevel,
+	arbitration?: SubagentArbitrationHooks,
 ): Promise<SubagentResult> {
-	const name = agentName || DEFAULT_AGENT;
-	const config = agents.get(name);
+	let name = agentName || DEFAULT_AGENT;
+	let config = agents.get(name);
 	if (!config) {
 		return {
 			agent: name,
@@ -983,7 +1085,6 @@ export async function executeSingle(
 			errorMessage: `Unknown agent type "${name}". Available: ${[...agents.keys()].join(", ")}. If you expected "${name}" to exist, check the .md file in ~/.dreb/agents/ or .dreb/agents/ for syntax errors.`,
 		};
 	}
-	// Validate task length for all modes (single, parallel items, chain steps)
 	if (task.length > MAX_TASK_LENGTH) {
 		return {
 			agent: name,
@@ -994,22 +1095,21 @@ export async function executeSingle(
 			errorMessage: `Task prompt too long (${task.length} chars, max ${MAX_TASK_LENGTH}). Shorten the prompt.`,
 		};
 	}
-	// Per-invocation model override takes precedence over agent settings, which take precedence over agent definition model.
-	// Override is always a single string; agentModels and agent config may be arrays.
-	const modelSpec = modelOverride || (agentModels && agentModels.length > 0 ? agentModels : undefined) || config.model;
+
+	// Phase 1: resolve the parent's proposal with the existing precedence and
+	// fallback behavior so the arbiter receives one concrete canonical route.
+	const configuredModelSpec =
+		modelOverride || (agentModels && agentModels.length > 0 ? agentModels : undefined) || config.model;
+	const modelSpec = configuredModelSpec || parentModel;
 	let effectiveConfig: AgentTypeConfig = modelOverride ? { ...config, model: modelOverride } : config;
 	let resolvedProvider = parentProvider;
+	let resolvedModel: Model<Api> | undefined;
 	let warning: string | undefined;
 	let skippedModels: SkippedFallbackModel[] = [];
 
-	// Resolve and validate the model against the registry before spawning.
-	// This catches typos and invalid model names immediately instead of failing
-	// silently in the child process. Also passes the canonical model ID to the
-	// child, avoiding fuzzy matching entirely. Agent definition fallback lists get
-	// an additional best-effort 1-token probe before spawn so runtime-unavailable
-	// models are skipped before committing to a child process.
 	if (modelSpec) {
-		const resolved = await resolveModelForSubagentSpawn(modelSpec, parentProvider, registry, parentModel, signal);
+		const parentFallback = configuredModelSpec ? parentModel : undefined;
+		const resolved = await resolveModelForSubagentSpawn(modelSpec, parentProvider, registry, parentFallback, signal);
 		skippedModels = resolved.skippedModels;
 		if (!resolved.ok) {
 			const skippedDetails = formatSkippedModelFailureDetails(skippedModels);
@@ -1023,10 +1123,190 @@ export async function executeSingle(
 			};
 		}
 		effectiveConfig = { ...effectiveConfig, model: resolved.modelId };
-		if (resolved.provider) {
-			resolvedProvider = resolved.provider;
-		}
+		if (resolved.provider) resolvedProvider = resolved.provider;
+		if (registry && resolvedProvider) resolvedModel = registry.find(resolvedProvider, resolved.modelId);
 		warning = resolved.warning;
+	}
+
+	if (thinkingOverride && thinkingOverride !== "off" && !modelSpec) {
+		return {
+			agent: name,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: "",
+			errorMessage: `Cannot validate thinking level "${thinkingOverride}" because agent "${name}" has no configured model and no parent model is available. Set a model on the agent or pass a per-call model override.`,
+		};
+	}
+
+	const proposalModelId = Array.isArray(effectiveConfig.model) ? effectiveConfig.model[0] : effectiveConfig.model;
+	const proposalSelectedModel = proposalModelId ? canonicalModelRef(resolvedProvider, proposalModelId) : undefined;
+	let finalThinking = thinkingOverride;
+	let arbitrationEnabled = false;
+	if (arbitration) {
+		const proposed: DispatchRoute = {
+			agent: name,
+			model: proposalSelectedModel ?? "",
+			thinking: resolveEffectiveThinkingLevel(resolvedModel, thinkingOverride, arbitration.defaultThinkingLevel),
+		};
+		let arbitrationResult: DispatchArbitrationResult;
+		try {
+			arbitrationResult = await arbitration.arbitrate(
+				{
+					task,
+					cwd,
+					proposed,
+					agents: summarizeAgentsForArbitration(agents, arbitration.getAgentModelsForAgent),
+					parentSessionFile,
+					step: arbitration.step,
+				},
+				signal,
+			);
+		} catch {
+			const errorMessage = "Dispatch arbiter failed internally before child spawn.";
+			try {
+				arbitration.onRecord({
+					status: "failure",
+					proposed,
+					final: null,
+					changed: [],
+					step: arbitration.step,
+					errorCode: "internal_error",
+					errorMessage,
+				});
+			} catch {}
+			return {
+				agent: name,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				errorMessage,
+			};
+		}
+		if (arbitrationResult.enabled) {
+			arbitrationEnabled = true;
+			if (!arbitrationResult.ok) {
+				const record: DispatchArbitrationRecord = {
+					status: "failure",
+					proposed,
+					final: null,
+					changed: [],
+					step: arbitration.step,
+					errorCode: arbitrationResult.code,
+					errorMessage: arbitrationResult.error,
+				};
+				try {
+					arbitration.onRecord(record);
+				} catch {
+					// The original failure still prevents spawn; do not replace it with an observer error.
+				}
+				return {
+					agent: name,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: "",
+					errorMessage: `Dispatch arbitration failed: ${arbitrationResult.error}`,
+				};
+			}
+
+			const decision = arbitrationResult.decision;
+			const selectedConfig = agents.get(decision.agent);
+			const slash = decision.model.indexOf("/");
+			const selectedProvider = slash > 0 ? decision.model.slice(0, slash) : "";
+			const selectedModelId = slash > 0 ? decision.model.slice(slash + 1) : "";
+			const selectedModel = registry?.find(selectedProvider, selectedModelId);
+			if (!selectedConfig || !selectedModel) {
+				const errorMessage = !selectedConfig
+					? "Arbiter selected an unknown agent."
+					: "Arbiter selected an unavailable model.";
+				const record: DispatchArbitrationRecord = {
+					status: "failure",
+					proposed,
+					final: null,
+					changed: [],
+					step: arbitration.step,
+					errorCode: !selectedConfig ? "unknown_agent" : "out_of_scope_model",
+					errorMessage,
+				};
+				try {
+					arbitration.onRecord(record);
+				} catch {}
+				return {
+					agent: name,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: "",
+					errorMessage: `Dispatch arbitration failed: ${errorMessage}`,
+				};
+			}
+
+			const finalThinkingValidation = validateThinkingLevelForModel(selectedModel, decision.thinking);
+			if (!finalThinkingValidation.ok) {
+				const record: DispatchArbitrationRecord = {
+					status: "failure",
+					proposed,
+					final: null,
+					changed: [],
+					step: arbitration.step,
+					errorCode: "unsupported_thinking",
+					errorMessage: finalThinkingValidation.error,
+				};
+				try {
+					arbitration.onRecord(record);
+				} catch {}
+				return {
+					agent: name,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: "",
+					errorMessage: `Dispatch arbitration failed: ${finalThinkingValidation.error}`,
+				};
+			}
+
+			name = decision.agent;
+			config = selectedConfig;
+			effectiveConfig = { ...config, model: selectedModel.id };
+			resolvedProvider = selectedModel.provider;
+			resolvedModel = selectedModel;
+			finalThinking = decision.thinking;
+
+			try {
+				arbitration.onRecord({
+					status: "success",
+					proposed,
+					final: decision,
+					changed: arbitrationResult.changed,
+					step: arbitration.step,
+				});
+			} catch (error) {
+				return {
+					agent: name,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: "",
+					errorMessage: `Dispatch arbitration observability failed before spawn: ${error instanceof Error ? error.message : String(error)}`,
+				};
+			}
+		}
+	}
+
+	if (finalThinking) {
+		const validation = validateThinkingLevelForModel(resolvedModel, finalThinking);
+		if (!validation.ok) {
+			return {
+				agent: name,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				errorMessage: validation.error,
+			};
+		}
 	}
 
 	const usedModel = effectiveConfig.model?.toString();
@@ -1041,17 +1321,25 @@ export async function executeSingle(
 		sessionDir,
 		parentSessionFile,
 		onChildEvent,
+		finalThinking,
 	);
-	result.output = prependModelFallbackSummary(result.output, skippedModels, result.model ?? usedModel);
+	const finalSelectedModel = result.model ?? (usedModel ? canonicalModelRef(resolvedProvider, usedModel) : undefined);
+	result.output = prependModelFallbackSummary(
+		result.output,
+		skippedModels,
+		arbitrationEnabled ? proposalSelectedModel : finalSelectedModel,
+		arbitrationEnabled ? finalSelectedModel : undefined,
+	);
 	if (warning) {
-		result.output = `[WARNING: ${warning}]\n\n${result.output}`;
+		const warningContext = arbitrationEnabled ? `Proposal resolution: ${warning}` : warning;
+		result.output = `[WARNING: ${warningContext}]\n\n${result.output}`;
 	}
 	return result;
 }
 
 async function executeChain(
 	agents: Map<string, AgentTypeConfig>,
-	chain: Array<{ agent?: string; task: string; cwd?: string; model?: string }>,
+	chain: Array<{ agent?: string; task: string; cwd?: string; model?: string; thinking?: ThinkingLevel }>,
 	defaultCwd: string,
 	signal?: AbortSignal,
 	onProgress?: (event: string) => void,
@@ -1060,10 +1348,12 @@ async function executeChain(
 	sessionBaseDir?: string,
 	defaultAgent?: string,
 	defaultModel?: string,
+	defaultThinking?: ThinkingLevel,
 	parentModel?: string,
 	getAgentModelsForAgentFn?: (name: string) => string[] | undefined,
 	parentSessionFile?: string,
 	onChildEvent?: (event: Record<string, unknown>) => void,
+	arbitration?: Omit<SubagentArbitrationHooks, "step">,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -1119,6 +1409,8 @@ async function executeChain(
 			stepMach6Models,
 			parentSessionFile,
 			onChildEvent,
+			resolveSubagentThinkingOverride(step.thinking, defaultThinking),
+			arbitration ? { ...arbitration, step: i + 1 } : undefined,
 		);
 		results.push(result);
 
@@ -1155,6 +1447,8 @@ export interface BackgroundAgentInfo {
 	sessionFile?: string;
 	/** Working directory the agent runs in. */
 	cwd?: string;
+	/** Safe host-generated pre-spawn routing decisions, ordered by chain step/attempt. */
+	arbitrations?: DispatchArbitrationRecord[];
 }
 
 const backgroundAgentRegistry = new Map<string, BackgroundAgentInfo>();
@@ -1429,14 +1723,21 @@ export function rehydrateBackgroundAgentsFromDisk(
 	return registered;
 }
 
+function cloneBackgroundAgentInfo(info: BackgroundAgentInfo): BackgroundAgentInfo {
+	return {
+		...info,
+		arbitrations: info.arbitrations?.map((record) => structuredClone(record)),
+	};
+}
+
 /** Get a snapshot of all tracked background agents (running and recently completed). Returns readonly clones. */
 export function getBackgroundAgents(): readonly Readonly<BackgroundAgentInfo>[] {
-	return [...backgroundAgentRegistry.values()].map((a) => ({ ...a }));
+	return [...backgroundAgentRegistry.values()].map(cloneBackgroundAgentInfo);
 }
 
 /** Get only currently running background agents. Returns readonly clones. */
 export function getRunningBackgroundAgents(): readonly Readonly<BackgroundAgentInfo>[] {
-	return [...backgroundAgentRegistry.values()].filter((a) => a.status === "running").map((a) => ({ ...a }));
+	return [...backgroundAgentRegistry.values()].filter((a) => a.status === "running").map(cloneBackgroundAgentInfo);
 }
 
 /** Abort all running background agents. */
@@ -1483,11 +1784,29 @@ export interface SubagentToolOptions {
 	modelRegistry?: ModelRegistry;
 	/** Settings-based model override getter for mach6.models. */
 	getAgentModelsForAgent?: (agentName: string) => string[] | undefined;
+	/** Mode-independent headless arbitration callback. Disabled arbitration returns `{ enabled: false }`. */
+	arbitrate?: (request: DispatchArbitrationRequest, signal?: AbortSignal) => Promise<DispatchArbitrationResult>;
+	/** Persist and relay one safe host-generated record for each enabled arbitration attempt. */
+	onArbitration?: (event: SubagentArbitrationEvent) => void;
+	/** Effective default used to make an omitted proposed thinking level concrete for the arbiter. */
+	defaultThinkingLevel?: () => ThinkingLevel;
 }
 
 // ---------------------------------------------------------------------------
 // Tool schema and definition
 // ---------------------------------------------------------------------------
+
+const thinkingLevelSchema = Type.Union(
+	[
+		Type.Literal("off"),
+		Type.Literal("minimal"),
+		Type.Literal("low"),
+		Type.Literal("medium"),
+		Type.Literal("high"),
+		Type.Literal("xhigh"),
+	],
+	{ description: "Thinking level override for the child model." },
+);
 
 const taskItemSchema = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Agent type name (default: 'Explore')" })),
@@ -1504,6 +1823,7 @@ const taskItemSchema = Type.Object({
 				"Model override for this task. Takes precedence over agent definition model. Note: a single-string override discards the agent's fallback list.",
 		}),
 	),
+	thinking: Type.Optional(thinkingLevelSchema),
 });
 
 const subagentSchema = Type.Object({
@@ -1514,6 +1834,22 @@ const subagentSchema = Type.Object({
 			description:
 				"Model override. Takes precedence over agent definition model. Note: a single-string override discards the agent's fallback list. For parallel/chain, set per-task instead.",
 		}),
+	),
+	thinking: Type.Optional(
+		Type.Union(
+			[
+				Type.Literal("off"),
+				Type.Literal("minimal"),
+				Type.Literal("low"),
+				Type.Literal("medium"),
+				Type.Literal("high"),
+				Type.Literal("xhigh"),
+			],
+			{
+				description:
+					"Thinking level override. Per-task values take precedence in parallel and chain modes. Omit to preserve child defaults.",
+			},
+		),
 	),
 	tasks: Type.Optional(
 		Type.Array(taskItemSchema, {
@@ -1620,7 +1956,13 @@ function formatSubagentResult(
 }
 
 export function formatSingleResult(result: SubagentResult): string {
-	let text = `## Agent: ${result.agent}${result.model ? ` (model: ${result.model})` : ""}\n`;
+	const metadata = [
+		result.model ? `model: ${result.model}` : undefined,
+		result.thinking ? `thinking: ${result.thinking}` : undefined,
+	]
+		.filter((value): value is string => value !== undefined)
+		.join(", ");
+	let text = `## Agent: ${result.agent}${metadata ? ` (${metadata})` : ""}\n`;
 	if (result.exitCode !== 0) {
 		text += `**Error** (exit ${result.exitCode}): ${result.errorMessage || "Unknown error"}\n`;
 		if (result.stderr) {
@@ -1653,6 +1995,9 @@ export function createSubagentToolDefinition(
 	const getParentSessionFile = options?.parentSessionFile ?? (() => undefined);
 	const modelRegistry = options?.modelRegistry;
 	const getAgentModelsForAgent = options?.getAgentModelsForAgent;
+	const arbitrate = options?.arbitrate;
+	const onArbitration = options?.onArbitration;
+	const getDefaultThinkingLevel = options?.defaultThinkingLevel;
 
 	// Discover agents at definition time to build the prompt guidelines.
 	// This is cheap (reads .md files) and the same call happens on every execute().
@@ -1685,6 +2030,7 @@ export function createSubagentToolDefinition(
 			"Each agent notifies independently when done — completion messages include a list of any still-running agents. If you need their results before proceeding, end your current turn with no tool calls (as if you were asking the user a question and waiting for their reply). This emits `agent_end` and lets the framework deliver the completion as a new message that resumes your turn automatically. Do not call `sleep` or any other waiting action, and do not launch filler work.",
 			"Agent definitions specify a `model` field with a provider fallback list (comma-separated or YAML list). The spawner tries each in order and uses the first one that resolves for the current provider. This makes agents portable across providers.",
 			"Per-invocation `model` overrides take precedence but **discard the entire fallback list** — if the single override model isn't available on the current provider, the agent fails. Only override when you have a specific reason (e.g. escalating to a stronger tier for a complex task).",
+			"Optional `thinking` overrides accept off/minimal/low/medium/high/xhigh. Per-task values override a top-level value; unsupported levels fail before spawn. Omit thinking to preserve the child's configured default.",
 			"**Model routing** — agent definitions already specify the right tier for their role. Most subagent tasks (exploration, file discovery, grep, navigation, summarization) are handled well by the defaults. Do not override the model unless the task genuinely requires a different capability tier than what the agent definition provides.",
 			"**Model identity** — Your current model is stated in the system prompt as `You are running on: provider/id`. Use this for explicit routing decisions — e.g. delegate vision tasks if you're on a text-only model, or use a differently-architected model as a critic for tasks where diverse model perspectives improve reliability.",
 		],
@@ -1733,9 +2079,9 @@ export function createSubagentToolDefinition(
 				 * Shared lifecycle for all background launches: generates agent ID,
 				 * sets up registry/abort/notification, gates on the concurrency
 				 * semaphore, and handles errors. The caller provides the actual
-				 * work via `runFn(signal, onChildEvent)` which must return a
-				 * SubagentResult; `onChildEvent` (when defined) must be forwarded to
-				 * the spawn so the child's JSONL events reach the relay.
+				 * work via `runFn(signal, onChildEvent, onArbitrationRecord)` which must
+				 * return a SubagentResult. Child events are relayed live; arbitration
+				 * records update the registry before being persisted/emitted.
 				 */
 				const launchBackgroundLifecycle = (
 					agentName: string,
@@ -1744,7 +2090,8 @@ export function createSubagentToolDefinition(
 					agentCwd: string,
 					runFn: (
 						signal: AbortSignal,
-						onChildEvent?: (event: Record<string, unknown>) => void,
+						onChildEvent: ((event: Record<string, unknown>) => void) | undefined,
+						onArbitrationRecord: (record: DispatchArbitrationRecord) => void,
 					) => Promise<SubagentResult>,
 				): string => {
 					const agentId = generateAgentId();
@@ -1775,6 +2122,16 @@ export function createSubagentToolDefinition(
 							}
 						: undefined;
 
+					const onArbitrationRecord = (record: DispatchArbitrationRecord) => {
+						const entry = backgroundAgentRegistry.get(agentId);
+						if (entry) {
+							entry.arbitrations ??= [];
+							entry.arbitrations.push(record);
+							if (record.status === "success" && record.final) entry.agentType = record.final.agent;
+						}
+						onArbitration?.({ type: "subagent_arbitration", agentId, ...record });
+					};
+
 					const bgSignal = bgAbort.signal;
 
 					const safeNotify = (result: SubagentResult) => {
@@ -1790,7 +2147,7 @@ export function createSubagentToolDefinition(
 					const run = async () => {
 						await bgAcquire();
 						try {
-							const result = await runFn(bgSignal, onChildEvent);
+							const result = await runFn(bgSignal, onChildEvent, onArbitrationRecord);
 							const entry = backgroundAgentRegistry.get(agentId);
 							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
 							if (entry && result.sessionFile) entry.sessionFile = result.sessionFile;
@@ -1850,29 +2207,44 @@ export function createSubagentToolDefinition(
 					taskLabel: string,
 					taskCwd?: string,
 					modelOverride?: string,
+					thinkingOverride?: ThinkingLevel,
 				) => {
 					const resolvedCwd = taskCwd ?? cwd;
 					// Each background agent gets its own session subdirectory
 					const sessionId = generateAgentId();
 					const sessionDir = join(subagentSessionsBase, sessionId);
 					const agentModels = getAgentModelsForAgent?.(agentName || DEFAULT_AGENT);
-					return launchBackgroundLifecycle(agentName, taskLabel, sessionDir, resolvedCwd, (signal, onChildEvent) =>
-						executeSingle(
-							agents,
-							agentName === DEFAULT_AGENT ? undefined : agentName,
-							task,
-							resolvedCwd,
-							signal,
-							undefined,
-							modelOverride,
-							getParentProvider(),
-							modelRegistry,
-							sessionDir,
-							getParentModel(),
-							agentModels,
-							getParentSessionFile(),
-							onChildEvent,
-						),
+					return launchBackgroundLifecycle(
+						agentName,
+						taskLabel,
+						sessionDir,
+						resolvedCwd,
+						(signal, onChildEvent, onArbitrationRecord) =>
+							executeSingle(
+								agents,
+								agentName === DEFAULT_AGENT ? undefined : agentName,
+								task,
+								resolvedCwd,
+								signal,
+								undefined,
+								modelOverride,
+								getParentProvider(),
+								modelRegistry,
+								sessionDir,
+								getParentModel(),
+								agentModels,
+								getParentSessionFile(),
+								onChildEvent,
+								thinkingOverride,
+								arbitrate
+									? {
+											arbitrate,
+											onRecord: onArbitrationRecord,
+											defaultThinkingLevel: getDefaultThinkingLevel?.(),
+											getAgentModelsForAgent,
+										}
+									: undefined,
+							),
 					);
 				};
 
@@ -1885,6 +2257,7 @@ export function createSubagentToolDefinition(
 						`${agentName} task`,
 						undefined,
 						params.model,
+						params.thinking,
 					);
 					return {
 						content: [
@@ -1914,6 +2287,7 @@ export function createSubagentToolDefinition(
 							`${agentName} task ${i + 1}/${params.tasks.length}`,
 							cwdResult.cwd,
 							item.model || params.model,
+							resolveSubagentThinkingOverride(item.thinking, params.thinking),
 						);
 						launched.push({ id: agentId, agentName, taskText: item.task });
 					}
@@ -1954,7 +2328,7 @@ export function createSubagentToolDefinition(
 						taskSummary,
 						chainSessionDir,
 						cwd,
-						async (signal, onChildEvent) => {
+						async (signal, onChildEvent, onArbitrationRecord) => {
 							const results = await executeChain(
 								agents,
 								chainSteps,
@@ -1966,10 +2340,19 @@ export function createSubagentToolDefinition(
 								chainSessionDir,
 								params.agent,
 								params.model,
+								params.thinking,
 								getParentModel(),
 								getAgentModelsForAgent,
 								getParentSessionFile(),
 								onChildEvent,
+								arbitrate
+									? {
+											arbitrate,
+											onRecord: onArbitrationRecord,
+											defaultThinkingLevel: getDefaultThinkingLevel?.(),
+											getAgentModelsForAgent,
+										}
+									: undefined,
 							);
 							const resultText = results
 								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
@@ -1979,6 +2362,13 @@ export function createSubagentToolDefinition(
 							return {
 								agent: agentName,
 								task: taskSummary,
+								steps: results.map((result, index) => ({
+									step: index + 1,
+									agent: result.agent,
+									success: result.exitCode === 0,
+									model: result.model,
+									thinking: result.thinking,
+								})),
 								exitCode: failed.length > 0 ? 1 : 0,
 								output: resultText,
 								stderr: "",

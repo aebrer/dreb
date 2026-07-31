@@ -272,6 +272,27 @@ describe("InteractiveMode working indicator", () => {
 		expect(inlineStatuses.at(-1)).toBeNull();
 	});
 
+	test("context_window_upgrade shows a status line and invalidates the footer", async () => {
+		const { fakeThis } = createWorkingFakeThis();
+		fakeThis.chatContainer = new Container();
+		fakeThis.lastStatusSpacer = undefined;
+		fakeThis.lastStatusText = undefined;
+		fakeThis.showStatus = (...args: unknown[]) =>
+			(InteractiveMode as any).prototype.showStatus.call(fakeThis, ...args);
+
+		await dispatchEvent(fakeThis, {
+			type: "context_window_upgrade",
+			provider: "kimi-coding-oauth",
+			modelId: "k3",
+			fromContextWindow: 262144,
+			toContextWindow: 1048576,
+		});
+
+		const rendered = fakeThis.chatContainer.children.flatMap((child: any) => child.render(120)).join("\n");
+		expect(rendered).toContain("k3 context window upgraded: 256k → 1M (cache preserved)");
+		expect(fakeThis.footer.invalidate).toHaveBeenCalled();
+	});
+
 	test("non-agent inline loaders can update and clear branch summary, dream, and compaction statuses", () => {
 		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
 
@@ -477,6 +498,212 @@ describe("InteractiveMode.createExtensionUIContext setTheme", () => {
 		expect(result.success).toBe(false);
 		expect(settingsManager.setTheme).not.toHaveBeenCalled();
 		expect(fakeThis.ui.requestRender).not.toHaveBeenCalled();
+	});
+});
+
+describe("InteractiveMode extension dialog queue", () => {
+	test("serializes ask with other blocking extension dialogs", async () => {
+		let resolveSelector!: (value: string | undefined) => void;
+		const showExtensionSelector = vi.fn(
+			() =>
+				new Promise<string | undefined>((resolve) => {
+					resolveSelector = resolve;
+				}),
+		);
+		const showExtensionAsk = vi.fn(async () => ({ selected: ["yes"] }));
+		const fakeThis: any = {
+			extensionDialogQueue: Promise.resolve(),
+			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
+			showExtensionSelector,
+			showExtensionAsk,
+		};
+		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
+
+		const selector = uiContext.select("First", ["a", "b"]);
+		const ask = uiContext.ask({ question: "Second?", options: ["yes", "no"] });
+		await Promise.resolve();
+
+		expect(showExtensionSelector).toHaveBeenCalledTimes(1);
+		expect(showExtensionAsk).not.toHaveBeenCalled();
+
+		resolveSelector("a");
+		await expect(selector).resolves.toBe("a");
+		await expect(ask).resolves.toEqual({ selected: ["yes"] });
+		expect(showExtensionAsk).toHaveBeenCalledTimes(1);
+	});
+
+	test("settles a queued ask immediately on abort without opening it or reordering later dialogs", async () => {
+		let resolveSelector!: (value: string | undefined) => void;
+		const showExtensionSelector = vi.fn(
+			() =>
+				new Promise<string | undefined>((resolve) => {
+					resolveSelector = resolve;
+				}),
+		);
+		const showExtensionAsk = vi.fn(async (request: { question: string }) => ({ selected: [request.question] }));
+		const fakeThis: any = {
+			extensionDialogQueue: Promise.resolve(),
+			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
+			showExtensionSelector,
+			showExtensionAsk,
+		};
+		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
+		const controller = new AbortController();
+
+		const selector = uiContext.select("First", ["a", "b"]);
+		const abortedAsk = uiContext.ask({ question: "aborted" }, { signal: controller.signal });
+		const laterAsk = uiContext.ask({ question: "later" });
+		await Promise.resolve();
+		expect(showExtensionSelector).toHaveBeenCalledTimes(1);
+		expect(showExtensionAsk).not.toHaveBeenCalled();
+
+		controller.abort();
+		// This must settle before the unrelated selector does; the old queue only
+		// observed the abort after the selector released its slot.
+		await expect(abortedAsk).resolves.toBeUndefined();
+		expect(showExtensionAsk).not.toHaveBeenCalled();
+
+		resolveSelector("a");
+		await expect(selector).resolves.toBe("a");
+		await expect(laterAsk).resolves.toEqual({ selected: ["later"] });
+		expect(showExtensionAsk).toHaveBeenCalledTimes(1);
+		expect(showExtensionAsk).toHaveBeenCalledWith({ question: "later" }, undefined);
+	});
+});
+
+describe("InteractiveMode.showExtensionAsk lifecycle", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	type AskFakeThis = {
+		ui: { setFocus: ReturnType<typeof vi.fn>; requestRender: ReturnType<typeof vi.fn> };
+		editorContainer: Container;
+		extensionAsk: unknown;
+		restoreEditorComponent: ReturnType<typeof vi.fn>;
+		cancelBackgroundAgents: ReturnType<typeof vi.fn>;
+		restoreQueuedMessagesToEditor: ReturnType<typeof vi.fn>;
+		hideExtensionAsk: unknown;
+	};
+
+	function createAskFakeThis(): AskFakeThis {
+		const fakeThis: AskFakeThis = {
+			ui: { setFocus: vi.fn(), requestRender: vi.fn() },
+			editorContainer: new Container(),
+			extensionAsk: undefined,
+			restoreEditorComponent: vi.fn(),
+			cancelBackgroundAgents: vi.fn(),
+			restoreQueuedMessagesToEditor: vi.fn(),
+			hideExtensionAsk: (InteractiveMode as any).prototype.hideExtensionAsk,
+		};
+		return fakeThis;
+	}
+
+	function show(fakeThis: AskFakeThis, request: object, opts?: object) {
+		return (InteractiveMode as any).prototype.showExtensionAsk.call(fakeThis, request, opts);
+	}
+
+	test("mounts the question, focuses it, and resolves the submitted answer, then restores the editor", async () => {
+		const fakeThis = createAskFakeThis();
+		const p = show(fakeThis, { question: "DB?", options: ["a", "b"] });
+
+		// Mounted into the shared editor container and focused exactly once.
+		expect(fakeThis.editorContainer.children).toHaveLength(1);
+		expect(fakeThis.ui.setFocus).toHaveBeenCalledWith(fakeThis.extensionAsk);
+		expect(fakeThis.extensionAsk).toBeDefined();
+
+		// Submit the highlighted option.
+		(fakeThis.extensionAsk as any).handleInput("\n");
+
+		await expect(p).resolves.toEqual({ selected: ["a"], customText: undefined });
+		// Torn down exactly once: component disposed/cleared and editor restored.
+		expect(fakeThis.extensionAsk).toBeUndefined();
+		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+	});
+
+	test("Esc stops the whole agent turn without leaving a mounted component", async () => {
+		const fakeThis = createAskFakeThis();
+		const p = show(fakeThis, { question: "DB?", options: ["a", "b"] });
+		(fakeThis.extensionAsk as any).handleInput("\x1b"); // Esc
+		await expect(p).resolves.toBeUndefined();
+		expect(fakeThis.extensionAsk).toBeUndefined();
+		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+		expect(fakeThis.cancelBackgroundAgents).toHaveBeenCalledTimes(1);
+		expect(fakeThis.restoreQueuedMessagesToEditor).toHaveBeenCalledWith({ abort: true });
+	});
+
+	test("aborting while pending resolves undefined, disposes, and restores the editor (no orphaned promise)", async () => {
+		const fakeThis = createAskFakeThis();
+		const controller = new AbortController();
+		const p = show(fakeThis, { question: "DB?", options: ["a"] }, { signal: controller.signal });
+		expect(fakeThis.extensionAsk).toBeDefined();
+
+		controller.abort();
+		await expect(p).resolves.toBeUndefined();
+		expect(fakeThis.extensionAsk).toBeUndefined();
+		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+	});
+
+	test("an already-aborted signal resolves undefined without mounting or focusing", async () => {
+		const fakeThis = createAskFakeThis();
+		const controller = new AbortController();
+		controller.abort();
+		const p = show(fakeThis, { question: "DB?", options: ["a"] }, { signal: controller.signal });
+		await expect(p).resolves.toBeUndefined();
+		expect(fakeThis.editorContainer.children).toHaveLength(0);
+		expect(fakeThis.ui.setFocus).not.toHaveBeenCalled();
+		expect(fakeThis.extensionAsk).toBeUndefined();
+	});
+
+	test("a multiline request builds the editor branch and tears down cleanly on abort", async () => {
+		// The multiline Editor is only constructed when a real TUI is provided.
+		const terminal = new VirtualTerminal(60, 16);
+		const ui = new TUI(terminal);
+		const fakeThis: any = {
+			ui,
+			editorContainer: new Container(),
+			extensionAsk: undefined,
+			restoreEditorComponent: vi.fn(),
+			hideExtensionAsk: (InteractiveMode as any).prototype.hideExtensionAsk,
+		};
+		const controller = new AbortController();
+		const p = (InteractiveMode as any).prototype.showExtensionAsk.call(
+			fakeThis,
+			{ question: "Notes?", multiline: true },
+			{ signal: controller.signal },
+		);
+		// Constructed and mounted without throwing (exercises the Editor branch).
+		expect(fakeThis.editorContainer.children).toHaveLength(1);
+		expect(fakeThis.extensionAsk).toBeDefined();
+
+		controller.abort();
+		await expect(p).resolves.toBeUndefined();
+		expect(fakeThis.extensionAsk).toBeUndefined();
+		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+	});
+
+	test("a timeout stops the agent turn and disposes the countdown interval", async () => {
+		vi.useFakeTimers();
+		try {
+			const fakeThis = createAskFakeThis();
+			const p = show(fakeThis, { question: "DB?", options: ["a"] }, { timeout: 3000 });
+			expect(fakeThis.extensionAsk).toBeDefined();
+
+			// The countdown ticks every second and expires at 0 → stop the turn.
+			vi.advanceTimersByTime(3000);
+			await expect(p).resolves.toBeUndefined();
+			expect(fakeThis.extensionAsk).toBeUndefined();
+			expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+			expect(fakeThis.cancelBackgroundAgents).toHaveBeenCalledTimes(1);
+			expect(fakeThis.restoreQueuedMessagesToEditor).toHaveBeenCalledWith({ abort: true });
+
+			// Interval disposed: no further ticks drive renders after teardown.
+			const rendersAfter = fakeThis.ui.requestRender.mock.calls.length;
+			vi.advanceTimersByTime(5000);
+			expect(fakeThis.ui.requestRender.mock.calls.length).toBe(rendersAfter);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

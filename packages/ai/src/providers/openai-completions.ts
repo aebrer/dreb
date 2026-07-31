@@ -375,7 +375,8 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 	maybeAddOpenRouterAnthropicCacheControl(model, messages);
 
 	const params: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
-		model: model.id,
+		// Context-tiered models (e.g. Kimi K3) send a cheaper variant id on the wire.
+		model: model.wireModelId ?? model.id,
 		messages,
 		stream: true,
 	};

@@ -452,3 +452,45 @@ describe("openai-completions kimi thinkingFormat", () => {
 		]);
 	});
 });
+
+describe("openai-completions wireModelId", () => {
+	beforeEach(() => {
+		mockState.lastParams = undefined;
+		mockState.chunks = undefined;
+	});
+
+	it("sends wireModelId on the wire while recording the registry model id", async () => {
+		const model: Model<"openai-completions"> = {
+			...KIMI_MODEL,
+			provider: "kimi-coding-oauth",
+			id: "k3",
+			wireModelId: "k3-256k",
+			contextWindow: 262144,
+		};
+
+		const result = await streamSimple(
+			model,
+			{ messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey: "test" },
+		).result();
+
+		expect((mockState.lastParams as { model?: string }).model).toBe("k3-256k");
+		expect(result.model).toBe("k3");
+	});
+
+	it("sends the registry model id when wireModelId is unset", async () => {
+		const model: Model<"openai-completions"> = {
+			...KIMI_MODEL,
+			provider: "kimi-coding-oauth",
+			id: "k3",
+		};
+
+		await streamSimple(
+			model,
+			{ messages: [{ role: "user", content: "Hi", timestamp: Date.now() }] },
+			{ apiKey: "test" },
+		).result();
+
+		expect((mockState.lastParams as { model?: string }).model).toBe("k3");
+	});
+});

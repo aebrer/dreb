@@ -17,23 +17,27 @@ function makeSinks(overrides: Partial<ChildLineSinks> = {}): ChildLineSinks & {
 	messages: Array<{ role: string; content: any[] }>;
 	plains: string[];
 	models: string[];
+	thinkings: string[];
 	progress: string[];
 } {
 	const events: Record<string, unknown>[] = [];
 	const messages: Array<{ role: string; content: any[] }> = [];
 	const plains: string[] = [];
 	const models: string[] = [];
+	const thinkings: string[] = [];
 	const progress: string[] = [];
 	return {
 		events,
 		messages,
 		plains,
 		models,
+		thinkings,
 		progress,
 		onEvent: (e) => events.push(e),
 		onAssistantMessage: (m) => messages.push(m),
 		onProgress: (t) => progress.push(t),
 		onModel: (m) => models.push(m),
+		onThinking: (thinking) => thinkings.push(thinking),
 		onPlainLine: (l) => plains.push(l),
 		toolNameRef: { current: "" },
 		...overrides,
@@ -78,7 +82,14 @@ describe("handleChildJsonlLine — event relay", () => {
 
 	it("keeps existing extraction behavior alongside the relay", () => {
 		const sinks = makeSinks();
-		handleChildJsonlLine(JSON.stringify({ type: "agent_start", model: { id: "claude-x" } }), sinks);
+		handleChildJsonlLine(
+			JSON.stringify({
+				type: "agent_start",
+				model: { provider: "anthropic", id: "claude-x" },
+				thinkingLevel: "high",
+			}),
+			sinks,
+		);
 		handleChildJsonlLine(
 			JSON.stringify({
 				type: "message_end",
@@ -89,9 +100,30 @@ describe("handleChildJsonlLine — event relay", () => {
 		handleChildJsonlLine(JSON.stringify({ type: "tool_execution_start", toolName: "bash" }), sinks);
 		handleChildJsonlLine(JSON.stringify({ type: "tool_execution_end" }), sinks);
 
-		expect(sinks.models).toEqual(["claude-x"]);
+		expect(sinks.models).toEqual(["anthropic/claude-x"]);
+		expect(sinks.thinkings).toEqual(["high"]);
 		expect(sinks.messages).toHaveLength(1);
 		expect(sinks.progress).toEqual(["Using bash...", "bash done"]);
+	});
+
+	it("preserves provider identity for model IDs that contain slashes", () => {
+		const sinks = makeSinks();
+		handleChildJsonlLine(
+			JSON.stringify({ type: "agent_start", model: { provider: "openrouter", id: "org/model" } }),
+			sinks,
+		);
+		expect(sinks.models).toEqual(["openrouter/org/model"]);
+	});
+
+	it("ignores invalid thinking metadata while relaying the event", () => {
+		const sinks = makeSinks();
+		handleChildJsonlLine(
+			JSON.stringify({ type: "agent_start", model: { id: "claude-x" }, thinkingLevel: "extreme" }),
+			sinks,
+		);
+		expect(sinks.models).toEqual(["claude-x"]);
+		expect(sinks.thinkings).toEqual([]);
+		expect(sinks.events).toHaveLength(1);
 	});
 
 	it("works without an onEvent sink (relay is opt-in)", () => {
@@ -166,6 +198,14 @@ describe("toRpcBackgroundAgentInfo", () => {
 			status: "running",
 			sessionDir: "/home/u/.dreb/agent/subagent-sessions/a1b2c3",
 			cwd: "/home/u/project",
+			arbitrations: [
+				{
+					status: "success",
+					proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+					final: { agent: "feature-dev", model: "provider/worker", thinking: "medium" },
+					changed: ["agent", "model", "thinking"],
+				},
+			],
 		};
 		expect(toRpcBackgroundAgentInfo(info)).toEqual({
 			agentId: "a1b2c3",
@@ -176,6 +216,14 @@ describe("toRpcBackgroundAgentInfo", () => {
 			sessionDir: "/home/u/.dreb/agent/subagent-sessions/a1b2c3",
 			sessionFile: undefined,
 			cwd: "/home/u/project",
+			arbitrations: [
+				{
+					status: "success",
+					proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+					final: { agent: "feature-dev", model: "provider/worker", thinking: "medium" },
+					changed: ["agent", "model", "thinking"],
+				},
+			],
 		});
 	});
 });

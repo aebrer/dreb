@@ -1515,6 +1515,23 @@ describe("Kimi For Coding OAuth", () => {
 			expect(result.filter((m) => m.provider === "kimi-coding-oauth").map((m) => m.id)).toEqual(["k3"]);
 		});
 
+		it("never surfaces the k3-256k wire variant as a separate selectable model", () => {
+			const creds: OAuthCredentials & { models?: KimiModelInfo[] } = {
+				refresh: "r",
+				access: "a",
+				expires: Date.now() + 120_000,
+				models: [
+					{ id: "k3", display_name: "K3", context_length: 1048576 },
+					{ id: "k3-256k", display_name: "K3 256k", context_length: 262144 },
+				],
+			};
+
+			const result = kimiCodingOAuthProvider.modifyModels!(buildStaticModels(), creds);
+			const ids = result.filter((m) => m.provider === "kimi-coding-oauth").map((m) => m.id);
+
+			expect(ids).toEqual(["k3"]);
+		});
+
 		it("preserves static IDs and appends an unknown legacy model", () => {
 			const creds: OAuthCredentials & {
 				modelId?: string;

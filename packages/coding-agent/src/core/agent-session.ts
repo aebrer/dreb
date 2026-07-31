@@ -35,6 +35,7 @@ import {
 } from "./compaction/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
+import { DispatchArbiter, type DispatchArbiterDeps } from "./dispatch-arbiter.js";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.js";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
 import {
@@ -65,7 +66,16 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.js";
 import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./forbidden-commands.js";
-import { type GitRepoState, getGitRepoState } from "./git-repo-state.js";
+import { type GitRepoState, getGitRepoState, getGitStatusMetadata } from "./git-repo-state.js";
+import { findGitRoot } from "./git-root.js";
+import {
+	deriveK3ContextTierModel,
+	isK3256kTier,
+	K3_1M_CONTEXT_WINDOW,
+	K3_256K_CONTEXT_WINDOW,
+	K3_UPGRADE_CUTOFF_TOKENS,
+	shouldUpgradeK3Tier,
+} from "./k3-context-tier.js";
 import { log } from "./logger.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -88,7 +98,9 @@ import {
 	discoverAgentTypes,
 	getRunningBackgroundAgents,
 	type SessionTask,
+	type SubagentArbitrationEvent,
 	type SubagentResult,
+	type SubagentStepMetadata,
 } from "./tools/index.js";
 import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
@@ -131,6 +143,7 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| AgentEvent
+	| SubagentArbitrationEvent
 	| { type: "auto_compaction_start"; reason: "threshold" | "overflow" }
 	| {
 			type: "auto_compaction_end";
@@ -142,7 +155,16 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string; sessionDir?: string }
-	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; sessionFile?: string }
+	| {
+			type: "background_agent_end";
+			agentId: string;
+			agentType: string;
+			success: boolean;
+			model?: string;
+			thinking?: ThinkingLevel;
+			steps?: SubagentStepMetadata[];
+			sessionFile?: string;
+	  }
 	| {
 			type: "background_agent_event";
 			agentId: string;
@@ -152,7 +174,15 @@ export type AgentSessionEvent =
 	| { type: "parent_paused_for_background_agents"; runningAgentCount: number; turnsUsed: number; turnLimit: number }
 	| { type: "session_name_changed"; name: string }
 	| { type: "tasks_update"; tasks: readonly SessionTask[] }
-	| { type: "suggest_next"; command: string };
+	| { type: "suggest_next"; command: string }
+	| {
+			/** The wire model tier auto-upgraded because the session context outgrew the smaller tier (e.g. Kimi K3 256k → 1M). */
+			type: "context_window_upgrade";
+			provider: string;
+			modelId: string;
+			fromContextWindow: number;
+			toContextWindow: number;
+	  };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -189,6 +219,8 @@ export interface AgentSessionConfig {
 	uiType?: string;
 	/** Optional performance tracker override, primarily for isolated tests. */
 	performanceTracker?: PerformanceTracker;
+	/** Inject the headless arbiter completion seam for deterministic, offline integration tests. */
+	dispatchArbiterComplete?: DispatchArbiterDeps["complete"];
 }
 
 export interface ExtensionBindings {
@@ -358,6 +390,9 @@ export class AgentSession {
 	// Git repo state captured once at session start
 	private _gitRepoState: GitRepoState | undefined;
 
+	// Fully headless pre-spawn router. It owns only bounded parent activity context.
+	private _dispatchArbiter: DispatchArbiter;
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -388,6 +423,30 @@ export class AgentSession {
 		// Capture git repo state once at session start (before building runtime/system prompt)
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
 
+		this._dispatchArbiter = new DispatchArbiter({
+			getSettings: () => this.settingsManager.getGlobalSubagentArbiterSettings(),
+			getCandidateModels: () => this._scopedModels,
+			getModelRegistry: () => this._modelRegistry,
+			getMessages: () => this.agent.state.messages,
+			getParentModel: () => this.model,
+			getSessionTitle: () => this.sessionName,
+			getRepoMetadata: (cwd) => {
+				const gitRoot = findGitRoot(cwd);
+				const isSessionCwd = resolve(cwd) === resolve(this._cwd);
+				const currentStatus = gitRoot
+					? (getGitStatusMetadata(cwd) ?? (isSessionCwd ? this._gitRepoState : undefined))
+					: undefined;
+				return {
+					repo: gitRoot ? basename(gitRoot) : undefined,
+					cwd,
+					branch: currentStatus?.branch,
+					dirtyCount: currentStatus?.dirtyCount,
+				};
+			},
+			getExtraSecretPatterns: () => this._compileExtraSecretPatterns(),
+			complete: config.dispatchArbiterComplete,
+		});
+
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
@@ -408,6 +467,25 @@ export class AgentSession {
 	/** Performance tracker for recording and querying model throughput */
 	getPerformanceTracker(): PerformanceTracker {
 		return this.performanceTracker;
+	}
+
+	private _compileExtraSecretPatterns(): SecretPattern[] | undefined {
+		return this.settingsManager.getSecretOutputPatterns()?.flatMap((pattern) => {
+			if (!pattern.pattern || typeof pattern.pattern !== "string" || pattern.pattern.trim() === "") {
+				console.warn(
+					`[secret-scrubber] Skipping empty or invalid pattern in secretOutputPatterns: "${pattern.name}"`,
+				);
+				return [];
+			}
+			try {
+				return [{ name: pattern.name, pattern: new RegExp(pattern.pattern, "g") }];
+			} catch (error) {
+				console.warn(
+					`[secret-scrubber] Skipping invalid regex in secretOutputPatterns "${pattern.name}": ${pattern.pattern} — ${error instanceof Error ? error.message : String(error)}`,
+				);
+				return [];
+			}
+		});
 	}
 
 	/**
@@ -501,21 +579,7 @@ export class AgentSession {
 		this.agent.setAfterToolCall(async ({ toolCall, args, result, isError }) => {
 			// Scrub secrets from tool output — runs before extensions, cannot be bypassed
 			let scrubbedContent = result.content;
-			const extraSecretPatterns = this.settingsManager?.getSecretOutputPatterns();
-			const compiledExtras: SecretPattern[] | undefined = extraSecretPatterns?.flatMap((p) => {
-				if (!p.pattern || typeof p.pattern !== "string" || p.pattern.trim() === "") {
-					console.warn(`[secret-scrubber] Skipping empty or invalid pattern in secretOutputPatterns: "${p.name}"`);
-					return [];
-				}
-				try {
-					return [{ name: p.name, pattern: new RegExp(p.pattern, "g") }];
-				} catch (err) {
-					console.warn(
-						`[secret-scrubber] Skipping invalid regex in secretOutputPatterns "${p.name}": ${p.pattern} — ${err instanceof Error ? err.message : String(err)}`,
-					);
-					return [];
-				}
-			});
+			const compiledExtras = this._compileExtraSecretPatterns();
 			let totalRedactions = 0;
 			scrubbedContent = scrubbedContent.map((item) => {
 				if (item.type === "text" && item.text) {
@@ -741,6 +805,15 @@ export class AgentSession {
 	 */
 	_handleBackgroundComplete(agentId: string, result: SubagentResult, cancelled: boolean): void {
 		const parts: string[] = [];
+		if (result.model || result.thinking) {
+			const metadata = [
+				result.model ? `model: ${result.model}` : undefined,
+				result.thinking ? `thinking: ${result.thinking}` : undefined,
+			]
+				.filter((value): value is string => value !== undefined)
+				.join(", ");
+			parts.push(`Execution metadata: ${metadata}`);
+		}
 		if (cancelled) {
 			parts.push("This agent was cancelled by the user.");
 		}
@@ -816,6 +889,9 @@ export class AgentSession {
 				agentId,
 				agentType: result.agent,
 				success: result.exitCode === 0,
+				model: result.model,
+				thinking: result.thinking,
+				steps: result.steps,
 				sessionFile: result.sessionFile,
 			});
 		} catch (emitErr) {
@@ -990,6 +1066,17 @@ export class AgentSession {
 		// Notify all listeners
 		this._emit(event);
 
+		// Keep a small, mode-independent rolling context for the headless arbiter.
+		if (event.type === "message_end") {
+			this._dispatchArbiter.onMessageEnd(event.message);
+		} else if (event.type === "tool_execution_end") {
+			this._dispatchArbiter.onToolEnd({
+				toolName: event.toolName,
+				isError: event.isError,
+				result: event.result,
+			});
+		}
+
 		// Handle session persistence
 		if (event.type === "message_end") {
 			// Check if this is a custom message from extensions
@@ -1099,7 +1186,12 @@ export class AgentSession {
 
 	/** Emit extension events based on agent events */
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
-		if (!this._extensionRunner) return;
+		// The runner is created unconditionally (so built-in tools like ask_user
+		// always have a UI context). When no extensions are loaded there are no
+		// handlers to invoke — return synchronously to avoid inserting an extra
+		// await tick per event, which would otherwise delay the final agent_end
+		// emission past when prompt() resolves.
+		if (!this._extensionRunner || !this._extensionRunner.hasExtensions) return;
 
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
@@ -1954,6 +2046,7 @@ export class AgentSession {
 		this._disconnectFromAgent();
 		await this.abort();
 		this.agent.reset();
+		this._dispatchArbiter.clearContext();
 		this.sessionManager.newSession({ parentSession: options?.parentSession });
 		this.agent.sessionId = this.sessionManager.getSessionId();
 		this._steeringMessages = [];
@@ -2017,7 +2110,7 @@ export class AgentSession {
 
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
-		this.agent.setModel(model);
+		this.agent.setModel(this._applyContextTier(model));
 		this._refreshThinkingDisplay(model);
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
@@ -2092,7 +2185,7 @@ export class AgentSession {
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.thinkingLevel);
 
 		// Apply model
-		this.agent.setModel(next.model);
+		this.agent.setModel(this._applyContextTier(next.model));
 		this._refreshThinkingDisplay(next.model);
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
@@ -2128,7 +2221,7 @@ export class AgentSession {
 		}
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
-		this.agent.setModel(nextModel);
+		this.agent.setModel(this._applyContextTier(nextModel));
 		this._refreshThinkingDisplay(nextModel);
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
@@ -2351,6 +2444,11 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// Re-derive the K3 context tier: the compacted context is small again,
+			// so the session returns to the cheaper 256k wire tier.
+			if (this.model) {
+				this.agent.setModel(this._applyContextTier(this.model));
+			}
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2405,12 +2503,11 @@ export class AgentSession {
 	 */
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
 		const settings = this.settingsManager.getCompactionSettings();
-		if (!settings.enabled) return;
 
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
 
-		const contextWindow = this.model?.contextWindow ?? 0;
+		let contextWindow = this.model?.contextWindow ?? 0;
 
 		// Skip overflow check if the message came from a different model.
 		// This handles the case where user switched from a smaller-context model (e.g. opus)
@@ -2431,6 +2528,26 @@ export class AgentSession {
 
 		// Case 1: Overflow - LLM returned context overflow error
 		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
+			// K3 auto context tier: an overflow in the 256k tier upgrades to the
+			// 1M tier instead of compacting — the Kimi backend grows the prompt
+			// cache seamlessly. This runs even when compaction is disabled since
+			// no context reduction is involved.
+			if (this._tryUpgradeK3ContextTier()) {
+				// Remove the error message from agent state (it IS saved to session
+				// for history, but we don't want it in context for the retry)
+				this._removeLastAssistantMessage();
+				setTimeout(() => {
+					this.agent.continue().catch((err) => {
+						this.warnInSession(
+							`Agent failed to continue after context window upgrade: ${err instanceof Error ? err.message : String(err)}`,
+						);
+					});
+				}, 100);
+				return;
+			}
+
+			if (!settings.enabled) return;
+
 			if (this._overflowRecoveryAttempted) {
 				this._emit({
 					type: "auto_compaction_end",
@@ -2446,10 +2563,7 @@ export class AgentSession {
 			this._overflowRecoveryAttempted = true;
 			// Remove the error message from agent state (it IS saved to session for history,
 			// but we don't want it in context for the retry)
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.replaceMessages(messages.slice(0, -1));
-			}
+			this._removeLastAssistantMessage();
 			await this._runAutoCompaction("overflow", true);
 			return;
 		}
@@ -2477,9 +2591,69 @@ export class AgentSession {
 		} else {
 			contextTokens = calculateContextTokens(assistantMessage.usage);
 		}
+
+		// K3 auto context tier: reaching the 256k cutoff upgrades to the 1M tier
+		// instead of compacting. This is model-capability management, not context
+		// reduction, so it applies even when compaction is disabled. The cutoff is
+		// fixed at the default compaction threshold of the 256k window; a
+		// user-lowered compaction threshold takes precedence and effectively
+		// disables the upgrade.
+		if (shouldUpgradeK3Tier(this.model, contextTokens)) {
+			// A user-lowered compaction threshold takes precedence over the
+			// upgrade: if the user's compact point for the 256k window sits below
+			// the default cutoff and is already exceeded, compact instead.
+			const userCompactPoint = K3_256K_CONTEXT_WINDOW - settings.reserveTokens;
+			const userThresholdPreempts =
+				settings.enabled && userCompactPoint < K3_UPGRADE_CUTOFF_TOKENS && contextTokens > userCompactPoint;
+			if (!userThresholdPreempts) {
+				this._tryUpgradeK3ContextTier();
+				contextWindow = this.model?.contextWindow ?? contextWindow;
+			}
+		}
+
+		if (!settings.enabled) return;
+
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
 			await this._runAutoCompaction("threshold", false);
 		}
+	}
+
+	/**
+	 * Apply the K3 auto context tier to a model being set on the agent. The
+	 * user-facing `k3` model runs on the cheaper `k3-256k` wire model ID until
+	 * the session context grows past the 256k cutoff; no-op for other models.
+	 * See k3-context-tier.ts.
+	 */
+	private _applyContextTier(model: Model<any>): Model<any> {
+		return deriveK3ContextTierModel(model, estimateContextTokens(this.agent.state.messages).tokens);
+	}
+
+	/** Remove the last message from agent state when it is an assistant message. */
+	private _removeLastAssistantMessage(): void {
+		const messages = this.agent.state.messages;
+		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+			this.agent.replaceMessages(messages.slice(0, -1));
+		}
+	}
+
+	/**
+	 * Upgrade the K3 auto context tier from 256k to 1M. The Kimi backend
+	 * upgrades the prompt cache seamlessly, so no context is lost or
+	 * compacted. Returns true when the upgrade was applied.
+	 */
+	private _tryUpgradeK3ContextTier(): boolean {
+		const model = this.model;
+		if (!model || !isK3256kTier(model)) return false;
+		const upgraded = deriveK3ContextTierModel(model, K3_UPGRADE_CUTOFF_TOKENS + 1);
+		this.agent.setModel(upgraded);
+		this._emit({
+			type: "context_window_upgrade",
+			provider: upgraded.provider,
+			modelId: upgraded.id,
+			fromContextWindow: K3_256K_CONTEXT_WINDOW,
+			toContextWindow: K3_1M_CONTEXT_WINDOW,
+		});
+		return true;
 	}
 
 	/**
@@ -2569,6 +2743,11 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// Re-derive the K3 context tier: the compacted context is small again,
+			// so the session returns to the cheaper 256k wire tier.
+			if (this.model) {
+				this.agent.setModel(this._applyContextTier(this.model));
+			}
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2742,7 +2921,7 @@ export class AgentSession {
 			return;
 		}
 
-		this.agent.setModel(refreshedModel);
+		this.agent.setModel(this._applyContextTier(refreshedModel));
 		this._refreshThinkingDisplay(refreshedModel);
 	}
 
@@ -2901,10 +3080,16 @@ export class AgentSession {
 			? wrapRegisteredTools(allCustomTools, this._extensionRunner)
 			: [];
 
+		// Give base tools a per-execution extension context so built-ins like
+		// ask_user can reach ctx.ui. createContext() snapshots hasUI at call time,
+		// so print/RPC-without-host modes degrade to the no-op UI (hasUI === false).
+		const baseToolCtxFactory = this._extensionRunner
+			? () => (this._extensionRunner as ExtensionRunner).createContext()
+			: undefined;
 		const toolRegistry = new Map(
 			Array.from(this._baseToolDefinitions.values()).map((definition) => [
 				definition.name,
-				wrapToolDefinition(definition),
+				wrapToolDefinition(definition, baseToolCtxFactory),
 			]),
 		);
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
@@ -2987,6 +3172,12 @@ export class AgentSession {
 						parentSessionFile: () => this.sessionFile,
 						modelRegistry: this._modelRegistry,
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
+						defaultThinkingLevel: () => this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+						arbitrate: (request, signal) => this._dispatchArbiter.arbitrate(request, signal),
+						onArbitration: (event) => {
+							this.sessionManager.appendCustomEntry("subagent_arbitration", event);
+							this._emit(event);
+						},
 						onBackgroundStart: (agentId, agentType, taskSummary, sessionDir) => {
 							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary, sessionDir });
 						},
@@ -3010,18 +3201,17 @@ export class AgentSession {
 			}
 		}
 
-		const hasExtensions = extensionsResult.extensions.length > 0;
-		const hasCustomTools = this._customTools.length > 0;
-		this._extensionRunner =
-			hasExtensions || hasCustomTools
-				? new ExtensionRunner(
-						extensionsResult.extensions,
-						extensionsResult.runtime,
-						this._cwd,
-						this.sessionManager,
-						this._modelRegistry,
-					)
-				: undefined;
+		// The runner also owns the cross-surface UI context used by built-in
+		// tools such as ask_user. Create it even when no third-party extensions
+		// are loaded; otherwise ordinary TUI/Dashboard sessions give base tools
+		// no ctx.ui and ask_user can never open its dialog.
+		this._extensionRunner = new ExtensionRunner(
+			extensionsResult.extensions,
+			extensionsResult.runtime,
+			this._cwd,
+			this.sessionManager,
+			this._modelRegistry,
+		);
 		if (this._extensionRunnerRef) {
 			this._extensionRunnerRef.current = this._extensionRunner;
 		}
@@ -3045,6 +3235,7 @@ export class AgentSession {
 					"subagent",
 					"wait",
 					"search",
+					"ask_user",
 					"skill",
 					"tasks_update",
 					"suggest_next",
@@ -3358,6 +3549,7 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this._pendingNextTurnMessages = [];
+		this._dispatchArbiter.clearContext();
 
 		// Set new session
 		this.sessionManager.setSessionFile(sessionPath);
@@ -3387,7 +3579,7 @@ export class AgentSession {
 				(m) => m.provider === sessionContext.model!.provider && m.id === sessionContext.model!.modelId,
 			);
 			if (match) {
-				this.agent.setModel(match);
+				this.agent.setModel(this._applyContextTier(match));
 				this._refreshThinkingDisplay(match);
 				await this._emitModelSelect(match, previousModel, "restore");
 			}

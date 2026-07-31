@@ -174,6 +174,7 @@ const noOpUIContext: ExtensionUIContext = {
 	select: async () => undefined,
 	confirm: async () => false,
 	input: async () => undefined,
+	ask: async () => undefined,
 	notify: () => {},
 	onTerminalInput: () => () => {},
 	setStatus: () => {},
@@ -446,6 +447,16 @@ export class ExtensionRunner {
 		for (const listener of this.errorListeners) {
 			listener(error);
 		}
+	}
+
+	/**
+	 * Whether any extensions are loaded. The runner is now created
+	 * unconditionally so built-in tools (e.g. ask_user) always have a UI
+	 * context, but when no extensions are present there are no event handlers
+	 * to run — callers can skip the async emit path entirely.
+	 */
+	get hasExtensions(): boolean {
+		return this.extensions.length > 0;
 	}
 
 	hasHandlers(eventType: string): boolean {

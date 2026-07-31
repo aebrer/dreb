@@ -10,6 +10,7 @@ import { createGrepTool, type GrepOperations, grepTool } from "../src/core/tools
 import { allToolDefinitions, allTools, createAllToolDefinitions, createAllTools } from "../src/core/tools/index.js";
 import { lsTool } from "../src/core/tools/ls.js";
 import { readTool } from "../src/core/tools/read.js";
+import { wrapToolDefinition } from "../src/core/tools/tool-definition-wrapper.js";
 import { writeTool } from "../src/core/tools/write.js";
 import * as shellModule from "../src/utils/shell.js";
 
@@ -947,5 +948,58 @@ describe("allTools / allToolDefinitions", () => {
 	it("createAllTools includes search unconditionally", () => {
 		const tools = createAllTools("/tmp");
 		expect(tools.search).toBeDefined();
+	});
+
+	it("includes ask_user in both registries unconditionally", () => {
+		expect("ask_user" in allTools).toBe(true);
+		expect("ask_user" in allToolDefinitions).toBe(true);
+		expect(allTools.ask_user.name).toBe("ask_user");
+		expect(typeof allTools.ask_user.execute).toBe("function");
+		expect(createAllToolDefinitions("/tmp").ask_user).toBeDefined();
+		expect(createAllTools("/tmp").ask_user).toBeDefined();
+	});
+});
+
+describe("wrapToolDefinition ctxFactory (base-tool ctx.ui wiring)", () => {
+	it("forwards a per-execution ExtensionContext from the factory to execute", async () => {
+		const seen: unknown[] = [];
+		const definition = {
+			name: "probe",
+			label: "probe",
+			description: "d",
+			parameters: {} as any,
+			execute: async (_id: string, _params: any, _signal: any, _onUpdate: any, ctx: any) => {
+				seen.push(ctx);
+				return { content: [{ type: "text" as const, text: "ok" }] };
+			},
+		};
+		let created = 0;
+		const factory = () => {
+			created += 1;
+			return { hasUI: true, ui: {} } as any;
+		};
+		const tool = wrapToolDefinition(definition as any, factory);
+		await tool.execute("c1", {}, undefined, undefined);
+		await tool.execute("c2", {}, undefined, undefined);
+		expect(created).toBe(2); // resolved fresh per execution
+		expect(seen).toHaveLength(2);
+		expect((seen[0] as any).hasUI).toBe(true);
+	});
+
+	it("passes undefined ctx when no factory is provided", async () => {
+		let received: unknown = "sentinel";
+		const definition = {
+			name: "probe2",
+			label: "probe2",
+			description: "d",
+			parameters: {} as any,
+			execute: async (_id: string, _params: any, _signal: any, _onUpdate: any, ctx: any) => {
+				received = ctx;
+				return { content: [{ type: "text" as const, text: "ok" }] };
+			},
+		};
+		const tool = wrapToolDefinition(definition as any);
+		await tool.execute("c1", {}, undefined, undefined);
+		expect(received).toBeUndefined();
 	});
 });

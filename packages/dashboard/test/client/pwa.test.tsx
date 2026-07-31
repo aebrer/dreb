@@ -376,6 +376,38 @@ describe("PWA client — notification dispatch gating", () => {
 		);
 	});
 
+	it("fires for an ask_user question with the question title as the reason", async () => {
+		setPermission("granted");
+		setHidden(true);
+		const stream = captureEnvelopeHandler();
+		await mountAppAndFlush();
+
+		stream.push({ seq: 1, key: "sess-ask", event: { type: "session_name_changed", name: "Ask Session" } });
+		stream.push({
+			seq: 2,
+			key: "sess-ask",
+			event: {
+				type: "extension_ui_request",
+				id: "ask-1",
+				method: "ask",
+				title: "Choose a database",
+				question: "Which persistence strategy?",
+				options: ["SQLite", "Postgres"],
+			},
+		});
+		await flushEffects();
+
+		expect(document.title).toContain("◆");
+		expect(showNotification).toHaveBeenCalledWith(
+			"dreb — Ask Session",
+			expect.objectContaining({
+				body: "waiting for input — Choose a database",
+				tag: "sess-ask",
+				data: { sessionKey: "sess-ask" },
+			}),
+		);
+	});
+
 	it("fires for store.sessions error status entries with the error text as the reason", async () => {
 		setPermission("granted");
 		setHidden(true);

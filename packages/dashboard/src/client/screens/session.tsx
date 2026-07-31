@@ -20,7 +20,7 @@ import type {
 import { MAX_TOTAL_IMAGE_BYTES } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { ConnectionIndicator, Modal } from "../components/common.js";
-import { Transcript } from "../components/transcript.js";
+import { MarkdownBody, Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import {
@@ -179,6 +179,153 @@ function ExtensionUiModal(props: {
 				</div>
 			</Show>
 		</Modal>
+	);
+}
+
+function AskUiInline(props: {
+	request: ExtensionUiRequest;
+	onRespond: (response: Record<string, unknown>) => void;
+	onStop: () => void;
+	stopping: boolean;
+}): JSX.Element {
+	const options = () => props.request.options ?? [];
+	const allowFreeText = () => props.request.allowFreeText !== false;
+	const multiSelect = () => props.request.multiSelect === true && options().length > 0;
+	const [selected, setSelected] = createSignal<string[]>([]);
+	const [customText, setCustomText] = createSignal("");
+	const respond = (body: Record<string, unknown>) =>
+		props.onRespond({ type: "extension_ui_response", id: props.request.id, ...body });
+
+	const toggle = (option: string) => {
+		if (multiSelect()) {
+			setSelected((current) =>
+				current.includes(option) ? current.filter((value) => value !== option) : [...current, option],
+			);
+		} else {
+			setSelected([option]);
+		}
+	};
+
+	const answer = () => {
+		const text = customText().trim();
+		return { selected: selected(), customText: text ? text : undefined };
+	};
+	const canSubmit = () => answer().selected.length > 0 || answer().customText !== undefined;
+	const submit = () => {
+		if (canSubmit()) respond(answer());
+	};
+	const stop = () => {
+		if (!props.stopping) props.onStop();
+	};
+
+	// Escape stops the whole agent turn, matching the explicit action in this
+	// card and keeping cancellation accessible when the mobile layout obscures
+	// the dock-level stop control.
+	const onKeyDown = (event: KeyboardEvent) => {
+		if (event.key === "Escape") {
+			event.preventDefault();
+			stop();
+		}
+	};
+	onMount(() => window.addEventListener("keydown", onKeyDown));
+	onCleanup(() => window.removeEventListener("keydown", onKeyDown));
+
+	// Optional visible countdown. `expiresAt` is the authoritative RPC-side
+	// deadline and survives reload/resync/drill-in recovery. Fall back to a
+	// local deadline for older runtimes that only send the original duration.
+	const expiresAt =
+		typeof props.request.expiresAt === "number"
+			? props.request.expiresAt
+			: props.request.timeout && props.request.timeout > 0
+				? Date.now() + props.request.timeout
+				: undefined;
+	const secondsRemaining = () =>
+		expiresAt === undefined ? 0 : Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+	const [remaining, setRemaining] = createSignal(secondsRemaining());
+	if (expiresAt !== undefined) {
+		let interval: ReturnType<typeof setInterval> | undefined;
+		const updateCountdown = () => {
+			const next = secondsRemaining();
+			setRemaining(next);
+			if (next <= 0) {
+				if (interval !== undefined) clearInterval(interval);
+				interval = undefined;
+				stop();
+			}
+		};
+		onMount(() => {
+			updateCountdown();
+			if (expiresAt > Date.now()) interval = setInterval(updateCountdown, 1000);
+		});
+		onCleanup(() => {
+			if (interval !== undefined) clearInterval(interval);
+		});
+	}
+
+	return (
+		<section class="ask-inline" aria-label={props.request.title}>
+			<header class="ask-inline-header">
+				{props.request.title}
+				<Show when={expiresAt !== undefined}>
+					<span class="ask-inline-countdown"> (auto-stops in {remaining()}s)</span>
+				</Show>
+			</header>
+			<Show when={props.request.question}>
+				<MarkdownBody text={props.request.question ?? ""} class="ask-inline-question markdown-body" />
+			</Show>
+			<Show when={options().length > 0}>
+				<fieldset class="ask-options">
+					<legend class="ask-options-legend">Answer options</legend>
+					<For each={options()}>
+						{(option) => (
+							<label class="ask-option" classList={{ selected: selected().includes(option) }}>
+								<input
+									type={multiSelect() ? "checkbox" : "radio"}
+									name={`ask-${props.request.id}`}
+									checked={selected().includes(option)}
+									onChange={() => toggle(option)}
+								/>
+								<span>{option}</span>
+							</label>
+						)}
+					</For>
+				</fieldset>
+			</Show>
+			<Show when={allowFreeText()}>
+				<div class="field">
+					<label class="ask-custom-label" for={`ask-custom-${props.request.id}`}>
+						{options().length > 0 ? "Or type your own answer" : "Your answer"}
+					</label>
+					<Show
+						when={props.request.multiline}
+						fallback={
+							<input
+								id={`ask-custom-${props.request.id}`}
+								type="text"
+								value={customText()}
+								placeholder="Type a different answer…"
+								onInput={(e) => setCustomText(e.currentTarget.value)}
+							/>
+						}
+					>
+						<textarea
+							id={`ask-custom-${props.request.id}`}
+							rows="5"
+							value={customText()}
+							onInput={(e) => setCustomText(e.currentTarget.value)}
+						/>
+					</Show>
+				</div>
+			</Show>
+			<div class="ask-inline-actions">
+				<button type="button" class="btn btn-small btn-danger" disabled={props.stopping} onClick={stop}>
+					{props.stopping ? "stopping…" : "■ stop agent"}
+				</button>
+				<button type="button" class="btn btn-small btn-primary" disabled={!canSubmit()} onClick={submit}>
+					submit
+				</button>
+			</div>
+		</section>
 	);
 }
 
@@ -465,6 +612,24 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			setActionError(err instanceof Error ? err.message : String(err));
 		}
 	}
+
+	// Keep a question visible until the server accepts its response. Removing it
+	// before the POST succeeds would leave an unreachable RPC promise on network
+	// or authentication failure. The in-flight set also prevents duplicate sends.
+	const uiResponsesInFlight = new Set<string>();
+	const respondToUiRequest = async (response: Record<string, unknown>) => {
+		const id = typeof response.id === "string" ? response.id : undefined;
+		if (id && uiResponsesInFlight.has(id)) return;
+		if (id) uiResponsesInFlight.add(id);
+		try {
+			await api.extensionUiResponse(props.sessionKey, response);
+			if (id) props.store.resolveUiRequest(props.sessionKey, id);
+		} catch (err) {
+			setActionError(err instanceof Error ? err.message : String(err));
+		} finally {
+			if (id) uiResponsesInFlight.delete(id);
+		}
+	};
 
 	function bytesFromBase64(data: string): Uint8Array<ArrayBuffer> {
 		const binary = atob(data);
@@ -1178,6 +1343,18 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							resetKey={props.sessionKey}
 							imageScope={{ runtimeKey: props.sessionKey }}
 						/>
+						<Show when={session()!.uiRequests[0]} keyed>
+							{(request) => (
+								<Show when={request.method === "ask"}>
+									<AskUiInline
+										request={request}
+										onRespond={respondToUiRequest}
+										onStop={() => void abort()}
+										stopping={stopping()}
+									/>
+								</Show>
+							)}
+						</Show>
 						<For each={session()!.widgets.below}>{(line) => <div class="widget-block">{line}</div>}</For>
 					</Show>
 				</div>
@@ -1254,6 +1431,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 													</span>
 													<span class="task">
 														{agent.agentType} — {agent.taskSummary}
+														<Show when={agent.arbitrations?.at(-1)}>
+															{(record) =>
+																record().status === "failure"
+																	? " · arbitration failed"
+																	: ` · ${record().final?.model ?? record().proposed.model} @ ${record().final?.thinking ?? record().proposed.thinking}`
+															}
+														</Show>
 													</span>
 												</button>
 											</li>
@@ -1534,18 +1718,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</Show>
 			</footer>
 
-			<Show when={session()?.uiRequests[0]}>
+			<Show when={session()?.uiRequests[0]} keyed>
 				{(request) => (
-					<ExtensionUiModal
-						request={request()}
-						onRespond={async (response) => {
-							try {
-								await api.extensionUiResponse(props.sessionKey, response);
-							} catch (err) {
-								setActionError(err instanceof Error ? err.message : String(err));
-							}
-						}}
-					/>
+					// ask_user renders inline in the transcript (see .chat-inner); only
+					// the other extension UI methods use a blocking modal overlay.
+					<Show when={request.method !== "ask"}>
+						<ExtensionUiModal request={request} onRespond={respondToUiRequest} />
+					</Show>
 				)}
 			</Show>
 
