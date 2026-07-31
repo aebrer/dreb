@@ -20,6 +20,13 @@ export interface SubagentLogSource {
 	sessionDir?: string;
 }
 
+export class SubagentSessionLogNotFoundError extends Error {
+	constructor() {
+		super("No session log found for this agent — it may not have produced output yet");
+		this.name = "SubagentSessionLogNotFoundError";
+	}
+}
+
 interface SessionFileCandidate {
 	path: string;
 	mtime: number;
@@ -149,7 +156,7 @@ function discoverMessageFiles(source: SubagentLogSource): string[] {
 export function readSubagentMessages(source: SubagentLogSource): unknown[] {
 	const files = discoverMessageFiles(source);
 	if (files.length === 0) {
-		throw new Error("No session log found for this agent — it may not have produced output yet");
+		throw new SubagentSessionLogNotFoundError();
 	}
 	return files.flatMap((file) => readMessagesFromFile(file));
 }

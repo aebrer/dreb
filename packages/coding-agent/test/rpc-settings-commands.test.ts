@@ -39,7 +39,7 @@ afterEach(async () => {
 
 function stubRegistry(models: Array<{ provider: string; id: string }>) {
 	return {
-		getAvailable: () => models as Model<any>[],
+		getAvailable: vi.fn(() => models as Model<any>[]),
 	};
 }
 
@@ -68,6 +68,7 @@ describe("getSettingsForRpc", () => {
 			transport: "sse",
 			hideThinkingBlock: false,
 			agentModels: {},
+			subagentArbiter: undefined,
 		});
 	});
 
@@ -86,6 +87,7 @@ describe("getSettingsForRpc", () => {
 			transport: "websocket",
 			hideThinkingBlock: true,
 			agentModels: { models: { Explore: ["anthropic/sonnet", "openai/gpt-5"] } },
+			subagentArbiter: { enabled: true, model: "anthropic/claude-sonnet-4-5", thinking: "high" },
 		});
 
 		expect(getSettingsForRpc(manager)).toEqual({
@@ -105,6 +107,7 @@ describe("getSettingsForRpc", () => {
 			transport: "websocket",
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
+			subagentArbiter: { enabled: true, model: "anthropic/claude-sonnet-4-5", thinking: "high" },
 		});
 	});
 
@@ -483,6 +486,71 @@ describe("setSettingsForRpc validation", () => {
 		expect(getSettingsForRpc(manager).trustedContextFolders).toEqual([valid]);
 	});
 
+	it("validates global-only subagent arbiter configuration", async () => {
+		const manager = SettingsManager.inMemory();
+		const missingModel = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), {
+			subagentArbiter: { enabled: true },
+		});
+		expect(missingModel).toMatchObject({ ok: false, error: expect.stringContaining("requires") });
+
+		const fuzzyModel = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), {
+			subagentArbiter: { enabled: true, model: "claude-sonnet-4-5" },
+		});
+		expect(fuzzyModel).toMatchObject({ ok: false, error: expect.stringContaining("exact provider/model") });
+
+		const invalidKey = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), {
+			subagentArbiter: { enabled: false, extra: true } as never,
+		});
+		expect(invalidKey).toMatchObject({ ok: false, error: expect.stringContaining("Unknown subagentArbiter") });
+	});
+
+	it("always permits explicit disablement with malformed retained fields", async () => {
+		const manager = SettingsManager.inMemory({
+			subagentArbiter: {
+				enabled: true,
+				model: "retired-provider/retired-model",
+				thinking: "xhigh",
+				guidePath: "~/routing.md",
+			},
+		});
+		const registry = stubRegistry([]);
+
+		const result = await setSettingsForRpc(manager, registry, {
+			subagentArbiter: {
+				enabled: false,
+				model: "malformed-model-id",
+				thinking: "invalid-thinking",
+				guidePath: "",
+			} as never,
+		});
+
+		expect(result).toMatchObject({
+			ok: true,
+			settings: {
+				subagentArbiter: {
+					enabled: false,
+					model: "malformed-model-id",
+					thinking: "invalid-thinking",
+					guidePath: "",
+				},
+			},
+		});
+		expect(registry.getAvailable).not.toHaveBeenCalled();
+		const disabledPolicy = {
+			enabled: false,
+			model: "malformed-model-id",
+			thinking: "invalid-thinking",
+			guidePath: "",
+		} as const;
+		expect(manager.getGlobalSubagentArbiterSettings()).toEqual(disabledPolicy);
+
+		const reEnabled = await setSettingsForRpc(manager, registry, {
+			subagentArbiter: { ...disabledPolicy, enabled: true } as never,
+		});
+		expect(reEnabled).toMatchObject({ ok: false, error: expect.stringContaining("Invalid subagentArbiter") });
+		expect(manager.getGlobalSubagentArbiterSettings()).toEqual(disabledPolicy);
+	});
+
 	it("applies nothing when any field is invalid (atomicity)", async () => {
 		const manager = SettingsManager.inMemory({ retry: { enabled: true }, images: { autoResize: true } });
 		const result = await setSettingsForRpc(manager, stubRegistry([]), {
@@ -499,6 +567,34 @@ describe("setSettingsForRpc validation", () => {
 });
 
 describe("setSettingsForRpc writes", () => {
+	it("persists and clears the complete global-only arbiter policy", async () => {
+		const manager = SettingsManager.inMemory();
+		const enabled = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), {
+			subagentArbiter: {
+				enabled: true,
+				model: "anthropic/claude-sonnet-4-5",
+				thinking: "off",
+				guidePath: "~/routing.md",
+			},
+		});
+		expect(enabled).toMatchObject({
+			ok: true,
+			settings: {
+				subagentArbiter: {
+					enabled: true,
+					model: "anthropic/claude-sonnet-4-5",
+					thinking: "off",
+					guidePath: "~/routing.md",
+				},
+			},
+		});
+		expect(manager.getGlobalSubagentArbiterSettings()?.enabled).toBe(true);
+
+		const cleared = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), { subagentArbiter: null });
+		expect(cleared).toMatchObject({ ok: true, settings: { subagentArbiter: undefined } });
+		expect(manager.getGlobalSubagentArbiterSettings()).toBeUndefined();
+	});
+
 	it("expands home-directory trusted folders before persisting canonical roots", async () => {
 		const manager = SettingsManager.inMemory();
 		const result = await setSettingsForRpc(manager, stubRegistry([]), { trustedContextFolders: ["~"] });

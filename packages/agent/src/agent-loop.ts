@@ -9,6 +9,7 @@ import {
 	DEFAULT_MAX_OUTPUT_TOKENS,
 	EventStream,
 	streamSimple,
+	supportsXhigh,
 	type ToolResultMessage,
 	validateToolArguments,
 } from "@dreb/ai";
@@ -21,9 +22,16 @@ import type {
 	AgentToolCall,
 	AgentToolResult,
 	StreamFn,
+	ThinkingLevel,
 } from "./types.js";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
+
+function getEffectiveThinkingLevel(config: AgentLoopConfig): ThinkingLevel {
+	const requested = config.reasoning ?? "off";
+	if (!config.model.reasoning) return "off";
+	return requested === "xhigh" && !supportsXhigh(config.model) ? "high" : requested;
+}
 
 /**
  * Start an agent loop with a new prompt message.
@@ -107,7 +115,11 @@ export async function runAgentLoop(
 		messages: [...context.messages, ...prompts],
 	};
 
-	await emit({ type: "agent_start", model: { provider: config.model.provider, id: config.model.id } });
+	await emit({
+		type: "agent_start",
+		model: { provider: config.model.provider, id: config.model.id },
+		thinkingLevel: getEffectiveThinkingLevel(config),
+	});
 	await emit({ type: "turn_start" });
 	for (const prompt of prompts) {
 		await emit({ type: "message_start", message: prompt });
@@ -136,7 +148,11 @@ export async function runAgentLoopContinue(
 	const newMessages: AgentMessage[] = [];
 	const currentContext: AgentContext = { ...context };
 
-	await emit({ type: "agent_start", model: { provider: config.model.provider, id: config.model.id } });
+	await emit({
+		type: "agent_start",
+		model: { provider: config.model.provider, id: config.model.id },
+		thinkingLevel: getEffectiveThinkingLevel(config),
+	});
 	await emit({ type: "turn_start" });
 
 	await runLoop(currentContext, newMessages, config, signal, emit, streamFn);

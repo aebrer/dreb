@@ -24,6 +24,22 @@ export interface SessionInventoryDto {
 	sessions: SessionInfoDto[];
 }
 
+export interface ArbitrationRouteDto {
+	agent: string;
+	model: string;
+	thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+}
+
+export interface SubagentArbitrationDto {
+	status: "success" | "failure";
+	proposed: ArbitrationRouteDto;
+	final: ArbitrationRouteDto | null;
+	changed: Array<"agent" | "model" | "thinking">;
+	step?: number;
+	errorCode?: string;
+	errorMessage?: string;
+}
+
 /** Background agent metadata (mirrors RpcBackgroundAgentInfo). */
 export interface BackgroundAgentDto {
 	agentId: string;
@@ -34,6 +50,7 @@ export interface BackgroundAgentDto {
 	sessionDir?: string;
 	sessionFile?: string;
 	cwd?: string;
+	arbitrations?: SubagentArbitrationDto[];
 }
 
 /**
@@ -392,6 +409,13 @@ export interface PairedDeviceDto {
 }
 
 /** Dashboard settings snapshot (mirrors RpcSettingsSnapshot). */
+export interface SubagentArbiterSettingsDto {
+	enabled?: boolean;
+	model?: string;
+	thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	guidePath?: string;
+}
+
 export interface SettingsDto {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -411,6 +435,8 @@ export interface SettingsDto {
 	transport?: "sse" | "websocket" | "auto";
 	hideThinkingBlock?: boolean;
 	agentModels?: Record<string, string[]>;
+	/** Global-only Dispatch Arbiter configuration. */
+	subagentArbiter?: SubagentArbiterSettingsDto | null;
 }
 
 export type SettingsSaveResultDto = SettingsDto & { warnings?: string[] };

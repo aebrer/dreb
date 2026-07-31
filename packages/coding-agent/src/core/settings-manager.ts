@@ -73,6 +73,15 @@ export interface AgentModelsSettings {
 	models?: Record<string, string[]>;
 }
 
+/** Global-only configuration for the fail-closed pre-spawn Dispatch Arbiter. */
+export interface SubagentArbiterSettings {
+	enabled?: boolean;
+	/** Exact canonical provider/model used for the tool-less arbiter call. */
+	model?: string;
+	thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	guidePath?: string;
+}
+
 export interface ModelSpecificSettings {
 	/** Thinking display preference for this model: "summarized" shows thinking text, "omitted" hides it (lower latency). */
 	thinkingDisplay?: "summarized" | "omitted";
@@ -134,6 +143,8 @@ export interface Settings {
 	sensitiveFilePaths?: string[]; // Additional glob patterns for sensitive file paths blocked by the read/bash guard
 	secretOutputPatterns?: { name: string; pattern: string }[]; // Additional regex patterns for secret scrubbing in tool output
 	agentModels?: AgentModelsSettings;
+	/** Global-only. Project settings must never enable or reconfigure arbitration. */
+	subagentArbiter?: SubagentArbiterSettings;
 	// Per-model overrides keyed by model id (e.g. thinking display). Read identically by main sessions and subagents.
 	modelSettings?: Record<string, ModelSpecificSettings>;
 	dream?: {
@@ -512,6 +523,28 @@ export class SettingsManager {
 		this.globalSettings = { ...this.globalSettings, context: loaded.settings.context };
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 		return true;
+	}
+
+	private refreshGlobalSubagentArbiterFromStorage(): void {
+		// Keep a locally selected policy effective until its queued write completes;
+		// otherwise re-read the global slice so long-lived sessions observe dashboard
+		// and TUI changes made by another runtime.
+		if (this.storage instanceof InMemorySettingsStorage || this.modifiedFields.has("subagentArbiter")) {
+			return;
+		}
+
+		const loaded = SettingsManager.tryLoadFromStorage(this.storage, "global");
+		if (loaded.error) {
+			this.recordError("global", loaded.error);
+			this.globalSettings = { ...this.globalSettings, subagentArbiter: undefined };
+			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+			throw new Error(`Could not reload global Dispatch Arbiter settings: ${loaded.error.message}`);
+		}
+
+		// This refresh owns only the global-only arbiter slice. Preserve unrelated
+		// in-memory settings, including writes that are queued but not yet durable.
+		this.globalSettings = { ...this.globalSettings, subagentArbiter: loaded.settings.subagentArbiter };
+		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 	}
 
 	private clearModifiedScope(scope: SettingsScope): void {
@@ -1212,6 +1245,22 @@ export class SettingsManager {
 
 	getSecretOutputPatterns(): { name: string; pattern: string }[] | undefined {
 		return this.settings.secretOutputPatterns;
+	}
+
+	/**
+	 * Read only the global arbiter policy; project settings are intentionally ignored.
+	 * File-backed managers refresh this slice for every dispatch so independently
+	 * running sessions observe dashboard and TUI writes without a restart.
+	 */
+	getGlobalSubagentArbiterSettings(): SubagentArbiterSettings | undefined {
+		this.refreshGlobalSubagentArbiterFromStorage();
+		return this.globalSettings.subagentArbiter ? structuredClone(this.globalSettings.subagentArbiter) : undefined;
+	}
+
+	setGlobalSubagentArbiterSettings(settings: SubagentArbiterSettings | undefined): void {
+		this.globalSettings.subagentArbiter = settings ? structuredClone(settings) : undefined;
+		this.markModified("subagentArbiter");
+		this.save();
 	}
 
 	getDreamArchivePath(): string {

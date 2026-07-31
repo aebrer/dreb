@@ -1425,6 +1425,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 												</span>
 												<span class="task">
 													{agent.agentType} — {agent.taskSummary}
+													<Show when={agent.arbitrations?.at(-1)}>
+														{(record) =>
+															record().status === "failure"
+																? " · arbitration failed"
+																: ` · ${record().final?.model ?? record().proposed.model} @ ${record().final?.thinking ?? record().proposed.thinking}`
+														}
+													</Show>
 												</span>
 											</button>
 										)}
