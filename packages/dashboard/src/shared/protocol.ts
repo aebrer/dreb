@@ -285,6 +285,25 @@ export interface FleetDto {
 	diskSessions: SessionInfoDto[];
 }
 
+/** A blocking extension UI request that can be restored from a runtime snapshot. */
+export interface ExtensionUiRequestDto {
+	type: "extension_ui_request";
+	id: string;
+	method: "select" | "confirm" | "input" | "editor" | "ask";
+	title: string;
+	message?: string;
+	options?: string[];
+	prefill?: string;
+	placeholder?: string;
+	question?: string;
+	allowFreeText?: boolean;
+	multiSelect?: boolean;
+	multiline?: boolean;
+	timeout?: number;
+	/** Absolute Unix timestamp in milliseconds when the runtime timeout fires. */
+	expiresAt?: number;
+}
+
 /**
  * Atomic parent-session snapshot for drill-in hydration. Its barrier sequence
  * marks the SSE ordering point captured by the matching RPC snapshot marker.
@@ -294,6 +313,8 @@ export interface RuntimeHydrationDto {
 	state: SessionStateDto;
 	messages: unknown[];
 	backgroundAgents: BackgroundAgentDto[];
+	/** Dialogs still waiting for a host response at the snapshot boundary. */
+	pendingExtensionUiRequests?: ExtensionUiRequestDto[];
 	barrierSeq: number;
 }
 

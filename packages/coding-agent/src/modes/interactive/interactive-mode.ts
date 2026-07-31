@@ -56,6 +56,8 @@ import {
 	validateMemoryLinks,
 } from "../../core/dream.js";
 import type {
+	AskRequest,
+	AskResult,
 	ExtensionContext,
 	ExtensionRunner,
 	ExtensionUIContext,
@@ -91,6 +93,7 @@ import {
 } from "../../utils/message-text.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { ArminComponent } from "./components/armin.js";
+import { AskUserComponent } from "./components/ask-user.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
 import { BashExecutionComponent } from "./components/bash-execution.js";
 import { BorderedLoader } from "./components/bordered-loader.js";
@@ -257,6 +260,8 @@ export class InteractiveMode {
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
+	private extensionAsk: AskUserComponent | undefined = undefined;
+	private extensionDialogQueue: Promise<void> = Promise.resolve();
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
 	// Extension widgets (components rendered above/below the editor)
@@ -1515,6 +1520,9 @@ export class InteractiveMode {
 		if (this.extensionEditor) {
 			this.hideExtensionEditor();
 		}
+		if (this.extensionAsk) {
+			this.hideExtensionAsk();
+		}
 		this.ui.hideOverlay();
 		this.clearExtensionTerminalInputListeners();
 		this.setExtensionFooter(undefined);
@@ -1777,9 +1785,26 @@ export class InteractiveMode {
 	 */
 	private createExtensionUIContext(): ExtensionUIContext {
 		return {
-			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
-			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
-			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
+			select: (title, options, opts) =>
+				this.enqueueExtensionDialog(() => this.showExtensionSelector(title, options, opts), {
+					signal: opts?.signal,
+					abortedValue: undefined,
+				}),
+			confirm: (title, message, opts) =>
+				this.enqueueExtensionDialog(() => this.showExtensionConfirm(title, message, opts), {
+					signal: opts?.signal,
+					abortedValue: false,
+				}),
+			input: (title, placeholder, opts) =>
+				this.enqueueExtensionDialog(() => this.showExtensionInput(title, placeholder, opts), {
+					signal: opts?.signal,
+					abortedValue: undefined,
+				}),
+			ask: (request, opts) =>
+				this.enqueueExtensionDialog(() => this.showExtensionAsk(request, opts), {
+					signal: opts?.signal,
+					abortedValue: undefined,
+				}),
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
@@ -1788,11 +1813,11 @@ export class InteractiveMode {
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => this.ui.terminal.setTitle(title),
-			custom: (factory, options) => this.showExtensionCustom(factory, options),
+			custom: (factory, options) => this.enqueueExtensionDialog(() => this.showExtensionCustom(factory, options)),
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
 			setEditorText: (text) => this.editor.setText(text),
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
-			editor: (title, prefill) => this.showExtensionEditor(title, prefill),
+			editor: (title, prefill) => this.enqueueExtensionDialog(() => this.showExtensionEditor(title, prefill)),
 			setEditorComponent: (factory) => this.setCustomEditorComponent(factory),
 			get theme() {
 				return theme;
@@ -1817,6 +1842,42 @@ export class InteractiveMode {
 			getToolsExpanded: () => this.toolOutputExpanded,
 			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
 		};
+	}
+
+	/** Serialize every blocking extension dialog that can take over keyboard focus. */
+	private enqueueExtensionDialog<T>(
+		open: () => Promise<T>,
+		opts?: { signal?: AbortSignal; abortedValue: T },
+	): Promise<T> {
+		if (!opts?.signal) {
+			const result = this.extensionDialogQueue.then(open, open);
+			this.extensionDialogQueue = result.then(
+				() => undefined,
+				() => undefined,
+			);
+			return result;
+		}
+		const { signal, abortedValue } = opts;
+		if (signal.aborted) return Promise.resolve(abortedValue);
+
+		// Settle the caller as soon as a queued dialog aborts, even if an earlier
+		// unbounded dialog still owns the UI. Its queue slot remains as a no-op so
+		// later dialogs keep their FIFO order.
+		let onQueuedAbort!: () => void;
+		const aborted = new Promise<T>((resolve) => {
+			onQueuedAbort = () => resolve(abortedValue);
+			signal.addEventListener("abort", onQueuedAbort, { once: true });
+		});
+		const run = () => {
+			signal.removeEventListener("abort", onQueuedAbort);
+			return signal.aborted ? Promise.resolve(abortedValue) : open();
+		};
+		const queued = this.extensionDialogQueue.then(run, run);
+		this.extensionDialogQueue = queued.then(
+			() => undefined,
+			() => undefined,
+		);
+		return Promise.race([queued, aborted]).finally(() => signal.removeEventListener("abort", onQueuedAbort));
 	}
 
 	/**
@@ -1932,6 +1993,53 @@ export class InteractiveMode {
 	private hideExtensionInput(): void {
 		this.extensionInput?.dispose();
 		this.extensionInput = undefined;
+		this.restoreEditorComponent();
+	}
+
+	/**
+	 * Show a rich ask_user question for extensions/built-in tools.
+	 */
+	private showExtensionAsk(request: AskRequest, opts?: ExtensionUIDialogOptions): Promise<AskResult | undefined> {
+		return new Promise((resolve) => {
+			if (opts?.signal?.aborted) {
+				resolve(undefined);
+				return;
+			}
+
+			const onAbort = () => {
+				this.hideExtensionAsk();
+				resolve(undefined);
+			};
+			opts?.signal?.addEventListener("abort", onAbort, { once: true });
+
+			this.extensionAsk = new AskUserComponent(
+				request,
+				(result) => {
+					opts?.signal?.removeEventListener("abort", onAbort);
+					this.hideExtensionAsk();
+					resolve(result);
+				},
+				() => {
+					opts?.signal?.removeEventListener("abort", onAbort);
+					this.hideExtensionAsk();
+					resolve(undefined);
+				},
+				{ tui: this.ui, timeout: opts?.timeout },
+			);
+
+			this.editorContainer.clear();
+			this.editorContainer.addChild(this.extensionAsk);
+			this.ui.setFocus(this.extensionAsk);
+			this.ui.requestRender();
+		});
+	}
+
+	/**
+	 * Hide the ask_user question.
+	 */
+	private hideExtensionAsk(): void {
+		this.extensionAsk?.dispose();
+		this.extensionAsk = undefined;
 		this.restoreEditorComponent();
 	}
 

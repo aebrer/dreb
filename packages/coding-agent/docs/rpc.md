@@ -224,17 +224,17 @@ The `model` field is a full [Model](#model) object or `null`. `scopedModels` is 
 
 #### get_dashboard_snapshot
 
-Capture the dashboard-visible parent-session state, full parent transcript, and background-agent registry at one RPC command boundary. This is for authoritative recovery, not ordinary incremental refreshes.
+Capture the dashboard-visible parent-session state, full parent transcript, background-agent registry, and blocking extension UI requests at one RPC command boundary. This is for authoritative recovery, not ordinary incremental refreshes.
 
 ```json
 {"id": "snapshot-7", "type": "get_dashboard_snapshot"}
 ```
 
-The `RpcDashboardSnapshot` result is a `snapshotId`, a complete `RpcSessionState` (including `tasks`), `messages`, and `backgroundAgents`. The RPC child writes a `RpcDashboardSnapshotBarrierEvent` to stdout **immediately before** the matching response line:
+The `RpcDashboardSnapshot` result is a `snapshotId`, a complete `RpcSessionState` (including `tasks`), `messages`, `backgroundAgents`, and `pendingExtensionUiRequests`. The last field contains every blocking `select`, `confirm`, `input`, `editor`, or `ask` request still awaiting a host response, so a recovering Dashboard can restore the answer UI instead of leaving the runtime blocked. The RPC child writes a `RpcDashboardSnapshotBarrierEvent` to stdout **immediately before** the matching response line:
 
 ```json
 {"type":"dashboard_snapshot_barrier","snapshotId":"snapshot-7"}
-{"id":"snapshot-7","type":"response","command":"get_dashboard_snapshot","success":true,"data":{"snapshotId":"snapshot-7","state":{...},"messages":[...],"backgroundAgents":[...]}}
+{"id":"snapshot-7","type":"response","command":"get_dashboard_snapshot","success":true,"data":{"snapshotId":"snapshot-7","state":{...},"messages":[...],"backgroundAgents":[...],"pendingExtensionUiRequests":[...]}}
 ```
 
 Stdout JSONL ordering is the contract: a relay records its current event-stream sequence when the marker arrives, before resolving the response, and pairs the snapshot only with that exact marker. The dashboard returns that captured sequence as `/api/resync.barrierSeq`; consumers discard queued events through it and replay only later events. The marker itself is not broadcast as another browser event, so one recovering client does not interrupt healthy clients. Do not infer ordering from request/response timing; see [dashboard recovery](dashboard.md#live-connection-and-recovery).
@@ -1925,7 +1925,7 @@ Extensions can request user interaction via `ctx.ui.select()`, `ctx.ui.confirm()
 
 There are two categories of extension UI methods:
 
-- **Dialog methods** (`select`, `confirm`, `input`, `editor`): emit an `extension_ui_request` on stdout and block until the client sends back an `extension_ui_response` on stdin with the matching `id`.
+- **Dialog methods** (`select`, `confirm`, `input`, `editor`, `ask`): emit an `extension_ui_request` on stdout and block until the client sends back an `extension_ui_response` on stdin with the matching `id`.
 - **Fire-and-forget methods** (`notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`): emit an `extension_ui_request` on stdout but do not expect a response. The client can display the information or ignore it.
 
 If a dialog method includes a `timeout` field, the agent-side will auto-resolve with a default value when the timeout expires. The client does not need to track timeouts.
@@ -2012,6 +2012,34 @@ Open a multi-line text editor with optional prefilled content.
 
 Expected response: `extension_ui_response` with `value` (the edited text) or `cancelled: true`.
 
+#### ask
+
+Ask the user a rich clarifying question with optional single- or multi-select options and an optional free-text field. This powers the built-in `ask_user` tool. `options` (2-4 nonblank strings) is optional; `allowFreeText` (default `true`), `multiSelect`, and `multiline` are optional booleans.
+
+```json
+{
+  "type": "extension_ui_request",
+  "id": "uuid-5",
+  "method": "ask",
+  "title": "Choose a database",
+  "question": "Which persistence strategy should I use?",
+  "options": ["SQLite", "PostgreSQL", "Keep the JSON file"],
+  "allowFreeText": true,
+  "multiSelect": false,
+  "multiline": false,
+  "timeout": 60000,
+  "expiresAt": 1785434460000
+}
+```
+
+`timeout` is the original duration in milliseconds. `expiresAt` is the corresponding absolute Unix timestamp in milliseconds; Dashboard clients should use it for the visible countdown so reload, resync, or drill-in recovery does not restart the full duration.
+
+Expected response: `extension_ui_response` with `selected` (an array of strings, possibly empty) and optional string `customText` (the typed answer), or `cancelled: true` to skip. The client should treat an empty `selected` with no `customText` as a skip. Malformed ask responses are rejected as protocol failures rather than being reported to the model as user skips.
+
+```json
+{ "type": "extension_ui_response", "id": "uuid-5", "selected": ["SQLite"], "customText": "with WAL enabled" }
+```
+
 #### notify
 
 Display a notification. Fire-and-forget, no response expected.
@@ -2089,7 +2117,7 @@ Set the text in the input editor. Fire-and-forget.
 
 ### Extension UI Responses (stdin)
 
-Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`). The `id` must match the request.
+Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`, `ask`). The `id` must match the request.
 
 #### Value response (select, input, editor)
 
@@ -2110,6 +2138,17 @@ Dismiss any dialog method. The extension receives `undefined` (for select/input/
 ```json
 {"type": "extension_ui_response", "id": "uuid-3", "cancelled": true}
 ```
+
+After any dialog settles, RPC emits a lifecycle event on stdout so hosts can
+remove the matching UI even when the dialog ended locally because of timeout,
+abort, or runtime shutdown:
+
+```json
+{"type": "extension_ui_response_handled", "id": "uuid-3"}
+```
+
+Hosts should treat this event as idempotent; it can arrive after the host has
+already removed a successfully answered request.
 
 ## Error Handling
 

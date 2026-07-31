@@ -1170,7 +1170,12 @@ export class AgentSession {
 
 	/** Emit extension events based on agent events */
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
-		if (!this._extensionRunner) return;
+		// The runner is created unconditionally (so built-in tools like ask_user
+		// always have a UI context). When no extensions are loaded there are no
+		// handlers to invoke — return synchronously to avoid inserting an extra
+		// await tick per event, which would otherwise delay the final agent_end
+		// emission past when prompt() resolves.
+		if (!this._extensionRunner || !this._extensionRunner.hasExtensions) return;
 
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
@@ -2973,10 +2978,16 @@ export class AgentSession {
 			? wrapRegisteredTools(allCustomTools, this._extensionRunner)
 			: [];
 
+		// Give base tools a per-execution extension context so built-ins like
+		// ask_user can reach ctx.ui. createContext() snapshots hasUI at call time,
+		// so print/RPC-without-host modes degrade to the no-op UI (hasUI === false).
+		const baseToolCtxFactory = this._extensionRunner
+			? () => (this._extensionRunner as ExtensionRunner).createContext()
+			: undefined;
 		const toolRegistry = new Map(
 			Array.from(this._baseToolDefinitions.values()).map((definition) => [
 				definition.name,
-				wrapToolDefinition(definition),
+				wrapToolDefinition(definition, baseToolCtxFactory),
 			]),
 		);
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
@@ -3088,18 +3099,17 @@ export class AgentSession {
 			}
 		}
 
-		const hasExtensions = extensionsResult.extensions.length > 0;
-		const hasCustomTools = this._customTools.length > 0;
-		this._extensionRunner =
-			hasExtensions || hasCustomTools
-				? new ExtensionRunner(
-						extensionsResult.extensions,
-						extensionsResult.runtime,
-						this._cwd,
-						this.sessionManager,
-						this._modelRegistry,
-					)
-				: undefined;
+		// The runner also owns the cross-surface UI context used by built-in
+		// tools such as ask_user. Create it even when no third-party extensions
+		// are loaded; otherwise ordinary TUI/Dashboard sessions give base tools
+		// no ctx.ui and ask_user can never open its dialog.
+		this._extensionRunner = new ExtensionRunner(
+			extensionsResult.extensions,
+			extensionsResult.runtime,
+			this._cwd,
+			this.sessionManager,
+			this._modelRegistry,
+		);
 		if (this._extensionRunnerRef) {
 			this._extensionRunnerRef.current = this._extensionRunner;
 		}
@@ -3123,6 +3133,7 @@ export class AgentSession {
 					"subagent",
 					"wait",
 					"search",
+					"ask_user",
 					"skill",
 					"tasks_update",
 					"suggest_next",

@@ -105,12 +105,54 @@ export interface StatusLineEntry {
 
 export interface ExtensionUiRequest {
 	id: string;
-	method: "select" | "confirm" | "input" | "editor";
+	method: "select" | "confirm" | "input" | "editor" | "ask";
 	title: string;
 	message?: string;
 	options?: string[];
 	prefill?: string;
 	placeholder?: string;
+	/** ask: the question body shown under the title. */
+	question?: string;
+	/** ask: offer a free-text field (defaults true). */
+	allowFreeText?: boolean;
+	/** ask: render options as checkboxes instead of radios. */
+	multiSelect?: boolean;
+	/** ask: use a multi-line text area for free text. */
+	multiline?: boolean;
+	/** ask: original auto-skip duration in milliseconds. */
+	timeout?: number;
+	/** ask: absolute runtime deadline; survives reload/resync/drill-in recovery. */
+	expiresAt?: number;
+}
+
+export function extensionUiRequestFromEvent(event: any): ExtensionUiRequest | undefined {
+	const method = event?.method as string | undefined;
+	if (method === "select" || method === "confirm" || method === "input" || method === "editor") {
+		return {
+			id: String(event.id),
+			method,
+			title: String(event.title ?? ""),
+			message: event.message as string | undefined,
+			options: event.options as string[] | undefined,
+			prefill: event.prefill as string | undefined,
+			placeholder: event.placeholder as string | undefined,
+		};
+	}
+	if (method === "ask") {
+		return {
+			id: String(event.id),
+			method: "ask",
+			title: String(event.title ?? "Question"),
+			question: String(event.question ?? ""),
+			options: event.options as string[] | undefined,
+			allowFreeText: event.allowFreeText as boolean | undefined,
+			multiSelect: event.multiSelect as boolean | undefined,
+			multiline: event.multiline as boolean | undefined,
+			timeout: typeof event.timeout === "number" ? (event.timeout as number) : undefined,
+			expiresAt: typeof event.expiresAt === "number" ? (event.expiresAt as number) : undefined,
+		};
+	}
+	return undefined;
 }
 
 export interface Toast {
@@ -813,18 +855,15 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			});
 			break;
 		}
+		case "extension_ui_response_handled": {
+			resolveUiRequest(state, String(event.id));
+			break;
+		}
 		case "extension_ui_request": {
 			const method = event.method as string;
-			if (method === "select" || method === "confirm" || method === "input" || method === "editor") {
-				state.uiRequests.push({
-					id: String(event.id),
-					method,
-					title: String(event.title ?? ""),
-					message: event.message as string | undefined,
-					options: event.options as string[] | undefined,
-					prefill: event.prefill as string | undefined,
-					placeholder: event.placeholder as string | undefined,
-				});
+			const blockingRequest = extensionUiRequestFromEvent(event);
+			if (blockingRequest) {
+				state.uiRequests.push(blockingRequest);
 			} else if (method === "notify") {
 				toastCounter += 1;
 				const tone = (event.notifyType as "info" | "warning" | "error" | undefined) ?? "info";

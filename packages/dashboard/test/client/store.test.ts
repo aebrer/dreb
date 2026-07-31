@@ -486,6 +486,79 @@ describe("app store SSE sync", () => {
 		expect(store.sessions.a?.needsAttention).toBe(false);
 	});
 
+	it("restores a pending ask and attention from the authoritative resync", async () => {
+		const snapshot = runtimeSnapshot("a", true);
+		vi.mocked(api.resync).mockResolvedValueOnce({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [],
+				backgroundAgents: [],
+				pendingExtensionUiRequests: [
+					{
+						type: "extension_ui_request",
+						id: "ask-pending",
+						method: "ask",
+						title: "Choose a database",
+						question: "Which one?",
+						options: ["SQLite", "Postgres"],
+						allowFreeText: true,
+						multiSelect: false,
+						multiline: false,
+						timeout: 30_000,
+						expiresAt: 1_030_000,
+					},
+				],
+				barrierSeq: 20,
+			},
+			barrierSeq: 20,
+		});
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.uiRequests).toEqual([
+			expect.objectContaining({
+				id: "ask-pending",
+				method: "ask",
+				question: "Which one?",
+				options: ["SQLite", "Postgres"],
+				timeout: 30_000,
+				expiresAt: 1_030_000,
+			}),
+		]);
+		expect(store.sessions.a?.needsAttention).toBe(true);
+	});
+
+	it("resolveUiRequest optimistically dismisses an ask request and clears attention", async () => {
+		const store = await makeStartedStore();
+
+		emit("a", {
+			type: "extension_ui_request",
+			method: "ask",
+			id: "ask-1",
+			title: "Choose a database",
+			question: "Which one?",
+			options: ["SQLite", "Postgres"],
+		});
+		expect(store.sessions.a?.uiRequests).toMatchObject([{ id: "ask-1", method: "ask" }]);
+		expect(store.sessions.a?.needsAttention).toBe(true);
+
+		// Skipping/answering removes the dialog immediately — there is no server
+		// acknowledgement event, so without this the dialog would linger until
+		// the next agent_start.
+		store.resolveUiRequest("a", "ask-1");
+
+		expect(store.sessions.a?.uiRequests).toEqual([]);
+		expect(store.sessions.a?.needsAttention).toBe(false);
+
+		// Idempotent — resolving an already-removed id is a safe no-op.
+		store.resolveUiRequest("a", "ask-1");
+		expect(store.sessions.a?.uiRequests).toEqual([]);
+	});
+
 	it("clears stale extension UI state before replaying post-barrier requests", async () => {
 		const snapshot = runtimeSnapshot("a", false);
 		const request = deferred<Awaited<ReturnType<typeof api.resync>>>();
@@ -1009,6 +1082,41 @@ describe("app store hydration", () => {
 		});
 		expect(store.sessions.s1?.streaming).toBe(true);
 		expect(store.sessions.s1?.workingSince).toEqual(expect.any(Number));
+	});
+
+	it("restores a pending ask and attention when drilling into a session", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.pendingExtensionUiRequests = [
+			{
+				type: "extension_ui_request",
+				id: "ask-pending",
+				method: "ask",
+				title: "Choose a database",
+				question: "Which one?",
+				options: ["SQLite", "Postgres"],
+				allowFreeText: true,
+				multiSelect: false,
+				multiline: false,
+				timeout: 30_000,
+				expiresAt: 1_030_000,
+			},
+		];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		expect(store.sessions.s1?.uiRequests).toEqual([
+			expect.objectContaining({
+				id: "ask-pending",
+				method: "ask",
+				question: "Which one?",
+				options: ["SQLite", "Postgres"],
+				timeout: 30_000,
+				expiresAt: 1_030_000,
+			}),
+		]);
+		expect(store.sessions.s1?.needsAttention).toBe(true);
 	});
 
 	it("preserves final routed identity and ordered arbitration history during hydration", async () => {

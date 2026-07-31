@@ -2207,6 +2207,100 @@ details.thinking .thinking-body {
 	outline: none;
 }
 
+/* ------------------------------------------------------------- ask_user dialog */
+
+/* Inline ask card — flows at the end of the transcript so the whole chat area
+   stays scrollable while the agent waits for an answer. */
+.ask-inline {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: var(--space-3) 0;
+	padding: var(--space-3);
+	border: var(--hairline);
+	/* Match the needs-attention accent (orange in the default theme) — an
+	   unanswered question is the primary "your move" signal for the session. */
+	border-left: 3px solid var(--status-attention);
+	border-radius: var(--radius);
+	background: color-mix(in srgb, var(--status-attention) 6%, var(--surface, transparent));
+}
+
+.ask-inline-header {
+	font-weight: 600;
+	color: var(--text);
+}
+
+.ask-inline-countdown {
+	font-weight: 400;
+	color: var(--muted);
+}
+
+.ask-inline-question {
+	margin: 0 0 var(--space-2);
+	color: var(--text);
+}
+
+.ask-inline-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-2);
+	margin-top: var(--space-1);
+}
+
+.ask-options {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: 0 0 var(--space-3);
+	padding: 0;
+	border: 0;
+	min-width: 0;
+}
+
+.ask-options-legend {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+.ask-option {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: var(--space-2) var(--space-3);
+	cursor: pointer;
+	color: var(--text);
+}
+
+.ask-option:hover {
+	border-color: var(--text);
+}
+
+.ask-option.selected {
+	border-color: var(--status-running);
+	background: color-mix(in srgb, var(--status-running) 12%, transparent);
+}
+
+.ask-option input {
+	width: auto;
+	margin: 0;
+	accent-color: var(--status-running);
+	cursor: pointer;
+}
+
+.ask-custom-label {
+	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
 .recent-projects {
 	display: flex;
 	flex-direction: column;

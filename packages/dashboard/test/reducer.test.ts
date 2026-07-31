@@ -958,6 +958,79 @@ describe("applySessionEvent — extension UI", () => {
 		expect(state.needsAttention).toBe(false);
 	});
 
+	it("handled events dismiss requests that timed out or aborted in the runtime", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "extension_ui_request", id: "u1", method: "confirm", title: "Proceed?" });
+
+		applySessionEvent(state, { type: "extension_ui_response_handled", id: "u1" });
+
+		expect(state.uiRequests).toHaveLength(0);
+		expect(state.needsAttention).toBe(false);
+	});
+
+	it("ask requests populate uiRequests with question/options and set attention", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "extension_ui_request",
+			id: "a1",
+			method: "ask",
+			title: "Choose a database",
+			question: "Which persistence strategy?",
+			options: ["SQLite", "Postgres"],
+			multiSelect: true,
+			multiline: false,
+			allowFreeText: true,
+		});
+		expect(state.uiRequests).toHaveLength(1);
+		expect(state.uiRequests[0]).toMatchObject({
+			id: "a1",
+			method: "ask",
+			title: "Choose a database",
+			question: "Which persistence strategy?",
+			options: ["SQLite", "Postgres"],
+			multiSelect: true,
+			allowFreeText: true,
+		});
+		expect(state.needsAttention).toBe(true);
+
+		resolveUiRequest(state, "a1");
+		expect(state.uiRequests).toHaveLength(0);
+		expect(state.needsAttention).toBe(false);
+	});
+
+	it("extracts the numeric ask timeout and absolute deadline onto the ui request", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "extension_ui_request",
+			id: "a-timeout",
+			method: "ask",
+			title: "Choose",
+			question: "Which?",
+			options: ["a", "b"],
+			timeout: 30_000,
+			expiresAt: 1_030_000,
+		});
+		// The deadline keeps the visible countdown aligned with the authoritative
+		// runtime timer when this request is restored after a reload or resync.
+		expect(state.uiRequests[0]).toMatchObject({ timeout: 30_000, expiresAt: 1_030_000 });
+	});
+
+	it("ignores non-numeric ask timeout metadata (guards against malformed events)", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "extension_ui_request",
+			id: "a-bad-timeout",
+			method: "ask",
+			title: "Choose",
+			question: "Which?",
+			options: ["a"],
+			timeout: "soon",
+			expiresAt: "later",
+		});
+		expect(state.uiRequests[0]?.timeout).toBeUndefined();
+		expect(state.uiRequests[0]?.expiresAt).toBeUndefined();
+	});
+
 	it("agent_start clears pending UI requests (server resolved them)", () => {
 		const state = makeState();
 		applySessionEvent(state, {

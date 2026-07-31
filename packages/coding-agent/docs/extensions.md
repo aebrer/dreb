@@ -9,7 +9,7 @@ Extensions are TypeScript modules that extend dreb's behavior. They can subscrib
 **Key capabilities:**
 - **Custom tools** - Register tools the LLM can call via `dreb.registerTool()`
 - **Event interception** - Block or modify tool calls, inject context, customize compaction
-- **User interaction** - Prompt users via `ctx.ui` (select, confirm, input, notify)
+- **User interaction** - Prompt users via `ctx.ui` (select, confirm, input, ask, notify)
 - **Custom UI components** - Full TUI components with keyboard input via `ctx.ui.custom()` for complex interactions
 - **Custom commands** - Register commands like `/mycommand` via `dreb.registerCommand()`
 - **Session persistence** - Store state that survives restarts via `dreb.appendEntry()`
@@ -161,6 +161,26 @@ export default function (dreb: ExtensionAPI) {
     ctx.ui.notify("Done!", "success");
     ctx.ui.setStatus("my-ext", "Processing...");  // Footer status
     ctx.ui.setWidget("my-ext", ["Line 1", "Line 2"]);  // Widget above editor (default)
+
+    // ctx.ui.ask — a rich clarifying question with options + free text,
+    // rendered natively in the TUI and Dashboard (and over RPC). Resolves to
+    // { selected: string[], customText?: string }, or undefined when skipped,
+    // cancelled, or timed out. This is the same primitive that powers the
+    // built-in `ask_user` tool.
+    const answer = await ctx.ui.ask(
+      {
+        title: "Choose a database",
+        question: "Which persistence strategy should I use?",
+        options: ["SQLite", "PostgreSQL", "Keep the JSON file"],
+        allowFreeText: true, // default; offers a "type your own answer" field
+        multiSelect: false,  // true → checkboxes, combined with any free text
+        multiline: false,    // true → multi-line free-text area
+      },
+      { signal, timeout: 60000 }, // both optional; absent user never deadlocks
+    );
+    if (!answer) {
+      // user skipped / cancelled / timed out — continue gracefully
+    }
   });
 
   // Register tools, commands, shortcuts, flags
@@ -1782,6 +1802,14 @@ const ok = await ctx.ui.confirm("Delete?", "This cannot be undone");
 // Text input
 const name = await ctx.ui.input("Name:", "placeholder");
 
+// Rich question: options and free text can be combined; undefined means skipped
+const answer = await ctx.ui.ask({
+  title: "Choose a database",
+  question: "Which persistence strategy should I use?",
+  options: ["SQLite", "PostgreSQL"],
+  allowFreeText: true,
+});
+
 // Multi-line editor
 const text = await ctx.ui.editor("Edit:", "prefilled text");
 
@@ -1812,6 +1840,7 @@ if (confirmed) {
 - `select()` returns `undefined`
 - `confirm()` returns `false`
 - `input()` returns `undefined`
+- `ask()` returns `undefined`
 
 #### Manual Dismissal with AbortSignal
 

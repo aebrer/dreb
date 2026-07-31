@@ -21,6 +21,7 @@ vi.mock("../../src/client/api.js", () => ({
 	},
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
+		extensionUiResponse: vi.fn(async () => ({ ok: true })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
 		sessions: vi.fn(async () => ({ sessions: [] })),
 		resync: vi.fn(async () => ({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 })),
@@ -1078,6 +1079,367 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k2" />);
 		expect(el.textContent).not.toContain("■ stop");
 		expect(el.textContent).not.toContain("follow-up");
+	});
+
+	it("ask_user dialog: native checkboxes + free text combine into one response", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask");
+		session.uiRequests = [
+			{
+				id: "a1",
+				method: "ask",
+				title: "Choose validation",
+				question: "Which checks?",
+				options: ["unit", "browser"],
+				multiSelect: true,
+				allowFreeText: true,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(el.textContent).toContain("Which checks?");
+		// ask_user renders inline in the transcript flow (scrollable), not as a
+		// blocking modal overlay.
+		expect(el.querySelector(".chat-inner .ask-inline")).not.toBeNull();
+		expect(el.querySelector(".modal-backdrop")).toBeNull();
+		const checkboxes = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="checkbox"]');
+		expect(checkboxes.length).toBe(2);
+		expect(el.querySelector('.ask-option input[type="radio"]')).toBeNull();
+
+		checkboxes[0].click(); // check "unit"
+		const custom = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		if (!custom) throw new Error("free-text field missing");
+		custom.value = "lint";
+		custom.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const submit = [...el.querySelectorAll("button")].find((b) => b.textContent === "submit");
+		submit?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask",
+			expect.objectContaining({
+				type: "extension_ui_response",
+				id: "a1",
+				selected: ["unit"],
+				customText: "lint",
+			}),
+		);
+	});
+
+	it("ask_user dialog: single-select renders radios and skip cancels", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask2");
+		session.uiRequests = [{ id: "a2", method: "ask", title: "Pick", question: "Which one?", options: ["A", "B"] }];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask2": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask2" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const radios = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="radio"]');
+		expect(radios.length).toBe(2);
+
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const skip = [...el.querySelectorAll("button")].find((b) => b.textContent === "skip");
+		skip?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask2",
+			expect.objectContaining({ type: "extension_ui_response", id: "a2", cancelled: true }),
+		);
+	});
+
+	it("keeps an ask request recoverable when sending the response fails", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-retry");
+		session.uiRequests = [
+			{ id: "a-retry", method: "ask", title: "Retry", question: "Still there?", options: ["A", "B"] },
+		];
+		const resolveUiRequest = vi.fn();
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-retry": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+			resolveUiRequest,
+		};
+		vi.mocked(api.extensionUiResponse).mockRejectedValueOnce(new Error("offline"));
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-retry" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const skip = [...el.querySelectorAll("button")].find((button) => button.textContent === "skip");
+		skip?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(resolveUiRequest).not.toHaveBeenCalled();
+		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.textContent).toContain("offline");
+
+		vi.mocked(api.extensionUiResponse).mockResolvedValueOnce({ ok: true });
+		skip?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(resolveUiRequest).toHaveBeenCalledWith("k-ask-retry", "a-retry");
+	});
+
+	it("retains a selected + typed answer across a failed send and resends it on retry", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-state");
+		session.uiRequests = [
+			{
+				id: "a-state",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				allowFreeText: true,
+			},
+		];
+		const resolveUiRequest = vi.fn();
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-state": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+			resolveUiRequest,
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		vi.mocked(api.extensionUiResponse).mockRejectedValueOnce(new Error("offline"));
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-state" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Choose an option and type free text, then fail the send.
+		const radio = el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]');
+		if (!radio) throw new Error("radio missing");
+		radio.click();
+		const custom = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		if (!custom) throw new Error("free-text field missing");
+		custom.value = "extra";
+		custom.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const submitButton = () => [...el.querySelectorAll("button")].find((b) => b.textContent === "submit");
+		submitButton()?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Failure keeps the question and preserves the entered answer state.
+		expect(resolveUiRequest).not.toHaveBeenCalled();
+		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]')?.checked).toBe(true);
+		expect(el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]')?.value).toBe("extra");
+
+		// Retry succeeds and sends the same retained answer, not a stateless skip.
+		vi.mocked(api.extensionUiResponse).mockResolvedValueOnce({ ok: true });
+		submitButton()?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenLastCalledWith(
+			"k-ask-state",
+			expect.objectContaining({ id: "a-state", selected: ["A"], customText: "extra" }),
+		);
+		expect(resolveUiRequest).toHaveBeenCalledWith("k-ask-state", "a-state");
+	});
+
+	it("suppresses duplicate sends while a response POST is still in flight", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-dedup");
+		session.uiRequests = [{ id: "a-dedup", method: "ask", title: "Pick", question: "Which?", options: ["A", "B"] }];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-dedup": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		let release!: () => void;
+		vi.mocked(api.extensionUiResponse).mockReturnValueOnce(
+			new Promise((resolve) => {
+				release = () => resolve({ ok: true });
+			}),
+		);
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-dedup" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const radio = el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]');
+		if (!radio) throw new Error("radio missing");
+		radio.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const submitButton = () => [...el.querySelectorAll("button")].find((b) => b.textContent === "submit");
+		// Three rapid clicks while the first POST is still pending.
+		submitButton()?.click();
+		submitButton()?.click();
+		submitButton()?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		release();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+
+	it("skips an ask request when Escape is pressed and shows a timeout countdown", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-esc");
+		session.uiRequests = [
+			{
+				id: "a-esc",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				timeout: 30_000,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-esc": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-esc" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// A visible auto-skip countdown mirrors the TUI.
+		expect(el.textContent).toContain("auto-skips in");
+
+		// Escape skips, matching the TUI keyboard model.
+		window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-esc",
+			expect.objectContaining({ type: "extension_ui_response", id: "a-esc", cancelled: true }),
+		);
+	});
+
+	it("auto-skips an ask request exactly once when the client-side countdown reaches zero", async () => {
+		vi.useFakeTimers();
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-timeout");
+		session.uiRequests = [
+			{
+				id: "a-timeout",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				timeout: 30_000,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-timeout": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-timeout" />);
+		await vi.advanceTimersByTimeAsync(0);
+
+		// Not yet fired one tick before the deadline.
+		await vi.advanceTimersByTimeAsync(29_000);
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+
+		// The countdown backstop auto-skips with a single cancelled response at zero.
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-timeout",
+			expect.objectContaining({ type: "extension_ui_response", id: "a-timeout", cancelled: true }),
+		);
+
+		// clearInterval on fire prevents any repeated auto-skip.
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+	});
+
+	it("uses the authoritative remaining deadline after a timed ask is recovered", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-07-30T18:00:00Z"));
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-recovered-timeout");
+		session.uiRequests = [
+			{
+				id: "a-recovered-timeout",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				timeout: 30_000,
+				// Twenty-five seconds elapsed before reload; only five remain.
+				expiresAt: Date.now() + 5_000,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-recovered-timeout": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-recovered-timeout" />);
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(el.textContent).toContain("auto-skips in 5s");
+		await vi.advanceTimersByTimeAsync(4_000);
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-recovered-timeout",
+			expect.objectContaining({ type: "extension_ui_response", id: "a-recovered-timeout", cancelled: true }),
+		);
+	});
+
+	it("ask_user tool card stays collapsed while running (unlike other running tools)", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-collapse");
+		session.entries = [
+			{
+				kind: "tool",
+				toolCallId: "ask-tc",
+				toolName: "ask_user",
+				args: { title: "Favorite Composer", options: ["Bach", "Mozart"] },
+				status: "running",
+				resultText: "",
+				startedAt: Date.now(),
+			},
+			{
+				kind: "tool",
+				toolCallId: "bash-tc",
+				toolName: "bash",
+				args: { command: "pwd" },
+				status: "running",
+				resultText: "",
+				startedAt: Date.now(),
+			},
+		] as any;
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-collapse": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-collapse" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const cards = [...el.querySelectorAll<HTMLDetailsElement>("details.tool")];
+		const askCard = cards.find((c) => c.querySelector(".tool-name")?.textContent === "ask_user");
+		const bashCard = cards.find((c) => c.querySelector(".tool-name")?.textContent === "bash");
+		if (!askCard || !bashCard) throw new Error("expected both tool cards to render");
+		// The still-running ask_user card is collapsed; a normal running tool (bash) auto-opens.
+		expect(askCard.open).toBe(false);
+		expect(bashCard.open).toBe(true);
 	});
 
 	it("session header prefers live session_name_changed state", () => {

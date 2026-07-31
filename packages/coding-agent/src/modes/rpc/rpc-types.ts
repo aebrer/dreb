@@ -186,6 +186,8 @@ export interface RpcDashboardSnapshot {
 	messages: AgentMessage[];
 	/** Current background-agent registry at that boundary. */
 	backgroundAgents: RpcBackgroundAgentInfo[];
+	/** Blocking UI requests that are still waiting for a host response. */
+	pendingExtensionUiRequests: RpcBlockingExtensionUIRequest[];
 }
 
 /** Ordering marker emitted immediately before a matching dashboard snapshot response. */
@@ -654,6 +656,20 @@ export type RpcExtensionUIRequest =
 	| {
 			type: "extension_ui_request";
 			id: string;
+			method: "ask";
+			title: string;
+			question: string;
+			options?: string[];
+			allowFreeText?: boolean;
+			multiSelect?: boolean;
+			multiline?: boolean;
+			timeout?: number;
+			/** Absolute Unix timestamp in milliseconds when the RPC-side timeout fires. */
+			expiresAt?: number;
+	  }
+	| {
+			type: "extension_ui_request";
+			id: string;
 			method: "notify";
 			message: string;
 			notifyType?: "info" | "warning" | "error";
@@ -676,6 +692,12 @@ export type RpcExtensionUIRequest =
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
 	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
 
+/** Blocking dialog requests retained until a matching host response arrives. */
+export type RpcBlockingExtensionUIRequest = Extract<
+	RpcExtensionUIRequest,
+	{ method: "select" | "confirm" | "input" | "editor" | "ask" }
+>;
+
 // ============================================================================
 // Extension UI Commands (stdin)
 // ============================================================================
@@ -684,6 +706,7 @@ export type RpcExtensionUIRequest =
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
+	| { type: "extension_ui_response"; id: string; selected: string[]; customText?: string }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 
 // ============================================================================
