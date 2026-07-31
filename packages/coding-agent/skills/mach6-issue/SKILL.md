@@ -16,7 +16,7 @@ argument-hint: "[issue-number | description]"
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets (.env, credentials, tokens, keys).
 5. **Task tracking** — Use the `tasks_update` tool to show progress through multi-step commands.
 6. **Project conventions** — Check for CLAUDE.md, AGENTS.md, .dreb/CONTEXT.md, and CONTRIBUTING.md before planning or implementing.
-7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 ## Determine Mode
 
@@ -76,7 +76,7 @@ Present to the user:
 Post as an issue comment:
 
 ```bash
-GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX.md)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-assessment -->
 ## Issue Assessment
@@ -128,7 +128,7 @@ Present the draft to the user for approval.
 ### Step 3: Create the issue
 
 ```bash
-GH_BODY="$(mktemp /tmp/gh-body.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-body.$$.XXXXXXXX.md)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <body>
 MACH6_EOF

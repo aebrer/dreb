@@ -187,7 +187,53 @@ systemctl --user daemon-reload
 systemctl --user enable --now dreb-dashboard
 ```
 
-macOS users can run the same command under a launchd user agent; a full plist is deferred.
+For auto-restart on macOS, create a LaunchAgent. Launchd runs with a minimal `PATH`, so invoke `node` directly on the resolved entry point (use `command -v node` and `readlink $(command -v dreb-dashboard)` — paths vary by install method):
+
+Save as `~/Library/LaunchAgents/com.dreb.dashboard.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dreb.dashboard</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/ABSOLUTE/PATH/TO/node</string>
+        <string>/ABSOLUTE/PATH/TO/@dreb/dashboard/dist/index.js</string>
+        <string>--port</string>
+        <string>5343</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/Library/Logs/dreb-dashboard.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/Library/Logs/dreb-dashboard.err.log</string>
+</dict>
+</plist>
+```
+
+```bash
+# load / start
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dreb.dashboard.plist
+# stop / unload
+launchctl bootout gui/$(id -u)/com.dreb.dashboard
+# check status
+launchctl print gui/$(id -u)/com.dreb.dashboard | grep -E 'state|pid'
+```
+
+> This is a **LaunchAgent** (must run as your user to read `~/.dreb/agent` and spawn RPC children as you), not a LaunchDaemon. OAuth subscription creds in `~/.dreb/agent/auth.json` are found automatically via `HOME`. If you use API keys via shell environment variables, add them to `EnvironmentVariables` — LaunchAgents do not source shell profiles. See the [dashboard docs](packages/coding-agent/docs/dashboard.md#background-service--auto-restart) for full details.
 
 **WSL2 users:** if you reach the dashboard from a Windows browser and hit an intermittent access-denied / pairing screen on `http://127.0.0.1` after the WSL VM has been idle, see the [WSL2 gotcha](packages/coding-agent/docs/dashboard.md#wsl2-gotcha) for the cause and keep-alive workarounds.
 

@@ -342,4 +342,4 @@ acceptance, use Chromium network throttling at 100 ms RTT and 1.5 Mbps; HTTP
 packet loss is not emulated.
 
 See `packages/coding-agent/docs/dashboard.md` in the repo for the full
-product documentation.
+product documentation, including systemd and launchd auto-restart setup.

@@ -471,3 +471,144 @@ TUI theme system** — dashboard themes intentionally do not map to TUI themes.
   loop; the tree design and RPC are ready).
 - No shell passthrough from the browser.
 - No subagent steering (the drill-in view is read-only).
+
+## Background service / auto-restart
+
+The dashboard runs as a foreground process by default. For it to start on boot
+and restart after crashes, run it as a system service.
+
+### Linux (systemd)
+
+Save a user unit to `~/.config/systemd/user/dreb-dashboard.service`:
+
+```ini
+[Unit]
+Description=dreb web dashboard
+
+[Service]
+ExecStart=%h/.npm-global/bin/dreb-dashboard
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Use the absolute path from `which dreb-dashboard` for `ExecStart` (the example
+matches an npm global prefix under `~/.npm-global`). Then:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now dreb-dashboard
+```
+
+### macOS (launchd)
+
+Create a **LaunchAgent** (not a LaunchDaemon) — the dashboard must run as the
+logged-in user to read `~/.dreb/agent/sessions` and `auth.json`, and to spawn
+`dreb --mode rpc` children under that user. A root LaunchDaemon would have the
+wrong `HOME` and credentials.
+
+Save a plist to `~/Library/LaunchAgents/com.dreb.dashboard.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dreb.dashboard</string>
+    <!--
+      Invoke node directly on the resolved entry point. The `dreb-dashboard`
+      bin is a #!/usr/bin/env node script; launchd's minimal environment
+      cannot resolve `node` via PATH, so we point ProgramArguments at the
+      absolute node binary and the resolved dist/index.js.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/ABSOLUTE/PATH/TO/node</string>
+        <string>/ABSOLUTE/PATH/TO/@dreb/dashboard/dist/index.js</string>
+        <string>--port</string>
+        <string>5343</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- KeepAlive + ThrottleInterval gives crash auto-restart without a tight
+         fail-loop. kill -9 the process and launchd respawns it in seconds. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <!--
+      HOME is set automatically for user agents, so ~/.dreb/agent/auth.json
+      (OAuth creds) is found. PATH lets RPC children spawn bash/git/node.
+      If you use API keys via shell environment variables rather than OAuth
+      creds, add the keys here — LaunchAgents do not source shell profiles.
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/Library/Logs/dreb-dashboard.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/Library/Logs/dreb-dashboard.err.log</string>
+</dict>
+</plist>
+```
+
+#### Finding the absolute paths
+
+The two `ProgramArguments` paths vary by install method (Homebrew, nvm, bun
+global, npm global prefix). Discover them:
+
+```bash
+command -v node                         # → /opt/homebrew/bin/node
+readlink $(command -v dreb-dashboard)   # → /opt/homebrew/lib/node_modules/@dreb/dashboard/dist/index.js
+```
+
+Replace `/ABSOLUTE/PATH/TO/node` and `/ABSOLUTE/PATH/TO/@dreb/dashboard/dist/index.js`
+with the actual output. Also replace `/Users/YOU/` in the log paths with your
+home directory.
+
+#### load / unload / status
+
+Use the modern `launchctl bootstrap`/`bootout` API (not the deprecated
+`load`/`unload`):
+
+```bash
+# load / start
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dreb.dashboard.plist
+# stop / unload
+launchctl bootout gui/$(id -u)/com.dreb.dashboard
+# check state
+launchctl print gui/$(id -u)/com.dreb.dashboard | grep -E 'state|pid'
+```
+
+#### API-key providers
+
+OAuth subscription credentials live in `~/.dreb/agent/auth.json` and are
+found via the auto-set `HOME` — no secrets in the plist. If you use API keys
+via shell environment variables (e.g. `ANTHROPIC_API_KEY`), add them to the
+`EnvironmentVariables` dictionary:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>PATH</key>
+    <string>…</string>
+    <key>ANTHROPIC_API_KEY</key>
+    <string>sk-ant-…</string>
+</dict>
+```
+
+LaunchAgents do not source `.zshrc`/`.bashrc`/`.profile`, so env vars must be
+set explicitly in the plist.
+
+#### Local vs remote
+
+The plist above runs in local-only mode (binds `127.0.0.1:5343`). For remote
+access from a phone, add `--remote --allow you@example.com` to
+`ProgramArguments` and see the [remote access walkthrough](#local-vs-remote--exactly-two-modes)
+and [TLS setup](#native-tls-remote-https) for the Tailscale + HTTPS path.
+Do not expose the port on your LAN — there is no LAN mode.
