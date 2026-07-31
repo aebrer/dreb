@@ -10,8 +10,10 @@ import type { ImageContent, Model, Transport } from "@dreb/ai";
 import type { AgentSessionEvent, SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
+import type { DispatchArbitrationRecord } from "../../core/dispatch-arbiter.js";
 import type { ContextUsage } from "../../core/extensions/types.js";
 import type { SessionEntry } from "../../core/session-manager.js";
+import type { SubagentArbiterSettings } from "../../core/settings-manager.js";
 import type { SourceInfo } from "../../core/source-info.js";
 
 // ============================================================================
@@ -184,6 +186,8 @@ export interface RpcDashboardSnapshot {
 	messages: AgentMessage[];
 	/** Current background-agent registry at that boundary. */
 	backgroundAgents: RpcBackgroundAgentInfo[];
+	/** Blocking UI requests that are still waiting for a host response. */
+	pendingExtensionUiRequests: RpcBlockingExtensionUIRequest[];
 }
 
 /** Ordering marker emitted immediately before a matching dashboard snapshot response. */
@@ -491,6 +495,8 @@ export interface RpcBackgroundAgentInfo {
 	sessionFile?: string;
 	/** Working directory the agent runs in */
 	cwd?: string;
+	/** Safe pre-spawn arbitration records, ordered by attempt/chain step. */
+	arbitrations?: DispatchArbitrationRecord[];
 }
 
 /** Agent type metadata returned by list_agent_types */
@@ -569,6 +575,8 @@ export interface RpcSettingsSnapshot {
 	hideThinkingBlock?: boolean;
 	/** Per-agent model fallback lists, merged global + project with project entries winning */
 	agentModels?: Record<string, string[]>;
+	/** Global-only fail-closed Dispatch Arbiter configuration. */
+	subagentArbiter?: SubagentArbiterSettings;
 }
 
 /** Settings snapshot returned by `set_settings`; warnings are present for loud shadowing notices. */
@@ -624,6 +632,8 @@ export interface RpcSettingsUpdate {
 	transport?: Transport;
 	hideThinkingBlock?: boolean;
 	agentModels?: Record<string, string[]>;
+	/** Replaces the complete global-only arbiter configuration. */
+	subagentArbiter?: SubagentArbiterSettings | null;
 }
 
 // ============================================================================
@@ -643,6 +653,20 @@ export type RpcExtensionUIRequest =
 			timeout?: number;
 	  }
 	| { type: "extension_ui_request"; id: string; method: "editor"; title: string; prefill?: string }
+	| {
+			type: "extension_ui_request";
+			id: string;
+			method: "ask";
+			title: string;
+			question: string;
+			options?: string[];
+			allowFreeText?: boolean;
+			multiSelect?: boolean;
+			multiline?: boolean;
+			timeout?: number;
+			/** Absolute Unix timestamp in milliseconds when the RPC-side timeout fires. */
+			expiresAt?: number;
+	  }
 	| {
 			type: "extension_ui_request";
 			id: string;
@@ -668,6 +692,12 @@ export type RpcExtensionUIRequest =
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
 	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
 
+/** Blocking dialog requests retained until a matching host response arrives. */
+export type RpcBlockingExtensionUIRequest = Extract<
+	RpcExtensionUIRequest,
+	{ method: "select" | "confirm" | "input" | "editor" | "ask" }
+>;
+
 // ============================================================================
 // Extension UI Commands (stdin)
 // ============================================================================
@@ -676,6 +706,7 @@ export type RpcExtensionUIRequest =
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
+	| { type: "extension_ui_response"; id: string; selected: string[]; customText?: string }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 
 // ============================================================================

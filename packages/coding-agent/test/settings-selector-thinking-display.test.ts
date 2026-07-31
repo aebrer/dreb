@@ -46,6 +46,7 @@ function makeConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
 		agentModels: {},
 		agentNames: [],
 		availableModelIds: [],
+		subagentArbiter: {},
 		...overrides,
 	};
 }
@@ -73,6 +74,7 @@ function makeCallbacks(): SettingsCallbacks {
 		onAutocompleteMaxVisibleChange: vi.fn(),
 		onQuietStartupChange: vi.fn(),
 		onAgentModelsChange: vi.fn(),
+		onSubagentArbiterChange: vi.fn(() => true),
 		onCancel: vi.fn(),
 	};
 }
@@ -89,6 +91,108 @@ function focusThinkingDisplay(component: SettingsSelectorComponent): void {
 		list.handleInput(ch);
 	}
 }
+
+describe("SettingsSelectorComponent — Dispatch Arbiter controls", () => {
+	test("shows enable, model, thinking, and guide controls with global fail-closed guidance", () => {
+		const component = new SettingsSelectorComponent(
+			makeConfig({
+				subagentArbiter: { enabled: false, model: "provider/router", thinking: "medium" },
+				availableModelIds: ["provider/router"],
+			}),
+			makeCallbacks(),
+		);
+		const list = component.getSettingsList();
+		for (const ch of "arbiter") list.handleInput(ch);
+		const output = list.render(180).join("\n");
+		expect(output).toContain("Dispatch Arbiter");
+		expect(output).toContain("Dispatch Arbiter model");
+		expect(output).toContain("Dispatch Arbiter thinking");
+		expect(output).toContain("Dispatch Arbiter guide");
+		expect(output).toContain("Global-only");
+	});
+
+	test("model, thinking, and guide submenus emit complete global arbiter policies", () => {
+		const modelCallbacks = makeCallbacks();
+		const modelComponent = new SettingsSelectorComponent(
+			makeConfig({ subagentArbiter: { enabled: false }, availableModelIds: ["provider/router"] }),
+			modelCallbacks,
+		);
+		for (const ch of "arbitermodel") modelComponent.getSettingsList().handleInput(ch);
+		modelComponent.getSettingsList().handleInput(ENTER);
+		modelComponent.getSettingsList().handleInput(ENTER);
+		expect(modelCallbacks.onSubagentArbiterChange).toHaveBeenCalledWith({
+			enabled: false,
+			model: "provider/router",
+		});
+
+		const thinkingCallbacks = makeCallbacks();
+		const thinkingComponent = new SettingsSelectorComponent(
+			makeConfig({ subagentArbiter: { enabled: false, model: "provider/router", thinking: "off" } }),
+			thinkingCallbacks,
+		);
+		for (const ch of "arbiterthinking") thinkingComponent.getSettingsList().handleInput(ch);
+		thinkingComponent.getSettingsList().handleInput(ENTER);
+		thinkingComponent.getSettingsList().handleInput("\x1b[B");
+		thinkingComponent.getSettingsList().handleInput(ENTER);
+		expect(thinkingCallbacks.onSubagentArbiterChange).toHaveBeenCalledWith({
+			enabled: false,
+			model: "provider/router",
+			thinking: "minimal",
+		});
+
+		const guideCallbacks = makeCallbacks();
+		const guideComponent = new SettingsSelectorComponent(
+			makeConfig({ subagentArbiter: { enabled: false, model: "provider/router" } }),
+			guideCallbacks,
+		);
+		for (const ch of "arbiterguide") guideComponent.getSettingsList().handleInput(ch);
+		guideComponent.getSettingsList().handleInput(ENTER);
+		for (const ch of "~/custom-guide.md") guideComponent.getSettingsList().handleInput(ch);
+		guideComponent.getSettingsList().handleInput(ENTER);
+		expect(guideCallbacks.onSubagentArbiterChange).toHaveBeenCalledWith({
+			enabled: false,
+			model: "provider/router",
+			guidePath: "~/custom-guide.md",
+		});
+	});
+
+	test("rejected enablement stays off instead of presenting an unpersisted state", async () => {
+		const callbacks = makeCallbacks();
+		vi.mocked(callbacks.onSubagentArbiterChange).mockReturnValue(false);
+		const component = new SettingsSelectorComponent(
+			makeConfig({ subagentArbiter: { enabled: false, model: "provider/router" } }),
+			callbacks,
+		);
+		const list = component.getSettingsList();
+		for (const ch of "arbiter") list.handleInput(ch);
+		list.handleInput(ENTER);
+		list.handleInput("\x1b[B");
+		list.handleInput(ENTER);
+		expect(callbacks.onSubagentArbiterChange).toHaveBeenCalledWith({ enabled: true, model: "provider/router" });
+		await vi.waitFor(() => expect(list.render(120).join("\n")).toContain("false"));
+	});
+
+	test("enable toggle emits the complete current global arbiter policy", () => {
+		const callbacks = makeCallbacks();
+		const component = new SettingsSelectorComponent(
+			makeConfig({
+				subagentArbiter: { enabled: false, model: "provider/router", thinking: "medium", guidePath: "~/guide.md" },
+			}),
+			callbacks,
+		);
+		const list = component.getSettingsList();
+		for (const ch of "arbiter") list.handleInput(ch);
+		list.handleInput(ENTER);
+		list.handleInput("\x1b[B");
+		list.handleInput(ENTER);
+		expect(callbacks.onSubagentArbiterChange).toHaveBeenCalledWith({
+			enabled: true,
+			model: "provider/router",
+			thinking: "medium",
+			guidePath: "~/guide.md",
+		});
+	});
+});
 
 describe("SettingsSelectorComponent — thinking-display toggle", () => {
 	test("labels unrestricted nested loading as a default-off prompt-injection risk", () => {

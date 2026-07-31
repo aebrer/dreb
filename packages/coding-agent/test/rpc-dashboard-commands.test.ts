@@ -273,7 +273,7 @@ describe("git branch helper used by RPC", () => {
 });
 
 describe("runRpcMode dashboard dispatcher", () => {
-	it("emits a dashboard snapshot barrier before the snapshot response", async () => {
+	it("emits a dashboard snapshot barrier and includes pending UI requests in the response", async () => {
 		const { session, cleanup } = createTestSession({ inMemory: true });
 		const tasks = [
 			{ id: "read", title: "Read dispatcher pattern", status: "completed" as const },
@@ -282,9 +282,9 @@ describe("runRpcMode dashboard dispatcher", () => {
 		(session as unknown as { _tasks: typeof tasks })._tasks = tasks;
 		const outputs: Array<Record<string, unknown>> = [];
 		let handleInputLine: ((line: string) => void) | undefined;
-		let resolveTwoOutputs: (() => void) | undefined;
-		const twoOutputs = new Promise<void>((resolve) => {
-			resolveTwoOutputs = resolve;
+		let resolveSnapshotOutputs: (() => void) | undefined;
+		const snapshotOutputs = new Promise<void>((resolve) => {
+			resolveSnapshotOutputs = resolve;
 		});
 		const existingEndListeners = new Set(process.stdin.listeners("end"));
 		const existingErrorListeners = new Set(process.stdin.listeners("error"));
@@ -292,8 +292,8 @@ describe("runRpcMode dashboard dispatcher", () => {
 		vi.spyOn(outputGuard, "takeOverStdout").mockImplementation(() => {});
 		vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((line) => {
 			outputs.push(JSON.parse(line) as Record<string, unknown>);
-			if (outputs.length === 2) {
-				resolveTwoOutputs?.();
+			if (outputs.length === 3) {
+				resolveSnapshotOutputs?.();
 			}
 		});
 		vi.spyOn(jsonl, "attachJsonlLineReader").mockImplementation((_stream, onLine) => {
@@ -307,12 +307,20 @@ describe("runRpcMode dashboard dispatcher", () => {
 			void runRpcMode(session);
 			await vi.waitFor(() => expect(handleInputLine).toBeDefined());
 
-			handleInputLine!(JSON.stringify({ type: "get_dashboard_snapshot" }));
-			await twoOutputs;
+			const pendingAsk = session.extensionRunner!.createContext().ui.ask({
+				title: "Choose a database",
+				question: "Which one?",
+				options: ["SQLite", "Postgres"],
+			});
+			const request = outputs[0]!;
+			expect(request).toMatchObject({ type: "extension_ui_request", method: "ask" });
 
-			expect(outputs).toHaveLength(2);
-			const barrier = outputs[0]!;
-			const response = outputs[1]!;
+			handleInputLine!(JSON.stringify({ type: "get_dashboard_snapshot" }));
+			await snapshotOutputs;
+
+			expect(outputs).toHaveLength(3);
+			const barrier = outputs[1]!;
+			const response = outputs[2]!;
 
 			expect(barrier).toEqual({ type: "dashboard_snapshot_barrier", snapshotId: expect.any(String) });
 			const snapshotId = barrier.snapshotId;
@@ -324,8 +332,12 @@ describe("runRpcMode dashboard dispatcher", () => {
 				data: {
 					snapshotId,
 					state: { tasks },
+					pendingExtensionUiRequests: [request],
 				},
 			});
+
+			handleInputLine!(JSON.stringify({ type: "extension_ui_response", id: request.id, selected: ["SQLite"] }));
+			await expect(pendingAsk).resolves.toEqual({ selected: ["SQLite"], customText: undefined });
 		} finally {
 			cleanup();
 			for (const listener of process.stdin.listeners("end")) {
@@ -396,6 +408,7 @@ describe("RpcClient dashboard command methods", () => {
 			},
 			messages: [],
 			backgroundAgents: [],
+			pendingExtensionUiRequests: [],
 		} satisfies RpcDashboardSnapshot;
 		const aggregateSnapshot: AggregateRpcDashboardSnapshot = snapshot;
 

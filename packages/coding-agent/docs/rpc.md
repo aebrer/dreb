@@ -224,17 +224,17 @@ The `model` field is a full [Model](#model) object or `null`. `scopedModels` is 
 
 #### get_dashboard_snapshot
 
-Capture the dashboard-visible parent-session state, full parent transcript, and background-agent registry at one RPC command boundary. This is for authoritative recovery, not ordinary incremental refreshes.
+Capture the dashboard-visible parent-session state, full parent transcript, background-agent registry, and blocking extension UI requests at one RPC command boundary. This is for authoritative recovery, not ordinary incremental refreshes.
 
 ```json
 {"id": "snapshot-7", "type": "get_dashboard_snapshot"}
 ```
 
-The `RpcDashboardSnapshot` result is a `snapshotId`, a complete `RpcSessionState` (including `tasks`), `messages`, and `backgroundAgents`. The RPC child writes a `RpcDashboardSnapshotBarrierEvent` to stdout **immediately before** the matching response line:
+The `RpcDashboardSnapshot` result is a `snapshotId`, a complete `RpcSessionState` (including `tasks`), `messages`, `backgroundAgents`, and `pendingExtensionUiRequests`. The last field contains every blocking `select`, `confirm`, `input`, `editor`, or `ask` request still awaiting a host response, so a recovering Dashboard can restore the answer UI instead of leaving the runtime blocked. The RPC child writes a `RpcDashboardSnapshotBarrierEvent` to stdout **immediately before** the matching response line:
 
 ```json
 {"type":"dashboard_snapshot_barrier","snapshotId":"snapshot-7"}
-{"id":"snapshot-7","type":"response","command":"get_dashboard_snapshot","success":true,"data":{"snapshotId":"snapshot-7","state":{...},"messages":[...],"backgroundAgents":[...]}}
+{"id":"snapshot-7","type":"response","command":"get_dashboard_snapshot","success":true,"data":{"snapshotId":"snapshot-7","state":{...},"messages":[...],"backgroundAgents":[...],"pendingExtensionUiRequests":[...]}}
 ```
 
 Stdout JSONL ordering is the contract: a relay records its current event-stream sequence when the marker arrives, before resolving the response, and pairs the snapshot only with that exact marker. The dashboard returns that captured sequence as `/api/resync.barrierSeq`; consumers discard queued events through it and replay only later events. The marker itself is not broadcast as another browser event, so one recovering client does not interrupt healthy clients. Do not infer ordering from request/response timing; see [dashboard recovery](dashboard.md#live-connection-and-recovery).
@@ -1243,17 +1243,18 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 ### Settings
 
-Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with one security-policy exception:
+Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with global-only control/security-policy exceptions:
 
 - **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
 - **Global nested-context trust policy** (`autoLoadNestedContext`, `trustedContextFolders`, `effectiveTrustedContextRoots`, and the trust commands below): this is read from `~/.dreb/agent/settings.json` only, never project settings. Active main/subagent processes observe it for **future lazy nested/out-of-cwd loads**; it cannot remove content already injected into a conversation. It does not govern the separate initial upward context scan from the launch cwd.
+- **Global Dispatch Arbiter policy** (`subagentArbiter`): the complete object is read/written globally and project settings cannot shadow it. Enabled runtimes consume it before future subagent spawns; it does not rewrite already-started children.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
 
 A dashboard settings tab typically reads `get_state` for what is active now and `get_settings` for persistent defaults plus the current global context-trust policy.
 
 #### get_settings
 
-Get persistent settings. Before replying, RPC flushes pending settings writes, reloads durable global and project settings, and then reads the merged view; reopening dashboard Settings therefore sees external file edits. A pending write failure, unreadable file, parse error, or reload failure returns an explicit RPC error rather than a stale snapshot. Ordinary fields are the merged global + project view; the nested-context trust fields are always global-only.
+Get persistent settings. Before replying, RPC flushes pending settings writes, reloads durable global and project settings, and then reads the merged view; reopening dashboard Settings therefore sees external file edits. A pending write failure, unreadable file, parse error, or reload failure returns an explicit RPC error rather than a stale snapshot. Ordinary fields are the merged global + project view; nested-context trust and `subagentArbiter` are always global-only.
 
 ```json
 {"type": "get_settings"}
@@ -1283,6 +1284,12 @@ Response:
     "hideThinkingBlock": false,
     "agentModels": {
       "Explore": ["anthropic/sonnet", "openai/gpt-5"]
+    },
+    "subagentArbiter": {
+      "enabled": true,
+      "model": "anthropic/claude-sonnet-4-5",
+      "thinking": "medium",
+      "guidePath": "~/.dreb/agent/model-routing-guide.md"
     }
   }
 }
@@ -1291,6 +1298,8 @@ Response:
 `defaultProvider`, `defaultModel`, and `defaultThinkingLevel` are absent if never set. `agentModels` is the merged global + project view; project entries win per agent name.
 
 `trustedContextFolders` is the raw global configured list, including invalid legacy paths that are ignored fail-closed. `effectiveTrustedContextRoots` is the canonical, existing root set actually enforced after `~` expansion, native `realpath`, deduplication, and ancestor subsumption. `autoLoadNestedContext` defaults to `false`; when `true` it is global expert trust-all for every resolvable target, not a project override. Project `.dreb/settings.json` cannot affect any of these three fields.
+
+`subagentArbiter` is absent when unconfigured. It is always the global object; project `.dreb/settings.json` cannot enable, disable, or alter it.
 
 #### set_settings
 
@@ -1329,6 +1338,14 @@ Setting per-agent model fallback lists:
 ```
 
 For `agentModels`, a non-empty array writes the global fallback list for that agent. An empty array removes the global entry, so that agent uses its agent-definition default unless a project-level override exists.
+
+Replace the complete global-only Dispatch Arbiter policy (exact model is validated; explicit thinking is capability-validated):
+
+```json
+{"type":"set_settings","settings":{"subagentArbiter":{"enabled":true,"model":"anthropic/claude-sonnet-4-5","thinking":"medium","guidePath":"~/.dreb/agent/model-routing-guide.md"}}}
+```
+
+Set `subagentArbiter: null` to remove the global policy. Enabling requires `model`; `guidePath` defaults to the standard guide path and omitted thinking runs the arbiter call with thinking off. Runtime guide/scope validation still occurs at each spawn because the live explicit scope can change.
 
 Response is the full settings snapshot after the write (same shape as `get_settings`), plus `warnings` when the write was accepted but a project-level override shadows part of it:
 
@@ -1406,6 +1423,7 @@ Valid keys and values:
 | `transport` | `"sse"`, `"websocket"`, `"auto"` |
 | `hideThinkingBlock` | boolean |
 | `agentModels` | Plain object mapping agent names to arrays of non-empty model id strings; empty arrays remove the global entry for that agent |
+| `subagentArbiter` | Complete global-only object or `null`. Keys: `enabled` boolean, exact available `model`, optional valid/capability-supported `thinking`, non-empty `guidePath`. Enabling requires `model`. Unknown nested keys are rejected. |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
 
@@ -1419,6 +1437,7 @@ Errors are explicit `success: false` responses (nothing is applied on any of the
 - Invalid trusted-root list: `trustedContextFolders must be an array of non-empty path strings` or `Invalid trustedContextFolders[0]: path must be absolute after ~ expansion` / `path must be an existing directory`
 - Provider without model (or vice versa): `defaultProvider and defaultModel must be set together`
 - Unavailable model: `Model not found: provider/model-id`
+- Invalid arbiter policy: `Enabling subagentArbiter requires an exact provider/model`, `Arbiter model not found: ...`, or a nested-key/type/thinking capability error
 - Corrupt settings file: `Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)` — without this guard the write would silently no-op
 - Write failure (I/O error): `Failed to persist settings: ...`
 
@@ -1584,7 +1603,7 @@ Response:
 
 | Event | Description |
 |-------|-------------|
-| `agent_start` | Agent begins processing |
+| `agent_start` | Agent begins processing (resolved model and effective thinking level) |
 | `agent_end` | Agent completes (includes all generated messages) |
 | `turn_start` | New turn begins |
 | `turn_end` | Turn completes (includes assistant message and tool results) |
@@ -1602,7 +1621,7 @@ Response:
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
 | `background_agent_start` | Background subagent launched (includes `sessionDir`) |
-| `background_agent_end` | Background subagent finished (includes `sessionFile` when known) |
+| `background_agent_end` | Background subagent finished (canonical model/thinking, per-step chain metadata, and `sessionFile` when known) |
 | `background_agent_event` | Relayed event from a background subagent's own stream |
 | `parent_paused_for_background_agents` | Parent paused waiting on background agents |
 | `session_name_changed` | Session display name changed (manual rename, extension rename, or auto-title) |
@@ -1616,10 +1635,10 @@ rather than validating against a closed list; new event types may be added.
 
 ### agent_start
 
-Emitted when the agent begins processing a prompt. Includes the resolved model.
+Emitted when the agent begins processing a prompt. Includes the resolved model and effective thinking level sent to the provider.
 
 ```json
-{"type": "agent_start", "model": {"provider": "anthropic", "id": "claude-sonnet-4-20250514"}}
+{"type": "agent_start", "model": {"provider": "anthropic", "id": "claude-sonnet-4-20250514"}, "thinkingLevel": "high"}
 ```
 
 ### agent_end
@@ -1807,9 +1826,9 @@ On final failure (max retries exceeded):
 }
 ```
 
-### background_agent_start / background_agent_end / background_agent_event
+### background_agent_start / subagent_arbitration / background_agent_end / background_agent_event
 
-Lifecycle and live-observability events for background subagents (the `subagent` tool's background mode).
+Lifecycle, pre-spawn routing, and live-observability events for background subagents (the `subagent` tool's background mode).
 
 `background_agent_start` fires at launch. `sessionDir` is the directory the child will write its session JSONL into (per-launch, known before spawn):
 
@@ -1823,7 +1842,22 @@ Lifecycle and live-observability events for background subagents (the `subagent`
 }
 ```
 
-`background_agent_end` fires after the result is delivered to the parent agent. `sessionFile` is the child's session JSONL path when one was written:
+When the global Dispatch Arbiter is enabled, `subagent_arbitration` fires after the requested route is made concrete and before child spawn/events. It appears for changed and unchanged successful decisions, and for failures that prevent spawn. Chain records include `step`; failures have `final: null` and bounded host-generated `errorCode`/`errorMessage`.
+
+```json
+{
+  "type": "subagent_arbitration",
+  "agentId": "a1b2c3d4e5f6",
+  "status": "success",
+  "proposed": {"agent": "Explore", "model": "provider/frontier", "thinking": "high"},
+  "final": {"agent": "feature-dev", "model": "provider/worker", "thinking": "medium"},
+  "changed": ["agent", "model", "thinking"]
+}
+```
+
+The event is deliberately safe and programmatic: it never contains the task, guide, conversation context, prompt, raw response, or model reasoning. The parent session persists the same fields as a non-context `custom` entry. Consumers should update displayed background-agent identity from `final.agent` before child events arrive.
+
+`background_agent_end` fires after the result is delivered to the parent agent. For a single child it includes the canonical resolved `provider/model` and effective thinking level when reported; `sessionFile` is the child's session JSONL path when one was written:
 
 ```json
 {
@@ -1831,7 +1865,24 @@ Lifecycle and live-observability events for background subagents (the `subagent`
   "agentId": "a1b2c3d4e5f6",
   "agentType": "Explore",
   "success": true,
+  "model": "anthropic/claude-sonnet-4-20250514",
+  "thinking": "medium",
   "sessionFile": "/home/user/.dreb/agent/subagent-sessions/a1b2c3d4e5f6/2026-07-07T12-00-00-000Z_uuid.jsonl"
+}
+```
+
+Chain completions omit ambiguous scalar model/thinking fields and instead include ordered per-step metadata, since steps may use different agents, providers, models, or thinking levels:
+
+```json
+{
+  "type": "background_agent_end",
+  "agentId": "a1b2c3d4e5f6",
+  "agentType": "Explore",
+  "success": true,
+  "steps": [
+    {"step": 1, "agent": "Explore", "success": true, "model": "anthropic/claude-sonnet-4-6", "thinking": "low"},
+    {"step": 2, "agent": "feature-dev", "success": true, "model": "openai/gpt-5.6-sol", "thinking": "high"}
+  ]
 }
 ```
 
@@ -1875,7 +1926,7 @@ Extensions can request user interaction via `ctx.ui.select()`, `ctx.ui.confirm()
 
 There are two categories of extension UI methods:
 
-- **Dialog methods** (`select`, `confirm`, `input`, `editor`): emit an `extension_ui_request` on stdout and block until the client sends back an `extension_ui_response` on stdin with the matching `id`.
+- **Dialog methods** (`select`, `confirm`, `input`, `editor`, `ask`): emit an `extension_ui_request` on stdout and block until the client sends back an `extension_ui_response` on stdin with the matching `id`.
 - **Fire-and-forget methods** (`notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`): emit an `extension_ui_request` on stdout but do not expect a response. The client can display the information or ignore it.
 
 If a dialog method includes a `timeout` field, the agent-side will auto-resolve with a default value when the timeout expires. The client does not need to track timeouts.
@@ -1962,6 +2013,34 @@ Open a multi-line text editor with optional prefilled content.
 
 Expected response: `extension_ui_response` with `value` (the edited text) or `cancelled: true`.
 
+#### ask
+
+Ask the user a rich clarifying question with Markdown-formatted question text, optional single- or multi-select options, and an optional free-text field. This powers the built-in `ask_user` tool. `options` (2-4 nonblank strings) is optional; `allowFreeText` (default `true`), `multiSelect`, and `multiline` are optional booleans.
+
+```json
+{
+  "type": "extension_ui_request",
+  "id": "uuid-5",
+  "method": "ask",
+  "title": "Choose a database",
+  "question": "Which persistence strategy should I use?",
+  "options": ["SQLite", "PostgreSQL", "Keep the JSON file"],
+  "allowFreeText": true,
+  "multiSelect": false,
+  "multiline": false,
+  "timeout": 60000,
+  "expiresAt": 1785434460000
+}
+```
+
+`timeout` is the original duration in milliseconds. `expiresAt` is the corresponding absolute Unix timestamp in milliseconds; Dashboard clients should use it for the visible countdown so reload, resync, or drill-in recovery does not restart the full duration.
+
+Expected response: `extension_ui_response` with `selected` (an array of strings) and optional string `customText` (the typed answer). Sending `cancelled: true`, or an empty `selected` with no nonblank `customText`, stops the current agent turn rather than continuing without an answer. A timeout has the same stop semantics. Other malformed ask responses are rejected as protocol failures.
+
+```json
+{ "type": "extension_ui_response", "id": "uuid-5", "selected": ["SQLite"], "customText": "with WAL enabled" }
+```
+
 #### notify
 
 Display a notification. Fire-and-forget, no response expected.
@@ -2039,7 +2118,7 @@ Set the text in the input editor. Fire-and-forget.
 
 ### Extension UI Responses (stdin)
 
-Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`). The `id` must match the request.
+Responses are sent for dialog methods only (`select`, `confirm`, `input`, `editor`, `ask`). The `id` must match the request.
 
 #### Value response (select, input, editor)
 
@@ -2055,11 +2134,22 @@ Responses are sent for dialog methods only (`select`, `confirm`, `input`, `edito
 
 #### Cancellation response (any dialog)
 
-Dismiss any dialog method. The extension receives `undefined` (for select/input/editor) or `false` (for confirm).
+Dismiss any dialog method. The extension receives `undefined` (for select/input/editor) or `false` (for confirm). For `ask`, cancellation returns `undefined` while stopping the current agent turn.
 
 ```json
 {"type": "extension_ui_response", "id": "uuid-3", "cancelled": true}
 ```
+
+After any dialog settles, RPC emits a lifecycle event on stdout so hosts can
+remove the matching UI even when the dialog ended locally because of timeout,
+abort, or runtime shutdown:
+
+```json
+{"type": "extension_ui_response_handled", "id": "uuid-3"}
+```
+
+Hosts should treat this event as idempotent; it can arrive after the host has
+already removed a successfully answered request.
 
 ## Error Handling
 

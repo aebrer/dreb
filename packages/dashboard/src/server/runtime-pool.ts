@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { RpcClient, type RpcExitInfo } from "@dreb/coding-agent/rpc";
+import { RpcClient, type RpcDashboardSnapshot, type RpcExitInfo } from "@dreb/coding-agent/rpc";
 import {
 	type BackgroundAgentDto,
 	type FleetRuntimeSnapshotDto,
@@ -20,6 +20,7 @@ import {
 	type RuntimeInfoDto,
 	type RuntimeStatsSummaryDto,
 	type SessionStateDto,
+	type SubagentArbitrationDto,
 } from "../shared/protocol.js";
 
 /** Resolve the absolute path to the dreb CLI (RpcClient defaults to a cwd-relative path). */
@@ -39,13 +40,6 @@ export type RuntimeEventListener = (key: string, event: Record<string, unknown>)
 export type FleetSnapshotListener = (event: FleetSnapshotEventDto) => void;
 
 export { MAX_COMPLETED_BACKGROUND_AGENTS };
-
-interface RpcDashboardSnapshot {
-	snapshotId: string;
-	state: SessionStateDto;
-	messages: unknown[];
-	backgroundAgents: BackgroundAgentDto[];
-}
 
 type DashboardSnapshotClient = RpcClient & { getDashboardSnapshot(): Promise<RpcDashboardSnapshot> };
 
@@ -90,6 +84,7 @@ const FLEET_SNAPSHOT_EVENT_TYPES = new Set([
 	"auto_retry_end",
 	"background_agent_start",
 	"background_agent_end",
+	"subagent_arbitration",
 	"extension_ui_request",
 	"extension_ui_response_handled",
 	"message_end",
@@ -446,7 +441,13 @@ export class RuntimePool {
 		// paused, error states.
 		if (type === "extension_ui_request") {
 			const method = event.method as string;
-			if (method === "select" || method === "confirm" || method === "input" || method === "editor") {
+			if (
+				method === "select" ||
+				method === "confirm" ||
+				method === "input" ||
+				method === "editor" ||
+				method === "ask"
+			) {
 				handle.attention.set(`ui:${event.id}`, `extension ${method} awaiting response`);
 			}
 		}
@@ -508,6 +509,22 @@ export class RuntimePool {
 				status: "running",
 				sessionDir: event.sessionDir as string | undefined,
 			});
+		}
+		if (type === "subagent_arbitration") {
+			const existing = handle.backgroundAgents.get(event.agentId as string);
+			if (existing) {
+				const record: SubagentArbitrationDto = {
+					status: event.status as SubagentArbitrationDto["status"],
+					proposed: event.proposed as SubagentArbitrationDto["proposed"],
+					final: (event.final as SubagentArbitrationDto["final"]) ?? null,
+					changed: (event.changed as SubagentArbitrationDto["changed"]) ?? [],
+					step: event.step as number | undefined,
+					errorCode: event.errorCode as string | undefined,
+					errorMessage: event.errorMessage as string | undefined,
+				};
+				existing.arbitrations = [...(existing.arbitrations ?? []), record];
+				if (record.status === "success" && record.final) existing.agentType = record.final.agent;
+			}
 		}
 		if (type === "background_agent_end") {
 			const existing = handle.backgroundAgents.get(event.agentId as string);

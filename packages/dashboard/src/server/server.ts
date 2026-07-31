@@ -38,7 +38,7 @@ import { EventHub, formatHeartbeatFrame, type SseWriteMetadata } from "./event-h
 import { defaultPlaces, FileApi } from "./files.js";
 import { ImagePreviewWorker } from "./image-preview.js";
 import type { DashboardRuntimeSnapshot, RuntimePool } from "./runtime-pool.js";
-import { readSubagentMessages } from "./subagent-log.js";
+import { readSubagentMessages, SubagentSessionLogNotFoundError } from "./subagent-log.js";
 
 export type DashboardServerApp = express.Express & {
 	/** Close dashboard-owned services. Safe to call more than once during shutdown. */
@@ -446,6 +446,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		state: snapshot.snapshot.state,
 		messages: images.project(snapshot.snapshot.messages, { runtimeKey: snapshot.key }),
 		backgroundAgents: snapshot.snapshot.backgroundAgents,
+		pendingExtensionUiRequests: snapshot.snapshot.pendingExtensionUiRequests ?? [],
 		barrierSeq: snapshot.barrierSeq,
 	});
 
@@ -824,7 +825,17 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			const agents = await h.client.listBackgroundAgents();
 			const agent = agents.find((a) => a.agentId === agentId);
 			if (!agent) throw new Error(`No background agent ${agentId} in this runtime`);
-			const messages = readSubagentMessages(agent);
+			let messages: unknown[];
+			try {
+				messages = readSubagentMessages(agent);
+			} catch (error) {
+				const failedBeforeSpawn =
+					agent.arbitrations !== undefined &&
+					agent.arbitrations.length > 0 &&
+					agent.arbitrations.every((record) => record.status === "failure");
+				if (!(error instanceof SubagentSessionLogNotFoundError) || !failedBeforeSpawn) throw error;
+				messages = [];
+			}
 			return { agent, messages: images.project(messages, { runtimeKey: h.key, agentId }) };
 		});
 	});

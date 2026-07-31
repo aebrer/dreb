@@ -49,6 +49,7 @@ function createAssistantMessage(text: string, overrides?: Partial<AssistantMessa
 type SessionWithExtensionEmitHook = {
 	_emitExtensionEvent: (event: AgentEvent) => Promise<void>;
 	_extensionRunner?: {
+		hasExtensions: boolean;
 		hasHandlers: (eventType: string) => boolean;
 		emit: (event: { type: string; [key: string]: unknown }) => Promise<void>;
 		emitBeforeAgentStart: () => Promise<undefined>;
@@ -250,6 +251,7 @@ describe("AgentSession retry", () => {
 		const extensionEvents: Array<{ type: string; [key: string]: unknown }> = [];
 		const sessionWithRunner = session as unknown as SessionWithExtensionEmitHook;
 		sessionWithRunner._extensionRunner = {
+			hasExtensions: true,
 			hasHandlers: () => false,
 			emit: async (event) => {
 				extensionEvents.push(event);
@@ -333,6 +335,7 @@ describe("AgentSession retry", () => {
 		const extensionEvents: Array<{ type: string; [key: string]: unknown }> = [];
 		const sessionWithRunner = session as unknown as SessionWithExtensionEmitHook;
 		sessionWithRunner._extensionRunner = {
+			hasExtensions: true,
 			hasHandlers: () => false,
 			emit: async (event) => {
 				extensionEvents.push(event);
@@ -409,6 +412,7 @@ describe("AgentSession retry", () => {
 		const extensionEvents: Array<{ type: string; [key: string]: unknown }> = [];
 		const sessionWithRunner = session as unknown as SessionWithExtensionEmitHook;
 		sessionWithRunner._extensionRunner = {
+			hasExtensions: true,
 			hasHandlers: () => false,
 			emit: async (event) => {
 				extensionEvents.push(event);

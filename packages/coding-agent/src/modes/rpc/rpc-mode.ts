@@ -36,6 +36,7 @@ import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js
 import { SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager, TransportSetting } from "../../core/settings-manager.js";
 import { TabTitleGenerator } from "../../core/tab-title.js";
+import { validateThinkingLevelForModel } from "../../core/thinking.js";
 import {
 	type BackgroundAgentInfo,
 	discoverAgentTypes,
@@ -47,6 +48,7 @@ import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
 import type {
 	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,
+	RpcBlockingExtensionUIRequest,
 	RpcCommand,
 	RpcContextTrustEvaluation,
 	RpcContextTrustMutationResult,
@@ -231,6 +233,7 @@ export function toRpcBackgroundAgentInfo(a: Readonly<BackgroundAgentInfo>): RpcB
 		sessionDir: a.sessionDir,
 		sessionFile: a.sessionFile,
 		cwd: a.cwd,
+		arbitrations: a.arbitrations?.map((record) => structuredClone(record)),
 	};
 }
 
@@ -259,6 +262,7 @@ type SettingsReader = Pick<
 	| "getTransport"
 	| "getHideThinkingBlock"
 	| "getAgentModels"
+	| "getGlobalSubagentArbiterSettings"
 >;
 
 type SettingsRefresher = SettingsReader &
@@ -288,6 +292,7 @@ type SettingsWriter = SettingsRefresher &
 		| "setAgentModelsForAgent"
 		| "removeAgentModelsForAgent"
 		| "hasProjectAgentModelOverride"
+		| "setGlobalSubagentArbiterSettings"
 	>;
 
 /**
@@ -318,6 +323,7 @@ export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsS
 		transport: settingsManager.getTransport(),
 		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
 		agentModels: settingsManager.getAgentModels(),
+		subagentArbiter: settingsManager.getGlobalSubagentArbiterSettings(),
 	};
 }
 
@@ -393,6 +399,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"transport",
 	"hideThinkingBlock",
 	"agentModels",
+	"subagentArbiter",
 ] as const;
 
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
@@ -717,6 +724,68 @@ export async function setSettingsForRpc(
 		}
 	}
 
+	let subagentArbiter = update.subagentArbiter === null ? undefined : update.subagentArbiter;
+	if (subagentArbiter !== undefined) {
+		if (!isPlainObject(subagentArbiter)) {
+			return { ok: false, error: "subagentArbiter must be an object or null" };
+		}
+		const validKeys = ["enabled", "model", "thinking", "guidePath"];
+		const unknownArbiterKeys = Object.keys(subagentArbiter).filter((key) => !validKeys.includes(key));
+		if (unknownArbiterKeys.length > 0) {
+			return { ok: false, error: `Unknown subagentArbiter key(s): ${unknownArbiterKeys.join(", ")}` };
+		}
+		if (subagentArbiter.enabled !== undefined && typeof subagentArbiter.enabled !== "boolean") {
+			return { ok: false, error: "subagentArbiter.enabled must be a boolean" };
+		}
+		if (subagentArbiter.enabled === false) {
+			// Explicit disablement is the recovery path for fail-closed policies.
+			// Preserve retained fields without validating them so malformed manual
+			// edits cannot trap users in a policy that blocks every child spawn.
+			subagentArbiter = { ...subagentArbiter };
+		} else {
+			if (
+				subagentArbiter.model !== undefined &&
+				(typeof subagentArbiter.model !== "string" || !subagentArbiter.model.trim())
+			) {
+				return { ok: false, error: "subagentArbiter.model must be a non-empty exact provider/model string" };
+			}
+			if (
+				subagentArbiter.thinking !== undefined &&
+				(typeof subagentArbiter.thinking !== "string" || !isValidThinkingLevel(subagentArbiter.thinking))
+			) {
+				return {
+					ok: false,
+					error: `Invalid subagentArbiter.thinking: ${JSON.stringify(subagentArbiter.thinking)}. Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
+				};
+			}
+			if (
+				subagentArbiter.guidePath !== undefined &&
+				(typeof subagentArbiter.guidePath !== "string" || !subagentArbiter.guidePath.trim())
+			) {
+				return { ok: false, error: "subagentArbiter.guidePath must be a non-empty string" };
+			}
+			if (subagentArbiter.enabled === true && !subagentArbiter.model) {
+				return { ok: false, error: "Enabling subagentArbiter requires an exact provider/model" };
+			}
+			if (subagentArbiter.model) {
+				const slash = subagentArbiter.model.indexOf("/");
+				if (slash <= 0 || slash === subagentArbiter.model.length - 1 || /\s/.test(subagentArbiter.model)) {
+					return { ok: false, error: "subagentArbiter.model must be an exact provider/model" };
+				}
+				const provider = subagentArbiter.model.slice(0, slash);
+				const modelId = subagentArbiter.model.slice(slash + 1);
+				const models = await modelRegistry.getAvailable();
+				const model = models.find((candidate) => candidate.provider === provider && candidate.id === modelId);
+				if (!model) return { ok: false, error: `Arbiter model not found: ${subagentArbiter.model}` };
+				if (subagentArbiter.thinking !== undefined) {
+					const validation = validateThinkingLevelForModel(model, subagentArbiter.thinking);
+					if (!validation.ok) return validation;
+				}
+			}
+			subagentArbiter = { ...subagentArbiter };
+		}
+	}
+
 	let trustedContextFolders: string[] | undefined;
 	if (update.trustedContextFolders !== undefined) {
 		try {
@@ -807,6 +876,9 @@ export async function setSettingsForRpc(
 			}
 
 			const warnings: string[] = [];
+			if (update.subagentArbiter !== undefined) {
+				settingsManager.setGlobalSubagentArbiterSettings(subagentArbiter);
+			}
 			if (update.agentModels !== undefined) {
 				for (const [agentName, models] of Object.entries(update.agentModels)) {
 					if (settingsManager.hasProjectAgentModelOverride(agentName)) {
@@ -1010,95 +1082,90 @@ export async function navigateTreeForRpc(
  * Run in RPC mode.
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
-export async function runRpcMode(session: AgentSession, modelFallbackMessage?: string): Promise<never> {
-	takeOverStdout();
+/**
+ * Build the RPC-mode extension UI context. Extracted from `runRpcMode` so the
+ * dialog request emission and response mapping (select/confirm/input/ask/editor)
+ * can be unit-tested without spawning the CLI. `output` is the JSONL sink and
+ * `pendingExtensionRequests` is the shared map keyed by request id.
+ */
+export interface PendingRpcExtensionRequest {
+	request: RpcBlockingExtensionUIRequest;
+	resolve: (value: any) => void;
+	reject: (error: Error) => void;
+}
 
-	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
-		writeRawStdout(serializeJsonLine(obj));
-	};
-
-	const success = <T extends RpcCommand["type"]>(
-		id: string | undefined,
-		command: T,
-		data?: object | null,
-	): RpcResponse => {
-		if (data === undefined) {
-			return { id, type: "response", command, success: true } as RpcResponse;
-		}
-		return { id, type: "response", command, success: true, data } as RpcResponse;
-	};
-
-	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
-		return { id, type: "response", command, success: false, error: message };
-	};
-
-	if (session.sessionFile && session.messages.length > 0) {
-		const rehydratedCount = rehydrateBackgroundAgentsFromDisk(session.sessionFile);
-		if (rehydratedCount > 0) {
-			console.error(
-				`[rpc] Rehydrated ${rehydratedCount} background subagent${rehydratedCount === 1 ? "" : "s"} from disk`,
-			);
-		}
-	}
-
-	// Pending extension UI requests waiting for response
-	const pendingExtensionRequests = new Map<
-		string,
-		{ resolve: (value: any) => void; reject: (error: Error) => void }
-	>();
-
-	// Shutdown request flag
-	let shutdownRequested = false;
-	let dailyCostTracker: DailyCostTracker | undefined;
-	let dailyCostTrackerPrimed = false;
-
+export function createRpcExtensionUIContext(
+	output: (obj: RpcResponse | RpcExtensionUIRequest | object) => void,
+	pendingExtensionRequests: Map<string, PendingRpcExtensionRequest>,
+	onAskStop: () => void = () => {},
+): ExtensionUIContext {
 	/** Helper for dialog methods with signal/timeout support */
 	function createDialogPromise<T>(
 		opts: ExtensionUIDialogOptions | undefined,
 		defaultValue: T,
 		request: Record<string, unknown>,
 		parseResponse: (response: RpcExtensionUIResponse) => T,
+		onTimeout?: () => void,
 	): Promise<T> {
 		if (opts?.signal?.aborted) return Promise.resolve(defaultValue);
 
 		const id = crypto.randomUUID();
 		return new Promise((resolve, reject) => {
 			let timeoutId: ReturnType<typeof setTimeout> | undefined;
+			let settled = false;
 
-			const cleanup = () => {
+			const cleanup = (): boolean => {
+				if (settled) return false;
+				settled = true;
 				if (timeoutId) clearTimeout(timeoutId);
 				opts?.signal?.removeEventListener("abort", onAbort);
 				pendingExtensionRequests.delete(id);
+				output({ type: "extension_ui_response_handled", id });
+				return true;
 			};
 
 			const onAbort = () => {
-				cleanup();
+				if (!cleanup()) return;
 				resolve(defaultValue);
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
 			if (opts?.timeout) {
 				timeoutId = setTimeout(() => {
-					cleanup();
+					if (!cleanup()) return;
+					onTimeout?.();
 					resolve(defaultValue);
 				}, opts.timeout);
 			}
 
+			const rpcRequest = {
+				type: "extension_ui_request",
+				id,
+				...request,
+			} as RpcBlockingExtensionUIRequest;
 			pendingExtensionRequests.set(id, {
+				request: rpcRequest,
 				resolve: (response: RpcExtensionUIResponse) => {
-					cleanup();
-					resolve(parseResponse(response));
+					if (!cleanup()) return;
+					try {
+						resolve(parseResponse(response));
+					} catch (error) {
+						reject(error);
+					}
 				},
-				reject,
+				reject: (error) => {
+					if (!cleanup()) return;
+					reject(error);
+				},
 			});
-			output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
+			output(rpcRequest);
 		});
 	}
 
 	/**
 	 * Create an extension UI context that uses the RPC protocol.
 	 */
-	const createExtensionUIContext = (): ExtensionUIContext => ({
+	return {
 		select: (title, options, opts) =>
 			createDialogPromise(opts, undefined, { method: "select", title, options, timeout: opts?.timeout }, (r) =>
 				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
@@ -1112,6 +1179,46 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		input: (title, placeholder, opts) =>
 			createDialogPromise(opts, undefined, { method: "input", title, placeholder, timeout: opts?.timeout }, (r) =>
 				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
+			),
+
+		ask: (request, opts) =>
+			createDialogPromise(
+				opts,
+				undefined,
+				{
+					method: "ask",
+					title: request.title ?? "Question",
+					question: request.question,
+					options: request.options,
+					allowFreeText: request.allowFreeText,
+					multiSelect: request.multiSelect,
+					multiline: request.multiline,
+					timeout: opts?.timeout,
+					// Preserve the authoritative deadline across Dashboard reload,
+					// resync, and drill-in hydration instead of restarting the full
+					// duration whenever the question component remounts.
+					expiresAt: opts?.timeout ? Date.now() + opts.timeout : undefined,
+				},
+				(response) => {
+					if ("cancelled" in response && response.cancelled) {
+						onAskStop();
+						return undefined;
+					}
+					const selected = (response as { selected?: unknown }).selected;
+					const customText = (response as { customText?: unknown }).customText;
+					if (!Array.isArray(selected) || !selected.every((value) => typeof value === "string")) {
+						throw new Error("Invalid RPC ask response: selected must be an array of strings");
+					}
+					if (customText !== undefined && typeof customText !== "string") {
+						throw new Error("Invalid RPC ask response: customText must be a string");
+					}
+					if (selected.length === 0 && !customText?.trim()) {
+						onAskStop();
+						return undefined;
+					}
+					return { selected, customText };
+				},
+				onAskStop,
 			),
 
 		notify(message: string, type?: "info" | "warning" | "error"): void {
@@ -1204,24 +1311,14 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			return "";
 		},
 
-		async editor(title: string, prefill?: string): Promise<string | undefined> {
-			const id = crypto.randomUUID();
-			return new Promise((resolve, reject) => {
-				pendingExtensionRequests.set(id, {
-					resolve: (response: RpcExtensionUIResponse) => {
-						if ("cancelled" in response && response.cancelled) {
-							resolve(undefined);
-						} else if ("value" in response) {
-							resolve(response.value);
-						} else {
-							resolve(undefined);
-						}
-					},
-					reject,
-				});
-				output({ type: "extension_ui_request", id, method: "editor", title, prefill } as RpcExtensionUIRequest);
-			});
-		},
+		editor: (title, prefill) =>
+			createDialogPromise(undefined, undefined, { method: "editor", title, prefill }, (response) =>
+				"cancelled" in response && response.cancelled
+					? undefined
+					: "value" in response
+						? response.value
+						: undefined,
+			),
 
 		setEditorComponent(): void {
 			// Custom editor components not supported in RPC mode
@@ -1252,7 +1349,63 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		setToolsExpanded(_expanded: boolean) {
 			// Tool expansion not supported in RPC mode - no TUI
 		},
-	});
+	};
+}
+
+/** Cancel every pending dialog during RPC host teardown. */
+export function cancelPendingRpcExtensionRequests(
+	pendingExtensionRequests: Map<string, PendingRpcExtensionRequest>,
+): void {
+	for (const [id, pending] of [...pendingExtensionRequests]) {
+		pending.resolve({ type: "extension_ui_response", id, cancelled: true });
+	}
+}
+
+export async function runRpcMode(session: AgentSession, modelFallbackMessage?: string): Promise<never> {
+	takeOverStdout();
+
+	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
+		writeRawStdout(serializeJsonLine(obj));
+	};
+
+	const success = <T extends RpcCommand["type"]>(
+		id: string | undefined,
+		command: T,
+		data?: object | null,
+	): RpcResponse => {
+		if (data === undefined) {
+			return { id, type: "response", command, success: true } as RpcResponse;
+		}
+		return { id, type: "response", command, success: true, data } as RpcResponse;
+	};
+
+	const error = (id: string | undefined, command: string, message: string): RpcResponse => {
+		return { id, type: "response", command, success: false, error: message };
+	};
+
+	if (session.sessionFile && session.messages.length > 0) {
+		const rehydratedCount = rehydrateBackgroundAgentsFromDisk(session.sessionFile);
+		if (rehydratedCount > 0) {
+			console.error(
+				`[rpc] Rehydrated ${rehydratedCount} background subagent${rehydratedCount === 1 ? "" : "s"} from disk`,
+			);
+		}
+	}
+
+	// Pending extension UI requests waiting for response. Keep the emitted
+	// payload alongside its callbacks so recovery snapshots can reconstruct the
+	// answer UI after a Dashboard reload or replay gap.
+	const pendingExtensionRequests = new Map<string, PendingRpcExtensionRequest>();
+
+	// Shutdown request flag
+	let shutdownRequested = false;
+	let dailyCostTracker: DailyCostTracker | undefined;
+	let dailyCostTrackerPrimed = false;
+
+	// Extension UI context uses the RPC protocol; built by a module-scope
+	// factory so the dialog round trip is unit-testable (see createRpcExtensionUIContext).
+	const createExtensionUIContext = (): ExtensionUIContext =>
+		createRpcExtensionUIContext(output, pendingExtensionRequests, () => void session.abort());
 
 	// Set up extensions with RPC-based UI context
 	await session.bindExtensions({
@@ -1407,6 +1560,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 					state: getStateForRpc(session, modelFallbackMessage),
 					messages: getDashboardMessagesForRpc(session),
 					backgroundAgents: getBackgroundAgents().map(toRpcBackgroundAgentInfo),
+					pendingExtensionUiRequests: [...pendingExtensionRequests.values()].map(({ request }) => request),
 				};
 				return success(id, "get_dashboard_snapshot", data);
 			}
@@ -1805,6 +1959,8 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 	let detachInput = () => {};
 
 	async function shutdown(): Promise<never> {
+		cancelPendingRpcExtensionRequests(pendingExtensionRequests);
+
 		const currentRunner = session.extensionRunner;
 		if (currentRunner?.hasHandlers("session_shutdown")) {
 			await currentRunner.emit({ type: "session_shutdown" });

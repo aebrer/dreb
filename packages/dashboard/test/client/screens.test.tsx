@@ -21,6 +21,7 @@ vi.mock("../../src/client/api.js", () => ({
 	},
 	api: {
 		auth: vi.fn(async () => ({ mode: "local", needsPairing: false })),
+		extensionUiResponse: vi.fn(async () => ({ ok: true })),
 		fleet: vi.fn(async () => ({ runtimes: [], diskSessions: [] })),
 		sessions: vi.fn(async () => ({ sessions: [] })),
 		resync: vi.fn(async () => ({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 0 })),
@@ -671,7 +672,23 @@ describe("app store integration", () => {
 					pendingMessageCount: 0,
 				},
 				messages: [{ role: "assistant", content: [{ type: "text", text: "fresh transcript" }] }],
-				backgroundAgents: [],
+				backgroundAgents: [
+					{
+						agentId: "resynced-route",
+						agentType: "feature-dev",
+						taskSummary: "resynced routing",
+						startedAt: new Date().toISOString(),
+						status: "completed",
+						arbitrations: [
+							{
+								status: "success",
+								proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+								final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+								changed: ["agent", "model", "thinking"],
+							},
+						],
+					},
+				],
 				barrierSeq: 3,
 			},
 			barrierSeq: 3,
@@ -689,6 +706,10 @@ describe("app store integration", () => {
 
 		expect(api.resync).toHaveBeenCalledWith("k-resync", undefined, expect.any(AbortSignal));
 		expect(store.sessions["k-resync"]?.entries[0]?.kind).toBe("assistant");
+		expect(store.sessions["k-resync"]?.backgroundAgents["resynced-route"]).toMatchObject({
+			agentType: "feature-dev",
+			arbitrations: [{ final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" } }],
+		});
 	});
 
 	it("touch scrolling the transcript suspends stick-to-bottom while streaming", async () => {
@@ -1060,6 +1081,366 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).not.toContain("follow-up");
 	});
 
+	it("ask_user dialog: native checkboxes + free text combine into one response", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask");
+		session.uiRequests = [
+			{
+				id: "a1",
+				method: "ask",
+				title: "Choose validation",
+				question: "Which **checks**?\n\nUse `fast` validation.",
+				options: ["unit", "browser"],
+				multiSelect: true,
+				allowFreeText: true,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const question = el.querySelector(".ask-inline-question");
+		expect(question?.querySelector("strong")?.textContent).toBe("checks");
+		expect(question?.querySelector("code")?.textContent).toBe("fast");
+		expect(question?.textContent).not.toContain("**");
+		// ask_user renders inline in the transcript flow (scrollable), not as a
+		// blocking modal overlay.
+		expect(el.querySelector(".chat-inner .ask-inline")).not.toBeNull();
+		expect(el.querySelector(".modal-backdrop")).toBeNull();
+		const checkboxes = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="checkbox"]');
+		expect(checkboxes.length).toBe(2);
+		expect(el.querySelector('.ask-option input[type="radio"]')).toBeNull();
+
+		checkboxes[0].click(); // check "unit"
+		const custom = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		if (!custom) throw new Error("free-text field missing");
+		custom.value = "lint";
+		custom.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const submit = [...el.querySelectorAll("button")].find((b) => b.textContent === "submit");
+		submit?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask",
+			expect.objectContaining({
+				type: "extension_ui_response",
+				id: "a1",
+				selected: ["unit"],
+				customText: "lint",
+			}),
+		);
+	});
+
+	it("ask_user dialog: single-select keeps stop-agent accessible in the mobile question card", async () => {
+		stubMobile(true);
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask2");
+		session.uiRequests = [{ id: "a2", method: "ask", title: "Pick", question: "Which one?", options: ["A", "B"] }];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask2": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.abort).mockClear();
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask2" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const radios = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="radio"]');
+		expect(radios.length).toBe(2);
+
+		const stop = [...el.querySelectorAll("button")].find((button) => button.textContent === "■ stop agent");
+		stop?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.abort)).toHaveBeenCalledWith("k-ask2");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+	});
+
+	it("keeps the stop-agent action available when aborting fails", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-stop-retry");
+		session.uiRequests = [
+			{ id: "a-stop-retry", method: "ask", title: "Retry", question: "Still there?", options: ["A", "B"] },
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-stop-retry": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.abort).mockClear();
+		vi.mocked(api.abort).mockRejectedValueOnce(new Error("offline"));
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-stop-retry" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const stop = [...el.querySelectorAll("button")].find((button) => button.textContent === "■ stop agent");
+		stop?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.textContent).toContain("offline");
+		expect(stop?.disabled).toBe(false);
+
+		vi.mocked(api.abort).mockResolvedValueOnce({});
+		stop?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.abort)).toHaveBeenCalledTimes(2);
+	});
+
+	it("retains a selected + typed answer across a failed send and resends it on retry", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-state");
+		session.uiRequests = [
+			{
+				id: "a-state",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				allowFreeText: true,
+			},
+		];
+		const resolveUiRequest = vi.fn();
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-state": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+			resolveUiRequest,
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		vi.mocked(api.extensionUiResponse).mockRejectedValueOnce(new Error("offline"));
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-state" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Choose an option and type free text, then fail the send.
+		const radio = el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]');
+		if (!radio) throw new Error("radio missing");
+		radio.click();
+		const custom = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		if (!custom) throw new Error("free-text field missing");
+		custom.value = "extra";
+		custom.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const submitButton = () => [...el.querySelectorAll("button")].find((b) => b.textContent === "submit");
+		submitButton()?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Failure keeps the question and preserves the entered answer state.
+		expect(resolveUiRequest).not.toHaveBeenCalled();
+		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]')?.checked).toBe(true);
+		expect(el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]')?.value).toBe("extra");
+
+		// Retry succeeds and sends the same retained answer, not a stateless skip.
+		vi.mocked(api.extensionUiResponse).mockResolvedValueOnce({ ok: true });
+		submitButton()?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenLastCalledWith(
+			"k-ask-state",
+			expect.objectContaining({ id: "a-state", selected: ["A"], customText: "extra" }),
+		);
+		expect(resolveUiRequest).toHaveBeenCalledWith("k-ask-state", "a-state");
+	});
+
+	it("suppresses duplicate sends while a response POST is still in flight", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-dedup");
+		session.uiRequests = [{ id: "a-dedup", method: "ask", title: "Pick", question: "Which?", options: ["A", "B"] }];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-dedup": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		let release!: () => void;
+		vi.mocked(api.extensionUiResponse).mockReturnValueOnce(
+			new Promise((resolve) => {
+				release = () => resolve({ ok: true });
+			}),
+		);
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-dedup" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const radio = el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]');
+		if (!radio) throw new Error("radio missing");
+		radio.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const submitButton = () => [...el.querySelectorAll("button")].find((b) => b.textContent === "submit");
+		// Three rapid clicks while the first POST is still pending.
+		submitButton()?.click();
+		submitButton()?.click();
+		submitButton()?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		release();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+
+	it("stops the agent when Escape is pressed and shows a timeout countdown", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-esc");
+		session.uiRequests = [
+			{
+				id: "a-esc",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				timeout: 30_000,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-esc": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.abort).mockClear();
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-esc" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// A visible auto-stop countdown mirrors the TUI.
+		expect(el.textContent).toContain("auto-stops in");
+
+		// Escape stops the whole turn, matching the explicit card action.
+		window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.abort)).toHaveBeenCalledWith("k-ask-esc");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+	});
+
+	it("auto-stops an ask request exactly once when the client-side countdown reaches zero", async () => {
+		vi.useFakeTimers();
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-timeout");
+		session.uiRequests = [
+			{
+				id: "a-timeout",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				timeout: 30_000,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-timeout": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.abort).mockClear();
+		vi.mocked(api.extensionUiResponse).mockClear();
+		mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-timeout" />);
+		await vi.advanceTimersByTimeAsync(0);
+
+		// Not yet fired one tick before the deadline.
+		await vi.advanceTimersByTimeAsync(29_000);
+		expect(vi.mocked(api.abort)).not.toHaveBeenCalled();
+
+		// The countdown backstop stops the whole turn exactly once at zero.
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledWith("k-ask-timeout");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+
+		// clearInterval on fire prevents any repeated stop request.
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledTimes(1);
+	});
+
+	it("uses the authoritative remaining deadline after a timed ask is recovered", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-07-30T18:00:00Z"));
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-recovered-timeout");
+		session.uiRequests = [
+			{
+				id: "a-recovered-timeout",
+				method: "ask",
+				title: "Pick",
+				question: "Which?",
+				options: ["A", "B"],
+				timeout: 30_000,
+				// Twenty-five seconds elapsed before reload; only five remain.
+				expiresAt: Date.now() + 5_000,
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-recovered-timeout": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.abort).mockClear();
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-recovered-timeout" />);
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(el.textContent).toContain("auto-stops in 5s");
+		await vi.advanceTimersByTimeAsync(4_000);
+		expect(vi.mocked(api.abort)).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledWith("k-ask-recovered-timeout");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+	});
+
+	it("ask_user tool card stays collapsed while running (unlike other running tools)", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-collapse");
+		session.entries = [
+			{
+				kind: "tool",
+				toolCallId: "ask-tc",
+				toolName: "ask_user",
+				args: { title: "Favorite Composer", options: ["Bach", "Mozart"] },
+				status: "running",
+				resultText: "",
+				startedAt: Date.now(),
+			},
+			{
+				kind: "tool",
+				toolCallId: "bash-tc",
+				toolName: "bash",
+				args: { command: "pwd" },
+				status: "running",
+				resultText: "",
+				startedAt: Date.now(),
+			},
+		] as any;
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-collapse": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-collapse" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const cards = [...el.querySelectorAll<HTMLDetailsElement>("details.tool")];
+		const askCard = cards.find((c) => c.querySelector(".tool-name")?.textContent === "ask_user");
+		const bashCard = cards.find((c) => c.querySelector(".tool-name")?.textContent === "bash");
+		if (!askCard || !bashCard) throw new Error("expected both tool cards to render");
+		// The still-running ask_user card is collapsed; a normal running tool (bash) auto-opens.
+		expect(askCard.open).toBe(false);
+		expect(bashCard.open).toBe(true);
+	});
+
 	it("session header prefers live session_name_changed state", () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-live");
@@ -1170,6 +1551,14 @@ describe("screen smoke tests", () => {
 		const store = makeStore() as any;
 		const session = populatedSession("k1");
 		applySessionEvent(session, {
+			type: "subagent_arbitration",
+			agentId: "bg1",
+			status: "success",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+			changed: ["agent", "model", "thinking"],
+		});
+		applySessionEvent(session, {
 			type: "background_agent_event",
 			agentId: "bg1",
 			event: {
@@ -1184,8 +1573,36 @@ describe("screen smoke tests", () => {
 		};
 		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k1" agentId="bg1" />);
 		expect(el.textContent).toContain("subagent says hi");
+		expect(el.textContent).toContain("agent, model, thinking changed");
+		expect(el.textContent).toContain("feature-dev · provider/cheap · low");
 		expect(el.textContent).toContain("subagents can't be steered yet");
 		expect(el.querySelector("textarea")).toBeNull(); // no composer
+	});
+
+	it("subagent drill-in renders failed arbitration with safe host metadata", () => {
+		const store = makeStore() as any;
+		const session = populatedSession("k-failed-arbitration");
+		applySessionEvent(session, {
+			type: "subagent_arbitration",
+			agentId: "bg1",
+			status: "failure",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: null,
+			changed: [],
+			errorCode: "invalid_guide",
+			errorMessage: "Routing guide coverage is stale.",
+			rawResponse: "RAW ARBITER MODEL OUTPUT",
+		});
+		const fakeStore = {
+			...store,
+			sessions: { "k-failed-arbitration": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+		};
+
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-failed-arbitration" agentId="bg1" />);
+
+		expect(el.textContent).toContain("arbiter: failed — Routing guide coverage is stale.");
+		expect(el.textContent).not.toContain("RAW ARBITER MODEL OUTPUT");
 	});
 
 	it("session hydration aborts on unmount without surfacing an error", async () => {
@@ -1450,6 +1867,283 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("already injected content cannot be retracted");
 		expect(el.textContent).toContain("default model");
 		expect(el.textContent).toContain("devices");
+	});
+
+	it("settings exposes complete global Dispatch Arbiter controls and readiness", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: {
+				enabled: true,
+				model: "provider/router",
+				thinking: "medium",
+				guidePath: "~/routing.md",
+			},
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		expect(section).not.toBeNull();
+		expect(section.textContent).toContain("Global-only");
+		expect(section.textContent).toContain("enabled");
+		expect(section.textContent).toContain("arbiter model");
+		expect(section.textContent).toContain("arbiter thinking");
+		expect(section.textContent).toContain("routing guide path");
+		expect(section.textContent).toContain("live scope and guide are validated before every child spawn");
+		expect((section.querySelector("#dispatch-arbiter-guide-path") as HTMLInputElement).value).toBe("~/routing.md");
+	});
+
+	it("settings refuses to enable the Dispatch Arbiter until a model is selected", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ subagentArbiter: { enabled: false } });
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const select = enabledRow.querySelector("select") as HTMLSelectElement;
+		select.value = "on";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector(".settings-error")?.textContent).toContain("Choose an exact Dispatch Arbiter model");
+		expect(select.value).toBe("off");
+		expect(api.saveSettings).not.toHaveBeenCalled();
+		expect(el.textContent).toContain("select Dispatch Arbiter model");
+	});
+
+	it("settings explicitly disables even when retained fields are malformed", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: {
+				enabled: true,
+				model: "malformed-model-id",
+				thinking: "invalid-thinking",
+				guidePath: "",
+			} as never,
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const enabled = enabledRow.querySelector("select") as HTMLSelectElement;
+
+		enabled.value = "off";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: {
+				enabled: false,
+				model: "malformed-model-id",
+				thinking: "invalid-thinking",
+				guidePath: "",
+			},
+		});
+		expect(enabled.value).toBe("off");
+	});
+
+	it("keeps the disable control reachable with a non-string retained guide path", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: {
+				enabled: true,
+				model: "provider/router",
+				thinking: "high",
+				guidePath: 123,
+			} as never,
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const enabled = enabledRow.querySelector("select") as HTMLSelectElement;
+
+		expect((section.querySelector("#dispatch-arbiter-guide-path") as HTMLInputElement).value).toBe("");
+		expect(section.querySelector("[data-testid='dispatch-arbiter-readiness']")?.textContent).toContain(
+			"routing guide path is invalid",
+		);
+		enabled.value = "off";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "high", guidePath: 123 },
+		});
+		expect(enabled.value).toBe("off");
+	});
+
+	it("settings model picker and toggle persist the exact global Dispatch Arbiter policy", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: { enabled: false, thinking: "medium", guidePath: "~/routing.md" },
+		});
+		vi.mocked(api.settingsModels).mockResolvedValue({
+			models: [{ provider: "provider", id: "router", name: "Router", contextWindow: 128000, reasoning: true }],
+		});
+		vi.mocked(api.saveSettings).mockImplementation(async (update) => ({
+			subagentArbiter: {
+				enabled: false,
+				thinking: "medium",
+				guidePath: "~/routing.md",
+				...(update.subagentArbiter ?? {}),
+			},
+		}));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		(section.querySelector(".model-picker-button") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		(el.querySelector(".model-row") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: {
+				enabled: false,
+				model: "provider/router",
+				thinking: "medium",
+				guidePath: "~/routing.md",
+			},
+		});
+
+		const refreshedSection = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...refreshedSection.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const select = enabledRow.querySelector("select") as HTMLSelectElement;
+		select.value = "on";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenLastCalledWith({
+			subagentArbiter: {
+				enabled: true,
+				model: "provider/router",
+				thinking: "medium",
+				guidePath: "~/routing.md",
+			},
+		});
+	});
+
+	it("serializes overlapping Dispatch Arbiter edits without restoring stale disabled state", async () => {
+		vi.mocked(api.saveSettings).mockClear();
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "off" },
+		});
+		let resolveFirst!: (value: Awaited<ReturnType<typeof api.saveSettings>>) => void;
+		let resolveSecond!: (value: Awaited<ReturnType<typeof api.saveSettings>>) => void;
+		const firstSave = new Promise<Awaited<ReturnType<typeof api.saveSettings>>>((resolve) => {
+			resolveFirst = resolve;
+		});
+		const secondSave = new Promise<Awaited<ReturnType<typeof api.saveSettings>>>((resolve) => {
+			resolveSecond = resolve;
+		});
+		vi.mocked(api.saveSettings)
+			.mockImplementationOnce(() => firstSave)
+			.mockImplementationOnce(() => secondSave);
+
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const enabled = enabledRow.querySelector("select") as HTMLSelectElement;
+		enabled.value = "on";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+
+		const thinkingRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("arbiter thinking"),
+		)!;
+		const thinking = thinkingRow.querySelector("select") as HTMLSelectElement;
+		thinking.value = "high";
+		thinking.dispatchEvent(new Event("change", { bubbles: true }));
+		await Promise.resolve();
+
+		expect(api.saveSettings).toHaveBeenCalledTimes(1);
+		expect(api.saveSettings).toHaveBeenNthCalledWith(1, {
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "off" },
+		});
+		resolveFirst({ subagentArbiter: { enabled: true, model: "provider/router", thinking: "off" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(api.saveSettings).toHaveBeenNthCalledWith(2, {
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" },
+		});
+
+		resolveSecond({ subagentArbiter: { enabled: true, model: "provider/router", thinking: "high" } });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(el.querySelector("[data-testid='dispatch-arbiter-readiness']")?.textContent).toContain("status: enabled");
+	});
+
+	it("rolls back an optimistic Dispatch Arbiter edit when the durable save is rejected", async () => {
+		vi.mocked(api.settings).mockClear();
+		vi.mocked(api.saveSettings).mockClear();
+		const durableSettings = {
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "off" as const },
+		};
+		vi.mocked(api.settings).mockResolvedValue(durableSettings);
+		vi.mocked(api.saveSettings).mockRejectedValueOnce(new Error("arbiter policy rejected by server"));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const enabledRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("disabled by default"),
+		)!;
+		const enabled = enabledRow.querySelector("select") as HTMLSelectElement;
+
+		enabled.value = "on";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+		expect(enabled.value).toBe("on");
+
+		await vi.waitFor(() =>
+			expect(el.querySelector(".settings-error")?.textContent).toContain("arbiter policy rejected by server"),
+		);
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: { enabled: true, model: "provider/router", thinking: "off" },
+		});
+		expect(api.settings).toHaveBeenCalledTimes(2);
+		expect(enabled.value).toBe("off");
+		expect(el.querySelector("[data-testid='dispatch-arbiter-readiness']")?.textContent).toContain("status: disabled");
+	});
+
+	it("settings persists Dispatch Arbiter thinking and guide-path controls", async () => {
+		vi.mocked(api.settings).mockResolvedValue({
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "off" },
+		});
+		vi.mocked(api.saveSettings).mockImplementation(async (update) => update);
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		let section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const thinkingRow = [...section.querySelectorAll(".setting-row")].find((row) =>
+			row.textContent?.includes("arbiter thinking"),
+		)!;
+		const thinking = thinkingRow.querySelector("select") as HTMLSelectElement;
+		thinking.value = "high";
+		thinking.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenCalledWith({
+			subagentArbiter: { enabled: false, model: "provider/router", thinking: "high" },
+		});
+
+		section = el.querySelector(".dispatch-arbiter-settings") as HTMLElement;
+		const path = section.querySelector("#dispatch-arbiter-guide-path") as HTMLInputElement;
+		path.value = "~/custom-guide.md";
+		path.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenLastCalledWith({
+			subagentArbiter: {
+				enabled: false,
+				model: "provider/router",
+				thinking: "high",
+				guidePath: "~/custom-guide.md",
+			},
+		});
 	});
 
 	it("settings reports an initial durable-load failure", async () => {
@@ -4188,10 +4882,18 @@ describe("dashboard client regressions", () => {
 			backgroundAgents: [
 				{
 					agentId: "bg7",
-					agentType: "Explore",
+					agentType: "feature-dev",
 					taskSummary: "registry-seeded task",
 					startedAt: new Date().toISOString(),
 					status: "running",
+					arbitrations: [
+						{
+							status: "success",
+							proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+							final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+							changed: ["agent", "model", "thinking"],
+						},
+					],
 				},
 			],
 			barrierSeq: 0,
@@ -4199,7 +4901,15 @@ describe("dashboard client regressions", () => {
 		const store = makeStore();
 		await store.hydrateSession("k-reload");
 
-		expect(store.sessions["k-reload"]?.backgroundAgents.bg7?.taskSummary).toBe("registry-seeded task");
+		expect(store.sessions["k-reload"]?.backgroundAgents.bg7).toMatchObject({
+			agentType: "feature-dev",
+			taskSummary: "registry-seeded task",
+			arbitrations: [{ final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" } }],
+		});
+		const el = mount(() => <SessionScreen store={store} sessionKey="k-reload" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("feature-dev — registry-seeded task");
+		expect(el.textContent).toContain("provider/cheap @ low");
 	});
 
 	it("tool cards render full inputs expanded (subagent task markdown, generic long args)", () => {

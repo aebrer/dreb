@@ -35,6 +35,7 @@ import {
 } from "./compaction/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
+import { DispatchArbiter, type DispatchArbiterDeps } from "./dispatch-arbiter.js";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.js";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
 import {
@@ -65,7 +66,8 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.js";
 import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./forbidden-commands.js";
-import { type GitRepoState, getGitRepoState } from "./git-repo-state.js";
+import { type GitRepoState, getGitRepoState, getGitStatusMetadata } from "./git-repo-state.js";
+import { findGitRoot } from "./git-root.js";
 import {
 	deriveK3ContextTierModel,
 	isK3256kTier,
@@ -96,7 +98,9 @@ import {
 	discoverAgentTypes,
 	getRunningBackgroundAgents,
 	type SessionTask,
+	type SubagentArbitrationEvent,
 	type SubagentResult,
+	type SubagentStepMetadata,
 } from "./tools/index.js";
 import { expandSkillContent } from "./tools/skill.js";
 import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.js";
@@ -139,6 +143,7 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
 	| AgentEvent
+	| SubagentArbitrationEvent
 	| { type: "auto_compaction_start"; reason: "threshold" | "overflow" }
 	| {
 			type: "auto_compaction_end";
@@ -150,7 +155,16 @@ export type AgentSessionEvent =
 	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
 	| { type: "background_agent_start"; agentId: string; agentType: string; taskSummary: string; sessionDir?: string }
-	| { type: "background_agent_end"; agentId: string; agentType: string; success: boolean; sessionFile?: string }
+	| {
+			type: "background_agent_end";
+			agentId: string;
+			agentType: string;
+			success: boolean;
+			model?: string;
+			thinking?: ThinkingLevel;
+			steps?: SubagentStepMetadata[];
+			sessionFile?: string;
+	  }
 	| {
 			type: "background_agent_event";
 			agentId: string;
@@ -205,6 +219,8 @@ export interface AgentSessionConfig {
 	uiType?: string;
 	/** Optional performance tracker override, primarily for isolated tests. */
 	performanceTracker?: PerformanceTracker;
+	/** Inject the headless arbiter completion seam for deterministic, offline integration tests. */
+	dispatchArbiterComplete?: DispatchArbiterDeps["complete"];
 }
 
 export interface ExtensionBindings {
@@ -374,6 +390,9 @@ export class AgentSession {
 	// Git repo state captured once at session start
 	private _gitRepoState: GitRepoState | undefined;
 
+	// Fully headless pre-spawn router. It owns only bounded parent activity context.
+	private _dispatchArbiter: DispatchArbiter;
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -404,6 +423,30 @@ export class AgentSession {
 		// Capture git repo state once at session start (before building runtime/system prompt)
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
 
+		this._dispatchArbiter = new DispatchArbiter({
+			getSettings: () => this.settingsManager.getGlobalSubagentArbiterSettings(),
+			getCandidateModels: () => this._scopedModels,
+			getModelRegistry: () => this._modelRegistry,
+			getMessages: () => this.agent.state.messages,
+			getParentModel: () => this.model,
+			getSessionTitle: () => this.sessionName,
+			getRepoMetadata: (cwd) => {
+				const gitRoot = findGitRoot(cwd);
+				const isSessionCwd = resolve(cwd) === resolve(this._cwd);
+				const currentStatus = gitRoot
+					? (getGitStatusMetadata(cwd) ?? (isSessionCwd ? this._gitRepoState : undefined))
+					: undefined;
+				return {
+					repo: gitRoot ? basename(gitRoot) : undefined,
+					cwd,
+					branch: currentStatus?.branch,
+					dirtyCount: currentStatus?.dirtyCount,
+				};
+			},
+			getExtraSecretPatterns: () => this._compileExtraSecretPatterns(),
+			complete: config.dispatchArbiterComplete,
+		});
+
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
@@ -424,6 +467,25 @@ export class AgentSession {
 	/** Performance tracker for recording and querying model throughput */
 	getPerformanceTracker(): PerformanceTracker {
 		return this.performanceTracker;
+	}
+
+	private _compileExtraSecretPatterns(): SecretPattern[] | undefined {
+		return this.settingsManager.getSecretOutputPatterns()?.flatMap((pattern) => {
+			if (!pattern.pattern || typeof pattern.pattern !== "string" || pattern.pattern.trim() === "") {
+				console.warn(
+					`[secret-scrubber] Skipping empty or invalid pattern in secretOutputPatterns: "${pattern.name}"`,
+				);
+				return [];
+			}
+			try {
+				return [{ name: pattern.name, pattern: new RegExp(pattern.pattern, "g") }];
+			} catch (error) {
+				console.warn(
+					`[secret-scrubber] Skipping invalid regex in secretOutputPatterns "${pattern.name}": ${pattern.pattern} — ${error instanceof Error ? error.message : String(error)}`,
+				);
+				return [];
+			}
+		});
 	}
 
 	/**
@@ -517,21 +579,7 @@ export class AgentSession {
 		this.agent.setAfterToolCall(async ({ toolCall, args, result, isError }) => {
 			// Scrub secrets from tool output — runs before extensions, cannot be bypassed
 			let scrubbedContent = result.content;
-			const extraSecretPatterns = this.settingsManager?.getSecretOutputPatterns();
-			const compiledExtras: SecretPattern[] | undefined = extraSecretPatterns?.flatMap((p) => {
-				if (!p.pattern || typeof p.pattern !== "string" || p.pattern.trim() === "") {
-					console.warn(`[secret-scrubber] Skipping empty or invalid pattern in secretOutputPatterns: "${p.name}"`);
-					return [];
-				}
-				try {
-					return [{ name: p.name, pattern: new RegExp(p.pattern, "g") }];
-				} catch (err) {
-					console.warn(
-						`[secret-scrubber] Skipping invalid regex in secretOutputPatterns "${p.name}": ${p.pattern} — ${err instanceof Error ? err.message : String(err)}`,
-					);
-					return [];
-				}
-			});
+			const compiledExtras = this._compileExtraSecretPatterns();
 			let totalRedactions = 0;
 			scrubbedContent = scrubbedContent.map((item) => {
 				if (item.type === "text" && item.text) {
@@ -757,6 +805,15 @@ export class AgentSession {
 	 */
 	_handleBackgroundComplete(agentId: string, result: SubagentResult, cancelled: boolean): void {
 		const parts: string[] = [];
+		if (result.model || result.thinking) {
+			const metadata = [
+				result.model ? `model: ${result.model}` : undefined,
+				result.thinking ? `thinking: ${result.thinking}` : undefined,
+			]
+				.filter((value): value is string => value !== undefined)
+				.join(", ");
+			parts.push(`Execution metadata: ${metadata}`);
+		}
 		if (cancelled) {
 			parts.push("This agent was cancelled by the user.");
 		}
@@ -832,6 +889,9 @@ export class AgentSession {
 				agentId,
 				agentType: result.agent,
 				success: result.exitCode === 0,
+				model: result.model,
+				thinking: result.thinking,
+				steps: result.steps,
 				sessionFile: result.sessionFile,
 			});
 		} catch (emitErr) {
@@ -1006,6 +1066,17 @@ export class AgentSession {
 		// Notify all listeners
 		this._emit(event);
 
+		// Keep a small, mode-independent rolling context for the headless arbiter.
+		if (event.type === "message_end") {
+			this._dispatchArbiter.onMessageEnd(event.message);
+		} else if (event.type === "tool_execution_end") {
+			this._dispatchArbiter.onToolEnd({
+				toolName: event.toolName,
+				isError: event.isError,
+				result: event.result,
+			});
+		}
+
 		// Handle session persistence
 		if (event.type === "message_end") {
 			// Check if this is a custom message from extensions
@@ -1115,7 +1186,12 @@ export class AgentSession {
 
 	/** Emit extension events based on agent events */
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
-		if (!this._extensionRunner) return;
+		// The runner is created unconditionally (so built-in tools like ask_user
+		// always have a UI context). When no extensions are loaded there are no
+		// handlers to invoke — return synchronously to avoid inserting an extra
+		// await tick per event, which would otherwise delay the final agent_end
+		// emission past when prompt() resolves.
+		if (!this._extensionRunner || !this._extensionRunner.hasExtensions) return;
 
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
@@ -1970,6 +2046,7 @@ export class AgentSession {
 		this._disconnectFromAgent();
 		await this.abort();
 		this.agent.reset();
+		this._dispatchArbiter.clearContext();
 		this.sessionManager.newSession({ parentSession: options?.parentSession });
 		this.agent.sessionId = this.sessionManager.getSessionId();
 		this._steeringMessages = [];
@@ -3003,10 +3080,16 @@ export class AgentSession {
 			? wrapRegisteredTools(allCustomTools, this._extensionRunner)
 			: [];
 
+		// Give base tools a per-execution extension context so built-ins like
+		// ask_user can reach ctx.ui. createContext() snapshots hasUI at call time,
+		// so print/RPC-without-host modes degrade to the no-op UI (hasUI === false).
+		const baseToolCtxFactory = this._extensionRunner
+			? () => (this._extensionRunner as ExtensionRunner).createContext()
+			: undefined;
 		const toolRegistry = new Map(
 			Array.from(this._baseToolDefinitions.values()).map((definition) => [
 				definition.name,
-				wrapToolDefinition(definition),
+				wrapToolDefinition(definition, baseToolCtxFactory),
 			]),
 		);
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
@@ -3089,6 +3172,12 @@ export class AgentSession {
 						parentSessionFile: () => this.sessionFile,
 						modelRegistry: this._modelRegistry,
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
+						defaultThinkingLevel: () => this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+						arbitrate: (request, signal) => this._dispatchArbiter.arbitrate(request, signal),
+						onArbitration: (event) => {
+							this.sessionManager.appendCustomEntry("subagent_arbitration", event);
+							this._emit(event);
+						},
 						onBackgroundStart: (agentId, agentType, taskSummary, sessionDir) => {
 							this._emit({ type: "background_agent_start", agentId, agentType, taskSummary, sessionDir });
 						},
@@ -3112,18 +3201,17 @@ export class AgentSession {
 			}
 		}
 
-		const hasExtensions = extensionsResult.extensions.length > 0;
-		const hasCustomTools = this._customTools.length > 0;
-		this._extensionRunner =
-			hasExtensions || hasCustomTools
-				? new ExtensionRunner(
-						extensionsResult.extensions,
-						extensionsResult.runtime,
-						this._cwd,
-						this.sessionManager,
-						this._modelRegistry,
-					)
-				: undefined;
+		// The runner also owns the cross-surface UI context used by built-in
+		// tools such as ask_user. Create it even when no third-party extensions
+		// are loaded; otherwise ordinary TUI/Dashboard sessions give base tools
+		// no ctx.ui and ask_user can never open its dialog.
+		this._extensionRunner = new ExtensionRunner(
+			extensionsResult.extensions,
+			extensionsResult.runtime,
+			this._cwd,
+			this.sessionManager,
+			this._modelRegistry,
+		);
 		if (this._extensionRunnerRef) {
 			this._extensionRunnerRef.current = this._extensionRunner;
 		}
@@ -3147,6 +3235,7 @@ export class AgentSession {
 					"subagent",
 					"wait",
 					"search",
+					"ask_user",
 					"skill",
 					"tasks_update",
 					"suggest_next",
@@ -3460,6 +3549,7 @@ export class AgentSession {
 		this._steeringMessages = [];
 		this._followUpMessages = [];
 		this._pendingNextTurnMessages = [];
+		this._dispatchArbiter.clearContext();
 
 		// Set new session
 		this.sessionManager.setSessionFile(sessionPath);

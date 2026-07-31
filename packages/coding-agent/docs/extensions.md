@@ -9,7 +9,7 @@ Extensions are TypeScript modules that extend dreb's behavior. They can subscrib
 **Key capabilities:**
 - **Custom tools** - Register tools the LLM can call via `dreb.registerTool()`
 - **Event interception** - Block or modify tool calls, inject context, customize compaction
-- **User interaction** - Prompt users via `ctx.ui` (select, confirm, input, notify)
+- **User interaction** - Prompt users via `ctx.ui` (select, confirm, input, ask, notify)
 - **Custom UI components** - Full TUI components with keyboard input via `ctx.ui.custom()` for complex interactions
 - **Custom commands** - Register commands like `/mycommand` via `dreb.registerCommand()`
 - **Session persistence** - Store state that survives restarts via `dreb.appendEntry()`
@@ -161,6 +161,26 @@ export default function (dreb: ExtensionAPI) {
     ctx.ui.notify("Done!", "success");
     ctx.ui.setStatus("my-ext", "Processing...");  // Footer status
     ctx.ui.setWidget("my-ext", ["Line 1", "Line 2"]);  // Widget above editor (default)
+
+    // ctx.ui.ask — a rich clarifying question with options + free text,
+    // rendered natively in the TUI and Dashboard (and over RPC). Resolves to
+    // { selected: string[], customText?: string }. Dismissing or timing out an
+    // ask stops the current agent turn and resolves undefined. This is the same
+    // primitive that powers the built-in `ask_user` tool.
+    const answer = await ctx.ui.ask(
+      {
+        title: "Choose a database",
+        question: "Which persistence strategy should I use?",
+        options: ["SQLite", "PostgreSQL", "Keep the JSON file"],
+        allowFreeText: true, // default; offers a "type your own answer" field
+        multiSelect: false,  // true → checkboxes, combined with any free text
+        multiline: false,    // true → multi-line free-text area
+      },
+      { signal, timeout: 60000 }, // both optional; absent user never deadlocks
+    );
+    if (!answer) {
+      // The ask was dismissed or timed out; the current agent turn is stopping.
+    }
   });
 
   // Register tools, commands, shortcuts, flags
@@ -593,7 +613,7 @@ In the default parallel tool execution mode, sibling tool calls from the same as
 import { isToolCallEventType } from "@dreb/coding-agent";
 
 dreb.on("tool_call", async (event, ctx) => {
-  // event.toolName - "bash", "read", "write", "edit", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "wait", "search", "skill", "tasks_update", "suggest_next", or custom tool names
+  // event.toolName - "bash", "read", "write", "edit", "grep", "find", "ls", "web_search", "web_fetch", "subagent", "wait", "search", "ask_user", "skill", "tasks_update", "suggest_next", or custom tool names
   // event.toolCallId
   // event.input - tool parameters
 
@@ -1498,7 +1518,7 @@ async execute(toolCallId, params) {
 
 ### Overriding Built-in Tools
 
-Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `search`) by registering a tool with the same name. Interactive mode displays a warning when this happens. The factory-only tools (`skill`, `tasks_update`, `suggest_next`) can also be overridden.
+Extensions can override built-in tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `search`, `ask_user`) by registering a tool with the same name. Interactive mode displays a warning when this happens. The factory-only tools (`skill`, `tasks_update`, `suggest_next`) can also be overridden.
 
 ```bash
 # Extension's read tool replaces built-in read
@@ -1782,6 +1802,15 @@ const ok = await ctx.ui.confirm("Delete?", "This cannot be undone");
 // Text input
 const name = await ctx.ui.input("Name:", "placeholder");
 
+// Rich question: question text supports Markdown and options can be combined
+// with free text. Dismissal stops the current agent turn and returns undefined.
+const answer = await ctx.ui.ask({
+  title: "Choose a database",
+  question: "Which persistence strategy should I use?",
+  options: ["SQLite", "PostgreSQL"],
+  allowFreeText: true,
+});
+
 // Multi-line editor
 const text = await ctx.ui.editor("Edit:", "prefilled text");
 
@@ -1812,6 +1841,7 @@ if (confirmed) {
 - `select()` returns `undefined`
 - `confirm()` returns `false`
 - `input()` returns `undefined`
+- `ask()` returns `undefined` and stops the current agent turn
 
 #### Manual Dismissal with AbortSignal
 

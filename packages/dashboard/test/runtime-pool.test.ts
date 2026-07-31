@@ -520,12 +520,24 @@ describe("RuntimePool", () => {
 		expect(seen).toEqual([[handle.key, { type: "agent_start" }]]);
 	});
 
-	it("tracks needs-attention from extension UI requests and clears on agent_start", async () => {
+	it("tracks needs-attention from extension UI requests and clears when handled", async () => {
 		const { pool, clients } = makePool();
 		const handle = await pool.create("/tmp");
 		clients[0].emit({ type: "extension_ui_request", id: "u1", method: "confirm" });
 		expect(handle.attention.size).toBe(1);
-		clients[0].emit({ type: "agent_start" });
+		clients[0].emit({ type: "extension_ui_response_handled", id: "u1" });
+		expect(handle.attention.size).toBe(0);
+	});
+
+	it("tracks needs-attention from an ask_user request and clears when handled", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+		// The `ask` method must be in the needs-attention allowlist just like the
+		// other blocking dialog methods, so fleet snapshots surface an open
+		// ask_user question.
+		clients[0].emit({ type: "extension_ui_request", id: "ask-1", method: "ask" });
+		expect(handle.attention.get("ui:ask-1")).toBe("extension ask awaiting response");
+		clients[0].emit({ type: "extension_ui_response_handled", id: "ask-1" });
 		expect(handle.attention.size).toBe(0);
 	});
 
@@ -762,9 +774,67 @@ describe("RuntimePool", () => {
 		expect(handle.backgroundAgents.get("bg1")?.status).toBe("running");
 		expect(handle.backgroundAgents.get("bg1")?.sessionDir).toBe("/subagent-sessions/bg1");
 
+		clients[0].emit({
+			type: "subagent_arbitration",
+			agentId: "bg1",
+			status: "success",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+			changed: ["agent", "model", "thinking"],
+		});
+		expect(handle.backgroundAgents.get("bg1")).toMatchObject({
+			agentType: "feature-dev",
+			arbitrations: [
+				{
+					status: "success",
+					final: { agent: "feature-dev", model: "provider/cheap", thinking: "low" },
+				},
+			],
+		});
+
 		clients[0].emit({ type: "background_agent_end", agentId: "bg1", success: true, sessionFile: "/s/bg1.jsonl" });
 		expect(handle.backgroundAgents.get("bg1")?.status).toBe("completed");
 		expect(handle.backgroundAgents.get("bg1")?.sessionFile).toBe("/s/bg1.jsonl");
+	});
+
+	it("projects failed arbitration records without replacing the requested identity", async () => {
+		const { pool, clients } = makePool();
+		const handle = await pool.create("/tmp");
+		clients[0].emit({
+			type: "background_agent_start",
+			agentId: "failed-route",
+			agentType: "Explore",
+			taskSummary: "look around",
+		});
+		clients[0].emit({
+			type: "subagent_arbitration",
+			agentId: "failed-route",
+			status: "failure",
+			proposed: { agent: "Explore", model: "provider/frontier", thinking: "high" },
+			final: null,
+			changed: [],
+			errorCode: "invalid_guide",
+			errorMessage: "Routing guide coverage is stale.",
+			rawResponse: "RAW ARBITER MODEL OUTPUT",
+		});
+
+		expect(handle.backgroundAgents.get("failed-route")).toMatchObject({
+			agentType: "Explore",
+			arbitrations: [
+				{
+					status: "failure",
+					final: null,
+					errorCode: "invalid_guide",
+					errorMessage: "Routing guide coverage is stale.",
+				},
+			],
+		});
+		const info = await pool.describe(handle);
+		expect(info.backgroundAgents.find((agent) => agent.agentId === "failed-route")).toMatchObject({
+			agentType: "Explore",
+			arbitrations: [{ status: "failure", final: null, errorCode: "invalid_guide" }],
+		});
+		expect(JSON.stringify(info.backgroundAgents)).not.toContain("RAW ARBITER MODEL OUTPUT");
 	});
 
 	it("caps completed background agents from lifecycle events while preserving running agents", async () => {
