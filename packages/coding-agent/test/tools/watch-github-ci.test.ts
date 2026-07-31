@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import {
 	createWatchGithubCiToolDefinition,
 	type GithubCiOperations,
 } from "../../src/core/tools/watch-github-ci.js";
+import * as shellModule from "../../src/utils/shell.js";
 
 function operationsResult(exitCode: number | null, output = "checks output"): GithubCiOperations {
 	return {
@@ -75,6 +76,24 @@ describe("watch_github_ci tool", () => {
 			text: "GitHub CI checks did not pass. The GitHub CLI exited with code 1.\n\nbuild failed",
 		});
 		expect(result.details).toEqual({ status: "failed", exitCode: 1, outputTruncated: false });
+	});
+
+	it("rejects a no-pull-request CLI error as a tool error instead of status failed", async () => {
+		await expect(execute(operationsResult(1, 'no pull requests found for branch "ghost-branch"'))).rejects.toThrow(
+			"could not query checks",
+		);
+
+		const operations = operationsResult(1, 'no pull requests found for branch "ghost-branch"');
+		await expect(execute(operations)).rejects.toThrow("no pull requests found");
+	});
+
+	it.each([
+		"GraphQL: Could not resolve to a PullRequest with the number of 999999. (repository.pullRequest)",
+		"failed to run git: fatal: not a git repository",
+		"HTTP 401: Bad credentials (https://api.github.com/graphql)",
+		"could not parse the pull request selector",
+	])("rejects CLI failure output %s as a tool error, not status failed", async (output) => {
+		await expect(execute(operationsResult(1, output))).rejects.toThrow("could not query checks");
 	});
 
 	it("refuses to treat pending exit code 8 as terminal success", async () => {
@@ -146,10 +165,14 @@ describe("watch_github_ci tool", () => {
 
 describe("createLocalGithubCiOperations", () => {
 	let cwd: string | undefined;
+	let bins: string[] | undefined;
 
 	afterEach(() => {
 		if (cwd) rmSync(cwd, { recursive: true, force: true });
 		cwd = undefined;
+		vi.restoreAllMocks();
+		for (const bin of bins ?? []) rmSync(bin, { recursive: true, force: true });
+		bins = undefined;
 	});
 
 	it("rejects before spawning when already aborted", async () => {
@@ -173,5 +196,62 @@ describe("createLocalGithubCiOperations", () => {
 				env: process.env,
 			}),
 		).rejects.toThrow("Working directory does not exist");
+	});
+
+	it("kills the process tree when the AbortSignal fires mid-watch", async () => {
+		// Skip on platforms without a POSIX shell / SIGKILL semantics used by killProcessTree.
+		if (process.platform === "win32") return;
+
+		cwd = mkdtempSync(join(tmpdir(), "watch-github-ci-abort-"));
+		const binDir = mkdtempSync(join(tmpdir(), "watch-github-ci-bin-"));
+		if (!bins) bins = [];
+		bins.push(binDir);
+		const ghPath = join(binDir, "gh");
+		// Fake `gh` that lingers long enough to be aborted mid-watch.
+		writeFileSync(ghPath, "#!/bin/sh\nsleep 30\n");
+		chmodSync(ghPath, 0o755);
+
+		const killSpy = vi.spyOn(shellModule, "killProcessTree").mockImplementation((pid: number) => {
+			// Actually kill the process group so the fake `gh` does not leak past the test,
+			// while still recording that killProcessTree was invoked.
+			try {
+				process.kill(-pid, "SIGKILL");
+			} catch {
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {
+					// already dead
+				}
+			}
+		});
+
+		const controller = new AbortController();
+		const execPromise = createLocalGithubCiOperations().exec(["pr", "checks", "--watch", "--fail-fast"], cwd, {
+			onData: () => {},
+			signal: controller.signal,
+			// Prepend the bin dir so our fake `gh` resolves first while system
+			// utilities such as `sleep` (used by the shim) remain available.
+			env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+		});
+
+		// Give the child a moment to spawn, then abort mid-watch.
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		controller.abort();
+
+		await expect(execPromise).rejects.toThrow("aborted");
+		expect(killSpy).toHaveBeenCalledTimes(1);
+		expect(typeof killSpy.mock.calls[0]?.[0]).toBe("number");
+		expect(killSpy.mock.calls[0]?.[0]).toBeGreaterThan(0);
+	});
+
+	it("surfaces a loud spawn error when `gh` is not installed (ENOENT)", async () => {
+		cwd = mkdtempSync(join(tmpdir(), "watch-github-ci-no-gh-"));
+
+		await expect(
+			createLocalGithubCiOperations().exec(["pr", "checks", "--watch"], cwd, {
+				onData: () => {},
+				env: { ...process.env, PATH: "" },
+			}),
+		).rejects.toThrow(/ENOENT|gh/i);
 	});
 });

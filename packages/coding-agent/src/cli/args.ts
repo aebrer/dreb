@@ -337,5 +337,7 @@ ${chalk.bold("Available Tools (default: all):")}
   subagent   - Delegate tasks to independent subagents
   wait       - Do nothing and end your turn (explicit no-op)
   search     - Semantic codebase search using natural language
+  watch_github_ci - Watch GitHub pull-request CI until checks pass or fail
+  ask_user   - Ask the user a clarifying question with optional multiple-choice options
 `);
 }

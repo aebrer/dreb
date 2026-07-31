@@ -669,6 +669,20 @@ describe("Coding Agent Tools", () => {
 	});
 });
 
+describe("public SDK exports (src/index.ts barrel)", () => {
+	it("exports the watch_github_ci tool, definition, factory, and local operations from the public surface", async () => {
+		const barrel = await import("../src/index.js");
+		expect(typeof barrel.watchGithubCiTool).toBe("object");
+		expect(barrel.watchGithubCiTool?.name).toBe("watch_github_ci");
+		expect(typeof barrel.watchGithubCiTool?.execute).toBe("function");
+		expect(typeof barrel.watchGithubCiToolDefinition).toBe("object");
+		expect(barrel.watchGithubCiToolDefinition?.name).toBe("watch_github_ci");
+		expect(typeof barrel.createWatchGithubCiTool).toBe("function");
+		expect(typeof barrel.createWatchGithubCiToolDefinition).toBe("function");
+		expect(typeof barrel.createLocalGithubCiOperations).toBe("function");
+	});
+});
+
 describe("edit tool fuzzy matching", () => {
 	let testDir: string;
 

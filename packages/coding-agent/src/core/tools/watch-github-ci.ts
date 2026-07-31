@@ -42,6 +42,36 @@ export interface WatchGithubCiToolOptions {
 	operations?: GithubCiOperations;
 }
 
+/**
+ * Substrings (matched case-insensitively) that identify a `gh pr checks` CLI-level
+ * failure rather than a real failed-check result. `gh pr checks` exits 1 for both,
+ * and `--json` is incompatible with `--watch`, so the captured output is the only
+ * way to tell them apart. These signatures are specific enough that they will not
+ * appear in a normal check-status table.
+ */
+const GH_CLI_FAILURE_SIGNATURES = [
+	"no pull requests found",
+	"could not resolve to a pullrequest",
+	"failed to run git",
+	"not a git repository",
+	"http 401",
+	"bad credentials",
+	"could not parse",
+	"invalid pull request",
+	"authentication required",
+	"could not find repository",
+];
+
+function detectGhCliFailure(output: string): string | null {
+	const lower = output.toLowerCase();
+	for (const signature of GH_CLI_FAILURE_SIGNATURES) {
+		if (lower.includes(signature)) {
+			return signature;
+		}
+	}
+	return null;
+}
+
 export function createLocalGithubCiOperations(): GithubCiOperations {
 	return {
 		exec: (args, cwd, { onData, signal, env }) =>
@@ -191,6 +221,12 @@ export function createWatchGithubCiToolDefinition(
 				};
 			}
 			if (exitCode === 1) {
+				const cliFailure = detectGhCliFailure(output);
+				if (cliFailure !== null) {
+					throw new Error(
+						`GitHub CI watch could not query checks: the GitHub CLI reported an error (matched "${cliFailure}"). This is a CLI-level failure such as a bad pull-request selector, no pull request for the branch, a missing repository, or an authentication problem — not a failed-check result. Re-check the selector and \`gh auth status\`.\n\n${output}`,
+					);
+				}
 				return {
 					content: [
 						{
