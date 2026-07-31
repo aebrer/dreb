@@ -1548,6 +1548,23 @@ describe("screen smoke tests", () => {
 		expect(panel.querySelector("summary")?.textContent).toContain("subagents — 1 running · 0 done");
 	});
 
+	it("starts the subagent panel collapsed on mobile while keeping the count visible", () => {
+		stubMobile(true);
+		const store = makeStore() as any;
+		const session = populatedSession("k-subpanel-mobile");
+		const fakeStore = {
+			...store,
+			sessions: { "k-subpanel-mobile": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-subpanel-mobile" />);
+		const panel = el.querySelector("details.subagents") as HTMLDetailsElement;
+		expect(panel).not.toBeNull();
+		expect(panel.open).toBe(false);
+		expect(panel.querySelector("summary")?.textContent).toContain("subagents — 1 running · 0 done");
+	});
+
 	it("lists every subagent beyond the old four-agent cap, newest spawn first, with drill-in navigation", () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-submany");
