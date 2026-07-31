@@ -34,10 +34,9 @@ tasks_update([
 gh pr checkout <pr-number>
 git pull
 gh pr view <pr-number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,comments,body
-gh pr checks <pr-number>
 ```
 
-**Note:** `gh pr checks` returns exit code 8 while checks are still pending — this is expected, not a failure. Wait and re-run if needed.
+Use `watch_github_ci` with `pr: "<pr-number>"` to block until CI passes or fails. Do not use `wait`, sleep, or repeated polling commands for CI.
 
 Read ALL PR comments to understand the full history — plans, reviews, assessments, progress updates, and discussion.
 
@@ -90,7 +89,7 @@ Update task: checks → completed, version → in_progress.
    git push
    ```
 
-5. Wait for CI to pass on the version bump commit before proceeding to merge.
+5. Use `watch_github_ci` with `pr: "<pr-number>"` and proceed only after it reports that CI passed on the version bump commit.
 
 If the project doesn't use versioning, skip this step.
 
@@ -127,7 +126,7 @@ Proactively review and update ALL documentation affected by the PR's changes. Th
    git push
    ```
 
-5. Wait for CI to pass on the docs commit.
+5. Use `watch_github_ci` with `pr: "<pr-number>"` and proceed only after it reports that CI passed on the docs commit.
 
 If no documentation changes are needed (rare), skip this step.
 

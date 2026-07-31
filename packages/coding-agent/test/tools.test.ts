@@ -950,6 +950,15 @@ describe("allTools / allToolDefinitions", () => {
 		expect(tools.search).toBeDefined();
 	});
 
+	it("includes watch_github_ci in both registries unconditionally", () => {
+		expect("watch_github_ci" in allTools).toBe(true);
+		expect("watch_github_ci" in allToolDefinitions).toBe(true);
+		expect(allTools.watch_github_ci.name).toBe("watch_github_ci");
+		expect(typeof allTools.watch_github_ci.execute).toBe("function");
+		expect(createAllToolDefinitions("/tmp").watch_github_ci).toBeDefined();
+		expect(createAllTools("/tmp").watch_github_ci).toBeDefined();
+	});
+
 	it("includes ask_user in both registries unconditionally", () => {
 		expect("ask_user" in allTools).toBe(true);
 		expect("ask_user" in allToolDefinitions).toBe(true);

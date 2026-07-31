@@ -30,7 +30,7 @@ Assess an existing GitHub issue or create a new one.
 /skill:mach6-issue add dark mode   # Create issue from description
 ```
 
-**Assess mode:** Launches parallel subagents to explore the codebase, then posts a structured assessment (summary, gaps, ambiguities, scope, risks) as an issue comment.
+**Assess mode:** Launches parallel Explore agents to retrieve bounded code/documentation evidence, then has the primary agent synthesize and post the assessment (summary, gaps, ambiguities, scope, risks) as an issue comment.
 
 **Create mode:** Drafts a structured issue with title, summary, acceptance criteria, and technical notes.
 
@@ -44,7 +44,7 @@ Explore the codebase, create an implementation plan, open a draft PR, and post t
 
 - Reads the issue and any existing assessment
 - Checks project conventions (AGENTS.md, CONTRIBUTING.md, etc.)
-- Launches parallel subagents to explore similar features, architecture, and integration points
+- Launches parallel Explore agents to locate related implementations, enumerate explicit flows/call sites, and quote bounded evidence; the primary agent owns architecture and planning
 - Creates a feature branch (`feature/issue-42-<slug>`) with an empty commit
 - Opens a draft PR linking to the issue
 - Posts the plan as a PR comment with `<!-- mach6-plan -->` marker
@@ -112,7 +112,7 @@ Pre-merge checks, version bump, docs update, merge, tag, and release.
 /skill:mach6-publish 53
 ```
 
-- Verifies CI passing, no merge conflicts, all findings addressed
+- Verifies CI passing with the blocking `watch_github_ci` tool (never `wait` or a polling loop), no merge conflicts, and all findings addressed
 - Runs pre-merge checklist (version bump, tests)
 - Applies version bump on the feature branch
 - Proactively reviews and updates ALL documentation affected by the PR's changes
