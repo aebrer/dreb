@@ -45,7 +45,7 @@ const askUserSchema = Type.Object({
 		}),
 	),
 	options: Type.Optional(
-		Type.Array(Type.String({ minLength: 1, pattern: "\\S" }), {
+		Type.Array(Type.String({ minLength: 1, pattern: "^.*[^ \\t\\r\\n].*$" }), {
 			minItems: 2,
 			maxItems: 4,
 			description: "2-4 nonblank suggested answers the user can pick from.",
