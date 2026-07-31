@@ -103,6 +103,19 @@ export interface StatusLineEntry {
 	tone: "info" | "warning" | "error";
 }
 
+/** A single question inside an `ask` extension-UI request (mirrors RpcAskQuestion). */
+export interface AskUiQuestion {
+	question: string;
+	title?: string;
+	options?: string[];
+	/** Offer a free-text field (defaults true). */
+	allowFreeText?: boolean;
+	/** Render options as checkboxes instead of radios. */
+	multiSelect?: boolean;
+	/** Use a multi-line text area for free text. */
+	multiline?: boolean;
+}
+
 export interface ExtensionUiRequest {
 	id: string;
 	method: "select" | "confirm" | "input" | "editor" | "ask";
@@ -111,14 +124,8 @@ export interface ExtensionUiRequest {
 	options?: string[];
 	prefill?: string;
 	placeholder?: string;
-	/** ask: the question body shown under the title. */
-	question?: string;
-	/** ask: offer a free-text field (defaults true). */
-	allowFreeText?: boolean;
-	/** ask: render options as checkboxes instead of radios. */
-	multiSelect?: boolean;
-	/** ask: use a multi-line text area for free text. */
-	multiline?: boolean;
+	/** ask: one or more questions asked together as a single wizard. */
+	questions?: AskUiQuestion[];
 	/** ask: original auto-stop duration in milliseconds. */
 	timeout?: number;
 	/** ask: absolute runtime deadline; survives reload/resync/drill-in recovery. */
@@ -139,15 +146,20 @@ export function extensionUiRequestFromEvent(event: any): ExtensionUiRequest | un
 		};
 	}
 	if (method === "ask") {
+		const rawQuestions = Array.isArray(event.questions) ? event.questions : [];
+		const questions: AskUiQuestion[] = rawQuestions.map((q: any) => ({
+			question: String(q?.question ?? ""),
+			title: typeof q?.title === "string" ? q.title : undefined,
+			options: Array.isArray(q?.options) ? (q.options as any[]).map((o) => String(o)) : undefined,
+			allowFreeText: typeof q?.allowFreeText === "boolean" ? q.allowFreeText : undefined,
+			multiSelect: typeof q?.multiSelect === "boolean" ? q.multiSelect : undefined,
+			multiline: typeof q?.multiline === "boolean" ? q.multiline : undefined,
+		}));
 		return {
 			id: String(event.id),
 			method: "ask",
 			title: String(event.title ?? "Question"),
-			question: String(event.question ?? ""),
-			options: event.options as string[] | undefined,
-			allowFreeText: event.allowFreeText as boolean | undefined,
-			multiSelect: event.multiSelect as boolean | undefined,
-			multiline: event.multiline as boolean | undefined,
+			questions,
 			timeout: typeof event.timeout === "number" ? (event.timeout as number) : undefined,
 			expiresAt: typeof event.expiresAt === "number" ? (event.expiresAt as number) : undefined,
 		};
@@ -460,15 +472,17 @@ export function updateAttention(state: SessionViewState): void {
 }
 
 /**
- * Human-readable attention reason for pending questions, reflecting ALL pending
- * `ask_user` requests rather than just the first. Returns `undefined` when none
- * are pending so callers can fall back to other attention sources (errors etc.).
- * With `askUserMode: "tabbed"` several questions can be pending at once.
+ * Human-readable attention reason for pending questions, counting the TOTAL
+ * number of questions across all pending `ask` requests (Σ questions.length,
+ * treating missing questions as 0). Returns `undefined` when none are pending so
+ * callers can fall back to other attention sources (errors etc.). Because ask
+ * requests serialize there is normally at most one pending ask request, but the
+ * sum is taken defensively.
  */
 export function pendingQuestionsReason(requests: readonly ExtensionUiRequest[]): string | undefined {
-	if (requests.length === 0) return undefined;
-	if (requests.length === 1) return `waiting for input — ${requests[0].title}`;
-	return `waiting for input — ${requests.length} questions`;
+	const count = requests.reduce((sum, request) => sum + (request.questions?.length ?? 0), 0);
+	if (count === 0) return undefined;
+	return `waiting for input — ${count} question${count === 1 ? "" : "s"}`;
 }
 
 const PROVIDER_ERROR_STATUS_KEY = "provider-error";

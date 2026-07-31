@@ -658,29 +658,6 @@ describe("SettingsManager", () => {
 		});
 	});
 
-	describe("askUserMode", () => {
-		it("defaults to sequential when unset", () => {
-			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
-			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getAskUserMode()).toBe("sequential");
-		});
-
-		it("loads askUserMode from settings", () => {
-			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ askUserMode: "tabbed" }));
-			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getAskUserMode()).toBe("tabbed");
-		});
-
-		it("persists askUserMode via setAskUserMode", async () => {
-			const settingsPath = join(agentDir, "settings.json");
-			const manager = SettingsManager.create(projectDir, agentDir);
-			manager.setAskUserMode("tabbed");
-			await manager.flush();
-			const saved = JSON.parse(readFileSync(settingsPath, "utf-8"));
-			expect(saved.askUserMode).toBe("tabbed");
-		});
-	});
-
 	describe("getSessionDir", () => {
 		it("should return undefined when not set", () => {
 			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));

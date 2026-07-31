@@ -64,12 +64,6 @@ export interface AgentOptions {
 	followUpMode?: "all" | "one-at-a-time";
 
 	/**
-	 * ask_user mode: "sequential" = strict FIFO, one question shown at a time
-	 * (today's behavior); "tabbed" = allow multiple concurrent questions.
-	 */
-	askUserMode?: "tabbed" | "sequential";
-
-	/**
 	 * Custom stream function (for proxy backends, etc.). Default uses streamSimple.
 	 */
 	streamFn?: StreamFn;
@@ -180,7 +174,6 @@ export class Agent {
 	private followUpQueue: AgentMessage[] = [];
 	private steeringMode: "all" | "one-at-a-time";
 	private followUpMode: "all" | "one-at-a-time";
-	private askUserMode: "tabbed" | "sequential";
 	public streamFn: StreamFn;
 	private _sessionId?: string;
 	public getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
@@ -213,7 +206,6 @@ export class Agent {
 		this.transformContext = opts.transformContext;
 		this.steeringMode = opts.steeringMode || "one-at-a-time";
 		this.followUpMode = opts.followUpMode || "one-at-a-time";
-		this.askUserMode = opts.askUserMode || "sequential";
 		this.streamFn = opts.streamFn || streamSimple;
 		this._sessionId = opts.sessionId;
 		this.getApiKey = opts.getApiKey;
@@ -369,14 +361,6 @@ export class Agent {
 
 	getFollowUpMode(): "all" | "one-at-a-time" {
 		return this.followUpMode;
-	}
-
-	setAskUserMode(mode: "tabbed" | "sequential") {
-		this.askUserMode = mode;
-	}
-
-	getAskUserMode(): "tabbed" | "sequential" {
-		return this.askUserMode;
 	}
 
 	setTools(t: AgentTool<any>[]) {

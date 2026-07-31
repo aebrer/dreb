@@ -1,8 +1,7 @@
 export {
+	type AskUserAnswerDetail,
 	type AskUserDetails,
 	type AskUserInput,
-	type AskUserMode,
-	type AskUserToolOptions,
 	createAskUserToolDefinition,
 } from "./ask-user.js";
 export {
@@ -166,7 +165,7 @@ export {
 
 import type { AgentTool } from "@dreb/agent-core";
 import type { ToolDefinition } from "../extensions/types.js";
-import { type AskUserToolOptions, createAskUserToolDefinition } from "./ask-user.js";
+import { createAskUserToolDefinition } from "./ask-user.js";
 import {
 	type BashToolOptions,
 	bashTool,
@@ -267,7 +266,6 @@ export interface ToolsOptions {
 	skill?: SkillToolOptions;
 	tasks?: { onUpdate: TasksUpdateCallback };
 	suggestNext?: { onSuggest: SuggestNextCallback };
-	askUser?: AskUserToolOptions;
 }
 
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
@@ -303,7 +301,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		tmp_read: createTmpReadToolDefinition(options?.read),
 		wait: createWaitToolDefinition({ getRunningAgents: getRunningBackgroundAgents }),
 		search: createSearchToolDefinition(cwd),
-		ask_user: createAskUserToolDefinition(options?.askUser),
+		ask_user: createAskUserToolDefinition(),
 	};
 	if (options?.skill) {
 		tools.skill = createSkillToolDefinition(cwd, options.skill);
@@ -345,7 +343,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		tmp_read: wrapToolDefinition(createTmpReadToolDefinition(options?.read)),
 		wait: wrapToolDefinition(createWaitToolDefinition({ getRunningAgents: getRunningBackgroundAgents })),
 		search: createSearchTool(cwd),
-		ask_user: wrapToolDefinition(createAskUserToolDefinition(options?.askUser)),
+		ask_user: wrapToolDefinition(createAskUserToolDefinition()),
 	};
 	if (options?.skill) {
 		tools.skill = createSkillTool(cwd, options.skill);

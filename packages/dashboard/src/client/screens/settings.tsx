@@ -27,7 +27,6 @@ import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
-const ASK_USER_MODES = ["sequential", "tabbed"] as const;
 const TRANSPORTS = ["sse", "websocket", "auto"] as const;
 
 type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
@@ -813,25 +812,6 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 											}
 										>
 											<For each={[...QUEUE_MODES]}>{(mode) => <option value={mode}>{mode}</option>}</For>
-										</select>
-									</span>
-								</div>
-								<div class="setting-row">
-									<span class="setting-label">
-										<span class="name">ask_user mode</span>
-										<span class="hint">
-											show concurrent ask_user questions one at a time (sequential) or as switchable tabs
-											(tabbed)
-										</span>
-									</span>
-									<span class="setting-control">
-										<select
-											value={current().askUserMode ?? "sequential"}
-											onChange={(e) =>
-												save({ askUserMode: e.currentTarget.value as "tabbed" | "sequential" })
-											}
-										>
-											<For each={[...ASK_USER_MODES]}>{(mode) => <option value={mode}>{mode}</option>}</For>
 										</select>
 									</span>
 								</div>

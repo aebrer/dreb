@@ -223,7 +223,6 @@ export interface SessionStateDto {
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";
-	askUserMode: "tabbed" | "sequential";
 	sessionFile?: string;
 	sessionId: string;
 	sessionName?: string;
@@ -286,6 +285,16 @@ export interface FleetDto {
 	diskSessions: SessionInfoDto[];
 }
 
+/** A single question inside an `ask` extension-UI request (mirrors RpcAskQuestion). */
+export interface AskUiQuestionDto {
+	question: string;
+	title?: string;
+	options?: string[];
+	allowFreeText?: boolean;
+	multiSelect?: boolean;
+	multiline?: boolean;
+}
+
 /** A blocking extension UI request that can be restored from a runtime snapshot. */
 export interface ExtensionUiRequestDto {
 	type: "extension_ui_request";
@@ -296,10 +305,8 @@ export interface ExtensionUiRequestDto {
 	options?: string[];
 	prefill?: string;
 	placeholder?: string;
-	question?: string;
-	allowFreeText?: boolean;
-	multiSelect?: boolean;
-	multiline?: boolean;
+	/** For the `ask` method: one or more questions asked together as a single wizard. */
+	questions?: AskUiQuestionDto[];
 	timeout?: number;
 	/** Absolute Unix timestamp in milliseconds when the runtime timeout fires. */
 	expiresAt?: number;
@@ -423,7 +430,6 @@ export interface SettingsDto {
 	defaultThinkingLevel?: string;
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
-	askUserMode?: "tabbed" | "sequential";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
 	imageAutoResize?: boolean;

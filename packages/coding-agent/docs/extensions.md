@@ -162,24 +162,33 @@ export default function (dreb: ExtensionAPI) {
     ctx.ui.setStatus("my-ext", "Processing...");  // Footer status
     ctx.ui.setWidget("my-ext", ["Line 1", "Line 2"]);  // Widget above editor (default)
 
-    // ctx.ui.ask — a rich clarifying question with options + free text,
-    // rendered natively in the TUI and Dashboard (and over RPC). Resolves to
-    // { selected: string[], customText?: string }. Dismissing or timing out an
-    // ask stops the current agent turn and resolves undefined. This is the same
-    // primitive that powers the built-in `ask_user` tool.
-    const answer = await ctx.ui.ask(
+    // ctx.ui.ask — one or more rich clarifying questions asked together as a
+    // single wizard, rendered natively in the TUI and Dashboard (and over RPC).
+    // Resolves to { answers: Array<{ selected: string[], customText?: string,
+    // skipped?: boolean }> } with one answer per question, in order. Dismissing
+    // or timing out an ask stops the current agent turn and resolves undefined.
+    // This is the same primitive that powers the built-in `ask_user` tool.
+    const result = await ctx.ui.ask(
       {
         title: "Choose a database",
-        question: "Which persistence strategy should I use?",
-        options: ["SQLite", "PostgreSQL", "Keep the JSON file"],
-        allowFreeText: true, // default; offers a "type your own answer" field
-        multiSelect: false,  // true → checkboxes, combined with any free text
-        multiline: false,    // true → multi-line free-text area
+        questions: [
+          {
+            question: "Which persistence strategy should I use?",
+            options: ["SQLite", "PostgreSQL", "Keep the JSON file"],
+            allowFreeText: true, // default; offers a "type your own answer" field
+            multiSelect: false,  // true → checkboxes, combined with any free text
+            multiline: false,    // true → multi-line free-text area
+          },
+          { question: "Any migration constraints I should know about?", multiline: true },
+        ],
       },
       { signal, timeout: 60000 }, // both optional; absent user never deadlocks
     );
-    if (!answer) {
+    if (!result) {
       // The ask was dismissed or timed out; the current agent turn is stopping.
+    } else {
+      const [dbAnswer] = result.answers; // one entry per question, in order
+      // dbAnswer.selected / dbAnswer.customText / dbAnswer.skipped
     }
   });
 
@@ -1802,14 +1811,21 @@ const ok = await ctx.ui.confirm("Delete?", "This cannot be undone");
 // Text input
 const name = await ctx.ui.input("Name:", "placeholder");
 
-// Rich question: question text supports Markdown and options can be combined
-// with free text. Dismissal stops the current agent turn and returns undefined.
-const answer = await ctx.ui.ask({
+// Rich question wizard: one or more questions asked together, question text
+// supports Markdown and options can be combined with free text. Resolves to
+// { answers: [...] } (one per question, in order); dismissal stops the current
+// agent turn and returns undefined.
+const result = await ctx.ui.ask({
   title: "Choose a database",
-  question: "Which persistence strategy should I use?",
-  options: ["SQLite", "PostgreSQL"],
-  allowFreeText: true,
+  questions: [
+    {
+      question: "Which persistence strategy should I use?",
+      options: ["SQLite", "PostgreSQL"],
+      allowFreeText: true,
+    },
+  ],
 });
+const answer = result?.answers[0];
 
 // Multi-line editor
 const text = await ctx.ui.editor("Edit:", "prefilled text");

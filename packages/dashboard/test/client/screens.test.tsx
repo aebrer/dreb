@@ -1081,7 +1081,7 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).not.toContain("follow-up");
 	});
 
-	it("ask_user dialog: native checkboxes + free text combine into one response", async () => {
+	it("ask_user wizard: native checkboxes + free text combine into one answers[] entry", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask");
 		session.uiRequests = [
@@ -1089,10 +1089,14 @@ describe("screen smoke tests", () => {
 				id: "a1",
 				method: "ask",
 				title: "Choose validation",
-				question: "Which **checks**?\n\nUse `fast` validation.",
-				options: ["unit", "browser"],
-				multiSelect: true,
-				allowFreeText: true,
+				questions: [
+					{
+						question: "Which **checks**?\n\nUse `fast` validation.",
+						options: ["unit", "browser"],
+						multiSelect: true,
+						allowFreeText: true,
+					},
+				],
 			},
 		];
 		const fakeStore = {
@@ -1104,13 +1108,13 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		const question = el.querySelector(".ask-inline-question");
+		const question = el.querySelector(".ask-question-body");
 		expect(question?.querySelector("strong")?.textContent).toBe("checks");
 		expect(question?.querySelector("code")?.textContent).toBe("fast");
 		expect(question?.textContent).not.toContain("**");
 		// ask_user renders inline in the transcript flow (scrollable), not as a
 		// blocking modal overlay.
-		expect(el.querySelector(".chat-inner .ask-inline")).not.toBeNull();
+		expect(el.querySelector(".chat-inner .ask-wizard")).not.toBeNull();
 		expect(el.querySelector(".modal-backdrop")).toBeNull();
 		const checkboxes = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="checkbox"]');
 		expect(checkboxes.length).toBe(2);
@@ -1132,19 +1136,25 @@ describe("screen smoke tests", () => {
 			expect.objectContaining({
 				type: "extension_ui_response",
 				id: "a1",
-				selected: ["unit"],
-				customText: "lint",
+				answers: [expect.objectContaining({ selected: ["unit"], customText: "lint" })],
 			}),
 		);
 	});
 
-	it("tabbed ask_user: renders one switchable tab per concurrent question, showing only the active panel", async () => {
+	it("ask_user wizard: N>=2 renders a tab strip with answered-state markers and a Submit tab", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-tabs");
 		session.uiRequests = [
-			{ id: "t1", method: "ask", title: "First question", question: "Q one?", options: ["A", "B"] },
-			{ id: "t2", method: "ask", title: "Second question", question: "Q two?", options: ["C", "D"] },
-			{ id: "t3", method: "ask", title: "Third question", question: "Q three?", options: ["E", "F"] },
+			{
+				id: "multi",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "Q one?", title: "First question", options: ["A", "B"] },
+					{ question: "Q two?", title: "Second question", options: ["C", "D"] },
+					{ question: "Q three?", title: "Third question", options: ["E", "F"] },
+				],
+			},
 		];
 		const fakeStore = {
 			...store,
@@ -1155,26 +1165,44 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-tabs" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		// A tab strip with one button per pending question.
+		// A tab strip with one button per question plus a trailing Submit tab.
 		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
-		expect(tabs.length).toBe(3);
+		expect(tabs.length).toBe(4);
 		expect(tabs[0].textContent).toContain("First question");
 		expect(tabs[2].textContent).toContain("Third question");
+		expect(tabs[3].textContent).toContain("Submit");
 
-		// All three question cards are mounted (so their state/countdown persist)
-		// but only the active one is visible.
+		// Every question starts unanswered (○ marker).
+		const markers = el.querySelectorAll(".ask-tab-marker");
+		expect(markers.length).toBe(3);
+		expect([...markers].every((m) => m.textContent === "○")).toBe(true);
+
+		// All question panels + the review panel are mounted (so their state
+		// persists) but only the active question is visible.
 		const panels = el.querySelectorAll(".ask-tab-panel");
-		expect(panels.length).toBe(3);
+		expect(panels.length).toBe(4);
 		const visible = [...panels].filter((p) => !p.classList.contains("hidden"));
 		expect(visible.length).toBe(1);
+
+		// Answering the active question flips its marker to ●.
+		el.querySelectorAll<HTMLInputElement>('.ask-option input[type="radio"]')[0].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(el.querySelectorAll(".ask-tab-marker")[0].textContent).toBe("●");
 	});
 
-	it("tabbed ask_user: clicking a tab switches the active question", async () => {
+	it("ask_user wizard: clicking a tab switches the active question", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-switch");
 		session.uiRequests = [
-			{ id: "s1", method: "ask", title: "Alpha", question: "First body", options: ["A", "B"] },
-			{ id: "s2", method: "ask", title: "Beta", question: "Second body", options: ["C", "D"] },
+			{
+				id: "switch",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First body", title: "Alpha", options: ["A", "B"] },
+					{ question: "Second body", title: "Beta", options: ["C", "D"] },
+				],
+			},
 		];
 		const fakeStore = {
 			...store,
@@ -1185,7 +1213,7 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-switch" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab");
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
 		// First question active by default.
 		expect(tabs[0].getAttribute("aria-selected")).toBe("true");
 		let activePanel = [...el.querySelectorAll(".ask-tab-panel")].find((p) => !p.classList.contains("hidden"));
@@ -1198,10 +1226,116 @@ describe("screen smoke tests", () => {
 		expect(activePanel?.textContent).toContain("Second body");
 	});
 
-	it("tabbed ask_user: no tab strip is shown for a single pending question", async () => {
+	it("ask_user wizard: digit keys toggle options and Submit all sends one answer per question", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-digits");
+		session.uiRequests = [
+			{
+				id: "digits",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First?", title: "One", options: ["A", "B"] },
+					{ question: "Second?", title: "Two", options: ["C", "D"] },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-digits": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-digits" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Digit "2" selects the second option of the active (first) question.
+		window.dispatchEvent(new KeyboardEvent("keydown", { key: "2" }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Switch to the second question and pick its first option.
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		window.dispatchEvent(new KeyboardEvent("keydown", { key: "1" }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Move to the review tab and submit everything.
+		tabs[2].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const submitAll = [...el.querySelectorAll("button")].find((b) => b.textContent === "Submit all");
+		submitAll?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-digits",
+			expect.objectContaining({
+				type: "extension_ui_response",
+				id: "digits",
+				answers: [expect.objectContaining({ selected: ["B"] }), expect.objectContaining({ selected: ["C"] })],
+			}),
+		);
+	});
+
+	it("ask_user wizard: review panel summarizes answers and marks unanswered questions", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-review");
+		session.uiRequests = [
+			{
+				id: "review",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First?", title: "One", options: ["A", "B"] },
+					{ question: "Second?", title: "Two", options: ["C", "D"] },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-review": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-review" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Answer only the first question, then open the review tab.
+		el.querySelectorAll<HTMLInputElement>('.ask-option input[type="radio"]')[0].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		tabs[2].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const items = el.querySelectorAll(".ask-review-item");
+		expect(items.length).toBe(2);
+		expect(items[0].querySelector(".ask-review-answer")?.textContent).toContain("A");
+		expect(items[1].querySelector(".ask-review-answer.muted")?.textContent).toContain("(unanswered)");
+
+		// Submitting marks the unanswered second question as skipped.
+		const submitAll = [...el.querySelectorAll("button")].find((b) => b.textContent === "Submit all");
+		submitAll?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-review",
+			expect.objectContaining({
+				id: "review",
+				answers: [
+					expect.objectContaining({ selected: ["A"] }),
+					expect.objectContaining({ selected: [], skipped: true }),
+				],
+			}),
+		);
+	});
+
+	it("ask_user wizard: a single-question request shows no tab strip", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-one");
-		session.uiRequests = [{ id: "o1", method: "ask", title: "Solo", question: "Only one?", options: ["A", "B"] }];
+		session.uiRequests = [
+			{ id: "o1", method: "ask", title: "Solo", questions: [{ question: "Only one?", options: ["A", "B"] }] },
+		];
 		const fakeStore = {
 			...store,
 			sessions: { "k-ask-one": session },
@@ -1211,14 +1345,17 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-one" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(el.querySelector(".ask-tab-strip")).toBeNull();
-		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.querySelector(".ask-wizard")).not.toBeNull();
+		expect(el.querySelector(".ask-question")).not.toBeNull();
 	});
 
 	it("ask_user dialog: single-select keeps stop-agent accessible in the mobile question card", async () => {
 		stubMobile(true);
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask2");
-		session.uiRequests = [{ id: "a2", method: "ask", title: "Pick", question: "Which one?", options: ["A", "B"] }];
+		session.uiRequests = [
+			{ id: "a2", method: "ask", title: "Pick", questions: [{ question: "Which one?", options: ["A", "B"] }] },
+		];
 		const fakeStore = {
 			...store,
 			sessions: { "k-ask2": session },
@@ -1244,7 +1381,12 @@ describe("screen smoke tests", () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-stop-retry");
 		session.uiRequests = [
-			{ id: "a-stop-retry", method: "ask", title: "Retry", question: "Still there?", options: ["A", "B"] },
+			{
+				id: "a-stop-retry",
+				method: "ask",
+				title: "Retry",
+				questions: [{ question: "Still there?", options: ["A", "B"] }],
+			},
 		];
 		const fakeStore = {
 			...store,
@@ -1261,7 +1403,7 @@ describe("screen smoke tests", () => {
 		stop?.click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.querySelector(".ask-wizard")).not.toBeNull();
 		expect(el.textContent).toContain("offline");
 		expect(stop?.disabled).toBe(false);
 
@@ -1279,9 +1421,7 @@ describe("screen smoke tests", () => {
 				id: "a-state",
 				method: "ask",
 				title: "Pick",
-				question: "Which?",
-				options: ["A", "B"],
-				allowFreeText: true,
+				questions: [{ question: "Which?", options: ["A", "B"], allowFreeText: true }],
 			},
 		];
 		const resolveUiRequest = vi.fn();
@@ -1313,7 +1453,7 @@ describe("screen smoke tests", () => {
 
 		// Failure keeps the question and preserves the entered answer state.
 		expect(resolveUiRequest).not.toHaveBeenCalled();
-		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.querySelector(".ask-wizard")).not.toBeNull();
 		expect(el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]')?.checked).toBe(true);
 		expect(el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]')?.value).toBe("extra");
 
@@ -1323,7 +1463,10 @@ describe("screen smoke tests", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenLastCalledWith(
 			"k-ask-state",
-			expect.objectContaining({ id: "a-state", selected: ["A"], customText: "extra" }),
+			expect.objectContaining({
+				id: "a-state",
+				answers: [expect.objectContaining({ selected: ["A"], customText: "extra" })],
+			}),
 		);
 		expect(resolveUiRequest).toHaveBeenCalledWith("k-ask-state", "a-state");
 	});
@@ -1331,7 +1474,9 @@ describe("screen smoke tests", () => {
 	it("suppresses duplicate sends while a response POST is still in flight", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-dedup");
-		session.uiRequests = [{ id: "a-dedup", method: "ask", title: "Pick", question: "Which?", options: ["A", "B"] }];
+		session.uiRequests = [
+			{ id: "a-dedup", method: "ask", title: "Pick", questions: [{ question: "Which?", options: ["A", "B"] }] },
+		];
 		const fakeStore = {
 			...store,
 			sessions: { "k-ask-dedup": session },
@@ -1373,8 +1518,7 @@ describe("screen smoke tests", () => {
 				id: "a-esc",
 				method: "ask",
 				title: "Pick",
-				question: "Which?",
-				options: ["A", "B"],
+				questions: [{ question: "Which?", options: ["A", "B"] }],
 				timeout: 30_000,
 			},
 		];
@@ -1408,8 +1552,7 @@ describe("screen smoke tests", () => {
 				id: "a-timeout",
 				method: "ask",
 				title: "Pick",
-				question: "Which?",
-				options: ["A", "B"],
+				questions: [{ question: "Which?", options: ["A", "B"] }],
 				timeout: 30_000,
 			},
 		];
@@ -1449,8 +1592,7 @@ describe("screen smoke tests", () => {
 				id: "a-recovered-timeout",
 				method: "ask",
 				title: "Pick",
-				question: "Which?",
-				options: ["A", "B"],
+				questions: [{ question: "Which?", options: ["A", "B"] }],
 				timeout: 30_000,
 				// Twenty-five seconds elapsed before reload; only five remain.
 				expiresAt: Date.now() + 5_000,

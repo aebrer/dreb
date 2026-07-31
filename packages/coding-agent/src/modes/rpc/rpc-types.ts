@@ -58,7 +58,6 @@ export type RpcCommand =
 	// Queue modes
 	| { id?: string; type: "set_steering_mode"; mode: "all" | "one-at-a-time" }
 	| { id?: string; type: "set_follow_up_mode"; mode: "all" | "one-at-a-time" }
-	| { id?: string; type: "set_ask_user_mode"; mode: "tabbed" | "sequential" }
 	| { id?: string; type: "get_pending_messages" }
 	| { id?: string; type: "clear_pending_messages" }
 
@@ -216,7 +215,6 @@ export interface RpcSessionState {
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";
-	askUserMode: "tabbed" | "sequential";
 	sessionFile?: string;
 	sessionId: string;
 	sessionName?: string;
@@ -314,7 +312,6 @@ export type RpcResponse =
 	// Queue modes
 	| { id?: string; type: "response"; command: "set_steering_mode"; success: true }
 	| { id?: string; type: "response"; command: "set_follow_up_mode"; success: true }
-	| { id?: string; type: "response"; command: "set_ask_user_mode"; success: true }
 	| { id?: string; type: "response"; command: "get_pending_messages"; success: true; data: RpcPendingMessages }
 	| { id?: string; type: "response"; command: "clear_pending_messages"; success: true; data: RpcPendingMessages }
 
@@ -556,8 +553,6 @@ export interface RpcSettingsSnapshot {
 	steeringMode: "all" | "one-at-a-time";
 	/** How queued follow-up messages are delivered */
 	followUpMode: "all" | "one-at-a-time";
-	/** How concurrent ask_user questions are surfaced */
-	askUserMode: "tabbed" | "sequential";
 	/** Whether automatic context compaction is enabled */
 	compactionEnabled: boolean;
 	/** Whether automatic retry on transient errors is enabled */
@@ -626,7 +621,6 @@ export interface RpcSettingsUpdate {
 	defaultThinkingLevel?: ThinkingLevel;
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
-	askUserMode?: "tabbed" | "sequential";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
 	imageAutoResize?: boolean;
@@ -646,6 +640,23 @@ export interface RpcSettingsUpdate {
 // Extension UI Events (stdout)
 // ============================================================================
 
+/** A single question inside an `ask` extension-UI request. */
+export interface RpcAskQuestion {
+	question: string;
+	title?: string;
+	options?: string[];
+	allowFreeText?: boolean;
+	multiSelect?: boolean;
+	multiline?: boolean;
+}
+
+/** A single answer in an `ask` extension-UI response, one per question in order. */
+export interface RpcAskAnswer {
+	selected: string[];
+	customText?: string;
+	skipped?: boolean;
+}
+
 /** Emitted when an extension needs user input */
 export type RpcExtensionUIRequest =
 	| { type: "extension_ui_request"; id: string; method: "select"; title: string; options: string[]; timeout?: number }
@@ -664,11 +675,8 @@ export type RpcExtensionUIRequest =
 			id: string;
 			method: "ask";
 			title: string;
-			question: string;
-			options?: string[];
-			allowFreeText?: boolean;
-			multiSelect?: boolean;
-			multiline?: boolean;
+			/** One or more questions asked together as a single wizard. */
+			questions: RpcAskQuestion[];
 			timeout?: number;
 			/** Absolute Unix timestamp in milliseconds when the RPC-side timeout fires. */
 			expiresAt?: number;
@@ -713,6 +721,7 @@ export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
 	| { type: "extension_ui_response"; id: string; selected: string[]; customText?: string }
+	| { type: "extension_ui_response"; id: string; answers: RpcAskAnswer[] }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 
 // ============================================================================

@@ -93,8 +93,7 @@ import {
 } from "../../utils/message-text.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { ArminComponent } from "./components/armin.js";
-import { AskTabHost } from "./components/ask-tab-host.js";
-import { AskUserComponent } from "./components/ask-user.js";
+import { AskWizardComponent } from "./components/ask-wizard.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
 import { BashExecutionComponent } from "./components/bash-execution.js";
 import { BorderedLoader } from "./components/bordered-loader.js";
@@ -261,16 +260,8 @@ export class InteractiveMode {
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
-	private extensionAsk: AskUserComponent | undefined = undefined;
+	private extensionAsk: AskWizardComponent | undefined = undefined;
 	private extensionDialogQueue: Promise<void> = Promise.resolve();
-	// Tabbed ask_user host (only used when askUserMode === "tabbed"): holds
-	// multiple concurrently-open questions as switchable tabs.
-	private askTabHost: AskTabHost | undefined = undefined;
-	private tabbedAskSeq = 0;
-	// Count of single-slot extension dialogs (select/confirm/input/editor/custom,
-	// plus sequential ask) currently occupying the editor slot. Tabbed asks defer
-	// mounting their host while a single-slot dialog is up so it is never buried.
-	private extensionDialogActive = 0;
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
 	// Extension widgets (components rendered above/below the editor)
@@ -1810,15 +1801,10 @@ export class InteractiveMode {
 					abortedValue: undefined,
 				}),
 			ask: (request, opts) =>
-				// In "tabbed" mode, concurrent questions open side-by-side in a tab
-				// host and must NOT serialize through the single-slot dialog queue.
-				// "sequential" keeps today's strict one-at-a-time FIFO path.
-				this.session.askUserMode === "tabbed"
-					? this.showTabbedAsk(request, opts)
-					: this.enqueueExtensionDialog(() => this.showExtensionAsk(request, opts), {
-							signal: opts?.signal,
-							abortedValue: undefined,
-						}),
+				this.enqueueExtensionDialog(() => this.showExtensionAsk(request, opts), {
+					signal: opts?.signal,
+					abortedValue: undefined,
+				}),
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
@@ -1863,26 +1849,8 @@ export class InteractiveMode {
 		open: () => Promise<T>,
 		opts?: { signal?: AbortSignal; abortedValue: T },
 	): Promise<T> {
-		// Track single-slot dialog occupancy for the whole time the dialog owns the
-		// editor slot, so a concurrent tabbed ask defers mounting its host rather
-		// than burying an active select/confirm/input dialog. open() is invoked
-		// synchronously (same tick as the unwrapped call) to preserve dialog
-		// ordering timing; only the returned promise is wrapped.
-		const tracked = () => {
-			this.extensionDialogActive++;
-			let opened: Promise<T>;
-			try {
-				opened = open();
-			} catch (err) {
-				this.extensionDialogActive--;
-				throw err;
-			}
-			return opened.finally(() => {
-				this.extensionDialogActive--;
-			});
-		};
 		if (!opts?.signal) {
-			const result = this.extensionDialogQueue.then(tracked, tracked);
+			const result = this.extensionDialogQueue.then(open, open);
 			this.extensionDialogQueue = result.then(
 				() => undefined,
 				() => undefined,
@@ -1902,7 +1870,7 @@ export class InteractiveMode {
 		});
 		const run = () => {
 			signal.removeEventListener("abort", onQueuedAbort);
-			return signal.aborted ? Promise.resolve(abortedValue) : tracked();
+			return signal.aborted ? Promise.resolve(abortedValue) : open();
 		};
 		const queued = this.extensionDialogQueue.then(run, run);
 		this.extensionDialogQueue = queued.then(
@@ -2029,7 +1997,9 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Show a rich ask_user question for extensions/built-in tools.
+	 * Show a rich multi-question ask_user wizard for extensions/built-in tools.
+	 * One call renders one wizard; the whole batch resolves together on Submit,
+	 * and Esc/timeout stops the current turn.
 	 */
 	private showExtensionAsk(request: AskRequest, opts?: ExtensionUIDialogOptions): Promise<AskResult | undefined> {
 		return new Promise((resolve) => {
@@ -2044,7 +2014,7 @@ export class InteractiveMode {
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-			this.extensionAsk = new AskUserComponent(
+			this.extensionAsk = new AskWizardComponent(
 				request,
 				(result) => {
 					opts?.signal?.removeEventListener("abort", onAbort);
@@ -2054,7 +2024,7 @@ export class InteractiveMode {
 				() => {
 					opts?.signal?.removeEventListener("abort", onAbort);
 					this.hideExtensionAsk();
-					// The question-level escape action means stop the whole turn, not
+					// The wizard-level escape action means stop the whole turn, not
 					// continue without an answer. Mirror the default editor's Escape
 					// behavior, including background-agent and queued-message cleanup.
 					this.cancelBackgroundAgents();
@@ -2072,86 +2042,12 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Hide the ask_user question.
+	 * Hide the ask_user wizard.
 	 */
 	private hideExtensionAsk(): void {
 		this.extensionAsk?.dispose();
 		this.extensionAsk = undefined;
 		this.restoreEditorComponent();
-	}
-
-	/**
-	 * Show a rich ask_user question as a tab in the concurrent tab host
-	 * (`askUserMode === "tabbed"`). Multiple questions can be open at once; each
-	 * keeps its own countdown and abort listener and resolves independently. The
-	 * editor is restored only after the LAST question resolves.
-	 */
-	private showTabbedAsk(request: AskRequest, opts?: ExtensionUIDialogOptions): Promise<AskResult | undefined> {
-		return new Promise((resolve) => {
-			if (opts?.signal?.aborted) {
-				resolve(undefined);
-				return;
-			}
-
-			if (!this.askTabHost) this.askTabHost = new AskTabHost(this.ui);
-			const host = this.askTabHost;
-			const tabId = `ask-${++this.tabbedAskSeq}`;
-			// Guard against a re-entrant double settle: a turn-stop aborts the shared
-			// turn signal, which can fire this same question's abort listener during
-			// its own stop handler.
-			let settled = false;
-
-			// Remove this question's tab and, once the last one resolves, tear the
-			// host down and hand the editor slot back.
-			const settle = (value: AskResult | undefined) => {
-				if (settled) return;
-				settled = true;
-				opts?.signal?.removeEventListener("abort", onAbort);
-				const hasRemaining = host.removeTab(tabId);
-				if (!hasRemaining) {
-					if (this.askTabHost === host) this.askTabHost = undefined;
-					host.dispose();
-					// Only reclaim the editor slot if a single-slot dialog is not
-					// currently occupying it; otherwise that dialog's own teardown
-					// restores the editor when it closes.
-					if (this.extensionDialogActive === 0) this.restoreEditorComponent();
-				} else if (this.editorContainer.children.includes(host)) {
-					// Keep the host focused after a sibling tab was removed.
-					this.ui.setFocus(host);
-					this.ui.requestRender();
-				}
-				resolve(value);
-			};
-
-			const onAbort = () => settle(undefined);
-			opts?.signal?.addEventListener("abort", onAbort, { once: true });
-
-			const component = new AskUserComponent(
-				request,
-				(result) => settle(result),
-				() => {
-					// Question-level Escape means stop the whole turn, regardless of
-					// how many other questions are open — mirroring the sequential
-					// path. Aborting the turn cascades an abort signal to every other
-					// open question, which settles them via their own onAbort.
-					this.cancelBackgroundAgents();
-					this.restoreQueuedMessagesToEditor({ abort: true });
-					settle(undefined);
-				},
-				{ tui: this.ui, timeout: opts?.timeout },
-			);
-
-			host.addTab(tabId, request.title?.trim() || "Question", component);
-
-			// Mount the host now unless a single-slot dialog owns the editor slot;
-			// in that case restoreEditorComponent will mount it when that dialog closes.
-			if (this.extensionDialogActive === 0) {
-				this.editorContainer.clear();
-				this.editorContainer.addChild(host);
-				this.ui.setFocus(host);
-				this.ui.requestRender();
-			}
-		});
 	}
 
 	/**
@@ -3918,16 +3814,6 @@ export class InteractiveMode {
 	 * agent streaming.
 	 */
 	private restoreEditorComponent(editor: Component = this.editor): void {
-		// If tabbed ask_user questions are still open, they own the editor slot —
-		// a transient single-slot dialog (select/confirm/input) that buried the
-		// host must hand it back rather than orphan the pending questions.
-		if (this.askTabHost?.hasTabs()) {
-			this.editorContainer.clear();
-			this.editorContainer.addChild(this.askTabHost);
-			this.ui.setFocus(this.askTabHost);
-			this.ui.recommitAll();
-			return;
-		}
 		this.editorContainer.clear();
 		this.editorContainer.addChild(editor);
 		this.ui.setFocus(editor);
@@ -4046,7 +3932,6 @@ export class InteractiveMode {
 					enableSkillCommands: this.settingsManager.getEnableSkillCommands(),
 					steeringMode: this.session.steeringMode,
 					followUpMode: this.session.followUpMode,
-					askUserMode: this.session.askUserMode,
 					transport: this.settingsManager.getTransport(),
 					thinkingLevel: this.session.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
@@ -4105,9 +3990,6 @@ export class InteractiveMode {
 					},
 					onFollowUpModeChange: (mode) => {
 						this.session.setFollowUpMode(mode);
-					},
-					onAskUserModeChange: (mode) => {
-						this.session.setAskUserMode(mode);
 					},
 					onTransportChange: (transport) => {
 						this.settingsManager.setTransport(transport);

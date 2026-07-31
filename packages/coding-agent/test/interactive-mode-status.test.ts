@@ -510,11 +510,10 @@ describe("InteractiveMode extension dialog queue", () => {
 					resolveSelector = resolve;
 				}),
 		);
-		const showExtensionAsk = vi.fn(async () => ({ selected: ["yes"] }));
+		const showExtensionAsk = vi.fn(async () => ({ answers: [{ selected: ["yes"] }] }));
 		const fakeThis: any = {
 			extensionDialogQueue: Promise.resolve(),
 			extensionDialogActive: 0,
-			session: { askUserMode: "sequential" },
 			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
 			showExtensionSelector,
 			showExtensionAsk,
@@ -522,7 +521,7 @@ describe("InteractiveMode extension dialog queue", () => {
 		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
 
 		const selector = uiContext.select("First", ["a", "b"]);
-		const ask = uiContext.ask({ question: "Second?", options: ["yes", "no"] });
+		const ask = uiContext.ask({ questions: [{ question: "Second?", options: ["yes", "no"] }] });
 		await Promise.resolve();
 
 		expect(showExtensionSelector).toHaveBeenCalledTimes(1);
@@ -530,7 +529,7 @@ describe("InteractiveMode extension dialog queue", () => {
 
 		resolveSelector("a");
 		await expect(selector).resolves.toBe("a");
-		await expect(ask).resolves.toEqual({ selected: ["yes"] });
+		await expect(ask).resolves.toEqual({ answers: [{ selected: ["yes"] }] });
 		expect(showExtensionAsk).toHaveBeenCalledTimes(1);
 	});
 
@@ -542,11 +541,12 @@ describe("InteractiveMode extension dialog queue", () => {
 					resolveSelector = resolve;
 				}),
 		);
-		const showExtensionAsk = vi.fn(async (request: { question: string }) => ({ selected: [request.question] }));
+		const showExtensionAsk = vi.fn(async (request: { questions: Array<{ question: string }> }) => ({
+			answers: [{ selected: [request.questions[0].question] }],
+		}));
 		const fakeThis: any = {
 			extensionDialogQueue: Promise.resolve(),
 			extensionDialogActive: 0,
-			session: { askUserMode: "sequential" },
 			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
 			showExtensionSelector,
 			showExtensionAsk,
@@ -555,8 +555,8 @@ describe("InteractiveMode extension dialog queue", () => {
 		const controller = new AbortController();
 
 		const selector = uiContext.select("First", ["a", "b"]);
-		const abortedAsk = uiContext.ask({ question: "aborted" }, { signal: controller.signal });
-		const laterAsk = uiContext.ask({ question: "later" });
+		const abortedAsk = uiContext.ask({ questions: [{ question: "aborted" }] }, { signal: controller.signal });
+		const laterAsk = uiContext.ask({ questions: [{ question: "later" }] });
 		await Promise.resolve();
 		expect(showExtensionSelector).toHaveBeenCalledTimes(1);
 		expect(showExtensionAsk).not.toHaveBeenCalled();
@@ -569,38 +569,9 @@ describe("InteractiveMode extension dialog queue", () => {
 
 		resolveSelector("a");
 		await expect(selector).resolves.toBe("a");
-		await expect(laterAsk).resolves.toEqual({ selected: ["later"] });
+		await expect(laterAsk).resolves.toEqual({ answers: [{ selected: ["later"] }] });
 		expect(showExtensionAsk).toHaveBeenCalledTimes(1);
-		expect(showExtensionAsk).toHaveBeenCalledWith({ question: "later" }, undefined);
-	});
-
-	test("tabbed mode routes ask to the concurrent tab host, bypassing the single-slot queue", async () => {
-		// A selector holds the single-slot dialog queue open forever; in tabbed
-		// mode an ask must NOT wait behind it — it opens concurrently via the tab
-		// host instead of showExtensionAsk.
-		const showExtensionSelector = vi.fn(() => new Promise<string | undefined>(() => {}));
-		const showExtensionAsk = vi.fn(async () => ({ selected: ["queued"] }));
-		const showTabbedAsk = vi.fn(async () => ({ selected: ["tabbed"] }));
-		const fakeThis: any = {
-			extensionDialogQueue: Promise.resolve(),
-			extensionDialogActive: 0,
-			session: { askUserMode: "tabbed" },
-			enqueueExtensionDialog: (InteractiveMode as any).prototype.enqueueExtensionDialog,
-			showExtensionSelector,
-			showExtensionAsk,
-			showTabbedAsk,
-		};
-		const uiContext = (InteractiveMode as any).prototype.createExtensionUIContext.call(fakeThis);
-
-		uiContext.select("First", ["a", "b"]); // occupies the queue indefinitely
-		const ask = uiContext.ask({ question: "Concurrent?", options: ["yes", "no"] });
-		await Promise.resolve();
-
-		// The ask resolved via the tab host without waiting on the selector, and
-		// the serialized single-slot ask path was never used.
-		await expect(ask).resolves.toEqual({ selected: ["tabbed"] });
-		expect(showTabbedAsk).toHaveBeenCalledTimes(1);
-		expect(showExtensionAsk).not.toHaveBeenCalled();
+		expect(showExtensionAsk).toHaveBeenCalledWith({ questions: [{ question: "later" }] }, undefined);
 	});
 });
 
@@ -638,7 +609,7 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 
 	test("mounts the question, focuses it, and resolves the submitted answer, then restores the editor", async () => {
 		const fakeThis = createAskFakeThis();
-		const p = show(fakeThis, { question: "DB?", options: ["a", "b"] });
+		const p = show(fakeThis, { questions: [{ question: "DB?", options: ["a", "b"] }] });
 
 		// Mounted into the shared editor container and focused exactly once.
 		expect(fakeThis.editorContainer.children).toHaveLength(1);
@@ -648,7 +619,7 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 		// Submit the highlighted option.
 		(fakeThis.extensionAsk as any).handleInput("\n");
 
-		await expect(p).resolves.toEqual({ selected: ["a"], customText: undefined });
+		await expect(p).resolves.toEqual({ answers: [{ selected: ["a"], customText: undefined }] });
 		// Torn down exactly once: component disposed/cleared and editor restored.
 		expect(fakeThis.extensionAsk).toBeUndefined();
 		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
@@ -656,7 +627,7 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 
 	test("Esc stops the whole agent turn without leaving a mounted component", async () => {
 		const fakeThis = createAskFakeThis();
-		const p = show(fakeThis, { question: "DB?", options: ["a", "b"] });
+		const p = show(fakeThis, { questions: [{ question: "DB?", options: ["a", "b"] }] });
 		(fakeThis.extensionAsk as any).handleInput("\x1b"); // Esc
 		await expect(p).resolves.toBeUndefined();
 		expect(fakeThis.extensionAsk).toBeUndefined();
@@ -668,7 +639,7 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 	test("aborting while pending resolves undefined, disposes, and restores the editor (no orphaned promise)", async () => {
 		const fakeThis = createAskFakeThis();
 		const controller = new AbortController();
-		const p = show(fakeThis, { question: "DB?", options: ["a"] }, { signal: controller.signal });
+		const p = show(fakeThis, { questions: [{ question: "DB?", options: ["a"] }] }, { signal: controller.signal });
 		expect(fakeThis.extensionAsk).toBeDefined();
 
 		controller.abort();
@@ -681,7 +652,7 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 		const fakeThis = createAskFakeThis();
 		const controller = new AbortController();
 		controller.abort();
-		const p = show(fakeThis, { question: "DB?", options: ["a"] }, { signal: controller.signal });
+		const p = show(fakeThis, { questions: [{ question: "DB?", options: ["a"] }] }, { signal: controller.signal });
 		await expect(p).resolves.toBeUndefined();
 		expect(fakeThis.editorContainer.children).toHaveLength(0);
 		expect(fakeThis.ui.setFocus).not.toHaveBeenCalled();
@@ -702,7 +673,7 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 		const controller = new AbortController();
 		const p = (InteractiveMode as any).prototype.showExtensionAsk.call(
 			fakeThis,
-			{ question: "Notes?", multiline: true },
+			{ questions: [{ question: "Notes?", multiline: true }] },
 			{ signal: controller.signal },
 		);
 		// Constructed and mounted without throwing (exercises the Editor branch).
@@ -719,7 +690,7 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 		vi.useFakeTimers();
 		try {
 			const fakeThis = createAskFakeThis();
-			const p = show(fakeThis, { question: "DB?", options: ["a"] }, { timeout: 3000 });
+			const p = show(fakeThis, { questions: [{ question: "DB?", options: ["a"] }] }, { timeout: 3000 });
 			expect(fakeThis.extensionAsk).toBeDefined();
 
 			// The countdown ticks every second and expires at 0 → stop the turn.

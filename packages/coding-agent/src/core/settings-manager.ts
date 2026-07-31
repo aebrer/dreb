@@ -111,7 +111,6 @@ export interface Settings {
 	transport?: TransportSetting; // default: "sse"
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
-	askUserMode?: "tabbed" | "sequential";
 	theme?: string;
 	compaction?: CompactionSettings;
 	context?: ContextSettings;
@@ -721,16 +720,6 @@ export class SettingsManager {
 	setFollowUpMode(mode: "all" | "one-at-a-time"): void {
 		this.globalSettings.followUpMode = mode;
 		this.markModified("followUpMode");
-		this.save();
-	}
-
-	getAskUserMode(): "tabbed" | "sequential" {
-		return this.settings.askUserMode || "sequential";
-	}
-
-	setAskUserMode(mode: "tabbed" | "sequential"): void {
-		this.globalSettings.askUserMode = mode;
-		this.markModified("askUserMode");
 		this.save();
 	}
 

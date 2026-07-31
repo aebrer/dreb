@@ -1,44 +1,36 @@
 /**
  * ask_user tool.
  *
- * Lets the agent pause and ask the user a structured clarifying question —
- * with optional multiple-choice options, single- or multi-select, and a
- * "type your own answer" free-text field — rendered natively in the TUI, the
- * Dashboard, and over RPC. Answering, stopping the turn, aborting, or timing
- * out always settles cleanly so the agent never deadlocks on an absent user.
- *
- * Concurrent calls are serialized through a per-session FIFO queue: only one
- * question is ever shown at a time, and a queued call whose signal aborts
- * settles without opening any UI.
+ * Lets the agent pause and ask the user one or more structured clarifying
+ * questions in a single call — each with optional multiple-choice options,
+ * single- or multi-select, and a "type your own answer" free-text field —
+ * rendered natively as a wizard in the TUI, the Dashboard, and over RPC. The
+ * whole batch is answered together and returned as one result. Answering,
+ * stopping the turn, aborting, or timing out always settles cleanly so the
+ * agent never deadlocks on an absent user. Unanswered questions come back
+ * flagged as skipped rather than blocking the turn.
  */
 
 import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
-import type { AskRequest, AskResult, ExtensionContext, ToolDefinition } from "../extensions/types.js";
-
-/**
- * How concurrent `ask_user` calls are surfaced:
- * - `"sequential"`: strict per-session FIFO — only one question is ever open at
- *   a time (today's behavior).
- * - `"tabbed"`: allow multiple questions to open concurrently (switchable tabs).
- */
-export type AskUserMode = "tabbed" | "sequential";
-
-export interface AskUserToolOptions {
-	/** Read the current ask_user mode. Defaults to "sequential" when omitted. */
-	getMode?: () => AskUserMode;
-}
+import type { AskQuestion, AskRequest, AskResult, ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
 // ============================================================================
 // Types
 
-export interface AskUserDetails {
+/** One question's outcome, surfaced in the tool result details. */
+export interface AskUserAnswerDetail {
 	question: string;
 	title?: string;
 	selected: string[];
 	customText?: string;
-	/** True when the question closed without an answer. */
+	/** True when this question closed without an answer. */
 	skipped: boolean;
+}
+
+export interface AskUserDetails {
+	/** One entry per question asked, in order. */
+	answers: AskUserAnswerDetail[];
 	/** True when no interactive UI was available (headless/print mode). */
 	unavailable: boolean;
 	/** True when the UI host or response protocol failed. */
@@ -48,13 +40,13 @@ export interface AskUserDetails {
 // ============================================================================
 // Schema
 
-const askUserSchema = Type.Object({
+const questionSchema = Type.Object({
 	question: Type.String({
 		description: "The Markdown-formatted question to ask the user. Be specific about what you need to decide.",
 	}),
 	title: Type.Optional(
 		Type.String({
-			description: "Short bold header shown above the question.",
+			description: "Short bold header shown above this question.",
 		}),
 	),
 	options: Type.Optional(
@@ -79,6 +71,16 @@ const askUserSchema = Type.Object({
 			description: "Use a large multi-line text area for open-ended answers.",
 		}),
 	),
+});
+
+const askUserSchema = Type.Object({
+	questions: Type.Array(questionSchema, {
+		minItems: 1,
+		maxItems: 10,
+		description:
+			"One or more clarifying questions to ask together in a single wizard. " +
+			"Batch every question you need answered in one call — the user answers them all and submits once.",
+	}),
 	timeoutSeconds: Type.Optional(
 		Type.Number({
 			minimum: 5,
@@ -91,6 +93,31 @@ const askUserSchema = Type.Object({
 });
 
 export type AskUserInput = Static<typeof askUserSchema>;
+type AskUserQuestion = Static<typeof questionSchema>;
+
+// ============================================================================
+// Normalization
+
+/**
+ * Normalize a single question so every rendered surface has at least one usable
+ * answer control and no impossible flag combinations survive.
+ */
+function normalizeQuestion(q: AskUserQuestion): AskQuestion {
+	const hasOptions = (q.options?.length ?? 0) > 0;
+	return {
+		question: q.question,
+		title: q.title,
+		options: q.options,
+		// Guarantee at least one answer control: with no options, free text must
+		// be offered regardless of the requested flag, otherwise a question would
+		// render only a Skip control and no way to answer.
+		allowFreeText: hasOptions ? q.allowFreeText : true,
+		// multiSelect is only meaningful with options; multiline only with free
+		// text — normalize away impossible combinations.
+		multiSelect: hasOptions ? q.multiSelect : undefined,
+		multiline: hasOptions ? (q.allowFreeText === false ? undefined : q.multiline) : q.multiline,
+	};
+}
 
 // ============================================================================
 // Result helpers
@@ -102,79 +129,93 @@ function textResult(text: string, details: AskUserDetails) {
 	};
 }
 
-function baseDetails(input: AskUserInput): Omit<AskUserDetails, "selected" | "skipped" | "unavailable"> {
-	return { question: input.question, title: input.title };
+function skippedAnswer(q: AskQuestion): AskUserAnswerDetail {
+	return { question: q.question, title: q.title, selected: [], skipped: true };
 }
 
-function unavailableResult(input: AskUserInput) {
+function unavailableResult(questions: AskQuestion[]) {
 	return textResult(
 		"The ask_user tool requires an interactive UI, which is not available in this mode. " +
 			"Proceed using your best judgment without waiting for an answer.",
-		{ ...baseDetails(input), selected: [], skipped: true, unavailable: true },
+		{ answers: questions.map(skippedAnswer), unavailable: true },
 	);
 }
 
-function unansweredResult(input: AskUserInput) {
-	return textResult("The question closed without an answer.", {
-		...baseDetails(input),
-		selected: [],
-		skipped: true,
+function unansweredResult(questions: AskQuestion[]) {
+	return textResult("The questions closed without an answer.", {
+		answers: questions.map(skippedAnswer),
 		unavailable: false,
 	});
 }
 
-function failedResult(input: AskUserInput) {
+function failedResult(questions: AskQuestion[]) {
 	return textResult(
-		"The question could not be delivered because the interactive UI or response protocol failed. " +
+		"The questions could not be delivered because the interactive UI or response protocol failed. " +
 			"Continue without this input.",
-		{
-			...baseDetails(input),
-			selected: [],
-			skipped: false,
-			unavailable: false,
-			failed: true,
-		},
+		{ answers: questions.map(skippedAnswer), unavailable: false, failed: true },
 	);
 }
 
-function answeredResult(input: AskUserInput, answer: AskResult) {
+/** Build a per-question detail entry from the user's answer. */
+function toAnswerDetail(q: AskQuestion, answer: AskResult["answers"][number] | undefined): AskUserAnswerDetail {
+	if (!answer || answer.skipped) return skippedAnswer(q);
 	const customText = answer.customText?.trim() || undefined;
-	const selected = answer.selected;
-	const parts: string[] = [];
-	if (selected.length > 0) {
-		parts.push(
-			selected.length === 1 ? `The user selected: ${selected[0]}` : `The user selected: ${selected.join(", ")}`,
-		);
-	}
-	if (customText) {
-		parts.push(selected.length > 0 ? `They also wrote: "${customText}"` : `The user answered: "${customText}"`);
-	}
-	return textResult(parts.join(" "), {
-		...baseDetails(input),
-		selected,
-		customText,
-		skipped: false,
-		unavailable: false,
+	const selected = answer.selected ?? [];
+	if (selected.length === 0 && !customText) return skippedAnswer(q);
+	return { question: q.question, title: q.title, selected, customText, skipped: false };
+}
+
+/** Compose the model-facing summary, one block per question. */
+function summarizeAnswers(details: AskUserAnswerDetail[]): string {
+	const blocks = details.map((d) => {
+		const heading = (d.title || d.question || "").replace(/\s+/g, " ").trim();
+		if (d.skipped) return `**${heading}** → (no answer)`;
+		const parts: string[] = [];
+		if (d.selected.length > 0) parts.push(`Selected: ${d.selected.join(", ")}`);
+		if (d.customText) parts.push(`wrote: "${d.customText}"`);
+		return `**${heading}** → ${parts.join(" / ")}`;
 	});
+	return blocks.join("\n");
+}
+
+function answeredResult(questions: AskQuestion[], result: AskResult) {
+	const details = questions.map((q, i) => toAnswerDetail(q, result.answers[i]));
+	return textResult(summarizeAnswers(details), { answers: details, unavailable: false });
 }
 
 // ============================================================================
 // Render helpers
 
-function formatCall(args: { question?: string; title?: string } | undefined, theme: any): string {
-	const label = (args?.title || args?.question || "").replace(/\s+/g, " ").trim();
-	const shown = label.length > 80 ? `${label.slice(0, 79)}…` : label;
-	return `${theme.fg("toolTitle", theme.bold("ask_user"))} ${theme.fg("accent", shown)}`;
+function callLabel(args: { questions?: Array<{ title?: string; question?: string }> } | undefined): string {
+	const questions = args?.questions ?? [];
+	const count = questions.length;
+	if (count === 1) {
+		const first = questions[0];
+		const label = (first?.title || first?.question || "").replace(/\s+/g, " ").trim();
+		return label.length > 80 ? `${label.slice(0, 79)}…` : label;
+	}
+	return `${count} questions`;
+}
+
+function formatCall(
+	args: { questions?: Array<{ title?: string; question?: string }> } | undefined,
+	theme: any,
+): string {
+	return `${theme.fg("toolTitle", theme.bold("ask_user"))} ${theme.fg("accent", callLabel(args))}`;
 }
 
 function formatResult(details: AskUserDetails, theme: any): string {
 	if (details.unavailable) return theme.fg("toolOutput", "no interactive UI — continued without asking");
 	if (details.failed) return theme.fg("toolOutput", "interactive UI failed — continued without an answer");
-	if (details.skipped) return theme.fg("toolOutput", "question closed without an answer");
-	const parts: string[] = [];
-	if (details.selected.length > 0) parts.push(details.selected.join(", "));
-	if (details.customText) parts.push(`"${details.customText}"`);
-	return theme.fg("toolOutput", `→ ${parts.join(" + ")}`);
+	const answered = details.answers.filter((a) => !a.skipped);
+	if (answered.length === 0) return theme.fg("toolOutput", "closed without an answer");
+	if (details.answers.length === 1) {
+		const parts: string[] = [];
+		if (answered[0].selected.length > 0) parts.push(answered[0].selected.join(", "));
+		if (answered[0].customText) parts.push(`"${answered[0].customText}"`);
+		return theme.fg("toolOutput", `→ ${parts.join(" + ")}`);
+	}
+	return theme.fg("toolOutput", `→ answered ${answered.length} of ${details.answers.length}`);
 }
 
 // ============================================================================
@@ -183,69 +224,37 @@ function formatResult(details: AskUserDetails, theme: any): string {
 /**
  * Create an `ask_user` tool definition.
  *
- * In `"sequential"` mode (the default), each definition owns an isolated
- * per-session FIFO queue, so concurrent `ask_user` calls in a single session
- * are shown strictly one at a time. In `"tabbed"` mode the queue is bypassed
- * so multiple questions can open concurrently; the surrounding UI hosts them as
- * switchable tabs. Either way, every path — answer, skip, empty, abort, or host
- * failure — settles gracefully and never orphans a promise.
- *
- * The mode is read fresh on each `execute()` via `options.getMode`, so a
- * runtime settings change takes effect for subsequent questions.
+ * One call carries one or more questions, collected together in a single
+ * wizard and returned as a batch of answers. Every path — answer, skip, abort,
+ * timeout, or host failure — settles gracefully and never orphans a promise.
  */
-export function createAskUserToolDefinition(
-	options?: AskUserToolOptions,
-): ToolDefinition<typeof askUserSchema, AskUserDetails | undefined> {
-	const getMode = options?.getMode ?? (() => "sequential" as AskUserMode);
-	// Per-session serialization ("sequential" mode): only one question is ever
-	// open at a time.
-	let tail: Promise<void> = Promise.resolve();
-	const serialize = <T>(run: () => Promise<T>): Promise<T> => {
-		const result = tail.then(run, run);
-		// Always advance the queue, whether the call resolved, cancelled, timed
-		// out, or threw — so a failure can never wedge later questions.
-		tail = result.then(
-			() => undefined,
-			() => undefined,
-		);
-		return result;
-	};
-
+export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSchema, AskUserDetails | undefined> {
 	return {
 		name: "ask_user",
 		label: "ask_user",
 		description:
-			"Pause and ask the user a structured clarifying question with optional multiple-choice options and a " +
-			"free-text answer. Use only when genuinely blocked by ambiguity with multiple viable paths — not for routine confirmation.",
+			"Pause and ask the user one or more structured clarifying questions in a single call, each with " +
+			"optional multiple-choice options and a free-text answer. The questions are shown together as one " +
+			"wizard and answered as a batch. Use only when genuinely blocked by ambiguity with multiple viable " +
+			"paths — not for routine confirmation.",
 
 		parameters: askUserSchema,
 
-		promptSnippet: "Ask the user a clarifying question with optional multiple-choice options and free text",
+		promptSnippet:
+			"Ask the user one or more clarifying questions with optional multiple-choice options and free text",
 
 		promptGuidelines: [
 			"Call ask_user ONLY when you are genuinely blocked by ambiguity and there are multiple viable paths forward",
 			"Do NOT use it for routine confirmation, permission, or things you can reasonably decide yourself",
-			"Provide 2-4 concrete `options` when there are clear candidate answers; the user can always type their own",
+			"Batch everything you need in ONE call: put each distinct decision in the `questions` array — the user answers them all and submits once",
+			"Provide 2-4 concrete `options` per question when there are clear candidate answers; the user can always type their own",
 			"Set `multiSelect: true` when several options can be combined; `multiline: true` for open-ended answers",
-			"The user may stop the current turn instead of answering; never treat that as an answer",
-			"Prefer one focused question over many; the question blocks the turn until the user responds or stops it",
+			"The user may stop the current turn instead of answering; never treat that as an answer, and unanswered questions come back as skipped",
 		],
 
 		async execute(_toolCallId, input: AskUserInput, signal, _onUpdate, ctx?: ExtensionContext) {
-			const hasOptions = (input.options?.length ?? 0) > 0;
-			const request: AskRequest = {
-				question: input.question,
-				title: input.title,
-				options: input.options,
-				// Guarantee at least one answer control: with no options, free text
-				// must be offered regardless of the requested flag, otherwise both
-				// surfaces would render only a Skip button and no way to answer.
-				allowFreeText: hasOptions ? input.allowFreeText : true,
-				// multiSelect is only meaningful with options; multiline only with
-				// free text — normalize away impossible combinations.
-				multiSelect: hasOptions ? input.multiSelect : undefined,
-				multiline: hasOptions ? (input.allowFreeText === false ? undefined : input.multiline) : input.multiline,
-			};
+			const questions = input.questions.map(normalizeQuestion);
+			const request: AskRequest = { questions };
 
 			// Optional auto-stop timeout, forwarded to every UI surface (TUI
 			// countdown, RPC/Dashboard). Model-facing units are seconds.
@@ -253,29 +262,22 @@ export function createAskUserToolDefinition(
 
 			// Headless / print / no-host modes: never block on an unreachable UI.
 			if (!ctx?.hasUI) {
-				return unavailableResult(input);
+				return unavailableResult(questions);
 			}
 
-			const runAsk = async () => {
-				// A call whose signal already aborted settles without ever opening
-				// the UI; the parent turn is already stopping.
-				if (signal?.aborted) return unansweredResult(input);
-				try {
-					const answer = await ctx.ui.ask(request, { signal, timeout });
-					if (!answer || (answer.selected.length === 0 && !answer.customText?.trim())) {
-						return unansweredResult(input);
-					}
-					return answeredResult(input, answer);
-				} catch {
-					// Host/protocol failure must still release the queue and never
-					// deadlock, but it must not masquerade as an intentional user skip.
-					return failedResult(input);
-				}
-			};
+			// A call whose signal already aborted settles without ever opening the
+			// UI; the parent turn is already stopping.
+			if (signal?.aborted) return unansweredResult(questions);
 
-			// "tabbed" mode bypasses the FIFO queue so multiple questions can open
-			// concurrently; "sequential" mode serializes them one at a time.
-			return getMode() === "tabbed" ? runAsk() : serialize(runAsk);
+			try {
+				const answer = await ctx.ui.ask(request, { signal, timeout });
+				if (!answer) return unansweredResult(questions);
+				return answeredResult(questions, answer);
+			} catch {
+				// Host/protocol failure must still settle and never deadlock, but it
+				// must not masquerade as an intentional user skip.
+				return failedResult(questions);
+			}
 		},
 
 		renderCall(args, theme, context) {

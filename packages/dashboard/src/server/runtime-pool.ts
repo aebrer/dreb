@@ -650,7 +650,6 @@ export class RuntimePool {
 			isCompacting: previous?.isCompacting ?? false,
 			steeringMode: previous?.steeringMode ?? "all",
 			followUpMode: previous?.followUpMode ?? "all",
-			askUserMode: previous?.askUserMode ?? "sequential",
 			sessionFile: previous?.sessionFile ?? handle.sessionFileFallback,
 			autoCompactionEnabled: previous?.autoCompactionEnabled ?? false,
 			messageCount: previous?.messageCount ?? 0,

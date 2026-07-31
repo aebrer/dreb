@@ -1449,11 +1449,6 @@ export class AgentSession {
 		return this.agent.getFollowUpMode();
 	}
 
-	/** Current ask_user mode */
-	get askUserMode(): "tabbed" | "sequential" {
-		return this.agent.getAskUserMode();
-	}
-
 	/** Current session file path, or undefined if sessions are disabled */
 	get sessionFile(): string | undefined {
 		return this.sessionManager.getSessionFile();
@@ -2356,15 +2351,6 @@ export class AgentSession {
 		this.settingsManager.setFollowUpMode(mode);
 	}
 
-	/**
-	 * Set ask_user mode.
-	 * Saves to settings.
-	 */
-	setAskUserMode(mode: "tabbed" | "sequential"): void {
-		this.agent.setAskUserMode(mode);
-		this.settingsManager.setAskUserMode(mode);
-	}
-
 	// =========================================================================
 	// Compaction
 	// =========================================================================
@@ -3147,9 +3133,6 @@ export class AgentSession {
 			: createAllToolDefinitions(this._cwd, {
 					read: { autoResizeImages },
 					bash: { commandPrefix: shellCommandPrefix },
-					askUser: {
-						getMode: () => this.agent.getAskUserMode(),
-					},
 					skill: {
 						getSkills: () => this._getFilteredSkills(),
 						getSessionId: () => this.sessionId,

@@ -2207,11 +2207,12 @@ details.thinking .thinking-body {
 	outline: none;
 }
 
-/* ------------------------------------------------------------- ask_user dialog */
+/* ------------------------------------------------------------- ask_user wizard */
 
-/* Inline ask card — flows at the end of the transcript so the whole chat area
-   stays scrollable while the agent waits for an answer. */
-.ask-inline {
+/* Multi-question wizard — flows at the end of the transcript so the whole chat
+   area stays scrollable while the agent waits for answers. A single request may
+   carry one or more questions rendered as switchable tabs. */
+.ask-wizard {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
@@ -2225,15 +2226,24 @@ details.thinking .thinking-body {
 	background: color-mix(in srgb, var(--status-attention) 6%, var(--surface, transparent));
 }
 
-/* Tabbed ask_user host (askUserMode: "tabbed") — a strip of switchable pending
-   questions above the active question card. Only shown with 2+ questions. */
-.ask-tabs {
+.ask-wizard-header {
 	display: flex;
-	flex-direction: column;
-	gap: var(--space-1);
-	margin: var(--space-3) 0;
+	align-items: baseline;
+	gap: var(--space-2);
 }
 
+.ask-wizard-title {
+	font-weight: 600;
+	color: var(--text);
+}
+
+.ask-wizard-countdown {
+	font-weight: 400;
+	color: var(--muted);
+}
+
+/* Tab strip — one tab per question plus a trailing Submit/review tab. Only shown
+   when the request carries 2+ questions. */
 .ask-tab-strip {
 	display: flex;
 	flex-wrap: wrap;
@@ -2241,6 +2251,9 @@ details.thinking .thinking-body {
 }
 
 .ask-tab {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
 	border: var(--hairline);
 	border-radius: var(--radius);
 	background: var(--bg);
@@ -2261,42 +2274,44 @@ details.thinking .thinking-body {
 	color: var(--text);
 }
 
+/* Answered-state marker in each tab: ○ unanswered, ● answered. */
+.ask-tab-marker {
+	color: var(--status-running);
+	font-size: var(--fs-small);
+}
+
+.ask-tab-submit {
+	font-weight: 600;
+}
+
 .ask-tab-panel.hidden {
 	display: none;
 }
 
-/* The active question inside the tab host owns the outer margin from .ask-tabs. */
-.ask-tabs .ask-inline {
-	margin: 0;
+/* Compact question panel. */
+.ask-question {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
 }
 
-.ask-inline-header {
+.ask-question-title {
+	margin: 0;
+	font-size: var(--fs-base);
 	font-weight: 600;
 	color: var(--text);
 }
 
-.ask-inline-countdown {
-	font-weight: 400;
-	color: var(--muted);
-}
-
-.ask-inline-question {
-	margin: 0 0 var(--space-2);
+.ask-question-body {
+	margin: 0;
 	color: var(--text);
-}
-
-.ask-inline-actions {
-	display: flex;
-	justify-content: flex-end;
-	gap: var(--space-2);
-	margin-top: var(--space-1);
 }
 
 .ask-options {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
-	margin: 0 0 var(--space-3);
+	margin: 0;
 	padding: 0;
 	border: 0;
 	min-width: 0;
@@ -2341,8 +2356,76 @@ details.thinking .thinking-body {
 	cursor: pointer;
 }
 
+/* Leading 1-9 keyboard hint number for each option. */
+.ask-option-index {
+	flex: 0 0 auto;
+	min-width: 1.4em;
+	text-align: center;
+	color: var(--muted);
+	font-size: var(--fs-small);
+	font-variant-numeric: tabular-nums;
+}
+
+.ask-option-label {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.ask-option-check {
+	flex: 0 0 auto;
+	color: var(--status-running);
+}
+
+.ask-custom-field {
+	margin: 0;
+}
+
 .ask-custom-label {
 	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
+.ask-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-2);
+	margin-top: var(--space-1);
+}
+
+/* Review panel — per-question summary before submitting all answers. */
+.ask-review {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.ask-review-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.ask-review-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: var(--space-2) 0;
+	border-bottom: var(--hairline);
+}
+
+.ask-review-question {
+	font-weight: 600;
+	color: var(--text);
+}
+
+.ask-review-answer {
+	color: var(--text);
+}
+
+.ask-review-answer.muted {
 	color: var(--muted);
 }
 
