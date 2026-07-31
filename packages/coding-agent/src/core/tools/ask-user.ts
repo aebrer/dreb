@@ -4,12 +4,12 @@
  * Lets the agent pause and ask the user a structured clarifying question —
  * with optional multiple-choice options, single- or multi-select, and a
  * "type your own answer" free-text field — rendered natively in the TUI, the
- * Dashboard, and over RPC. Cancelling, skipping, aborting, or timing out
- * always resolves gracefully so the agent never deadlocks on an absent user.
+ * Dashboard, and over RPC. Answering, stopping the turn, aborting, or timing
+ * out always settles cleanly so the agent never deadlocks on an absent user.
  *
  * Concurrent calls are serialized through a per-session FIFO queue: only one
  * question is ever shown at a time, and a queued call whose signal aborts
- * resolves as skipped without opening any UI.
+ * settles without opening any UI.
  */
 
 import { Text } from "@dreb/tui";
@@ -24,7 +24,7 @@ export interface AskUserDetails {
 	title?: string;
 	selected: string[];
 	customText?: string;
-	/** True when the user skipped/cancelled/timed out. */
+	/** True when the question closed without an answer. */
 	skipped: boolean;
 	/** True when no interactive UI was available (headless/print mode). */
 	unavailable: boolean;
@@ -37,7 +37,7 @@ export interface AskUserDetails {
 
 const askUserSchema = Type.Object({
 	question: Type.String({
-		description: "The question to ask the user. Be specific about what you need to decide.",
+		description: "The Markdown-formatted question to ask the user. Be specific about what you need to decide.",
 	}),
 	title: Type.Optional(
 		Type.String({
@@ -71,7 +71,7 @@ const askUserSchema = Type.Object({
 			minimum: 5,
 			maximum: 3600,
 			description:
-				"Optional: auto-skip the question after this many seconds if the user does not respond. " +
+				"Optional: stop the current agent turn after this many seconds if the user does not respond. " +
 				"Shows a live countdown. Omit to wait indefinitely.",
 		}),
 	),
@@ -101,8 +101,8 @@ function unavailableResult(input: AskUserInput) {
 	);
 }
 
-function skippedResult(input: AskUserInput) {
-	return textResult("The user skipped the question without answering. Continue without this input.", {
+function unansweredResult(input: AskUserInput) {
+	return textResult("The question closed without an answer.", {
 		...baseDetails(input),
 		selected: [],
 		skipped: true,
@@ -157,7 +157,7 @@ function formatCall(args: { question?: string; title?: string } | undefined, the
 function formatResult(details: AskUserDetails, theme: any): string {
 	if (details.unavailable) return theme.fg("toolOutput", "no interactive UI — continued without asking");
 	if (details.failed) return theme.fg("toolOutput", "interactive UI failed — continued without an answer");
-	if (details.skipped) return theme.fg("toolOutput", "user skipped");
+	if (details.skipped) return theme.fg("toolOutput", "question closed without an answer");
 	const parts: string[] = [];
 	if (details.selected.length > 0) parts.push(details.selected.join(", "));
 	if (details.customText) parts.push(`"${details.customText}"`);
@@ -202,8 +202,8 @@ export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSche
 			"Do NOT use it for routine confirmation, permission, or things you can reasonably decide yourself",
 			"Provide 2-4 concrete `options` when there are clear candidate answers; the user can always type their own",
 			"Set `multiSelect: true` when several options can be combined; `multiline: true` for open-ended answers",
-			"The user may skip — always handle a skipped answer gracefully and continue with a sensible default",
-			"Prefer one focused question over many; the question blocks the turn until the user responds or skips",
+			"The user may stop the current turn instead of answering; never treat that as an answer",
+			"Prefer one focused question over many; the question blocks the turn until the user responds or stops it",
 		],
 
 		async execute(_toolCallId, input: AskUserInput, signal, _onUpdate, ctx?: ExtensionContext) {
@@ -222,7 +222,7 @@ export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSche
 				multiline: hasOptions ? (input.allowFreeText === false ? undefined : input.multiline) : input.multiline,
 			};
 
-			// Optional auto-skip timeout, forwarded to every UI surface (TUI
+			// Optional auto-stop timeout, forwarded to every UI surface (TUI
 			// countdown, RPC/Dashboard). Model-facing units are seconds.
 			const timeout = input.timeoutSeconds && input.timeoutSeconds > 0 ? input.timeoutSeconds * 1000 : undefined;
 
@@ -232,13 +232,13 @@ export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSche
 			}
 
 			return serialize(async () => {
-				// A queued call whose signal already aborted resolves as skipped
-				// without ever opening the UI.
-				if (signal?.aborted) return skippedResult(input);
+				// A queued call whose signal already aborted settles without ever
+				// opening the UI; the parent turn is already stopping.
+				if (signal?.aborted) return unansweredResult(input);
 				try {
 					const answer = await ctx.ui.ask(request, { signal, timeout });
 					if (!answer || (answer.selected.length === 0 && !answer.customText?.trim())) {
-						return skippedResult(input);
+						return unansweredResult(input);
 					}
 					return answeredResult(input, answer);
 				} catch {

@@ -14,7 +14,7 @@ interface ExecResult {
 	endTurn?: boolean;
 }
 
-/** Build a ctx whose ui.ask returns a scripted answer (or undefined for skip). */
+/** Build a ctx whose ui.ask returns a scripted answer (or undefined when closed). */
 function makeCtx(
 	ask: (request: AskRequest, opts?: { signal?: AbortSignal }) => Promise<AskResult | undefined>,
 	hasUI = true,
@@ -39,7 +39,7 @@ describe("ask_user tool", () => {
 		const guidelines = (def.promptGuidelines as string[]).join(" ").toLowerCase();
 		expect(guidelines).toContain("only");
 		expect(guidelines).toContain("blocked");
-		expect(guidelines).toContain("skip");
+		expect(guidelines).toContain("stop");
 	});
 
 	it("validates option bounds (2-4) and rejects blank options in its schema", () => {
@@ -95,23 +95,23 @@ describe("ask_user tool", () => {
 		expect(result.content[0].text).toBe('The user answered: "my own answer"');
 	});
 
-	it("treats an undefined answer as a graceful skip", async () => {
+	it("reports an undefined host answer as closed without an answer", async () => {
 		const def = createAskUserToolDefinition();
 		const ctx = makeCtx(async () => undefined);
 		const result = await run(def, { question: "Which?" }, ctx);
 		expect(result.details?.skipped).toBe(true);
 		expect(result.details?.unavailable).toBe(false);
-		expect(result.content[0].text).toContain("skipped");
+		expect(result.content[0].text).toContain("closed without an answer");
 	});
 
-	it("treats an empty answer as a skip", async () => {
+	it("treats an empty answer as closed without an answer", async () => {
 		const def = createAskUserToolDefinition();
 		const ctx = makeCtx(async () => ({ selected: [], customText: "   " }));
 		const result = await run(def, { question: "Which?" }, ctx);
 		expect(result.details?.skipped).toBe(true);
 	});
 
-	it("resolves as skipped without opening UI when the signal is already aborted", async () => {
+	it("settles without opening UI when the signal is already aborted", async () => {
 		const def = createAskUserToolDefinition();
 		const ask = vi.fn(async () => ({ selected: ["x"] }));
 		const controller = new AbortController();
@@ -122,7 +122,7 @@ describe("ask_user tool", () => {
 		expect(result.details?.unavailable).toBe(false);
 	});
 
-	it("reports a host failure distinctly from an intentional user skip", async () => {
+	it("reports a host failure distinctly from a question closing", async () => {
 		const def = createAskUserToolDefinition();
 		const ctx = makeCtx(async () => {
 			throw new Error("host exploded");
@@ -131,7 +131,7 @@ describe("ask_user tool", () => {
 		expect(result.details?.failed).toBe(true);
 		expect(result.details?.skipped).toBe(false);
 		expect(result.content[0].text).toContain("interactive UI or response protocol failed");
-		expect(result.content[0].text).not.toContain("user skipped");
+		expect(result.content[0].text).not.toContain("question closed");
 	});
 
 	it("serializes concurrent calls strictly one at a time (FIFO)", async () => {
@@ -301,7 +301,7 @@ describe("ask_user tool", () => {
 
 		const [r1, r2, r3] = await Promise.all([first, second, third]);
 		expect(r1.details?.selected).toEqual(["first"]);
-		// The queued-then-aborted call resolves skipped and never opened the UI.
+		// The queued-then-aborted call settles and never opened the UI.
 		expect(r2.details?.skipped).toBe(true);
 		expect(r2.details?.unavailable).toBe(false);
 		// A later call still advances after the aborted one is dequeued.

@@ -560,6 +560,8 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 		editorContainer: Container;
 		extensionAsk: unknown;
 		restoreEditorComponent: ReturnType<typeof vi.fn>;
+		cancelBackgroundAgents: ReturnType<typeof vi.fn>;
+		restoreQueuedMessagesToEditor: ReturnType<typeof vi.fn>;
 		hideExtensionAsk: unknown;
 	};
 
@@ -569,6 +571,8 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 			editorContainer: new Container(),
 			extensionAsk: undefined,
 			restoreEditorComponent: vi.fn(),
+			cancelBackgroundAgents: vi.fn(),
+			restoreQueuedMessagesToEditor: vi.fn(),
 			hideExtensionAsk: (InteractiveMode as any).prototype.hideExtensionAsk,
 		};
 		return fakeThis;
@@ -596,13 +600,15 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
 	});
 
-	test("Esc skips and resolves undefined without leaving a mounted component", async () => {
+	test("Esc stops the whole agent turn without leaving a mounted component", async () => {
 		const fakeThis = createAskFakeThis();
 		const p = show(fakeThis, { question: "DB?", options: ["a", "b"] });
 		(fakeThis.extensionAsk as any).handleInput("\x1b"); // Esc
 		await expect(p).resolves.toBeUndefined();
 		expect(fakeThis.extensionAsk).toBeUndefined();
 		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+		expect(fakeThis.cancelBackgroundAgents).toHaveBeenCalledTimes(1);
+		expect(fakeThis.restoreQueuedMessagesToEditor).toHaveBeenCalledWith({ abort: true });
 	});
 
 	test("aborting while pending resolves undefined, disposes, and restores the editor (no orphaned promise)", async () => {
@@ -655,18 +661,20 @@ describe("InteractiveMode.showExtensionAsk lifecycle", () => {
 		expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
 	});
 
-	test("a timeout builds a countdown that expires to a skip and disposes the interval", async () => {
+	test("a timeout stops the agent turn and disposes the countdown interval", async () => {
 		vi.useFakeTimers();
 		try {
 			const fakeThis = createAskFakeThis();
 			const p = show(fakeThis, { question: "DB?", options: ["a"] }, { timeout: 3000 });
 			expect(fakeThis.extensionAsk).toBeDefined();
 
-			// The countdown ticks every second and expires at 0 → skip (undefined).
+			// The countdown ticks every second and expires at 0 → stop the turn.
 			vi.advanceTimersByTime(3000);
 			await expect(p).resolves.toBeUndefined();
 			expect(fakeThis.extensionAsk).toBeUndefined();
 			expect(fakeThis.restoreEditorComponent).toHaveBeenCalledTimes(1);
+			expect(fakeThis.cancelBackgroundAgents).toHaveBeenCalledTimes(1);
+			expect(fakeThis.restoreQueuedMessagesToEditor).toHaveBeenCalledWith({ abort: true });
 
 			// Interval disposed: no further ticks drive renders after teardown.
 			const rendersAfter = fakeThis.ui.requestRender.mock.calls.length;

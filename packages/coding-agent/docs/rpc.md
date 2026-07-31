@@ -2014,7 +2014,7 @@ Expected response: `extension_ui_response` with `value` (the edited text) or `ca
 
 #### ask
 
-Ask the user a rich clarifying question with optional single- or multi-select options and an optional free-text field. This powers the built-in `ask_user` tool. `options` (2-4 nonblank strings) is optional; `allowFreeText` (default `true`), `multiSelect`, and `multiline` are optional booleans.
+Ask the user a rich clarifying question with Markdown-formatted question text, optional single- or multi-select options, and an optional free-text field. This powers the built-in `ask_user` tool. `options` (2-4 nonblank strings) is optional; `allowFreeText` (default `true`), `multiSelect`, and `multiline` are optional booleans.
 
 ```json
 {
@@ -2034,7 +2034,7 @@ Ask the user a rich clarifying question with optional single- or multi-select op
 
 `timeout` is the original duration in milliseconds. `expiresAt` is the corresponding absolute Unix timestamp in milliseconds; Dashboard clients should use it for the visible countdown so reload, resync, or drill-in recovery does not restart the full duration.
 
-Expected response: `extension_ui_response` with `selected` (an array of strings, possibly empty) and optional string `customText` (the typed answer), or `cancelled: true` to skip. The client should treat an empty `selected` with no `customText` as a skip. Malformed ask responses are rejected as protocol failures rather than being reported to the model as user skips.
+Expected response: `extension_ui_response` with `selected` (an array of strings) and optional string `customText` (the typed answer). Sending `cancelled: true`, or an empty `selected` with no nonblank `customText`, stops the current agent turn rather than continuing without an answer. A timeout has the same stop semantics. Other malformed ask responses are rejected as protocol failures.
 
 ```json
 { "type": "extension_ui_response", "id": "uuid-5", "selected": ["SQLite"], "customText": "with WAL enabled" }
@@ -2133,7 +2133,7 @@ Responses are sent for dialog methods only (`select`, `confirm`, `input`, `edito
 
 #### Cancellation response (any dialog)
 
-Dismiss any dialog method. The extension receives `undefined` (for select/input/editor) or `false` (for confirm).
+Dismiss any dialog method. The extension receives `undefined` (for select/input/editor) or `false` (for confirm). For `ask`, cancellation returns `undefined` while stopping the current agent turn.
 
 ```json
 {"type": "extension_ui_response", "id": "uuid-3", "cancelled": true}

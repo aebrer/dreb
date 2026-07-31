@@ -11,12 +11,12 @@
  *              free-text field: submit the typed answer;
  *              multi-select: submit all checked options plus any free text
  *   Shift+Enter insert a newline in the multiline free-text field
- *   Esc        skip without answering (always safe)
+ *   Esc        stop the current agent turn
  */
 
-import { Container, Editor, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@dreb/tui";
+import { Container, Editor, type Focusable, getKeybindings, Input, Markdown, Spacer, Text, type TUI } from "@dreb/tui";
 import type { AskRequest, AskResult } from "../../../core/extensions/types.js";
-import { getEditorTheme, theme } from "../theme/theme.js";
+import { getEditorTheme, getMarkdownTheme, theme } from "../theme/theme.js";
 import { CountdownTimer } from "./countdown-timer.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint, rawKeyHint } from "./keybinding-hints.js";
@@ -38,7 +38,7 @@ export class AskUserComponent extends Container implements Focusable {
 	private checked: boolean[];
 
 	private onSubmitCallback: (result: AskResult) => void;
-	private onCancelCallback: () => void;
+	private onStopCallback: () => void;
 
 	private titleText: Text;
 	private baseTitle: string;
@@ -73,7 +73,7 @@ export class AskUserComponent extends Container implements Focusable {
 	constructor(
 		request: AskRequest,
 		onSubmit: (result: AskResult) => void,
-		onCancel: () => void,
+		onStop: () => void,
 		opts?: AskUserComponentOptions,
 	) {
 		super();
@@ -84,7 +84,7 @@ export class AskUserComponent extends Container implements Focusable {
 		this.multiline = request.multiline === true;
 		this.checked = this.options.map(() => false);
 		this.onSubmitCallback = onSubmit;
-		this.onCancelCallback = onCancel;
+		this.onStopCallback = onStop;
 		this.baseTitle = request.title?.trim() || "Question";
 
 		// Start the cursor on the first option, or the free-text field when there
@@ -98,7 +98,7 @@ export class AskUserComponent extends Container implements Focusable {
 		this.addChild(this.titleText);
 		this.addChild(new Spacer(1));
 
-		this.addChild(new Text(theme.fg("text", request.question), 1, 0));
+		this.addChild(new Markdown(request.question, 1, 0, getMarkdownTheme(), undefined, true));
 		this.addChild(new Spacer(1));
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {
@@ -106,7 +106,7 @@ export class AskUserComponent extends Container implements Focusable {
 				opts.timeout,
 				opts.tui,
 				(s) => this.titleText.setText(theme.fg("accent", theme.bold(`${this.baseTitle} (${s}s)`))),
-				() => this.cancel(),
+				() => this.stop(),
 			);
 		}
 
@@ -143,7 +143,7 @@ export class AskUserComponent extends Container implements Focusable {
 		if (this.multiSelect) parts.push(rawKeyHint("Space", "toggle"));
 		parts.push(keyHint("tui.select.confirm", "submit"));
 		if (this.multiline) parts.push(keyHint("tui.input.newLine", "newline"));
-		parts.push(keyHint("tui.select.cancel", "skip"));
+		parts.push(keyHint("tui.select.cancel", "stop agent"));
 		return parts.join("  ");
 	}
 
@@ -207,22 +207,22 @@ export class AskUserComponent extends Container implements Focusable {
 	private submit(editorTextOverride?: string): void {
 		if (this.submitted) return;
 		const answer = this.currentAnswer(editorTextOverride);
-		if (!answer) return; // Nothing to submit yet — Esc skips instead.
+		if (!answer) return; // Nothing to submit yet — Esc stops the turn instead.
 		this.submitted = true;
 		this.onSubmitCallback(answer);
 	}
 
-	private cancel(): void {
+	private stop(): void {
 		if (this.submitted) return;
 		this.submitted = true;
-		this.onCancelCallback();
+		this.onStopCallback();
 	}
 
 	handleInput(keyData: string): void {
 		const kb = getKeybindings();
 
 		if (kb.matches(keyData, "tui.select.cancel")) {
-			this.cancel();
+			this.stop();
 			return;
 		}
 

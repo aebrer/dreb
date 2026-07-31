@@ -440,6 +440,22 @@ describe("createBranchedSession", () => {
 		expect(entries[1].id).toBe(id2);
 	});
 
+	it("preserves the current session name when branching before its metadata entry", () => {
+		const session = SessionManager.inMemory();
+		session.appendMessage(userMsg("question"));
+		const branchPoint = session.appendMessage(assistantMsg("answer"));
+		session.appendSessionInfo("Keep this title");
+
+		session.createBranchedSession(branchPoint);
+
+		expect(session.getSessionName()).toBe("Keep this title");
+		expect(session.getEntries().at(-1)).toMatchObject({
+			type: "session_info",
+			parentId: branchPoint,
+			name: "Keep this title",
+		});
+	});
+
 	it("extracts correct path from branched tree", () => {
 		const session = SessionManager.inMemory();
 
@@ -500,6 +516,32 @@ describe("createBranchedSession", () => {
 				.map((r) => r.id)
 				.filter((id): id is string => typeof id === "string");
 			expect(new Set(entryIds).size).toBe(entryIds.length);
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("persists the current session name when forking before its metadata entry", () => {
+		const tempDir = join(tmpdir(), `session-fork-name-${Date.now()}`);
+		mkdirSync(tempDir, { recursive: true });
+
+		try {
+			const session = SessionManager.create(tempDir, tempDir);
+			session.appendMessage(userMsg("question"));
+			const branchPoint = session.appendMessage(assistantMsg("answer"));
+			session.appendSessionInfo("Keep this title");
+
+			const newFile = session.createBranchedSession(branchPoint);
+			expect(newFile).toBeDefined();
+			expect(session.getSessionName()).toBe("Keep this title");
+
+			const records = readFileSync(newFile!, "utf-8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line));
+			expect(records.filter((record) => record.type === "session_info")).toEqual([
+				expect.objectContaining({ name: "Keep this title" }),
+			]);
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });
 		}

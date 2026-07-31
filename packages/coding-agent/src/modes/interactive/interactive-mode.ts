@@ -2022,6 +2022,11 @@ export class InteractiveMode {
 				() => {
 					opts?.signal?.removeEventListener("abort", onAbort);
 					this.hideExtensionAsk();
+					// The question-level escape action means stop the whole turn, not
+					// continue without an answer. Mirror the default editor's Escape
+					// behavior, including background-agent and queued-message cleanup.
+					this.cancelBackgroundAgents();
+					this.restoreQueuedMessagesToEditor({ abort: true });
 					resolve(undefined);
 				},
 				{ tui: this.ui, timeout: opts?.timeout },

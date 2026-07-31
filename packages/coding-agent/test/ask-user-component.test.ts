@@ -22,20 +22,20 @@ beforeEach(() => {
 
 function mount(request: AskRequest) {
 	const onSubmit = vi.fn<(result: AskResult) => void>();
-	const onCancel = vi.fn<() => void>();
-	const component = new AskUserComponent(request, onSubmit, onCancel);
+	const onStop = vi.fn<() => void>();
+	const component = new AskUserComponent(request, onSubmit, onStop);
 	component.focused = true;
-	return { component, onSubmit, onCancel };
+	return { component, onSubmit, onStop };
 }
 
 /** Mount with a real TUI so the multiline `Editor` branch is exercised. */
 function mountWithTui(request: AskRequest) {
 	const tui = new TUI(new VirtualTerminal(80, 24));
 	const onSubmit = vi.fn<(result: AskResult) => void>();
-	const onCancel = vi.fn<() => void>();
-	const component = new AskUserComponent(request, onSubmit, onCancel, { tui });
+	const onStop = vi.fn<() => void>();
+	const component = new AskUserComponent(request, onSubmit, onStop, { tui });
 	component.focused = true;
-	return { component, onSubmit, onCancel, tui };
+	return { component, onSubmit, onStop, tui };
 }
 
 function type(component: AskUserComponent, text: string) {
@@ -43,6 +43,15 @@ function type(component: AskUserComponent, text: string) {
 }
 
 describe("AskUserComponent", () => {
+	it("renders the question with the existing TUI Markdown component", () => {
+		const { component } = mount({ question: "Use **bold** and `code`", options: ["A", "B"] });
+		const rendered = component.render(80).join("\n");
+		expect(rendered).toContain("bold");
+		expect(rendered).toContain("code");
+		expect(rendered).not.toContain("**bold**");
+		expect(rendered).not.toContain("`code`");
+	});
+
 	it("single-select: Enter picks the highlighted option and submits", () => {
 		const { component, onSubmit } = mount({ question: "DB?", options: ["SQLite", "Postgres", "JSON"] });
 		component.handleInput(DOWN); // move to Postgres
@@ -99,14 +108,14 @@ describe("AskUserComponent", () => {
 		expect(onSubmit).toHaveBeenCalledWith({ selected: ["unit"], customText: "lint" });
 	});
 
-	it("Esc skips without answering", () => {
-		const { component, onSubmit, onCancel } = mount({ question: "DB?", options: ["a", "b"] });
+	it("Esc requests that the current agent turn stop", () => {
+		const { component, onSubmit, onStop } = mount({ question: "DB?", options: ["a", "b"] });
 		component.handleInput(ESC);
-		expect(onCancel).toHaveBeenCalledTimes(1);
+		expect(onStop).toHaveBeenCalledTimes(1);
 		expect(onSubmit).not.toHaveBeenCalled();
 	});
 
-	it("ignores Enter on an empty free-text field (Esc is the way to skip)", () => {
+	it("ignores Enter on an empty free-text field (Esc stops the turn)", () => {
 		const { component, onSubmit } = mount({ question: "Name?" });
 		// Free-text-only question: cursor starts on the field, which is empty.
 		component.handleInput(ENTER);

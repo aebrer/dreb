@@ -1007,7 +1007,7 @@ export function createAppStore() {
 		dismissToast,
 		/**
 		 * Optimistically dismiss an extension UI request (ask/select/confirm/…)
-		 * as soon as the user answers or skips, so the dialog disappears
+		 * as soon as the user answers, so the dialog disappears
 		 * immediately without waiting for a server round-trip or the next
 		 * agent_start. Safe to call for an already-removed id (no-op).
 		 */

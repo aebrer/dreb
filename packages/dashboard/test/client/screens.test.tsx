@@ -1089,7 +1089,7 @@ describe("screen smoke tests", () => {
 				id: "a1",
 				method: "ask",
 				title: "Choose validation",
-				question: "Which checks?",
+				question: "Which **checks**?\n\nUse `fast` validation.",
 				options: ["unit", "browser"],
 				multiSelect: true,
 				allowFreeText: true,
@@ -1104,7 +1104,10 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(el.textContent).toContain("Which checks?");
+		const question = el.querySelector(".ask-inline-question");
+		expect(question?.querySelector("strong")?.textContent).toBe("checks");
+		expect(question?.querySelector("code")?.textContent).toBe("fast");
+		expect(question?.textContent).not.toContain("**");
 		// ask_user renders inline in the transcript flow (scrollable), not as a
 		// blocking modal overlay.
 		expect(el.querySelector(".chat-inner .ask-inline")).not.toBeNull();
@@ -1135,7 +1138,8 @@ describe("screen smoke tests", () => {
 		);
 	});
 
-	it("ask_user dialog: single-select renders radios and skip cancels", async () => {
+	it("ask_user dialog: single-select keeps stop-agent accessible in the mobile question card", async () => {
+		stubMobile(true);
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask2");
 		session.uiRequests = [{ id: "a2", method: "ask", title: "Pick", question: "Which one?", options: ["A", "B"] }];
@@ -1145,52 +1149,50 @@ describe("screen smoke tests", () => {
 			fleet: () => ({ runtimes: [], diskSessions: [] }),
 			hydrateSession: async () => {},
 		};
+		vi.mocked(api.abort).mockClear();
+		vi.mocked(api.extensionUiResponse).mockClear();
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask2" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
 		const radios = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="radio"]');
 		expect(radios.length).toBe(2);
 
-		vi.mocked(api.extensionUiResponse).mockClear();
-		const skip = [...el.querySelectorAll("button")].find((b) => b.textContent === "skip");
-		skip?.click();
+		const stop = [...el.querySelectorAll("button")].find((button) => button.textContent === "■ stop agent");
+		stop?.click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
-			"k-ask2",
-			expect.objectContaining({ type: "extension_ui_response", id: "a2", cancelled: true }),
-		);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledWith("k-ask2");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
 	});
 
-	it("keeps an ask request recoverable when sending the response fails", async () => {
+	it("keeps the stop-agent action available when aborting fails", async () => {
 		const store = makeStore() as any;
-		const session = createSessionViewState("k-ask-retry");
+		const session = createSessionViewState("k-ask-stop-retry");
 		session.uiRequests = [
-			{ id: "a-retry", method: "ask", title: "Retry", question: "Still there?", options: ["A", "B"] },
+			{ id: "a-stop-retry", method: "ask", title: "Retry", question: "Still there?", options: ["A", "B"] },
 		];
-		const resolveUiRequest = vi.fn();
 		const fakeStore = {
 			...store,
-			sessions: { "k-ask-retry": session },
+			sessions: { "k-ask-stop-retry": session },
 			fleet: () => ({ runtimes: [], diskSessions: [] }),
 			hydrateSession: async () => {},
-			resolveUiRequest,
 		};
-		vi.mocked(api.extensionUiResponse).mockRejectedValueOnce(new Error("offline"));
-		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-retry" />);
+		vi.mocked(api.abort).mockClear();
+		vi.mocked(api.abort).mockRejectedValueOnce(new Error("offline"));
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-stop-retry" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		const skip = [...el.querySelectorAll("button")].find((button) => button.textContent === "skip");
-		skip?.click();
+		const stop = [...el.querySelectorAll("button")].find((button) => button.textContent === "■ stop agent");
+		stop?.click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(resolveUiRequest).not.toHaveBeenCalled();
 		expect(el.querySelector(".ask-inline")).not.toBeNull();
 		expect(el.textContent).toContain("offline");
+		expect(stop?.disabled).toBe(false);
 
-		vi.mocked(api.extensionUiResponse).mockResolvedValueOnce({ ok: true });
-		skip?.click();
+		vi.mocked(api.abort).mockResolvedValueOnce({});
+		stop?.click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(resolveUiRequest).toHaveBeenCalledWith("k-ask-retry", "a-retry");
+		expect(vi.mocked(api.abort)).toHaveBeenCalledTimes(2);
 	});
 
 	it("retains a selected + typed answer across a failed send and resends it on retry", async () => {
@@ -1287,7 +1289,7 @@ describe("screen smoke tests", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	});
 
-	it("skips an ask request when Escape is pressed and shows a timeout countdown", async () => {
+	it("stops the agent when Escape is pressed and shows a timeout countdown", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-esc");
 		session.uiRequests = [
@@ -1306,23 +1308,22 @@ describe("screen smoke tests", () => {
 			fleet: () => ({ runtimes: [], diskSessions: [] }),
 			hydrateSession: async () => {},
 		};
+		vi.mocked(api.abort).mockClear();
 		vi.mocked(api.extensionUiResponse).mockClear();
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-esc" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		// A visible auto-skip countdown mirrors the TUI.
-		expect(el.textContent).toContain("auto-skips in");
+		// A visible auto-stop countdown mirrors the TUI.
+		expect(el.textContent).toContain("auto-stops in");
 
-		// Escape skips, matching the TUI keyboard model.
+		// Escape stops the whole turn, matching the explicit card action.
 		window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
-			"k-ask-esc",
-			expect.objectContaining({ type: "extension_ui_response", id: "a-esc", cancelled: true }),
-		);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledWith("k-ask-esc");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
 	});
 
-	it("auto-skips an ask request exactly once when the client-side countdown reaches zero", async () => {
+	it("auto-stops an ask request exactly once when the client-side countdown reaches zero", async () => {
 		vi.useFakeTimers();
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-timeout");
@@ -1342,25 +1343,24 @@ describe("screen smoke tests", () => {
 			fleet: () => ({ runtimes: [], diskSessions: [] }),
 			hydrateSession: async () => {},
 		};
+		vi.mocked(api.abort).mockClear();
 		vi.mocked(api.extensionUiResponse).mockClear();
 		mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-timeout" />);
 		await vi.advanceTimersByTimeAsync(0);
 
 		// Not yet fired one tick before the deadline.
 		await vi.advanceTimersByTimeAsync(29_000);
+		expect(vi.mocked(api.abort)).not.toHaveBeenCalled();
+
+		// The countdown backstop stops the whole turn exactly once at zero.
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledWith("k-ask-timeout");
 		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
 
-		// The countdown backstop auto-skips with a single cancelled response at zero.
-		await vi.advanceTimersByTimeAsync(1_000);
-		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
-		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
-			"k-ask-timeout",
-			expect.objectContaining({ type: "extension_ui_response", id: "a-timeout", cancelled: true }),
-		);
-
-		// clearInterval on fire prevents any repeated auto-skip.
+		// clearInterval on fire prevents any repeated stop request.
 		await vi.advanceTimersByTimeAsync(60_000);
-		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledTimes(1);
 	});
 
 	it("uses the authoritative remaining deadline after a timed ask is recovered", async () => {
@@ -1386,19 +1386,18 @@ describe("screen smoke tests", () => {
 			fleet: () => ({ runtimes: [], diskSessions: [] }),
 			hydrateSession: async () => {},
 		};
+		vi.mocked(api.abort).mockClear();
 		vi.mocked(api.extensionUiResponse).mockClear();
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-recovered-timeout" />);
 		await vi.advanceTimersByTimeAsync(0);
 
-		expect(el.textContent).toContain("auto-skips in 5s");
+		expect(el.textContent).toContain("auto-stops in 5s");
 		await vi.advanceTimersByTimeAsync(4_000);
-		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+		expect(vi.mocked(api.abort)).not.toHaveBeenCalled();
 		await vi.advanceTimersByTimeAsync(1_000);
-		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
-		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
-			"k-ask-recovered-timeout",
-			expect.objectContaining({ type: "extension_ui_response", id: "a-recovered-timeout", cancelled: true }),
-		);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.abort)).toHaveBeenCalledWith("k-ask-recovered-timeout");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
 	});
 
 	it("ask_user tool card stays collapsed while running (unlike other running tools)", async () => {

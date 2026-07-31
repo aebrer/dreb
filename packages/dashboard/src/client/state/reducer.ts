@@ -119,7 +119,7 @@ export interface ExtensionUiRequest {
 	multiSelect?: boolean;
 	/** ask: use a multi-line text area for free text. */
 	multiline?: boolean;
-	/** ask: original auto-skip duration in milliseconds. */
+	/** ask: original auto-stop duration in milliseconds. */
 	timeout?: number;
 	/** ask: absolute runtime deadline; survives reload/resync/drill-in recovery. */
 	expiresAt?: number;

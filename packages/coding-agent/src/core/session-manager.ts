@@ -1223,6 +1223,16 @@ export class SessionManager {
 		// Filter out LabelEntry from path - we'll recreate them from the resolved map
 		const pathWithoutLabels = path.filter((e) => e.type !== "label");
 
+		// Session names are current-session metadata, not conversation content. A
+		// branch may intentionally stop before the latest session_info entry (for
+		// example when recovering from an aborted turn), but that must not silently
+		// erase the generated or manually assigned name.
+		const latestSessionInfo = [...this.fileEntries]
+			.reverse()
+			.find((entry): entry is SessionInfoEntry => entry.type === "session_info");
+		const carrySessionInfo =
+			latestSessionInfo !== undefined && !pathWithoutLabels.some((entry) => entry.id === latestSessionInfo.id);
+
 		const newSessionId = randomUUID();
 		const timestamp = new Date().toISOString();
 		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
@@ -1264,8 +1274,23 @@ export class SessionManager {
 				labelEntries.push(labelEntry);
 				parentId = labelEntry.id;
 			}
+			const inheritedSessionInfo: SessionInfoEntry | undefined =
+				carrySessionInfo && latestSessionInfo !== undefined
+					? {
+							type: "session_info",
+							id: generateId(new Set(pathEntryIds)),
+							parentId,
+							timestamp: new Date().toISOString(),
+							name: latestSessionInfo.name,
+						}
+					: undefined;
 
-			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+			this.fileEntries = [
+				header,
+				...pathWithoutLabels,
+				...labelEntries,
+				...(inheritedSessionInfo ? [inheritedSessionInfo] : []),
+			];
 			this.sessionId = newSessionId;
 			this.sessionFile = newSessionFile;
 			this._buildIndex();
@@ -1301,7 +1326,22 @@ export class SessionManager {
 			labelEntries.push(labelEntry);
 			parentId = labelEntry.id;
 		}
-		this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+		const inheritedSessionInfo: SessionInfoEntry | undefined =
+			carrySessionInfo && latestSessionInfo !== undefined
+				? {
+						type: "session_info",
+						id: generateId(new Set([...pathEntryIds, ...labelEntries.map((entry) => entry.id)])),
+						parentId,
+						timestamp: new Date().toISOString(),
+						name: latestSessionInfo.name,
+					}
+				: undefined;
+		this.fileEntries = [
+			header,
+			...pathWithoutLabels,
+			...labelEntries,
+			...(inheritedSessionInfo ? [inheritedSessionInfo] : []),
+		];
 		this.sessionId = newSessionId;
 		this._buildIndex();
 		return undefined;
