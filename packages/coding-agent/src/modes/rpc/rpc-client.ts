@@ -491,6 +491,13 @@ export class RpcClient {
 	}
 
 	/**
+	 * Set ask_user mode.
+	 */
+	async setAskUserMode(mode: "tabbed" | "sequential"): Promise<void> {
+		await this.send({ type: "set_ask_user_mode", mode });
+	}
+
+	/**
 	 * Get pending steering and follow-up messages without clearing them.
 	 */
 	async getPendingMessages(): Promise<RpcPendingMessages> {

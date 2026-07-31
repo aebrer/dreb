@@ -44,6 +44,7 @@ export interface SettingsConfig {
 	enableSkillCommands: boolean;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";
+	askUserMode: "tabbed" | "sequential";
 	transport: Transport;
 	thinkingLevel: ThinkingLevel;
 	availableThinkingLevels: ThinkingLevel[];
@@ -80,6 +81,7 @@ export interface SettingsCallbacks {
 	onEnableSkillCommandsChange: (enabled: boolean) => void;
 	onSteeringModeChange: (mode: "all" | "one-at-a-time") => void;
 	onFollowUpModeChange: (mode: "all" | "one-at-a-time") => void;
+	onAskUserModeChange: (mode: "tabbed" | "sequential") => void;
 	onTransportChange: (transport: Transport) => void;
 	onThinkingLevelChange: (level: ThinkingLevel) => void;
 	onThemeChange: (theme: string) => void;
@@ -485,6 +487,14 @@ export class SettingsSelectorComponent extends Container {
 				values: ["one-at-a-time", "all"],
 			},
 			{
+				id: "ask-user-mode",
+				label: "ask_user mode",
+				description:
+					"How concurrent ask_user questions are shown. 'sequential': strict one-at-a-time FIFO. 'tabbed': multiple questions open concurrently as switchable tabs.",
+				currentValue: config.askUserMode,
+				values: ["sequential", "tabbed"],
+			},
+			{
 				id: "transport",
 				label: "Transport",
 				description: "Preferred transport for providers that support multiple transports",
@@ -793,6 +803,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "follow-up-mode":
 						callbacks.onFollowUpModeChange(newValue as "all" | "one-at-a-time");
+						break;
+					case "ask-user-mode":
+						callbacks.onAskUserModeChange(newValue as "tabbed" | "sequential");
 						break;
 					case "transport":
 						callbacks.onTransportChange(newValue as Transport);

@@ -3930,6 +3930,7 @@ export class InteractiveMode {
 					enableSkillCommands: this.settingsManager.getEnableSkillCommands(),
 					steeringMode: this.session.steeringMode,
 					followUpMode: this.session.followUpMode,
+					askUserMode: this.session.askUserMode,
 					transport: this.settingsManager.getTransport(),
 					thinkingLevel: this.session.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
@@ -3988,6 +3989,9 @@ export class InteractiveMode {
 					},
 					onFollowUpModeChange: (mode) => {
 						this.session.setFollowUpMode(mode);
+					},
+					onAskUserModeChange: (mode) => {
+						this.session.setAskUserMode(mode);
 					},
 					onTransportChange: (transport) => {
 						this.settingsManager.setTransport(transport);

@@ -16,6 +16,19 @@ import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import type { AskRequest, AskResult, ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
+/**
+ * How concurrent `ask_user` calls are surfaced:
+ * - `"sequential"`: strict per-session FIFO — only one question is ever open at
+ *   a time (today's behavior).
+ * - `"tabbed"`: allow multiple questions to open concurrently (switchable tabs).
+ */
+export type AskUserMode = "tabbed" | "sequential";
+
+export interface AskUserToolOptions {
+	/** Read the current ask_user mode. Defaults to "sequential" when omitted. */
+	getMode?: () => AskUserMode;
+}
+
 // ============================================================================
 // Types
 
@@ -168,12 +181,24 @@ function formatResult(details: AskUserDetails, theme: any): string {
 // Tool definition factory
 
 /**
- * Create an `ask_user` tool definition. Each call creates an isolated FIFO
- * queue, so concurrent `ask_user` calls in a single session are shown strictly
- * one at a time.
+ * Create an `ask_user` tool definition.
+ *
+ * In `"sequential"` mode (the default), each definition owns an isolated
+ * per-session FIFO queue, so concurrent `ask_user` calls in a single session
+ * are shown strictly one at a time. In `"tabbed"` mode the queue is bypassed
+ * so multiple questions can open concurrently; the surrounding UI hosts them as
+ * switchable tabs. Either way, every path — answer, skip, empty, abort, or host
+ * failure — settles gracefully and never orphans a promise.
+ *
+ * The mode is read fresh on each `execute()` via `options.getMode`, so a
+ * runtime settings change takes effect for subsequent questions.
  */
-export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSchema, AskUserDetails | undefined> {
-	// Per-session serialization: only one question is ever open at a time.
+export function createAskUserToolDefinition(
+	options?: AskUserToolOptions,
+): ToolDefinition<typeof askUserSchema, AskUserDetails | undefined> {
+	const getMode = options?.getMode ?? (() => "sequential" as AskUserMode);
+	// Per-session serialization ("sequential" mode): only one question is ever
+	// open at a time.
 	let tail: Promise<void> = Promise.resolve();
 	const serialize = <T>(run: () => Promise<T>): Promise<T> => {
 		const result = tail.then(run, run);
@@ -231,9 +256,9 @@ export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSche
 				return unavailableResult(input);
 			}
 
-			return serialize(async () => {
-				// A queued call whose signal already aborted settles without ever
-				// opening the UI; the parent turn is already stopping.
+			const runAsk = async () => {
+				// A call whose signal already aborted settles without ever opening
+				// the UI; the parent turn is already stopping.
 				if (signal?.aborted) return unansweredResult(input);
 				try {
 					const answer = await ctx.ui.ask(request, { signal, timeout });
@@ -246,7 +271,11 @@ export function createAskUserToolDefinition(): ToolDefinition<typeof askUserSche
 					// deadlock, but it must not masquerade as an intentional user skip.
 					return failedResult(input);
 				}
-			});
+			};
+
+			// "tabbed" mode bypasses the FIFO queue so multiple questions can open
+			// concurrently; "sequential" mode serializes them one at a time.
+			return getMode() === "tabbed" ? runAsk() : serialize(runAsk);
 		},
 
 		renderCall(args, theme, context) {

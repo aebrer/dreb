@@ -201,6 +201,7 @@ Response:
     "isCompacting": false,
     "steeringMode": "all",
     "followUpMode": "one-at-a-time",
+    "askUserMode": "sequential",
     "sessionFile": "/path/to/session.jsonl",
     "sessionId": "abc123",
     "sessionName": "my-feature-work",
@@ -518,6 +519,25 @@ Response:
 ```json
 {"type": "response", "command": "set_follow_up_mode", "success": true}
 ```
+
+#### set_ask_user_mode
+
+Control how concurrent `ask_user` questions are surfaced.
+
+```json
+{"type": "set_ask_user_mode", "mode": "sequential"}
+```
+
+Modes:
+- `"sequential"`: Strict one-at-a-time FIFO — only one question is ever open at a time (default)
+- `"tabbed"`: Allow multiple concurrent questions, surfaced as switchable tabs
+
+Response:
+```json
+{"type": "response", "command": "set_ask_user_mode", "success": true}
+```
+
+Like the other runtime setters, this also persists the value as the new default.
 
 #### get_pending_messages
 
@@ -1248,7 +1268,7 @@ Persistent settings, backed by the settings file (see [settings.md](settings.md)
 - **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
 - **Global nested-context trust policy** (`autoLoadNestedContext`, `trustedContextFolders`, `effectiveTrustedContextRoots`, and the trust commands below): this is read from `~/.dreb/agent/settings.json` only, never project settings. Active main/subagent processes observe it for **future lazy nested/out-of-cwd loads**; it cannot remove content already injected into a conversation. It does not govern the separate initial upward context scan from the launch cwd.
 - **Global Dispatch Arbiter policy** (`subagentArbiter`): the complete object is read/written globally and project settings cannot shadow it. Enabled runtimes consume it before future subagent spawns; it does not rewrite already-started children.
-- **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
+- **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_ask_user_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
 
 A dashboard settings tab typically reads `get_state` for what is active now and `get_settings` for persistent defaults plus the current global context-trust policy.
 
@@ -1272,6 +1292,7 @@ Response:
     "defaultThinkingLevel": "high",
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
+    "askUserMode": "sequential",
     "compactionEnabled": true,
     "retryEnabled": true,
     "imageAutoResize": true,
@@ -1360,6 +1381,7 @@ Response is the full settings snapshot after the write (same shape as `get_setti
     "defaultThinkingLevel": "low",
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
+    "askUserMode": "sequential",
     "compactionEnabled": true,
     "retryEnabled": false,
     "imageAutoResize": true,
@@ -1385,6 +1407,7 @@ Project-shadow warning example (the global write still lands, but the returned m
   "data": {
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
+    "askUserMode": "sequential",
     "compactionEnabled": true,
     "retryEnabled": true,
     "imageAutoResize": true,
@@ -1413,6 +1436,7 @@ Valid keys and values:
 | `defaultThinkingLevel` | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` (validated against the full set — a stored default is not tied to the current model's capabilities) |
 | `steeringMode` | `"all"`, `"one-at-a-time"` |
 | `followUpMode` | `"all"`, `"one-at-a-time"` |
+| `askUserMode` | `"sequential"`, `"tabbed"` |
 | `compactionEnabled` | boolean |
 | `retryEnabled` | boolean |
 | `imageAutoResize` | boolean |

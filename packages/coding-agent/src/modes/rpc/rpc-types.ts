@@ -58,6 +58,7 @@ export type RpcCommand =
 	// Queue modes
 	| { id?: string; type: "set_steering_mode"; mode: "all" | "one-at-a-time" }
 	| { id?: string; type: "set_follow_up_mode"; mode: "all" | "one-at-a-time" }
+	| { id?: string; type: "set_ask_user_mode"; mode: "tabbed" | "sequential" }
 	| { id?: string; type: "get_pending_messages" }
 	| { id?: string; type: "clear_pending_messages" }
 
@@ -215,6 +216,7 @@ export interface RpcSessionState {
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";
+	askUserMode: "tabbed" | "sequential";
 	sessionFile?: string;
 	sessionId: string;
 	sessionName?: string;
@@ -312,6 +314,7 @@ export type RpcResponse =
 	// Queue modes
 	| { id?: string; type: "response"; command: "set_steering_mode"; success: true }
 	| { id?: string; type: "response"; command: "set_follow_up_mode"; success: true }
+	| { id?: string; type: "response"; command: "set_ask_user_mode"; success: true }
 	| { id?: string; type: "response"; command: "get_pending_messages"; success: true; data: RpcPendingMessages }
 	| { id?: string; type: "response"; command: "clear_pending_messages"; success: true; data: RpcPendingMessages }
 
@@ -553,6 +556,8 @@ export interface RpcSettingsSnapshot {
 	steeringMode: "all" | "one-at-a-time";
 	/** How queued follow-up messages are delivered */
 	followUpMode: "all" | "one-at-a-time";
+	/** How concurrent ask_user questions are surfaced */
+	askUserMode: "tabbed" | "sequential";
 	/** Whether automatic context compaction is enabled */
 	compactionEnabled: boolean;
 	/** Whether automatic retry on transient errors is enabled */
@@ -621,6 +626,7 @@ export interface RpcSettingsUpdate {
 	defaultThinkingLevel?: ThinkingLevel;
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
+	askUserMode?: "tabbed" | "sequential";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
 	imageAutoResize?: boolean;

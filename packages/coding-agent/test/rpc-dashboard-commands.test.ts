@@ -401,6 +401,7 @@ describe("RpcClient dashboard command methods", () => {
 				isCompacting: false,
 				steeringMode: "all",
 				followUpMode: "all",
+				askUserMode: "sequential",
 				sessionId: "session-1",
 				autoCompactionEnabled: false,
 				messageCount: 0,

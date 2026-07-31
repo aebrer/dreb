@@ -168,6 +168,7 @@ export function getStateForRpc(session: AgentSession, modelFallbackMessage?: str
 		isCompacting: session.isCompacting,
 		steeringMode: session.steeringMode,
 		followUpMode: session.followUpMode,
+		askUserMode: session.askUserMode,
 		sessionFile: session.sessionFile,
 		sessionId: session.sessionId,
 		sessionName: session.sessionName,
@@ -252,6 +253,7 @@ type SettingsReader = Pick<
 	| "getDefaultThinkingLevel"
 	| "getSteeringMode"
 	| "getFollowUpMode"
+	| "getAskUserMode"
 	| "getCompactionEnabled"
 	| "getRetryEnabled"
 	| "getImageAutoResize"
@@ -278,6 +280,7 @@ type SettingsWriter = SettingsRefresher &
 		| "setDefaultThinkingLevel"
 		| "setSteeringMode"
 		| "setFollowUpMode"
+		| "setAskUserMode"
 		| "setCompactionEnabled"
 		| "setRetryEnabled"
 		| "setImageAutoResize"
@@ -312,6 +315,7 @@ export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsS
 		defaultThinkingLevel: settingsManager.getDefaultThinkingLevel(),
 		steeringMode: settingsManager.getSteeringMode(),
 		followUpMode: settingsManager.getFollowUpMode(),
+		askUserMode: settingsManager.getAskUserMode(),
 		compactionEnabled: settingsManager.getCompactionEnabled(),
 		retryEnabled: settingsManager.getRetryEnabled(),
 		imageAutoResize: settingsManager.getImageAutoResize(),
@@ -389,6 +393,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"defaultThinkingLevel",
 	"steeringMode",
 	"followUpMode",
+	"askUserMode",
 	"compactionEnabled",
 	"retryEnabled",
 	"imageAutoResize",
@@ -403,6 +408,7 @@ const SETTINGS_UPDATE_KEYS = [
 ] as const;
 
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
+const ASK_USER_MODES = ["tabbed", "sequential"] as const;
 const TRANSPORT_SETTINGS = ["sse", "websocket", "auto"] as const satisfies readonly TransportSetting[];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -690,6 +696,18 @@ export async function setSettingsForRpc(
 		}
 	}
 
+	// askUserMode has its own value set — do NOT fold it into the QUEUE_MODES
+	// loop above, which would reject "tabbed"/"sequential".
+	if (
+		update.askUserMode !== undefined &&
+		!(ASK_USER_MODES as readonly string[]).includes(update.askUserMode as string)
+	) {
+		return {
+			ok: false,
+			error: `Invalid askUserMode: ${JSON.stringify(update.askUserMode)}. Valid values: ${ASK_USER_MODES.join(", ")}`,
+		};
+	}
+
 	for (const key of [
 		"compactionEnabled",
 		"retryEnabled",
@@ -852,6 +870,9 @@ export async function setSettingsForRpc(
 			}
 			if (update.followUpMode !== undefined) {
 				settingsManager.setFollowUpMode(update.followUpMode);
+			}
+			if (update.askUserMode !== undefined) {
+				settingsManager.setAskUserMode(update.askUserMode);
 			}
 			if (update.compactionEnabled !== undefined) {
 				settingsManager.setCompactionEnabled(update.compactionEnabled);
@@ -1680,6 +1701,11 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			case "set_follow_up_mode": {
 				session.setFollowUpMode(command.mode);
 				return success(id, "set_follow_up_mode");
+			}
+
+			case "set_ask_user_mode": {
+				session.setAskUserMode(command.mode);
+				return success(id, "set_ask_user_mode");
 			}
 
 			case "get_pending_messages": {

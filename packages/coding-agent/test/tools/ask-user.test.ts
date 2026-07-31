@@ -311,6 +311,145 @@ describe("ask_user tool", () => {
 		expect(asked).toEqual(["first", "third"]);
 	});
 
+	it("serializes concurrent calls by default when no mode getter is provided (sequential)", async () => {
+		// Omitting options entirely must preserve today's strict FIFO behavior.
+		const def = createAskUserToolDefinition();
+		let active = 0;
+		let maxActive = 0;
+		const ctx = makeCtx(async (request) => {
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			await new Promise((r) => setTimeout(r, 10));
+			active -= 1;
+			return { selected: [request.question] };
+		});
+		await Promise.all([
+			run(def, { question: "a" }, ctx),
+			run(def, { question: "b" }, ctx),
+			run(def, { question: "c" }, ctx),
+		]);
+		expect(maxActive).toBe(1);
+	});
+
+	it("serializes concurrent calls in explicit sequential mode (parity with today)", async () => {
+		const def = createAskUserToolDefinition({ getMode: () => "sequential" });
+		let active = 0;
+		let maxActive = 0;
+		const order: string[] = [];
+		const ctx = makeCtx(async (request) => {
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			await new Promise((r) => setTimeout(r, 10));
+			order.push(request.question);
+			active -= 1;
+			return { selected: [request.question] };
+		});
+		const results = await Promise.all([
+			run(def, { question: "first" }, ctx),
+			run(def, { question: "second" }, ctx),
+			run(def, { question: "third" }, ctx),
+		]);
+		expect(maxActive).toBe(1);
+		expect(order).toEqual(["first", "second", "third"]);
+		expect(results.map((r) => r.details?.selected?.[0])).toEqual(["first", "second", "third"]);
+	});
+
+	it("allows concurrent open questions in tabbed mode", async () => {
+		const def = createAskUserToolDefinition({ getMode: () => "tabbed" });
+		let active = 0;
+		let maxActive = 0;
+		let releaseAll!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			releaseAll = resolve;
+		});
+		const ctx = makeCtx(async (request) => {
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			await gate; // hold every question open simultaneously
+			active -= 1;
+			return { selected: [request.question] };
+		});
+		const all = Promise.all([
+			run(def, { question: "first" }, ctx),
+			run(def, { question: "second" }, ctx),
+			run(def, { question: "third" }, ctx),
+		]);
+		// Let all three open before any resolves.
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(maxActive).toBe(3);
+		releaseAll();
+		const results = await all;
+		expect(results.map((r) => r.details?.selected?.[0])).toEqual(["first", "second", "third"]);
+	});
+
+	it("reads the mode fresh on each execute so a runtime change takes effect", async () => {
+		let mode: "tabbed" | "sequential" = "sequential";
+		const def = createAskUserToolDefinition({ getMode: () => mode });
+		let active = 0;
+		let maxActive = 0;
+		let release!: () => void;
+		let gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const ctx = makeCtx(async (request) => {
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			await gate;
+			active -= 1;
+			return { selected: [request.question] };
+		});
+		// Switch to tabbed before dispatching — both should open concurrently.
+		mode = "tabbed";
+		const all = Promise.all([run(def, { question: "a" }, ctx), run(def, { question: "b" }, ctx)]);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(maxActive).toBe(2);
+		release();
+		await all;
+		// Back to sequential — the queue must serialize again.
+		mode = "sequential";
+		active = 0;
+		maxActive = 0;
+		gate = Promise.resolve();
+		await Promise.all([run(def, { question: "c" }, ctx), run(def, { question: "d" }, ctx)]);
+		expect(maxActive).toBe(1);
+	});
+
+	it("still settles every exit path gracefully in tabbed mode (skip/empty/abort/host-failure)", async () => {
+		const def = createAskUserToolDefinition({ getMode: () => "tabbed" });
+		// closed without answer
+		const closed = await run(
+			def,
+			{ question: "q1" },
+			makeCtx(async () => undefined),
+		);
+		expect(closed.details?.skipped).toBe(true);
+		expect(closed.details?.unavailable).toBe(false);
+		// empty answer
+		const empty = await run(
+			def,
+			{ question: "q2" },
+			makeCtx(async () => ({ selected: [], customText: "  " })),
+		);
+		expect(empty.details?.skipped).toBe(true);
+		// host failure
+		const failed = await run(
+			def,
+			{ question: "q3" },
+			makeCtx(async () => {
+				throw new Error("boom");
+			}),
+		);
+		expect(failed.details?.failed).toBe(true);
+		expect(failed.details?.skipped).toBe(false);
+		// already-aborted signal never opens UI
+		const ask = vi.fn(async () => ({ selected: ["x"] }));
+		const controller = new AbortController();
+		controller.abort();
+		const aborted = await run(def, { question: "q4" }, makeCtx(ask), controller.signal);
+		expect(ask).not.toHaveBeenCalled();
+		expect(aborted.details?.skipped).toBe(true);
+	});
+
 	it("renders a call and result without throwing", () => {
 		const def = createAskUserToolDefinition();
 		const call = def.renderCall?.(

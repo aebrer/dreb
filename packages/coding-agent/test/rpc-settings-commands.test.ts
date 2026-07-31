@@ -57,6 +57,7 @@ describe("getSettingsForRpc", () => {
 			defaultThinkingLevel: undefined,
 			steeringMode: "one-at-a-time",
 			followUpMode: "one-at-a-time",
+			askUserMode: "sequential",
 			compactionEnabled: true,
 			retryEnabled: true,
 			imageAutoResize: true,
@@ -79,6 +80,7 @@ describe("getSettingsForRpc", () => {
 			defaultThinkingLevel: "high",
 			steeringMode: "all",
 			followUpMode: "all",
+			askUserMode: "tabbed",
 			compaction: { enabled: false },
 			retry: { enabled: false },
 			images: { autoResize: false, blockImages: true },
@@ -96,6 +98,7 @@ describe("getSettingsForRpc", () => {
 			defaultThinkingLevel: "high",
 			steeringMode: "all",
 			followUpMode: "all",
+			askUserMode: "tabbed",
 			compactionEnabled: false,
 			retryEnabled: false,
 			imageAutoResize: false,
@@ -379,6 +382,25 @@ describe("setSettingsForRpc validation", () => {
 		expect(result.error).toContain("all, one-at-a-time");
 	});
 
+	it("rejects an invalid askUserMode against its own value set", async () => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), { askUserMode: "one-at-a-time" } as never);
+
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("unreachable");
+		expect(result.error).toContain("Invalid askUserMode");
+		expect(result.error).toContain("tabbed, sequential");
+	});
+
+	it.each(["tabbed", "sequential"] as const)("accepts the valid askUserMode %s", async (mode) => {
+		const manager = SettingsManager.inMemory();
+		const result = await setSettingsForRpc(manager, stubRegistry([]), { askUserMode: mode });
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) throw new Error("unreachable");
+		expect(result.settings.askUserMode).toBe(mode);
+	});
+
 	it.each([
 		"compactionEnabled",
 		"retryEnabled",
@@ -633,6 +655,7 @@ describe("setSettingsForRpc writes", () => {
 			defaultThinkingLevel: "low",
 			steeringMode: "all",
 			followUpMode: "all",
+			askUserMode: "tabbed",
 			compactionEnabled: false,
 			retryEnabled: false,
 			imageAutoResize: false,
@@ -653,6 +676,7 @@ describe("setSettingsForRpc writes", () => {
 			defaultThinkingLevel: "low",
 			steeringMode: "all",
 			followUpMode: "all",
+			askUserMode: "tabbed",
 			compactionEnabled: false,
 			retryEnabled: false,
 			imageAutoResize: false,
@@ -1418,6 +1442,7 @@ describe("RpcClient settings methods", () => {
 		defaultThinkingLevel: "high",
 		steeringMode: "one-at-a-time",
 		followUpMode: "one-at-a-time",
+		askUserMode: "sequential",
 		compactionEnabled: true,
 		retryEnabled: true,
 		imageAutoResize: true,
@@ -1458,6 +1483,21 @@ describe("RpcClient settings methods", () => {
 			retryEnabled: false,
 		});
 		expect(client.send).toHaveBeenCalledWith({ type: "set_settings", settings: { retryEnabled: false } });
+	});
+
+	it("setAskUserMode sends the set_ask_user_mode command with the mode", async () => {
+		const client = new RpcClient() as any;
+		client.send = vi.fn().mockResolvedValue({
+			type: "response",
+			command: "set_ask_user_mode",
+			success: true,
+		});
+
+		await client.setAskUserMode("tabbed");
+		expect(client.send).toHaveBeenCalledWith({ type: "set_ask_user_mode", mode: "tabbed" });
+
+		await client.setAskUserMode("sequential");
+		expect(client.send).toHaveBeenCalledWith({ type: "set_ask_user_mode", mode: "sequential" });
 	});
 
 	it("setSettings passes through warnings from the server", async () => {

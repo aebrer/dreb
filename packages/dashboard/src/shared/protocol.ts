@@ -223,6 +223,7 @@ export interface SessionStateDto {
 	isCompacting: boolean;
 	steeringMode: "all" | "one-at-a-time";
 	followUpMode: "all" | "one-at-a-time";
+	askUserMode: "tabbed" | "sequential";
 	sessionFile?: string;
 	sessionId: string;
 	sessionName?: string;
@@ -422,6 +423,7 @@ export interface SettingsDto {
 	defaultThinkingLevel?: string;
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
+	askUserMode?: "tabbed" | "sequential";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
 	imageAutoResize?: boolean;
