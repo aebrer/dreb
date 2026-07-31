@@ -1138,45 +1138,19 @@ details.thinking .thinking-body {
 	font-weight: 600;
 }
 
-.subagent-strip {
-	border: var(--hairline);
-	border-radius: var(--radius);
-	padding: var(--space-2) var(--space-3);
-	font-size: var(--fs-secondary);
+.subagents .subagent-list {
+	list-style: none;
+	padding-top: var(--space-1);
 	display: flex;
-	align-items: center;
-	gap: var(--space-3);
-	flex-wrap: wrap;
+	flex-direction: column;
+	gap: var(--space-1);
+	/* Bounded overflow: many subagents scroll instead of growing the dock. */
+	max-height: 10rem;
+	overflow-y: auto;
 }
 
-.subagent-strip .count,
-.subagent-strip .collapsed-hint {
-	color: var(--muted);
-	font-size: var(--fs-small);
-	white-space: nowrap;
-}
-
-.subagent-strip .subagent-toggle {
-	border: var(--hairline);
-	border-radius: var(--radius);
-	background: var(--bg);
-	color: var(--text);
-	font-family: inherit;
-	font-size: var(--fs-small);
-	padding: 1px var(--space-2);
-	cursor: pointer;
-}
-
-.subagent-strip .subagent-toggle:hover {
-	border-color: var(--text);
-}
-
-.subagent-strip.collapsed {
-	padding-block: var(--space-1);
-}
-
-.subagent-strip .agent-chip {
-	display: inline-flex;
+.subagents .agent-chip {
+	display: flex;
 	align-items: center;
 	gap: 6px;
 	border: var(--hairline);
@@ -1187,23 +1161,24 @@ details.thinking .thinking-body {
 	color: var(--text);
 	cursor: pointer;
 	transition: border-color 0.2s;
-	max-width: 260px;
 	font-family: inherit;
+	width: 100%;
+	text-align: left;
 }
 
-.subagent-strip .agent-chip:hover {
+.subagents .agent-chip:hover {
 	border-color: var(--text);
 }
 
-.subagent-strip .agent-chip .live {
+.subagents .agent-chip .live {
 	color: var(--status-running);
 }
 
-.subagent-strip .agent-chip .done {
+.subagents .agent-chip .done {
 	color: var(--muted);
 }
 
-.subagent-strip .agent-chip .task {
+.subagents .agent-chip .task {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -2706,25 +2681,6 @@ details.thinking .thinking-body {
 
 	.trusted-context-folder-add .btn {
 		align-self: flex-start;
-	}
-
-	.subagent-strip {
-		align-items: stretch;
-		gap: var(--space-2);
-	}
-
-	.subagent-strip .subagent-toggle {
-		flex: 0 0 auto;
-		min-height: 32px;
-	}
-
-	.subagent-strip .count,
-	.subagent-strip .collapsed-hint {
-		white-space: normal;
-	}
-
-	.subagent-strip .agent-chip {
-		max-width: 100%;
 	}
 
 	.head-actions .btn {
