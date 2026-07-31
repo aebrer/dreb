@@ -20,7 +20,7 @@ import type {
 import { MAX_TOTAL_IMAGE_BYTES } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { ConnectionIndicator, Modal } from "../components/common.js";
-import { Transcript } from "../components/transcript.js";
+import { MarkdownBody, Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import {
@@ -265,7 +265,7 @@ function AskUiInline(props: {
 				</Show>
 			</header>
 			<Show when={props.request.question}>
-				<p class="ask-inline-question">{props.request.question}</p>
+				<MarkdownBody text={props.request.question ?? ""} class="ask-inline-question markdown-body" />
 			</Show>
 			<Show when={options().length > 0}>
 				<fieldset class="ask-options">

@@ -90,7 +90,7 @@ export interface ExtensionUIDialogOptions {
  * field, rendered natively in every surface (TUI, Dashboard, RPC host).
  */
 export interface AskRequest {
-	/** The question to ask the user. */
+	/** The Markdown-formatted question to ask the user. */
 	question: string;
 	/** Short bold header. Defaults to a generic prompt title when omitted. */
 	title?: string;

@@ -82,7 +82,7 @@ function formatOutputSize(bytes: number): string {
 	return `${(kib / 1024).toFixed(1)} MB`;
 }
 
-function MarkdownBody(props: {
+export function MarkdownBody(props: {
 	text: string;
 	class?: string;
 	classList?: Record<string, boolean | undefined>;

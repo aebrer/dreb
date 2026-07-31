@@ -43,6 +43,15 @@ function type(component: AskUserComponent, text: string) {
 }
 
 describe("AskUserComponent", () => {
+	it("renders the question with the existing TUI Markdown component", () => {
+		const { component } = mount({ question: "Use **bold** and `code`", options: ["A", "B"] });
+		const rendered = component.render(80).join("\n");
+		expect(rendered).toContain("bold");
+		expect(rendered).toContain("code");
+		expect(rendered).not.toContain("**bold**");
+		expect(rendered).not.toContain("`code`");
+	});
+
 	it("single-select: Enter picks the highlighted option and submits", () => {
 		const { component, onSubmit } = mount({ question: "DB?", options: ["SQLite", "Postgres", "JSON"] });
 		component.handleInput(DOWN); // move to Postgres

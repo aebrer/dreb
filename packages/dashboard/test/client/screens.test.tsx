@@ -1089,7 +1089,7 @@ describe("screen smoke tests", () => {
 				id: "a1",
 				method: "ask",
 				title: "Choose validation",
-				question: "Which checks?",
+				question: "Which **checks**?\n\nUse `fast` validation.",
 				options: ["unit", "browser"],
 				multiSelect: true,
 				allowFreeText: true,
@@ -1104,7 +1104,10 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(el.textContent).toContain("Which checks?");
+		const question = el.querySelector(".ask-inline-question");
+		expect(question?.querySelector("strong")?.textContent).toBe("checks");
+		expect(question?.querySelector("code")?.textContent).toBe("fast");
+		expect(question?.textContent).not.toContain("**");
 		// ask_user renders inline in the transcript flow (scrollable), not as a
 		// blocking modal overlay.
 		expect(el.querySelector(".chat-inner .ask-inline")).not.toBeNull();

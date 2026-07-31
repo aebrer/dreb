@@ -1802,7 +1802,8 @@ const ok = await ctx.ui.confirm("Delete?", "This cannot be undone");
 // Text input
 const name = await ctx.ui.input("Name:", "placeholder");
 
-// Rich question: options and free text can be combined; undefined means skipped
+// Rich question: question text supports Markdown, options and free text can be
+// combined, and undefined means skipped
 const answer = await ctx.ui.ask({
   title: "Choose a database",
   question: "Which persistence strategy should I use?",

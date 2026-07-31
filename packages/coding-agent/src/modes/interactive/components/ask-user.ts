@@ -14,9 +14,9 @@
  *   Esc        skip without answering (always safe)
  */
 
-import { Container, Editor, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@dreb/tui";
+import { Container, Editor, type Focusable, getKeybindings, Input, Markdown, Spacer, Text, type TUI } from "@dreb/tui";
 import type { AskRequest, AskResult } from "../../../core/extensions/types.js";
-import { getEditorTheme, theme } from "../theme/theme.js";
+import { getEditorTheme, getMarkdownTheme, theme } from "../theme/theme.js";
 import { CountdownTimer } from "./countdown-timer.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint, rawKeyHint } from "./keybinding-hints.js";
@@ -98,7 +98,7 @@ export class AskUserComponent extends Container implements Focusable {
 		this.addChild(this.titleText);
 		this.addChild(new Spacer(1));
 
-		this.addChild(new Text(theme.fg("text", request.question), 1, 0));
+		this.addChild(new Markdown(request.question, 1, 0, getMarkdownTheme(), undefined, true));
 		this.addChild(new Spacer(1));
 
 		if (opts?.timeout && opts.timeout > 0 && opts.tui) {

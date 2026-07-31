@@ -37,7 +37,7 @@ export interface AskUserDetails {
 
 const askUserSchema = Type.Object({
 	question: Type.String({
-		description: "The question to ask the user. Be specific about what you need to decide.",
+		description: "The Markdown-formatted question to ask the user. Be specific about what you need to decide.",
 	}),
 	title: Type.Optional(
 		Type.String({
