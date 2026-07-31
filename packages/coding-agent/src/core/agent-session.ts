@@ -68,6 +68,14 @@ import {
 import { checkScriptContent, extractScriptPaths, isForbiddenCommand } from "./forbidden-commands.js";
 import { type GitRepoState, getGitRepoState, getGitStatusMetadata } from "./git-repo-state.js";
 import { findGitRoot } from "./git-root.js";
+import {
+	deriveK3ContextTierModel,
+	isK3256kTier,
+	K3_1M_CONTEXT_WINDOW,
+	K3_256K_CONTEXT_WINDOW,
+	K3_UPGRADE_CUTOFF_TOKENS,
+	shouldUpgradeK3Tier,
+} from "./k3-context-tier.js";
 import { log } from "./logger.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
@@ -166,7 +174,15 @@ export type AgentSessionEvent =
 	| { type: "parent_paused_for_background_agents"; runningAgentCount: number; turnsUsed: number; turnLimit: number }
 	| { type: "session_name_changed"; name: string }
 	| { type: "tasks_update"; tasks: readonly SessionTask[] }
-	| { type: "suggest_next"; command: string };
+	| { type: "suggest_next"; command: string }
+	| {
+			/** The wire model tier auto-upgraded because the session context outgrew the smaller tier (e.g. Kimi K3 256k → 1M). */
+			type: "context_window_upgrade";
+			provider: string;
+			modelId: string;
+			fromContextWindow: number;
+			toContextWindow: number;
+	  };
 
 /** Listener function for agent session events */
 export type AgentSessionEventListener = (event: AgentSessionEvent) => void;
@@ -2094,7 +2110,7 @@ export class AgentSession {
 
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
-		this.agent.setModel(model);
+		this.agent.setModel(this._applyContextTier(model));
 		this._refreshThinkingDisplay(model);
 		this.sessionManager.appendModelChange(model.provider, model.id);
 		this.settingsManager.setDefaultModelAndProvider(model.provider, model.id);
@@ -2169,7 +2185,7 @@ export class AgentSession {
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.thinkingLevel);
 
 		// Apply model
-		this.agent.setModel(next.model);
+		this.agent.setModel(this._applyContextTier(next.model));
 		this._refreshThinkingDisplay(next.model);
 		this.sessionManager.appendModelChange(next.model.provider, next.model.id);
 		this.settingsManager.setDefaultModelAndProvider(next.model.provider, next.model.id);
@@ -2205,7 +2221,7 @@ export class AgentSession {
 		}
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
-		this.agent.setModel(nextModel);
+		this.agent.setModel(this._applyContextTier(nextModel));
 		this._refreshThinkingDisplay(nextModel);
 		this.sessionManager.appendModelChange(nextModel.provider, nextModel.id);
 		this.settingsManager.setDefaultModelAndProvider(nextModel.provider, nextModel.id);
@@ -2428,6 +2444,11 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// Re-derive the K3 context tier: the compacted context is small again,
+			// so the session returns to the cheaper 256k wire tier.
+			if (this.model) {
+				this.agent.setModel(this._applyContextTier(this.model));
+			}
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2482,12 +2503,11 @@ export class AgentSession {
 	 */
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
 		const settings = this.settingsManager.getCompactionSettings();
-		if (!settings.enabled) return;
 
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
 
-		const contextWindow = this.model?.contextWindow ?? 0;
+		let contextWindow = this.model?.contextWindow ?? 0;
 
 		// Skip overflow check if the message came from a different model.
 		// This handles the case where user switched from a smaller-context model (e.g. opus)
@@ -2508,6 +2528,26 @@ export class AgentSession {
 
 		// Case 1: Overflow - LLM returned context overflow error
 		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
+			// K3 auto context tier: an overflow in the 256k tier upgrades to the
+			// 1M tier instead of compacting — the Kimi backend grows the prompt
+			// cache seamlessly. This runs even when compaction is disabled since
+			// no context reduction is involved.
+			if (this._tryUpgradeK3ContextTier()) {
+				// Remove the error message from agent state (it IS saved to session
+				// for history, but we don't want it in context for the retry)
+				this._removeLastAssistantMessage();
+				setTimeout(() => {
+					this.agent.continue().catch((err) => {
+						this.warnInSession(
+							`Agent failed to continue after context window upgrade: ${err instanceof Error ? err.message : String(err)}`,
+						);
+					});
+				}, 100);
+				return;
+			}
+
+			if (!settings.enabled) return;
+
 			if (this._overflowRecoveryAttempted) {
 				this._emit({
 					type: "auto_compaction_end",
@@ -2523,10 +2563,7 @@ export class AgentSession {
 			this._overflowRecoveryAttempted = true;
 			// Remove the error message from agent state (it IS saved to session for history,
 			// but we don't want it in context for the retry)
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.replaceMessages(messages.slice(0, -1));
-			}
+			this._removeLastAssistantMessage();
 			await this._runAutoCompaction("overflow", true);
 			return;
 		}
@@ -2554,9 +2591,69 @@ export class AgentSession {
 		} else {
 			contextTokens = calculateContextTokens(assistantMessage.usage);
 		}
+
+		// K3 auto context tier: reaching the 256k cutoff upgrades to the 1M tier
+		// instead of compacting. This is model-capability management, not context
+		// reduction, so it applies even when compaction is disabled. The cutoff is
+		// fixed at the default compaction threshold of the 256k window; a
+		// user-lowered compaction threshold takes precedence and effectively
+		// disables the upgrade.
+		if (shouldUpgradeK3Tier(this.model, contextTokens)) {
+			// A user-lowered compaction threshold takes precedence over the
+			// upgrade: if the user's compact point for the 256k window sits below
+			// the default cutoff and is already exceeded, compact instead.
+			const userCompactPoint = K3_256K_CONTEXT_WINDOW - settings.reserveTokens;
+			const userThresholdPreempts =
+				settings.enabled && userCompactPoint < K3_UPGRADE_CUTOFF_TOKENS && contextTokens > userCompactPoint;
+			if (!userThresholdPreempts) {
+				this._tryUpgradeK3ContextTier();
+				contextWindow = this.model?.contextWindow ?? contextWindow;
+			}
+		}
+
+		if (!settings.enabled) return;
+
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
 			await this._runAutoCompaction("threshold", false);
 		}
+	}
+
+	/**
+	 * Apply the K3 auto context tier to a model being set on the agent. The
+	 * user-facing `k3` model runs on the cheaper `k3-256k` wire model ID until
+	 * the session context grows past the 256k cutoff; no-op for other models.
+	 * See k3-context-tier.ts.
+	 */
+	private _applyContextTier(model: Model<any>): Model<any> {
+		return deriveK3ContextTierModel(model, estimateContextTokens(this.agent.state.messages).tokens);
+	}
+
+	/** Remove the last message from agent state when it is an assistant message. */
+	private _removeLastAssistantMessage(): void {
+		const messages = this.agent.state.messages;
+		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+			this.agent.replaceMessages(messages.slice(0, -1));
+		}
+	}
+
+	/**
+	 * Upgrade the K3 auto context tier from 256k to 1M. The Kimi backend
+	 * upgrades the prompt cache seamlessly, so no context is lost or
+	 * compacted. Returns true when the upgrade was applied.
+	 */
+	private _tryUpgradeK3ContextTier(): boolean {
+		const model = this.model;
+		if (!model || !isK3256kTier(model)) return false;
+		const upgraded = deriveK3ContextTierModel(model, K3_UPGRADE_CUTOFF_TOKENS + 1);
+		this.agent.setModel(upgraded);
+		this._emit({
+			type: "context_window_upgrade",
+			provider: upgraded.provider,
+			modelId: upgraded.id,
+			fromContextWindow: K3_256K_CONTEXT_WINDOW,
+			toContextWindow: K3_1M_CONTEXT_WINDOW,
+		});
+		return true;
 	}
 
 	/**
@@ -2646,6 +2743,11 @@ export class AgentSession {
 			const newEntries = this.sessionManager.getEntries();
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.replaceMessages(sessionContext.messages);
+			// Re-derive the K3 context tier: the compacted context is small again,
+			// so the session returns to the cheaper 256k wire tier.
+			if (this.model) {
+				this.agent.setModel(this._applyContextTier(this.model));
+			}
 
 			// Get the saved compaction entry for the extension event
 			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
@@ -2819,7 +2921,7 @@ export class AgentSession {
 			return;
 		}
 
-		this.agent.setModel(refreshedModel);
+		this.agent.setModel(this._applyContextTier(refreshedModel));
 		this._refreshThinkingDisplay(refreshedModel);
 	}
 
@@ -3477,7 +3579,7 @@ export class AgentSession {
 				(m) => m.provider === sessionContext.model!.provider && m.id === sessionContext.model!.modelId,
 			);
 			if (match) {
-				this.agent.setModel(match);
+				this.agent.setModel(this._applyContextTier(match));
 				this._refreshThinkingDisplay(match);
 				await this._emitModelSelect(match, previousModel, "restore");
 			}

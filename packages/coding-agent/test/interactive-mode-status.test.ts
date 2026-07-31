@@ -272,6 +272,27 @@ describe("InteractiveMode working indicator", () => {
 		expect(inlineStatuses.at(-1)).toBeNull();
 	});
 
+	test("context_window_upgrade shows a status line and invalidates the footer", async () => {
+		const { fakeThis } = createWorkingFakeThis();
+		fakeThis.chatContainer = new Container();
+		fakeThis.lastStatusSpacer = undefined;
+		fakeThis.lastStatusText = undefined;
+		fakeThis.showStatus = (...args: unknown[]) =>
+			(InteractiveMode as any).prototype.showStatus.call(fakeThis, ...args);
+
+		await dispatchEvent(fakeThis, {
+			type: "context_window_upgrade",
+			provider: "kimi-coding-oauth",
+			modelId: "k3",
+			fromContextWindow: 262144,
+			toContextWindow: 1048576,
+		});
+
+		const rendered = fakeThis.chatContainer.children.flatMap((child: any) => child.render(120)).join("\n");
+		expect(rendered).toContain("k3 context window upgraded: 256k → 1M (cache preserved)");
+		expect(fakeThis.footer.invalidate).toHaveBeenCalled();
+	});
+
 	test("non-agent inline loaders can update and clear branch summary, dream, and compaction statuses", () => {
 		const { fakeThis, inlineStatuses } = createWorkingFakeThis();
 

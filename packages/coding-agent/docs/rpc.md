@@ -1617,6 +1617,7 @@ Response:
 | `length_retry` | Response hit the token limit; retrying with a larger budget |
 | `auto_compaction_start` | Auto-compaction begins |
 | `auto_compaction_end` | Auto-compaction completes |
+| `context_window_upgrade` | Wire model tier auto-upgraded (e.g. Kimi K3 256k → 1M); includes `provider`, `modelId`, `fromContextWindow`, `toContextWindow` |
 | `auto_retry_start` | Auto-retry begins (after transient error) |
 | `auto_retry_end` | Auto-retry completes (success or final failure) |
 | `background_agent_start` | Background subagent launched (includes `sessionDir`) |
