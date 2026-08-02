@@ -15,7 +15,7 @@ argument-hint: "[commit message]"
 3. **No `#N` in comment bodies** — Use "finding 3", "item 3", "stage 2" etc. instead.
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets (.env, credentials, tokens, keys).
 5. **Task tracking** — Use the `tasks_update` tool to show progress.
-6. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+6. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 7. **Stop after durable progress** — The commit, push, and GitHub progress comment are the accountability and recovery boundary. Do not invoke `mach6-review` or continue into a formal review cycle. Only the user may start formal review; offer it with `suggest_next` and stop.
 
 ## Step 1: Set up task tracking
@@ -82,7 +82,7 @@ If session context points to an issue but a PR also exists on the current branch
 
 Post a progress comment:
 ```bash
-GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-progress -->
 ## Progress Update
