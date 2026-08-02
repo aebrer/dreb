@@ -72,7 +72,7 @@ export const waitToolDefinition: ToolDefinition<typeof waitSchema, WaitToolDetai
 	name: "wait",
 	label: "wait",
 	description:
-		"Do nothing and end your turn. Use this when you are explicitly told to wait, or when background subagents are running and you have no other work to do.",
+		"Do nothing and end your turn. Use this only when explicitly told to wait or when background subagents are running and you have no other work. It does not wait for GitHub CI; use watch_github_ci for that.",
 
 	parameters: waitSchema,
 
@@ -81,6 +81,7 @@ export const waitToolDefinition: ToolDefinition<typeof waitSchema, WaitToolDetai
 	promptGuidelines: [
 		"Use `wait` only when explicitly told to wait, or when background subagents are still running and you have no other work to do",
 		"Do NOT use `wait` as a general-purpose delay or sleep — it returns immediately",
+		"Do NOT use `wait` for GitHub CI; use `watch_github_ci`, which blocks until checks pass or fail",
 		"If you need to wait for something, call `wait` once — do not loop or call it repeatedly",
 	],
 

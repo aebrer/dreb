@@ -7,7 +7,7 @@ Concretely, dreb ships *without* things Claude Code has — and that's intention
 - **No MCP.** Build CLI tools with READMEs (see [Skills](#skills)), or build an extension that adds MCP support.
 - **No permission popups.** Run in a container, or build your own confirmation flow with [extensions](#extensions).
 - **No plan mode.** Write plans to files, or build it with extensions, or install a package.
-- **No background bash in the main agent.** The main agent runs commands synchronously. For parallel work, use the `subagent` tool — each subagent runs as an independent process with its own tools.
+- **No background bash in the main agent.** The main agent runs commands synchronously. Role-matched parallel work can use the optional `subagent` tool — each subagent runs as an independent process with its own tools.
 
 What you get in exchange: a skill system, an extension API, custom agent definitions, custom provider support (route through any proxy, use any API-compatible backend), and a subagent system for parallel work. From those primitives, you build what you need — and share it with others via git or npm.
 
@@ -79,7 +79,7 @@ dreb
 
 Or use a custom provider (corporate proxy, Bedrock, etc.) — see [Custom providers & models](#providers--models).
 
-Then just talk to dreb. All 12 built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, and `ask_user`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Three additional tools — `search`, `skill`, and `tasks_update` — are always active regardless of `--tools`. `suggest_next` is active by default but excluded when `--tools` is specified. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
+Then just talk to dreb. All 13 standard built-in tools are enabled by default: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `watch_github_ci`, and `ask_user`. Use `--tools` to restrict to a subset (e.g., `--tools read,grep,find,ls` for read-only). Three additional tools — `search`, `skill`, and `tasks_update` — are always active regardless of `--tools`. `suggest_next` is active by default but excluded when `--tools` is specified. The model uses these to fulfill your requests. Add capabilities via [skills](#skills), [prompt templates](#prompt-templates), [extensions](#extensions), or [packages](#packages).
 
 **Also available:** [`@dreb/telegram`](https://www.npmjs.com/package/@dreb/telegram) — run dreb as a Telegram bot with live tool status and visible results for user-facing tools (`npm install -g @dreb/telegram`). [`@dreb/dashboard`](https://www.npmjs.com/package/@dreb/dashboard) — run `dreb dashboard` for a browser UI with fleet overview, full chat steering, inline provider/API failures with partial output preserved, sanitized raster tool images plus sent user uploads retained as bounded transcript previews by default, a bounded all-agent subagent panel with drill-in, host file browser, curated appearance themes (per-browser light/dark), and Tailscale/rotating-code pairing (`npm install -g @dreb/dashboard`; see [docs/dashboard.md](docs/dashboard.md)). Tool images cross browser-facing transport as content-addressed references; browser-local Settings offers placeholders, bounded previews, or informed-opt-in originals, with size disclosure and confirmation above 1 MiB. Full-resolution HTML export remains self-contained. Compact SSE snapshots update live fleet cards without repeatedly fetching the cross-project inventory, and session drill-in hydrates state, messages, and background agents through one ordered snapshot request. Terminal provider failures show their reason on fleet cards, while transient failures clear terminal state when automatic retry begins and remain recorded inline on the failed attempt. Its top bar and persistent session header indicators report connecting, connected, retrying, resyncing, disconnected, or auth failed; bounded SSE replay plus an explicit snapshot barrier restores session state, tasks, and image references after a reload, restart, gap, backpressure disconnect, or stalled stream, while authenticated image routes recover bytes separately from authoritative transcripts.
 
@@ -381,7 +381,11 @@ Task tracking is prompt-driven: the system prompt includes guidelines for when t
 
 ## Subagents
 
-The `subagent` tool delegates tasks to independent child agent processes. Each subagent runs in its own process with its own context window, and notifies the parent when complete.
+The optional `subagent` tool runs focused, role-matched work in independent child agent processes. Each subagent runs in its own process with its own context window, and notifies the parent when complete.
+
+When `agent` is omitted, dreb selects the default `Explore` agent. Explore retrieves concrete, bounded evidence: files, symbols, documentation, call sites, exact snippets, tests for a named behavior, and explicitly named data flows. The primary agent must synthesize that evidence and owns root-cause diagnosis, ambiguous-requirement interpretation, architecture/design decisions, implementation recommendations, planning, and final conclusions.
+
+Good Explore requests ask it to locate every renderer of a named component, enumerate call sites, quote collection-limiting code, or find documented examples. Do not ask Explore to investigate a root cause, decide ambiguous behavior, recommend an implementation, design a refactor, or produce a plan. Parallel and chain execution do not change role fit; specialized agents remain available for the broader work described by their own definitions.
 
 **Modes:**
 - **Single** (`task`): One background agent
@@ -390,7 +394,7 @@ The `subagent` tool delegates tasks to independent child agent processes. Each s
 
 **Agent type and override inheritance:** The top-level `agent` parameter is inherited by parallel tasks and chain steps that don't specify their own. Precedence: per-task `agent` > top-level `agent` > default (`"Explore"`). The `model` and optional `thinking` parameters follow the same per-task-over-top-level inheritance. Explicit thinking accepts `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`; unsupported levels for the resolved model fail before spawn. Omit `thinking` to preserve the child's normal settings/default behavior.
 
-**Agent definitions** live in `~/.dreb/agents/` (global) and `.dreb/agents/` (project). Each is a markdown file with YAML frontmatter specifying `name`, `model` (with provider fallback list), and optional `systemPrompt`. Built-in agents include `Explore` (read-only codebase exploration), `Sandbox` (restricted to `/tmp`), `feature-dev` (strong-tier coding), and several review agents.
+**Agent definitions** live in `~/.dreb/agents/` (global) and `.dreb/agents/` (project). Each is a markdown file with YAML frontmatter specifying `name`, `model` (with provider fallback list), and optional `systemPrompt`. Built-in agents include `Explore` (concrete evidence retrieval with no implementation work), `Sandbox` (restricted to `/tmp`), `feature-dev` (strong-tier coding), and several review agents.
 
 **Model availability probes:** When an agent definition specifies a fallback list (comma-separated models), each model is verified with a lightweight API call via the same `streamSimple` path the agent loop uses before the subagent is spawned. The probe uses normal coding-agent thinking defaults and does not pass a synthetic `maxTokens` override, which keeps the request shape representative for reasoning models as well as non-reasoning models. Models that fail the probe (rate limit, quota exhaustion, auth failure, timeout) are skipped with a loud log line, and the next fallback is tried. If all configured models fail, the parent session's model is used as a last resort. Per-invocation model overrides and single-model configs skip probing entirely.
 
@@ -403,6 +407,12 @@ The `subagent` tool delegates tasks to independent child agent processes. Each s
 **Session and event metadata:** Each child process records its agent type in the session JSONL header (`agentType` field), providing an audit trail of which agent definition executed the work. Child `agent_start`, subagent results, and `background_agent_end` also expose the canonical resolved `provider/model` and effective thinking level, including defaults used when no override was supplied. Chain completion events expose ordered per-step metadata because steps may use different models or thinking levels. Enabled arbiter attempts add a separate `subagent_arbitration` event with proposed/final routes, changed fields, status, optional chain step, and safe host error metadata; raw prompts, responses, and reasoning are never included.
 
 **Background-agent guardrail:** Background subagents run asynchronously and return control to you while they work. To stop the parent agent from spinning ahead of results, a guardrail pauses it after `backgroundAgents.parentTurnLimit` turns (default 3) while subagents are still running. When this happens, dreb surfaces a friendly, non-error notification in the TUI and Telegram — explaining that background agents are still working and the parent paused intentionally, and that it resumes when they report back or when you send a message to steer it. This is a frontend/session event, not a model-context steer, so it can't go stale. Set `backgroundAgents.parentTurnGuardrail` to `false` to let the parent run unbounded while subagents work, or raise `parentTurnLimit` to relax the guardrail. See [settings](docs/settings.md#background-agents).
+
+### Waiting for GitHub CI
+
+Use `watch_github_ci` to monitor pull-request checks without asking the user to return later or constructing a polling loop. It runs `gh pr checks --watch --fail-fast`, defaults to the pull request for the current branch, accepts an optional PR number/URL/branch, and returns when checks pass or definitively fail. The call is cancellable and requires an installed, authenticated [GitHub CLI](https://cli.github.com/).
+
+The separate `wait` tool is an immediate no-op used when explicitly told to wait or while background subagents are running. It does not monitor CI and must not be used as a sleep or delay.
 
 ---
 
@@ -643,7 +653,7 @@ cat README.md | dreb -p "Summarize this text"
 | `--tools <list>` | Comma-separated list of tools to enable (default: all) |
 | `--no-tools` | Disable all built-in tools (extension tools still work) |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `search`, `ask_user`
+Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `watch_github_ci`, `search`, `ask_user`
 
 `ask_user` pauses the turn and asks you a structured clarifying question — Markdown-formatted question text, optional 2-4 multiple-choice options (single- or multi-select), and a "type your own answer" field — rendered natively in the TUI and the Dashboard, and over RPC. Answering submits the structured result; choosing **Stop agent** or pressing `Esc` aborts the whole current turn rather than continuing without an answer. Options must contain nonblank text. When there are no options the free-text field is always shown, so every question is answerable. An optional `timeoutSeconds` auto-stops the turn after the given number of seconds with a live countdown on every surface; recovered Dashboard sessions retain the original deadline rather than restarting it. Tool abort, timeout, host teardown, and headless/no-UI modes settle cleanly, so the agent never deadlocks waiting on an absent user. UI or response-protocol failures remain distinct from question closure. Concurrent `ask_user` calls are shown strictly one at a time (FIFO). In the TUI: `↑`/`↓` move between options and the free-text field, `Space` toggles a checkbox (multi-select), `Enter` submits, and `Esc` stops the turn. In the Dashboard: native radios/checkboxes plus a text field, an in-card **Stop agent** button that remains accessible on mobile, and `Esc` to stop.
 
