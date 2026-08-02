@@ -37,6 +37,7 @@ const TOOL_EMOJI: Record<string, string> = {
 	search: "🔍",
 	suggest_next: "💡",
 	wait: "⏳",
+	watch_github_ci: "🔄",
 	subagent: "🤖",
 	tasks_update: "📋",
 	skill: "⚡",
@@ -151,6 +152,10 @@ function formatTool(name: string, args: Record<string, any>): string {
 			return `${emoji} *suggest\\_next*: ${args.command || "?"}`;
 		case "wait":
 			return args.reason ? `${emoji} *wait*: ${String(args.reason).slice(0, 200)}` : `${emoji} *wait*`;
+		case "watch_github_ci":
+			return args.pr
+				? `${emoji} *watch_github_ci*: ${String(args.pr).slice(0, 120)}`
+				: `${emoji} *watch_github_ci*: current branch`;
 		case "subagent":
 			return `${emoji} *subagent* (${args.agent || "?"}): ${(args.task || args.tasks?.[0]?.task || "?").slice(0, 200)}`;
 		case "skill":

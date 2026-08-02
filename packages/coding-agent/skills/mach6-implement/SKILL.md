@@ -133,12 +133,13 @@ tasks_update([
 
 #### If `ci` was specified:
 
+Use `watch_github_ci` with `pr: "<pr-number>"` so the tool blocks until the pull request's checks pass or fail. Do not use `wait`, sleep, or repeated polling commands for CI.
+
+If checks fail, use the returned check output to identify the failed run, then inspect it:
+
 ```bash
-gh pr checks <pr-number>
 gh run view <run-id> --log-failed
 ```
-
-**Note:** `gh pr checks` returns exit code 8 while checks are still pending — this is expected, not a failure. Wait and re-run if needed.
 
 Read the failed CI logs and identify issues. Extract test failures, stack traces, error messages. If all checks pass, report this and stop.
 

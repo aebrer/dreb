@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "vitest";
 import type { GitRepoState } from "../src/core/git-repo-state.js";
 import { buildSystemPrompt } from "../src/core/system-prompt.js";
+import { subagentToolDefinition } from "../src/core/tools/subagent.js";
 
 describe("buildSystemPrompt", () => {
 	describe("empty tools", () => {
@@ -91,6 +92,24 @@ describe("buildSystemPrompt", () => {
 			});
 
 			expect(prompt.match(/- Use dynamic_tool for summaries\./g)).toHaveLength(1);
+		});
+
+		test("renders the actual subagent Explore boundary without the old imperative", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: ["subagent"],
+				toolSnippets: { subagent: subagentToolDefinition.promptSnippet! },
+				promptGuidelines: subagentToolDefinition.promptGuidelines,
+				contextFiles: [],
+				skills: [],
+			});
+
+			expect(prompt).toContain("- subagent: Run role-matched work in independent child agents");
+			expect(prompt).toContain("When `agent` is omitted, the default is `Explore`");
+			expect(prompt).toContain("The primary agent must synthesize Explore evidence");
+			expect(prompt).toContain("Good default Explore tasks");
+			expect(prompt).toContain("Bad default Explore tasks");
+			expect(prompt).toContain("Specialized agents may perform the broader work");
+			expect(prompt).not.toContain("Use `subagent` to delegate focused, independent tasks to child agents");
 		});
 	});
 

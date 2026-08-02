@@ -1112,7 +1112,7 @@ Response:
       },
       {
         "name": "Explore",
-        "description": "Codebase and web exploration — find files, search code, search the web, answer questions. Read-only."
+        "description": "Concrete evidence retrieval — locate files, symbols, documentation, call sites, and exact snippets. No implementation work."
       }
     ]
   }

@@ -3234,6 +3234,7 @@ export class AgentSession {
 					"web_fetch",
 					"subagent",
 					"wait",
+					"watch_github_ci",
 					"search",
 					"ask_user",
 					"skill",

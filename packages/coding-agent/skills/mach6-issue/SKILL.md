@@ -52,12 +52,12 @@ Update task: read → completed, explore → in_progress.
 
 ### Step 3: Explore the codebase
 
-Launch 2-3 Explore subagents in parallel targeting different aspects. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a particularly complex issue warrants a stronger tier).
-- **Relevant code**: Find existing code related to the issue, trace implementation patterns
-- **Architecture**: Map relevant architecture layers, abstractions, data flow
-- **Prior work**: Check for related branches, PRs, or commits
+Launch 2-3 Explore subagents in parallel for concrete evidence retrieval. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a large repository requires inspecting many files).
+- **Relevant code evidence**: Locate named related behavior and quote the exact implementation and test snippets
+- **Flow inventory**: Enumerate files, symbols, imports, calls, and registrations in an explicitly named existing flow without diagnosing it
+- **Prior-work evidence**: Locate related branches, PRs, commits, and documentation and report their exact references
 
-Each agent should return 5-10 key files. After agents complete, read all identified files.
+Do not ask Explore to determine the root cause, interpret ambiguous requirements, recommend an implementation, decide architecture, or assess the issue. Each agent should return 5-10 key files with bounded evidence. After agents complete, read all identified files and have the primary agent synthesize the current state, gaps, scope, and risks.
 
 Update task: explore → completed, assess → in_progress.
 
@@ -109,7 +109,7 @@ ls .github/ISSUE_TEMPLATE/ 2>/dev/null
 ```
 If templates exist, read them and select the most appropriate one.
 
-Explore the codebase if needed to understand the relevant area.
+If codebase context is needed, use Explore subagents only for bounded evidence such as locating named behavior, files, tests, call sites, or exact snippets. The primary agent must interpret that evidence and own the issue's requirements, proposed behavior, scope, and technical conclusions.
 
 ### Step 2: Draft the issue
 

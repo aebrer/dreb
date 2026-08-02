@@ -261,6 +261,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		"web_fetch",
 		"subagent",
 		"wait",
+		"watch_github_ci",
 	];
 	const visibleTools = tools.filter((name) => !!toolSnippets?.[name]);
 	const toolsList =
