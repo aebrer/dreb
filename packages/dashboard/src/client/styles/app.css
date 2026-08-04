@@ -2292,6 +2292,9 @@ details.thinking .thinking-body {
 }
 
 .ask-options {
+	/* Contain the absolutely positioned legend and hidden radios inside the
+	   transcript scroller so focusing them cannot scroll the document. */
+	position: relative;
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
