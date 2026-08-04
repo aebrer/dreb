@@ -85,14 +85,13 @@ export interface ExtensionUIDialogOptions {
 }
 
 /**
- * A rich question for {@link ExtensionUIContext.ask}. Presents optional
- * suggested options (single- or multi-select) alongside an optional free-text
- * field, rendered natively in every surface (TUI, Dashboard, RPC host).
+ * A single question inside an {@link AskRequest}. Presents optional suggested
+ * options (single- or multi-select) alongside an optional free-text field.
  */
-export interface AskRequest {
+export interface AskQuestion {
 	/** The Markdown-formatted question to ask the user. */
 	question: string;
-	/** Short bold header. Defaults to a generic prompt title when omitted. */
+	/** Short bold header for this question. Defaults to a generic title. */
 	title?: string;
 	/** 2-4 suggested options. */
 	options?: string[];
@@ -105,14 +104,36 @@ export interface AskRequest {
 }
 
 /**
- * The user's answer to an {@link AskRequest}. Stopping or timing out the
- * question stops the current agent turn and resolves to `undefined`.
+ * A rich multi-question request for {@link ExtensionUIContext.ask}. One request
+ * carries one or more questions, collected together in a single wizard and
+ * returned as a batch of answers, rendered natively in every surface (TUI,
+ * Dashboard, RPC host).
  */
-export interface AskResult {
+export interface AskRequest {
+	/** Optional overall header for the wizard. */
+	title?: string;
+	/** One or more questions to ask, presented as a single batch. */
+	questions: AskQuestion[];
+}
+
+/** The user's answer to a single {@link AskQuestion}. */
+export interface AskAnswer {
 	/** Options the user selected (empty when only free text was provided). */
 	selected: string[];
 	/** Free-text answer, when the user typed one. */
 	customText?: string;
+	/** True when this question was submitted without any answer. */
+	skipped?: boolean;
+}
+
+/**
+ * The user's batch answer to an {@link AskRequest}, one {@link AskAnswer} per
+ * question in order. Stopping or timing out the wizard stops the current agent
+ * turn and resolves to `undefined`.
+ */
+export interface AskResult {
+	/** One answer per question, in the same order as the request. */
+	answers: AskAnswer[];
 }
 
 /** Placement for extension widgets. */
@@ -142,9 +163,10 @@ export interface ExtensionUIContext {
 	input(title: string, placeholder?: string, opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 
 	/**
-	 * Show a rich question with suggested options, optional free text, and
-	 * single- or multi-select. Resolves to the user's answer, or `undefined`
-	 * while stopping the current agent turn when dismissed or timed out.
+	 * Show a rich multi-question wizard with suggested options, optional free
+	 * text, and single- or multi-select per question. Resolves to a batch of
+	 * answers, or `undefined` while stopping the current agent turn when
+	 * dismissed or timed out.
 	 */
 	ask(request: AskRequest, opts?: ExtensionUIDialogOptions): Promise<AskResult | undefined>;
 

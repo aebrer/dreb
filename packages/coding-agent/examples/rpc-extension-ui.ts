@@ -3,15 +3,16 @@
  *
  * A lightweight TUI chat client that spawns the agent in RPC mode.
  * Demonstrates how to build a custom UI on top of the RPC protocol,
- * including handling extension UI requests (select, confirm, input, editor).
+ * including handling extension UI requests (select, confirm, input, editor, ask).
  *
  * Usage: npx tsx examples/rpc-extension-ui.ts
  *
  * Slash commands:
- *   /select  - demo select dialog
- *   /confirm - demo confirm dialog
- *   /input   - demo input dialog
- *   /editor  - demo editor dialog
+ *   /select   - demo select dialog
+ *   /confirm  - demo confirm dialog
+ *   /input    - demo input dialog
+ *   /editor   - demo editor dialog
+ *   /rpc-ask  - demo batch ask wizard from the companion extension
  */
 
 import { spawn } from "node:child_process";
@@ -39,12 +40,28 @@ const RESET = "\x1b[0m";
 // Extension UI request type (subset of rpc-types.ts)
 // ============================================================================
 
+interface AskQuestion {
+	question: string;
+	title?: string;
+	options?: string[];
+	allowFreeText?: boolean;
+	multiSelect?: boolean;
+	multiline?: boolean;
+}
+
+interface AskAnswer {
+	selected: string[];
+	customText?: string;
+	skipped?: boolean;
+}
+
 interface ExtensionUIRequest {
 	type: "extension_ui_request";
 	id: string;
 	method: string;
 	title?: string;
 	options?: string[];
+	questions?: AskQuestion[];
 	message?: string;
 	placeholder?: string;
 	prefill?: string;
@@ -239,6 +256,98 @@ class InputDialog implements Component {
 	}
 }
 
+/**
+ * Compact batch-question wizard for the RPC example. Each page accepts option
+ * numbers and optional free text separated by commas, then sends one ordered
+ * answers[] response after the final question.
+ */
+class AskDialog implements Component {
+	private readonly input = new Input();
+	private readonly answers: AskAnswer[] = [];
+	private questionIndex = 0;
+	onSubmit?: (answers: AskAnswer[]) => void;
+	onCancel?: () => void;
+	onCtrlD?: () => void;
+
+	constructor(
+		private readonly title: string,
+		private readonly questions: AskQuestion[],
+	) {
+		this.input.onSubmit = (value) => this.acceptAnswer(value);
+		this.input.onEscape = () => this.onCancel?.();
+	}
+
+	private acceptAnswer(value: string): void {
+		const question = this.questions[this.questionIndex];
+		if (!question) return;
+		const raw = value.trim();
+		const options = question.options ?? [];
+		const selected: string[] = [];
+		const customParts: string[] = [];
+
+		if (options.length === 0) {
+			if (raw) customParts.push(raw);
+		} else if (raw) {
+			for (const token of raw
+				.split(",")
+				.map((part) => part.trim())
+				.filter(Boolean)) {
+				const numericIndex = /^\d+$/.test(token) ? Number(token) - 1 : -1;
+				const matched =
+					options[numericIndex] ?? options.find((option) => option.toLowerCase() === token.toLowerCase());
+				if (matched && (question.multiSelect || selected.length === 0)) {
+					if (!selected.includes(matched)) selected.push(matched);
+				} else if (!matched && question.allowFreeText !== false) {
+					customParts.push(token);
+				}
+			}
+		}
+
+		const customText = customParts.join(", ").trim() || undefined;
+		this.answers.push(selected.length > 0 || customText ? { selected, customText } : { selected: [], skipped: true });
+		this.questionIndex++;
+		if (this.questionIndex >= this.questions.length) {
+			this.onSubmit?.(this.answers);
+			return;
+		}
+		this.input.setValue("");
+	}
+
+	handleInput(data: string): void {
+		if (matchesKey(data, "ctrl+d")) {
+			this.onCtrlD?.();
+			return;
+		}
+		this.input.handleInput(data);
+	}
+
+	invalidate(): void {
+		this.input.invalidate();
+	}
+
+	render(width: number): string[] {
+		const question = this.questions[this.questionIndex];
+		if (!question) return [`${RED}Invalid empty ask request${RESET}`];
+		const options = question.options ?? [];
+		const optionLines = options.map((option, index) => `  ${index + 1}. ${option}`);
+		const answerHint =
+			options.length === 0
+				? "Type an answer"
+				: question.multiSelect
+					? "Type option numbers separated by commas"
+					: "Type one option number";
+		const customHint = options.length > 0 && question.allowFreeText !== false ? ", plus optional text" : "";
+		return [
+			`${MAGENTA}${BOLD}${this.title} — ${this.questionIndex + 1}/${this.questions.length}${RESET}`,
+			`${BOLD}${question.title ?? question.question}${RESET}`,
+			...(question.title ? [question.question] : []),
+			...optionLines,
+			...this.input.render(width),
+			`${DIM}${answerHint}${customHint}. Enter to continue, Esc to cancel.${RESET}`,
+		];
+	}
+}
+
 // ============================================================================
 // Main
 // ============================================================================
@@ -300,6 +409,7 @@ async function main() {
 	// These helpers swap between them.
 
 	let activeDialog: Component | null = null;
+	let activeDialogId: string | null = null;
 
 	function setBottomComponent(component: Component): void {
 		root.clear();
@@ -312,6 +422,7 @@ async function main() {
 
 	function showPrompt(): void {
 		activeDialog = null;
+		activeDialogId = null;
 		setBottomComponent(promptInput);
 		tui.setFocus(promptInput.input);
 	}
@@ -374,8 +485,27 @@ async function main() {
 		tui.setFocus(dialog.inputComponent);
 	}
 
+	function showAskDialog(
+		title: string,
+		questions: AskQuestion[],
+		onDone: (answers: AskAnswer[] | undefined) => void,
+	): void {
+		const dialog = new AskDialog(title, questions);
+		dialog.onSubmit = (answers) => {
+			showPrompt();
+			onDone(answers);
+		};
+		dialog.onCancel = () => {
+			showPrompt();
+			onDone(undefined);
+		};
+		dialog.onCtrlD = exit;
+		showDialog(dialog);
+	}
+
 	function handleExtensionUI(req: ExtensionUIRequest): void {
 		const { id, method } = req;
+		if (["select", "confirm", "input", "editor", "ask"].includes(method)) activeDialogId = id;
 
 		switch (method) {
 			// Dialog methods: replace prompt with interactive component
@@ -422,6 +552,23 @@ async function main() {
 				break;
 			}
 
+			case "ask": {
+				const questions = req.questions ?? [];
+				if (questions.length === 0) {
+					showPrompt();
+					send({ type: "extension_ui_response", id, cancelled: true });
+					break;
+				}
+				showAskDialog(req.title ?? "Question", questions, (answers) => {
+					if (answers) {
+						send({ type: "extension_ui_response", id, answers });
+					} else {
+						send({ type: "extension_ui_response", id, cancelled: true });
+					}
+				});
+				break;
+			}
+
 			// Fire-and-forget methods: display as notification
 			case "notify": {
 				const notifyType = (req.notifyType as string) ?? "info";
@@ -449,6 +596,10 @@ async function main() {
 				}
 				break;
 			}
+
+			case "setTitle":
+				terminal.setTitle(req.title ?? "");
+				break;
 
 			case "set_editor_text":
 				promptInput.input.setValue((req.text as string) ?? "");
@@ -532,6 +683,11 @@ async function main() {
 
 		if (data.type === "extension_ui_request") {
 			handleExtensionUI(data as unknown as ExtensionUIRequest);
+			return;
+		}
+
+		if (data.type === "extension_ui_response_handled") {
+			if (data.id === activeDialogId) showPrompt();
 			return;
 		}
 
@@ -620,7 +776,7 @@ async function main() {
 
 	outputLog.append(`${BOLD}RPC Chat${RESET}`);
 	outputLog.append(`${DIM}Type a message and press Enter. Esc to abort or exit. Ctrl+D to quit.${RESET}`);
-	outputLog.append(`${DIM}Slash commands: /select /confirm /input /editor${RESET}`);
+	outputLog.append(`${DIM}Slash commands: /select /confirm /input /editor /rpc-ask${RESET}`);
 	outputLog.append("");
 
 	tui.start();

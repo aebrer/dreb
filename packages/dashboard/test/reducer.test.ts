@@ -3,8 +3,10 @@ import {
 	applySessionEvent,
 	createSessionViewState,
 	dismissToast,
+	type ExtensionUiRequest,
 	MAX_COMPLETED_BACKGROUND_AGENTS,
 	messagesToEntries,
+	pendingQuestionsReason,
 	resolveUiRequest,
 } from "../src/client/state/reducer.js";
 import type { BackgroundAgentDto } from "../src/shared/protocol.js";
@@ -946,6 +948,31 @@ describe("applySessionEvent — session-level events", () => {
 	});
 });
 
+describe("pendingQuestionsReason", () => {
+	const ask = (id: string, questionCount: number): ExtensionUiRequest => ({
+		id,
+		method: "ask",
+		title: "Question",
+		questions: Array.from({ length: questionCount }, (_, i) => ({ question: `Question ${i + 1}` })),
+	});
+
+	it("returns undefined when nothing is pending", () => {
+		expect(pendingQuestionsReason([])).toBeUndefined();
+	});
+
+	it("returns undefined when a pending ask request carries no questions", () => {
+		expect(pendingQuestionsReason([ask("a1", 0)])).toBeUndefined();
+	});
+
+	it("counts a single pending question in the singular", () => {
+		expect(pendingQuestionsReason([ask("a1", 1)])).toBe("waiting for input — 1 question");
+	});
+
+	it("sums the total number of questions across pending ask requests", () => {
+		expect(pendingQuestionsReason([ask("a1", 2), ask("a2", 1)])).toBe("waiting for input — 3 questions");
+	});
+});
+
 describe("applySessionEvent — extension UI", () => {
 	it("blocking requests queue as modals; resolveUiRequest dismisses; attention follows", () => {
 		const state = makeState();
@@ -954,6 +981,21 @@ describe("applySessionEvent — extension UI", () => {
 		expect(state.needsAttention).toBe(true);
 
 		resolveUiRequest(state, "u1");
+		expect(state.uiRequests).toHaveLength(0);
+		expect(state.needsAttention).toBe(false);
+	});
+
+	it("resolveUiRequest removes an ask request by id and clears attention when the last one goes", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "extension_ui_request", id: "a1", method: "ask", title: "First" });
+		applySessionEvent(state, { type: "extension_ui_request", id: "a2", method: "ask", title: "Second" });
+		expect(state.uiRequests.map((r) => r.id)).toEqual(["a1", "a2"]);
+
+		resolveUiRequest(state, "a1");
+		expect(state.uiRequests.map((r) => r.id)).toEqual(["a2"]);
+		expect(state.needsAttention).toBe(true);
+
+		resolveUiRequest(state, "a2");
 		expect(state.uiRequests).toHaveLength(0);
 		expect(state.needsAttention).toBe(false);
 	});
@@ -968,34 +1010,66 @@ describe("applySessionEvent — extension UI", () => {
 		expect(state.needsAttention).toBe(false);
 	});
 
-	it("ask requests populate uiRequests with question/options and set attention", () => {
+	it("ask requests populate uiRequests with the questions[] array and set attention", () => {
 		const state = makeState();
 		applySessionEvent(state, {
 			type: "extension_ui_request",
 			id: "a1",
 			method: "ask",
 			title: "Choose a database",
-			question: "Which persistence strategy?",
-			options: ["SQLite", "Postgres"],
-			multiSelect: true,
-			multiline: false,
-			allowFreeText: true,
+			questions: [
+				{
+					question: "Which persistence strategy?",
+					title: "Storage",
+					options: ["SQLite", "Postgres"],
+					multiSelect: true,
+					multiline: false,
+					allowFreeText: true,
+				},
+			],
 		});
 		expect(state.uiRequests).toHaveLength(1);
 		expect(state.uiRequests[0]).toMatchObject({
 			id: "a1",
 			method: "ask",
 			title: "Choose a database",
-			question: "Which persistence strategy?",
-			options: ["SQLite", "Postgres"],
-			multiSelect: true,
-			allowFreeText: true,
+			questions: [
+				{
+					question: "Which persistence strategy?",
+					title: "Storage",
+					options: ["SQLite", "Postgres"],
+					multiSelect: true,
+					allowFreeText: true,
+				},
+			],
 		});
 		expect(state.needsAttention).toBe(true);
 
 		resolveUiRequest(state, "a1");
 		expect(state.uiRequests).toHaveLength(0);
 		expect(state.needsAttention).toBe(false);
+	});
+
+	it("parses multiple questions in a single ask request", () => {
+		const state = makeState();
+		applySessionEvent(state, {
+			type: "extension_ui_request",
+			id: "a-multi",
+			method: "ask",
+			title: "Setup",
+			questions: [
+				{ question: "First?", options: ["A", "B"] },
+				{ question: "Second?", multiline: true },
+			],
+		});
+		expect(state.uiRequests[0]?.questions).toHaveLength(2);
+		expect(state.uiRequests[0]?.questions?.[1]).toMatchObject({ question: "Second?", multiline: true });
+	});
+
+	it("defaults questions to an empty array when the ask event omits them", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "extension_ui_request", id: "a-empty", method: "ask", title: "Choose" });
+		expect(state.uiRequests[0]?.questions).toEqual([]);
 	});
 
 	it("extracts the numeric ask timeout and absolute deadline onto the ui request", () => {
@@ -1005,8 +1079,7 @@ describe("applySessionEvent — extension UI", () => {
 			id: "a-timeout",
 			method: "ask",
 			title: "Choose",
-			question: "Which?",
-			options: ["a", "b"],
+			questions: [{ question: "Which?", options: ["a", "b"] }],
 			timeout: 30_000,
 			expiresAt: 1_030_000,
 		});
@@ -1022,8 +1095,7 @@ describe("applySessionEvent — extension UI", () => {
 			id: "a-bad-timeout",
 			method: "ask",
 			title: "Choose",
-			question: "Which?",
-			options: ["a"],
+			questions: [{ question: "Which?", options: ["a"] }],
 			timeout: "soon",
 			expiresAt: "later",
 		});

@@ -10,6 +10,7 @@
  * - confirm() - on session_before_switch
  * - input() - via /rpc-input command
  * - editor() - via /rpc-editor command
+ * - ask() - via /rpc-ask command
  * - notify() - after each dialog completes
  * - setStatus() - on turn_start/turn_end
  * - setWidget() - on session_start
@@ -109,6 +110,34 @@ export default function (dreb: ExtensionAPI) {
 			} else {
 				ctx.ui.notify("Editor cancelled", "info");
 			}
+		},
+	});
+
+	// -- batch ask wizard via command --
+
+	dreb.registerCommand("rpc-ask", {
+		description: "Open a batch question wizard (demonstrates ctx.ui.ask in RPC)",
+		handler: async (_args, ctx) => {
+			const result = await ctx.ui.ask({
+				title: "Configure the RPC demo",
+				questions: [
+					{
+						question: "Which **transport checks** should run?",
+						title: "Checks",
+						options: ["Protocol", "Reconnect", "Timeout"],
+						multiSelect: true,
+						allowFreeText: true,
+					},
+					{
+						question: "Anything else the RPC host should display?",
+						title: "Notes",
+						multiline: true,
+					},
+				],
+			});
+			if (!result) return;
+			const answered = result.answers.filter((answer) => !answer.skipped).length;
+			ctx.ui.notify(`Submitted ${answered} of ${result.answers.length} answers`, "info");
 		},
 	});
 

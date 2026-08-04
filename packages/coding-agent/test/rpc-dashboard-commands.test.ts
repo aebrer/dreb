@@ -309,8 +309,7 @@ describe("runRpcMode dashboard dispatcher", () => {
 
 			const pendingAsk = session.extensionRunner!.createContext().ui.ask({
 				title: "Choose a database",
-				question: "Which one?",
-				options: ["SQLite", "Postgres"],
+				questions: [{ question: "Which one?", options: ["SQLite", "Postgres"] }],
 			});
 			const request = outputs[0]!;
 			expect(request).toMatchObject({ type: "extension_ui_request", method: "ask" });
@@ -336,8 +335,10 @@ describe("runRpcMode dashboard dispatcher", () => {
 				},
 			});
 
-			handleInputLine!(JSON.stringify({ type: "extension_ui_response", id: request.id, selected: ["SQLite"] }));
-			await expect(pendingAsk).resolves.toEqual({ selected: ["SQLite"], customText: undefined });
+			handleInputLine!(
+				JSON.stringify({ type: "extension_ui_response", id: request.id, answers: [{ selected: ["SQLite"] }] }),
+			);
+			await expect(pendingAsk).resolves.toEqual({ answers: [{ selected: ["SQLite"], skipped: false }] });
 		} finally {
 			cleanup();
 			for (const listener of process.stdin.listeners("end")) {

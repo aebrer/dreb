@@ -1162,6 +1162,73 @@ export function createRpcExtensionUIContext(
 		});
 	}
 
+	// Serialize `ask` requests so at most one ask wizard is ever pending, mirroring
+	// the TUI's single-dialog queue (`enqueueExtensionDialog`). Tool execution runs
+	// in parallel, so a turn can issue several `ask_user` calls at once; without
+	// this the Dashboard (which renders a single pending ask) would leave the extra
+	// wizards invisible and their promises hanging until the turn aborts. The first
+	// ask runs synchronously (preserving immediate request emission); later ones
+	// wait in a FIFO. A call whose signal aborts while still queued settles with the
+	// aborted value and never emits a request.
+	let askInFlight = false;
+	const askWaiters: Array<() => void> = [];
+	const runNextAsk = () => {
+		if (askInFlight) return;
+		const next = askWaiters.shift();
+		if (!next) return;
+		askInFlight = true;
+		next();
+	};
+	function serializeAsk<T>(
+		opts: ExtensionUIDialogOptions | undefined,
+		abortedValue: T,
+		run: () => Promise<T>,
+	): Promise<T> {
+		const signal = opts?.signal;
+		if (signal?.aborted) return Promise.resolve(abortedValue);
+		return new Promise<T>((resolve, reject) => {
+			let settled = false;
+			const finish = (value: T) => {
+				if (settled) return;
+				settled = true;
+				resolve(value);
+			};
+			// A started run's outcome propagates verbatim (a host/protocol failure
+			// must still reject so the ask_user tool reports it distinctly).
+			const fail = (error: unknown) => {
+				if (settled) return;
+				settled = true;
+				reject(error);
+			};
+			// While still queued, a signal abort removes this task and settles it
+			// without ever emitting. Once started, createDialogPromise owns abort.
+			const onAbort = () => {
+				const index = askWaiters.indexOf(startTask);
+				if (index === -1) return;
+				askWaiters.splice(index, 1);
+				finish(abortedValue);
+			};
+			const startTask = () => {
+				signal?.removeEventListener("abort", onAbort);
+				if (signal?.aborted) {
+					finish(abortedValue);
+					askInFlight = false;
+					runNextAsk();
+					return;
+				}
+				run()
+					.then(finish, fail)
+					.finally(() => {
+						askInFlight = false;
+						runNextAsk();
+					});
+			};
+			signal?.addEventListener("abort", onAbort, { once: true });
+			askWaiters.push(startTask);
+			runNextAsk();
+		});
+	}
+
 	/**
 	 * Create an extension UI context that uses the RPC protocol.
 	 */
@@ -1182,43 +1249,57 @@ export function createRpcExtensionUIContext(
 			),
 
 		ask: (request, opts) =>
-			createDialogPromise(
-				opts,
-				undefined,
-				{
-					method: "ask",
-					title: request.title ?? "Question",
-					question: request.question,
-					options: request.options,
-					allowFreeText: request.allowFreeText,
-					multiSelect: request.multiSelect,
-					multiline: request.multiline,
-					timeout: opts?.timeout,
-					// Preserve the authoritative deadline across Dashboard reload,
-					// resync, and drill-in hydration instead of restarting the full
-					// duration whenever the question component remounts.
-					expiresAt: opts?.timeout ? Date.now() + opts.timeout : undefined,
-				},
-				(response) => {
-					if ("cancelled" in response && response.cancelled) {
-						onAskStop();
-						return undefined;
-					}
-					const selected = (response as { selected?: unknown }).selected;
-					const customText = (response as { customText?: unknown }).customText;
-					if (!Array.isArray(selected) || !selected.every((value) => typeof value === "string")) {
-						throw new Error("Invalid RPC ask response: selected must be an array of strings");
-					}
-					if (customText !== undefined && typeof customText !== "string") {
-						throw new Error("Invalid RPC ask response: customText must be a string");
-					}
-					if (selected.length === 0 && !customText?.trim()) {
-						onAskStop();
-						return undefined;
-					}
-					return { selected, customText };
-				},
-				onAskStop,
+			serializeAsk(opts, undefined, () =>
+				createDialogPromise(
+					opts,
+					undefined,
+					{
+						method: "ask",
+						title: request.title ?? "Question",
+						questions: request.questions.map((q) => ({
+							question: q.question,
+							title: q.title,
+							options: q.options,
+							allowFreeText: q.allowFreeText,
+							multiSelect: q.multiSelect,
+							multiline: q.multiline,
+						})),
+						timeout: opts?.timeout,
+						// Preserve the authoritative deadline across Dashboard reload,
+						// resync, and drill-in hydration instead of restarting the full
+						// duration whenever the wizard remounts.
+						expiresAt: opts?.timeout ? Date.now() + opts.timeout : undefined,
+					},
+					(response) => {
+						if ("cancelled" in response && response.cancelled) {
+							onAskStop();
+							return undefined;
+						}
+						const rawAnswers = (response as { answers?: unknown }).answers;
+						if (!Array.isArray(rawAnswers)) {
+							throw new Error("Invalid RPC ask response: answers must be an array");
+						}
+						const answers = rawAnswers.map((entry) => {
+							const selected = (entry as { selected?: unknown })?.selected;
+							const customText = (entry as { customText?: unknown })?.customText;
+							const skipped = (entry as { skipped?: unknown })?.skipped;
+							if (!Array.isArray(selected) || !selected.every((value) => typeof value === "string")) {
+								throw new Error("Invalid RPC ask response: each answer's selected must be an array of strings");
+							}
+							if (customText !== undefined && typeof customText !== "string") {
+								throw new Error("Invalid RPC ask response: customText must be a string");
+							}
+							const answered = selected.length > 0 || !!customText?.trim();
+							return {
+								selected,
+								customText: customText || undefined,
+								skipped: skipped === true || !answered,
+							};
+						});
+						return { answers };
+					},
+					onAskStop,
+				),
 			),
 
 		notify(message: string, type?: "info" | "warning" | "error"): void {

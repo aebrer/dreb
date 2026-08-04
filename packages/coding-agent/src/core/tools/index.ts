@@ -1,4 +1,5 @@
 export {
+	type AskUserAnswerDetail,
 	type AskUserDetails,
 	type AskUserInput,
 	createAskUserToolDefinition,

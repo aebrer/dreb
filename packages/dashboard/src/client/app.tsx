@@ -11,7 +11,7 @@ import { PairingScreen } from "./screens/pairing.js";
 import { SessionScreen } from "./screens/session.js";
 import { SettingsScreen } from "./screens/settings.js";
 import { SubagentScreen } from "./screens/subagent.js";
-import { resolveUiRequest } from "./state/reducer.js";
+import { pendingQuestionsReason, resolveUiRequest } from "./state/reducer.js";
 import { createAppStore } from "./state/store.js";
 
 const SERVICE_WORKER_READY_TIMEOUT_MS = 5000;
@@ -82,9 +82,10 @@ export function App(): JSX.Element {
 			if (session.needsAttention) {
 				sessionAttention.set(session.key, {
 					name: session.sessionName ?? session.title ?? session.key,
-					reason: session.uiRequests[0]?.title
-						? `waiting for input — ${session.uiRequests[0].title}`
-						: (session.statusEntries.find((s) => s.tone === "error")?.text ?? "needs attention"),
+					reason:
+						pendingQuestionsReason(session.uiRequests) ??
+						session.statusEntries.find((s) => s.tone === "error")?.text ??
+						"needs attention",
 				});
 			}
 		}
