@@ -107,6 +107,10 @@ describe("AgentSession dynamic tool registration", () => {
 		});
 
 		expect(session.getActiveToolNames()).toContain("ask_user");
+		expect(session.getActiveToolNames()).toContain("watch_github_ci");
+		expect(session.systemPrompt).toContain(
+			"- watch_github_ci: Watch GitHub pull-request CI until checks pass or fail",
+		);
 		expect(session.extensionRunner).toBeDefined();
 		expect(session.extensionRunner?.hasUI()).toBe(false);
 
@@ -115,7 +119,7 @@ describe("AgentSession dynamic tool registration", () => {
 			expect(tool).toBeDefined();
 			return tool!.execute(
 				"ask-call",
-				{ question: "Which database?", options: ["SQLite", "Postgres"] },
+				{ questions: [{ question: "Which database?", options: ["SQLite", "Postgres"] }] },
 				new AbortController().signal,
 				() => {},
 			);
@@ -124,24 +128,26 @@ describe("AgentSession dynamic tool registration", () => {
 		// The actual session-wrapped tool must receive the no-host context rather
 		// than calling an unreachable UI implementation.
 		await expect(executeAskUser()).resolves.toMatchObject({
-			details: { unavailable: true, skipped: true },
+			details: { unavailable: true, answers: [{ skipped: true }] },
 		});
 
-		const firstAsk = vi.fn(async () => ({ selected: ["SQLite"] }));
+		const firstAsk = vi.fn(async () => ({ answers: [{ selected: ["SQLite"] }] }));
 		await session.bindExtensions({ uiContext: { ask: firstAsk } as any });
 		await expect(executeAskUser()).resolves.toMatchObject({
-			details: { selected: ["SQLite"], unavailable: false, skipped: false },
+			details: { unavailable: false, answers: [{ selected: ["SQLite"], skipped: false }] },
 		});
 		expect(firstAsk).toHaveBeenCalledWith(
-			expect.objectContaining({ question: "Which database?" }),
+			expect.objectContaining({ questions: [expect.objectContaining({ question: "Which database?" })] }),
 			expect.objectContaining({ signal: expect.any(AbortSignal) }),
 		);
 
 		// Context is resolved for each execution, so rebinding the host UI must
 		// not leave the base-tool wrapper pointing at the previous implementation.
-		const secondAsk = vi.fn(async () => ({ selected: ["Postgres"] }));
+		const secondAsk = vi.fn(async () => ({ answers: [{ selected: ["Postgres"] }] }));
 		await session.bindExtensions({ uiContext: { ask: secondAsk } as any });
-		await expect(executeAskUser()).resolves.toMatchObject({ details: { selected: ["Postgres"] } });
+		await expect(executeAskUser()).resolves.toMatchObject({
+			details: { answers: [{ selected: ["Postgres"] }] },
+		});
 		expect(firstAsk).toHaveBeenCalledTimes(1);
 		expect(secondAsk).toHaveBeenCalledTimes(1);
 

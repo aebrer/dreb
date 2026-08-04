@@ -8,6 +8,7 @@ import { createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } fro
 import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, StatusChip, Topbar } from "../components/common.js";
+import { pendingQuestionsReason } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
 
 function runtimeStatus(runtime: RuntimeInfoDto): "running" | "attention" | "idle" | "error" {
@@ -85,9 +86,7 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 				{shortenPath(props.runtime.cwd)}
 			</p>
 			<Show when={status() === "attention"}>
-				<p class="attention-reason">
-					{session()?.uiRequests[0] ? `waiting for input — ${session()!.uiRequests[0].title}` : "needs attention"}
-				</p>
+				<p class="attention-reason">{pendingQuestionsReason(session()?.uiRequests ?? []) ?? "needs attention"}</p>
 			</Show>
 			<Show when={props.runtime.error ?? session()?.lastError}>
 				<p class="error-reason">{props.runtime.error ?? session()!.lastError}</p>

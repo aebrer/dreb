@@ -1138,45 +1138,19 @@ details.thinking .thinking-body {
 	font-weight: 600;
 }
 
-.subagent-strip {
-	border: var(--hairline);
-	border-radius: var(--radius);
-	padding: var(--space-2) var(--space-3);
-	font-size: var(--fs-secondary);
+.subagents .subagent-list {
+	list-style: none;
+	padding-top: var(--space-1);
 	display: flex;
-	align-items: center;
-	gap: var(--space-3);
-	flex-wrap: wrap;
+	flex-direction: column;
+	gap: var(--space-1);
+	/* Bounded overflow: many subagents scroll instead of growing the dock. */
+	max-height: 10rem;
+	overflow-y: auto;
 }
 
-.subagent-strip .count,
-.subagent-strip .collapsed-hint {
-	color: var(--muted);
-	font-size: var(--fs-small);
-	white-space: nowrap;
-}
-
-.subagent-strip .subagent-toggle {
-	border: var(--hairline);
-	border-radius: var(--radius);
-	background: var(--bg);
-	color: var(--text);
-	font-family: inherit;
-	font-size: var(--fs-small);
-	padding: 1px var(--space-2);
-	cursor: pointer;
-}
-
-.subagent-strip .subagent-toggle:hover {
-	border-color: var(--text);
-}
-
-.subagent-strip.collapsed {
-	padding-block: var(--space-1);
-}
-
-.subagent-strip .agent-chip {
-	display: inline-flex;
+.subagents .agent-chip {
+	display: flex;
 	align-items: center;
 	gap: 6px;
 	border: var(--hairline);
@@ -1187,23 +1161,24 @@ details.thinking .thinking-body {
 	color: var(--text);
 	cursor: pointer;
 	transition: border-color 0.2s;
-	max-width: 260px;
 	font-family: inherit;
+	width: 100%;
+	text-align: left;
 }
 
-.subagent-strip .agent-chip:hover {
+.subagents .agent-chip:hover {
 	border-color: var(--text);
 }
 
-.subagent-strip .agent-chip .live {
+.subagents .agent-chip .live {
 	color: var(--status-running);
 }
 
-.subagent-strip .agent-chip .done {
+.subagents .agent-chip .done {
 	color: var(--muted);
 }
 
-.subagent-strip .agent-chip .task {
+.subagents .agent-chip .task {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -2207,11 +2182,12 @@ details.thinking .thinking-body {
 	outline: none;
 }
 
-/* ------------------------------------------------------------- ask_user dialog */
+/* ------------------------------------------------------------- ask_user wizard */
 
-/* Inline ask card — flows at the end of the transcript so the whole chat area
-   stays scrollable while the agent waits for an answer. */
-.ask-inline {
+/* Multi-question wizard — flows at the end of the transcript so the whole chat
+   area stays scrollable while the agent waits for answers. A single request may
+   carry one or more questions rendered as switchable tabs. */
+.ask-wizard {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
@@ -2225,33 +2201,101 @@ details.thinking .thinking-body {
 	background: color-mix(in srgb, var(--status-attention) 6%, var(--surface, transparent));
 }
 
-.ask-inline-header {
+.ask-wizard-header {
+	display: flex;
+	align-items: baseline;
+	gap: var(--space-2);
+}
+
+.ask-wizard-title {
 	font-weight: 600;
 	color: var(--text);
 }
 
-.ask-inline-countdown {
+.ask-wizard-countdown {
 	font-weight: 400;
 	color: var(--muted);
 }
 
-.ask-inline-question {
-	margin: 0 0 var(--space-2);
+/* Tab strip — one tab per question plus a trailing Submit/review tab. Only shown
+   when the request carries 2+ questions. */
+.ask-tab-strip {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--space-1);
+}
+
+.ask-tab {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--muted);
+	padding: 2px var(--space-2);
+	cursor: pointer;
+	font-family: inherit;
+	font-size: var(--fs-small);
+	max-width: 22ch;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ask-tab.selected {
+	border-left: 3px solid var(--status-attention);
+	background: color-mix(in srgb, var(--status-attention) 12%, var(--surface, transparent));
+	color: var(--text);
+	/* The active tab shows its full title; inactive tabs stay capped + ellipsized. */
+	max-width: none;
+	overflow: visible;
+	text-overflow: clip;
+}
+
+/* Answered (but not active) tabs read as complete via normal text weight/color
+   plus a trailing check — no terminal-style colored dot. */
+.ask-tab.answered {
 	color: var(--text);
 }
 
-.ask-inline-actions {
+.ask-tab-check {
+	color: var(--status-attention);
+	font-size: var(--fs-small);
+}
+
+.ask-tab-submit {
+	font-weight: 600;
+}
+
+.ask-tab-panel.hidden {
+	display: none;
+}
+
+/* Compact question panel. */
+.ask-question {
 	display: flex;
-	justify-content: flex-end;
+	flex-direction: column;
 	gap: var(--space-2);
-	margin-top: var(--space-1);
+}
+
+.ask-question-title {
+	margin: 0;
+	font-size: var(--fs-base);
+	font-weight: 600;
+	color: var(--text);
+}
+
+.ask-question-body {
+	margin: 0;
+	color: var(--text);
 }
 
 .ask-options {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
-	margin: 0 0 var(--space-3);
+	margin: 0;
 	padding: 0;
 	border: 0;
 	min-width: 0;
@@ -2285,19 +2329,101 @@ details.thinking .thinking-body {
 }
 
 .ask-option.selected {
-	border-color: var(--status-running);
-	background: color-mix(in srgb, var(--status-running) 12%, transparent);
+	border-color: var(--status-attention);
+	background: color-mix(in srgb, var(--status-attention) 10%, transparent);
 }
 
 .ask-option input {
 	width: auto;
 	margin: 0;
-	accent-color: var(--status-running);
+	accent-color: var(--status-attention);
 	cursor: pointer;
+}
+
+/* Single-select hides the native radio while keeping it accessible: the row
+   highlight + trailing ✔ convey the choice. */
+.ask-option-input--hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* Leading 1-9 keyboard hint number for each option. */
+.ask-option-index {
+	flex: 0 0 auto;
+	min-width: 1.4em;
+	text-align: center;
+	color: var(--muted);
+	font-size: var(--fs-small);
+	font-variant-numeric: tabular-nums;
+}
+
+.ask-option-label {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.ask-option-check {
+	flex: 0 0 auto;
+	color: var(--status-attention);
+}
+
+.ask-custom-field {
+	margin: 0;
 }
 
 .ask-custom-label {
 	font-size: var(--fs-small);
+	color: var(--muted);
+}
+
+.ask-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: var(--space-2);
+	margin-top: var(--space-1);
+}
+
+/* Review panel — per-question summary before submitting all answers. */
+.ask-review {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+}
+
+.ask-review-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.ask-review-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: var(--space-2) 0;
+	border-bottom: var(--hairline);
+}
+
+.ask-review-question {
+	font-weight: 600;
+	color: var(--text);
+}
+
+.ask-review-answer {
+	color: var(--text);
+}
+
+.ask-review-answer.muted {
 	color: var(--muted);
 }
 
@@ -2706,25 +2832,6 @@ details.thinking .thinking-body {
 
 	.trusted-context-folder-add .btn {
 		align-self: flex-start;
-	}
-
-	.subagent-strip {
-		align-items: stretch;
-		gap: var(--space-2);
-	}
-
-	.subagent-strip .subagent-toggle {
-		flex: 0 0 auto;
-		min-height: 32px;
-	}
-
-	.subagent-strip .count,
-	.subagent-strip .collapsed-hint {
-		white-space: normal;
-	}
-
-	.subagent-strip .agent-chip {
-		max-width: 100%;
 	}
 
 	.head-actions .btn {

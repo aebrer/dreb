@@ -1081,7 +1081,7 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).not.toContain("follow-up");
 	});
 
-	it("ask_user dialog: native checkboxes + free text combine into one response", async () => {
+	it("ask_user wizard: native checkboxes + free text combine into one answers[] entry", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask");
 		session.uiRequests = [
@@ -1089,10 +1089,14 @@ describe("screen smoke tests", () => {
 				id: "a1",
 				method: "ask",
 				title: "Choose validation",
-				question: "Which **checks**?\n\nUse `fast` validation.",
-				options: ["unit", "browser"],
-				multiSelect: true,
-				allowFreeText: true,
+				questions: [
+					{
+						question: "Which **checks**?\n\nUse `fast` validation.",
+						options: ["unit", "browser"],
+						multiSelect: true,
+						allowFreeText: true,
+					},
+				],
 			},
 		];
 		const fakeStore = {
@@ -1104,13 +1108,13 @@ describe("screen smoke tests", () => {
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask" />);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		const question = el.querySelector(".ask-inline-question");
+		const question = el.querySelector(".ask-question-body");
 		expect(question?.querySelector("strong")?.textContent).toBe("checks");
 		expect(question?.querySelector("code")?.textContent).toBe("fast");
 		expect(question?.textContent).not.toContain("**");
 		// ask_user renders inline in the transcript flow (scrollable), not as a
 		// blocking modal overlay.
-		expect(el.querySelector(".chat-inner .ask-inline")).not.toBeNull();
+		expect(el.querySelector(".chat-inner .ask-wizard")).not.toBeNull();
 		expect(el.querySelector(".modal-backdrop")).toBeNull();
 		const checkboxes = el.querySelectorAll<HTMLInputElement>('.ask-option input[type="checkbox"]');
 		expect(checkboxes.length).toBe(2);
@@ -1132,17 +1136,497 @@ describe("screen smoke tests", () => {
 			expect.objectContaining({
 				type: "extension_ui_response",
 				id: "a1",
-				selected: ["unit"],
-				customText: "lint",
+				answers: [expect.objectContaining({ selected: ["unit"], customText: "lint" })],
 			}),
 		);
+	});
+
+	it("ask_user wizard: N>=2 renders a tab strip with answered-state markers and a Submit tab", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-tabs");
+		session.uiRequests = [
+			{
+				id: "multi",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "Q one?", title: "First question", options: ["A", "B"] },
+					{ question: "Q two?", title: "Second question", options: ["C", "D"] },
+					{ question: "Q three?", title: "Third question", options: ["E", "F"] },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-tabs": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-tabs" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// A tab strip with one button per question plus a trailing Submit tab.
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		expect(tabs.length).toBe(4);
+		expect(tabs[0].textContent).toContain("First question");
+		expect(tabs[2].textContent).toContain("Third question");
+		expect(tabs[3].textContent).toContain("Submit");
+
+		// Every question starts unanswered (no answered class, no check).
+		const questionTabs = [...tabs].filter((t) => !t.classList.contains("ask-tab-submit"));
+		expect(questionTabs.every((t) => !t.classList.contains("answered"))).toBe(true);
+		expect(el.querySelectorAll(".ask-tab-check").length).toBe(0);
+
+		// All question panels + the review panel are mounted (so their state
+		// persists) but only the active question is visible.
+		const panels = el.querySelectorAll(".ask-tab-panel");
+		expect(panels.length).toBe(4);
+		const visible = [...panels].filter((p) => !p.classList.contains("hidden"));
+		expect(visible.length).toBe(1);
+
+		// Answering the active question marks its tab answered (class + trailing check).
+		el.querySelectorAll<HTMLInputElement>('.ask-option input[type="radio"]')[0].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const answeredTabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		expect(answeredTabs[0].classList.contains("answered")).toBe(true);
+		expect(answeredTabs[0].querySelector(".ask-tab-check")).not.toBeNull();
+	});
+
+	it("ask_user wizard: clicking a tab switches the active question", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-switch");
+		session.uiRequests = [
+			{
+				id: "switch",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First body", title: "Alpha", options: ["A", "B"] },
+					{ question: "Second body", title: "Beta", options: ["C", "D"] },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-switch": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-switch" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		// First question active by default.
+		expect(tabs[0].getAttribute("aria-selected")).toBe("true");
+		let activePanel = [...el.querySelectorAll(".ask-tab-panel")].find((p) => !p.classList.contains("hidden"));
+		expect(activePanel?.textContent).toContain("First body");
+
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+		activePanel = [...el.querySelectorAll(".ask-tab-panel")].find((p) => !p.classList.contains("hidden"));
+		expect(activePanel?.textContent).toContain("Second body");
+	});
+
+	it("ask_user wizard: free-text drafts persist across tabs and submit in question order", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-text-tabs");
+		session.uiRequests = [
+			{
+				id: "text-tabs",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First details?", title: "First", allowFreeText: true },
+					{ question: "Second details?", title: "Second", multiline: true },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-text-tabs": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-text-tabs" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		const first = el.querySelector<HTMLInputElement>("#ask-custom-text-tabs-0");
+		expect(first).not.toBeNull();
+		first!.value = "first detail";
+		first!.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const second = el.querySelector<HTMLTextAreaElement>("#ask-custom-text-tabs-1");
+		expect(second).not.toBeNull();
+		second!.value = "second detail";
+		second!.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		tabs[0].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(first!.value).toBe("first detail");
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(second!.value).toBe("second detail");
+
+		tabs[2].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const submitAll = [...el.querySelectorAll("button")].find((button) => button.textContent === "Submit all");
+		submitAll?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-text-tabs",
+			expect.objectContaining({
+				type: "extension_ui_response",
+				id: "text-tabs",
+				answers: [
+					expect.objectContaining({ selected: [], customText: "first detail" }),
+					expect.objectContaining({ selected: [], customText: "second detail" }),
+				],
+			}),
+		);
+	});
+
+	it("ask_user wizard: ArrowRight/ArrowLeft/Tab navigate tabs with wrap-around", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-kbnav");
+		session.uiRequests = [
+			{
+				id: "kbnav",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First body", title: "Alpha", options: ["A", "B"] },
+					{ question: "Second body", title: "Beta", options: ["C", "D"] },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-kbnav": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-kbnav" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Tabs: [question 0, question 1, Submit/review] → indices 0,1,2.
+		const activeIndex = () =>
+			[...el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab")].findIndex(
+				(t) => t.getAttribute("aria-selected") === "true",
+			);
+		const key = async (k: string) => {
+			window.dispatchEvent(new KeyboardEvent("keydown", { key: k }));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		};
+
+		expect(activeIndex()).toBe(0);
+		await key("ArrowRight");
+		expect(activeIndex()).toBe(1);
+		await key("ArrowRight");
+		expect(activeIndex()).toBe(2); // Submit/review tab
+		await key("ArrowRight");
+		expect(activeIndex()).toBe(0); // wraps forward past the review tab
+		await key("ArrowLeft");
+		expect(activeIndex()).toBe(2); // wraps backward to the review tab
+		await key("Tab");
+		expect(activeIndex()).toBe(0); // Tab advances and wraps
+	});
+
+	it("ask_user wizard: digit/Enter typed into a text field do not toggle options or submit", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-defer");
+		session.uiRequests = [
+			{
+				id: "defer",
+				method: "ask",
+				title: "Setup",
+				questions: [{ question: "Pick one", title: "Solo", options: ["A", "B"], multiline: true }],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-defer": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-defer" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const textarea = el.querySelector<HTMLTextAreaElement>(".ask-custom-field textarea");
+		expect(textarea).not.toBeNull();
+
+		// A digit typed into the free-text field must NOT toggle option 2.
+		textarea?.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const options = el.querySelectorAll<HTMLInputElement>(".ask-option input");
+		expect([...options].some((o) => o.checked)).toBe(false);
+
+		// Enter inside the textarea must NOT submit the single-question wizard.
+		textarea?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+	});
+
+	it("ask_user wizard: single-question Enter submits only from its own field, not Stop or outside inputs", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-enter-scope");
+		session.uiRequests = [
+			{
+				id: "enter-scope",
+				method: "ask",
+				title: "Solo",
+				questions: [{ question: "Only one?", options: ["A", "B"], allowFreeText: true }],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-enter-scope": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-enter-scope" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const fire = async (target: EventTarget, key: string) => {
+			target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		};
+
+		// Enter on the wizard's own Stop button must NOT submit a skipped answer —
+		// the button keeps its native Enter-to-click (abort) behavior instead.
+		const stop = [...el.querySelectorAll("button")].find((b) => b.textContent === "■ stop agent");
+		expect(stop).toBeTruthy();
+		await fire(stop!, "Enter");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+
+		// Enter on an unrelated single-line input elsewhere on the page (e.g. the
+		// model filter or rename field) must be left completely alone.
+		const outside = document.createElement("input");
+		outside.type = "text";
+		document.body.appendChild(outside);
+		await fire(outside, "Enter");
+		expect(vi.mocked(api.extensionUiResponse)).not.toHaveBeenCalled();
+		outside.remove();
+
+		// Enter from the wizard's OWN single-line answer field does submit.
+		const field = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		expect(field).toBeTruthy();
+		field!.value = "typed answer";
+		field!.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await fire(field!, "Enter");
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-enter-scope",
+			expect.objectContaining({
+				type: "extension_ui_response",
+				id: "enter-scope",
+				answers: [expect.objectContaining({ customText: "typed answer" })],
+			}),
+		);
+	});
+
+	it("ask_user wizard: arrow/Tab in a focused field do not switch tabs (N>=2)", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-kbnav-field");
+		session.uiRequests = [
+			{
+				id: "kbnav-field",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First body", title: "Alpha", options: ["A", "B"], allowFreeText: true },
+					{ question: "Second body", title: "Beta", multiline: true },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-kbnav-field": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-kbnav-field" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const activeIndex = () =>
+			[...el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab")].findIndex(
+				(t) => t.getAttribute("aria-selected") === "true",
+			);
+		const fireFrom = async (target: EventTarget, k: string) => {
+			target.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		};
+
+		// Start on the first question tab.
+		expect(activeIndex()).toBe(0);
+
+		// A focused single-line input on question 0: arrows move the caret and Tab
+		// does its normal thing — none may switch the active wizard tab.
+		const input = el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]');
+		expect(input).toBeTruthy();
+		await fireFrom(input!, "ArrowLeft");
+		expect(activeIndex()).toBe(0);
+		await fireFrom(input!, "ArrowRight");
+		expect(activeIndex()).toBe(0);
+		await fireFrom(input!, "Tab");
+		expect(activeIndex()).toBe(0);
+
+		// Switch to question 1 (a multiline textarea) and repeat from the textarea.
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(activeIndex()).toBe(1);
+
+		const textarea = el.querySelector<HTMLTextAreaElement>(".ask-custom-field textarea");
+		expect(textarea).toBeTruthy();
+		await fireFrom(textarea!, "ArrowLeft");
+		expect(activeIndex()).toBe(1);
+		await fireFrom(textarea!, "ArrowRight");
+		expect(activeIndex()).toBe(1);
+		await fireFrom(textarea!, "Tab");
+		expect(activeIndex()).toBe(1);
+	});
+
+	it("ask_user wizard: digit keys toggle options and Submit all sends one answer per question", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-digits");
+		session.uiRequests = [
+			{
+				id: "digits",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First?", title: "One", options: ["A", "B"] },
+					{ question: "Second?", title: "Two", options: ["C", "D"] },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-digits": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-digits" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Digit "2" selects the second option of the active (first) question.
+		window.dispatchEvent(new KeyboardEvent("keydown", { key: "2" }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Switch to the second question and pick its first option.
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		window.dispatchEvent(new KeyboardEvent("keydown", { key: "1" }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Move to the review tab and submit everything.
+		tabs[2].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const submitAll = [...el.querySelectorAll("button")].find((b) => b.textContent === "Submit all");
+		submitAll?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-digits",
+			expect.objectContaining({
+				type: "extension_ui_response",
+				id: "digits",
+				answers: [expect.objectContaining({ selected: ["B"] }), expect.objectContaining({ selected: ["C"] })],
+			}),
+		);
+	});
+
+	it("ask_user wizard: review panel summarizes answers and marks unanswered questions", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-review");
+		session.uiRequests = [
+			{
+				id: "review",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First?", title: "One", options: ["A", "B"] },
+					{ question: "Second?", title: "Two", options: ["C", "D"] },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-review": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-review" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Answer only the first question, then open the review tab.
+		el.querySelectorAll<HTMLInputElement>('.ask-option input[type="radio"]')[0].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		tabs[2].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const items = el.querySelectorAll(".ask-review-item");
+		expect(items.length).toBe(2);
+		expect(items[0].querySelector(".ask-review-answer")?.textContent).toContain("A");
+		expect(items[1].querySelector(".ask-review-answer.muted")?.textContent).toContain("(unanswered)");
+
+		// Submitting marks the unanswered second question as skipped.
+		const submitAll = [...el.querySelectorAll("button")].find((b) => b.textContent === "Submit all");
+		submitAll?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-review",
+			expect.objectContaining({
+				id: "review",
+				answers: [
+					expect.objectContaining({ selected: ["A"] }),
+					expect.objectContaining({ selected: [], skipped: true }),
+				],
+			}),
+		);
+	});
+
+	it("ask_user wizard: a single-question request shows no tab strip", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-one");
+		session.uiRequests = [
+			{ id: "o1", method: "ask", title: "Solo", questions: [{ question: "Only one?", options: ["A", "B"] }] },
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-one": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-one" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(el.querySelector(".ask-tab-strip")).toBeNull();
+		expect(el.querySelector(".ask-wizard")).not.toBeNull();
+		expect(el.querySelector(".ask-question")).not.toBeNull();
 	});
 
 	it("ask_user dialog: single-select keeps stop-agent accessible in the mobile question card", async () => {
 		stubMobile(true);
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask2");
-		session.uiRequests = [{ id: "a2", method: "ask", title: "Pick", question: "Which one?", options: ["A", "B"] }];
+		session.uiRequests = [
+			{ id: "a2", method: "ask", title: "Pick", questions: [{ question: "Which one?", options: ["A", "B"] }] },
+		];
 		const fakeStore = {
 			...store,
 			sessions: { "k-ask2": session },
@@ -1168,7 +1652,12 @@ describe("screen smoke tests", () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-stop-retry");
 		session.uiRequests = [
-			{ id: "a-stop-retry", method: "ask", title: "Retry", question: "Still there?", options: ["A", "B"] },
+			{
+				id: "a-stop-retry",
+				method: "ask",
+				title: "Retry",
+				questions: [{ question: "Still there?", options: ["A", "B"] }],
+			},
 		];
 		const fakeStore = {
 			...store,
@@ -1185,7 +1674,7 @@ describe("screen smoke tests", () => {
 		stop?.click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 
-		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.querySelector(".ask-wizard")).not.toBeNull();
 		expect(el.textContent).toContain("offline");
 		expect(stop?.disabled).toBe(false);
 
@@ -1203,9 +1692,7 @@ describe("screen smoke tests", () => {
 				id: "a-state",
 				method: "ask",
 				title: "Pick",
-				question: "Which?",
-				options: ["A", "B"],
-				allowFreeText: true,
+				questions: [{ question: "Which?", options: ["A", "B"], allowFreeText: true }],
 			},
 		];
 		const resolveUiRequest = vi.fn();
@@ -1237,7 +1724,7 @@ describe("screen smoke tests", () => {
 
 		// Failure keeps the question and preserves the entered answer state.
 		expect(resolveUiRequest).not.toHaveBeenCalled();
-		expect(el.querySelector(".ask-inline")).not.toBeNull();
+		expect(el.querySelector(".ask-wizard")).not.toBeNull();
 		expect(el.querySelector<HTMLInputElement>('.ask-option input[type="radio"]')?.checked).toBe(true);
 		expect(el.querySelector<HTMLInputElement>('input[id^="ask-custom-"]')?.value).toBe("extra");
 
@@ -1247,7 +1734,10 @@ describe("screen smoke tests", () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenLastCalledWith(
 			"k-ask-state",
-			expect.objectContaining({ id: "a-state", selected: ["A"], customText: "extra" }),
+			expect.objectContaining({
+				id: "a-state",
+				answers: [expect.objectContaining({ selected: ["A"], customText: "extra" })],
+			}),
 		);
 		expect(resolveUiRequest).toHaveBeenCalledWith("k-ask-state", "a-state");
 	});
@@ -1255,7 +1745,9 @@ describe("screen smoke tests", () => {
 	it("suppresses duplicate sends while a response POST is still in flight", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-dedup");
-		session.uiRequests = [{ id: "a-dedup", method: "ask", title: "Pick", question: "Which?", options: ["A", "B"] }];
+		session.uiRequests = [
+			{ id: "a-dedup", method: "ask", title: "Pick", questions: [{ question: "Which?", options: ["A", "B"] }] },
+		];
 		const fakeStore = {
 			...store,
 			sessions: { "k-ask-dedup": session },
@@ -1297,8 +1789,7 @@ describe("screen smoke tests", () => {
 				id: "a-esc",
 				method: "ask",
 				title: "Pick",
-				question: "Which?",
-				options: ["A", "B"],
+				questions: [{ question: "Which?", options: ["A", "B"] }],
 				timeout: 30_000,
 			},
 		];
@@ -1332,8 +1823,7 @@ describe("screen smoke tests", () => {
 				id: "a-timeout",
 				method: "ask",
 				title: "Pick",
-				question: "Which?",
-				options: ["A", "B"],
+				questions: [{ question: "Which?", options: ["A", "B"] }],
 				timeout: 30_000,
 			},
 		];
@@ -1373,8 +1863,7 @@ describe("screen smoke tests", () => {
 				id: "a-recovered-timeout",
 				method: "ask",
 				title: "Pick",
-				question: "Which?",
-				options: ["A", "B"],
+				questions: [{ question: "Which?", options: ["A", "B"] }],
 				timeout: 30_000,
 				// Twenty-five seconds elapsed before reload; only five remain.
 				expiresAt: Date.now() + 5_000,
@@ -1526,7 +2015,7 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("compose ▴");
 	});
 
-	it("in-session subagent panel collapses without hiding the count", () => {
+	it("in-session subagent panel collapses with the task-tracker details pattern", () => {
 		const store = makeStore() as any;
 		const session = populatedSession("k-subpanel");
 		const fakeStore = {
@@ -1536,15 +2025,79 @@ describe("screen smoke tests", () => {
 			hydrateSession: async () => {},
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-subpanel" />);
+		const panel = el.querySelector("details.subagents") as HTMLDetailsElement;
+		expect(panel).not.toBeNull();
+		expect(panel.open).toBe(true);
+		expect(panel.querySelector("summary")?.textContent).toContain("subagents — 1 running · 0 done");
 		expect(el.textContent).toContain("scan things");
-		const toggle = [...el.querySelectorAll("button")].find((button) => button.textContent?.includes("subagents ▾"));
-		expect(toggle).toBeDefined();
-		(toggle as HTMLButtonElement).click();
 
-		expect(el.textContent).toContain("subagents ▴");
-		expect(el.textContent).toContain("1 running · 0 done");
-		expect(el.textContent).toContain("subagent panel hidden");
-		expect(el.textContent).not.toContain("scan things");
+		setDetailsOpen(panel, false);
+		expect(panel.open).toBe(false);
+		// The count stays visible in the summary while collapsed
+		expect(panel.querySelector("summary")?.textContent).toContain("subagents — 1 running · 0 done");
+	});
+
+	it("starts the subagent panel collapsed on mobile while keeping the count visible", () => {
+		stubMobile(true);
+		const store = makeStore() as any;
+		const session = populatedSession("k-subpanel-mobile");
+		const fakeStore = {
+			...store,
+			sessions: { "k-subpanel-mobile": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-subpanel-mobile" />);
+		const panel = el.querySelector("details.subagents") as HTMLDetailsElement;
+		expect(panel).not.toBeNull();
+		expect(panel.open).toBe(false);
+		expect(panel.querySelector("summary")?.textContent).toContain("subagents — 1 running · 0 done");
+	});
+
+	it("lists every subagent beyond the old four-agent cap, newest spawn first, with drill-in navigation", () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-submany");
+		applySessionEvent(session, { type: "agent_start" });
+		for (let i = 1; i <= 6; i++) {
+			applySessionEvent(session, {
+				type: "background_agent_start",
+				agentId: `bg${i}`,
+				agentType: "Explore",
+				taskSummary: `task ${i}`,
+				sessionDir: "/dir",
+			});
+		}
+		for (let i = 2; i <= 6; i++) {
+			applySessionEvent(session, {
+				type: "background_agent_end",
+				agentId: `bg${i}`,
+				agentType: "Explore",
+				success: true,
+			});
+		}
+		// Pin distinct spawn times so the newest-first ordering is deterministic
+		for (let i = 1; i <= 6; i++) {
+			session.backgroundAgents[`bg${i}`]!.startedAt = new Date(1_000_000 + i * 1000).toISOString();
+		}
+		const navigate = vi.fn();
+		const fakeStore = {
+			...store,
+			sessions: { "k-submany": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+			navigate,
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-submany" />);
+		const chips = el.querySelectorAll(".subagent-list .agent-chip");
+		expect(chips).toHaveLength(6);
+		expect(el.textContent).toContain("subagents — 1 running · 5 done");
+
+		// Newest spawned at the top, oldest at the bottom
+		expect(chips[0]?.textContent).toContain("task 6");
+		expect(chips[5]?.textContent).toContain("task 1");
+
+		(chips[0] as HTMLButtonElement).click();
+		expect(navigate).toHaveBeenCalledWith({ screen: "subagent", key: "k-submany", agentId: "bg6" });
 	});
 
 	it("subagent drill-in renders read-only with the fixed note and no composer", () => {

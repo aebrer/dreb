@@ -93,7 +93,7 @@ import {
 } from "../../utils/message-text.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import { ArminComponent } from "./components/armin.js";
-import { AskUserComponent } from "./components/ask-user.js";
+import { AskWizardComponent } from "./components/ask-wizard.js";
 import { AssistantMessageComponent } from "./components/assistant-message.js";
 import { BashExecutionComponent } from "./components/bash-execution.js";
 import { BorderedLoader } from "./components/bordered-loader.js";
@@ -260,7 +260,7 @@ export class InteractiveMode {
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
 	private extensionInput: ExtensionInputComponent | undefined = undefined;
 	private extensionEditor: ExtensionEditorComponent | undefined = undefined;
-	private extensionAsk: AskUserComponent | undefined = undefined;
+	private extensionAsk: AskWizardComponent | undefined = undefined;
 	private extensionDialogQueue: Promise<void> = Promise.resolve();
 	private extensionTerminalInputUnsubscribers = new Set<() => void>();
 
@@ -1997,7 +1997,9 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Show a rich ask_user question for extensions/built-in tools.
+	 * Show a rich multi-question ask_user wizard for extensions/built-in tools.
+	 * One call renders one wizard; the whole batch resolves together on Submit,
+	 * and Esc/timeout stops the current turn.
 	 */
 	private showExtensionAsk(request: AskRequest, opts?: ExtensionUIDialogOptions): Promise<AskResult | undefined> {
 		return new Promise((resolve) => {
@@ -2012,7 +2014,7 @@ export class InteractiveMode {
 			};
 			opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-			this.extensionAsk = new AskUserComponent(
+			this.extensionAsk = new AskWizardComponent(
 				request,
 				(result) => {
 					opts?.signal?.removeEventListener("abort", onAbort);
@@ -2022,7 +2024,7 @@ export class InteractiveMode {
 				() => {
 					opts?.signal?.removeEventListener("abort", onAbort);
 					this.hideExtensionAsk();
-					// The question-level escape action means stop the whole turn, not
+					// The wizard-level escape action means stop the whole turn, not
 					// continue without an answer. Mirror the default editor's Escape
 					// behavior, including background-agent and queued-message cleanup.
 					this.cancelBackgroundAgents();
@@ -2040,7 +2042,7 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * Hide the ask_user question.
+	 * Hide the ask_user wizard.
 	 */
 	private hideExtensionAsk(): void {
 		this.extensionAsk?.dispose();

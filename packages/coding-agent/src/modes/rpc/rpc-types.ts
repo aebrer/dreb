@@ -640,6 +640,23 @@ export interface RpcSettingsUpdate {
 // Extension UI Events (stdout)
 // ============================================================================
 
+/** A single question inside an `ask` extension-UI request. */
+export interface RpcAskQuestion {
+	question: string;
+	title?: string;
+	options?: string[];
+	allowFreeText?: boolean;
+	multiSelect?: boolean;
+	multiline?: boolean;
+}
+
+/** A single answer in an `ask` extension-UI response, one per question in order. */
+export interface RpcAskAnswer {
+	selected: string[];
+	customText?: string;
+	skipped?: boolean;
+}
+
 /** Emitted when an extension needs user input */
 export type RpcExtensionUIRequest =
 	| { type: "extension_ui_request"; id: string; method: "select"; title: string; options: string[]; timeout?: number }
@@ -658,11 +675,8 @@ export type RpcExtensionUIRequest =
 			id: string;
 			method: "ask";
 			title: string;
-			question: string;
-			options?: string[];
-			allowFreeText?: boolean;
-			multiSelect?: boolean;
-			multiline?: boolean;
+			/** One or more questions asked together as a single wizard. */
+			questions: RpcAskQuestion[];
 			timeout?: number;
 			/** Absolute Unix timestamp in milliseconds when the RPC-side timeout fires. */
 			expiresAt?: number;
@@ -706,7 +720,7 @@ export type RpcBlockingExtensionUIRequest = Extract<
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
-	| { type: "extension_ui_response"; id: string; selected: string[]; customText?: string }
+	| { type: "extension_ui_response"; id: string; answers: RpcAskAnswer[] }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 
 // ============================================================================

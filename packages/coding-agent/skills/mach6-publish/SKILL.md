@@ -14,7 +14,7 @@ argument-hint: "<pr-number>"
 2. **No `#N` in comment bodies** — Use "finding 3", "item 3" etc. instead.
 3. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
-5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 ## Step 1: Set up task tracking
 
@@ -34,10 +34,9 @@ tasks_update([
 gh pr checkout <pr-number>
 git pull
 gh pr view <pr-number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,comments,body
-gh pr checks <pr-number>
 ```
 
-**Note:** `gh pr checks` returns exit code 8 while checks are still pending — this is expected, not a failure. Wait and re-run if needed.
+Use `watch_github_ci` with `pr: "<pr-number>"` to block until CI passes or fails. Do not use `wait`, sleep, or repeated polling commands for CI.
 
 Read ALL PR comments to understand the full history — plans, reviews, assessments, progress updates, and discussion.
 
@@ -90,7 +89,7 @@ Update task: checks → completed, version → in_progress.
    git push
    ```
 
-5. Wait for CI to pass on the version bump commit before proceeding to merge.
+5. Use `watch_github_ci` with `pr: "<pr-number>"` and proceed only after it reports that CI passed on the version bump commit.
 
 If the project doesn't use versioning, skip this step.
 
@@ -127,7 +126,7 @@ Proactively review and update ALL documentation affected by the PR's changes. Th
    git push
    ```
 
-5. Wait for CI to pass on the docs commit.
+5. Use `watch_github_ci` with `pr: "<pr-number>"` and proceed only after it reports that CI passed on the docs commit.
 
 If no documentation changes are needed (rare), skip this step.
 
@@ -181,7 +180,7 @@ git push --tags
 
 3. Present draft to user for approval, then create:
    ```bash
-   GH_NOTES="$(mktemp /tmp/gh-release-notes.XXXXXX.md)"
+   GH_NOTES="$(mktemp /tmp/gh-release-notes.$$.XXXXXXXX)"
    cat > "$GH_NOTES" << 'MACH6_EOF'
    <release-notes>
    MACH6_EOF

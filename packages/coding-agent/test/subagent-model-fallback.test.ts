@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { complete, completeSimple, type Model } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ExtensionContext } from "../src/core/extensions/types.js";
@@ -1547,6 +1548,41 @@ describe("subagent promptGuidelines", () => {
 		expect(description).toContain("`task` for a single task");
 		expect(description).toContain("`tasks` for parallel execution in one call");
 		expect(description).toContain("`chain` for a sequential pipeline");
+	});
+
+	test("makes delegation optional and defines the default Explore role boundary", () => {
+		const guidelines = subagentToolDefinition.promptGuidelines ?? [];
+		const text = guidelines.join("\n");
+
+		expect(text).toContain("delegation is optional");
+		expect(text).toContain("When `agent` is omitted, the default is `Explore`");
+		expect(text).toContain("locating files, symbols, or documentation");
+		expect(text).toContain("enumerating call sites");
+		expect(text).toContain("quoting exact snippets");
+		expect(text).toContain("diagnose root causes");
+		expect(text).toContain("interpret ambiguous requirements");
+		expect(text).toContain("architecture or design decisions");
+		expect(text).toContain("recommend an implementation");
+		expect(text).toContain("produce an implementation plan");
+		expect(text).toContain("primary agent must synthesize Explore evidence and own those conclusions");
+		expect(text).toContain("Good default Explore tasks");
+		expect(text).toContain("Bad default Explore tasks");
+		expect(text).toContain("Parallel and chain modes do not make a role-inappropriate task suitable");
+		expect(text).toContain("Specialized agents may perform the broader work described by their own definitions");
+		expect(text).not.toContain("Use `subagent` to delegate focused, independent tasks to child agents");
+	});
+
+	test("bundled Explore definition matches the evidence-only boundary", () => {
+		const content = readFileSync(fileURLToPath(new URL("../agents/explore.md", import.meta.url)), "utf-8");
+		const result = parseAgentFrontmatter(content);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.config.description).toContain("Concrete evidence retrieval");
+		expect(result.config.description).not.toContain("Read-only");
+		expect(result.config.systemPrompt).toContain("primary agent owns synthesis and final conclusions");
+		expect(result.config.systemPrompt).toContain("Do not diagnose root causes");
+		expect(result.config.systemPrompt).toContain("tell the parent to use `feature-dev`");
 	});
 
 	test("parallel guideline requires one tasks-array call", () => {

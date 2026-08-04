@@ -351,7 +351,7 @@ describe("PWA client — notification dispatch gating", () => {
 		expect(opts?.data?.sessionKey).toBe("att-1");
 	});
 
-	it("fires for store.sessions UI requests with the request title as the reason", async () => {
+	it("fires for a non-ask UI request with the generic needs-attention reason", async () => {
 		setPermission("granted");
 		setHidden(true);
 		const stream = captureEnvelopeHandler();
@@ -365,18 +365,20 @@ describe("PWA client — notification dispatch gating", () => {
 		});
 		await flushEffects();
 
+		// Only `ask` requests carry a question count; other blocking dialogs
+		// (confirm/select/input/editor) fall back to the generic reason.
 		expect(document.title).toContain("◆");
 		expect(showNotification).toHaveBeenCalledWith(
 			"dreb — Review Session",
 			expect.objectContaining({
-				body: "waiting for input — Approve deploy",
+				body: "needs attention",
 				tag: "sess-ui",
 				data: { sessionKey: "sess-ui" },
 			}),
 		);
 	});
 
-	it("fires for an ask_user question with the question title as the reason", async () => {
+	it("fires for an ask_user request with the pending question count as the reason", async () => {
 		setPermission("granted");
 		setHidden(true);
 		const stream = captureEnvelopeHandler();
@@ -391,8 +393,7 @@ describe("PWA client — notification dispatch gating", () => {
 				id: "ask-1",
 				method: "ask",
 				title: "Choose a database",
-				question: "Which persistence strategy?",
-				options: ["SQLite", "Postgres"],
+				questions: [{ question: "Which persistence strategy?", options: ["SQLite", "Postgres"] }],
 			},
 		});
 		await flushEffects();
@@ -401,7 +402,7 @@ describe("PWA client — notification dispatch gating", () => {
 		expect(showNotification).toHaveBeenCalledWith(
 			"dreb — Ask Session",
 			expect.objectContaining({
-				body: "waiting for input — Choose a database",
+				body: "waiting for input — 1 question",
 				tag: "sess-ask",
 				data: { sessionKey: "sess-ask" },
 			}),

@@ -85,6 +85,8 @@ describe("wait tool", () => {
 		const guidelines = waitToolDefinition.promptGuidelines!.join(" ");
 		expect(guidelines).toContain("explicitly told to wait");
 		expect(guidelines).toContain("background subagents");
+		expect(guidelines).toContain("Do NOT use `wait` for GitHub CI");
+		expect(guidelines).toContain("`watch_github_ci`");
 	});
 
 	describe("createWaitToolDefinition factory", () => {
@@ -194,13 +196,18 @@ describe("filterSubagentTools", () => {
 		expect(result).toBe("read,bash,grep");
 	});
 
+	it("filters out watch_github_ci from tool list", () => {
+		const result = filterSubagentTools("read,watch_github_ci,bash");
+		expect(result).toBe("read,bash");
+	});
+
 	it("filters out subagent from tool list", () => {
 		const result = filterSubagentTools("read,subagent,bash");
 		expect(result).toBe("read,bash");
 	});
 
-	it("filters out wait, subagent, and suggest_next", () => {
-		const result = filterSubagentTools("read,wait,bash,subagent,suggest_next,grep");
+	it("filters out all parent-only tools", () => {
+		const result = filterSubagentTools("read,wait,watch_github_ci,bash,subagent,suggest_next,grep");
 		expect(result).toBe("read,bash,grep");
 	});
 

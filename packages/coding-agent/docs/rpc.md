@@ -1112,7 +1112,7 @@ Response:
       },
       {
         "name": "Explore",
-        "description": "Codebase and web exploration — find files, search code, search the web, answer questions. Read-only."
+        "description": "Concrete evidence retrieval — locate files, symbols, documentation, call sites, and exact snippets. No implementation work."
       }
     ]
   }
@@ -2015,7 +2015,7 @@ Expected response: `extension_ui_response` with `value` (the edited text) or `ca
 
 #### ask
 
-Ask the user a rich clarifying question with Markdown-formatted question text, optional single- or multi-select options, and an optional free-text field. This powers the built-in `ask_user` tool. `options` (2-4 nonblank strings) is optional; `allowFreeText` (default `true`), `multiSelect`, and `multiline` are optional booleans.
+Ask the user one or more rich clarifying questions together as a single wizard. Each question has Markdown-formatted question text, optional single- or multi-select options, and an optional free-text field. This powers the built-in `ask_user` tool. The request carries a `questions` array (1-10 entries); per question, `options` (2-4 nonblank strings) is optional and `allowFreeText` (default `true`), `multiSelect`, and `multiline` are optional booleans. An overall `title` defaults to `"Question"`.
 
 ```json
 {
@@ -2023,11 +2023,20 @@ Ask the user a rich clarifying question with Markdown-formatted question text, o
   "id": "uuid-5",
   "method": "ask",
   "title": "Choose a database",
-  "question": "Which persistence strategy should I use?",
-  "options": ["SQLite", "PostgreSQL", "Keep the JSON file"],
-  "allowFreeText": true,
-  "multiSelect": false,
-  "multiline": false,
+  "questions": [
+    {
+      "question": "Which persistence strategy should I use?",
+      "title": "Storage",
+      "options": ["SQLite", "PostgreSQL", "Keep the JSON file"],
+      "allowFreeText": true,
+      "multiSelect": false,
+      "multiline": false
+    },
+    {
+      "question": "Any migration constraints I should know about?",
+      "multiline": true
+    }
+  ],
   "timeout": 60000,
   "expiresAt": 1785434460000
 }
@@ -2035,11 +2044,20 @@ Ask the user a rich clarifying question with Markdown-formatted question text, o
 
 `timeout` is the original duration in milliseconds. `expiresAt` is the corresponding absolute Unix timestamp in milliseconds; Dashboard clients should use it for the visible countdown so reload, resync, or drill-in recovery does not restart the full duration.
 
-Expected response: `extension_ui_response` with `selected` (an array of strings) and optional string `customText` (the typed answer). Sending `cancelled: true`, or an empty `selected` with no nonblank `customText`, stops the current agent turn rather than continuing without an answer. A timeout has the same stop semantics. Other malformed ask responses are rejected as protocol failures.
+Expected response: `extension_ui_response` with `answers` — an array with one entry per question, in the same order. Each answer has `selected` (an array of strings) and optional string `customText` (the typed answer); an answer with an empty `selected` and no nonblank `customText` is treated as skipped (an explicit `skipped: true` is also honored). Answering submits the batch even when some questions are skipped. Sending `cancelled: true` stops the current agent turn rather than continuing; a timeout has the same stop semantics. A missing/non-array `answers`, or a malformed `selected`/`customText`, is rejected as a protocol failure.
 
 ```json
-{ "type": "extension_ui_response", "id": "uuid-5", "selected": ["SQLite"], "customText": "with WAL enabled" }
+{
+  "type": "extension_ui_response",
+  "id": "uuid-5",
+  "answers": [
+    { "selected": ["SQLite"], "customText": "with WAL enabled" },
+    { "selected": [], "skipped": true }
+  ]
+}
 ```
+
+`ask` requests are single-flight per RPC runtime. If parallel tool execution starts several calls concurrently, RPC emits only the first request and queues the rest in FIFO order. The next request is emitted only after the active request settles; a queued call that is aborted before it starts settles without emitting. Hosts therefore need to render at most one pending `ask` wizard at a time.
 
 #### notify
 

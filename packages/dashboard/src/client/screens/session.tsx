@@ -29,7 +29,7 @@ import {
 	getComposerHistory,
 	setComposerDraft,
 } from "../state/composer-memory.js";
-import type { ExtensionUiRequest, SessionViewState } from "../state/reducer.js";
+import type { AskUiQuestion, ExtensionUiRequest, SessionViewState } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -182,49 +182,156 @@ function ExtensionUiModal(props: {
 	);
 }
 
-function AskUiInline(props: {
+interface AskDraft {
+	selected: string[];
+	customText: string;
+}
+
+/** True when the keyboard event targets a text input/textarea, so digit and
+ * Enter shortcuts must defer to normal typing. */
+function isTextEntryTarget(event: KeyboardEvent): boolean {
+	const target = event.target as HTMLElement | null;
+	const tag = target?.tagName;
+	return tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable === true;
+}
+
+/**
+ * Render a single pending `ask_user` request's `questions[]` as a multi-question
+ * wizard. Each question is a tab; when there are two or more questions a clickable
+ * tab strip with answered-state markers plus a trailing Submit/review tab lets the
+ * user move between them. A single-question request skips the strip and shows the
+ * one panel with a submit button. Every panel stays mounted so typed answers and
+ * selections persist while switching tabs.
+ */
+function AskWizard(props: {
 	request: ExtensionUiRequest;
 	onRespond: (response: Record<string, unknown>) => void;
 	onStop: () => void;
 	stopping: boolean;
 }): JSX.Element {
-	const options = () => props.request.options ?? [];
-	const allowFreeText = () => props.request.allowFreeText !== false;
-	const multiSelect = () => props.request.multiSelect === true && options().length > 0;
-	const [selected, setSelected] = createSignal<string[]>([]);
-	const [customText, setCustomText] = createSignal("");
+	const questions = (): AskUiQuestion[] => props.request.questions ?? [];
+	const count = () => questions().length;
+	const hasReview = () => count() >= 2;
+
+	// Ref to this wizard's root element. The window-level Enter shortcut uses it
+	// to submit only when focus is inside THIS wizard's own field — never from the
+	// Stop button or unrelated page inputs (model filter, rename) elsewhere.
+	let wizardEl: HTMLElement | undefined;
+
+	const [drafts, setDrafts] = createSignal<AskDraft[]>(questions().map(() => ({ selected: [], customText: "" })));
+	// Re-seed drafts if the underlying question set changes shape (defensive —
+	// ask requests serialize, so a wizard normally sees one stable request).
+	createEffect(() => {
+		const n = count();
+		setDrafts((prev) => {
+			if (prev.length === n) return prev;
+			return questions().map((_, i) => prev[i] ?? { selected: [], customText: "" });
+		});
+	});
+
+	// activeTab is 0..N-1 for question panels, or N (the review tab) when N>=2.
+	const [activeTab, setActiveTab] = createSignal(0);
+	const reviewing = () => hasReview() && activeTab() === count();
+
 	const respond = (body: Record<string, unknown>) =>
 		props.onRespond({ type: "extension_ui_response", id: props.request.id, ...body });
 
-	const toggle = (option: string) => {
-		if (multiSelect()) {
-			setSelected((current) =>
-				current.includes(option) ? current.filter((value) => value !== option) : [...current, option],
-			);
-		} else {
-			setSelected([option]);
-		}
+	const optionsFor = (index: number) => questions()[index]?.options ?? [];
+	const allowFreeText = (index: number) => questions()[index]?.allowFreeText !== false;
+	const isMultiSelect = (index: number) => questions()[index]?.multiSelect === true && optionsFor(index).length > 0;
+
+	const setDraft = (index: number, updater: (draft: AskDraft) => AskDraft) =>
+		setDrafts((prev) => prev.map((draft, i) => (i === index ? updater(draft) : draft)));
+
+	const toggleOption = (index: number, option: string) => {
+		setDraft(index, (draft) => {
+			if (isMultiSelect(index)) {
+				const selected = draft.selected.includes(option)
+					? draft.selected.filter((value) => value !== option)
+					: [...draft.selected, option];
+				return { ...draft, selected };
+			}
+			return { ...draft, selected: [option] };
+		});
 	};
 
-	const answer = () => {
-		const text = customText().trim();
-		return { selected: selected(), customText: text ? text : undefined };
+	const setCustomText = (index: number, text: string) => setDraft(index, (draft) => ({ ...draft, customText: text }));
+
+	const isAnswered = (index: number) => {
+		const draft = drafts()[index];
+		if (!draft) return false;
+		return draft.selected.length > 0 || draft.customText.trim().length > 0;
 	};
-	const canSubmit = () => answer().selected.length > 0 || answer().customText !== undefined;
-	const submit = () => {
-		if (canSubmit()) respond(answer());
+
+	const chosenSummary = (index: number): string | undefined => {
+		const draft = drafts()[index];
+		if (!draft) return undefined;
+		const parts = [...draft.selected];
+		const text = draft.customText.trim();
+		if (text) parts.push(text);
+		return parts.length > 0 ? parts.join(", ") : undefined;
 	};
+
 	const stop = () => {
 		if (!props.stopping) props.onStop();
 	};
 
-	// Escape stops the whole agent turn, matching the explicit action in this
-	// card and keeping cancellation accessible when the mobile layout obscures
-	// the dock-level stop control.
+	const submit = () => {
+		const answers = drafts().map((draft) => {
+			const selected = draft.selected;
+			const customText = draft.customText.trim() || undefined;
+			const answered = selected.length > 0 || !!customText;
+			return answered ? { selected, customText } : { selected: [], skipped: true };
+		});
+		respond({ answers });
+	};
+
+	// Keyboard: Esc stops the turn anywhere; 1-9 select/toggle the option at that
+	// index in the active question; ←/→ or Tab move between tabs (when N>=2);
+	// Enter submits a single-question wizard, but only from its own answer field —
+	// not the Stop button, a textarea, or unrelated page inputs.
 	const onKeyDown = (event: KeyboardEvent) => {
 		if (event.key === "Escape") {
 			event.preventDefault();
 			stop();
+			return;
+		}
+		if (event.key === "Enter" && count() === 1 && !reviewing()) {
+			const target = event.target as HTMLElement | null;
+			// Scope the Enter-to-submit shortcut to THIS wizard's own controls.
+			// Buttons keep their native Enter-to-click behavior (so Enter on Stop
+			// aborts the turn instead of submitting a skipped answer); textareas
+			// insert newlines; and inputs elsewhere on the page (the model filter or
+			// rename field) are left completely alone.
+			if (target && wizardEl?.contains(target) && target.tagName !== "TEXTAREA" && target.tagName !== "BUTTON") {
+				event.preventDefault();
+				submit();
+			}
+			return;
+		}
+		if (hasReview() && (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Tab")) {
+			// Never hijack navigation keys while a text field is focused: arrows must
+			// move the caret and Tab must do its normal thing, not switch wizard tabs.
+			if (isTextEntryTarget(event)) return;
+			const last = count();
+			const delta = event.key === "ArrowLeft" ? -1 : 1;
+			event.preventDefault();
+			setActiveTab((current) => {
+				const next = current + delta;
+				if (next < 0) return last;
+				if (next > last) return 0;
+				return next;
+			});
+			return;
+		}
+		if (!reviewing() && /^[1-9]$/.test(event.key) && !isTextEntryTarget(event)) {
+			const index = activeTab();
+			const options = optionsFor(index);
+			const optionIndex = Number(event.key) - 1;
+			if (optionIndex < options.length) {
+				event.preventDefault();
+				toggleOption(index, options[optionIndex]);
+			}
 		}
 	};
 	onMount(() => window.addEventListener("keydown", onKeyDown));
@@ -262,69 +369,156 @@ function AskUiInline(props: {
 		});
 	}
 
-	return (
-		<section class="ask-inline" aria-label={props.request.title}>
-			<header class="ask-inline-header">
-				{props.request.title}
-				<Show when={expiresAt !== undefined}>
-					<span class="ask-inline-countdown"> (auto-stops in {remaining()}s)</span>
-				</Show>
-			</header>
-			<Show when={props.request.question}>
-				<MarkdownBody text={props.request.question ?? ""} class="ask-inline-question markdown-body" />
+	const renderQuestion = (question: AskUiQuestion, index: number): JSX.Element => (
+		<div class="ask-question" role="tabpanel">
+			<Show when={question.title}>
+				<h4 class="ask-question-title">{question.title}</h4>
 			</Show>
-			<Show when={options().length > 0}>
+			<MarkdownBody text={question.question ?? ""} class="ask-question-body markdown-body" />
+			<Show when={optionsFor(index).length > 0}>
 				<fieldset class="ask-options">
 					<legend class="ask-options-legend">Answer options</legend>
-					<For each={options()}>
-						{(option) => (
-							<label class="ask-option" classList={{ selected: selected().includes(option) }}>
+					<For each={optionsFor(index)}>
+						{(option, optionIndex) => (
+							<label class="ask-option" classList={{ selected: drafts()[index]?.selected.includes(option) }}>
+								<span class="ask-option-index">{optionIndex() + 1}</span>
+								{/* Single-select hides the native radio — the row highlight + trailing
+								    ✔ carry the state; multi-select keeps a visible checkbox to signal
+								    multi-pick. The input stays in the DOM for keyboard/AT support. */}
 								<input
-									type={multiSelect() ? "checkbox" : "radio"}
-									name={`ask-${props.request.id}`}
-									checked={selected().includes(option)}
-									onChange={() => toggle(option)}
+									type={isMultiSelect(index) ? "checkbox" : "radio"}
+									class={isMultiSelect(index) ? undefined : "ask-option-input--hidden"}
+									name={`ask-${props.request.id}-${index}`}
+									checked={drafts()[index]?.selected.includes(option)}
+									onChange={() => toggleOption(index, option)}
 								/>
-								<span>{option}</span>
+								<span class="ask-option-label">{option}</span>
+								<Show when={drafts()[index]?.selected.includes(option)}>
+									<span class="ask-option-check">✔</span>
+								</Show>
 							</label>
 						)}
 					</For>
 				</fieldset>
 			</Show>
-			<Show when={allowFreeText()}>
-				<div class="field">
-					<label class="ask-custom-label" for={`ask-custom-${props.request.id}`}>
-						{options().length > 0 ? "Or type your own answer" : "Your answer"}
+			<Show when={allowFreeText(index)}>
+				<div class="field ask-custom-field">
+					<label class="ask-custom-label" for={`ask-custom-${props.request.id}-${index}`}>
+						{optionsFor(index).length > 0 ? "Or type your own answer" : "Your answer"}
 					</label>
 					<Show
-						when={props.request.multiline}
+						when={question.multiline}
 						fallback={
 							<input
-								id={`ask-custom-${props.request.id}`}
+								id={`ask-custom-${props.request.id}-${index}`}
 								type="text"
-								value={customText()}
+								value={drafts()[index]?.customText ?? ""}
 								placeholder="Type a different answer…"
-								onInput={(e) => setCustomText(e.currentTarget.value)}
+								onInput={(e) => setCustomText(index, e.currentTarget.value)}
 							/>
 						}
 					>
 						<textarea
-							id={`ask-custom-${props.request.id}`}
+							id={`ask-custom-${props.request.id}-${index}`}
 							rows="5"
-							value={customText()}
-							onInput={(e) => setCustomText(e.currentTarget.value)}
+							value={drafts()[index]?.customText ?? ""}
+							onInput={(e) => setCustomText(index, e.currentTarget.value)}
 						/>
 					</Show>
 				</div>
 			</Show>
-			<div class="ask-inline-actions">
-				<button type="button" class="btn btn-small btn-danger" disabled={props.stopping} onClick={stop}>
-					{props.stopping ? "stopping…" : "■ stop agent"}
-				</button>
-				<button type="button" class="btn btn-small btn-primary" disabled={!canSubmit()} onClick={submit}>
-					submit
-				</button>
-			</div>
+			<Show when={count() === 1}>
+				<div class="ask-actions">
+					<button type="button" class="btn btn-small btn-danger" disabled={props.stopping} onClick={stop}>
+						{props.stopping ? "stopping…" : "■ stop agent"}
+					</button>
+					<button type="button" class="btn btn-small btn-primary" onClick={submit}>
+						submit
+					</button>
+				</div>
+			</Show>
+		</div>
+	);
+
+	return (
+		<section class="ask-wizard" aria-label={props.request.title} ref={wizardEl}>
+			<header class="ask-wizard-header">
+				<span class="ask-wizard-title">{props.request.title}</span>
+				<Show when={expiresAt !== undefined}>
+					<span class="ask-wizard-countdown"> (auto-stops in {remaining()}s)</span>
+				</Show>
+			</header>
+			<Show when={hasReview()}>
+				<div class="ask-tab-strip" role="tablist" aria-label="questions">
+					<For each={questions()}>
+						{(question, index) => (
+							<button
+								type="button"
+								role="tab"
+								class="ask-tab"
+								aria-selected={activeTab() === index()}
+								classList={{ selected: activeTab() === index(), answered: isAnswered(index()) }}
+								onClick={() => setActiveTab(index())}
+							>
+								{index() + 1}. {question.title ?? question.question}
+								{/* Answered state reads through label weight/color + this trailing
+								    check rather than a terminal-style colored dot. */}
+								<Show when={isAnswered(index())}>
+									<span class="ask-tab-check" role="img" aria-label="answered">
+										✓
+									</span>
+								</Show>
+							</button>
+						)}
+					</For>
+					<button
+						type="button"
+						role="tab"
+						class="ask-tab ask-tab-submit"
+						aria-selected={reviewing()}
+						classList={{ selected: reviewing() }}
+						onClick={() => setActiveTab(count())}
+					>
+						Submit
+					</button>
+				</div>
+			</Show>
+			<For each={questions()}>
+				{(question, index) => (
+					<div classList={{ "ask-tab-panel": true, hidden: activeTab() !== index() }}>
+						{renderQuestion(question, index())}
+					</div>
+				)}
+			</For>
+			<Show when={hasReview()}>
+				<div classList={{ "ask-tab-panel": true, hidden: !reviewing() }}>
+					<div class="ask-review" role="tabpanel">
+						<ul class="ask-review-list">
+							<For each={questions()}>
+								{(question, index) => (
+									<li class="ask-review-item">
+										<span class="ask-review-question">{question.title ?? question.question}</span>
+										<Show
+											when={chosenSummary(index())}
+											fallback={<span class="ask-review-answer muted">(unanswered)</span>}
+										>
+											{(summary) => <span class="ask-review-answer">{summary()}</span>}
+										</Show>
+									</li>
+								)}
+							</For>
+						</ul>
+						<div class="ask-actions">
+							<button type="button" class="btn btn-small btn-danger" disabled={props.stopping} onClick={stop}>
+								{props.stopping ? "stopping…" : "cancel"}
+							</button>
+							<button type="button" class="btn btn-small btn-primary" onClick={submit}>
+								Submit all
+							</button>
+						</div>
+					</div>
+				</div>
+			</Show>
 		</section>
 	);
 }
@@ -519,7 +713,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [showOverflow, setShowOverflow] = createSignal(false);
 	const [topChromeCollapsed, setTopChromeCollapsed] = createSignal(false);
 	const [bottomDockCollapsed, setBottomDockCollapsed] = createSignal(false);
-	const [subagentPanelCollapsed, setSubagentPanelCollapsed] = createSignal(false);
 	const [showCompactModal, setShowCompactModal] = createSignal(false);
 	const [showRenameModal, setShowRenameModal] = createSignal(false);
 	const [showContextModal, setShowContextModal] = createSignal(false);
@@ -1060,6 +1253,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 
 	const liveAgents = () => Object.values(session()?.backgroundAgents ?? {}).filter((a) => a.status === "running");
 	const doneAgents = () => Object.values(session()?.backgroundAgents ?? {}).filter((a) => a.status !== "running");
+	// Newest spawned subagent first, oldest last. Array.prototype.sort is stable,
+	// so equal timestamps keep spawn (insertion) order.
+	const sortedAgents = () =>
+		Object.values(session()?.backgroundAgents ?? {}).sort(
+			(a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt),
+		);
 	const tasks = () => session()?.tasks ?? [];
 	const tasksDone = () => tasks().filter((t) => t.status === "completed").length;
 	const ctx = () => runtime()?.state.contextUsage ?? stats()?.contextUsage;
@@ -1338,16 +1537,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							resetKey={props.sessionKey}
 							imageScope={{ runtimeKey: props.sessionKey }}
 						/>
-						<Show when={session()!.uiRequests[0]} keyed>
+						<Show when={session()!.uiRequests.find((r) => r.method === "ask")}>
 							{(request) => (
-								<Show when={request.method === "ask"}>
-									<AskUiInline
-										request={request}
-										onRespond={respondToUiRequest}
-										onStop={() => void abort()}
-										stopping={stopping()}
-									/>
-								</Show>
+								<AskWizard
+									request={request()}
+									onRespond={respondToUiRequest}
+									onStop={() => void abort()}
+									stopping={stopping()}
+								/>
 							)}
 						</Show>
 						<For each={session()!.widgets.below}>{(line) => <div class="widget-block">{line}</div>}</For>
@@ -1401,54 +1598,45 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						</Show>
 
 						<Show when={liveAgents().length + doneAgents().length > 0}>
-							<div class="subagent-strip" classList={{ collapsed: subagentPanelCollapsed() }}>
-								<button
-									type="button"
-									class="subagent-toggle"
-									title={subagentPanelCollapsed() ? "show subagents" : "hide subagents"}
-									onClick={() => setSubagentPanelCollapsed(!subagentPanelCollapsed())}
-								>
-									{subagentPanelCollapsed() ? "subagents ▴" : "subagents ▾"}
-								</button>
-								<span class="count">
-									⚡ {liveAgents().length} running · {doneAgents().length} done
-								</span>
-								<Show when={subagentPanelCollapsed()}>
-									<span class="collapsed-hint">subagent panel hidden</span>
-								</Show>
-								<Show when={!subagentPanelCollapsed()}>
-									<For each={[...liveAgents(), ...doneAgents()].slice(0, 4)}>
+							<details class="tasks subagents" open={!isMobile()}>
+								<summary>
+									subagents — {liveAgents().length} running · {doneAgents().length} done
+								</summary>
+								<ul class="subagent-list">
+									<For each={sortedAgents()}>
 										{(agent) => (
-											<button
-												type="button"
-												class="agent-chip"
-												title="view this subagent's session"
-												onClick={() =>
-													props.store.navigate({
-														screen: "subagent",
-														key: props.sessionKey,
-														agentId: agent.agentId,
-													})
-												}
-											>
-												<span class={agent.status === "running" ? "live" : "done"}>
-													{agent.status === "running" ? "●" : agent.status === "completed" ? "✓" : "✕"}
-												</span>
-												<span class="task">
-													{agent.agentType} — {agent.taskSummary}
-													<Show when={agent.arbitrations?.at(-1)}>
-														{(record) =>
-															record().status === "failure"
-																? " · arbitration failed"
-																: ` · ${record().final?.model ?? record().proposed.model} @ ${record().final?.thinking ?? record().proposed.thinking}`
-														}
-													</Show>
-												</span>
-											</button>
+											<li>
+												<button
+													type="button"
+													class="agent-chip"
+													title="view this subagent's session"
+													onClick={() =>
+														props.store.navigate({
+															screen: "subagent",
+															key: props.sessionKey,
+															agentId: agent.agentId,
+														})
+													}
+												>
+													<span class={agent.status === "running" ? "live" : "done"}>
+														{agent.status === "running" ? "●" : agent.status === "completed" ? "✓" : "✕"}
+													</span>
+													<span class="task">
+														{agent.agentType} — {agent.taskSummary}
+														<Show when={agent.arbitrations?.at(-1)}>
+															{(record) =>
+																record().status === "failure"
+																	? " · arbitration failed"
+																	: ` · ${record().final?.model ?? record().proposed.model} @ ${record().final?.thinking ?? record().proposed.thinking}`
+															}
+														</Show>
+													</span>
+												</button>
+											</li>
 										)}
 									</For>
-								</Show>
-							</div>
+								</ul>
+							</details>
 						</Show>
 
 						<Show when={showStopControls() || (session()?.statusEntries.length ?? 0) > 0 || actionError()}>
@@ -1722,13 +1910,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</Show>
 			</footer>
 
-			<Show when={session()?.uiRequests[0]} keyed>
+			<Show when={session()?.uiRequests.find((r) => r.method !== "ask")} keyed>
 				{(request) => (
-					// ask_user renders inline in the transcript (see .chat-inner); only
-					// the other extension UI methods use a blocking modal overlay.
-					<Show when={request.method !== "ask"}>
-						<ExtensionUiModal request={request} onRespond={respondToUiRequest} />
-					</Show>
+					// ask_user renders inline in the transcript (see .chat-inner) as a
+					// multi-question wizard; only the other extension UI methods use a
+					// blocking modal overlay (still one at a time).
+					<ExtensionUiModal request={request} onRespond={respondToUiRequest} />
 				)}
 			</Show>
 

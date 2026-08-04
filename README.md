@@ -10,7 +10,7 @@ Use dreb if you want a coding agent that can run against direct APIs, coding sub
 - **Model and provider freedom.** Authenticate with API keys or `/login` subscriptions, switch models at runtime with `/model`, scope model sets, tune thinking levels, route built-in providers through proxies, use cloud providers such as Bedrock/Vertex/Azure, or add local/proxy/custom models through [Custom Models](packages/coding-agent/docs/models.md) and [Custom Providers](packages/coding-agent/docs/custom-provider.md). See [Providers](packages/coding-agent/docs/providers.md) for the current setup list.
 - **A real development workflow.** [mach6](packages/coding-agent/docs/mach6.md) is a built-in issue-to-merge workflow: assess issues, plan work, open draft PRs, implement, push progress, run multi-agent reviews, independently assess findings, fix CI or review items, and publish. Plans, reviews, and progress live on GitHub as shared memory.
 - **Composable agent building blocks.** [Skills](packages/coding-agent/docs/skills.md) are markdown workflows loaded on demand; [extensions](packages/coding-agent/docs/extensions.md) are TypeScript modules for custom tools, commands, event hooks, UI components, renderers, keybindings, provider registration, permission gates, and workflow automation; [packages](packages/coding-agent/docs/packages.md) bundle skills, extensions, prompts, and themes for npm, git, or local sharing.
-- **Parallel and specialized agents.** The `subagent` tool runs independent child agents in single, parallel, or chain mode. Custom agent definitions can inherit models, record child-session metadata for audit trails, and power workflows such as mach6's specialized reviewers. Per-agent models and per-request thinking remain explicit controls. The built-in [`model-routing-guide` skill](packages/coding-agent/docs/skills.md#model-routing-guide) researches scoped provider/model candidates and local child history, and its `update` mode preserves retained entries while removing stale scope and researching newly added models; the optional global-only [Dispatch Arbiter](packages/coding-agent/docs/agent-models.md#dispatch-arbiter) consumes that guide in a fully headless, tool-less call before every child spawn and may change only agent, scoped canonical model, and supported thinking. Its bounded rolling parent activity follows the title setter and includes useful tool outputs, with existing secret scrubbing applied before inference. It is disabled by default and fails closed—bad configuration, guide, inference, or decisions prevent the child from spawning rather than silently keeping the original route. TUI `/settings` and dashboard Settings expose its enable toggle, exact model, thinking, guide path, and validation/readiness feedback. Typed decisions are persisted and visible in the TUI, JSON/RPC, and dashboard. While background subagents run, a separate guardrail pauses the parent after a few turns, configurable via [`backgroundAgents`](packages/coding-agent/docs/settings.md#background-agents).
+- **Parallel and specialized agents.** The optional `subagent` tool runs role-matched work in independent child agents using single, parallel, or chain mode. Omitting the agent type selects `Explore`, which retrieves concrete evidence such as files, symbols, documentation, call sites, exact snippets, and explicit data flows; the primary agent retains root-cause diagnosis, requirements interpretation, design, implementation recommendations, planning, synthesis, and final conclusions. Parallel and chain modes do not relax that boundary, while specialized agents continue to perform the broader work in their own definitions. Custom agent definitions can inherit models, record child-session metadata for audit trails, and power workflows such as mach6's specialized reviewers. Per-agent models and per-request thinking remain explicit controls. The built-in [`model-routing-guide` skill](packages/coding-agent/docs/skills.md#model-routing-guide) researches scoped provider/model candidates and local child history, and its `update` mode preserves retained entries while removing stale scope and researching newly added models; the optional global-only [Dispatch Arbiter](packages/coding-agent/docs/agent-models.md#dispatch-arbiter) consumes that guide in a fully headless, tool-less call before every child spawn and may change only agent, scoped canonical model, and supported thinking. Its bounded rolling parent activity follows the title setter and includes useful tool outputs, with existing secret scrubbing applied before inference. It is disabled by default and fails closed—bad configuration, guide, inference, or decisions prevent the child from spawning rather than silently keeping the original route. TUI `/settings` and dashboard Settings expose its enable toggle, exact model, thinking, guide path, and validation/readiness feedback. Typed decisions are persisted and visible in the TUI, JSON/RPC, and dashboard. While background subagents run, a separate guardrail pauses the parent after a few turns, configurable via [`backgroundAgents`](packages/coding-agent/docs/settings.md#background-agents).
 - **Durable context.** [Sessions](packages/coding-agent/docs/session.md) are JSONL trees with resume/continue, `/tree` navigation, `/fork`, CLI `--fork`, compaction, HTML export, and JSONL import/export. [Memory](packages/coding-agent/README.md#memory) is file-based, global + project-scoped, survives sessions, can read Claude Code project memory, and can be maintained with `/dream` memory consolidation.
 - **A capable terminal workspace.** The TUI supports slash commands, file references with `@`, path completion, image paste/drag, bash shortcuts, hotkeys, settings, model cycling, steering/follow-up queues while the agent is working, token/cost/context status, custom themes, and extension-provided UI surfaces. Transcript prose, code, tool output, and agent results use terminal soft-wrap so copying from scrollback keeps long logical lines intact instead of injecting hard newlines.
 - **Optional local companion.** [`/buddy`](packages/coding-agent/docs/buddy.md) hatches an Ollama-powered terminal companion with persistent state, generated personality/backstory, event reactions, idle quips, name-call responses, pet/reroll/stats commands, and a sidebar presence while you work.
@@ -74,7 +74,7 @@ bunx --force dreb
 
 ### Tools and interaction
 
-dreb ships with 13 built-in tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `search` (semantic codebase search), and `ask_user` (pause and ask the user a structured multiple-choice or free-text question with Markdown-formatted question text and an in-card Stop agent action, rendered natively in the TUI and Dashboard). Two more tools are always active: `skill` for loading workflows, and `tasks_update` for visible task tracking. `suggest_next` (ghost text command suggestions, Tab to accept) is active by default but excluded when `--tools` is specified.
+dreb ships with 13 standard built-in tools: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `watch_github_ci` (blocks until pull-request checks pass or fail), and `ask_user` (pause and ask the user one or more structured multiple-choice or free-text clarifying questions in a single batch wizard, with Markdown-formatted question text and an in-card Stop agent action, rendered natively in the TUI and Dashboard). Three additional tools are always active: `search` for semantic codebase search, `skill` for loading workflows, and `tasks_update` for visible task tracking. `suggest_next` (ghost text command suggestions, Tab to accept) is active by default but excluded when `--tools` is specified.
 
 Interactive mode adds slash commands such as `/model`, `/settings`, `/resume`, `/tree`, `/fork`, `/compact`, `/dream`, `/buddy`, `/export`, `/reload`, and `/hotkeys`. The message queue lets you steer a running agent or queue follow-up work without waiting for the current turn to finish.
 
@@ -133,9 +133,9 @@ The dashboard is the visual face of dreb: every agent session on the host, live 
 
 **Low-data transcript images.** Tool results and images uploaded with user turns remain visible through content-addressed browser references rather than full base64 in events and transcript JSON. The default browser-local mode lazily requests a preview bounded to 1024 × 1024 and 256 KiB; clicking enlarges that same preview without downloading the original. Settings also offers request-free placeholders and informed-opt-in automatic originals. Explicit originals disclose their size and confirm above 1 MiB. Authenticated same-origin routes accept only signature-matching PNG/JPEG/GIF/WebP, send `nosniff`, and recover evicted entries from authoritative session data; static GIF previews preserve animated originals behind the original route. Image bytes therefore cannot cause an SSE oversized-event resync. Full-resolution HTML exports remain self-contained and unchanged.
 
-<!-- screenshot: session view with tool cards + subagent strip, desktop (dark) -->
+<!-- screenshot: session view with tool cards + subagent panel, desktop (dark) -->
 
-**Live subagent observability.** Background subagents are first-class: chips on the parent session, live counts on fleet cards, and a read-only drill-in transcript per agent that streams in real time and survives browser reloads. When the Dispatch Arbiter is enabled, those views also show its host-validated changed, unchanged, or failed pre-spawn decision and the final routed agent/model/thinking—never raw arbiter output.
+**Live subagent observability.** Background subagents are first-class: the parent session has a bounded, scrollable panel listing every retained agent newest-first with full running/done counts, fleet cards show live counts, and each agent has a read-only drill-in transcript that streams in real time and survives browser reloads. The panel uses the task tracker's native collapse pattern and starts collapsed on mobile. When the Dispatch Arbiter is enabled, those views also show its host-validated changed, unchanged, or failed pre-spawn decision and the final routed agent/model/thinking—never raw arbiter output.
 
 **Live connection recovery.** The top bar and persistent session header have an accessible, text-labelled connection indicator (connecting, connected, retrying, resyncing, disconnected, or auth failed). SSE uses bounded replay and an authoritative snapshot barrier to recover from browser reloads, server restarts, sequence gaps, slow-client backpressure, and stalls without duplicating state; task lists restore with the session snapshot. Named 25-second heartbeats and a foreground 60-second liveness watchdog detect a stuck stream. See [dashboard recovery details](packages/coding-agent/docs/dashboard.md#live-connection-and-recovery) and the [RPC ordering contract](packages/coding-agent/docs/rpc.md#get_dashboard_snapshot).
 
@@ -187,7 +187,53 @@ systemctl --user daemon-reload
 systemctl --user enable --now dreb-dashboard
 ```
 
-macOS users can run the same command under a launchd user agent; a full plist is deferred.
+For auto-restart on macOS, create a LaunchAgent. Launchd runs with a minimal `PATH`, so invoke `node` directly on the resolved entry point (use `command -v node` and `realpath "$(command -v dreb-dashboard)"` — paths vary by install method; if `realpath` is not found, `brew install coreutils`):
+
+Save as `~/Library/LaunchAgents/com.dreb.dashboard.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dreb.dashboard</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/ABSOLUTE/PATH/TO/node</string>
+        <string>/ABSOLUTE/PATH/TO/@dreb/dashboard/dist/index.js</string>
+        <string>--port</string>
+        <string>5343</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/Library/Logs/dreb-dashboard.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/Library/Logs/dreb-dashboard.err.log</string>
+</dict>
+</plist>
+```
+
+```bash
+# load / start
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dreb.dashboard.plist
+# stop / unload
+launchctl bootout gui/$(id -u)/com.dreb.dashboard
+# check status
+launchctl print gui/$(id -u)/com.dreb.dashboard | grep -E 'state|pid'
+```
+
+> This is a **LaunchAgent** (must run as your user to read `~/.dreb/agent` and spawn RPC children as you), not a LaunchDaemon. OAuth subscription creds in `~/.dreb/agent/auth.json` are found automatically via `HOME`. If you use API keys via shell environment variables, add them to `EnvironmentVariables` — LaunchAgents do not source shell profiles. See the [dashboard docs](packages/coding-agent/docs/dashboard.md#background-service--auto-restart) for full details.
 
 **WSL2 users:** if you reach the dashboard from a Windows browser and hit an intermittent access-denied / pairing screen on `http://127.0.0.1` after the WSL VM has been idle, see the [WSL2 gotcha](packages/coding-agent/docs/dashboard.md#wsl2-gotcha) for the cause and keep-alive workarounds.
 

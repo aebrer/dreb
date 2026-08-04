@@ -501,11 +501,15 @@ describe("app store SSE sync", () => {
 						id: "ask-pending",
 						method: "ask",
 						title: "Choose a database",
-						question: "Which one?",
-						options: ["SQLite", "Postgres"],
-						allowFreeText: true,
-						multiSelect: false,
-						multiline: false,
+						questions: [
+							{
+								question: "Which one?",
+								options: ["SQLite", "Postgres"],
+								allowFreeText: true,
+								multiSelect: false,
+								multiline: false,
+							},
+						],
 						timeout: 30_000,
 						expiresAt: 1_030_000,
 					},
@@ -523,8 +527,12 @@ describe("app store SSE sync", () => {
 			expect.objectContaining({
 				id: "ask-pending",
 				method: "ask",
-				question: "Which one?",
-				options: ["SQLite", "Postgres"],
+				questions: [
+					expect.objectContaining({
+						question: "Which one?",
+						options: ["SQLite", "Postgres"],
+					}),
+				],
 				timeout: 30_000,
 				expiresAt: 1_030_000,
 			}),
@@ -540,8 +548,7 @@ describe("app store SSE sync", () => {
 			method: "ask",
 			id: "ask-1",
 			title: "Choose a database",
-			question: "Which one?",
-			options: ["SQLite", "Postgres"],
+			questions: [{ question: "Which one?", options: ["SQLite", "Postgres"] }],
 		});
 		expect(store.sessions.a?.uiRequests).toMatchObject([{ id: "ask-1", method: "ask" }]);
 		expect(store.sessions.a?.needsAttention).toBe(true);
@@ -1092,11 +1099,15 @@ describe("app store hydration", () => {
 				id: "ask-pending",
 				method: "ask",
 				title: "Choose a database",
-				question: "Which one?",
-				options: ["SQLite", "Postgres"],
-				allowFreeText: true,
-				multiSelect: false,
-				multiline: false,
+				questions: [
+					{
+						question: "Which one?",
+						options: ["SQLite", "Postgres"],
+						allowFreeText: true,
+						multiSelect: false,
+						multiline: false,
+					},
+				],
 				timeout: 30_000,
 				expiresAt: 1_030_000,
 			},
@@ -1110,8 +1121,12 @@ describe("app store hydration", () => {
 			expect.objectContaining({
 				id: "ask-pending",
 				method: "ask",
-				question: "Which one?",
-				options: ["SQLite", "Postgres"],
+				questions: [
+					expect.objectContaining({
+						question: "Which one?",
+						options: ["SQLite", "Postgres"],
+					}),
+				],
 				timeout: 30_000,
 				expiresAt: 1_030_000,
 			}),

@@ -16,7 +16,7 @@ argument-hint: "[issue-number | description]"
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets (.env, credentials, tokens, keys).
 5. **Task tracking** — Use the `tasks_update` tool to show progress through multi-step commands.
 6. **Project conventions** — Check for CLAUDE.md, AGENTS.md, .dreb/CONTEXT.md, and CONTRIBUTING.md before planning or implementing.
-7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 ## Determine Mode
 
@@ -52,12 +52,12 @@ Update task: read → completed, explore → in_progress.
 
 ### Step 3: Explore the codebase
 
-Launch 2-3 Explore subagents in parallel targeting different aspects. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a particularly complex issue warrants a stronger tier).
-- **Relevant code**: Find existing code related to the issue, trace implementation patterns
-- **Architecture**: Map relevant architecture layers, abstractions, data flow
-- **Prior work**: Check for related branches, PRs, or commits
+Launch 2-3 Explore subagents in parallel for concrete evidence retrieval. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a large repository requires inspecting many files).
+- **Relevant code evidence**: Locate named related behavior and quote the exact implementation and test snippets
+- **Flow inventory**: Enumerate files, symbols, imports, calls, and registrations in an explicitly named existing flow without diagnosing it
+- **Prior-work evidence**: Locate related branches, PRs, commits, and documentation and report their exact references
 
-Each agent should return 5-10 key files. After agents complete, read all identified files.
+Do not ask Explore to determine the root cause, interpret ambiguous requirements, recommend an implementation, decide architecture, or assess the issue. Each agent should return 5-10 key files with bounded evidence. After agents complete, read all identified files and have the primary agent synthesize the current state, gaps, scope, and risks.
 
 Update task: explore → completed, assess → in_progress.
 
@@ -76,7 +76,7 @@ Present to the user:
 Post as an issue comment:
 
 ```bash
-GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-assessment -->
 ## Issue Assessment
@@ -109,7 +109,7 @@ ls .github/ISSUE_TEMPLATE/ 2>/dev/null
 ```
 If templates exist, read them and select the most appropriate one.
 
-Explore the codebase if needed to understand the relevant area.
+If codebase context is needed, use Explore subagents only for bounded evidence such as locating named behavior, files, tests, call sites, or exact snippets. The primary agent must interpret that evidence and own the issue's requirements, proposed behavior, scope, and technical conclusions.
 
 ### Step 2: Draft the issue
 
@@ -128,7 +128,7 @@ Present the draft to the user for approval.
 ### Step 3: Create the issue
 
 ```bash
-GH_BODY="$(mktemp /tmp/gh-body.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-body.$$.XXXXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <body>
 MACH6_EOF
