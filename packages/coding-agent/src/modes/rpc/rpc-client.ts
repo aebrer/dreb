@@ -363,6 +363,17 @@ export class RpcClient {
 		return this.getData(response);
 	}
 
+	/** Reload extensions, skills, prompts, themes, and other session resources. */
+	async reload(): Promise<void> {
+		await this.send({ type: "reload" });
+	}
+
+	/** Run `/dream` or one of its backup-path forms. */
+	async dream(args?: string): Promise<{ message: string }> {
+		const response = await this.send({ type: "dream", args });
+		return this.getData(response);
+	}
+
 	/**
 	 * Get current session state.
 	 */
@@ -583,6 +594,12 @@ export class RpcClient {
 		return this.getData(response);
 	}
 
+	/** Import a JSONL file into the current runtime. */
+	async importJsonl(inputPath: string): Promise<{ cancelled: boolean }> {
+		const response = await this.send({ type: "import_jsonl", inputPath });
+		return this.getData(response);
+	}
+
 	/**
 	 * Switch to a different session file.
 	 * @returns Object with `cancelled: true` if an extension cancelled the switch
@@ -671,7 +688,7 @@ export class RpcClient {
 	}
 
 	/**
-	 * Get available commands (extension commands, prompt templates, skills).
+	 * Get discoverable commands, including built-ins that require client-side handling.
 	 */
 	async getCommands(): Promise<RpcSlashCommand[]> {
 		const response = await this.send({ type: "get_commands" });

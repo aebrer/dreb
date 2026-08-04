@@ -689,6 +689,7 @@ describe("dashboard server — fleet and runtimes", () => {
 			commands: [
 				{ name: "skill:review", description: "Review code", source: "skill" },
 				{ name: "plan", description: "Plan work", source: "prompt" },
+				{ name: "fork", description: "Create a fork", source: "builtin", dashboard: true },
 			],
 		});
 		await expect(fetch(`${base}/api/runtimes/${key}/branch`).then((r) => r.json())).resolves.toEqual({
@@ -708,6 +709,49 @@ describe("dashboard server — fleet and runtimes", () => {
 		await expect(fetch(`${base}/api/runtimes/${key}/abort-retry`, { method: "POST" })).resolves.toMatchObject({
 			status: 200,
 		});
+		await expect(
+			fetch(`${base}/api/runtimes/${key}/new-session`, { method: "POST" }).then((r) => r.json()),
+		).resolves.toEqual({ cancelled: false });
+		await expect(
+			fetch(`${base}/api/runtimes/${key}/reload`, { method: "POST" }).then((r) => r.json()),
+		).resolves.toEqual({
+			ok: true,
+		});
+		await expect(
+			fetch(`${base}/api/runtimes/${key}/dream`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ args: "backup" }),
+			}).then((r) => r.json()),
+		).resolves.toEqual({ message: "Dream completed" });
+		await expect(
+			fetch(`${base}/api/runtimes/${key}/import`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ inputPath: "/tmp/session.jsonl" }),
+			}).then((r) => r.json()),
+		).resolves.toEqual({ cancelled: false });
+		await expect(fetch(`${base}/api/runtimes/${key}/tree`).then((r) => r.json())).resolves.toEqual({
+			roots: [],
+			leafId: null,
+		});
+		await expect(
+			fetch(`${base}/api/runtimes/${key}/tree`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ targetId: "entry-1" }),
+			}).then((r) => r.json()),
+		).resolves.toEqual({ cancelled: false });
+		await expect(fetch(`${base}/api/runtimes/${key}/sessions`).then((r) => r.json())).resolves.toEqual({
+			sessions: [],
+		});
+		await expect(
+			fetch(`${base}/api/runtimes/${key}/resume`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ sessionPath: "/tmp/session.jsonl" }),
+			}).then((r) => r.json()),
+		).resolves.toEqual({ cancelled: false });
 		expect(clients[0].getPerformanceStats).toHaveBeenCalled();
 		expect(clients[0].getResources).toHaveBeenCalled();
 		expect(clients[0].getCommands).toHaveBeenCalled();
@@ -716,6 +760,14 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[0].clearPendingMessages).toHaveBeenCalled();
 		expect(clients[0].abortCompaction).toHaveBeenCalled();
 		expect(clients[0].abortRetry).toHaveBeenCalled();
+		expect(clients[0].newSession).toHaveBeenCalled();
+		expect(clients[0].reload).toHaveBeenCalled();
+		expect(clients[0].dream).toHaveBeenCalledWith("backup");
+		expect(clients[0].importJsonl).toHaveBeenCalledWith("/tmp/session.jsonl");
+		expect(clients[0].getTree).toHaveBeenCalled();
+		expect(clients[0].navigateTree).toHaveBeenCalledWith("entry-1");
+		expect(clients[0].listSessions).toHaveBeenCalled();
+		expect(clients[0].switchSession).toHaveBeenCalledWith("/tmp/session.jsonl");
 		expect(clients[1].getDailyCost).toHaveBeenCalled();
 	});
 

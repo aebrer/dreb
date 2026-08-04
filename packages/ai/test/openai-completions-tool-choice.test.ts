@@ -146,7 +146,11 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("maps groq qwen3 reasoning levels to default reasoning_effort", async () => {
-		const model = getModel("groq", "qwen/qwen3-32b")!;
+		// The upstream Groq catalog can remove retired models between generated-catalog
+		// refreshes. Build the legacy ID under test from a stable Groq fixture so this
+		// provider-compat regression test does not depend on current catalog inventory.
+		const { compat: _compat, ...groqBase } = getModel("groq", "openai/gpt-oss-20b")!;
+		const model = { ...groqBase, id: "qwen/qwen3-32b", name: "Qwen3 32B" } as const;
 		let payload: unknown;
 
 		await streamSimple(

@@ -192,7 +192,20 @@ export interface PendingMessagesDto {
 export interface CommandDto {
 	name: string;
 	description?: string;
-	source: "extension" | "prompt" | "skill";
+	source: "extension" | "prompt" | "skill" | "builtin";
+	/** Built-ins with false are intercepted when typed but omitted from autocomplete. */
+	dashboard?: boolean;
+}
+
+export interface SessionTreeNodeDto {
+	id: string;
+	parentId: string | null;
+	type: string;
+	role?: string;
+	preview: string;
+	timestamp: string;
+	label?: string;
+	children: SessionTreeNodeDto[];
 }
 
 export interface RuntimeStatsSummaryDto {

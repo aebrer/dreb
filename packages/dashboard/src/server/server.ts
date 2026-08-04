@@ -758,6 +758,31 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		withRuntime(req, res, (h) => h.client.compact(instructions));
 	});
 
+	app.post("/api/runtimes/:key/new-session", (req, res) => {
+		withRuntime(req, res, (h) => h.client.newSession());
+	});
+
+	app.post("/api/runtimes/:key/reload", (req, res) => {
+		withRuntime(req, res, async (h) => {
+			await h.client.reload();
+			return { ok: true };
+		});
+	});
+
+	app.post("/api/runtimes/:key/dream", (req, res) => {
+		const args = typeof req.body?.args === "string" ? req.body.args : undefined;
+		withRuntime(req, res, (h) => h.client.dream(args));
+	});
+
+	app.post("/api/runtimes/:key/import", (req, res) => {
+		const inputPath = typeof req.body?.inputPath === "string" ? req.body.inputPath.trim() : "";
+		if (!inputPath) {
+			res.status(400).json({ error: "inputPath is required" });
+			return;
+		}
+		withRuntime(req, res, (h) => h.client.importJsonl(inputPath));
+	});
+
 	app.post("/api/runtimes/:key/name", (req, res) => {
 		const { name } = req.body ?? {};
 		if (typeof name !== "string" || name.length === 0) {
@@ -798,6 +823,32 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			return;
 		}
 		withRuntime(req, res, (h) => h.client.fork(entryId));
+	});
+
+	app.get("/api/runtimes/:key/tree", (req, res) => {
+		withRuntime(req, res, (h) => h.client.getTree());
+	});
+
+	app.post("/api/runtimes/:key/tree", (req, res) => {
+		const targetId = typeof req.body?.targetId === "string" ? req.body.targetId : "";
+		if (!targetId) {
+			res.status(400).json({ error: "targetId is required" });
+			return;
+		}
+		withRuntime(req, res, (h) => h.client.navigateTree(targetId));
+	});
+
+	app.get("/api/runtimes/:key/sessions", (req, res) => {
+		withRuntime(req, res, async (h) => ({ sessions: await h.client.listSessions() }));
+	});
+
+	app.post("/api/runtimes/:key/resume", (req, res) => {
+		const sessionPath = typeof req.body?.sessionPath === "string" ? req.body.sessionPath : "";
+		if (!sessionPath) {
+			res.status(400).json({ error: "sessionPath is required" });
+			return;
+		}
+		withRuntime(req, res, (h) => h.client.switchSession(sessionPath));
 	});
 
 	app.get("/api/runtimes/:key/export-html", (req, res) => {

@@ -151,6 +151,16 @@ vi.mock("../../src/client/api.js", () => ({
 		abortRetry: vi.fn(async () => ({})),
 		setModel: vi.fn(async () => ({ provider: "test", id: "m1" })),
 		setThinking: vi.fn(async () => ({})),
+		compact: vi.fn(async () => ({})),
+		newSession: vi.fn(async () => ({ cancelled: false })),
+		reload: vi.fn(async () => ({ ok: true })),
+		dream: vi.fn(async () => ({ message: "Dream completed" })),
+		importJsonl: vi.fn(async () => ({ cancelled: false })),
+		rename: vi.fn(async () => ({ ok: true })),
+		tree: vi.fn(async () => ({ roots: [], leafId: null })),
+		navigateTree: vi.fn(async () => ({ cancelled: false })),
+		runtimeSessions: vi.fn(async () => ({ sessions: [] })),
+		resume: vi.fn(async () => ({ cancelled: false })),
 		saveSettings: vi.fn(async (settings) => settings),
 		deleteSession: vi.fn(async () => ({ ok: true })),
 		stopRuntime: vi.fn(async () => ({ ok: true })),
@@ -4121,6 +4131,83 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector('[role="listbox"]')).toBeNull();
 	});
 
+	it("intercepts /fork and opens its modal without prompting the model", async () => {
+		vi.mocked(api.commands).mockResolvedValue({
+			commands: [{ name: "fork", description: "Fork", source: "builtin", dashboard: true }],
+		});
+		vi.mocked(api.prompt).mockClear();
+		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [] });
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+
+		textarea.value = "/fork";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.prompt).not.toHaveBeenCalled();
+		expect(el.textContent).toContain("fork from message");
+		expect(textarea.value).toBe("");
+	});
+
+	it("intercepts dashboard-invalid built-ins with guidance instead of prompting", async () => {
+		vi.mocked(api.commands).mockResolvedValue({
+			commands: [{ name: "copy", description: "Copy", source: "builtin", dashboard: false }],
+		});
+		vi.mocked(api.prompt).mockClear();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+
+		textarea.value = "/copy";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(api.prompt).not.toHaveBeenCalled();
+		expect(el.textContent).toContain("/copy is available only in the terminal UI");
+	});
+
+	it("surfaces the fail-closed RPC rejection when built-in discovery fails", async () => {
+		vi.mocked(api.commands).mockRejectedValueOnce(new Error("command discovery failed"));
+		vi.mocked(api.prompt).mockRejectedValueOnce(
+			new Error("Built-in slash command /fork must be handled by the RPC client; it was not sent to the model."),
+		);
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "/fork";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.prompt).toHaveBeenCalledWith("k1", "/fork");
+		expect(el.textContent).toContain("was not sent to the model");
+		expect(textarea.value).toBe("/fork");
+	});
+
 	it("slash command composer sends raw slash text after arguments are entered", async () => {
 		vi.mocked(api.commands).mockResolvedValue({
 			commands: [{ name: "skill:review", description: "Review code", source: "skill" }],
@@ -5051,6 +5138,40 @@ describe("dashboard client regressions", () => {
 		expect(vi.mocked(api.prompt).mock.calls[0]?.[1]).toContain("tiny.png");
 		expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:mock-1");
 		expect(el.querySelector(".attachment-thumb")).toBeNull();
+	});
+
+	it("preserves attachments and composer text when a built-in command is rejected", async () => {
+		stubObjectUrls();
+		vi.mocked(api.commands).mockResolvedValue({
+			commands: [{ name: "fork", description: "Fork", source: "builtin", dashboard: true }],
+		});
+		vi.mocked(api.prompt).mockClear();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { image: createSessionViewState("image") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="image" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const input = el.querySelector('input[accept="image/*"]') as HTMLInputElement;
+		Object.defineProperty(input, "files", {
+			configurable: true,
+			value: [new File(["img"], "tiny.png", { type: "image/png" })],
+		});
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "/fork";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(api.prompt).not.toHaveBeenCalled();
+		expect(textarea.value).toBe("/fork");
+		expect(el.querySelector(".attachment-thumb")).not.toBeNull();
+		expect(el.textContent).toContain("nothing was sent or discarded");
 	});
 
 	it("generic file attachments upload to the workspace and send paths, not inline file contents", async () => {

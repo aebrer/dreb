@@ -43,7 +43,9 @@ Open `http://127.0.0.1:5343`.
   inline provider/API failures with partial output preserved, compaction summaries,
   per-message copy, tasks panel, a bounded scrollable panel listing every retained
   subagent newest-first (collapsed by default on mobile), suggest-next chip,
-  slash-command autocomplete, image attach/paste with sent-image previews retained in user transcript entries,
+  generic built-in slash-command discovery and fail-closed execution (including
+  settings/model, import/export, session tree, fork, new/compact/dream,
+  resume/reload, and quit), image attach/paste with sent-image previews retained in user transcript entries,
   queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,

@@ -24,8 +24,10 @@ import type {
 	ResourcesDto,
 	RuntimeHydrationDto,
 	RuntimeInfoDto,
+	SessionInfoDto,
 	SessionInventoryDto,
 	SessionStatsDto,
+	SessionTreeNodeDto,
 	SettingsDto,
 	SettingsSaveResultDto,
 	TrustedFolderRemovalResultDto,
@@ -119,6 +121,11 @@ export const api = {
 	setThinking: (key: string, level: string) => request<{ ok: true }>(`/api/runtimes/${key}/thinking`, json({ level })),
 	compact: (key: string, instructions?: string) =>
 		request<unknown>(`/api/runtimes/${key}/compact`, json({ instructions })),
+	newSession: (key: string) => request<{ cancelled: boolean }>(`/api/runtimes/${key}/new-session`, { method: "POST" }),
+	reload: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}/reload`, { method: "POST" }),
+	dream: (key: string, args?: string) => request<{ message: string }>(`/api/runtimes/${key}/dream`, json({ args })),
+	importJsonl: (key: string, inputPath: string) =>
+		request<{ cancelled: boolean }>(`/api/runtimes/${key}/import`, json({ inputPath })),
 	rename: (key: string, name: string) => request<{ ok: true }>(`/api/runtimes/${key}/name`, json({ name })),
 	stats: (key: string, signal?: AbortSignal) => request<SessionStatsDto>(`/api/runtimes/${key}/stats`, { signal }),
 	performance: (key: string) => request<PerformanceStatsDto>(`/api/runtimes/${key}/performance`),
@@ -129,6 +136,12 @@ export const api = {
 		request<{ messages: Array<{ entryId: string; text: string }> }>(`/api/runtimes/${key}/fork-messages`),
 	fork: (key: string, entryId: string) =>
 		request<{ text: string; cancelled: boolean }>(`/api/runtimes/${key}/fork`, json({ entryId })),
+	tree: (key: string) => request<{ roots: SessionTreeNodeDto[]; leafId: string | null }>(`/api/runtimes/${key}/tree`),
+	navigateTree: (key: string, targetId: string) =>
+		request<{ cancelled: boolean; editorText?: string }>(`/api/runtimes/${key}/tree`, json({ targetId })),
+	runtimeSessions: (key: string) => request<{ sessions: SessionInfoDto[] }>(`/api/runtimes/${key}/sessions`),
+	resume: (key: string, sessionPath: string) =>
+		request<{ cancelled: boolean }>(`/api/runtimes/${key}/resume`, json({ sessionPath })),
 	backgroundAgents: (key: string, signal?: AbortSignal) =>
 		request<{ agents: BackgroundAgentDto[] }>(`/api/runtimes/${key}/background-agents`, { signal }),
 	subagentMessages: (key: string, agentId: string, signal?: AbortSignal) =>

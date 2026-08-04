@@ -23,6 +23,8 @@ import type {
 import { RpcClient } from "../src/modes/rpc/index.js";
 import * as jsonl from "../src/modes/rpc/jsonl.js";
 import {
+	getBuiltinPromptRejection,
+	getCommandsForRpc,
 	getDashboardMessagesForRpc,
 	getPendingMessagesForRpc,
 	getResourcesForRpc,
@@ -260,6 +262,43 @@ describe("RPC dashboard state/resources DTOs", () => {
 		expect(JSON.stringify(resources)).not.toContain("hidden prompt body");
 		expect(JSON.stringify(resources)).not.toContain("hidden system prompt");
 	});
+
+	it("discovers all registered built-ins without widening the extension command contract", () => {
+		const sourceInfo = createSyntheticSourceInfo("/tmp/fork.ts", { source: "extension" });
+		const commands = getCommandsForRpc({
+			extensionRunner: {
+				getRegisteredCommands: () => [
+					{ invocationName: "fork", description: "collision", sourceInfo },
+					{ invocationName: "custom", description: "custom", sourceInfo },
+				],
+			},
+			promptTemplates: [],
+			getFilteredSkills: () => [],
+		} as never);
+
+		expect(commands.find((command) => command.name === "fork")).toEqual({
+			name: "fork",
+			description: "Create a new fork from a previous message",
+			source: "builtin",
+			dashboard: true,
+		});
+		expect(commands.find((command) => command.name === "copy")).toMatchObject({
+			source: "builtin",
+			dashboard: false,
+		});
+		expect(commands.find((command) => command.name === "custom")).toMatchObject({
+			source: "extension",
+			sourceInfo,
+		});
+		expect(commands.some((command) => command.name === "debug" || command.name === "arminsayshi")).toBe(false);
+	});
+
+	it("rejects complete built-in tokens but not prefixes or unknown slash text", () => {
+		expect(getBuiltinPromptRejection("/fork")).toContain("was not sent to the model");
+		expect(getBuiltinPromptRejection("/fork anything")).toContain("/fork");
+		expect(getBuiltinPromptRejection("/forklift")).toBeUndefined();
+		expect(getBuiltinPromptRejection("/custom args")).toBeUndefined();
+	});
 });
 
 describe("git branch helper used by RPC", () => {
@@ -273,6 +312,46 @@ describe("git branch helper used by RPC", () => {
 });
 
 describe("runRpcMode dashboard dispatcher", () => {
+	it("rejects built-ins at the RPC prompt boundary without calling AgentSession.prompt", async () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		const prompt = vi.spyOn(session, "prompt");
+		const outputs: Array<Record<string, unknown>> = [];
+		let handleInputLine: ((line: string) => void) | undefined;
+		const existingEndListeners = new Set(process.stdin.listeners("end"));
+		const existingErrorListeners = new Set(process.stdin.listeners("error"));
+		vi.spyOn(outputGuard, "takeOverStdout").mockImplementation(() => {});
+		vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((line) => {
+			outputs.push(JSON.parse(line) as Record<string, unknown>);
+		});
+		vi.spyOn(jsonl, "attachJsonlLineReader").mockImplementation((_stream, onLine) => {
+			handleInputLine = onLine;
+			return () => {};
+		});
+
+		try {
+			void runRpcMode(session);
+			await vi.waitFor(() => expect(handleInputLine).toBeDefined());
+			handleInputLine!(JSON.stringify({ id: "builtin", type: "prompt", message: "/fork" }));
+			await vi.waitFor(() => expect(outputs).toHaveLength(1));
+			expect(outputs[0]).toMatchObject({
+				id: "builtin",
+				command: "prompt",
+				success: false,
+				error: expect.stringContaining("was not sent to the model"),
+			});
+			expect(prompt).not.toHaveBeenCalled();
+		} finally {
+			cleanup();
+			for (const listener of process.stdin.listeners("end")) {
+				if (!existingEndListeners.has(listener)) process.stdin.off("end", listener as (...args: unknown[]) => void);
+			}
+			for (const listener of process.stdin.listeners("error")) {
+				if (!existingErrorListeners.has(listener))
+					process.stdin.off("error", listener as (...args: unknown[]) => void);
+			}
+		}
+	});
+
 	it("emits a dashboard snapshot barrier and includes pending UI requests in the response", async () => {
 		const { session, cleanup } = createTestSession({ inMemory: true });
 		const tasks = [
