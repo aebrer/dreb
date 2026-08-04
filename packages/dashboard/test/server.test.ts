@@ -690,6 +690,9 @@ describe("dashboard server — fleet and runtimes", () => {
 				{ name: "skill:review", description: "Review code", source: "skill" },
 				{ name: "plan", description: "Plan work", source: "prompt" },
 				{ name: "fork", description: "Create a fork", source: "builtin", dashboard: true },
+				{ name: "copy", description: "Copy", source: "builtin", dashboard: false },
+				{ name: "hotkeys", description: "Show hotkeys", source: "builtin", dashboard: false },
+				{ name: "buddy", description: "Toggle buddy mode", source: "builtin", dashboard: false },
 			],
 		});
 		await expect(fetch(`${base}/api/runtimes/${key}/branch`).then((r) => r.json())).resolves.toEqual({

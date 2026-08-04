@@ -71,6 +71,41 @@ function acceptRpcEventListener(listener: RpcEventListener): RpcEventListener {
 	return listener;
 }
 
+async function dispatchRpcCommand(
+	session: ReturnType<typeof createTestSession>["session"],
+	command: Record<string, unknown>,
+): Promise<Array<Record<string, unknown>>> {
+	const outputs: Array<Record<string, unknown>> = [];
+	let handleInputLine: ((line: string) => void) | undefined;
+	const existingEndListeners = new Set(process.stdin.listeners("end"));
+	const existingErrorListeners = new Set(process.stdin.listeners("error"));
+	vi.spyOn(outputGuard, "takeOverStdout").mockImplementation(() => {});
+	vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((line) => {
+		outputs.push(JSON.parse(line) as Record<string, unknown>);
+	});
+	vi.spyOn(jsonl, "attachJsonlLineReader").mockImplementation((_stream, onLine) => {
+		handleInputLine = onLine;
+		return () => {};
+	});
+
+	try {
+		void runRpcMode(session);
+		await vi.waitFor(() => expect(handleInputLine).toBeDefined());
+		handleInputLine!(JSON.stringify(command));
+		await vi.waitFor(() => expect(outputs).toHaveLength(1));
+		return outputs;
+	} finally {
+		for (const listener of process.stdin.listeners("end")) {
+			if (!existingEndListeners.has(listener)) process.stdin.off("end", listener as (...args: unknown[]) => void);
+		}
+		for (const listener of process.stdin.listeners("error")) {
+			if (!existingErrorListeners.has(listener)) {
+				process.stdin.off("error", listener as (...args: unknown[]) => void);
+			}
+		}
+	}
+}
+
 describe("RPC dashboard state/resources DTOs", () => {
 	it("includes scoped models in get_state data", () => {
 		const scoped = model("anthropic", "claude-scoped", "Claude Scoped");
@@ -282,10 +317,13 @@ describe("RPC dashboard state/resources DTOs", () => {
 			source: "builtin",
 			dashboard: true,
 		});
-		expect(commands.find((command) => command.name === "copy")).toMatchObject({
-			source: "builtin",
-			dashboard: false,
-		});
+		for (const name of ["copy", "hotkeys", "buddy"]) {
+			expect(commands.find((command) => command.name === name)).toMatchObject({
+				name,
+				source: "builtin",
+				dashboard: false,
+			});
+		}
 		expect(commands.find((command) => command.name === "custom")).toMatchObject({
 			source: "extension",
 			sourceInfo,
@@ -312,43 +350,58 @@ describe("git branch helper used by RPC", () => {
 });
 
 describe("runRpcMode dashboard dispatcher", () => {
-	it("rejects built-ins at the RPC prompt boundary without calling AgentSession.prompt", async () => {
+	it.each([
+		{ command: "prompt", method: "prompt" },
+		{ command: "steer", method: "steer" },
+		{ command: "follow_up", method: "followUp" },
+	] as const)("rejects built-ins at the RPC $command boundary", async ({ command, method }) => {
 		const { session, cleanup } = createTestSession({ inMemory: true });
-		const prompt = vi.spyOn(session, "prompt");
-		const outputs: Array<Record<string, unknown>> = [];
-		let handleInputLine: ((line: string) => void) | undefined;
-		const existingEndListeners = new Set(process.stdin.listeners("end"));
-		const existingErrorListeners = new Set(process.stdin.listeners("error"));
-		vi.spyOn(outputGuard, "takeOverStdout").mockImplementation(() => {});
-		vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((line) => {
-			outputs.push(JSON.parse(line) as Record<string, unknown>);
-		});
-		vi.spyOn(jsonl, "attachJsonlLineReader").mockImplementation((_stream, onLine) => {
-			handleInputLine = onLine;
-			return () => {};
-		});
+		const invoke = vi.spyOn(session, method).mockResolvedValue(undefined as never);
 
 		try {
-			void runRpcMode(session);
-			await vi.waitFor(() => expect(handleInputLine).toBeDefined());
-			handleInputLine!(JSON.stringify({ id: "builtin", type: "prompt", message: "/fork" }));
-			await vi.waitFor(() => expect(outputs).toHaveLength(1));
+			const outputs = await dispatchRpcCommand(session, {
+				id: `builtin-${command}`,
+				type: command,
+				message: "/fork",
+			});
 			expect(outputs[0]).toMatchObject({
-				id: "builtin",
-				command: "prompt",
+				id: `builtin-${command}`,
+				command,
 				success: false,
 				error: expect.stringContaining("was not sent to the model"),
 			});
-			expect(prompt).not.toHaveBeenCalled();
+			expect(invoke).not.toHaveBeenCalled();
 		} finally {
 			cleanup();
-			for (const listener of process.stdin.listeners("end")) {
-				if (!existingEndListeners.has(listener)) process.stdin.off("end", listener as (...args: unknown[]) => void);
-			}
-			for (const listener of process.stdin.listeners("error")) {
-				if (!existingErrorListeners.has(listener))
-					process.stdin.off("error", listener as (...args: unknown[]) => void);
-			}
+		}
+	});
+
+	it.each([
+		{ command: "prompt", method: "prompt", message: "/forklift" },
+		{ command: "steer", method: "steer", message: "/forklift" },
+		{ command: "follow_up", method: "followUp", message: "/forklift" },
+		{ command: "prompt", method: "prompt", message: "/unknown args" },
+		{ command: "steer", method: "steer", message: "/unknown args" },
+		{ command: "follow_up", method: "followUp", message: "/unknown args" },
+	] as const)("allows $message through the RPC $command boundary", async ({ command, method, message }) => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		const invoke = vi.spyOn(session, method).mockResolvedValue(undefined as never);
+
+		try {
+			const outputs = await dispatchRpcCommand(session, {
+				id: `ordinary-${command}`,
+				type: command,
+				message,
+			});
+			expect(outputs[0]).toMatchObject({
+				id: `ordinary-${command}`,
+				command,
+				success: true,
+			});
+			expect(invoke).toHaveBeenCalledOnce();
+			expect(invoke.mock.calls[0]?.[0]).toBe(message);
+		} finally {
+			cleanup();
 		}
 	});
 

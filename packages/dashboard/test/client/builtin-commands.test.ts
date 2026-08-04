@@ -5,6 +5,8 @@ import type { CommandDto } from "../../src/shared/protocol.js";
 const commands: CommandDto[] = [
 	{ name: "fork", description: "Fork", source: "builtin", dashboard: true },
 	{ name: "copy", description: "Copy", source: "builtin", dashboard: false },
+	{ name: "hotkeys", description: "Hotkeys", source: "builtin", dashboard: false },
+	{ name: "buddy", description: "Buddy mode", source: "builtin", dashboard: false },
 	{ name: "review", description: "Extension review", source: "extension" },
 ];
 
@@ -25,8 +27,10 @@ describe("dashboard built-in command dispatch", () => {
 		expect(fork).toHaveBeenCalledWith("");
 		expect(notice).not.toHaveBeenCalled();
 
-		await dispatchBuiltinCommand(parseDashboardBuiltin("/copy", commands)!, {}, notice);
-		expect(notice).toHaveBeenLastCalledWith("/copy is available only in the terminal UI.");
+		for (const name of ["copy", "hotkeys", "buddy"]) {
+			await dispatchBuiltinCommand(parseDashboardBuiltin(`/${name}`, commands)!, {}, notice);
+			expect(notice).toHaveBeenLastCalledWith(`/${name} is available only in the terminal UI.`);
+		}
 
 		await dispatchBuiltinCommand(
 			{ command: { name: "future", source: "builtin", dashboard: true }, args: "" },
@@ -43,6 +47,8 @@ describe("dashboard built-in command dispatch", () => {
 				{ name: "fork", source: "builtin", dashboard: true },
 				{ name: "plan", source: "prompt" },
 				{ name: "copy", source: "builtin", dashboard: false },
+				{ name: "hotkeys", source: "builtin", dashboard: false },
+				{ name: "buddy", source: "builtin", dashboard: false },
 			],
 			"",
 		);
