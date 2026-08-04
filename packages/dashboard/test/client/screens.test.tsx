@@ -1228,6 +1228,71 @@ describe("screen smoke tests", () => {
 		expect(activePanel?.textContent).toContain("Second body");
 	});
 
+	it("ask_user wizard: free-text drafts persist across tabs and submit in question order", async () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-ask-text-tabs");
+		session.uiRequests = [
+			{
+				id: "text-tabs",
+				method: "ask",
+				title: "Setup",
+				questions: [
+					{ question: "First details?", title: "First", allowFreeText: true },
+					{ question: "Second details?", title: "Second", multiline: true },
+				],
+			},
+		];
+		const fakeStore = {
+			...store,
+			sessions: { "k-ask-text-tabs": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-ask-text-tabs" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const tabs = el.querySelectorAll<HTMLButtonElement>(".ask-tab-strip .ask-tab");
+		const first = el.querySelector<HTMLInputElement>("#ask-custom-text-tabs-0");
+		expect(first).not.toBeNull();
+		first!.value = "first detail";
+		first!.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const second = el.querySelector<HTMLTextAreaElement>("#ask-custom-text-tabs-1");
+		expect(second).not.toBeNull();
+		second!.value = "second detail";
+		second!.dispatchEvent(new Event("input", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		tabs[0].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(first!.value).toBe("first detail");
+		tabs[1].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(second!.value).toBe("second detail");
+
+		tabs[2].click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const submitAll = [...el.querySelectorAll("button")].find((button) => button.textContent === "Submit all");
+		submitAll?.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(vi.mocked(api.extensionUiResponse)).toHaveBeenCalledWith(
+			"k-ask-text-tabs",
+			expect.objectContaining({
+				type: "extension_ui_response",
+				id: "text-tabs",
+				answers: [
+					expect.objectContaining({ selected: [], customText: "first detail" }),
+					expect.objectContaining({ selected: [], customText: "second detail" }),
+				],
+			}),
+		);
+	});
+
 	it("ask_user wizard: ArrowRight/ArrowLeft/Tab navigate tabs with wrap-around", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k-ask-kbnav");

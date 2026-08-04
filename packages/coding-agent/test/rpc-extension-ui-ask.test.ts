@@ -255,6 +255,30 @@ describe("RPC ask batch round trip", () => {
 		await expect(second).resolves.toEqual({ answers: [{ selected: ["b"], customText: undefined, skipped: false }] });
 	});
 
+	it("advances a queued ask after the active ask rejects a malformed response", async () => {
+		const h = harness();
+		const first = h.ctx.ask({ questions: [{ question: "First?", options: ["a"] }] });
+		const firstId = h.emitted[0]!.id;
+		const second = h.ctx.ask({ questions: [{ question: "Second?", options: ["b"] }] });
+
+		expect(h.emitted).toHaveLength(1);
+		h.pending
+			.get(firstId)!
+			.resolve({ type: "extension_ui_response", id: firstId, value: "wrong response variant" } as any);
+		await expect(first).rejects.toThrow("Invalid RPC ask response");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(h.emitted).toHaveLength(2);
+		const secondId = h.emitted[1]!.id;
+		expect(secondId).not.toBe(firstId);
+		expect(h.pending.has(secondId)).toBe(true);
+
+		h.pending
+			.get(secondId)!
+			.resolve({ type: "extension_ui_response", id: secondId, answers: [{ selected: ["b"] }] } as any);
+		await expect(second).resolves.toEqual({ answers: [{ selected: ["b"], customText: undefined, skipped: false }] });
+	});
+
 	it("settles a queued concurrent ask without emitting when the turn signal aborts", async () => {
 		const h = harness();
 		const controller = new AbortController();

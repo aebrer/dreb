@@ -720,7 +720,6 @@ export type RpcBlockingExtensionUIRequest = Extract<
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
-	| { type: "extension_ui_response"; id: string; selected: string[]; customText?: string }
 	| { type: "extension_ui_response"; id: string; answers: RpcAskAnswer[] }
 	| { type: "extension_ui_response"; id: string; cancelled: true };
 
