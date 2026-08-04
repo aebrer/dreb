@@ -14,11 +14,14 @@ import type {
 	QueuedMessageDto,
 	ResourcesDto,
 	ScopedModelDto,
+	SessionInfoDto,
 	SessionStateDto,
 	SessionStatsDto,
+	SessionTreeNodeDto,
 } from "../../shared/protocol.js";
 import { MAX_TOTAL_IMAGE_BYTES } from "../../shared/protocol.js";
 import { api } from "../api.js";
+import { commandMatches, dispatchBuiltinCommand, parseDashboardBuiltin } from "../builtin-commands.js";
 import { ConnectionIndicator, Modal } from "../components/common.js";
 import { MarkdownBody, Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
@@ -582,11 +585,12 @@ function LoadedContextModal(props: { resources?: ResourcesDto; error?: string; o
 function ModelSelectorModal(props: {
 	sessionKey: string;
 	state?: SessionStateDto;
+	initialFilter?: string;
 	onClose: () => void;
 	onSelected: (model: { provider: string; id: string }) => void;
 }): JSX.Element {
 	const [models, setModels] = createSignal<ModelInfoDto[]>([]);
-	const [filter, setFilter] = createSignal("");
+	const [filter, setFilter] = createSignal(props.initialFilter ?? "");
 	const [scope, setScope] = createSignal<ModelScope>((props.state?.scopedModels?.length ?? 0) > 0 ? "scoped" : "all");
 	const [error, setError] = createSignal<string>();
 
@@ -701,6 +705,135 @@ function ModelSelectorModal(props: {
 	);
 }
 
+function flattenTree(nodes: readonly SessionTreeNodeDto[]): Array<{ node: SessionTreeNodeDto; depth: number }> {
+	const flattened: Array<{ node: SessionTreeNodeDto; depth: number }> = [];
+	const stack = [...nodes].reverse().map((node) => ({ node, depth: 0 }));
+	while (stack.length > 0) {
+		const current = stack.pop();
+		if (!current) break;
+		flattened.push(current);
+		for (let index = current.node.children.length - 1; index >= 0; index -= 1) {
+			stack.push({ node: current.node.children[index], depth: current.depth + 1 });
+		}
+	}
+	return flattened;
+}
+
+function TreeModal(props: {
+	roots: SessionTreeNodeDto[];
+	leafId: string | null;
+	loading: boolean;
+	error?: string;
+	onClose: () => void;
+	onNavigate: (id: string) => void;
+}): JSX.Element {
+	return (
+		<Modal title="session tree" onDismiss={props.onClose}>
+			<Show when={props.error}>
+				<p class="pair-error">{props.error}</p>
+			</Show>
+			<Show
+				when={props.roots.length > 0}
+				fallback={<p class="muted small">{props.loading ? "loading tree…" : "No session entries yet."}</p>}
+			>
+				<div class="fork-message-list">
+					<For each={flattenTree(props.roots)}>
+						{({ node, depth }) => (
+							<button
+								type="button"
+								class="fork-message"
+								disabled={node.id === props.leafId}
+								style={{ "padding-left": `${12 + depth * 18}px` }}
+								onClick={() => props.onNavigate(node.id)}
+							>
+								<span class="fork-entry-id">{node.id.slice(0, 8)}</span>
+								<span>{node.label ?? (node.preview || node.type)}</span>
+								<Show when={node.id === props.leafId}>
+									<span class="muted small">current</span>
+								</Show>
+							</button>
+						)}
+					</For>
+				</div>
+			</Show>
+		</Modal>
+	);
+}
+
+function ResumeModal(props: {
+	sessions: SessionInfoDto[];
+	loading: boolean;
+	error?: string;
+	onClose: () => void;
+	onResume: (path: string) => void;
+}): JSX.Element {
+	return (
+		<Modal title="resume session" onDismiss={props.onClose}>
+			<Show when={props.error}>
+				<p class="pair-error">{props.error}</p>
+			</Show>
+			<Show
+				when={props.sessions.length > 0}
+				fallback={<p class="muted small">{props.loading ? "loading sessions…" : "No other sessions found."}</p>}
+			>
+				<div class="fork-message-list">
+					<For each={props.sessions}>
+						{(item) => (
+							<button type="button" class="fork-message" onClick={() => props.onResume(item.path)}>
+								<span>{item.name ?? (item.firstMessage || item.path)}</span>
+								<span class="muted small">{item.messageCount} messages</span>
+							</button>
+						)}
+					</For>
+				</div>
+			</Show>
+		</Modal>
+	);
+}
+
+function ImportModal(props: {
+	initialPath: string;
+	error?: string;
+	onClose: () => void;
+	onImport: (path: string) => void;
+}): JSX.Element {
+	const [path, setPath] = createSignal(props.initialPath);
+	return (
+		<Modal
+			title="import session"
+			onDismiss={props.onClose}
+			actions={
+				<>
+					<button type="button" class="btn btn-small" onClick={props.onClose}>
+						cancel
+					</button>
+					<button
+						type="button"
+						class="btn btn-small btn-primary"
+						disabled={!path().trim()}
+						onClick={() => props.onImport(path().trim())}
+					>
+						import and replace
+					</button>
+				</>
+			}
+		>
+			<p class="muted small">Replace the current session with a JSONL session file.</p>
+			<div class="field">
+				<input
+					type="text"
+					value={path()}
+					placeholder="/path/to/session.jsonl"
+					onInput={(e) => setPath(e.currentTarget.value)}
+				/>
+			</div>
+			<Show when={props.error}>
+				<p class="pair-error">{props.error}</p>
+			</Show>
+		</Modal>
+	);
+}
+
 export function SessionScreen(props: { store: AppStore; sessionKey: string }): JSX.Element {
 	const session = (): SessionViewState | undefined => props.store.sessions[props.sessionKey];
 	const runtime = createMemo(() => props.store.fleet().runtimes.find((r) => r.key === props.sessionKey));
@@ -710,6 +843,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [stopping, setStopping] = createSignal(false);
 	const [stoppingRuntime, setStoppingRuntime] = createSignal(false);
 	const [showModelSelector, setShowModelSelector] = createSignal(false);
+	const [modelFilter, setModelFilter] = createSignal("");
 	const [showOverflow, setShowOverflow] = createSignal(false);
 	const [topChromeCollapsed, setTopChromeCollapsed] = createSignal(false);
 	const [bottomDockCollapsed, setBottomDockCollapsed] = createSignal(false);
@@ -718,6 +852,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [showContextModal, setShowContextModal] = createSignal(false);
 	const [fallbackDismissed, setFallbackDismissed] = createSignal(false);
 	const [actionError, setActionError] = createSignal<string>();
+	const [actionNotice, setActionNotice] = createSignal<string>();
 	const [elapsed, setElapsed] = createSignal(0);
 	const [stats, setStats] = createSignal<SessionStatsDto>();
 	const [performance, setPerformance] = createSignal<PerformanceStatsDto>();
@@ -735,6 +870,18 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [showForkModal, setShowForkModal] = createSignal(false);
 	const [forkMessages, setForkMessages] = createSignal<Array<{ entryId: string; text: string }>>([]);
 	const [forkError, setForkError] = createSignal<string>();
+	const [showTreeModal, setShowTreeModal] = createSignal(false);
+	const [treeRoots, setTreeRoots] = createSignal<SessionTreeNodeDto[]>([]);
+	const [treeLeafId, setTreeLeafId] = createSignal<string | null>(null);
+	const [treeLoading, setTreeLoading] = createSignal(false);
+	const [treeError, setTreeError] = createSignal<string>();
+	const [showResumeModal, setShowResumeModal] = createSignal(false);
+	const [resumeSessions, setResumeSessions] = createSignal<SessionInfoDto[]>([]);
+	const [resumeLoading, setResumeLoading] = createSignal(false);
+	const [resumeError, setResumeError] = createSignal<string>();
+	const [showImportModal, setShowImportModal] = createSignal(false);
+	const [importPath, setImportPath] = createSignal("");
+	const [importError, setImportError] = createSignal<string>();
 	const [showStatsPopover, setShowStatsPopover] = createSignal(false);
 	const [statsPopoverError, setStatsPopoverError] = createSignal<string>();
 
@@ -1018,6 +1165,75 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
+	async function openTreeModal() {
+		setShowTreeModal(true);
+		setTreeError(undefined);
+		setTreeRoots([]);
+		setTreeLoading(true);
+		try {
+			const tree = await api.tree(props.sessionKey);
+			setTreeRoots(tree.roots);
+			setTreeLeafId(tree.leafId);
+		} catch (err) {
+			setTreeError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setTreeLoading(false);
+		}
+	}
+
+	async function navigateTree(targetId: string) {
+		setTreeError(undefined);
+		try {
+			const result = await api.navigateTree(props.sessionKey, targetId);
+			if (result.cancelled) return;
+			if (result.editorText) setComposerText(result.editorText);
+			await props.store.hydrateSession(props.sessionKey);
+			setShowTreeModal(false);
+		} catch (err) {
+			setTreeError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function openResumeModal() {
+		setShowResumeModal(true);
+		setResumeError(undefined);
+		setResumeSessions([]);
+		setResumeLoading(true);
+		try {
+			setResumeSessions((await api.runtimeSessions(props.sessionKey)).sessions);
+		} catch (err) {
+			setResumeError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setResumeLoading(false);
+		}
+	}
+
+	async function resumeSession(path: string) {
+		setResumeError(undefined);
+		try {
+			const result = await api.resume(props.sessionKey, path);
+			if (result.cancelled) return;
+			await props.store.hydrateSession(props.sessionKey);
+			await props.store.refreshDiskSessions();
+			setShowResumeModal(false);
+		} catch (err) {
+			setResumeError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function importSession(path: string) {
+		setImportError(undefined);
+		try {
+			const result = await api.importJsonl(props.sessionKey, path);
+			if (result.cancelled) return;
+			await props.store.hydrateSession(props.sessionKey);
+			await props.store.refreshDiskSessions();
+			setShowImportModal(false);
+		} catch (err) {
+			setImportError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
 	async function openForkModal() {
 		setShowForkModal(true);
 		setForkError(undefined);
@@ -1176,11 +1392,121 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		return [text, ...sections].filter((part) => part.trim()).join("\n\n");
 	}
 
+	function rejectArguments(name: string, args: string, usage = `/${name}`): boolean {
+		if (!args) return false;
+		setActionNotice(`Usage: ${usage}`);
+		return true;
+	}
+
+	function downloadHtmlExport(): void {
+		const link = document.createElement("a");
+		link.href = api.exportHtmlUrl(props.sessionKey);
+		link.download = "";
+		document.body.append(link);
+		link.click();
+		link.remove();
+	}
+
+	const builtinHandlers = {
+		settings: async (args: string) => {
+			if (!rejectArguments("settings", args)) props.store.navigate({ screen: "settings" });
+		},
+		model: async (args: string) => {
+			setModelFilter(args);
+			setShowModelSelector(true);
+		},
+		export: async (args: string) => {
+			if (!rejectArguments("export", args)) downloadHtmlExport();
+		},
+		import: async (args: string) => {
+			setImportPath(args);
+			setImportError(undefined);
+			setShowImportModal(true);
+		},
+		name: async (args: string) => {
+			if (args) await api.rename(props.sessionKey, args);
+			else setShowRenameModal(true);
+		},
+		session: async (args: string) => {
+			if (!rejectArguments("session", args)) {
+				setTopChromeCollapsed(false);
+				await openStatsPopover();
+			}
+		},
+		fork: async (args: string) => {
+			if (!rejectArguments("fork", args)) await openForkModal();
+		},
+		tree: async (args: string) => {
+			if (!rejectArguments("tree", args)) await openTreeModal();
+		},
+		new: async (args: string) => {
+			if (rejectArguments("new", args)) return;
+			if (streaming() || compacting()) {
+				setActionNotice("Wait for the current operation to finish before starting a new session.");
+				return;
+			}
+			const result = await api.newSession(props.sessionKey);
+			if (result.cancelled) setActionNotice("New session cancelled.");
+			else {
+				await props.store.hydrateSession(props.sessionKey);
+				await props.store.refreshDiskSessions();
+			}
+		},
+		compact: async (args: string) => {
+			if (args) {
+				await api.compact(props.sessionKey, args);
+				setActionNotice("Compaction started.");
+			} else {
+				setShowCompactModal(true);
+			}
+		},
+		dream: async (args: string) => {
+			const result = await api.dream(props.sessionKey, args || undefined);
+			setActionNotice(result.message);
+		},
+		resume: async (args: string) => {
+			if (!rejectArguments("resume", args)) await openResumeModal();
+		},
+		reload: async (args: string) => {
+			if (rejectArguments("reload", args)) return;
+			if (streaming() || compacting()) {
+				setActionNotice("Wait for the current operation to finish before reloading.");
+				return;
+			}
+			await api.reload(props.sessionKey);
+			const [{ commands: reloadedCommands }] = await Promise.all([
+				api.commands(props.sessionKey),
+				props.store.hydrateSession(props.sessionKey),
+			]);
+			setCommands(reloadedCommands);
+			setActionNotice("Reloaded extensions, skills, prompts, themes, and settings.");
+		},
+		quit: async (args: string) => {
+			if (!rejectArguments("quit", args)) await stopRuntime();
+		},
+	} as const;
+
 	async function send() {
 		const text = composerText().trim();
 		if (!text && fileAttachments().length === 0 && imageAttachments().length === 0) return;
-		const promptText = promptWithAttachmentList(text || "Please review the attached item(s). ");
 		setActionError(undefined);
+		setActionNotice(undefined);
+		const builtin = parseDashboardBuiltin(text, commands());
+		if (builtin) {
+			if (fileAttachments().length > 0 || imageAttachments().length > 0) {
+				setActionNotice("Remove attachments before running a built-in command; nothing was sent or discarded.");
+				return;
+			}
+			try {
+				await dispatchBuiltinCommand(builtin, builtinHandlers, setActionNotice);
+				setComposerText("");
+				setHistoryIndex(undefined);
+			} catch (err) {
+				setActionError(err instanceof Error ? err.message : String(err));
+			}
+			return;
+		}
+		const promptText = promptWithAttachmentList(text || "Please review the attached item(s). ");
 		try {
 			const pendingImages = imageAttachments();
 			const images =
@@ -1334,29 +1660,18 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		if (/\s/.test(query)) return undefined;
 		return query.toLowerCase();
 	};
-	const commandMatches = createMemo(() => {
+	const commandMatchesForComposer = createMemo(() => {
 		const query = commandQuery();
-		if (query === undefined) return [];
-		return commands()
-			.filter((command) => {
-				const name = command.name.toLowerCase();
-				return !query || name.startsWith(query) || name.includes(query);
-			})
-			.sort((a, b) => {
-				const aq = a.name.toLowerCase().startsWith(query) ? 0 : 1;
-				const bq = b.name.toLowerCase().startsWith(query) ? 0 : 1;
-				return aq - bq || a.name.localeCompare(b.name);
-			})
-			.slice(0, 8);
+		return query === undefined ? [] : commandMatches(commands(), query);
 	});
-	const showCommandMenu = () => commandMatches().length > 0;
+	const showCommandMenu = () => commandMatchesForComposer().length > 0;
 	const acceptCommand = (command: CommandDto) => {
 		setComposerText(`/${command.name} `);
 		setCommandMenuClosed(true);
 		queueMicrotask(() => composerRef?.focus());
 	};
 	createEffect(() => {
-		const length = commandMatches().length;
+		const length = commandMatchesForComposer().length;
 		if (commandSelection() >= length) setCommandSelection(Math.max(0, length - 1));
 	});
 
@@ -1639,7 +1954,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							</details>
 						</Show>
 
-						<Show when={showStopControls() || (session()?.statusEntries.length ?? 0) > 0 || actionError()}>
+						<Show
+							when={
+								showStopControls() ||
+								(session()?.statusEntries.length ?? 0) > 0 ||
+								actionError() ||
+								actionNotice()
+							}
+						>
 							<div class="status-line">
 								<Show when={streaming()}>
 									<span class="working">
@@ -1665,6 +1987,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 								</For>
 								<Show when={actionError()}>
 									<span class="error">{actionError()}</span>
+								</Show>
+								<Show when={actionNotice()}>
+									<span class="queued">{actionNotice()}</span>
 								</Show>
 								<Show when={showStopControls()}>
 									<button type="button" class="btn btn-small btn-danger" disabled={stopping()} onClick={abort}>
@@ -1730,7 +2055,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							</Show>
 							<Show when={showCommandMenu()}>
 								<div class="command-popover" role="listbox" id="command-listbox" aria-label="slash commands">
-									<For each={commandMatches()}>
+									<For each={commandMatchesForComposer()}>
 										{(command, index) => (
 											<button
 												type="button"
@@ -1779,20 +2104,26 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 									if (showCommandMenu()) {
 										if (e.key === "ArrowDown") {
 											e.preventDefault();
-											setCommandSelection((commandSelection() + 1) % commandMatches().length);
+											setCommandSelection((commandSelection() + 1) % commandMatchesForComposer().length);
 											return;
 										}
 										if (e.key === "ArrowUp") {
 											e.preventDefault();
 											setCommandSelection(
-												(commandSelection() - 1 + commandMatches().length) % commandMatches().length,
+												(commandSelection() - 1 + commandMatchesForComposer().length) %
+													commandMatchesForComposer().length,
 											);
 											return;
 										}
 										if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !isMobile())) {
 											e.preventDefault();
-											const command = commandMatches()[commandSelection()];
-											if (command) acceptCommand(command);
+											const command = commandMatchesForComposer()[commandSelection()];
+											if (command && e.key === "Enter" && composerText() === `/${command.name}`) {
+												setCommandMenuClosed(true);
+												void send();
+											} else if (command) {
+												acceptCommand(command);
+											}
 											return;
 										}
 										if (e.key === "Escape") {
@@ -1923,7 +2254,11 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				<ModelSelectorModal
 					sessionKey={props.sessionKey}
 					state={runtime()?.state}
-					onClose={() => setShowModelSelector(false)}
+					initialFilter={modelFilter()}
+					onClose={() => {
+						setShowModelSelector(false);
+						setModelFilter("");
+					}}
 					onSelected={(model) => props.store.setRuntimeModel(props.sessionKey, model)}
 				/>
 			</Show>
@@ -1988,6 +2323,36 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						</div>
 					</Show>
 				</Modal>
+			</Show>
+
+			<Show when={showTreeModal()}>
+				<TreeModal
+					roots={treeRoots()}
+					leafId={treeLeafId()}
+					loading={treeLoading()}
+					error={treeError()}
+					onClose={() => setShowTreeModal(false)}
+					onNavigate={navigateTree}
+				/>
+			</Show>
+
+			<Show when={showResumeModal()}>
+				<ResumeModal
+					sessions={resumeSessions()}
+					loading={resumeLoading()}
+					error={resumeError()}
+					onClose={() => setShowResumeModal(false)}
+					onResume={resumeSession}
+				/>
+			</Show>
+
+			<Show when={showImportModal()}>
+				<ImportModal
+					initialPath={importPath()}
+					error={importError()}
+					onClose={() => setShowImportModal(false)}
+					onImport={importSession}
+				/>
 			</Show>
 
 			<Show when={showRenameModal()}>

@@ -151,6 +151,16 @@ vi.mock("../../src/client/api.js", () => ({
 		abortRetry: vi.fn(async () => ({})),
 		setModel: vi.fn(async () => ({ provider: "test", id: "m1" })),
 		setThinking: vi.fn(async () => ({})),
+		compact: vi.fn(async () => ({})),
+		newSession: vi.fn(async () => ({ cancelled: false })),
+		reload: vi.fn(async () => ({ ok: true })),
+		dream: vi.fn(async () => ({ message: "Dream completed" })),
+		importJsonl: vi.fn(async () => ({ cancelled: false })),
+		rename: vi.fn(async () => ({ ok: true })),
+		tree: vi.fn(async () => ({ roots: [], leafId: null })),
+		navigateTree: vi.fn(async () => ({ cancelled: false })),
+		runtimeSessions: vi.fn(async () => ({ sessions: [] })),
+		resume: vi.fn(async () => ({ cancelled: false })),
 		saveSettings: vi.fn(async (settings) => settings),
 		deleteSession: vi.fn(async () => ({ ok: true })),
 		stopRuntime: vi.fn(async () => ({ ok: true })),
@@ -207,7 +217,7 @@ import {
 	type UserEntry,
 } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
-import { MAX_TOTAL_IMAGE_BYTES, type RuntimeInfoDto } from "../../src/shared/protocol.js";
+import { type CommandDto, MAX_TOTAL_IMAGE_BYTES, type RuntimeInfoDto } from "../../src/shared/protocol.js";
 
 const disposers: Array<() => void> = [];
 
@@ -418,6 +428,30 @@ function mountDisposable(element: () => any): { container: HTMLElement; dispose:
 function makeStore() {
 	// createAppStore touches window.location.hash — jsdom provides it.
 	return createAppStore();
+}
+
+async function mountCommandComposer(commands: CommandDto[]) {
+	vi.mocked(api.commands).mockResolvedValueOnce({ commands });
+	const baseStore = makeStore() as any;
+	const store = {
+		...baseStore,
+		sessions: { k1: createSessionViewState("k1") },
+		fleet: () => ({ runtimes: [], diskSessions: [] }),
+		hydrateSession: vi.fn(async () => {}),
+		refreshDiskSessions: vi.fn(async () => {}),
+		removeRuntime: vi.fn(async () => {}),
+		navigate: vi.fn(),
+	};
+	const element = mount(() => <SessionScreen store={store} sessionKey="k1" />);
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	return { element, store, textarea: element.querySelector("textarea") as HTMLTextAreaElement };
+}
+
+async function submitComposer(textarea: HTMLTextAreaElement, text: string): Promise<void> {
+	textarea.value = text;
+	textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+	textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+	await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 function runtimeInfo(key: string, cwd = "/home/test/project"): RuntimeInfoDto {
@@ -4121,6 +4155,286 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector('[role="listbox"]')).toBeNull();
 	});
 
+	const mappedBuiltinCases = [
+		{ command: "/settings", name: "settings", expected: "settings" },
+		{ command: "/model claude", name: "model", expected: "model" },
+		{ command: "/export", name: "export", expected: "export" },
+		{ command: "/import /tmp/session.jsonl", name: "import", expected: "import" },
+		{ command: "/name release", name: "name", expected: "name" },
+		{ command: "/session", name: "session", expected: "session" },
+		{ command: "/fork", name: "fork", expected: "fork" },
+		{ command: "/tree", name: "tree", expected: "tree" },
+		{ command: "/new", name: "new", expected: "new" },
+		{ command: "/compact keep key details", name: "compact", expected: "compact" },
+		{ command: "/dream backup /tmp/archive", name: "dream", expected: "dream" },
+		{ command: "/resume", name: "resume", expected: "resume" },
+		{ command: "/reload", name: "reload", expected: "reload" },
+		{ command: "/quit", name: "quit", expected: "quit" },
+	] as const;
+
+	it.each(mappedBuiltinCases)("routes $command through its dashboard action without prompting", async (testCase) => {
+		const { element, store, textarea } = await mountCommandComposer([
+			{ name: testCase.name, description: testCase.name, source: "builtin", dashboard: true },
+		]);
+		const exportClick =
+			testCase.expected === "export"
+				? vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {})
+				: undefined;
+		for (const method of [
+			api.prompt,
+			api.models,
+			api.stats,
+			api.forkMessages,
+			api.tree,
+			api.newSession,
+			api.compact,
+			api.dream,
+			api.runtimeSessions,
+			api.reload,
+			api.commands,
+			api.stopRuntime,
+			api.rename,
+		]) {
+			vi.mocked(method).mockClear();
+		}
+		store.navigate.mockClear();
+		store.removeRuntime.mockClear();
+
+		await submitComposer(textarea, testCase.command);
+
+		expect(api.prompt).not.toHaveBeenCalled();
+		expect(textarea.value).toBe("");
+		switch (testCase.expected) {
+			case "settings":
+				expect(store.navigate).toHaveBeenCalledWith({ screen: "settings" });
+				break;
+			case "model":
+				expect((element.querySelector('input[placeholder="search models…"]') as HTMLInputElement).value).toBe(
+					"claude",
+				);
+				break;
+			case "export":
+				expect(exportClick).toHaveBeenCalledOnce();
+				break;
+			case "import":
+				expect(
+					(element.querySelector('input[placeholder="/path/to/session.jsonl"]') as HTMLInputElement).value,
+				).toBe("/tmp/session.jsonl");
+				break;
+			case "name":
+				expect(api.rename).toHaveBeenCalledWith("k1", "release");
+				break;
+			case "session":
+				expect(api.stats).toHaveBeenCalledWith("k1");
+				expect(element.querySelector(".stats-popover")).not.toBeNull();
+				break;
+			case "fork":
+				expect(api.forkMessages).toHaveBeenCalledWith("k1");
+				expect(element.textContent).toContain("fork from message");
+				break;
+			case "tree":
+				expect(api.tree).toHaveBeenCalledWith("k1");
+				expect(element.textContent).toContain("session tree");
+				break;
+			case "new":
+				expect(api.newSession).toHaveBeenCalledWith("k1");
+				break;
+			case "compact":
+				expect(api.compact).toHaveBeenCalledWith("k1", "keep key details");
+				break;
+			case "dream":
+				expect(api.dream).toHaveBeenCalledWith("k1", "backup /tmp/archive");
+				break;
+			case "resume":
+				expect(api.runtimeSessions).toHaveBeenCalledWith("k1");
+				expect(element.textContent).toContain("resume session");
+				break;
+			case "reload":
+				expect(api.reload).toHaveBeenCalledWith("k1");
+				expect(api.commands).toHaveBeenCalledWith("k1");
+				break;
+			case "quit":
+				expect(api.stopRuntime).toHaveBeenCalledWith("k1");
+				expect(store.removeRuntime).toHaveBeenCalledWith("k1");
+				expect(store.navigate).toHaveBeenCalledWith({ screen: "fleet" });
+				break;
+		}
+		exportClick?.mockRestore();
+	});
+
+	it.each([
+		{ command: "/model", name: "model", title: "select model" },
+		{ command: "/import", name: "import", title: "import session" },
+		{ command: "/name", name: "name", title: "rename session" },
+		{ command: "/compact", name: "compact", title: "compact context" },
+	])("opens the expected modal for the no-argument $command form", async ({ command, name, title }) => {
+		const { element, textarea } = await mountCommandComposer([
+			{ name, description: name, source: "builtin", dashboard: true },
+		]);
+		vi.mocked(api.prompt).mockClear();
+
+		await submitComposer(textarea, command);
+
+		expect(api.prompt).not.toHaveBeenCalled();
+		expect(element.querySelector(".modal")?.textContent).toContain(title);
+	});
+
+	it.each([
+		{ command: "/dream", args: undefined },
+		{ command: "/dream backup", args: "backup" },
+		{ command: "/dream backup /tmp/archive", args: "backup /tmp/archive" },
+	])("preserves the dashboard behavior for $command", async ({ command, args }) => {
+		const { textarea } = await mountCommandComposer([
+			{ name: "dream", description: "dream", source: "builtin", dashboard: true },
+		]);
+		vi.mocked(api.prompt).mockClear();
+		vi.mocked(api.dream).mockClear();
+
+		await submitComposer(textarea, command);
+
+		expect(api.prompt).not.toHaveBeenCalled();
+		expect(api.dream).toHaveBeenCalledWith("k1", args);
+	});
+
+	it.each(["settings", "export", "session", "fork", "tree", "new", "resume", "reload", "quit"])(
+		"rejects arguments for /%s with visible usage guidance",
+		async (name) => {
+			const { element, store, textarea } = await mountCommandComposer([
+				{ name, description: name, source: "builtin", dashboard: true },
+			]);
+			const exportClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+			exportClick.mockClear();
+			for (const method of [
+				api.prompt,
+				api.stats,
+				api.forkMessages,
+				api.tree,
+				api.newSession,
+				api.runtimeSessions,
+				api.reload,
+				api.commands,
+				api.stopRuntime,
+			]) {
+				vi.mocked(method).mockClear();
+			}
+			store.navigate.mockClear();
+
+			await submitComposer(textarea, `/${name} extra`);
+
+			expect(api.prompt).not.toHaveBeenCalled();
+			expect(element.textContent).toContain(`Usage: /${name}`);
+			expect(api.stats).not.toHaveBeenCalled();
+			expect(api.forkMessages).not.toHaveBeenCalled();
+			expect(api.tree).not.toHaveBeenCalled();
+			expect(api.newSession).not.toHaveBeenCalled();
+			expect(api.runtimeSessions).not.toHaveBeenCalled();
+			expect(api.reload).not.toHaveBeenCalled();
+			expect(api.commands).not.toHaveBeenCalled();
+			expect(api.stopRuntime).not.toHaveBeenCalled();
+			expect(store.navigate).not.toHaveBeenCalled();
+			expect(exportClick).not.toHaveBeenCalled();
+			exportClick.mockRestore();
+		},
+	);
+
+	it("excludes and intercepts every dashboard-invalid built-in", async () => {
+		const invalid = ["copy", "hotkeys", "buddy"];
+		const { element, textarea } = await mountCommandComposer(
+			invalid.map((name) => ({ name, description: name, source: "builtin", dashboard: false })),
+		);
+		vi.mocked(api.prompt).mockClear();
+
+		textarea.value = "/";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		expect(element.querySelector('[role="listbox"]')).toBeNull();
+		for (const name of invalid) {
+			await submitComposer(textarea, `/${name}`);
+			expect(element.textContent).toContain(`/${name} is available only in the terminal UI`);
+		}
+
+		expect(api.prompt).not.toHaveBeenCalled();
+	});
+
+	it("surfaces the fail-closed RPC rejection when built-in discovery fails", async () => {
+		vi.mocked(api.commands).mockRejectedValueOnce(new Error("command discovery failed"));
+		vi.mocked(api.prompt).mockRejectedValueOnce(
+			new Error("Built-in slash command /fork must be handled by the RPC client; it was not sent to the model."),
+		);
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "/fork";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.prompt).toHaveBeenCalledWith("k1", "/fork");
+		expect(el.textContent).toContain("was not sent to the model");
+		expect(textarea.value).toBe("/fork");
+	});
+
+	it("fails closed while built-in discovery is still pending, then dispatches after discovery", async () => {
+		let resolveCommands: ((value: { commands: CommandDto[] }) => void) | undefined;
+		vi.mocked(api.commands).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveCommands = resolve;
+				}),
+		);
+		vi.mocked(api.prompt).mockRejectedValueOnce(
+			new Error("Built-in slash command /fork must be handled by the RPC client; it was not sent to the model."),
+		);
+		const baseStore = makeStore() as any;
+		const store = {
+			...baseStore,
+			sessions: { k1: createSessionViewState("k1") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: vi.fn(async () => {}),
+		};
+		const element = mount(() => <SessionScreen store={store} sessionKey="k1" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const textarea = element.querySelector("textarea") as HTMLTextAreaElement;
+		vi.mocked(api.prompt).mockClear();
+
+		await submitComposer(textarea, "/fork");
+
+		expect(api.prompt).toHaveBeenCalledWith("k1", "/fork");
+		expect(element.textContent).toContain("was not sent to the model");
+		expect(textarea.value).toBe("/fork");
+
+		resolveCommands?.({
+			commands: [{ name: "fork", description: "Fork", source: "builtin", dashboard: true }],
+		});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		await submitComposer(textarea, "/fork");
+
+		expect(api.prompt).toHaveBeenCalledOnce();
+		expect(api.forkMessages).toHaveBeenCalledWith("k1");
+		expect(element.textContent).toContain("fork from message");
+		expect(textarea.value).toBe("");
+	});
+
+	it.each(["/forklift", "/unknown with args"])(
+		"sends unrecognized slash text %s to the model unchanged",
+		async (text) => {
+			const { textarea } = await mountCommandComposer([
+				{ name: "fork", description: "Fork", source: "builtin", dashboard: true },
+			]);
+			vi.mocked(api.prompt).mockClear();
+
+			await submitComposer(textarea, text);
+
+			expect(api.prompt).toHaveBeenCalledWith("k1", text);
+		},
+	);
+
 	it("slash command composer sends raw slash text after arguments are entered", async () => {
 		vi.mocked(api.commands).mockResolvedValue({
 			commands: [{ name: "skill:review", description: "Review code", source: "skill" }],
@@ -5051,6 +5365,40 @@ describe("dashboard client regressions", () => {
 		expect(vi.mocked(api.prompt).mock.calls[0]?.[1]).toContain("tiny.png");
 		expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:mock-1");
 		expect(el.querySelector(".attachment-thumb")).toBeNull();
+	});
+
+	it("preserves attachments and composer text when a built-in command is rejected", async () => {
+		stubObjectUrls();
+		vi.mocked(api.commands).mockResolvedValue({
+			commands: [{ name: "fork", description: "Fork", source: "builtin", dashboard: true }],
+		});
+		vi.mocked(api.prompt).mockClear();
+		const store = makeStore() as any;
+		const fakeStore = {
+			...store,
+			sessions: { image: createSessionViewState("image") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="image" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const input = el.querySelector('input[accept="image/*"]') as HTMLInputElement;
+		Object.defineProperty(input, "files", {
+			configurable: true,
+			value: [new File(["img"], "tiny.png", { type: "image/png" })],
+		});
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = "/fork";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(api.prompt).not.toHaveBeenCalled();
+		expect(textarea.value).toBe("/fork");
+		expect(el.querySelector(".attachment-thumb")).not.toBeNull();
+		expect(el.textContent).toContain("nothing was sent or discarded");
 	});
 
 	it("generic file attachments upload to the workspace and send paths, not inline file contents", async () => {

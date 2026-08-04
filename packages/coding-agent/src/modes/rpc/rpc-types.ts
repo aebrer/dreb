@@ -27,6 +27,8 @@ export type RpcCommand =
 	| { id?: string; type: "follow_up"; message: string; images?: ImageContent[] }
 	| { id?: string; type: "abort" }
 	| { id?: string; type: "new_session"; parentSession?: string }
+	| { id?: string; type: "reload" }
+	| { id?: string; type: "dream"; args?: string }
 
 	// State
 	| { id?: string; type: "get_state" }
@@ -78,6 +80,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_session_stats" }
 	| { id?: string; type: "get_performance_stats" }
 	| { id?: string; type: "export_html"; outputPath?: string }
+	| { id?: string; type: "import_jsonl"; inputPath: string }
 	| { id?: string; type: "switch_session"; sessionPath: string }
 	| { id?: string; type: "delete_session"; sessionPath: string }
 	| { id?: string; type: "fork"; entryId: string }
@@ -98,7 +101,7 @@ export type RpcCommand =
 	// Messages
 	| { id?: string; type: "get_messages" }
 
-	// Commands (available for invocation via prompt)
+	// Command discovery (resource commands plus client-handled built-ins)
 	| { id?: string; type: "get_commands" }
 
 	// Session listing
@@ -124,17 +127,30 @@ export type RpcCommand =
 // RPC Slash Command (for get_commands response)
 // ============================================================================
 
-/** A command available for invocation via prompt */
-export interface RpcSlashCommand {
+interface RpcResourceSlashCommand {
 	/** Command name (without leading slash) */
 	name: string;
 	/** Human-readable description */
 	description?: string;
-	/** What kind of command this is */
+	/** Prompt-invokable resource command. */
 	source: "extension" | "prompt" | "skill";
-	/** Source metadata for the owning resource */
+	/** Source metadata for the owning resource. */
 	sourceInfo: SourceInfo;
 }
+
+interface RpcBuiltinSlashCommand {
+	/** Command name (without leading slash). */
+	name: string;
+	/** Human-readable description. */
+	description: string;
+	/** Built-ins require client-side handling and are rejected by RPC prompt commands. */
+	source: "builtin";
+	/** False means typed use is intercepted but the command is omitted from dashboard autocomplete. */
+	dashboard: boolean;
+}
+
+/** A slash command discoverable by an RPC client. */
+export type RpcSlashCommand = RpcResourceSlashCommand | RpcBuiltinSlashCommand;
 
 export interface RpcScopedModel {
 	provider: string;
@@ -245,6 +261,8 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "follow_up"; success: true }
 	| { id?: string; type: "response"; command: "abort"; success: true }
 	| { id?: string; type: "response"; command: "new_session"; success: true; data: { cancelled: boolean } }
+	| { id?: string; type: "response"; command: "reload"; success: true }
+	| { id?: string; type: "response"; command: "dream"; success: true; data: { message: string } }
 
 	// State
 	| { id?: string; type: "response"; command: "get_state"; success: true; data: RpcSessionState }
@@ -338,6 +356,7 @@ export type RpcResponse =
 			data: { models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }> };
 	  }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
+	| { id?: string; type: "response"; command: "import_jsonl"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "switch_session"; success: true; data: { cancelled: boolean } }
 	| { id?: string; type: "response"; command: "delete_session"; success: true; data: { method: "trash" | "unlink" } }
 	| { id?: string; type: "response"; command: "fork"; success: true; data: { text: string; cancelled: boolean } }

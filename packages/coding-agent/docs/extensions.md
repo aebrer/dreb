@@ -1176,8 +1176,9 @@ dreb.registerCommand("deploy", {
 
 ### dreb.getCommands()
 
-Get the slash commands available for invocation via `prompt` in the current session. Includes extension commands, prompt templates, and skill commands.
-The list matches the RPC `get_commands` ordering: extensions first, then templates, then skills.
+Get the slash commands available for invocation via `prompt` in the current session. Includes extension commands, prompt templates, and skill commands, in that order.
+
+This extension-SDK contract is intentionally narrower than RPC `get_commands`, which also exposes client-handled built-ins for alternate frontends.
 
 ```typescript
 const commands = dreb.getCommands();
@@ -1204,8 +1205,7 @@ Each entry has this shape:
 
 Use `sourceInfo` as the canonical provenance field. Do not infer ownership from command names or from ad hoc path parsing.
 
-Built-in interactive commands (like `/model` and `/settings`) are not included here. They are handled only in interactive
-mode and would not execute if sent via `prompt`.
+Built-in commands (like `/model` and `/settings`) are not included here because they are not prompt-invokable and have no resource provenance. RPC clients can discover them separately through `get_commands`; sending one through an RPC prompt command is rejected rather than passed to the model.
 
 ### dreb.registerMessageRenderer(customType, renderer)
 

@@ -82,6 +82,8 @@ If the agent is streaming and no `streamingBehavior` is specified, the command r
 
 **Input expansion**: Skill commands (`/skill:name`) and prompt templates (`/template`) are expanded before sending/queueing.
 
+**Built-in commands are client actions, not model prompts.** Registered built-ins such as `/fork` are rejected by `prompt`, `steer`, and `follow_up` with `success: false`; the message is not queued or sent to the model. Discover them through [`get_commands`](#get_commands), then invoke the corresponding RPC operation or client UI. Matching uses the complete first slash token: `/fork` and `/fork anything` are recognized, while `/forklift` and unknown slash commands remain ordinary prompt text.
+
 Response:
 ```json
 {"id": "req-1", "type": "response", "command": "prompt", "success": true}
@@ -168,6 +170,34 @@ If an extension cancelled:
 ```json
 {"type": "response", "command": "new_session", "success": true, "data": {"cancelled": true}}
 ```
+
+#### reload
+
+Reload session resources (extensions, skills, prompt templates, context, and themes) using the same core reload operation as the interactive command.
+
+```json
+{"type": "reload"}
+```
+
+Response:
+```json
+{"type": "response", "command": "reload", "success": true}
+```
+
+#### dream
+
+Run memory consolidation or manage its archive path. `args` is the text after `/dream`: omit it to run consolidation, use `"backup"` to read the archive path, or `"backup <path>"` to set it.
+
+```json
+{"type": "dream", "args": "backup"}
+```
+
+Response:
+```json
+{"type": "response", "command": "dream", "success": true, "data": {"message": "Dream backup path: /home/user/.dreb/memory-archive"}}
+```
+
+A consolidation run performs and verifies the backup before prompting the agent. Backup, lock, path-validation, settings-write, or consolidation failures are explicit RPC errors.
 
 ### State
 
@@ -800,6 +830,19 @@ Response:
 }
 ```
 
+#### import_jsonl
+
+Import a JSONL session into the current runtime. This can be cancelled by a session-switch extension hook.
+
+```json
+{"type": "import_jsonl", "inputPath": "/tmp/session.jsonl"}
+```
+
+Response:
+```json
+{"type": "response", "command": "import_jsonl", "success": true, "data": {"cancelled": false}}
+```
+
 #### switch_session
 
 Load a different session file. Can be cancelled by a `session_before_switch` extension event handler.
@@ -945,7 +988,7 @@ The current session name is available via `get_state` in the `sessionName` field
 
 #### get_commands
 
-Get available commands (extension commands, prompt templates, and skills). These can be invoked via the `prompt` command by prefixing with `/`.
+Discover extension commands, prompt templates, skills, and registered built-ins. Resource commands can be invoked through `prompt`; built-ins have `source: "builtin"` and require client-side handling through the corresponding RPC operation or UI. Sending a recognized built-in through `prompt`, `steer`, or `follow_up` is rejected fail-closed.
 
 ```json
 {"type": "get_commands"}
@@ -959,28 +1002,26 @@ Response:
   "success": true,
   "data": {
     "commands": [
-      {"name": "session-name", "description": "Set or clear session name", "source": "extension", "path": "/home/user/.dreb/agent/extensions/session.ts"},
-      {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt", "location": "project", "path": "/home/user/myproject/.dreb/agent/prompts/fix-tests.md"},
-      {"name": "skill:brave-search", "description": "Web search via Brave API", "source": "skill", "location": "user", "path": "/home/user/.dreb/agent/skills/brave-search/SKILL.md"}
+      {"name": "session-name", "description": "Set or clear session name", "source": "extension", "sourceInfo": {"path": "/home/user/.dreb/agent/extensions/session.ts"}},
+      {"name": "fix-tests", "description": "Fix failing tests", "source": "prompt", "sourceInfo": {"path": "/home/user/myproject/.dreb/agent/prompts/fix-tests.md"}},
+      {"name": "skill:brave-search", "description": "Web search via Brave API", "source": "skill", "sourceInfo": {"path": "/home/user/.dreb/agent/skills/brave-search/SKILL.md"}},
+      {"name": "fork", "description": "Create a new fork from a previous message", "source": "builtin", "dashboard": true},
+      {"name": "copy", "description": "Copy last agent message to clipboard", "source": "builtin", "dashboard": false}
     ]
   }
 }
 ```
 
-Each command has:
-- `name`: Command name (invoke with `/name`)
-- `description`: Human-readable description (optional for extension commands)
-- `source`: What kind of command:
-  - `"extension"`: Registered via `dreb.registerCommand()` in an extension
-  - `"prompt"`: Loaded from a prompt template `.md` file
-  - `"skill"`: Loaded from a skill directory (name is prefixed with `skill:`)
-- `location`: Where it was loaded from (optional, not present for extensions):
-  - `"user"`: User-level (`~/.dreb/agent/`)
-  - `"project"`: Project-level (`./.dreb/agent/`)
-  - `"path"`: Explicit path via CLI or settings
-- `path`: Absolute file path to the command source (optional)
+Every command has `name`, optional `description`, and a `source`:
 
-**Note**: Built-in TUI commands (`/settings`, `/hotkeys`, etc.) are not included. They are handled only in interactive mode and would not execute if sent via `prompt`.
+- `"extension"`: registered via `dreb.registerCommand()`; prompt-invokable and includes `sourceInfo`.
+- `"prompt"`: loaded prompt template; prompt-invokable and includes `sourceInfo`.
+- `"skill"`: loaded skill (name prefixed with `skill:`); prompt-invokable and includes `sourceInfo`.
+- `"builtin"`: core slash command; not prompt-invokable, has no file `sourceInfo`, and includes `dashboard`. A false value means dashboard clients should omit it from autocomplete while still intercepting typed use with terminal-only guidance.
+
+Names are deduplicated, with a built-in taking precedence over a colliding resource command. Future registry entries appear automatically. Hidden development commands are intentionally not registered and do not appear.
+
+The extension SDK's `dreb.getCommands()` contract is unchanged: it continues to return only commands invokable via `prompt`, with required resource provenance. Built-ins are added only to this RPC discovery surface.
 
 ### Session Listing
 

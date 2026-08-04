@@ -23,6 +23,17 @@ import {
 	validateTrustedContextFolders,
 } from "../../core/context-trust.js";
 import { DailyCostTracker } from "../../core/daily-cost-tracker.js";
+import {
+	acquireDreamLock,
+	buildDreamPrompt,
+	cleanupDreamTmpDirs,
+	parseDreamCommand,
+	performDreamBackup,
+	pruneOldBackups,
+	resolveDreamContext,
+	validateArchivePath,
+	validateMemoryLinks,
+} from "../../core/dream.js";
 import type {
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
@@ -35,8 +46,10 @@ import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
 import type { SettingsManager, TransportSetting } from "../../core/settings-manager.js";
+import { BUILTIN_SLASH_COMMANDS, parseBuiltinSlashCommand } from "../../core/slash-commands.js";
 import { TabTitleGenerator } from "../../core/tab-title.js";
 import { validateThinkingLevelForModel } from "../../core/thinking.js";
+import { resolveToCwd } from "../../core/tools/path-utils.js";
 import {
 	type BackgroundAgentInfo,
 	discoverAgentTypes,
@@ -133,6 +146,116 @@ export function getResourcesForRpc(
 			session.resourceLoader.getSystemPrompt() !== undefined ||
 			session.resourceLoader.getAppendSystemPrompt().length > 0,
 	};
+}
+
+export function getCommandsForRpc(
+	session: Pick<AgentSession, "extensionRunner" | "promptTemplates" | "getFilteredSkills">,
+): RpcSlashCommand[] {
+	const commands = new Map<string, RpcSlashCommand>();
+	for (const command of session.extensionRunner?.getRegisteredCommands() ?? []) {
+		commands.set(command.invocationName, {
+			name: command.invocationName,
+			description: command.description,
+			source: "extension",
+			sourceInfo: command.sourceInfo,
+		});
+	}
+	for (const template of session.promptTemplates) {
+		if (!commands.has(template.name)) {
+			commands.set(template.name, {
+				name: template.name,
+				description: template.description,
+				source: "prompt",
+				sourceInfo: template.sourceInfo,
+			});
+		}
+	}
+	for (const skill of session.getFilteredSkills()) {
+		const name = `skill:${skill.name}`;
+		if (!commands.has(name)) {
+			commands.set(name, { name, description: skill.description, source: "skill", sourceInfo: skill.sourceInfo });
+		}
+	}
+	// Built-ins deliberately win collisions, matching interactive autocomplete and
+	// ensuring a colliding resource can never make built-in text reach the model.
+	for (const command of BUILTIN_SLASH_COMMANDS) {
+		commands.set(command.name, {
+			name: command.name,
+			description: command.description,
+			source: "builtin",
+			dashboard: command.dashboard !== false,
+		});
+	}
+	return [...commands.values()];
+}
+
+export function getBuiltinPromptRejection(message: string): string | undefined {
+	const parsed = parseBuiltinSlashCommand(message);
+	return parsed
+		? `Built-in slash command /${parsed.command.name} must be handled by the RPC client; it was not sent to the model.`
+		: undefined;
+}
+
+async function runDreamForRpc(session: AgentSession, args = ""): Promise<{ message: string }> {
+	const command = parseDreamCommand(`/dream${args ? ` ${args}` : ""}`);
+	if (command.type === "showBackup") {
+		return { message: `Dream backup path: ${session.settingsManager.getDreamArchivePath()}` };
+	}
+	if (command.type === "setBackup") {
+		const absolutePath = resolveToCwd(command.path, session.sessionManager.getCwd());
+		const context = await resolveDreamContext(session.settingsManager);
+		validateArchivePath(absolutePath, [
+			context.globalMemoryDir,
+			...context.projectMemoryDirs,
+			...context.claudeMemoryDirs,
+		]);
+		if (session.settingsManager.hasGlobalSettingsLoadError()) {
+			throw new Error("Cannot write dream backup path: the global settings file failed to load");
+		}
+		session.settingsManager.drainErrors();
+		session.settingsManager.setDreamArchivePath(absolutePath);
+		try {
+			await session.settingsManager.flush();
+		} catch (error) {
+			session.settingsManager.reload();
+			throw error;
+		}
+		const writeErrors = session.settingsManager.drainErrors();
+		if (writeErrors.length > 0) {
+			session.settingsManager.reload();
+			throw new Error(
+				`Failed to persist dream backup path: ${writeErrors.map((entry) => `${entry.scope}: ${entry.error.message}`).join("; ")}`,
+			);
+		}
+		return { message: `Dream backup path set to: ${absolutePath}` };
+	}
+
+	let releaseLock: (() => void) | undefined;
+	let context: Awaited<ReturnType<typeof resolveDreamContext>> | undefined;
+	try {
+		releaseLock = await acquireDreamLock();
+		context = await resolveDreamContext(session.settingsManager);
+		validateArchivePath(context.archivePath, [
+			context.globalMemoryDir,
+			...context.projectMemoryDirs,
+			...context.claudeMemoryDirs,
+		]);
+		const backup = await performDreamBackup(context);
+		if (!backup.verified) {
+			throw new Error(`Backup verification failed; check ${backup.backupPath}`);
+		}
+		await session.prompt(buildDreamPrompt(context, backup), { source: "rpc" });
+		const links = validateMemoryLinks([context.globalMemoryDir, ...context.projectMemoryDirs]);
+		await pruneOldBackups(context.archivePath);
+		return {
+			message: links.valid
+				? `Dream completed. Backup: ${backup.backupPath}`
+				: `Dream completed with ${links.brokenLinks.length} broken memory link(s). Backup: ${backup.backupPath}`,
+		};
+	} finally {
+		releaseLock?.();
+		if (context) cleanupDreamTmpDirs([context.globalMemoryDir, ...context.projectMemoryDirs]);
+	}
 }
 
 export function getPendingMessagesForRpc(
@@ -1590,6 +1713,8 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			// =================================================================
 
 			case "prompt": {
+				const rejection = getBuiltinPromptRejection(command.message);
+				if (rejection) return error(id, "prompt", rejection);
 				// Don't await - events will stream
 				// Extension commands are executed immediately, file prompt templates are expanded
 				// If streaming and streamingBehavior specified, queues via steer/followUp
@@ -1604,11 +1729,15 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "steer": {
+				const rejection = getBuiltinPromptRejection(command.message);
+				if (rejection) return error(id, "steer", rejection);
 				await session.steer(command.message, command.images);
 				return success(id, "steer");
 			}
 
 			case "follow_up": {
+				const rejection = getBuiltinPromptRejection(command.message);
+				if (rejection) return error(id, "follow_up", rejection);
 				await session.followUp(command.message, command.images);
 				return success(id, "follow_up");
 			}
@@ -1624,6 +1753,15 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
 				const cancelled = !(await session.newSession(options));
 				return success(id, "new_session", { cancelled });
+			}
+
+			case "reload": {
+				await session.reload();
+				return success(id, "reload");
+			}
+
+			case "dream": {
+				return success(id, "dream", await runDreamForRpc(session, command.args));
 			}
 
 			// =================================================================
@@ -1836,6 +1974,11 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "export_html", { path });
 			}
 
+			case "import_jsonl": {
+				const cancelled = !(await session.importFromJsonl(command.inputPath));
+				return success(id, "import_jsonl", { cancelled });
+			}
+
 			case "switch_session": {
 				const cancelled = !(await session.switchSession(command.sessionPath));
 				return success(id, "switch_session", { cancelled });
@@ -1900,7 +2043,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			// =================================================================
-			// Commands (available for invocation via prompt)
+			// Command discovery (resource commands plus client-handled built-ins)
 			// =================================================================
 
 			// =================================================================
@@ -1994,36 +2137,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "get_commands": {
-				const commands: RpcSlashCommand[] = [];
-
-				for (const command of session.extensionRunner?.getRegisteredCommands() ?? []) {
-					commands.push({
-						name: command.invocationName,
-						description: command.description,
-						source: "extension",
-						sourceInfo: command.sourceInfo,
-					});
-				}
-
-				for (const template of session.promptTemplates) {
-					commands.push({
-						name: template.name,
-						description: template.description,
-						source: "prompt",
-						sourceInfo: template.sourceInfo,
-					});
-				}
-
-				for (const skill of session.getFilteredSkills()) {
-					commands.push({
-						name: `skill:${skill.name}`,
-						description: skill.description,
-						source: "skill",
-						sourceInfo: skill.sourceInfo,
-					});
-				}
-
-				return success(id, "get_commands", { commands });
+				return success(id, "get_commands", { commands: getCommandsForRpc(session) });
 			}
 
 			default: {
