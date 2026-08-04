@@ -139,6 +139,17 @@ export {
 	waitToolDefinition,
 } from "./wait.js";
 export {
+	createLocalGithubCiOperations,
+	createWatchGithubCiTool,
+	createWatchGithubCiToolDefinition,
+	type GithubCiOperations,
+	type WatchGithubCiToolDetails,
+	type WatchGithubCiToolInput,
+	type WatchGithubCiToolOptions,
+	watchGithubCiTool,
+	watchGithubCiToolDefinition,
+} from "./watch-github-ci.js";
+export {
 	createWebFetchTool,
 	createWebFetchToolDefinition,
 	createWebSearchTool,
@@ -200,6 +211,12 @@ import { createTmpReadToolDefinition } from "./tmp-read.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { createWaitToolDefinition, waitToolDefinition } from "./wait.js";
 import {
+	createWatchGithubCiTool,
+	createWatchGithubCiToolDefinition,
+	watchGithubCiTool,
+	watchGithubCiToolDefinition,
+} from "./watch-github-ci.js";
+import {
 	createWebFetchTool,
 	createWebFetchToolDefinition,
 	createWebSearchTool,
@@ -236,6 +253,7 @@ export const allTools = {
 	subagent: subagentTool,
 	tmp_read: tmpReadTool,
 	wait: waitTool,
+	watch_github_ci: watchGithubCiTool,
 	search: searchTool,
 	ask_user: askUserTool,
 };
@@ -253,6 +271,7 @@ export const allToolDefinitions = {
 	subagent: subagentToolDefinition,
 	tmp_read: tmpReadToolDefinition,
 	wait: waitToolDefinition,
+	watch_github_ci: watchGithubCiToolDefinition,
 	search: searchToolDefinition,
 	ask_user: askUserToolDefinition,
 };
@@ -300,6 +319,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		subagent: createSubagentToolDefinition(cwd, options?.subagent),
 		tmp_read: createTmpReadToolDefinition(options?.read),
 		wait: createWaitToolDefinition({ getRunningAgents: getRunningBackgroundAgents }),
+		watch_github_ci: createWatchGithubCiToolDefinition(cwd),
 		search: createSearchToolDefinition(cwd),
 		ask_user: createAskUserToolDefinition(),
 	};
@@ -342,6 +362,7 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		subagent: createSubagentTool(cwd, options?.subagent),
 		tmp_read: wrapToolDefinition(createTmpReadToolDefinition(options?.read)),
 		wait: wrapToolDefinition(createWaitToolDefinition({ getRunningAgents: getRunningBackgroundAgents })),
+		watch_github_ci: createWatchGithubCiTool(cwd),
 		search: createSearchTool(cwd),
 		ask_user: wrapToolDefinition(createAskUserToolDefinition()),
 	};

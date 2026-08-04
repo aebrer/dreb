@@ -186,9 +186,10 @@ const DREB_SCRIPT = process.argv[1] || "dreb";
 const NODE_EXEC = process.execPath;
 
 // Tools that must never be available to subagents — wait (subagents should
-// never no-op; they have a task to complete), subagent (no recursive spawning),
-// and suggest_next (would end the subagent's turn mid-work).
-const SUBAGENT_EXCLUDED_TOOLS = ["wait", "subagent", "suggest_next"] as const;
+// never no-op; they have a task to complete), watch_github_ci (parent workflow
+// orchestration), subagent (no recursive spawning), and suggest_next (would end
+// the subagent's turn mid-work).
+const SUBAGENT_EXCLUDED_TOOLS = ["wait", "watch_github_ci", "subagent", "suggest_next"] as const;
 
 // Default standard tools for subagents when no tools are specified in the agent
 // definition. This is the set passed via --tools to the child process.
@@ -2014,24 +2015,29 @@ export function createSubagentToolDefinition(
 		name: "subagent",
 		label: "subagent",
 		description:
-			"Delegate tasks to independent subagents (Explore for codebase research, Sandbox for isolated /tmp-only analysis). " +
+			"Run focused, independent work in a child agent when the task matches that agent's defined role " +
+			"(Explore for concrete evidence gathering, Sandbox for isolated /tmp-only analysis). " +
 			"Supports `task` for a single task, `tasks` for parallel execution in one call (up to 8, max 4 concurrent), " +
 			"and `chain` for a sequential pipeline with {previous} substitution. " +
 			"All subagents run in background — returns immediately, notifies on completion.",
-		promptSnippet: "Delegate tasks to independent subagents",
+		promptSnippet: "Run role-matched work in independent child agents",
 		promptGuidelines: [
-			"Use `subagent` to delegate focused, independent tasks to child agents",
+			"`subagent` can be used for focused, independent work that matches a child agent's defined role; delegation is optional, not an unconditional default",
+			"When `agent` is omitted, the default is `Explore`. Default Explore is for concrete, bounded evidence gathering: locating files, symbols, or documentation; enumerating call sites; quoting exact snippets; and tracing an explicit data flow",
+			"Do not ask default Explore to diagnose root causes, interpret ambiguous requirements, make architecture or design decisions, recommend an implementation, or produce an implementation plan. The primary agent must synthesize Explore evidence and own those conclusions",
+			"Good default Explore tasks: find every file that renders a named component; list tests for a specific behavior; quote code that limits a collection; locate documented examples; enumerate call sites. Bad default Explore tasks: investigate a root cause; decide ambiguous behavior; recommend an implementation; design an architecture or refactor; produce an implementation plan",
+			"Parallel and chain modes do not make a role-inappropriate task suitable for default Explore. Specialized agents may perform the broader work described by their own definitions",
 			"Available agent types can be discovered from ~/.dreb/agents/ and .dreb/agents/ markdown files",
 			builtInAgentsLine,
-			'Use the `tasks` array to run multiple independent tasks in a single `subagent` call (parallel mode), not separate calls. Typical mach6-review batch: `{ "tasks": [{ "agent": "code-reviewer", "task": "Review code changes" }, { "agent": "error-auditor", "task": "Audit runtime failures" }, { "agent": "test-reviewer", "task": "Review test coverage" }, { "agent": "completeness-checker", "task": "Check issue completeness" }] }`',
-			"Use chain mode when each step depends on the previous step's output (reference with {previous})",
+			'Use the `tasks` array to run multiple independent, role-matched tasks in a single `subagent` call (parallel mode), not separate calls. Typical mach6-review batch: `{ "tasks": [{ "agent": "code-reviewer", "task": "Review code changes" }, { "agent": "error-auditor", "task": "Audit runtime failures" }, { "agent": "test-reviewer", "task": "Review test coverage" }, { "agent": "completeness-checker", "task": "Check issue completeness" }] }`',
+			"Use chain mode for role-matched steps when each step depends on the previous step's output (reference with {previous})",
 			"All subagents run in background — the tool returns immediately and you are notified when each agent completes.",
 			"Subagents have their own context window — provide enough context in the task prompt",
 			"Each agent notifies independently when done — completion messages include a list of any still-running agents. If you need their results before proceeding, end your current turn with no tool calls (as if you were asking the user a question and waiting for their reply). This emits `agent_end` and lets the framework deliver the completion as a new message that resumes your turn automatically. Do not call `sleep` or any other waiting action, and do not launch filler work.",
 			"Agent definitions specify a `model` field with a provider fallback list (comma-separated or YAML list). The spawner tries each in order and uses the first one that resolves for the current provider. This makes agents portable across providers.",
 			"Per-invocation `model` overrides take precedence but **discard the entire fallback list** — if the single override model isn't available on the current provider, the agent fails. Only override when you have a specific reason (e.g. escalating to a stronger tier for a complex task).",
 			"Optional `thinking` overrides accept off/minimal/low/medium/high/xhigh. Per-task values override a top-level value; unsupported levels fail before spawn. Omit thinking to preserve the child's configured default.",
-			"**Model routing** — agent definitions already specify the right tier for their role. Most subagent tasks (exploration, file discovery, grep, navigation, summarization) are handled well by the defaults. Do not override the model unless the task genuinely requires a different capability tier than what the agent definition provides.",
+			"**Model routing** — choose an agent by role fit first. Agent definitions already specify the normal model tier for that role; override the model only when the assigned task genuinely requires a different capability tier.",
 			"**Model identity** — Your current model is stated in the system prompt as `You are running on: provider/id`. Use this for explicit routing decisions — e.g. delegate vision tasks if you're on a text-only model, or use a differently-architected model as a critic for tasks where diverse model perspectives improve reliability.",
 		],
 		parameters: subagentSchema,

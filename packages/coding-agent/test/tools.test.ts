@@ -669,6 +669,20 @@ describe("Coding Agent Tools", () => {
 	});
 });
 
+describe("public SDK exports (src/index.ts barrel)", () => {
+	it("exports the watch_github_ci tool, definition, factory, and local operations from the public surface", async () => {
+		const barrel = await import("../src/index.js");
+		expect(typeof barrel.watchGithubCiTool).toBe("object");
+		expect(barrel.watchGithubCiTool?.name).toBe("watch_github_ci");
+		expect(typeof barrel.watchGithubCiTool?.execute).toBe("function");
+		expect(typeof barrel.watchGithubCiToolDefinition).toBe("object");
+		expect(barrel.watchGithubCiToolDefinition?.name).toBe("watch_github_ci");
+		expect(typeof barrel.createWatchGithubCiTool).toBe("function");
+		expect(typeof barrel.createWatchGithubCiToolDefinition).toBe("function");
+		expect(typeof barrel.createLocalGithubCiOperations).toBe("function");
+	});
+});
+
 describe("edit tool fuzzy matching", () => {
 	let testDir: string;
 
@@ -948,6 +962,15 @@ describe("allTools / allToolDefinitions", () => {
 	it("createAllTools includes search unconditionally", () => {
 		const tools = createAllTools("/tmp");
 		expect(tools.search).toBeDefined();
+	});
+
+	it("includes watch_github_ci in both registries unconditionally", () => {
+		expect("watch_github_ci" in allTools).toBe(true);
+		expect("watch_github_ci" in allToolDefinitions).toBe(true);
+		expect(allTools.watch_github_ci.name).toBe("watch_github_ci");
+		expect(typeof allTools.watch_github_ci.execute).toBe("function");
+		expect(createAllToolDefinitions("/tmp").watch_github_ci).toBeDefined();
+		expect(createAllTools("/tmp").watch_github_ci).toBeDefined();
 	});
 
 	it("includes ask_user in both registries unconditionally", () => {

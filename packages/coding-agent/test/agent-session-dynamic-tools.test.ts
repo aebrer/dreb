@@ -107,6 +107,10 @@ describe("AgentSession dynamic tool registration", () => {
 		});
 
 		expect(session.getActiveToolNames()).toContain("ask_user");
+		expect(session.getActiveToolNames()).toContain("watch_github_ci");
+		expect(session.systemPrompt).toContain(
+			"- watch_github_ci: Watch GitHub pull-request CI until checks pass or fail",
+		);
 		expect(session.extensionRunner).toBeDefined();
 		expect(session.extensionRunner?.hasUI()).toBe(false);
 

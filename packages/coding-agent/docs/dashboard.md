@@ -120,7 +120,7 @@ networking window above.
 | Screen | What it does |
 |---|---|
 | **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Live cards keep a deterministic order by project path, then session start time; needs-attention cards badge the browser tab without jumping around. Below the grid: past sessions grouped by project, three compact rows per group with an "all N on disk" expander, resume and delete. |
-| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, subagent strip, status line with elapsed time plus ■ stop and compaction/retry aborts, a persistent session-header live indicator, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, median tok/s, and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests for select/confirm/input/editor render as modals; a rich `ask`/`ask_user` request renders inline as a single wizard that presents all its questions together — each with Markdown-formatted question text, choices, optional free text — plus an in-card Stop agent action, Escape-to-stop, and the authoritative auto-stop countdown, and is answered as one batch submit. Pending questions set needs-attention state and use the existing hidden-page notification path. Extension notifications render as toasts. |
+| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, a bounded scrollable subagent panel that lists every retained agent newest-first with full running/done counts, status line with elapsed time plus ■ stop and compaction/retry aborts, a persistent session-header live indicator, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, median tok/s, and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests for select/confirm/input/editor render as modals; a rich `ask`/`ask_user` request renders inline as a single wizard that presents all its questions together — each with Markdown-formatted question text, choices, optional free text — plus an in-card Stop agent action, Escape-to-stop, and the authoritative auto-stop countdown, and is answered as one batch submit. Pending questions set needs-attention state and use the existing hidden-page notification path. Extension notifications render as toasts. |
 | **Subagent view** | Read-only transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the transcript survives browser reloads. Shows the task, streaming output, tool activity, and any safe Dispatch Arbiter changed/unchanged/failure records with the final agent/model/thinking. No raw arbiter output is displayed or transported. No composer — subagents can't be steered yet; the parent session controls them. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. It also shows the **effective global nested-context trust** for the displayed canonical directory: untrusted, trusted by that root, inherited from a granting root, or global expert trust-all. You can trust the displayed folder and descendants, or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all descendants. |
 | **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. The global-only Dispatch Arbiter card exposes enable/disable, exact authenticated model selection, thinking, guide path, and readiness guidance; model-less enablement is blocked and RPC/runtime validation remains fail-closed. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions; context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, transcript image display mode, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards and a system/light/dark mode selector, saved per browser. Shows the current rotating pairing code on the host/local dashboard, plus the paired-devices list with unpair. |
@@ -128,7 +128,7 @@ networking window above.
 
 ### Dispatch Arbiter observability
 
-When the global Dispatch Arbiter is enabled, the dashboard consumes the typed `subagent_arbitration` RPC event. The matching background-agent card is updated to the final selected agent before child events arrive; the parent chip shows final model/thinking or a failure marker, and the subagent drill-in lists ordered records (including chain steps). Runtime snapshots carry the same safe records so refresh/resync during a live process does not revert to the requested identity.
+When the global Dispatch Arbiter is enabled, the dashboard consumes the typed `subagent_arbitration` RPC event. The matching background-agent card is updated to the final selected agent before child events arrive; the parent panel row shows final model/thinking or a failure marker, and the subagent drill-in lists ordered records (including chain steps). Runtime snapshots carry the same safe records so refresh/resync during a live process does not revert to the requested identity.
 
 Only host-validated proposed/final tuples, changed fields, status, step, and bounded host errors cross RPC/SSE. Arbiter prompts, raw output, reasoning, tasks, guides, and parent excerpts never reach dashboard protocol state. The safe record is separately persisted in the parent session as a non-context custom entry; child transcript hydration remains sourced from the child log.
 
@@ -374,8 +374,10 @@ Then open `https://hostname.tailXXXX.ts.net:<port>` on the phone.
 Background subagents are first-class:
 
 - Fleet cards show running/done counts and live agent lines.
-- The session view shows a chip strip — one chip per background agent; click
-  to drill into its live transcript.
+- The session view shows every retained background agent in a bounded,
+  scrollable panel, ordered newest-first with the full running/done count in its
+  summary. It uses the same native collapse pattern as the task tracker, starts
+  collapsed on mobile, and keeps every row available for transcript drill-in.
 - The drill-in view streams the child's events in real time via the
   `background_agent_event` relay (see [RPC events](rpc.md#event-types)) and
   hydrates from the agent's on-disk session log on mount, so transcripts
@@ -387,7 +389,8 @@ Single breakpoint at 700px. At <=700px, fleet cards stack; long session names,
 status chips, project paths, activity and subagent text, and past-session
 labels wrap within their cards or rows rather than spilling off-screen. The
 session view prioritizes read-and-steer (model/thinking switchers collapse into
-⋯, tasks default collapsed), and the file table shows name + download only.
+⋯, and task/subagent panels default collapsed), and the file table shows name +
+download only.
 Composer modes, abort, and needs-attention affordances are never reduced away
 — steering a running agent from a phone is the primary remote use case.
 
@@ -471,3 +474,145 @@ TUI theme system** — dashboard themes intentionally do not map to TUI themes.
   loop; the tree design and RPC are ready).
 - No shell passthrough from the browser.
 - No subagent steering (the drill-in view is read-only).
+
+## Background service / auto-restart
+
+The dashboard runs as a foreground process by default. For it to start on boot
+and restart after crashes, run it as a system service.
+
+### Linux (systemd)
+
+Save a user unit to `~/.config/systemd/user/dreb-dashboard.service`:
+
+```ini
+[Unit]
+Description=dreb web dashboard
+
+[Service]
+ExecStart=%h/.npm-global/bin/dreb-dashboard
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+Use the absolute path from `which dreb-dashboard` for `ExecStart` (the example
+matches an npm global prefix under `~/.npm-global`). Then:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now dreb-dashboard
+```
+
+### macOS (launchd)
+
+Create a **LaunchAgent** (not a LaunchDaemon) — the dashboard must run as the
+logged-in user to read `~/.dreb/agent/sessions` and `auth.json`, and to spawn
+`dreb --mode rpc` children under that user. A root LaunchDaemon would have the
+wrong `HOME` and credentials.
+
+Save a plist to `~/Library/LaunchAgents/com.dreb.dashboard.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dreb.dashboard</string>
+    <!--
+      Invoke node directly on the resolved entry point. The `dreb-dashboard`
+      bin is a #!/usr/bin/env node script; launchd's minimal environment
+      cannot resolve `node` via PATH, so we point ProgramArguments at the
+      absolute node binary and the resolved dist/index.js.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/ABSOLUTE/PATH/TO/node</string>
+        <string>/ABSOLUTE/PATH/TO/@dreb/dashboard/dist/index.js</string>
+        <string>--port</string>
+        <string>5343</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- KeepAlive + ThrottleInterval gives crash auto-restart without a tight
+         fail-loop. kill -9 the process and launchd respawns it in seconds. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <!--
+      HOME is set automatically for user agents, so ~/.dreb/agent/auth.json
+      (OAuth creds) is found. PATH lets RPC children spawn bash/git/node.
+      If you use API keys via shell environment variables rather than OAuth
+      creds, add the keys here — LaunchAgents do not source shell profiles.
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/Library/Logs/dreb-dashboard.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/Library/Logs/dreb-dashboard.err.log</string>
+</dict>
+</plist>
+```
+
+#### Finding the absolute paths
+
+The two `ProgramArguments` paths vary by install method (Homebrew, nvm, bun
+global, npm global prefix). Discover them:
+
+```bash
+command -v node                         # → /opt/homebrew/bin/node
+realpath "$(command -v dreb-dashboard)"   # → /opt/homebrew/lib/node_modules/@dreb/dashboard/dist/index.js
+# If `realpath` is not found, install coreutils: brew install coreutils
+```
+
+Replace `/ABSOLUTE/PATH/TO/node` and `/ABSOLUTE/PATH/TO/@dreb/dashboard/dist/index.js`
+with the actual output. Also replace `/Users/YOU/` in the log paths with your
+home directory.
+
+#### load / unload / status
+
+Use the modern `launchctl bootstrap`/`bootout` API (not the deprecated
+`load`/`unload`):
+
+```bash
+# load / start
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.dreb.dashboard.plist
+# stop / unload
+launchctl bootout gui/$(id -u)/com.dreb.dashboard
+# check state
+launchctl print gui/$(id -u)/com.dreb.dashboard | grep -E 'state|pid'
+```
+
+#### API-key providers
+
+OAuth subscription credentials live in `~/.dreb/agent/auth.json` and are
+found via the auto-set `HOME` — no secrets in the plist. If you use API keys
+via shell environment variables (e.g. `ANTHROPIC_API_KEY`), add them to the
+`EnvironmentVariables` dictionary:
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>PATH</key>
+    <string>…</string>
+    <key>ANTHROPIC_API_KEY</key>
+    <string>sk-ant-…</string>
+</dict>
+```
+
+LaunchAgents do not source `.zshrc`/`.bashrc`/`.profile`, so env vars must be
+set explicitly in the plist.
+
+#### Local vs remote
+
+The plist above runs in local-only mode (binds `127.0.0.1:5343`). For remote
+access from a phone, add `--remote --allow you@example.com` to
+`ProgramArguments` and see the [remote access walkthrough](#local-vs-remote--exactly-two-modes)
+and [TLS setup](#native-tls-remote-https) for the Tailscale + HTTPS path.
+Do not expose the port on your LAN — there is no LAN mode.

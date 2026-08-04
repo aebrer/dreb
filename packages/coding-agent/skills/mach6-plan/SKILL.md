@@ -18,7 +18,7 @@ This command is strictly for **planning**. Do NOT implement any code changes —
 4. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
 5. **Task tracking** — Use the `tasks_update` tool to show progress through multi-step commands.
 6. **Project conventions** — Check for CLAUDE.md, AGENTS.md, .dreb/CONTEXT.md, and CONTRIBUTING.md before planning.
-7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+7. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 ## Step 1: Set up task tracking
 
@@ -53,12 +53,12 @@ Extract planning-relevant guidance: project layers, testing expectations, coding
 
 ## Step 4: Explore the codebase
 
-Launch 2-3 Explore subagents in parallel. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a particularly large or complex codebase warrants a stronger tier).
-- **Similar features**: Find existing code that solves related problems, trace implementation patterns
-- **Architecture**: Map relevant architecture layers, abstractions, data flow
-- **Integration points**: Identify where new code connects to existing systems
+Launch 2-3 Explore subagents in parallel for concrete evidence retrieval. Agent definitions specify their own model with a provider fallback list — defaults work across providers and are fine for most cases. Override only with good reason (e.g. a particularly large codebase requires inspecting many files).
+- **Existing feature evidence**: Locate named related features and quote the exact implementation and test snippets that establish their patterns
+- **Layer inventory**: Enumerate the files, symbols, imports, and calls in an explicitly named existing data flow without deciding the architecture
+- **Integration evidence**: Enumerate concrete call sites, registrations, configuration, and documentation for the relevant symbols
 
-Include project conventions in each agent's context. Each agent returns 5-10 key files. Read all identified files.
+Do not ask Explore to diagnose the problem, interpret ambiguous requirements, recommend an implementation, design the architecture, or produce the plan. Include project conventions in each agent's context. Each agent returns 5-10 key files with bounded evidence. Read all identified files, then have the primary agent synthesize the architecture, risks, and implementation plan.
 
 Update task: explore → completed, plan → in_progress.
 
@@ -98,7 +98,7 @@ git commit --allow-empty -m "chore: open PR for issue <N>"
 git push -u origin feature/issue-<N>-<slug>
 
 # Open draft PR
-GH_BODY="$(mktemp /tmp/gh-body.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-body.$$.XXXXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 Closes #<N>
 
@@ -114,7 +114,7 @@ Update task: branch → completed, post → in_progress.
 ## Step 7: Post plan to PR
 
 ```bash
-GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"
+GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"
 cat > "$GH_BODY" << 'MACH6_EOF'
 <!-- mach6-plan -->
 ## Implementation Plan

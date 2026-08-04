@@ -1950,7 +1950,7 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("compose ▴");
 	});
 
-	it("in-session subagent panel collapses without hiding the count", () => {
+	it("in-session subagent panel collapses with the task-tracker details pattern", () => {
 		const store = makeStore() as any;
 		const session = populatedSession("k-subpanel");
 		const fakeStore = {
@@ -1960,15 +1960,79 @@ describe("screen smoke tests", () => {
 			hydrateSession: async () => {},
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-subpanel" />);
+		const panel = el.querySelector("details.subagents") as HTMLDetailsElement;
+		expect(panel).not.toBeNull();
+		expect(panel.open).toBe(true);
+		expect(panel.querySelector("summary")?.textContent).toContain("subagents — 1 running · 0 done");
 		expect(el.textContent).toContain("scan things");
-		const toggle = [...el.querySelectorAll("button")].find((button) => button.textContent?.includes("subagents ▾"));
-		expect(toggle).toBeDefined();
-		(toggle as HTMLButtonElement).click();
 
-		expect(el.textContent).toContain("subagents ▴");
-		expect(el.textContent).toContain("1 running · 0 done");
-		expect(el.textContent).toContain("subagent panel hidden");
-		expect(el.textContent).not.toContain("scan things");
+		setDetailsOpen(panel, false);
+		expect(panel.open).toBe(false);
+		// The count stays visible in the summary while collapsed
+		expect(panel.querySelector("summary")?.textContent).toContain("subagents — 1 running · 0 done");
+	});
+
+	it("starts the subagent panel collapsed on mobile while keeping the count visible", () => {
+		stubMobile(true);
+		const store = makeStore() as any;
+		const session = populatedSession("k-subpanel-mobile");
+		const fakeStore = {
+			...store,
+			sessions: { "k-subpanel-mobile": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-subpanel-mobile" />);
+		const panel = el.querySelector("details.subagents") as HTMLDetailsElement;
+		expect(panel).not.toBeNull();
+		expect(panel.open).toBe(false);
+		expect(panel.querySelector("summary")?.textContent).toContain("subagents — 1 running · 0 done");
+	});
+
+	it("lists every subagent beyond the old four-agent cap, newest spawn first, with drill-in navigation", () => {
+		const store = makeStore() as any;
+		const session = createSessionViewState("k-submany");
+		applySessionEvent(session, { type: "agent_start" });
+		for (let i = 1; i <= 6; i++) {
+			applySessionEvent(session, {
+				type: "background_agent_start",
+				agentId: `bg${i}`,
+				agentType: "Explore",
+				taskSummary: `task ${i}`,
+				sessionDir: "/dir",
+			});
+		}
+		for (let i = 2; i <= 6; i++) {
+			applySessionEvent(session, {
+				type: "background_agent_end",
+				agentId: `bg${i}`,
+				agentType: "Explore",
+				success: true,
+			});
+		}
+		// Pin distinct spawn times so the newest-first ordering is deterministic
+		for (let i = 1; i <= 6; i++) {
+			session.backgroundAgents[`bg${i}`]!.startedAt = new Date(1_000_000 + i * 1000).toISOString();
+		}
+		const navigate = vi.fn();
+		const fakeStore = {
+			...store,
+			sessions: { "k-submany": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+			navigate,
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-submany" />);
+		const chips = el.querySelectorAll(".subagent-list .agent-chip");
+		expect(chips).toHaveLength(6);
+		expect(el.textContent).toContain("subagents — 1 running · 5 done");
+
+		// Newest spawned at the top, oldest at the bottom
+		expect(chips[0]?.textContent).toContain("task 6");
+		expect(chips[5]?.textContent).toContain("task 1");
+
+		(chips[0] as HTMLButtonElement).click();
+		expect(navigate).toHaveBeenCalledWith({ screen: "subagent", key: "k-submany", agentId: "bg6" });
 	});
 
 	it("subagent drill-in renders read-only with the fixed note and no composer", () => {

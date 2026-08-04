@@ -18,7 +18,7 @@ This skill has two modes:
 2. **No `#N` in comment bodies** — Use "finding 3", "item 3" etc. instead.
 3. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
-5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.XXXXXX.md)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
 
 ## Parent ownership and the formal-review checkpoint
 
@@ -133,12 +133,13 @@ tasks_update([
 
 #### If `ci` was specified:
 
+Use `watch_github_ci` with `pr: "<pr-number>"` so the tool blocks until the pull request's checks pass or fail. Do not use `wait`, sleep, or repeated polling commands for CI.
+
+If checks fail, use the returned check output to identify the failed run, then inspect it:
+
 ```bash
-gh pr checks <pr-number>
 gh run view <run-id> --log-failed
 ```
-
-**Note:** `gh pr checks` returns exit code 8 while checks are still pending — this is expected, not a failure. Wait and re-run if needed.
 
 Read the failed CI logs and identify issues. Extract test failures, stack traces, error messages. If all checks pass, report this and stop.
 

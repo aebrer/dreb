@@ -387,10 +387,10 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 
 ```typescript
 import {
-  codingTools,   // read, bash, edit, write (subset — default is all 11)
+  codingTools,   // read, bash, edit, write (subset — default is all 13 standard tools)
   readOnlyTools, // read, grep, find, ls
   readTool, bashTool, editTool, writeTool,
-  grepTool, findTool, lsTool,
+  grepTool, findTool, lsTool, watchGithubCiTool,
 } from "@dreb/coding-agent";
 
 // Use built-in tool set
@@ -953,13 +953,13 @@ SettingsManager
 codingTools
 readOnlyTools
 readTool, bashTool, editTool, writeTool
-grepTool, findTool, lsTool
+grepTool, findTool, lsTool, watchGithubCiTool
 
 // Tool factories (for custom cwd)
 createCodingTools
 createReadOnlyTools
 createReadTool, createBashTool, createEditTool, createWriteTool
-createGrepTool, createFindTool, createLsTool
+createGrepTool, createFindTool, createLsTool, createWatchGithubCiTool
 
 // Types
 type CreateAgentSessionOptions

@@ -529,6 +529,25 @@ describe("skills", () => {
 			expect(body).toContain("atomically replace the old file");
 		});
 
+		it("mach6 planning workflows keep synthesis out of Explore tasks", () => {
+			for (const name of ["mach6-plan", "mach6-issue"]) {
+				const body = readBuiltInSkill(name);
+				expect(body).toContain("concrete evidence retrieval");
+				expect(body).toContain("Do not ask Explore");
+				expect(body).toContain("primary agent synthesize");
+				expect(body).not.toContain("**Architecture**: Map relevant architecture layers");
+			}
+		});
+
+		it("mach6 CI workflows use watch_github_ci instead of polling or wait", () => {
+			for (const name of ["mach6-implement", "mach6-publish"]) {
+				const body = readBuiltInSkill(name);
+				expect(body).toContain("`watch_github_ci`");
+				expect(body).toContain("Do not use `wait`, sleep, or repeated polling commands for CI");
+				expect(body).not.toContain("exit code 8 while checks are still pending");
+			}
+		});
+
 		it("mach6-review should remain user-controlled while supporting direct agent invocation", () => {
 			const review = getBuiltInSkill("mach6-review");
 			expect(review.disableModelInvocation).toBe(false);
