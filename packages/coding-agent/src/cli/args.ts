@@ -226,9 +226,10 @@ ${chalk.bold("Options:")}
   --no-session                   Don't save session (ephemeral)
   --models <patterns>            Comma-separated model patterns for Ctrl+P cycling
                                  Supports globs (anthropic/*, *sonnet*) and fuzzy matching
-  --no-tools                     Disable all built-in tools
-  --tools <tools>                Comma-separated list of tools to enable (default: all)
-                                 Available: read, bash, edit, write, grep, find, ls, web_search, web_fetch, subagent, wait, watch_github_ci, search, ask_user
+  --no-tools                     Disable all standard built-in tools
+  --tools <tools>                Comma-separated list of standard tools to enable (default: all)
+                                 Available: read, bash, edit, write, grep, find, ls, web_search, web_fetch, subagent, wait, watch_github_ci, ask_user
+                                 Always active: search, skill, tasks_update
   --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh
   --extension, -e <path>         Load an extension file (can be used multiple times)
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
@@ -324,7 +325,7 @@ ${chalk.bold("Environment Variables:")}
   DREB_OFFLINE                       - Disable startup network operations when set to 1/true/yes
   DREB_AI_ANTIGRAVITY_VERSION        - Override Antigravity User-Agent version (e.g., 1.23.0)
 
-${chalk.bold("Available Tools (default: all):")}
+${chalk.bold("Standard Tools (default: all):")}
   read       - Read file contents
   bash       - Execute bash commands
   edit       - Edit files with find/replace
@@ -336,8 +337,12 @@ ${chalk.bold("Available Tools (default: all):")}
   web_fetch  - Fetch URL content
   subagent   - Delegate tasks to independent subagents
   wait       - Do nothing and end your turn (explicit no-op)
-  search     - Semantic codebase search using natural language
   watch_github_ci - Watch GitHub pull-request CI until checks pass or fail
-  ask_user   - Ask the user a clarifying question with optional multiple-choice options
+  ask_user   - Ask one or more structured questions in a batch wizard
+
+${chalk.bold("Always-active Tools:")}
+  search       - Semantic codebase search using natural language
+  skill        - Invoke a progressively loaded workflow
+  tasks_update - Track visible session tasks
 `);
 }

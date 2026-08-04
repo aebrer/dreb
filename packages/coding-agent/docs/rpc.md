@@ -2057,6 +2057,8 @@ Expected response: `extension_ui_response` with `answers` — an array with one 
 }
 ```
 
+`ask` requests are single-flight per RPC runtime. If parallel tool execution starts several calls concurrently, RPC emits only the first request and queues the rest in FIFO order. The next request is emitted only after the active request settles; a queued call that is aborted before it starts settles without emitting. Hosts therefore need to render at most one pending `ask` wizard at a time.
+
 #### notify
 
 Display a notification. Fire-and-forget, no response expected.

@@ -651,16 +651,18 @@ cat README.md | dreb -p "Summarize this text"
 | Option | Description |
 |--------|-------------|
 | `--tools <list>` | Comma-separated list of tools to enable (default: all) |
-| `--no-tools` | Disable all built-in tools (extension tools still work) |
+| `--no-tools` | Disable all standard built-in tools (always-active and extension tools still work) |
 
-Available built-in tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `watch_github_ci`, `search`, `ask_user`
+Available standard tools: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`, `web_search`, `web_fetch`, `subagent`, `wait`, `watch_github_ci`, `ask_user`
 
 `ask_user` pauses the turn and asks you one or more structured clarifying questions in a single call — batched together and answered as one wizard. Each question has Markdown-formatted question text, optional 2-4 multiple-choice options (single- or multi-select), and a "type your own answer" field — rendered natively in the TUI and the Dashboard, and over RPC. Submitting sends the whole batch of structured answers back at once; choosing **Stop agent** or pressing `Esc` aborts the whole current turn rather than continuing without an answer. Options must contain nonblank text. When a question has no options its free-text field is always shown, so every question is answerable. Unanswered questions come back flagged as skipped rather than blocking the turn. An optional `timeoutSeconds` auto-stops the turn after the given number of seconds with a live countdown on every surface; recovered Dashboard sessions retain the original deadline rather than restarting it. Tool abort, timeout, host teardown, and headless/no-UI modes settle cleanly, so the agent never deadlocks waiting on an absent user. UI or response-protocol failures remain distinct from question closure. In the TUI: `↑`/`↓` move between questions, their options, and the free-text fields, `Space` toggles a checkbox (multi-select), `Enter` submits the batch, and `Esc` stops the turn. In the Dashboard: native radios/checkboxes plus a text field per question, an in-card **Stop agent** button that remains accessible on mobile, and `Esc` to stop.
 
-Three additional tools are always active but don't appear in `--tools`:
+Three additional tools are always active and don't need to appear in `--tools`:
+- `search` — semantic codebase search
 - `skill` — invokes [skills](#skills) programmatically
 - `tasks_update` — session [task tracking](#task-tracking) with TUI panel
-- `suggest_next` — suggests a next command shown as ghost text (Tab to accept)
+
+`suggest_next` is active by default, but specifying `--tools` excludes it so restricted and subagent sessions cannot end their turn with a command suggestion.
 
 ### Resource Options
 

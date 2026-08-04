@@ -2172,6 +2172,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `overlay-qa-tests.ts` | Comprehensive overlay tests | `ui.custom`, all overlay options |
 | `notify.ts` | Simple notifications | `ui.notify` |
 | `timed-confirm.ts` | Dialogs with timeout | `ui.confirm` with timeout/signal |
+| `rpc-demo.ts` | Complete RPC extension-UI demo, including the batch question wizard | `ui.select`, `ui.confirm`, `ui.input`, `ui.editor`, `ui.ask`, status/widget/title methods |
 | `mac-system-theme.ts` | Auto-switch theme | `setTheme`, `exec` |
 | **Complex Extensions** |||
 | `plan-mode/` | Full plan mode implementation | All event types, `registerCommand`, `registerShortcut`, `registerFlag`, `setStatus`, `setWidget`, `sendMessage`, `setActiveTools` |
