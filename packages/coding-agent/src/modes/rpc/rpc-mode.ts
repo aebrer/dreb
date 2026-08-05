@@ -41,7 +41,11 @@ import type {
 } from "../../core/extensions/index.js";
 import { getGitBranch } from "../../core/git-branch.js";
 import type { ModelRegistry } from "../../core/model-registry.js";
-import { parseModelPattern } from "../../core/model-resolver.js";
+import {
+	findExactModelReferenceMatch,
+	parseModelPattern,
+	resolveModelScopePatterns,
+} from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
@@ -386,6 +390,8 @@ type SettingsReader = Pick<
 	| "getHideThinkingBlock"
 	| "getAgentModels"
 	| "getGlobalSubagentArbiterSettings"
+	| "getEnabledModels"
+	| "hasProjectEnabledModelsOverride"
 >;
 
 type SettingsRefresher = SettingsReader &
@@ -416,6 +422,7 @@ type SettingsWriter = SettingsRefresher &
 		| "removeAgentModelsForAgent"
 		| "hasProjectAgentModelOverride"
 		| "setGlobalSubagentArbiterSettings"
+		| "setEnabledModels"
 	>;
 
 /**
@@ -426,9 +433,15 @@ type SettingsWriter = SettingsRefresher &
  * These seed fresh runtimes, NOT the live session state (`get_state` reports that). Extracted
  * (like {@link deleteSessionForRpc}) so it is unit-testable without a live RPC session.
  */
-export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsSnapshot {
+export function getSettingsForRpc(
+	settingsManager: SettingsReader,
+	availableModels: Awaited<ReturnType<ModelRegistry["getAvailable"]>> = [],
+): RpcSettingsSnapshot {
 	const contextTrust = settingsManager.getGlobalContextTrustPolicy();
 	const configuredTrustedFolders = settingsManager.getConfiguredTrustedContextFolders();
+	const enabledModels = settingsManager.getEnabledModels();
+	const hasProjectEnabledModelsOverride = settingsManager.hasProjectEnabledModelsOverride();
+	const scopeResolution = resolveModelScopePatterns(enabledModels ?? [], availableModels);
 	return {
 		defaultProvider: settingsManager.getDefaultProvider(),
 		defaultModel: settingsManager.getDefaultModel(),
@@ -447,7 +460,29 @@ export function getSettingsForRpc(settingsManager: SettingsReader): RpcSettingsS
 		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
 		agentModels: settingsManager.getAgentModels(),
 		subagentArbiter: settingsManager.getGlobalSubagentArbiterSettings(),
+		enabledModels,
+		resolvedScopedModels: scopeResolution.models.map(({ model, thinkingLevel }) => ({
+			provider: model.provider,
+			id: model.id,
+			name: model.name,
+			reasoning: model.reasoning,
+			...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+		})),
+		scopeWarnings: scopeResolution.warnings,
+		hasProjectEnabledModelsOverride,
+		enabledModelsSource: hasProjectEnabledModelsOverride
+			? "project"
+			: enabledModels === undefined
+				? "default"
+				: "global",
 	};
+}
+
+async function buildSettingsSnapshotForRpc(
+	settingsManager: SettingsReader,
+	modelRegistry?: Pick<ModelRegistry, "getAvailable">,
+): Promise<RpcSettingsSnapshot> {
+	return getSettingsForRpc(settingsManager, modelRegistry ? await modelRegistry.getAvailable() : []);
 }
 
 function formatSettingsErrors(errors: Array<{ scope: string; error: Error }>): string {
@@ -465,6 +500,7 @@ function formatSettingsErrors(errors: Array<{ scope: string; error: Error }>): s
  */
 export async function getFreshSettingsForRpc(
 	settingsManager: SettingsRefresher,
+	modelRegistry?: Pick<ModelRegistry, "getAvailable">,
 ): Promise<{ ok: true; settings: RpcSettingsSnapshot } | { ok: false; error: string }> {
 	return settingsWriteLock(async () => {
 		try {
@@ -502,7 +538,12 @@ export async function getFreshSettingsForRpc(
 			};
 		}
 
-		return { ok: true as const, settings: getSettingsForRpc(settingsManager) };
+		try {
+			const availableModels = modelRegistry ? await modelRegistry.getAvailable() : [];
+			return { ok: true as const, settings: getSettingsForRpc(settingsManager, availableModels) };
+		} catch (error) {
+			return { ok: false as const, error: `Failed to load available models: ${(error as Error).message}` };
+		}
 	});
 }
 
@@ -522,6 +563,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"transport",
 	"hideThinkingBlock",
 	"agentModels",
+	"enabledModels",
 	"subagentArbiter",
 ] as const;
 
@@ -618,6 +660,7 @@ async function persistContextTrustMutationForRpc(
 	folders: string[],
 	targetPath: string,
 	mutation: Pick<RpcContextTrustMutationResult, "addedRoot" | "removedRoot">,
+	modelRegistry?: Pick<ModelRegistry, "getAvailable">,
 ): Promise<{ ok: true; result: RpcContextTrustMutationResult } | { ok: false; error: string }> {
 	settingsManager.drainErrors();
 	if (settingsManager.hasGlobalSettingsLoadError()) {
@@ -650,7 +693,11 @@ async function persistContextTrustMutationForRpc(
 	if (!evaluated.ok) return evaluated;
 	return {
 		ok: true as const,
-		result: { evaluation: evaluated.evaluation, settings: getSettingsForRpc(settingsManager), ...mutation },
+		result: {
+			evaluation: evaluated.evaluation,
+			settings: await buildSettingsSnapshotForRpc(settingsManager, modelRegistry),
+			...mutation,
+		},
 	};
 }
 
@@ -658,6 +705,7 @@ async function persistContextTrustMutationForRpc(
 export async function trustContextFolderForRpc(
 	settingsManager: SettingsWriter,
 	path: unknown,
+	modelRegistry?: Pick<ModelRegistry, "getAvailable">,
 ): Promise<{ ok: true; result: RpcContextTrustMutationResult } | { ok: false; error: string }> {
 	return settingsWriteLock(async () => {
 		const evaluated = evaluateContextTrustForRpc(settingsManager, path);
@@ -672,11 +720,17 @@ export async function trustContextFolderForRpc(
 		} catch (error) {
 			return { ok: false as const, error: (error as Error).message };
 		}
-		return persistContextTrustMutationForRpc(settingsManager, folders, evaluated.evaluation.canonicalTarget, {
-			...(folders.includes(evaluated.evaluation.canonicalTarget)
-				? { addedRoot: evaluated.evaluation.canonicalTarget }
-				: {}),
-		});
+		return persistContextTrustMutationForRpc(
+			settingsManager,
+			folders,
+			evaluated.evaluation.canonicalTarget,
+			{
+				...(folders.includes(evaluated.evaluation.canonicalTarget)
+					? { addedRoot: evaluated.evaluation.canonicalTarget }
+					: {}),
+			},
+			modelRegistry,
+		);
 	});
 }
 
@@ -684,6 +738,7 @@ export async function trustContextFolderForRpc(
 export async function untrustContextFolderForRpc(
 	settingsManager: SettingsWriter,
 	path: unknown,
+	modelRegistry?: Pick<ModelRegistry, "getAvailable">,
 ): Promise<{ ok: true; result: RpcContextTrustMutationResult } | { ok: false; error: string }> {
 	return settingsWriteLock(async () => {
 		const evaluated = evaluateContextTrustForRpc(settingsManager, path);
@@ -697,7 +752,10 @@ export async function untrustContextFolderForRpc(
 		if (evaluated.evaluation.state === "untrusted") {
 			return {
 				ok: true,
-				result: { evaluation: evaluated.evaluation, settings: getSettingsForRpc(settingsManager) },
+				result: {
+					evaluation: evaluated.evaluation,
+					settings: await buildSettingsSnapshotForRpc(settingsManager, modelRegistry),
+				},
 			};
 		}
 
@@ -708,6 +766,7 @@ export async function untrustContextFolderForRpc(
 			roots.filter((root) => root !== removedRoot),
 			evaluated.evaluation.canonicalTarget,
 			{ removedRoot },
+			modelRegistry,
 		);
 	});
 }
@@ -716,6 +775,7 @@ export async function untrustContextFolderForRpc(
 export async function removeTrustedContextFolderForRpc(
 	settingsManager: SettingsWriter,
 	path: unknown,
+	modelRegistry?: Pick<ModelRegistry, "getAvailable">,
 ): Promise<{ ok: true; result: RpcTrustedFolderRemovalResult } | { ok: false; error: string }> {
 	return settingsWriteLock(async () => {
 		if (typeof path !== "string" || path.length === 0) {
@@ -749,7 +809,13 @@ export async function removeTrustedContextFolderForRpc(
 			return { ok: false as const, error: `Failed to persist settings: ${detail}` };
 		}
 
-		return { ok: true as const, result: { settings: getSettingsForRpc(settingsManager), removedFolder: path } };
+		return {
+			ok: true as const,
+			result: {
+				settings: await buildSettingsSnapshotForRpc(settingsManager, modelRegistry),
+				removedFolder: path,
+			},
+		};
 	});
 }
 
@@ -844,6 +910,51 @@ export async function setSettingsForRpc(
 		const validation = validateAgentModels(update.agentModels);
 		if (!validation.ok) {
 			return validation;
+		}
+	}
+
+	let canonicalEnabledModels: string[] | undefined;
+	if (update.enabledModels !== undefined && update.enabledModels !== null) {
+		if (!Array.isArray(update.enabledModels)) {
+			return {
+				ok: false,
+				error: "Invalid enabledModels: must be a non-empty array of exact model references or null",
+			};
+		}
+		if (update.enabledModels.length === 0) {
+			return {
+				ok: false,
+				error: "Invalid enabledModels: at least one model must remain enabled; use null to enable all",
+			};
+		}
+
+		const availableModels = await modelRegistry.getAvailable();
+		const seen = new Set<string>();
+		canonicalEnabledModels = [];
+		for (const reference of update.enabledModels) {
+			if (typeof reference !== "string" || reference.trim().length === 0 || reference !== reference.trim()) {
+				return { ok: false, error: "Invalid enabledModels: every entry must be a non-empty exact model reference" };
+			}
+			const match = findExactModelReferenceMatch(reference, availableModels);
+			if (!match) {
+				return {
+					ok: false,
+					error: `Invalid enabledModels entry ${JSON.stringify(reference)}: expected an available exact provider/model reference`,
+				};
+			}
+			const canonical = `${match.provider}/${match.id}`;
+			if (seen.has(canonical)) {
+				return { ok: false, error: `Invalid enabledModels: duplicate model ${JSON.stringify(canonical)}` };
+			}
+			seen.add(canonical);
+			canonicalEnabledModels.push(canonical);
+		}
+
+		if (
+			canonicalEnabledModels.length === availableModels.length &&
+			availableModels.every((model) => seen.has(`${model.provider}/${model.id}`))
+		) {
+			canonicalEnabledModels = undefined;
 		}
 	}
 
@@ -999,6 +1110,14 @@ export async function setSettingsForRpc(
 			}
 
 			const warnings: string[] = [];
+			if (update.enabledModels !== undefined) {
+				if (settingsManager.hasProjectEnabledModelsOverride()) {
+					warnings.push(
+						"A project-level enabledModels value (.dreb/settings.json) takes precedence — this change to global settings will have no effect. Edit the project settings file to change it.",
+					);
+				}
+				settingsManager.setEnabledModels(canonicalEnabledModels);
+			}
 			if (update.subagentArbiter !== undefined) {
 				settingsManager.setGlobalSubagentArbiterSettings(subagentArbiter);
 			}
@@ -1046,9 +1165,10 @@ export async function setSettingsForRpc(
 				}
 			}
 
+			const snapshot = getSettingsForRpc(settingsManager, await modelRegistry.getAvailable());
 			return warnings.length > 0
-				? { ok: true as const, settings: getSettingsForRpc(settingsManager), warnings }
-				: { ok: true as const, settings: getSettingsForRpc(settingsManager) };
+				? { ok: true as const, settings: snapshot, warnings }
+				: { ok: true as const, settings: snapshot };
 		} catch (error) {
 			if (updatesContextTrustPolicy) {
 				// Setters and flush() can also fail synchronously. The same fail-closed
@@ -2082,7 +2202,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			// =================================================================
 
 			case "get_settings": {
-				const result = await getFreshSettingsForRpc(session.settingsManager);
+				const result = await getFreshSettingsForRpc(session.settingsManager, session.modelRegistry);
 				return result.ok ? success(id, "get_settings", result.settings) : error(id, "get_settings", result.error);
 			}
 
@@ -2108,21 +2228,29 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "trust_context_folder": {
-				const result = await trustContextFolderForRpc(session.settingsManager, command.path);
+				const result = await trustContextFolderForRpc(session.settingsManager, command.path, session.modelRegistry);
 				return result.ok
 					? success(id, "trust_context_folder", result.result)
 					: error(id, "trust_context_folder", result.error);
 			}
 
 			case "untrust_context_folder": {
-				const result = await untrustContextFolderForRpc(session.settingsManager, command.path);
+				const result = await untrustContextFolderForRpc(
+					session.settingsManager,
+					command.path,
+					session.modelRegistry,
+				);
 				return result.ok
 					? success(id, "untrust_context_folder", result.result)
 					: error(id, "untrust_context_folder", result.error);
 			}
 
 			case "remove_trusted_context_folder": {
-				const result = await removeTrustedContextFolderForRpc(session.settingsManager, command.path);
+				const result = await removeTrustedContextFolderForRpc(
+					session.settingsManager,
+					command.path,
+					session.modelRegistry,
+				);
 				return result.ok
 					? success(id, "remove_trusted_context_folder", result.result)
 					: error(id, "remove_trusted_context_folder", result.error);

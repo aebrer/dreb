@@ -458,7 +458,27 @@ export interface SettingsDto {
 	agentModels?: Record<string, string[]>;
 	/** Global-only Dispatch Arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettingsDto | null;
+	/** Raw effective persisted patterns; absent means future-inclusive implicit all. */
+	enabledModels?: string[];
+	/** Effective persistent scope resolved by coding-agent core in cycling order. */
+	resolvedScopedModels: ScopedModelDto[];
+	/** Resolver diagnostics for legacy persisted patterns. */
+	scopeWarnings: Array<{ pattern: string; message: string }>;
+	hasProjectEnabledModelsOverride: boolean;
+	enabledModelsSource: "default" | "global" | "project";
 }
+
+/** Dashboard settings mutation payload. Unlike a snapshot, null explicitly clears enabledModels. */
+export type SettingsUpdateDto = Partial<
+	Omit<
+		SettingsDto,
+		| "resolvedScopedModels"
+		| "scopeWarnings"
+		| "hasProjectEnabledModelsOverride"
+		| "enabledModelsSource"
+		| "enabledModels"
+	>
+> & { enabledModels?: string[] | null };
 
 export type SettingsSaveResultDto = SettingsDto & { warnings?: string[] };
 

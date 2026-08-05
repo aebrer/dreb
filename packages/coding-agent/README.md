@@ -168,7 +168,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 |---------|-------------|
 | `/login`, `/logout` | OAuth authentication |
 | `/model` | Switch models |
-| `/scoped-models` | Enable/disable models for cycling |
+| `/scoped-models` | Set the ordered model-cycling scope; in dashboard sessions, opens the scoped-models Settings editor for the current project context |
 | `/settings` | Thinking level, thinking summaries (adaptive Claude models), theme, message delivery, transport |
 | `/resume` | Pick from previous sessions |
 | `/new` | Start a new session |
@@ -278,7 +278,7 @@ Use `/settings` to modify common options, or edit JSON files directly:
 | `~/.dreb/agent/settings.json` | Global (all projects) |
 | `.dreb/settings.json` | Project (overrides global) |
 
-See [docs/settings.md](docs/settings.md) for all options. Dashboard Settings re-entry reloads durable global and project settings after flushing pending writes, so it sees external file edits; unreadable, invalid, or failed writes are surfaced as errors rather than showing stale values. See the [RPC settings contract](docs/rpc.md#get_settings).
+See [docs/settings.md](docs/settings.md) for all options. Dashboard Settings re-entry reloads durable global and project settings after flushing pending writes, so it sees external file edits; unreadable, invalid, or failed writes are surfaced as errors rather than showing stale values. Its scoped-models editor provides provider-grouped search, model/provider/all toggles, accessible ordered partial-scope controls, and explicit save/reset on desktop and mobile. Absent `enabledModels` means future-inclusive all models in registry order; saved partial scopes are non-empty ordered canonical references, and editing a legacy pattern scope normalizes it. A selected project context shows effective merged settings, while writes remain global and warn when project settings shadow them. Changes seed new sessions only; `/scoped-models` opens the editor for the current dashboard session cwd. See the [RPC settings contract](docs/rpc.md#get_settings).
 
 ---
 

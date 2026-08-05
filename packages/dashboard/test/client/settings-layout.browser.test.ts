@@ -68,6 +68,16 @@ const HARNESS_HTML = `<!DOCTYPE html>
 				</span>
 			</div>
 		</section>
+		<section class="settings-section scoped-models-editor" data-scoped-editor>
+			<h2>scoped models</h2>
+			<div class="settings-warning">A project-level enabledModels value shadows this global write without changing the running session.</div>
+			<label class="scoped-models-context"><span>project context</span><select><option>${longPath}</option></select></label>
+			<div class="scoped-models-toolbar"><input value="provider/model/name search"><button class="btn btn-small">enable all</button></div>
+			<div class="scoped-models-grid">
+				<div class="scoped-models-order"><h3>cycling order</h3><div class="scoped-model-order-row"><span>openrouter/${longPath}</span><div class="scoped-model-move-controls"><button>↑</button><button>↓</button></div></div></div>
+				<div class="scoped-models-available"><h3>available models</h3><section class="scoped-model-provider"><label class="scoped-model-provider-heading"><input type="checkbox" checked><span>openrouter-provider-with-a-long-name</span></label><label class="scoped-model-choice"><input type="checkbox" checked><span class="model-id">${longPath}</span><span class="model-name">A deliberately long model display name that must wrap safely</span></label></section></div>
+			</div>
+		</section>
 	</main>
 </body>
 </html>`;
@@ -97,6 +107,8 @@ type SettingsMeasurements = {
 	agentValueClipped: boolean;
 	shortSelectWithinRow: boolean;
 	shortSelectNaturalSize: boolean;
+	scopedContentFitsViewport: boolean;
+	scopedTapTargetsUsable: boolean;
 };
 
 async function measurements(): Promise<SettingsMeasurements> {
@@ -137,6 +149,14 @@ async function measurements(): Promise<SettingsMeasurements> {
 		const nameLineHeight = Number.parseFloat(nameStyle.lineHeight);
 		const controlRect = control.getBoundingClientRect();
 		const labelRect = label.getBoundingClientRect();
+		const scopedElements = document.querySelectorAll<HTMLElement>(
+			"[data-scoped-editor], [data-scoped-editor] h2, [data-scoped-editor] h3, [data-scoped-editor] .settings-warning, [data-scoped-editor] select, [data-scoped-editor] input, [data-scoped-editor] button, [data-scoped-editor] .model-id, [data-scoped-editor] .model-name",
+		);
+		const scopedContentFitsViewport = [...scopedElements].every((element) => {
+			const rect = element.getBoundingClientRect();
+			return rect.left >= -tolerance && rect.right <= window.innerWidth + tolerance;
+		});
+		const moveButtons = document.querySelectorAll<HTMLElement>(".scoped-model-move-controls button");
 
 		return {
 			documentFits: document.documentElement.scrollWidth <= window.innerWidth + tolerance,
@@ -161,6 +181,13 @@ async function measurements(): Promise<SettingsMeasurements> {
 			// Natural size = rendered width matches the unconstrained baseline:
 			// neither stretched nor clipped by the new constraints.
 			shortSelectNaturalSize: Math.abs(shortSelect.getBoundingClientRect().width - intrinsicWidth(shortSelect)) <= 2,
+			scopedContentFitsViewport,
+			scopedTapTargetsUsable:
+				window.innerWidth > 700 ||
+				[...moveButtons].every((button) => {
+					const rect = button.getBoundingClientRect();
+					return rect.width >= 44 && rect.height >= 44;
+				}),
 		};
 	});
 }
@@ -172,8 +199,7 @@ async function measurementsAt(width: number): Promise<SettingsMeasurements> {
 
 describe("settings agent-context row layout in a real browser", () => {
 	// 701px is the first viewport where the desktop row layout applies; 1024px
-	// exercises the same layout with slack. (.settings-wrap caps at 720px, so
-	// intermediate widths add no new geometry.)
+	// exercises the same layout with slack.
 	it.each([701, 1024])("keeps the label readable and the row horizontal at %ipx", async (width) => {
 		const measured = await measurementsAt(width);
 
@@ -199,5 +225,11 @@ describe("settings agent-context row layout in a real browser", () => {
 
 		expect(measured.shortSelectWithinRow).toBe(true);
 		expect(measured.shortSelectNaturalSize).toBe(true);
+	});
+
+	it.each([360, 700, 701, 1024])("keeps scoped-model content and controls usable at %ipx", async (width) => {
+		const measured = await measurementsAt(width);
+		expect(measured.scopedContentFitsViewport).toBe(true);
+		expect(measured.scopedTapTargetsUsable).toBe(true);
 	});
 });

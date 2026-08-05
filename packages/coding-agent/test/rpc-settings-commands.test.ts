@@ -69,6 +69,11 @@ describe("getSettingsForRpc", () => {
 			hideThinkingBlock: false,
 			agentModels: {},
 			subagentArbiter: undefined,
+			enabledModels: undefined,
+			resolvedScopedModels: [],
+			scopeWarnings: [],
+			hasProjectEnabledModelsOverride: false,
+			enabledModelsSource: "default",
 		});
 	});
 
@@ -108,6 +113,11 @@ describe("getSettingsForRpc", () => {
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
 			subagentArbiter: { enabled: true, model: "anthropic/claude-sonnet-4-5", thinking: "high" },
+			enabledModels: undefined,
+			resolvedScopedModels: [],
+			scopeWarnings: [],
+			hasProjectEnabledModelsOverride: false,
+			enabledModelsSource: "default",
 		});
 	});
 
@@ -156,6 +166,31 @@ describe("getSettingsForRpc", () => {
 		expect(snapshot.autoLoadNestedContext).toBe(false);
 		expect(snapshot.trustedContextFolders).toEqual([rootA, rootB]);
 		expect(snapshot.effectiveTrustedContextRoots).toEqual([]);
+	});
+
+	it("keeps a legacy persisted empty scope distinct from implicit all", () => {
+		const snapshot = getSettingsForRpc(SettingsManager.inMemory({ enabledModels: [] }), []);
+		expect(snapshot.enabledModels).toEqual([]);
+		expect(snapshot.enabledModelsSource).toBe("global");
+		expect(snapshot.resolvedScopedModels).toEqual([]);
+	});
+
+	it("includes raw patterns, ordered core resolution diagnostics, and project source metadata", () => {
+		const manager = SettingsManager.inMemory({ enabledModels: ["anthropic/*", "missing"] });
+		vi.spyOn(manager, "hasProjectEnabledModelsOverride").mockReturnValue(true);
+		const snapshot = getSettingsForRpc(manager, [
+			{ provider: "anthropic", id: "second", name: "Second", reasoning: false },
+			{ provider: "anthropic", id: "first", name: "First", reasoning: true },
+		] as Model<any>[]);
+
+		expect(snapshot.enabledModels).toEqual(["anthropic/*", "missing"]);
+		expect(snapshot.resolvedScopedModels.map((model) => `${model.provider}/${model.id}`)).toEqual([
+			"anthropic/second",
+			"anthropic/first",
+		]);
+		expect(snapshot.scopeWarnings).toEqual([{ pattern: "missing", message: 'No models match pattern "missing"' }]);
+		expect(snapshot.hasProjectEnabledModelsOverride).toBe(true);
+		expect(snapshot.enabledModelsSource).toBe("project");
 	});
 });
 
@@ -535,7 +570,7 @@ describe("setSettingsForRpc validation", () => {
 				},
 			},
 		});
-		expect(registry.getAvailable).not.toHaveBeenCalled();
+		expect(registry.getAvailable).toHaveBeenCalledTimes(1);
 		const disabledPolicy = {
 			enabled: false,
 			model: "malformed-model-id",
@@ -549,6 +584,36 @@ describe("setSettingsForRpc validation", () => {
 		});
 		expect(reEnabled).toMatchObject({ ok: false, error: expect.stringContaining("Invalid subagentArbiter") });
 		expect(manager.getGlobalSubagentArbiterSettings()).toEqual(disabledPolicy);
+	});
+
+	it("rejects invalid enabledModels forms and leaves the prior scope unchanged", async () => {
+		const manager = SettingsManager.inMemory({ enabledModels: ["anthropic/claude-sonnet-4-5"] });
+		const registry = stubRegistry([anthropicSonnet, { provider: "openai", id: "gpt-5" }]);
+		const invalidValues = [
+			[],
+			["sonnet"],
+			["anthropic/*"],
+			["missing/model"],
+			["anthropic/claude-sonnet-4-5", "ANTHROPIC/CLAUDE-SONNET-4-5"],
+			[""],
+			[" openai/gpt-5 "],
+		] as unknown[];
+
+		for (const enabledModels of invalidValues) {
+			const result = await setSettingsForRpc(manager, registry, { enabledModels: enabledModels as never });
+			expect(result.ok).toBe(false);
+			expect(manager.getEnabledModels()).toEqual(["anthropic/claude-sonnet-4-5"]);
+		}
+	});
+
+	it("validates enabledModels before applying unrelated fields", async () => {
+		const manager = SettingsManager.inMemory({ retry: { enabled: true } });
+		const result = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), {
+			retryEnabled: false,
+			enabledModels: [],
+		});
+		expect(result.ok).toBe(false);
+		expect(manager.getRetryEnabled()).toBe(true);
 	});
 
 	it("applies nothing when any field is invalid (atomicity)", async () => {
@@ -567,6 +632,79 @@ describe("setSettingsForRpc validation", () => {
 });
 
 describe("setSettingsForRpc writes", () => {
+	it("canonicalizes ordered partial enabledModels and clears with null", async () => {
+		const manager = SettingsManager.inMemory();
+		const registry = stubRegistry([
+			{ provider: "anthropic", id: "claude-sonnet-4-5" },
+			{ provider: "openai", id: "gpt-5" },
+			{ provider: "openrouter", id: "org/model:exact" },
+		]);
+
+		const partial = await setSettingsForRpc(manager, registry, {
+			enabledModels: ["OPENAI/GPT-5", "org/model:exact"],
+		});
+		expect(partial).toMatchObject({
+			ok: true,
+			settings: {
+				enabledModels: ["openai/gpt-5", "openrouter/org/model:exact"],
+				resolvedScopedModels: [
+					{ provider: "openai", id: "gpt-5" },
+					{ provider: "openrouter", id: "org/model:exact" },
+				],
+			},
+		});
+		expect(manager.getEnabledModels()).toEqual(["openai/gpt-5", "openrouter/org/model:exact"]);
+
+		const cleared = await setSettingsForRpc(manager, registry, { enabledModels: null });
+		expect(cleared).toMatchObject({ ok: true, settings: { enabledModelsSource: "default" } });
+		expect(manager.getEnabledModels()).toBeUndefined();
+	});
+
+	it("normalizes the complete authoritative inventory to implicit all", async () => {
+		const manager = SettingsManager.inMemory();
+		const models = [anthropicSonnet, { provider: "openai", id: "gpt-5" }];
+		const result = await setSettingsForRpc(manager, stubRegistry(models), {
+			enabledModels: ["openai/gpt-5", "anthropic/claude-sonnet-4-5"],
+		});
+		expect(result).toMatchObject({ ok: true, settings: { enabledModelsSource: "default" } });
+		expect(manager.getEnabledModels()).toBeUndefined();
+	});
+
+	it("writes globally but returns the exact warning and effective project scope when shadowed", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(join(projectDir, ".dreb"), { recursive: true });
+		writeFileSync(
+			join(projectDir, ".dreb", "settings.json"),
+			JSON.stringify({ enabledModels: ["anthropic/claude-sonnet-4-5"] }),
+		);
+		const manager = SettingsManager.create(projectDir, agentDir);
+		const result = await setSettingsForRpc(
+			manager,
+			stubRegistry([anthropicSonnet, { provider: "openai", id: "gpt-5" }]),
+			{
+				enabledModels: ["openai/gpt-5"],
+			},
+		);
+
+		expect(result).toMatchObject({
+			ok: true,
+			settings: {
+				enabledModels: ["anthropic/claude-sonnet-4-5"],
+				enabledModelsSource: "project",
+				hasProjectEnabledModelsOverride: true,
+			},
+			warnings: [
+				"A project-level enabledModels value (.dreb/settings.json) takes precedence — this change to global settings will have no effect. Edit the project settings file to change it.",
+			],
+		});
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toEqual([
+			"openai/gpt-5",
+		]);
+	});
+
 	it("persists and clears the complete global-only arbiter policy", async () => {
 		const manager = SettingsManager.inMemory();
 		const enabled = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), {
@@ -664,6 +802,12 @@ describe("setSettingsForRpc writes", () => {
 			transport: "auto",
 			hideThinkingBlock: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
+			subagentArbiter: undefined,
+			enabledModels: undefined,
+			resolvedScopedModels: [],
+			scopeWarnings: [],
+			hasProjectEnabledModelsOverride: false,
+			enabledModelsSource: "default",
 		});
 		// Reflected in subsequent reads.
 		expect(getSettingsForRpc(manager)).toEqual(result.settings);
@@ -801,6 +945,29 @@ describe("setSettingsForRpc writes", () => {
 		if (result.ok) throw new Error("unreachable");
 		expect(result.error).toContain("Failed to persist settings");
 		expect(result.error).toContain("disk full");
+	});
+
+	it("leaves the prior durable enabledModels scope when its write fails", async () => {
+		let globalSettings = JSON.stringify({ enabledModels: ["anthropic/old"] });
+		const storage: SettingsStorage = {
+			withLock(scope, fn) {
+				const next = fn(scope === "global" ? globalSettings : undefined);
+				if (next === undefined || scope !== "global") return;
+				if (JSON.parse(next).enabledModels?.includes("openai/gpt-5")) throw new Error("disk full");
+				globalSettings = next;
+			},
+		};
+		const manager = SettingsManager.fromStorage(storage);
+		const result = await setSettingsForRpc(
+			manager,
+			stubRegistry([
+				{ provider: "anthropic", id: "old" },
+				{ provider: "openai", id: "gpt-5" },
+			]),
+			{ enabledModels: ["openai/gpt-5"] },
+		);
+		expect(result).toMatchObject({ ok: false, error: expect.stringContaining("disk full") });
+		expect(JSON.parse(globalSettings).enabledModels).toEqual(["anthropic/old"]);
 	});
 
 	it("does not durably enable context trust when an ordinary-settings write fails", async () => {
@@ -1429,6 +1596,11 @@ describe("RpcClient settings methods", () => {
 		transport: "sse",
 		hideThinkingBlock: false,
 		agentModels: {},
+		resolvedScopedModels: [{ provider: "anthropic", id: "claude-sonnet-4-5" }],
+		scopeWarnings: [],
+		hasProjectEnabledModelsOverride: false,
+		enabledModelsSource: "global",
+		enabledModels: ["anthropic/claude-sonnet-4-5"],
 	};
 
 	it("getSettings sends the get_settings command and unwraps the snapshot", async () => {

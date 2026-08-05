@@ -336,13 +336,17 @@ When multiple sources specify a session directory, `--session-dir` CLI flag take
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `enabledModels` | string[] | - | Model patterns for cycling (same format as `--models` CLI flag) |
+| `enabledModels` | string[] | - | Ordered model-cycling scope. When absent, all registry models are available in registry order, including future additions. A non-empty explicit list uses canonical `provider/model` references. |
 
 ```json
 {
-  "enabledModels": ["claude-*", "gpt-4o", "gemini-2*"]
+  "enabledModels": ["anthropic/claude-sonnet-4-5", "openai/gpt-5"]
 }
 ```
+
+An absent value is the future-inclusive implicit-all scope, not an empty list, and is not reorderable. An explicit scope must contain at least one model. Existing configurations may use glob, fuzzy, or thinking-suffix patterns like the `--models` CLI flag; the Dashboard scoped-models editor resolves those legacy values and saves an edited scope as exact canonical references in its selected order.
+
+Dashboard Settings provides a responsive scoped-models editor with provider-grouped search, model/provider/all toggles, accessible up/down ordering controls, and save/reset. It reads the effective global + selected-project value, but saves `enabledModels` to global settings; it warns when `.dreb/settings.json` shadows that global value. Scoped-model changes seed new sessions and do not mutate a running session. See [dashboard.md](dashboard.md) and the [`get_settings` / `set_settings` RPC contract](rpc.md#settings).
 
 ### Markdown
 

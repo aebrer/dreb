@@ -436,7 +436,10 @@ async function mountCommandComposer(commands: CommandDto[]) {
 	const store = {
 		...baseStore,
 		sessions: { k1: createSessionViewState("k1") },
-		fleet: () => ({ runtimes: [], diskSessions: [] }),
+		fleet: () => ({
+			runtimes: commands.some((command) => command.name === "scoped-models") ? [runtimeInfo("k1")] : [],
+			diskSessions: [],
+		}),
 		hydrateSession: vi.fn(async () => {}),
 		refreshDiskSessions: vi.fn(async () => {}),
 		removeRuntime: vi.fn(async () => {}),
@@ -2693,7 +2696,7 @@ describe("screen smoke tests", () => {
 		expect(api.saveSettings).toHaveBeenCalledWith({
 			subagentArbiter: { enabled: true, model: "provider/router", thinking: "off" },
 		});
-		expect(api.settings).toHaveBeenCalledTimes(2);
+		expect(api.settings).toHaveBeenCalledTimes(3); // main + scoped editor reads, then main rollback refetch
 		expect(enabled.value).toBe("off");
 		expect(el.querySelector("[data-testid='dispatch-arbiter-readiness']")?.textContent).toContain("status: disabled");
 	});
@@ -4157,6 +4160,7 @@ describe("dashboard client regressions", () => {
 
 	const mappedBuiltinCases = [
 		{ command: "/settings", name: "settings", expected: "settings" },
+		{ command: "/scoped-models", name: "scoped-models", expected: "scoped-models" },
 		{ command: "/model claude", name: "model", expected: "model" },
 		{ command: "/export", name: "export", expected: "export" },
 		{ command: "/import /tmp/session.jsonl", name: "import", expected: "import" },
@@ -4207,6 +4211,13 @@ describe("dashboard client regressions", () => {
 		switch (testCase.expected) {
 			case "settings":
 				expect(store.navigate).toHaveBeenCalledWith({ screen: "settings" });
+				break;
+			case "scoped-models":
+				expect(store.navigate).toHaveBeenCalledWith({
+					screen: "settings",
+					target: "scoped-models",
+					cwd: "/home/test/project",
+				});
 				break;
 			case "model":
 				expect((element.querySelector('input[placeholder="search models…"]') as HTMLInputElement).value).toBe(
@@ -4296,7 +4307,7 @@ describe("dashboard client regressions", () => {
 		expect(api.dream).toHaveBeenCalledWith("k1", args);
 	});
 
-	it.each(["settings", "export", "session", "fork", "tree", "new", "resume", "reload", "quit"])(
+	it.each(["settings", "scoped-models", "export", "session", "fork", "tree", "new", "resume", "reload", "quit"])(
 		"rejects arguments for /%s with visible usage guidance",
 		async (name) => {
 			const { element, store, textarea } = await mountCommandComposer([

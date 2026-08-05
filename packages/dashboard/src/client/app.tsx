@@ -170,7 +170,11 @@ export function App(): JSX.Element {
 					<FilesScreen store={store} initialPath={(store.route() as { path?: string }).path} />
 				</Match>
 				<Match when={store.route().screen === "settings"}>
-					<SettingsScreen store={store} />
+					<SettingsScreen
+						store={store}
+						target={(store.route() as { target?: "scoped-models" }).target}
+						initialScopedModelsCwd={(store.route() as { cwd?: string }).cwd}
+					/>
 				</Match>
 				<Match when={store.route().screen === "pairing"}>
 					<PairingScreen store={store} />

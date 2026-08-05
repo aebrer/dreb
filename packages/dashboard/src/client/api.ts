@@ -30,6 +30,7 @@ import type {
 	SessionTreeNodeDto,
 	SettingsDto,
 	SettingsSaveResultDto,
+	SettingsUpdateDto,
 	TrustedFolderRemovalResultDto,
 } from "../shared/protocol.js";
 
@@ -62,6 +63,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 function json(body: unknown): RequestInit {
 	return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+}
+
+function withCwd(path: string, cwd?: string): string {
+	return cwd ? `${path}?cwd=${encodeURIComponent(cwd)}` : path;
 }
 
 const DASHBOARD_IMAGE_ID_PATTERN = /^[0-9a-f]{64}$/;
@@ -160,14 +165,14 @@ export const api = {
 			body: JSON.stringify({ path }),
 		}),
 
-	settings: () => request<SettingsDto>("/api/settings"),
-	saveSettings: (settings: SettingsDto) =>
-		request<SettingsSaveResultDto>("/api/settings", {
+	settings: (cwd?: string) => request<SettingsDto>(withCwd("/api/settings", cwd)),
+	saveSettings: (settings: SettingsUpdateDto, cwd?: string) =>
+		request<SettingsSaveResultDto>(withCwd("/api/settings", cwd), {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify(settings),
 		}),
-	settingsModels: () => request<{ models: ModelInfoDto[] }>("/api/settings/models"),
+	settingsModels: (cwd?: string) => request<{ models: ModelInfoDto[] }>(withCwd("/api/settings/models", cwd)),
 	agentTypes: (cwd?: string) =>
 		request<{ agentTypes: AgentTypeDto[] }>(
 			cwd ? `/api/settings/agent-types?cwd=${encodeURIComponent(cwd)}` : "/api/settings/agent-types",

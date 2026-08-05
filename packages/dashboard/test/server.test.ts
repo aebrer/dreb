@@ -834,6 +834,42 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[1].listAgentTypes).toHaveBeenCalled();
 	});
 
+	it("routes scoped-model settings reads, inventory, and writes through the selected cwd utility runtime", async () => {
+		const dir = await createTempProject();
+		const { base, clients } = await startServer();
+		const query = `?cwd=${encodeURIComponent(dir)}`;
+
+		const settings = await fetch(`${base}/api/settings${query}`);
+		const models = await fetch(`${base}/api/settings/models${query}`);
+		const saved = await fetch(`${base}/api/settings${query}`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ enabledModels: null }),
+		});
+
+		expect(settings.status).toBe(200);
+		expect(models.status).toBe(200);
+		expect(saved.status).toBe(200);
+		expect(clients).toHaveLength(1);
+		expect(clients[0].getSettings).toHaveBeenCalled();
+		expect(clients[0].getAvailableModels).toHaveBeenCalled();
+		expect(clients[0].setSettings).toHaveBeenCalledWith({ enabledModels: null });
+
+		for (const path of ["/api/settings", "/api/settings/models"]) {
+			const missing = await fetch(`${base}${path}?cwd=${encodeURIComponent(`${dir}/missing`)}`);
+			expect(missing.status).toBe(400);
+			await expect(missing.json()).resolves.toEqual({ error: `cwd does not exist: ${dir}/missing` });
+		}
+		const empty = await fetch(`${base}/api/settings?cwd=`);
+		expect(empty.status).toBe(400);
+		const file = join(dir, "not-a-directory");
+		await writeFile(file, "x");
+		const notDirectory = await fetch(`${base}/api/settings?cwd=${encodeURIComponent(file)}`);
+		expect(notDirectory.status).toBe(400);
+		await expect(notDirectory.json()).resolves.toEqual({ error: `cwd is not a directory: ${file}` });
+		expect(clients).toHaveLength(1);
+	});
+
 	it("settings model metadata endpoints use a utility runtime when no user runtime is live", async () => {
 		const { base, clients } = await startServer();
 		const models = await fetch(`${base}/api/settings/models`);

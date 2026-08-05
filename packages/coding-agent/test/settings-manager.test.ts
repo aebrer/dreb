@@ -802,6 +802,32 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("enabledModels project override metadata", () => {
+		it("uses the project array and detects even an explicit empty override", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["global/model"] }));
+			writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ enabledModels: [] }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getEnabledModels()).toEqual([]);
+			expect(manager.hasProjectEnabledModelsOverride()).toBe(true);
+		});
+
+		it("clearing the global key does not change a project override", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["global/model"] }));
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ enabledModels: ["project/model"] }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setEnabledModels(undefined);
+			await manager.flush();
+
+			expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8")).enabledModels).toBeUndefined();
+			expect(manager.getEnabledModels()).toEqual(["project/model"]);
+			expect(manager.hasProjectEnabledModelsOverride()).toBe(true);
+		});
+	});
+
 	describe("modelSettings (per-model thinking display)", () => {
 		it("should roundtrip set then getModelThinkingDisplay", () => {
 			const manager = SettingsManager.create(projectDir, agentDir);

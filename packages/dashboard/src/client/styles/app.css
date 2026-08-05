@@ -1654,7 +1654,7 @@ details.thinking .thinking-body {
 /* ---------------------------------------------------------------- settings */
 
 .settings-wrap {
-	max-width: 720px;
+	max-width: 960px;
 }
 
 .settings-intro {
@@ -1751,6 +1751,138 @@ details.thinking .thinking-body {
 	font-size: var(--fs-secondary);
 	margin-bottom: var(--space-4);
 	white-space: pre-wrap;
+}
+
+.scoped-models-editor:focus {
+	outline: none;
+}
+
+.scoped-models-context {
+	display: grid;
+	gap: var(--space-1);
+	margin: var(--space-3) 0;
+	font-size: var(--fs-secondary);
+}
+
+.scoped-models-context select,
+.scoped-models-toolbar input {
+	min-width: 0;
+	max-width: 100%;
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	color: var(--text);
+	font: inherit;
+	padding: var(--space-2);
+}
+
+.scoped-models-toolbar,
+.scoped-models-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	flex-wrap: wrap;
+	margin: var(--space-3) 0;
+}
+
+.scoped-models-toolbar input {
+	flex: 1 1 260px;
+}
+
+.scoped-models-grid {
+	display: grid;
+	gap: var(--space-4);
+	min-width: 0;
+}
+
+.scoped-models-grid h3 {
+	font-size: var(--fs-secondary);
+	margin-bottom: var(--space-2);
+}
+
+.scoped-models-order,
+.scoped-models-available {
+	min-width: 0;
+}
+
+.scoped-model-order-row,
+.scoped-model-choice,
+.scoped-model-provider-heading {
+	display: flex;
+	align-items: center;
+	gap: var(--space-2);
+	min-width: 0;
+	font-size: var(--fs-secondary);
+}
+
+.scoped-model-order-row {
+	justify-content: space-between;
+	border-bottom: var(--hairline);
+	padding: var(--space-1) 0;
+}
+
+.scoped-model-order-row > span,
+.scoped-model-choice .model-id,
+.scoped-model-choice .model-name,
+.scoped-model-provider-heading span {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.scoped-model-choice .model-name {
+	color: var(--muted);
+	font-size: var(--fs-small);
+}
+
+.scoped-model-move-controls {
+	display: flex;
+	gap: var(--space-1);
+	flex-shrink: 0;
+}
+
+.scoped-model-move-controls button {
+	min-width: 36px;
+	min-height: 36px;
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg-elevated);
+	color: var(--text);
+}
+
+.scoped-model-provider {
+	border-bottom: var(--hairline);
+	padding: var(--space-2) 0;
+}
+
+.scoped-model-provider-heading {
+	font-weight: 600;
+	margin-bottom: var(--space-1);
+}
+
+.scoped-model-choice {
+	padding: var(--space-1) 0 var(--space-1) var(--space-4);
+}
+
+.scoped-model-choice input,
+.scoped-model-provider-heading input {
+	flex: 0 0 auto;
+}
+
+@media (min-width: 701px) {
+	.scoped-models-grid {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	}
+}
+
+@media (max-width: 700px) {
+	.scoped-model-move-controls button {
+		min-width: 44px;
+		min-height: 44px;
+	}
+
+	.scoped-model-choice {
+		min-height: 44px;
+	}
 }
 
 .model-picker-button {

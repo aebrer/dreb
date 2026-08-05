@@ -1411,6 +1411,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		settings: async (args: string) => {
 			if (!rejectArguments("settings", args)) props.store.navigate({ screen: "settings" });
 		},
+		"scoped-models": async (args: string) => {
+			if (rejectArguments("scoped-models", args)) return;
+			const cwd = runtime()?.cwd;
+			if (!cwd) throw new Error("Cannot open scoped models: the runtime project directory is unavailable");
+			props.store.navigate({ screen: "settings", target: "scoped-models", cwd });
+		},
 		model: async (args: string) => {
 			setModelFilter(args);
 			setShowModelSelector(true);
