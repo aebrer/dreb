@@ -13,7 +13,7 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock("../../src/client/api.js", () => ({ api: apiMocks }));
 
 import { ScopedModelsEditor } from "../../src/client/components/scoped-models-editor.js";
-import type { ModelInfoDto, SettingsDto } from "../../src/shared/protocol.js";
+import type { ModelInfoDto, SettingsDto, SettingsSaveResultDto } from "../../src/shared/protocol.js";
 
 const models: ModelInfoDto[] = [
 	{ provider: "anthropic", id: "sonnet", name: "Sonnet", contextWindow: 1, reasoning: true },
@@ -40,6 +40,16 @@ const disposers: Array<() => void> = [];
 async function flush(): Promise<void> {
 	await Promise.resolve();
 	await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
 }
 
 function mount(props: { cwd?: string; onCwdChange?: (cwd: string | undefined) => void } = {}): HTMLElement {
@@ -411,6 +421,86 @@ describe("ScopedModelsEditor", () => {
 		expect(modelCheckbox(root, "sonnet").checked).toBe(false);
 		expect(root.querySelector(".scoped-models-order")?.textContent).toContain("openai/gpt");
 	});
+
+	it.each(["resolve", "reject"] as const)(
+		"ignores a project save that %s after another project loads",
+		async (outcome) => {
+			const projectA = snapshot({
+				enabledModels: ["anthropic/sonnet"],
+				enabledModelsSource: "project",
+				hasProjectEnabledModelsOverride: true,
+				resolvedScopedModels: [{ provider: "anthropic", id: "sonnet" }],
+			});
+			const projectB = snapshot({
+				enabledModels: ["openai/gpt"],
+				enabledModelsSource: "project",
+				hasProjectEnabledModelsOverride: true,
+				resolvedScopedModels: [{ provider: "openai", id: "gpt" }],
+			});
+			apiMocks.settings.mockImplementation((cwd?: string) =>
+				Promise.resolve(cwd === "/project/b" ? projectB : projectA),
+			);
+			const pendingSave = deferred<SettingsSaveResultDto>();
+			apiMocks.saveSettings.mockReturnValueOnce(pendingSave.promise);
+
+			const [cwd, setCwd] = createSignal<string | undefined>("/project/a");
+			const root = document.createElement("div");
+			document.body.append(root);
+			disposers.push(
+				render(
+					() => (
+						<ScopedModelsEditor cwd={cwd()} projectRoots={["/project/a", "/project/b"]} onCwdChange={setCwd} />
+					),
+					root,
+				),
+			);
+			await flush();
+
+			modelCheckbox(root, "gpt").click();
+			button(root, "save").click();
+			expect(apiMocks.saveSettings).toHaveBeenCalledWith(
+				{ enabledModels: ["anthropic/sonnet", "openai/gpt"] },
+				"/project/a",
+			);
+
+			setCwd("/project/b");
+			await flush();
+			expect(root.querySelector(".scoped-models-order")?.textContent).toContain("openai/gpt");
+			expect(root.querySelector(".scoped-models-order")?.textContent).not.toContain("anthropic/sonnet");
+
+			if (outcome === "resolve") {
+				pendingSave.resolve({
+					...snapshot({
+						enabledModels: ["anthropic/opus"],
+						enabledModelsSource: "project",
+						hasProjectEnabledModelsOverride: true,
+						resolvedScopedModels: [{ provider: "anthropic", id: "opus" }],
+					}),
+					warnings: ["late project a warning"],
+				});
+			} else {
+				pendingSave.reject(new Error("late project a failure"));
+			}
+			await flush();
+
+			expect(root.querySelector(".scoped-models-order")?.textContent).toContain("openai/gpt");
+			expect(root.querySelector(".scoped-models-order")?.textContent).not.toContain("anthropic/sonnet");
+			expect(root.querySelector(".scoped-models-order")?.textContent).not.toContain("anthropic/opus");
+			expect(modelCheckbox(root, "gpt").checked).toBe(true);
+			expect(modelCheckbox(root, "sonnet").checked).toBe(false);
+			expect(root.textContent).not.toContain("late project a warning");
+			expect(root.textContent).not.toContain("late project a failure");
+			expect(root.textContent).not.toContain("unsaved changes");
+			expect(root.textContent).not.toContain("✓ saved");
+
+			modelCheckbox(root, "sonnet").click();
+			expect(root.textContent).toContain("unsaved changes");
+			button(root, "reset").click();
+			expect(modelCheckbox(root, "gpt").checked).toBe(true);
+			expect(modelCheckbox(root, "sonnet").checked).toBe(false);
+			expect(root.textContent).not.toContain("unsaved changes");
+		},
+	);
 
 	it("shows a loud no-inventory state and cannot save", async () => {
 		apiMocks.settingsModels.mockResolvedValue({ models: [] });

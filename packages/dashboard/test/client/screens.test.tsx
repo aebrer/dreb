@@ -3054,21 +3054,31 @@ describe("screen smoke tests", () => {
 		window.location.hash = "#/settings/scoped-models?cwd=%2Fproject%2Fa";
 
 		const el = mount(() => <App />);
-		await new Promise((resolve) => setTimeout(resolve, 25));
 
-		expect(api.settings).toHaveBeenCalledWith("/project/a");
-		expect(api.settingsModels).toHaveBeenCalledWith("/project/a");
+		await vi.waitFor(() => {
+			expect(api.settings).toHaveBeenCalledWith("/project/a");
+			expect(api.settingsModels).toHaveBeenCalledWith("/project/a");
+		});
 		const context = el.querySelector<HTMLSelectElement>(".scoped-models-context select")!;
 		expect(context.value).toBe("/project/a");
-		expect(context.querySelector('option[value="/project/b"]')).not.toBeNull();
+		await vi.waitFor(() => expect(context.querySelector('option[value="/project/b"]')).not.toBeNull());
 
 		context.value = "/project/b";
 		context.dispatchEvent(new Event("change", { bubbles: true }));
-		await new Promise((resolve) => setTimeout(resolve, 25));
-		expect(window.location.hash).toContain("cwd=%2Fproject%2Fb");
-		expect(api.settings).toHaveBeenCalledWith("/project/b");
-		expect(api.settingsModels).toHaveBeenCalledWith("/project/b");
+		await vi.waitFor(() => {
+			expect(window.location.hash).toContain("cwd=%2Fproject%2Fb");
+			expect(api.settings).toHaveBeenCalledWith("/project/b");
+			expect(api.settingsModels).toHaveBeenCalledWith("/project/b");
+			expect(context.value).toBe("/project/b");
+		});
 
+		await vi.waitFor(() =>
+			expect(
+				[...el.querySelectorAll<HTMLLabelElement>(".scoped-model-choice")].some((label) =>
+					label.textContent?.includes("sonnet"),
+				),
+			).toBe(true),
+		);
 		const sonnet = [...el.querySelectorAll<HTMLLabelElement>(".scoped-model-choice")].find((label) =>
 			label.textContent?.includes("sonnet"),
 		)!;
@@ -3076,13 +3086,31 @@ describe("screen smoke tests", () => {
 		[...el.querySelectorAll<HTMLButtonElement>("button")]
 			.find((candidate) => candidate.textContent?.trim() === "save")!
 			.click();
-		await new Promise((resolve) => setTimeout(resolve, 10));
+		await vi.waitFor(() => {
+			expect(api.saveSettings).toHaveBeenCalledWith(
+				{ enabledModels: ["openai/gpt", "anthropic/sonnet"] },
+				"/project/b",
+			);
+			expect(el.textContent).toContain("project b shadow warning");
+		});
 
-		expect(api.saveSettings).toHaveBeenCalledWith(
-			{ enabledModels: ["openai/gpt", "anthropic/sonnet"] },
-			"/project/b",
-		);
-		expect(el.textContent).toContain("project b shadow warning");
+		const callsBeforeDirectRoute = vi.mocked(api.settingsModels).mock.calls.length;
+		window.location.hash = "#/settings/scoped-models?cwd=%2Fproject%2Fa";
+		window.dispatchEvent(new HashChangeEvent("hashchange"));
+		await vi.waitFor(() => {
+			expect(context.value).toBe("/project/a");
+			expect(api.settingsModels).toHaveBeenCalledTimes(callsBeforeDirectRoute + 1);
+			expect(api.settingsModels).toHaveBeenLastCalledWith("/project/a");
+		});
+
+		const callsBeforeGlobalRoute = vi.mocked(api.settingsModels).mock.calls.length;
+		window.location.hash = "#/settings";
+		window.dispatchEvent(new HashChangeEvent("hashchange"));
+		await vi.waitFor(() => {
+			expect(context.value).toBe("");
+			expect(api.settingsModels).toHaveBeenCalledTimes(callsBeforeGlobalRoute + 1);
+			expect(api.settingsModels).toHaveBeenLastCalledWith(undefined);
+		});
 	});
 
 	it("pairing renders the PIN flow with both security copy blocks", () => {

@@ -3,7 +3,17 @@
  * shown verbatim) + paired-devices management + version footer.
  */
 
-import { createMemo, createResource, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	For,
+	type JSX,
+	onCleanup,
+	onMount,
+	Show,
+} from "solid-js";
 import type {
 	AgentTypeDto,
 	ModelInfoDto,
@@ -179,7 +189,7 @@ function ModelPickerModal(props: {
 export function SettingsScreen(props: {
 	store: AppStore;
 	target?: "scoped-models";
-	initialScopedModelsCwd?: string;
+	routeScopedModelsCwd?: string;
 }): JSX.Element {
 	const [error, setError] = createSignal<string>();
 	const [warnings, setWarnings] = createSignal<string[]>([]);
@@ -187,7 +197,12 @@ export function SettingsScreen(props: {
 	const [modelPickerTarget, setModelPickerTarget] = createSignal<ModelPickerTarget>();
 	const [editingAgent, setEditingAgent] = createSignal<string>();
 	const [agentContextCwd, setAgentContextCwd] = createSignal<string>();
-	const [scopedModelsCwd, setScopedModelsCwd] = createSignal<string | undefined>(props.initialScopedModelsCwd);
+	const [scopedModelsCwd, setScopedModelsCwd] = createSignal<string | undefined>(
+		props.target === "scoped-models" ? props.routeScopedModelsCwd : undefined,
+	);
+	createEffect(() => {
+		setScopedModelsCwd(props.target === "scoped-models" ? props.routeScopedModelsCwd : undefined);
+	});
 	const [trustedContextFolderPath, setTrustedContextFolderPath] = createSignal("");
 	const [contextTrustMutating, setContextTrustMutating] = createSignal(false);
 	const [notificationPermission, setNotificationPermission] = createSignal<

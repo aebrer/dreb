@@ -172,7 +172,7 @@ describe("AI Providers Abort Tests", () => {
 	describe.skipIf(
 		process.env.DREB_SKIP_LIVE_API === "1" || (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_TOKEN),
 	)("Anthropic Provider Abort", () => {
-		const llm = getModel("anthropic", "claude-opus-4-1-20250805");
+		const llm = getModel("anthropic", "claude-opus-4-6");
 
 		it("should abort mid-stream", { retry: 3 }, async () => {
 			await testAbortSignal(llm, { thinkingEnabled: true, thinkingBudgetTokens: 2048 });

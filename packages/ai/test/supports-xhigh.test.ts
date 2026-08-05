@@ -37,9 +37,8 @@ describe("supportsXhigh", () => {
 	});
 
 	it("returns false for Opus 4.1 (below threshold)", () => {
-		const model = getModel("anthropic", "claude-opus-4-1");
-		expect(model).toBeDefined();
-		expect(supportsXhigh(model!)).toBe(false);
+		const base = getModel("anthropic", "claude-opus-4-6");
+		expect(supportsXhigh({ ...base, id: "claude-opus-4-1" })).toBe(false);
 	});
 
 	it("returns false for Opus 4.5 (below threshold)", () => {

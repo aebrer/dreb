@@ -173,7 +173,7 @@ export function App(): JSX.Element {
 					<SettingsScreen
 						store={store}
 						target={(store.route() as { target?: "scoped-models" }).target}
-						initialScopedModelsCwd={(store.route() as { cwd?: string }).cwd}
+						routeScopedModelsCwd={(store.route() as { cwd?: string }).cwd}
 					/>
 				</Match>
 				<Match when={store.route().screen === "pairing"}>

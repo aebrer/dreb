@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	api,
 	connectEvents,
 	dashboardImageUrl,
 	type EventConnectionStatus,
@@ -98,7 +99,10 @@ function setup(overrides: Partial<EventStreamDependencies> = {}) {
 	};
 }
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+	vi.useRealTimers();
+	vi.unstubAllGlobals();
+});
 
 describe("dashboardImageUrl", () => {
 	it("builds encoded same-origin parent and subagent URLs only for validated IDs", () => {
@@ -108,6 +112,51 @@ describe("dashboardImageUrl", () => {
 			`/api/runtimes/runtime/subagents/agent%2Fone/images/${id}/original`,
 		);
 		expect(dashboardImageUrl("runtime", "../bad", "preview")).toBeUndefined();
+	});
+});
+
+describe("settings project context transport", () => {
+	it("encodes cwd for settings reads and writes while preserving global URLs", async () => {
+		const fetchMock = vi.fn().mockImplementation(
+			async () =>
+				new Response("{}", {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				}),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const cwd = "/projects/one space?branch=a&mode=b#scope";
+		const encoded = "%2Fprojects%2Fone%20space%3Fbranch%3Da%26mode%3Db%23scope";
+
+		await api.settings(cwd);
+		await api.settingsModels(cwd);
+		await api.saveSettings({ enabledModels: ["openai/gpt"] }, cwd);
+		await api.settings();
+		await api.settingsModels();
+		await api.saveSettings({ enabledModels: null });
+
+		expect(fetchMock.mock.calls).toEqual([
+			[`/api/settings?cwd=${encoded}`, undefined],
+			[`/api/settings/models?cwd=${encoded}`, undefined],
+			[
+				`/api/settings?cwd=${encoded}`,
+				{
+					method: "PUT",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ enabledModels: ["openai/gpt"] }),
+				},
+			],
+			["/api/settings", undefined],
+			["/api/settings/models", undefined],
+			[
+				"/api/settings",
+				{
+					method: "PUT",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ enabledModels: null }),
+				},
+			],
+		]);
 	});
 });
 
