@@ -9,6 +9,7 @@ import type {
 	ModelInfoDto,
 	PairingCodeDto,
 	SettingsDto,
+	SettingsUpdateDto,
 	SubagentArbiterSettingsDto,
 } from "../../shared/protocol.js";
 import { api } from "../api.js";
@@ -303,7 +304,7 @@ export function SettingsScreen(props: {
 		}
 	}
 
-	async function save(update: Partial<SettingsDto>) {
+	async function save(update: SettingsUpdateDto) {
 		setError(undefined);
 		setWarnings([]);
 		setSaved(false);

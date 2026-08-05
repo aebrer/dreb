@@ -41,11 +41,7 @@ import type {
 } from "../../core/extensions/index.js";
 import { getGitBranch } from "../../core/git-branch.js";
 import type { ModelRegistry } from "../../core/model-registry.js";
-import {
-	findExactModelReferenceMatch,
-	parseModelPattern,
-	resolveModelScopePatterns,
-} from "../../core/model-resolver.js";
+import { parseModelPattern, resolveModelScopePatterns } from "../../core/model-resolver.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
 import type { SessionInfo, SessionTreeNode } from "../../core/session-manager.js";
 import { SessionManager } from "../../core/session-manager.js";
@@ -935,13 +931,17 @@ export async function setSettingsForRpc(
 			if (typeof reference !== "string" || reference.trim().length === 0 || reference !== reference.trim()) {
 				return { ok: false, error: "Invalid enabledModels: every entry must be a non-empty exact model reference" };
 			}
-			const match = findExactModelReferenceMatch(reference, availableModels);
-			if (!match) {
+			const normalizedReference = reference.toLowerCase();
+			const matches = availableModels.filter(
+				(model) => `${model.provider}/${model.id}`.toLowerCase() === normalizedReference,
+			);
+			if (matches.length !== 1) {
 				return {
 					ok: false,
 					error: `Invalid enabledModels entry ${JSON.stringify(reference)}: expected an available exact provider/model reference`,
 				};
 			}
+			const match = matches[0]!;
 			const canonical = `${match.provider}/${match.id}`;
 			if (seen.has(canonical)) {
 				return { ok: false, error: `Invalid enabledModels: duplicate model ${JSON.stringify(canonical)}` };

@@ -470,13 +470,24 @@ export interface SettingsDto {
 
 /** Dashboard settings mutation payload. Unlike a snapshot, null explicitly clears enabledModels. */
 export type SettingsUpdateDto = Partial<
-	Omit<
+	Pick<
 		SettingsDto,
-		| "resolvedScopedModels"
-		| "scopeWarnings"
-		| "hasProjectEnabledModelsOverride"
-		| "enabledModelsSource"
-		| "enabledModels"
+		| "defaultProvider"
+		| "defaultModel"
+		| "defaultThinkingLevel"
+		| "steeringMode"
+		| "followUpMode"
+		| "compactionEnabled"
+		| "retryEnabled"
+		| "imageAutoResize"
+		| "blockImages"
+		| "enableSkillCommands"
+		| "autoLoadNestedContext"
+		| "trustedContextFolders"
+		| "transport"
+		| "hideThinkingBlock"
+		| "agentModels"
+		| "subagentArbiter"
 	>
 > & { enabledModels?: string[] | null };
 

@@ -33,16 +33,19 @@ export function ScopedModelsEditor(props: ScopedModelsEditorProps): JSX.Element 
 	const [saveError, setSaveError] = createSignal<string>();
 	const [saveWarnings, setSaveWarnings] = createSignal<string[]>([]);
 	let section: HTMLElement | undefined;
+	let appliedCwd: string | undefined;
 	let appliedSettings: SettingsDto | undefined;
 
-	const [data, { mutate }] = createResource(
-		() => props.cwd ?? "",
-		async (cwd) => {
-			const context = cwd || undefined;
-			const [settings, inventory] = await Promise.all([api.settings(context), api.settingsModels(context)]);
-			return { settings, models: inventory.models };
-		},
-	);
+	const contextKey = () => props.cwd ?? "";
+	const [data, { mutate }] = createResource(contextKey, async (cwd) => {
+		const context = cwd || undefined;
+		const [settings, inventory] = await Promise.all([api.settings(context), api.settingsModels(context)]);
+		return { cwd, settings, models: inventory.models };
+	});
+	const currentData = createMemo(() => {
+		const loaded = data();
+		return loaded?.cwd === contextKey() ? loaded : undefined;
+	});
 
 	function applySnapshot(settings: SettingsDto, models: ModelInfoDto[]): void {
 		const all = settings.enabledModels === undefined;
@@ -51,12 +54,28 @@ export function ScopedModelsEditor(props: ScopedModelsEditorProps): JSX.Element 
 			all ? models.map(modelKey) : settings.resolvedScopedModels.map((model) => `${model.provider}/${model.id}`),
 		);
 		setDirty(false);
+		setSaved(false);
 		setSaveError(undefined);
+		setSaveWarnings([]);
 	}
 
+	let observedCwd = contextKey();
 	createEffect(() => {
-		const loaded = data();
-		if (!loaded || loaded.settings === appliedSettings) return;
+		const cwd = contextKey();
+		if (cwd === observedCwd) return;
+		observedCwd = cwd;
+		appliedCwd = undefined;
+		appliedSettings = undefined;
+		setDirty(false);
+		setSaved(false);
+		setSaveError(undefined);
+		setSaveWarnings([]);
+	});
+
+	createEffect(() => {
+		const loaded = currentData();
+		if (!loaded || (loaded.cwd === appliedCwd && loaded.settings === appliedSettings)) return;
+		appliedCwd = loaded.cwd;
 		appliedSettings = loaded.settings;
 		applySnapshot(loaded.settings, loaded.models);
 	});
@@ -75,18 +94,18 @@ export function ScopedModelsEditor(props: ScopedModelsEditorProps): JSX.Element 
 	});
 	const filteredGroups = createMemo(() => {
 		const q = query().trim().toLowerCase();
-		const models = data()?.models ?? [];
+		const models = currentData()?.models ?? [];
 		return groupedModels(
 			models.filter((model) => !q || `${model.provider}/${model.id} ${model.name ?? ""}`.toLowerCase().includes(q)),
 		);
 	});
 	const validationError = createMemo(() => {
-		if ((data()?.models.length ?? 0) === 0) return "No available models were reported for this context.";
+		if ((currentData()?.models.length ?? 0) === 0) return "No available models were reported for this context.";
 		if (!implicitAll() && ordered().length === 0) return "At least one model must remain enabled.";
 		return undefined;
 	});
 	const normalizationNotice = createMemo(() => {
-		const settings = data()?.settings;
+		const settings = currentData()?.settings;
 		if (!settings?.enabledModels) return undefined;
 		const canonical = settings.resolvedScopedModels.map((model) => `${model.provider}/${model.id}`);
 		const alreadyCanonical =
@@ -98,7 +117,7 @@ export function ScopedModelsEditor(props: ScopedModelsEditorProps): JSX.Element 
 	});
 
 	function markPartial(next: string[]): void {
-		const inventory = data()?.models.map(modelKey) ?? [];
+		const inventory = currentData()?.models.map(modelKey) ?? [];
 		const allSelected = inventory.length > 0 && inventory.every((key) => next.includes(key));
 		setImplicitAll(allSelected);
 		setOrdered(allSelected ? inventory : next);
@@ -108,13 +127,13 @@ export function ScopedModelsEditor(props: ScopedModelsEditorProps): JSX.Element 
 	}
 
 	function toggleModel(key: string): void {
-		const current = implicitAll() ? (data()?.models.map(modelKey) ?? []) : ordered();
+		const current = implicitAll() ? (currentData()?.models.map(modelKey) ?? []) : ordered();
 		markPartial(current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
 	}
 
 	function toggleProvider(provider: string): void {
-		const keys = (data()?.models ?? []).filter((model) => model.provider === provider).map(modelKey);
-		const current = implicitAll() ? (data()?.models.map(modelKey) ?? []) : ordered();
+		const keys = (currentData()?.models ?? []).filter((model) => model.provider === provider).map(modelKey);
+		const current = implicitAll() ? (currentData()?.models.map(modelKey) ?? []) : ordered();
 		const remove = keys.every((key) => current.includes(key));
 		markPartial(
 			remove
@@ -135,36 +154,35 @@ export function ScopedModelsEditor(props: ScopedModelsEditorProps): JSX.Element 
 	}
 
 	function reset(): void {
-		const loaded = data();
+		const loaded = currentData();
 		if (!loaded) return;
 		applySnapshot(loaded.settings, loaded.models);
-		setSaveWarnings([]);
-		setSaved(false);
 	}
 
 	async function save(): Promise<void> {
-		if (!dirty() || validationError()) return;
+		const loaded = currentData();
+		if (!loaded || !dirty() || validationError()) return;
 		setSaving(true);
 		setSaveError(undefined);
 		setSaveWarnings([]);
 		setSaved(false);
-		const saveCwd = props.cwd;
+		const saveCwd = loaded.cwd || undefined;
 		try {
 			const result: SettingsSaveResultDto = await api.saveSettings(
 				{ enabledModels: implicitAll() ? null : ordered() },
 				saveCwd,
 			);
-			if (props.cwd !== saveCwd) return;
-			const loaded = data();
-			if (loaded) {
-				appliedSettings = result;
-				mutate({ settings: result, models: loaded.models });
-				applySnapshot(result, loaded.models);
-			}
+			if (contextKey() !== loaded.cwd) return;
+			appliedCwd = loaded.cwd;
+			appliedSettings = result;
+			mutate({ cwd: loaded.cwd, settings: result, models: loaded.models });
+			applySnapshot(result, loaded.models);
 			setSaveWarnings(result.warnings ?? []);
 			setSaved(true);
 		} catch (error) {
-			setSaveError(error instanceof Error ? error.message : String(error));
+			if (contextKey() === loaded.cwd) {
+				setSaveError(error instanceof Error ? error.message : String(error));
+			}
 		} finally {
 			setSaving(false);
 		}
@@ -199,7 +217,7 @@ export function ScopedModelsEditor(props: ScopedModelsEditorProps): JSX.Element 
 			<Show when={data.loading}>
 				<p class="muted">Loading scoped models…</p>
 			</Show>
-			<Show when={data()}>
+			<Show when={currentData()}>
 				{(loaded) => (
 					<>
 						<Show when={loaded().settings.hasProjectEnabledModelsOverride}>
@@ -280,8 +298,8 @@ export function ScopedModelsEditor(props: ScopedModelsEditorProps): JSX.Element 
 												<label class="scoped-model-provider-heading">
 													<input
 														type="checkbox"
-														checked={(data()?.models ?? [])
-															.filter((model) => model.provider === group.provider)
+														checked={loaded()
+															.models.filter((model) => model.provider === group.provider)
 															.every((model) => selected().has(modelKey(model)))}
 														onChange={() => toggleProvider(group.provider)}
 													/>

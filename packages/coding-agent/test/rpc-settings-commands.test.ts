@@ -214,6 +214,36 @@ describe("getFreshSettingsForRpc", () => {
 		});
 	});
 
+	it("resolves durable legacy model patterns with the refreshed registry inventory", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ enabledModels: ["anthropic/*", "missing"] }));
+		const manager = SettingsManager.create(projectDir, agentDir);
+		const registry = stubRegistry([
+			{ provider: "anthropic", id: "second" },
+			{ provider: "openai", id: "gpt-5" },
+			{ provider: "anthropic", id: "first" },
+		]);
+
+		const result = await getFreshSettingsForRpc(manager, registry);
+
+		expect(registry.getAvailable).toHaveBeenCalledOnce();
+		expect(result).toMatchObject({
+			ok: true,
+			settings: {
+				enabledModels: ["anthropic/*", "missing"],
+				resolvedScopedModels: [
+					{ provider: "anthropic", id: "second" },
+					{ provider: "anthropic", id: "first" },
+				],
+				scopeWarnings: [{ pattern: "missing", message: 'No models match pattern "missing"' }],
+			},
+		});
+	});
+
 	it("flushes queued writes before reload so they are not discarded", async () => {
 		const manager = SettingsManager.inMemory();
 		manager.setDefaultProvider("anthropic");
@@ -592,6 +622,8 @@ describe("setSettingsForRpc validation", () => {
 		const invalidValues = [
 			[],
 			["sonnet"],
+			["gpt-5"],
+			["openai / gpt-5"],
 			["anthropic/*"],
 			["missing/model"],
 			["anthropic/claude-sonnet-4-5", "ANTHROPIC/CLAUDE-SONNET-4-5"],
@@ -641,7 +673,7 @@ describe("setSettingsForRpc writes", () => {
 		]);
 
 		const partial = await setSettingsForRpc(manager, registry, {
-			enabledModels: ["OPENAI/GPT-5", "org/model:exact"],
+			enabledModels: ["OPENAI/GPT-5", "OPENROUTER/org/model:exact"],
 		});
 		expect(partial).toMatchObject({
 			ok: true,

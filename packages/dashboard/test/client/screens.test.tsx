@@ -188,6 +188,7 @@ vi.mock("../../src/client/api.js", () => ({
 }));
 
 import { api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
+import { App } from "../../src/client/app.js";
 import { ConnectionIndicator, Topbar } from "../../src/client/components/common.js";
 import {
 	TRANSCRIPT_WINDOW_SIZE,
@@ -217,7 +218,12 @@ import {
 	type UserEntry,
 } from "../../src/client/state/reducer.js";
 import { createAppStore } from "../../src/client/state/store.js";
-import { type CommandDto, MAX_TOTAL_IMAGE_BYTES, type RuntimeInfoDto } from "../../src/shared/protocol.js";
+import {
+	type CommandDto,
+	MAX_TOTAL_IMAGE_BYTES,
+	type RuntimeInfoDto,
+	type SettingsDto,
+} from "../../src/shared/protocol.js";
 
 const disposers: Array<() => void> = [];
 
@@ -226,6 +232,13 @@ const disposers: Array<() => void> = [];
 // logging its (correct) "ResizeObserver unavailable" warning on every screen
 // mount. Tests that exercise the observer path override this with a capturing
 // fake and restore it afterward.
+if (!HTMLElement.prototype.scrollIntoView) {
+	Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+		configurable: true,
+		value: vi.fn(),
+	});
+}
+
 if (!(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver) {
 	class NoopResizeObserver {
 		observe(): void {}
@@ -3003,6 +3016,73 @@ describe("screen smoke tests", () => {
 		select.dispatchEvent(new Event("change", { bubbles: true }));
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(select.getAttribute("title")).toBe("/home/test/project-alpha");
+	});
+
+	it("routes scoped-model context through App and reloads and saves after context selection", async () => {
+		const available = [
+			{ provider: "anthropic", id: "sonnet", name: "Sonnet", contextWindow: 1, reasoning: true },
+			{ provider: "openai", id: "gpt", name: "GPT", contextWindow: 1, reasoning: false },
+			{ provider: "google", id: "gemini", name: "Gemini", contextWindow: 1, reasoning: true },
+		];
+		const scopedSnapshot = (provider: string, id: string): SettingsDto => ({
+			enabledModels: [`${provider}/${id}`],
+			resolvedScopedModels: [{ provider, id }],
+			scopeWarnings: [],
+			hasProjectEnabledModelsOverride: true,
+			enabledModelsSource: "project",
+		});
+		vi.mocked(api.settings).mockClear();
+		vi.mocked(api.settingsModels).mockClear();
+		vi.mocked(api.saveSettings).mockClear();
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [{ cwd: "/project/b" } as RuntimeInfoDto],
+			diskSessions: [],
+		});
+		vi.mocked(api.settings).mockImplementation(async (cwd?: string) =>
+			cwd === "/project/b" ? scopedSnapshot("openai", "gpt") : scopedSnapshot("anthropic", "sonnet"),
+		);
+		vi.mocked(api.settingsModels).mockResolvedValue({ models: available });
+		vi.mocked(api.saveSettings).mockImplementation(async (update, cwd) => ({
+			...scopedSnapshot("openai", "gpt"),
+			enabledModels: update.enabledModels ?? undefined,
+			resolvedScopedModels: (update.enabledModels ?? []).map((key) => {
+				const [provider, ...id] = key.split("/");
+				return { provider: provider!, id: id.join("/") };
+			}),
+			warnings: cwd === "/project/b" ? ["project b shadow warning"] : [],
+		}));
+		window.location.hash = "#/settings/scoped-models?cwd=%2Fproject%2Fa";
+
+		const el = mount(() => <App />);
+		await new Promise((resolve) => setTimeout(resolve, 25));
+
+		expect(api.settings).toHaveBeenCalledWith("/project/a");
+		expect(api.settingsModels).toHaveBeenCalledWith("/project/a");
+		const context = el.querySelector<HTMLSelectElement>(".scoped-models-context select")!;
+		expect(context.value).toBe("/project/a");
+		expect(context.querySelector('option[value="/project/b"]')).not.toBeNull();
+
+		context.value = "/project/b";
+		context.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		expect(window.location.hash).toContain("cwd=%2Fproject%2Fb");
+		expect(api.settings).toHaveBeenCalledWith("/project/b");
+		expect(api.settingsModels).toHaveBeenCalledWith("/project/b");
+
+		const sonnet = [...el.querySelectorAll<HTMLLabelElement>(".scoped-model-choice")].find((label) =>
+			label.textContent?.includes("sonnet"),
+		)!;
+		sonnet.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+		[...el.querySelectorAll<HTMLButtonElement>("button")]
+			.find((candidate) => candidate.textContent?.trim() === "save")!
+			.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.saveSettings).toHaveBeenCalledWith(
+			{ enabledModels: ["openai/gpt", "anthropic/sonnet"] },
+			"/project/b",
+		);
+		expect(el.textContent).toContain("project b shadow warning");
 	});
 
 	it("pairing renders the PIN flow with both security copy blocks", () => {

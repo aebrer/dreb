@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { createSignal } from "solid-js";
 import { render } from "solid-js/web/dist/web.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -210,13 +211,10 @@ describe("ScopedModelsEditor", () => {
 		);
 		apiMocks.saveSettings.mockResolvedValueOnce({
 			...snapshot({
-				enabledModels: ["anthropic/sonnet", "openai/gpt"],
+				enabledModels: ["openai/gpt"],
 				enabledModelsSource: "project",
 				hasProjectEnabledModelsOverride: true,
-				resolvedScopedModels: [
-					{ provider: "anthropic", id: "sonnet" },
-					{ provider: "openai", id: "gpt" },
-				],
+				resolvedScopedModels: [{ provider: "openai", id: "gpt" }],
 			}),
 			warnings: ["project shadow warning, verbatim"],
 		});
@@ -235,6 +233,85 @@ describe("ScopedModelsEditor", () => {
 			"/project/a",
 		);
 		expect(root.textContent).toContain("project shadow warning, verbatim");
+		expect(root.querySelector(".scoped-models-order")?.textContent).toContain("openai/gpt");
+		expect(root.querySelector(".scoped-models-order")?.textContent).not.toContain("anthropic/sonnet");
+		expect(modelCheckbox(root, "gpt").checked).toBe(true);
+		expect(modelCheckbox(root, "sonnet").checked).toBe(false);
+		expect(root.textContent).not.toContain("unsaved changes");
+
+		modelCheckbox(root, "sonnet").click();
+		expect(root.textContent).toContain("unsaved changes");
+		button(root, "reset").click();
+		expect(modelCheckbox(root, "gpt").checked).toBe(true);
+		expect(modelCheckbox(root, "sonnet").checked).toBe(false);
+		expect(root.textContent).not.toContain("unsaved changes");
+	});
+
+	it("hides stale controls and status while a different project context loads", async () => {
+		const projectA = snapshot({
+			enabledModels: ["anthropic/sonnet"],
+			enabledModelsSource: "project",
+			hasProjectEnabledModelsOverride: true,
+			resolvedScopedModels: [{ provider: "anthropic", id: "sonnet" }],
+		});
+		const projectB = snapshot({
+			enabledModels: ["openai/gpt"],
+			enabledModelsSource: "project",
+			hasProjectEnabledModelsOverride: true,
+			resolvedScopedModels: [{ provider: "openai", id: "gpt" }],
+		});
+		let resolveSettingsB!: (settings: SettingsDto) => void;
+		let resolveModelsB!: (inventory: { models: ModelInfoDto[] }) => void;
+		apiMocks.settings.mockImplementation((cwd?: string) =>
+			cwd === "/project/b"
+				? new Promise<SettingsDto>((resolve) => {
+						resolveSettingsB = resolve;
+					})
+				: Promise.resolve(projectA),
+		);
+		apiMocks.settingsModels.mockImplementation((cwd?: string) =>
+			cwd === "/project/b"
+				? new Promise<{ models: ModelInfoDto[] }>((resolve) => {
+						resolveModelsB = resolve;
+					})
+				: Promise.resolve({ models }),
+		);
+		apiMocks.saveSettings.mockResolvedValueOnce({
+			...projectA,
+			warnings: ["warning from project a"],
+		});
+
+		const [cwd, setCwd] = createSignal<string | undefined>("/project/a");
+		const root = document.createElement("div");
+		document.body.append(root);
+		disposers.push(
+			render(
+				() => <ScopedModelsEditor cwd={cwd()} projectRoots={["/project/a", "/project/b"]} onCwdChange={setCwd} />,
+				root,
+			),
+		);
+		await flush();
+
+		modelCheckbox(root, "gpt").click();
+		button(root, "save").click();
+		await flush();
+		expect(root.textContent).toContain("warning from project a");
+		modelCheckbox(root, "opus").click();
+		expect(root.textContent).toContain("unsaved changes");
+
+		setCwd("/project/b");
+		await Promise.resolve();
+		expect(root.textContent).toContain("Loading scoped models");
+		expect(root.querySelector(".scoped-models-grid")).toBeNull();
+		expect(root.textContent).not.toContain("warning from project a");
+		expect(root.textContent).not.toContain("unsaved changes");
+
+		resolveSettingsB(projectB);
+		resolveModelsB({ models });
+		await flush();
+		expect(modelCheckbox(root, "gpt").checked).toBe(true);
+		expect(modelCheckbox(root, "sonnet").checked).toBe(false);
+		expect(root.querySelector(".scoped-models-order")?.textContent).toContain("openai/gpt");
 	});
 
 	it("shows a loud no-inventory state and cannot save", async () => {
