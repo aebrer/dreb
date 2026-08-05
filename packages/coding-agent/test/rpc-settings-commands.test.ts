@@ -648,6 +648,38 @@ describe("setSettingsForRpc validation", () => {
 		expect(manager.getRetryEnabled()).toBe(true);
 	});
 
+	it("does not persist valid enabledModels when a later field is invalid", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		const settingsPath = join(agentDir, "settings.json");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({ enabledModels: ["anthropic/claude-sonnet-4-5"], retry: { enabled: true } }),
+		);
+		const manager = SettingsManager.create(projectDir, agentDir);
+
+		const result = await setSettingsForRpc(
+			manager,
+			stubRegistry([anthropicSonnet, { provider: "openai", id: "gpt-5" }]),
+			{
+				enabledModels: ["openai/gpt-5"],
+				retryEnabled: false,
+				defaultProvider: "anthropic",
+			},
+		);
+
+		expect(result).toMatchObject({ ok: false, error: expect.stringContaining("must be set together") });
+		expect(manager.getEnabledModels()).toEqual(["anthropic/claude-sonnet-4-5"]);
+		expect(manager.getRetryEnabled()).toBe(true);
+		expect(JSON.parse(readFileSync(settingsPath, "utf8"))).toEqual({
+			enabledModels: ["anthropic/claude-sonnet-4-5"],
+			retry: { enabled: true },
+		});
+	});
+
 	it("applies nothing when any field is invalid (atomicity)", async () => {
 		const manager = SettingsManager.inMemory({ retry: { enabled: true }, images: { autoResize: true } });
 		const result = await setSettingsForRpc(manager, stubRegistry([]), {

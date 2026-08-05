@@ -151,7 +151,7 @@ async function measurements(): Promise<SettingsMeasurements> {
 		const controlRect = control.getBoundingClientRect();
 		const labelRect = label.getBoundingClientRect();
 		const scopedElements = document.querySelectorAll<HTMLElement>(
-			".scoped-models-editor, .scoped-models-editor h2, .scoped-models-editor h3, .scoped-models-editor .settings-warning, .scoped-models-editor .settings-error, .scoped-models-editor select, .scoped-models-editor input, .scoped-models-editor button, .scoped-models-editor .model-id, .scoped-models-editor .model-name",
+			".scoped-models-editor, .scoped-models-editor h2, .scoped-models-editor h3, .scoped-models-editor .settings-warning, .scoped-models-editor .settings-error, .scoped-models-editor select, .scoped-models-editor input, .scoped-models-editor button, .scoped-models-editor .model-id, .scoped-models-editor .model-name, .scoped-model-order-row, .scoped-model-order-row > span",
 		);
 		const scopedContentFitsViewport = [...scopedElements].every((element) => {
 			const rect = element.getBoundingClientRect();

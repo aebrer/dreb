@@ -43,6 +43,7 @@ export function ScopedModelsEditor(props: ScopedModelsEditorProps): JSX.Element 
 		return { cwd, settings, models: inventory.models };
 	});
 	const currentData = createMemo(() => {
+		if (data.error) return undefined;
 		const loaded = data();
 		return loaded?.cwd === contextKey() ? loaded : undefined;
 	});

@@ -199,6 +199,33 @@ describe("ScopedModelsEditor", () => {
 		expect(root.textContent).toContain("unsaved changes");
 	});
 
+	it("keeps a persisted legacy empty scope visibly invalid through reset", async () => {
+		apiMocks.settings.mockResolvedValue(
+			snapshot({
+				enabledModels: [],
+				enabledModelsSource: "global",
+				resolvedScopedModels: [],
+			}),
+		);
+		const root = mount();
+		await flush();
+
+		expect(root.querySelector(".scoped-models-order")?.textContent).not.toContain("All available models");
+		expect(root.querySelector(".scoped-models-order")?.textContent).toContain("0 enabled models");
+		expect(root.textContent).toContain("At least one model must remain enabled");
+		expect(button(root, "save").disabled).toBe(true);
+
+		modelCheckbox(root, "sonnet").click();
+		expect(root.textContent).not.toContain("At least one model must remain enabled");
+		button(root, "reset").click();
+
+		expect(root.querySelector(".scoped-models-order")?.textContent).not.toContain("All available models");
+		expect(root.querySelector(".scoped-models-order")?.textContent).toContain("0 enabled models");
+		expect(root.textContent).toContain("At least one model must remain enabled");
+		expect(button(root, "save").disabled).toBe(true);
+		expect(apiMocks.saveSettings).not.toHaveBeenCalled();
+	});
+
 	it("shows legacy diagnostics and returned project-shadow warnings verbatim", async () => {
 		apiMocks.settings.mockResolvedValue(
 			snapshot({
@@ -246,6 +273,77 @@ describe("ScopedModelsEditor", () => {
 		expect(modelCheckbox(root, "sonnet").checked).toBe(false);
 		expect(root.textContent).not.toContain("unsaved changes");
 	});
+
+	it.each(["settings", "inventory"] as const)(
+		"shows initial %s load failures verbatim without exposing controls",
+		async (failure) => {
+			const message = `${failure} unavailable`;
+			if (failure === "settings") apiMocks.settings.mockRejectedValue(new Error(message));
+			else apiMocks.settingsModels.mockRejectedValue(new Error(message));
+
+			const root = mount();
+			await flush();
+
+			expect(root.textContent).toContain(message);
+			expect(root.querySelector(".scoped-models-grid")).toBeNull();
+			expect(
+				[...root.querySelectorAll("button")].some((candidate) => candidate.textContent?.trim() === "save"),
+			).toBe(false);
+			expect(apiMocks.saveSettings).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(["settings", "inventory"] as const)(
+		"hides stale project controls when the next context's %s load fails",
+		async (failure) => {
+			const projectA = snapshot({
+				enabledModels: ["anthropic/sonnet"],
+				enabledModelsSource: "project",
+				hasProjectEnabledModelsOverride: true,
+				resolvedScopedModels: [{ provider: "anthropic", id: "sonnet" }],
+			});
+			const message = `project b ${failure} unavailable`;
+			apiMocks.settings.mockImplementation((cwd?: string) =>
+				cwd === "/project/b" && failure === "settings"
+					? Promise.reject(new Error(message))
+					: Promise.resolve(projectA),
+			);
+			apiMocks.settingsModels.mockImplementation((cwd?: string) =>
+				cwd === "/project/b" && failure === "inventory"
+					? Promise.reject(new Error(message))
+					: Promise.resolve({ models }),
+			);
+
+			const [cwd, setCwd] = createSignal<string | undefined>("/project/a");
+			const root = document.createElement("div");
+			document.body.append(root);
+			disposers.push(
+				render(
+					() => (
+						<ScopedModelsEditor cwd={cwd()} projectRoots={["/project/a", "/project/b"]} onCwdChange={setCwd} />
+					),
+					root,
+				),
+			);
+			await flush();
+
+			modelCheckbox(root, "gpt").click();
+			expect(root.textContent).toContain("unsaved changes");
+			expect(root.textContent).toContain("shadows global writes");
+
+			setCwd("/project/b");
+			await flush();
+
+			expect(root.textContent).toContain(message);
+			expect(root.querySelector(".scoped-models-grid")).toBeNull();
+			expect(root.textContent).not.toContain("unsaved changes");
+			expect(root.textContent).not.toContain("shadows global writes");
+			expect(
+				[...root.querySelectorAll("button")].some((candidate) => candidate.textContent?.trim() === "save"),
+			).toBe(false);
+			expect(apiMocks.saveSettings).not.toHaveBeenCalled();
+		},
+	);
 
 	it("hides stale controls and status while a different project context loads", async () => {
 		const projectA = snapshot({
