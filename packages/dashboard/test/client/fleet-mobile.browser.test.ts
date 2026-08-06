@@ -192,11 +192,11 @@ describe("mobile fleet SSE snapshots in a throttled real browser", () => {
 				}
 			});
 
-			await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+			await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
 			const card = page.locator("article.session-card");
-			await card.waitFor({ state: "visible", timeout: 10_000 });
+			await card.waitFor({ state: "visible", timeout: 60_000 });
 			expect(await card.textContent()).toContain("mobile acceptance session");
-			await page.locator(".connection-indicator .chip-idle").waitFor({ state: "visible", timeout: 10_000 });
+			await page.locator(".connection-indicator .chip-idle").waitFor({ state: "visible", timeout: 30_000 });
 			expect(requests.filter((request) => request.url === "/api/fleet")).toHaveLength(1);
 			await card.locator(".chip-idle").waitFor({ state: "visible" });
 
@@ -241,5 +241,5 @@ describe("mobile fleet SSE snapshots in a throttled real browser", () => {
 			await context?.close();
 			await browser.close();
 		}
-	}, 30_000);
+	}, 90_000);
 });

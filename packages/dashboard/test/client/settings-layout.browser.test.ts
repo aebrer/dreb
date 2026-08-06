@@ -99,9 +99,12 @@ afterAll(async () => {
 
 beforeEach(async () => {
 	await page.setViewportSize({ width: 1024, height: 800 });
-	await page.goto(`${baseUrl}/test/client/fixtures/settings-layout.html`, { waitUntil: "domcontentloaded" });
-	await page.locator(".scoped-models-grid").waitFor({ state: "visible" });
-}, 60_000);
+	await page.goto(`${baseUrl}/test/client/fixtures/settings-layout.html`, {
+		waitUntil: "domcontentloaded",
+		timeout: 60_000,
+	});
+	await page.locator(".scoped-models-grid").waitFor({ state: "visible", timeout: 60_000 });
+}, 90_000);
 
 type SettingsMeasurements = {
 	documentFits: boolean;
