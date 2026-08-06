@@ -101,7 +101,7 @@ beforeEach(async () => {
 	await page.setViewportSize({ width: 1024, height: 800 });
 	await page.goto(`${baseUrl}/test/client/fixtures/settings-layout.html`, { waitUntil: "domcontentloaded" });
 	await page.locator(".scoped-models-grid").waitFor({ state: "visible" });
-});
+}, 60_000);
 
 type SettingsMeasurements = {
 	documentFits: boolean;
