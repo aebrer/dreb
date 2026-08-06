@@ -160,6 +160,13 @@ export interface RpcScopedModel {
 	thinkingLevel?: string;
 }
 
+export interface RpcModelScopeWarning {
+	/** Raw persisted pattern that produced this diagnostic. */
+	pattern: string;
+	/** Resolver warning text without terminal styling. */
+	message: string;
+}
+
 export interface RpcResources {
 	contextFiles: Array<{ path: string }>;
 	skills: Array<{ name: string; description: string }>;
@@ -596,6 +603,16 @@ export interface RpcSettingsSnapshot {
 	agentModels?: Record<string, string[]>;
 	/** Global-only fail-closed Dispatch Arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettings;
+	/** Raw effective persisted model patterns. Absent means the future-inclusive all-model scope. */
+	enabledModels?: string[];
+	/** Effective patterns resolved by coding-agent core in model-cycling order. */
+	resolvedScopedModels: RpcScopedModel[];
+	/** Structured diagnostics from resolving legacy persisted patterns. */
+	scopeWarnings: RpcModelScopeWarning[];
+	/** True when project settings shadow global enabledModels writes. */
+	hasProjectEnabledModelsOverride: boolean;
+	/** Source of the effective raw enabledModels value. */
+	enabledModelsSource: "default" | "global" | "project";
 }
 
 /** Settings snapshot returned by `set_settings`; warnings are present for loud shadowing notices. */
@@ -651,6 +668,8 @@ export interface RpcSettingsUpdate {
 	transport?: Transport;
 	hideThinkingBlock?: boolean;
 	agentModels?: Record<string, string[]>;
+	/** Ordered exact model references; null removes the filter and restores implicit all. */
+	enabledModels?: string[] | null;
 	/** Replaces the complete global-only arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettings | null;
 }

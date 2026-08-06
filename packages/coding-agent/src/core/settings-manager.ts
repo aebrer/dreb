@@ -1179,6 +1179,11 @@ export class SettingsManager {
 		this.save();
 	}
 
+	/** Whether project settings explicitly replace the global enabled-model scope. */
+	hasProjectEnabledModelsOverride(): boolean {
+		return this.projectSettings.enabledModels !== undefined;
+	}
+
 	getDoubleEscapeAction(): "fork" | "tree" | "none" {
 		return this.settings.doubleEscapeAction ?? "tree";
 	}

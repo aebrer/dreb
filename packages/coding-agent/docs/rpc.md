@@ -1286,7 +1286,7 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with global-only control/security-policy exceptions:
 
-- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
+- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, `enabledModels`, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
 - **Global nested-context trust policy** (`autoLoadNestedContext`, `trustedContextFolders`, `effectiveTrustedContextRoots`, and the trust commands below): this is read from `~/.dreb/agent/settings.json` only, never project settings. Active main/subagent processes observe it for **future lazy nested/out-of-cwd loads**; it cannot remove content already injected into a conversation. It does not govern the separate initial upward context scan from the launch cwd.
 - **Global Dispatch Arbiter policy** (`subagentArbiter`): the complete object is read/written globally and project settings cannot shadow it. Enabled runtimes consume it before future subagent spawns; it does not rewrite already-started children.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
@@ -1326,6 +1326,14 @@ Response:
     "agentModels": {
       "Explore": ["anthropic/sonnet", "openai/gpt-5"]
     },
+    "enabledModels": ["anthropic/claude-sonnet-4-5", "openai/gpt-5"],
+    "resolvedScopedModels": [
+      {"provider": "anthropic", "id": "claude-sonnet-4-5", "name": "Claude Sonnet 4.5", "reasoning": true},
+      {"provider": "openai", "id": "gpt-5", "name": "GPT-5", "reasoning": true}
+    ],
+    "scopeWarnings": [],
+    "hasProjectEnabledModelsOverride": false,
+    "enabledModelsSource": "global",
     "subagentArbiter": {
       "enabled": true,
       "model": "anthropic/claude-sonnet-4-5",
@@ -1337,6 +1345,8 @@ Response:
 ```
 
 `defaultProvider`, `defaultModel`, and `defaultThinkingLevel` are absent if never set. `agentModels` is the merged global + project view; project entries win per agent name.
+
+`enabledModels` is the raw effective persisted value: absent means the implicit all-model scope, while a present value may be a legacy pattern list. `resolvedScopedModels` is that scope resolved in model-cycling order, and `scopeWarnings` reports legacy-resolution diagnostics. `hasProjectEnabledModelsOverride` and `enabledModelsSource` (`"default"`, `"global"`, or `"project"`) identify whether a selected project shadows global `enabledModels`. These fields let a dashboard show both the source value and its effective scope before normalizing an edited legacy scope.
 
 `trustedContextFolders` is the raw global configured list, including invalid legacy paths that are ignored fail-closed. `effectiveTrustedContextRoots` is the canonical, existing root set actually enforced after `~` expansion, native `realpath`, deduplication, and ancestor subsumption. `autoLoadNestedContext` defaults to `false`; when `true` it is global expert trust-all for every resolvable target, not a project override. Project `.dreb/settings.json` cannot affect any of these three fields.
 
@@ -1357,6 +1367,18 @@ Replace the global trusted-root list atomically (paths must be existing director
 ```
 
 Set `autoLoadNestedContext: true` only as an expert global trust-all choice: it permits lazy context from any resolvable directory, including untrusted prompt-injection content. `set_settings` writes this policy globally even when the RPC session has project settings; project `.dreb/settings.json` cannot add, override, or enable it. Active processes use the result for later lazy loads, not to retract prior injections. The separate initial upward scan from the launch cwd is unaffected.
+
+Set an ordered partial model-cycling scope with a non-empty array of available exact `provider/model` references. The complete payload is validated atomically, including canonical matching and duplicate detection; legacy glob, fuzzy, and thinking-suffix patterns are rejected here. Use explicit `null`, not `[]`, to clear `enabledModels` and restore implicit all models in registry order (including future models):
+
+```json
+{"type": "set_settings", "settings": {"enabledModels": ["anthropic/claude-sonnet-4-5", "openai/gpt-5"]}}
+```
+
+```json
+{"type": "set_settings", "settings": {"enabledModels": null}}
+```
+
+A write always targets global settings. If the session's project defines `enabledModels` in `.dreb/settings.json`, the response includes a warning that the effective project scope still shadows the global write.
 
 Setting the default model (both keys required together, validated against available models — the provider must have credentials configured, same rule as `set_model`):
 
@@ -1464,6 +1486,7 @@ Valid keys and values:
 | `transport` | `"sse"`, `"websocket"`, `"auto"` |
 | `hideThinkingBlock` | boolean |
 | `agentModels` | Plain object mapping agent names to arrays of non-empty model id strings; empty arrays remove the global entry for that agent |
+| `enabledModels` | Non-empty ordered array of available exact `provider/model` references, or explicit `null` to remove the global filter and restore implicit all. Duplicate, glob, fuzzy, and thinking-suffix entries are rejected. |
 | `subagentArbiter` | Complete global-only object or `null`. Keys: `enabled` boolean, exact available `model`, optional valid/capability-supported `thinking`, non-empty `guidePath`. Enabling requires `model`. Unknown nested keys are rejected. |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
@@ -1475,6 +1498,7 @@ Errors are explicit `success: false` responses (nothing is applied on any of the
 - Non-boolean toggle: `Invalid retryEnabled: "yes". Must be a boolean`
 - Invalid `agentModels` object: `Invalid agentModels: must be a plain object mapping agent names to model fallback arrays`
 - Invalid `agentModels` entry (the offending agent key is named): `Invalid agentModels["Explore"]: expected an array of non-empty strings`
+- Invalid `enabledModels`: empty arrays are rejected (`at least one model must remain enabled; use null to enable all`); entries must be non-empty exact available provider/model references with no duplicates
 - Invalid trusted-root list: `trustedContextFolders must be an array of non-empty path strings` or `Invalid trustedContextFolders[0]: path must be absolute after ~ expansion` / `path must be an existing directory`
 - Provider without model (or vice versa): `defaultProvider and defaultModel must be set together`
 - Unavailable model: `Model not found: provider/model-id`

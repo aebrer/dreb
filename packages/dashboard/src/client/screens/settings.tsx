@@ -3,16 +3,28 @@
  * shown verbatim) + paired-devices management + version footer.
  */
 
-import { createMemo, createResource, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import {
+	createEffect,
+	createMemo,
+	createResource,
+	createSignal,
+	For,
+	type JSX,
+	onCleanup,
+	onMount,
+	Show,
+} from "solid-js";
 import type {
 	AgentTypeDto,
 	ModelInfoDto,
 	PairingCodeDto,
 	SettingsDto,
+	SettingsUpdateDto,
 	SubagentArbiterSettingsDto,
 } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
+import { ScopedModelsEditor } from "../components/scoped-models-editor.js";
 import { ThemeGallery } from "../components/theme-gallery.js";
 import {
 	expandThinking,
@@ -174,13 +186,23 @@ function ModelPickerModal(props: {
 	);
 }
 
-export function SettingsScreen(props: { store: AppStore }): JSX.Element {
+export function SettingsScreen(props: {
+	store: AppStore;
+	target?: "scoped-models";
+	routeScopedModelsCwd?: string;
+}): JSX.Element {
 	const [error, setError] = createSignal<string>();
 	const [warnings, setWarnings] = createSignal<string[]>([]);
 	const [saved, setSaved] = createSignal(false);
 	const [modelPickerTarget, setModelPickerTarget] = createSignal<ModelPickerTarget>();
 	const [editingAgent, setEditingAgent] = createSignal<string>();
 	const [agentContextCwd, setAgentContextCwd] = createSignal<string>();
+	const [scopedModelsCwd, setScopedModelsCwd] = createSignal<string | undefined>(
+		props.target === "scoped-models" ? props.routeScopedModelsCwd : undefined,
+	);
+	createEffect(() => {
+		setScopedModelsCwd(props.target === "scoped-models" ? props.routeScopedModelsCwd : undefined);
+	});
 	const [trustedContextFolderPath, setTrustedContextFolderPath] = createSignal("");
 	const [contextTrustMutating, setContextTrustMutating] = createSignal(false);
 	const [notificationPermission, setNotificationPermission] = createSignal<
@@ -297,7 +319,7 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 		}
 	}
 
-	async function save(update: Partial<SettingsDto>) {
+	async function save(update: SettingsUpdateDto) {
 		setError(undefined);
 		setWarnings([]);
 		setSaved(false);
@@ -515,6 +537,20 @@ export function SettingsScreen(props: { store: AppStore }): JSX.Element {
 									</span>
 								</div>
 							</section>
+
+							<ScopedModelsEditor
+								cwd={scopedModelsCwd()}
+								projectRoots={agentProjectRoots()}
+								focused={props.target === "scoped-models"}
+								onCwdChange={(cwd) => {
+									setScopedModelsCwd(cwd);
+									props.store.navigate({
+										screen: "settings",
+										target: "scoped-models",
+										...(cwd ? { cwd } : {}),
+									});
+								}}
+							/>
 
 							<section class="settings-section dispatch-arbiter-settings">
 								<h2>dispatch arbiter</h2>

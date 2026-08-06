@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { NextFunction, Request, Response } from "express";
@@ -941,12 +941,38 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			});
 	}
 
-	app.get("/api/settings", (_req, res) => {
-		withAnyRuntime(res, (h) => h.client.getSettings());
+	function optionalSettingsCwd(req: Request, res: Response): string | undefined | null {
+		if (req.query.cwd === undefined) return undefined;
+		if (typeof req.query.cwd !== "string" || !req.query.cwd.trim()) {
+			res.status(400).json({ error: "cwd must be a non-empty path" });
+			return null;
+		}
+		if (!existsSync(req.query.cwd)) {
+			res.status(400).json({ error: `cwd does not exist: ${req.query.cwd}` });
+			return null;
+		}
+		try {
+			if (!statSync(req.query.cwd).isDirectory()) {
+				res.status(400).json({ error: `cwd is not a directory: ${req.query.cwd}` });
+				return null;
+			}
+		} catch (error) {
+			res.status(400).json({ error: `cannot access cwd ${req.query.cwd}: ${(error as Error).message}` });
+			return null;
+		}
+		return req.query.cwd;
+	}
+
+	app.get("/api/settings", (req, res) => {
+		const cwd = optionalSettingsCwd(req, res);
+		if (cwd === null) return;
+		withAnyRuntime(res, (h) => h.client.getSettings(), cwd);
 	});
 
-	app.get("/api/settings/models", (_req, res) => {
-		withAnyRuntime(res, async (h) => ({ models: await h.client.getAvailableModels() }));
+	app.get("/api/settings/models", (req, res) => {
+		const cwd = optionalSettingsCwd(req, res);
+		if (cwd === null) return;
+		withAnyRuntime(res, async (h) => ({ models: await h.client.getAvailableModels() }), cwd);
 	});
 
 	app.get("/api/settings/agent-types", (req, res) => {
@@ -963,7 +989,9 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	app.put("/api/settings", (req, res) => {
-		withAnyRuntime(res, (h) => h.client.setSettings(req.body ?? {}));
+		const cwd = optionalSettingsCwd(req, res);
+		if (cwd === null) return;
+		withAnyRuntime(res, (h) => h.client.setSettings(req.body ?? {}), cwd);
 	});
 
 	app.get("/api/version", (_req, res) => {

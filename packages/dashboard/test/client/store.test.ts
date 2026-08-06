@@ -28,7 +28,7 @@ import {
 	setComposerDraft,
 } from "../../src/client/state/composer-memory.js";
 import { MAX_COMPLETED_BACKGROUND_AGENTS } from "../../src/client/state/reducer.js";
-import { createAppStore } from "../../src/client/state/store.js";
+import { createAppStore, routeToHash } from "../../src/client/state/store.js";
 
 let eventHandlers: EventStreamHandlers | undefined;
 let seq = 0;
@@ -150,6 +150,20 @@ afterEach(() => {
 	window.location.hash = "#/";
 	for (const key of ["s1", "composer-round-trip", "removed-session"]) evictComposerMemory(key);
 	vi.clearAllMocks();
+});
+
+describe("settings routes", () => {
+	it("preserves the legacy settings hash and round-trips scoped-model context", () => {
+		expect(routeToHash({ screen: "settings" })).toBe("#/settings");
+		expect(routeToHash({ screen: "settings", target: "scoped-models", cwd: "/tmp/a b" })).toBe(
+			"#/settings/scoped-models?cwd=%2Ftmp%2Fa%20b",
+		);
+
+		window.location.hash = "#/settings/scoped-models?cwd=%2Ftmp%2Fa%20b";
+		const store = createAppStore();
+		expect(store.route()).toEqual({ screen: "settings", target: "scoped-models", cwd: "/tmp/a b" });
+		store.stop();
+	});
 });
 
 describe("composer memory", () => {

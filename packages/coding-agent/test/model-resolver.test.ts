@@ -1,10 +1,12 @@
 import type { Model } from "@dreb/ai";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
 	defaultModelPerProvider,
 	findInitialModel,
 	parseModelPattern,
 	resolveCliModel,
+	resolveModelScope,
+	resolveModelScopePatterns,
 } from "../src/core/model-resolver.js";
 
 // Mock models for testing
@@ -203,6 +205,50 @@ describe("parseModelPattern", () => {
 			expect(result.model?.id).toBe("claude-sonnet-4-5");
 			expect(result.warning).toContain("Invalid thinking level");
 		});
+	});
+});
+
+describe("resolveModelScopePatterns", () => {
+	test("returns stable pattern and registry order with structured diagnostics", () => {
+		const result = resolveModelScopePatterns(
+			["openai/gpt-4o", "openrouter/**", "sonnet:bogus", "missing", "anthropic/*"],
+			allModels,
+		);
+
+		expect(result.models.map(({ model }) => `${model.provider}/${model.id}`)).toEqual([
+			"openai/gpt-4o",
+			"openrouter/qwen/qwen3-coder:exacto",
+			"openrouter/openai/gpt-4o:extended",
+			"anthropic/claude-sonnet-4-5",
+		]);
+		expect(result.warnings).toEqual([
+			{
+				pattern: "sonnet:bogus",
+				message: 'Invalid thinking level "bogus" in pattern "sonnet:bogus". Using default instead.',
+			},
+			{ pattern: "missing", message: 'No models match pattern "missing"' },
+		]);
+	});
+
+	test("deduplicates matches while preserving the first thinking suffix", () => {
+		const result = resolveModelScopePatterns(["sonnet:high", "anthropic/*:low"], allModels);
+		expect(result.models).toHaveLength(1);
+		expect(result.models[0]?.thinkingLevel).toBe("high");
+	});
+
+	test("handles exact references whose model ids contain slashes and colons", () => {
+		const result = resolveModelScopePatterns(["openrouter/qwen/qwen3-coder:exacto:high"], allModels);
+		expect(result.models[0]?.model.id).toBe("qwen/qwen3-coder:exacto");
+		expect(result.models[0]?.thinkingLevel).toBe("high");
+		expect(result.warnings).toEqual([]);
+	});
+
+	test("legacy async wrapper emits the same warning text", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const registry = { getAvailable: vi.fn().mockResolvedValue(allModels) };
+		await resolveModelScope(["missing"], registry as any);
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('Warning: No models match pattern "missing"'));
+		warn.mockRestore();
 	});
 });
 

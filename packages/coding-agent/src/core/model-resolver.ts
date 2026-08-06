@@ -44,6 +44,19 @@ export interface ScopedModel {
 	thinkingLevel?: ThinkingLevel;
 }
 
+/** A resolver diagnostic tied to the raw scope pattern that produced it. */
+export interface ModelScopeWarning {
+	pattern: string;
+	/** Warning text without terminal styling or a leading `Warning:` label. */
+	message: string;
+}
+
+/** Ordered scope resolution result without terminal output side effects. */
+export interface ModelScopeResolution {
+	models: ScopedModel[];
+	warnings: ModelScopeWarning[];
+}
+
 // isAlias logic moved to @dreb/ai as isModelAlias
 
 /**
@@ -212,9 +225,9 @@ export function parseModelPattern(
  * The algorithm tries to match the full pattern first, then progressively
  * strips colon-suffixes to find a match.
  */
-export async function resolveModelScope(patterns: string[], modelRegistry: ModelRegistry): Promise<ScopedModel[]> {
-	const availableModels = await modelRegistry.getAvailable();
-	const scopedModels: ScopedModel[] = [];
+export function resolveModelScopePatterns(patterns: string[], availableModels: Model<Api>[]): ModelScopeResolution {
+	const models: ScopedModel[] = [];
+	const warnings: ModelScopeWarning[] = [];
 
 	for (const pattern of patterns) {
 		// Check if pattern contains glob characters
@@ -240,13 +253,13 @@ export async function resolveModelScope(patterns: string[], modelRegistry: Model
 			});
 
 			if (matchingModels.length === 0) {
-				console.warn(chalk.yellow(`Warning: No models match pattern "${pattern}"`));
+				warnings.push({ pattern, message: `No models match pattern "${pattern}"` });
 				continue;
 			}
 
 			for (const model of matchingModels) {
-				if (!scopedModels.find((sm) => modelsAreEqual(sm.model, model))) {
-					scopedModels.push({ model, thinkingLevel });
+				if (!models.find((scoped) => modelsAreEqual(scoped.model, model))) {
+					models.push({ model, thinkingLevel });
 				}
 			}
 			continue;
@@ -255,21 +268,38 @@ export async function resolveModelScope(patterns: string[], modelRegistry: Model
 		const { model, thinkingLevel, warning } = parseModelPattern(pattern, availableModels);
 
 		if (warning) {
-			console.warn(chalk.yellow(`Warning: ${warning}`));
+			warnings.push({ pattern, message: warning });
 		}
 
 		if (!model) {
-			console.warn(chalk.yellow(`Warning: No models match pattern "${pattern}"`));
+			warnings.push({ pattern, message: `No models match pattern "${pattern}"` });
 			continue;
 		}
 
-		// Avoid duplicates
-		if (!scopedModels.find((sm) => modelsAreEqual(sm.model, model))) {
-			scopedModels.push({ model, thinkingLevel });
+		// Avoid duplicates while preserving first-pattern/registry order.
+		if (!models.find((scoped) => modelsAreEqual(scoped.model, model))) {
+			models.push({ model, thinkingLevel });
 		}
 	}
 
-	return scopedModels;
+	return { models, warnings };
+}
+
+/** Resolve model scope patterns without emitting terminal warnings. */
+export async function resolveModelScopeWithDiagnostics(
+	patterns: string[],
+	modelRegistry: Pick<ModelRegistry, "getAvailable">,
+): Promise<ModelScopeResolution> {
+	return resolveModelScopePatterns(patterns, await modelRegistry.getAvailable());
+}
+
+/** Resolve model scope patterns and retain the legacy terminal warning behavior. */
+export async function resolveModelScope(patterns: string[], modelRegistry: ModelRegistry): Promise<ScopedModel[]> {
+	const resolution = await resolveModelScopeWithDiagnostics(patterns, modelRegistry);
+	for (const warning of resolution.warnings) {
+		console.warn(chalk.yellow(`Warning: ${warning.message}`));
+	}
+	return resolution.models;
 }
 
 export interface ResolveCliModelResult {

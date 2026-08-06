@@ -44,7 +44,7 @@ Open `http://127.0.0.1:5343`.
   per-message copy, tasks panel, a bounded scrollable panel listing every retained
   subagent newest-first (collapsed by default on mobile), suggest-next chip,
   generic built-in slash-command discovery and fail-closed execution (including
-  settings/model, import/export, session tree, fork, new/compact/dream,
+  settings/model/scoped-models, import/export, session tree, fork, new/compact/dream,
   resume/reload, and quit), image attach/paste with sent-image previews retained in user transcript entries,
   queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
@@ -61,8 +61,8 @@ Open `http://127.0.0.1:5343`.
   its inherited descendants).
 - **Settings** — persistent defaults (provider-grouped model dropdown,
   thinking, queue modes, image handling, skill commands, transport,
-  hide-thinking, compaction/retry), per-agent model fallback editor, and the
-  global-only nested-context policy: an auditable trusted-roots list with
+  hide-thinking, compaction/retry), a scoped-models editor, per-agent model
+  fallback editor, and the global-only nested-context policy: an auditable trusted-roots list with
   revoke and simple add-by-path controls, plus a prominent expert trust-all
   warning. The Files view remains the primary trust-grant flow. Most defaults
   seed new sessions; opening Settings flushes pending writes and reloads durable
@@ -76,6 +76,12 @@ Open `http://127.0.0.1:5343`.
   system/light/dark mode selector, saved per browser), current pairing code,
   and paired-devices management.
 - **Pairing** — remote first-login rotating-code flow.
+
+### Scoped models
+
+The Settings scoped-models editor manages the persistent model-cycling scope. Search is grouped by provider, with individual model, provider, and all-model toggles; non-empty partial scopes have accessible up/down ordering controls plus save/reset, and controls remain usable on mobile. An absent `enabledModels` means implicit all available registry models in registry order, including future additions, so that view cannot be reordered. A saved partial scope is an ordered list of exact canonical `provider/model` references; editing legacy glob, fuzzy, or thinking-suffix values normalizes them to exact references.
+
+The selected project context reads effective global + project settings, but saves always write the global setting and warn if `.dreb/settings.json` shadows it. Changes seed new sessions only and never modify a running session. Running `/scoped-models` in a dashboard session opens this editor with that session's cwd selected. For persisted-setting and RPC details, see [Model Cycling](../coding-agent/docs/settings.md#model-cycling) and [`get_settings` / `set_settings`](../coding-agent/docs/rpc.md#settings).
 
 ### Transcript images
 
