@@ -414,7 +414,7 @@ See [packages.md](packages.md) for package management details.
     "enabled": true,
     "maxRetries": 3
   },
-  "enabledModels": ["claude-*", "gpt-4o"],
+  "enabledModels": ["anthropic/claude-sonnet-4-5", "openai/gpt-5"],
   "packages": ["dreb-skills"]
 }
 ```
