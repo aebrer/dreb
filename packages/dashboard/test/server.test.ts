@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { type IncomingMessage, request, type Server, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +31,7 @@ interface TestServerOptions {
 	imageService?: DashboardImageService;
 	heartbeatIntervalMs?: number;
 	fleetSnapshotDebounceMs?: number;
+	memoryHomeDir?: string;
 }
 
 async function createTempProject(): Promise<string> {
@@ -111,6 +112,7 @@ async function startServer(options: TestServerOptions = {}) {
 		eventHub: options.eventHub,
 		imageService: options.imageService,
 		heartbeatIntervalMs: options.heartbeatIntervalMs,
+		memoryHomeDir: options.memoryHomeDir,
 	});
 	const server = await new Promise<Server>((resolve) => {
 		const s = app.listen(0, "127.0.0.1", () => resolve(s));
@@ -190,6 +192,60 @@ describe("dashboard server — auth middleware", () => {
 
 		const data = await fetch(`${base}/api/fleet`);
 		expect(data.status).toBe(403);
+	});
+});
+
+describe("dashboard server — memories routes", () => {
+	it("lists scopes, reads, saves, conflicts, and deletes through authenticated routes", async () => {
+		const home = await createTempProject();
+		const memory = join(home, ".dreb", "memory");
+		await mkdir(memory, { recursive: true });
+		await writeFile(join(memory, "MEMORY.md"), "- [Entry](entry.md) — entry\n");
+		await writeFile(
+			join(memory, "entry.md"),
+			"---\nname: Entry\ndescription: Test entry\ntype: project\n---\n\nBody\n",
+		);
+		const { base } = await startServer({ memoryHomeDir: home });
+
+		const scopesRes = await fetch(`${base}/api/memories/scopes`);
+		expect(scopesRes.status).toBe(200);
+		const scopes = (await scopesRes.json()) as { scopes: Array<{ id: string; kind: string }> };
+		expect(scopes.scopes).toEqual([expect.objectContaining({ id: "global", kind: "global" })]);
+
+		const listingRes = await fetch(`${base}/api/memories/global`);
+		expect(listingRes.status).toBe(200);
+		const listing = (await listingRes.json()) as { indexRevision: string; entries: Array<{ file: string }> };
+		expect(listing.entries.map((entry) => entry.file)).toEqual(["entry.md"]);
+
+		const docRes = await fetch(`${base}/api/memories/global/documents/entry.md`);
+		expect(docRes.status).toBe(200);
+		const doc = (await docRes.json()) as { revision: string; content: string };
+		const stale = await fetch(`${base}/api/memories/global/documents/entry.md`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ content: doc.content, revision: "stale" }),
+		});
+		expect(stale.status).toBe(409);
+
+		const saved = await fetch(`${base}/api/memories/global/documents/entry.md`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ content: doc.content.replace("Body", "Updated"), revision: doc.revision }),
+		});
+		expect(saved.status).toBe(200);
+		expect(await readFile(join(memory, "entry.md"), "utf8")).toContain("Updated");
+		const savedBody = (await saved.json()) as { document: { revision: string }; listing: { indexRevision: string } };
+
+		const deleted = await fetch(`${base}/api/memories/global/entries/entry.md`, {
+			method: "DELETE",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				revision: savedBody.document.revision,
+				indexRevision: savedBody.listing.indexRevision,
+			}),
+		});
+		expect(deleted.status).toBe(200);
+		expect(await readFile(join(memory, "MEMORY.md"), "utf8")).toBe("");
 	});
 });
 

@@ -16,6 +16,10 @@ import type {
 	EventEnvelope,
 	FleetDto,
 	ImageAttachmentDto,
+	MemoryDocumentDto,
+	MemoryListingDto,
+	MemoryMutationResultDto,
+	MemoryScopeDto,
 	ModelInfoDto,
 	PairedDeviceDto,
 	PairingCodeDto,
@@ -63,6 +67,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 function json(body: unknown): RequestInit {
 	return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+}
+
+function jsonWithMethod(method: "PUT" | "DELETE", body: unknown): RequestInit {
+	return { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
 }
 
 function withCwd(path: string, cwd?: string): string {
@@ -191,6 +199,22 @@ export const api = {
 	removeTrustedContextFolder: (path: string) =>
 		request<TrustedFolderRemovalResultDto>("/api/settings/remove-trusted", json({ path })),
 	places: () => request<{ places: Array<{ label: string; path: string }> }>("/api/files/places"),
+
+	memoryScopes: () => request<{ scopes: MemoryScopeDto[] }>("/api/memories/scopes"),
+	memoryListing: (scopeId: string) => request<MemoryListingDto>(`/api/memories/${encodeURIComponent(scopeId)}`),
+	memoryDocument: (scopeId: string, file: string) =>
+		request<MemoryDocumentDto>(`/api/memories/${encodeURIComponent(scopeId)}/documents/${encodeURIComponent(file)}`),
+	saveMemoryDocument: (scopeId: string, file: string, content: string, revision: string) =>
+		request<MemoryMutationResultDto>(
+			`/api/memories/${encodeURIComponent(scopeId)}/documents/${encodeURIComponent(file)}`,
+			jsonWithMethod("PUT", { content, revision }),
+		),
+	deleteMemoryEntry: (scopeId: string, file: string, revision: string, indexRevision: string | null) =>
+		request<MemoryMutationResultDto>(
+			`/api/memories/${encodeURIComponent(scopeId)}/entries/${encodeURIComponent(file)}`,
+			jsonWithMethod("DELETE", { revision, indexRevision }),
+		),
+
 	downloadUrl: (path: string) => `/api/files/download?path=${encodeURIComponent(path)}`,
 	upload: async (dir: string, file: File, overwrite: boolean) => {
 		const res = await fetch(

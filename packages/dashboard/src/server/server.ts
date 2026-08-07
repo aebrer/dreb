@@ -37,6 +37,7 @@ import {
 import { EventHub, formatHeartbeatFrame, type SseWriteMetadata } from "./event-hub.js";
 import { defaultPlaces, FileApi } from "./files.js";
 import { ImagePreviewWorker } from "./image-preview.js";
+import { MemoryApi } from "./memories.js";
 import type { DashboardRuntimeSnapshot, RuntimePool } from "./runtime-pool.js";
 import { readSubagentMessages, SubagentSessionLogNotFoundError } from "./subagent-log.js";
 
@@ -64,6 +65,8 @@ export interface DashboardServerOptions {
 	imageService?: DashboardImageService;
 	/** Named heartbeat interval; defaults to 25 seconds. */
 	heartbeatIntervalMs?: number;
+	/** Test-only override for the global dreb memory home directory. */
+	memoryHomeDir?: string;
 }
 
 const DEVICE_COOKIE = "dreb_dashboard_device";
@@ -134,6 +137,9 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	const diagnosticConnections = new Map<string, { issuedAt: number; lastAt?: number }>();
 	const log = options.logger ?? ((line: string) => console.log(`[dashboard] ${line}`));
 	const files = new FileApi((op, path, detail) => log(`file ${op}: ${path}${detail ? ` (${detail})` : ""}`));
+	const memories = new MemoryApi(options.memoryHomeDir ?? homedir(), (op, scopeId, detail) =>
+		log(`memory ${op}: ${scopeId}${detail ? ` (${detail})` : ""}`),
+	);
 	const hub = options.eventHub ?? new EventHub();
 	const images = options.imageService ?? new DashboardImageService(new ImagePreviewWorker());
 	hub.setEventProjector((key, event) => (key ? images.projectEvent(event, { runtimeKey: key }) : event));
@@ -434,6 +440,52 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	// -- fleet -----------------------------------------------------------------
 	const listDiskSessions = async (): Promise<SessionInfoDto[]> =>
 		((await options.listAllSessions()) as SessionInfoDto[]).filter((session) => existsSync(session.cwd));
+
+	const currentCwdInventory = async (): Promise<string[]> => [
+		...pool.list().map((handle) => handle.cwd),
+		...(await listDiskSessions()).map((session) => session.cwd),
+	];
+
+	const handleMemoryError = (res: Response, err: unknown): void => {
+		const status =
+			typeof (err as { status?: unknown })?.status === "number" ? (err as { status: number }).status : 500;
+		res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+	};
+
+	app.get("/api/memories/scopes", (_req, res) => {
+		currentCwdInventory()
+			.then((inventory) => memories.scopes(inventory))
+			.then((scopes) => res.json({ scopes }))
+			.catch((err) => handleMemoryError(res, err));
+	});
+
+	app.get("/api/memories/:scopeId", (req, res) => {
+		currentCwdInventory()
+			.then((inventory) => memories.listing(req.params.scopeId, inventory))
+			.then((listing) => res.json(listing))
+			.catch((err) => handleMemoryError(res, err));
+	});
+
+	app.get("/api/memories/:scopeId/documents/:file", (req, res) => {
+		currentCwdInventory()
+			.then((inventory) => memories.readDocument(req.params.scopeId, req.params.file, inventory))
+			.then((document) => res.json(document))
+			.catch((err) => handleMemoryError(res, err));
+	});
+
+	app.put("/api/memories/:scopeId/documents/:file", (req, res) => {
+		currentCwdInventory()
+			.then((inventory) => memories.saveDocument(req.params.scopeId, req.params.file, req.body, inventory))
+			.then((result) => res.json(result))
+			.catch((err) => handleMemoryError(res, err));
+	});
+
+	app.delete("/api/memories/:scopeId/entries/:file", (req, res) => {
+		currentCwdInventory()
+			.then((inventory) => memories.deleteEntry(req.params.scopeId, req.params.file, req.body, inventory))
+			.then((result) => res.json(result))
+			.catch((err) => handleMemoryError(res, err));
+	});
 
 	const getFleet = async (): Promise<FleetDto> => {
 		const runtimes = await Promise.all(pool.list().map((h) => pool.describe(h)));

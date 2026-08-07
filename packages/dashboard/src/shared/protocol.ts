@@ -405,6 +405,54 @@ export interface DirListingDto {
 	contextTrust: ContextTrustEvaluationDto;
 }
 
+export type MemoryScopeKindDto = "global" | "project";
+export type MemoryEntryTypeDto = "user-preferences" | "good-practices" | "project" | "navigation";
+
+export interface MemoryEntryMetadataDto {
+	name: string;
+	description: string;
+	type: MemoryEntryTypeDto;
+}
+
+export interface MemoryScopeDto {
+	id: string;
+	kind: MemoryScopeKindDto;
+	label: string;
+	projectRoot?: string;
+	memoryDir: string;
+	exists: boolean;
+}
+
+export interface MemoryEntrySummaryDto {
+	file: string;
+	metadata?: MemoryEntryMetadataDto;
+	metadataError?: string;
+	modified: string;
+	size: number;
+}
+
+export interface MemoryListingDto {
+	scope: MemoryScopeDto;
+	indexContent: string | null;
+	indexRevision: string | null;
+	indexOverLimit: boolean;
+	entries: MemoryEntrySummaryDto[];
+}
+
+export interface MemoryDocumentDto {
+	kind: "index" | "entry";
+	file: string;
+	content: string;
+	revision: string;
+	metadata?: MemoryEntryMetadataDto;
+	metadataError?: string;
+}
+
+export interface MemoryMutationResultDto {
+	listing: MemoryListingDto;
+	document?: MemoryDocumentDto;
+}
+
 /** Auth mode reported to the client. */
 export interface AuthStatusDto {
 	mode: "local" | "remote";

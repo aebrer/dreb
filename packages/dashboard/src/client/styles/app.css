@@ -2978,3 +2978,136 @@ details.thinking .thinking-body {
 		font-size: 16px;
 	}
 }
+
+/* ------------------------------------------------------------- memories page */
+
+.memories-screen {
+	padding-bottom: var(--space-6);
+}
+
+.memories-head,
+.memory-doc-head,
+.memory-edit-actions {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: var(--space-3);
+	flex-wrap: wrap;
+}
+
+.memories-head {
+	margin: var(--space-5) 0 var(--space-4);
+}
+
+.memories-layout {
+	display: grid;
+	grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+	gap: var(--space-4);
+	align-items: start;
+}
+
+.memories-sidebar {
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-4);
+}
+
+.memory-panel,
+.memory-editor {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: var(--space-4);
+	min-width: 0;
+}
+
+.memory-panel h2 {
+	font-size: var(--fs-secondary);
+	color: var(--muted);
+	margin-bottom: var(--space-2);
+}
+
+.memory-nav-item {
+	width: 100%;
+	text-align: left;
+	border: var(--hairline);
+	border-radius: var(--radius-sm);
+	background: var(--surface);
+	color: var(--text);
+	padding: var(--space-2);
+	margin-bottom: var(--space-2);
+	cursor: pointer;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.memory-nav-item:hover,
+.memory-nav-item.active {
+	border-color: var(--text);
+}
+
+.memory-nav-item.error {
+	border-color: var(--status-error);
+}
+
+.memory-nav-item small {
+	color: var(--muted);
+	overflow-wrap: anywhere;
+}
+
+.memory-doc-head {
+	margin-bottom: var(--space-3);
+}
+
+.memory-metadata {
+	display: flex;
+	gap: var(--space-2);
+	flex-wrap: wrap;
+	align-items: center;
+	border: var(--hairline);
+	border-radius: var(--radius-sm);
+	padding: var(--space-2);
+	margin-bottom: var(--space-3);
+}
+
+.memory-metadata span {
+	color: var(--muted);
+}
+
+.memory-edit-actions {
+	justify-content: flex-start;
+	align-items: center;
+	margin-bottom: var(--space-3);
+}
+
+.memory-textarea {
+	width: 100%;
+	min-height: 360px;
+	font-family: var(--font-mono);
+	font-size: var(--fs-secondary);
+	background: var(--surface);
+	color: var(--text);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: var(--space-3);
+	resize: vertical;
+}
+
+.memory-preview {
+	margin-top: var(--space-4);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	padding: var(--space-3);
+}
+
+.memory-preview summary {
+	cursor: pointer;
+	color: var(--muted);
+	margin-bottom: var(--space-2);
+}
+
+@media (max-width: 800px) {
+	.memories-layout {
+		grid-template-columns: 1fr;
+	}
+}
