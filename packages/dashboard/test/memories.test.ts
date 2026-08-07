@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoryApi } from "../src/server/memories.js";
+import { MAX_MEMORY_CONTENT_BYTES, MemoryApi } from "../src/server/memories.js";
 
 const tempDirs: string[] = [];
 
@@ -31,18 +31,22 @@ describe("MemoryApi", () => {
 	it("discovers global and project scopes with dedupe and stable ordering", async () => {
 		const home = await tempDir();
 		await mkdir(join(home, ".dreb", "memory"), { recursive: true });
+		await mkdir(join(home, ".git"), { recursive: true });
 		const b = await makeProject("b-project");
 		const a = await makeProject("a-project");
 		await mkdir(join(a, "src"), { recursive: true });
+		const aAlias = join(await tempDir(), "a-alias");
+		await symlink(a, aAlias);
 		const api = new MemoryApi(home, vi.fn());
 
-		const scopes = await api.scopes([join(b, "missing"), b, join(a, "src"), a]);
+		const scopes = await api.scopes([home, join(b, "missing"), b, join(a, "src"), a, aAlias]);
 
 		expect(scopes.map((scope) => scope.kind)).toEqual(["global", "project", "project"]);
 		expect(scopes.slice(1).map((scope) => scope.projectRoot)).toEqual(
 			[a, b].sort((left, right) => left.localeCompare(right)),
 		);
 		expect(new Set(scopes.map((scope) => scope.id)).size).toBe(scopes.length);
+		expect(new Set(scopes.map((scope) => scope.memoryDir)).size).toBe(scopes.length);
 	});
 
 	it("lists missing directories without creating them and flags long complete indexes", async () => {
@@ -61,6 +65,26 @@ describe("MemoryApi", () => {
 		const listing = await api.listing("global", []);
 		expect(listing.indexContent?.split("\n")).toHaveLength(201);
 		expect(listing.indexOverLimit).toBe(true);
+	});
+
+	it("enforces the content limit at the exact byte boundary for reads and saves", async () => {
+		const home = await tempDir();
+		const memory = join(home, ".dreb", "memory");
+		await mkdir(memory, { recursive: true });
+		const base = entry("Boundary");
+		const atLimit = `${base}${"x".repeat(MAX_MEMORY_CONTENT_BYTES - Buffer.byteLength(base))}`;
+		await writeFile(join(memory, "boundary.md"), atLimit);
+		const api = new MemoryApi(home, vi.fn());
+
+		const document = await api.readDocument("global", "boundary.md", []);
+		expect(Buffer.byteLength(document.content)).toBe(MAX_MEMORY_CONTENT_BYTES);
+		await api.saveDocument("global", "boundary.md", { content: atLimit, revision: document.revision }, []);
+		await expect(
+			api.saveDocument("global", "boundary.md", { content: `${atLimit}x`, revision: document.revision }, []),
+		).rejects.toMatchObject({ status: 413 });
+
+		await writeFile(join(memory, "oversized.md"), `${atLimit}x`);
+		await expect(api.readDocument("global", "oversized.md", [])).rejects.toMatchObject({ status: 413 });
 	});
 
 	it("surfaces malformed metadata while accepting valid entry summaries", async () => {

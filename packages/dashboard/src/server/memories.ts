@@ -8,8 +8,10 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
+import type { Stats } from "node:fs";
 import { open, readdir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { findGitRoot, parseFrontmatter } from "@dreb/coding-agent";
 import type {
 	MemoryDocumentDto,
@@ -113,12 +115,47 @@ function parseEntryMetadata(content: string): { metadata?: MemoryEntryMetadataDt
 	}
 }
 
-async function readUtf8Limited(path: string): Promise<string> {
+async function requireLimitedFile(path: string): Promise<Stats> {
 	const info = await stat(path);
 	if (!info.isFile()) throw httpError(400, `Not a file: ${path}`);
 	if (info.size > MAX_MEMORY_CONTENT_BYTES)
 		throw httpError(413, `Memory document exceeds the ${MAX_MEMORY_CONTENT_BYTES} byte limit`);
+	return info;
+}
+
+async function readUtf8Limited(path: string): Promise<string> {
+	await requireLimitedFile(path);
 	return readFile(path, "utf8");
+}
+
+async function readEntryMetadata(path: string): Promise<{
+	info: Stats;
+	parsed: ReturnType<typeof parseEntryMetadata>;
+}> {
+	const info = await requireLimitedFile(path);
+	const handle = await open(path, "r");
+	const decoder = new StringDecoder("utf8");
+	const chunk = Buffer.allocUnsafe(16 * 1024);
+	let prefix = "";
+	let position = 0;
+	try {
+		while (position < info.size) {
+			const { bytesRead } = await handle.read(chunk, 0, Math.min(chunk.length, info.size - position), position);
+			if (bytesRead === 0) break;
+			position += bytesRead;
+			prefix += decoder.write(chunk.subarray(0, bytesRead));
+			if (position === bytesRead && !prefix.startsWith("---")) break;
+			const end = prefix.indexOf("\n---", 3);
+			if (end !== -1) {
+				prefix = prefix.slice(0, end + 4);
+				break;
+			}
+		}
+		prefix += decoder.end();
+	} finally {
+		await handle.close();
+	}
+	return { info, parsed: parseEntryMetadata(prefix) };
 }
 
 async function atomicReplace(path: string, content: string): Promise<void> {
@@ -193,7 +230,8 @@ export class MemoryApi {
 
 	async scopes(cwdInventory: string[]): Promise<MemoryScopeDto[]> {
 		const scopes: MemoryScopeDto[] = [];
-		const globalMemoryDir = resolve(this.homeDir, ".dreb", "memory");
+		const canonicalHome = (await canonicalExistingDirectory(this.homeDir)) ?? resolve(this.homeDir);
+		const globalMemoryDir = resolve(canonicalHome, ".dreb", "memory");
 		scopes.push({
 			id: "global",
 			kind: "global",
@@ -209,7 +247,7 @@ export class MemoryApi {
 			if (!existingCwd) continue;
 			const root = findGitRoot(existingCwd) ?? existingCwd;
 			const canonicalRoot = await canonicalExistingDirectory(root);
-			if (!canonicalRoot) continue;
+			if (!canonicalRoot || canonicalRoot === canonicalHome) continue;
 			roots.set(canonicalRoot, canonicalRoot);
 		}
 		for (const root of [...roots.keys()].sort((a, b) => a.localeCompare(b))) {
@@ -227,7 +265,10 @@ export class MemoryApi {
 	}
 
 	async listing(scopeId: string, cwdInventory: string[]): Promise<MemoryListingDto> {
-		const scope = await this.requireScope(scopeId, cwdInventory);
+		return this.listingForScope(await this.requireScope(scopeId, cwdInventory));
+	}
+
+	private async listingForScope(scope: MemoryScopeDto): Promise<MemoryListingDto> {
 		const memoryRoot = await this.canonicalMemoryRootIfExists(scope);
 		if (!memoryRoot) {
 			this.log("list", scope.id);
@@ -237,7 +278,7 @@ export class MemoryApi {
 		let indexContent: string | null = null;
 		let indexRevision: string | null = null;
 		try {
-			const indexPath = await this.resolveExistingTarget(scope, MEMORY_INDEX_FILE, "index");
+			const indexPath = await this.resolveExistingTargetWithinRoot(memoryRoot, MEMORY_INDEX_FILE, "index");
 			indexContent = await readUtf8Limited(indexPath);
 			indexRevision = sha256Hex(indexContent);
 		} catch (err: any) {
@@ -254,12 +295,11 @@ export class MemoryApi {
 			} catch {
 				continue;
 			}
-			const path = await this.resolveExistingTarget(scope, dirent.name, "entry");
-			const info = await stat(path);
-			const content = await readUtf8Limited(path);
+			const path = await this.resolveExistingTargetWithinRoot(memoryRoot, dirent.name, "entry");
+			const { info, parsed } = await readEntryMetadata(path);
 			entries.push({
 				file: dirent.name,
-				...parseEntryMetadata(content),
+				...parsed,
 				modified: info.mtime.toISOString(),
 				size: info.size,
 			});
@@ -276,8 +316,11 @@ export class MemoryApi {
 	}
 
 	async readDocument(scopeId: string, file: string, cwdInventory: string[]): Promise<MemoryDocumentDto> {
+		return this.readDocumentForScope(await this.requireScope(scopeId, cwdInventory), file);
+	}
+
+	private async readDocumentForScope(scope: MemoryScopeDto, file: string): Promise<MemoryDocumentDto> {
 		const kind = validateDocumentFile(file);
-		const scope = await this.requireScope(scopeId, cwdInventory);
 		const path = await this.resolveExistingTarget(scope, file, kind);
 		const content = await readUtf8Limited(path);
 		this.log("read", scope.id, file);
@@ -311,8 +354,8 @@ export class MemoryApi {
 		if (sha256Hex(current) !== revision) throw httpError(409, "Memory document is stale; refresh before saving");
 		const beforeReplace = await this.resolveExistingTarget(scope, file, kind);
 		await atomicReplace(beforeReplace, content);
-		const document = await this.readDocument(scopeId, file, cwdInventory);
-		const listing = await this.listing(scopeId, cwdInventory);
+		const document = await this.readDocumentForScope(scope, file);
+		const listing = await this.listingForScope(scope);
 		this.log("save", scope.id, file);
 		return { listing, document };
 	}
@@ -359,7 +402,7 @@ export class MemoryApi {
 			if (originalIndex !== null && updatedIndex !== originalIndex) await atomicReplace(indexPath, originalIndex);
 			throw err;
 		}
-		const listing = await this.listing(scopeId, cwdInventory);
+		const listing = await this.listingForScope(scope);
 		if (
 			listing.indexContent &&
 			localMarkdownTargets(listing.indexContent).some((target) => targetMatchesFilename(target, file))
@@ -387,9 +430,16 @@ export class MemoryApi {
 	}
 
 	private async resolveExistingTarget(scope: MemoryScopeDto, file: string, kind: "index" | "entry"): Promise<string> {
+		return this.resolveExistingTargetWithinRoot(await this.requireCanonicalMemoryRoot(scope), file, kind);
+	}
+
+	private async resolveExistingTargetWithinRoot(
+		memoryRoot: string,
+		file: string,
+		kind: "index" | "entry",
+	): Promise<string> {
 		if (kind === "index" && file !== MEMORY_INDEX_FILE) throw httpError(400, "Invalid index file");
 		if (kind === "entry") validateEntryFile(file);
-		const memoryRoot = await this.requireCanonicalMemoryRoot(scope);
 		const target = await canonicalizePath(join(memoryRoot, file), { mustExist: true });
 		if (!isWithinCanonicalRoot(target, memoryRoot)) throw httpError(400, `Memory target escapes scope: ${file}`);
 		return target;

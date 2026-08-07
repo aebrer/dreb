@@ -3,7 +3,7 @@
  * Existing documents only: MEMORY.md index plus direct child .md entries.
  */
 
-import { createEffect, createResource, createSignal, For, type JSX, Show } from "solid-js";
+import { batch, createEffect, createResource, createSignal, For, type JSX, Show } from "solid-js";
 import type {
 	MemoryDocumentDto,
 	MemoryEntrySummaryDto,
@@ -114,11 +114,13 @@ export function MemoriesScreen(props: { store: AppStore }): JSX.Element {
 
 	function chooseScope(scope: MemoryScopeDto) {
 		if (selectedScopeId() === scope.id) return;
-		setSelectedScopeId(scope.id);
-		setSelectedFile(undefined);
-		mutateDocument(undefined);
-		setDirty(false);
-		setDraft("");
+		batch(() => {
+			setSelectedFile(undefined);
+			setSelectedScopeId(scope.id);
+			mutateDocument(undefined);
+			setDirty(false);
+			setDraft("");
+		});
 	}
 
 	function chooseFile(file: string) {
@@ -369,7 +371,7 @@ export function MemoriesScreen(props: { store: AppStore }): JSX.Element {
 
 									<details class="memory-preview" open>
 										<summary>preview</summary>
-										<MarkdownBody text={draft()} />
+										<MarkdownBody text={draft()} throttle />
 									</details>
 								</>
 							)}

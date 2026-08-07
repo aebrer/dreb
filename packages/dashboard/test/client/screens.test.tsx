@@ -2571,6 +2571,96 @@ describe("screen smoke tests", () => {
 		expect(api.deleteMemoryEntry).toHaveBeenCalled();
 	});
 
+	it("memories keeps repeated multi-scope navigation bounded and ignores stale loads", async () => {
+		vi.mocked(api.memoryListing).mockClear();
+		vi.mocked(api.memoryDocument).mockClear();
+		type Listing = Awaited<ReturnType<typeof api.memoryListing>>;
+		let resolveGlobal!: (value: Listing) => void;
+		const staleGlobal = new Promise<Listing>((resolve) => {
+			resolveGlobal = resolve;
+		});
+		const listingFor = (scopeId: string): Listing => ({
+			scope: {
+				id: scopeId,
+				kind: scopeId === "global" ? "global" : "project",
+				label: scopeId,
+				memoryDir: `/memory/${scopeId}`,
+				exists: true,
+				...(scopeId === "global" ? {} : { projectRoot: `/projects/${scopeId}` }),
+			},
+			indexContent: `# ${scopeId}\n`,
+			indexRevision: `index-${scopeId}`,
+			indexOverLimit: false,
+			entries: [],
+		});
+		vi.mocked(api.memoryScopes).mockResolvedValueOnce({
+			scopes: [
+				{ id: "global", kind: "global", label: "global", memoryDir: "/memory/global", exists: true },
+				{
+					id: "project-a",
+					kind: "project",
+					label: "project-a",
+					projectRoot: "/projects/project-a",
+					memoryDir: "/memory/project-a",
+					exists: true,
+				},
+			],
+		});
+		let listingCalls = 0;
+		vi.mocked(api.memoryListing).mockImplementation((scopeId) => {
+			listingCalls += 1;
+			return scopeId === "global" && listingCalls === 1 ? staleGlobal : Promise.resolve(listingFor(scopeId));
+		});
+		vi.mocked(api.memoryDocument).mockImplementation(async (scopeId, file) => ({
+			kind: "index",
+			file,
+			content: `${scopeId}:${file}:${"x".repeat(256 * 1024)}`,
+			revision: `revision-${scopeId}`,
+		}));
+
+		const el = mount(() => <MemoriesScreen store={makeStore()} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const project = [...el.querySelectorAll("button")].find((button) => button.textContent?.includes("project-a"))!;
+		project.click();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		resolveGlobal(listingFor("global"));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(el.querySelector("textarea")?.value.startsWith("project-a:MEMORY.md:")).toBe(true);
+
+		const global = [...el.querySelectorAll("button")].find((button) =>
+			button.textContent?.includes("/memory/global"),
+		)!;
+		for (let i = 0; i < 6; i++) {
+			(i % 2 === 0 ? global : project).click();
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		expect(api.memoryListing).toHaveBeenCalledTimes(8);
+		expect(api.memoryDocument).toHaveBeenCalledTimes(7);
+		expect(el.querySelectorAll(".memory-editor textarea")).toHaveLength(1);
+		expect(el.querySelectorAll(".memory-preview .markdown-body")).toHaveLength(1);
+		expect(el.querySelector("textarea")?.value.startsWith("project-a:MEMORY.md:")).toBe(true);
+	});
+
+	it("throttles live memory preview rendering while typing", async () => {
+		vi.useFakeTimers();
+		const parse = vi.spyOn(marked, "parse");
+		const el = mount(() => <MemoriesScreen store={makeStore()} />);
+		await vi.advanceTimersByTimeAsync(200);
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		const baseline = parse.mock.calls.length;
+		for (let i = 0; i < 20; i++) {
+			textarea.value = `draft ${i}`;
+			textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: String(i) }));
+		}
+		expect(parse.mock.calls.length).toBe(baseline);
+		await vi.advanceTimersByTimeAsync(149);
+		expect(parse.mock.calls.length).toBe(baseline);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(parse.mock.calls.length).toBe(baseline + 1);
+		expect(el.querySelector(".memory-preview")?.textContent).toContain("draft 19");
+		parse.mockRestore();
+	});
+
 	it("memories shows missing and malformed empty states", async () => {
 		vi.mocked(api.memoryListing).mockResolvedValueOnce({
 			scope: { id: "global", kind: "global", label: "global", memoryDir: "/home/test/.dreb/memory", exists: false },
