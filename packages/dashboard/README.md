@@ -59,6 +59,13 @@ Open `http://127.0.0.1:5343`.
   effective global nested-context trust for the viewed canonical folder. Trust
   the folder and descendants, or untrust the actual granting root (including
   its inherited descendants).
+- **Memories** — dreb-only memory management for `~/.dreb/memory` and active
+  project `.dreb/memory` scopes. It edits existing `MEMORY.md` indexes and
+  direct child `.md` entries only (no create/rename and no Claude memory paths),
+  displays valid entry metadata or frontmatter errors, shows sanitized Markdown
+  preview, warns when the complete index is over 200 lines, preserves drafts on
+  exact-revision conflicts, and deletes entries only after synchronously cleaning
+  matching safe index links.
 - **Settings** — persistent defaults (provider-grouped model dropdown,
   thinking, queue modes, image handling, skill commands, transport,
   hide-thinking, compaction/retry), a scoped-models editor, per-agent model
@@ -82,6 +89,14 @@ Open `http://127.0.0.1:5343`.
 The Settings scoped-models editor manages the persistent model-cycling scope. Search is grouped by provider, with individual model, provider, and all-model toggles; non-empty partial scopes have accessible up/down ordering controls plus save/reset, and controls remain usable on mobile. An absent `enabledModels` means implicit all available registry models in registry order, including future additions, so that view cannot be reordered. A saved partial scope is an ordered list of exact canonical `provider/model` references; editing legacy glob, fuzzy, or thinking-suffix values normalizes them to exact references.
 
 The selected project context reads effective global + project settings, but saves always write the global setting and warn if `.dreb/settings.json` shadows it. Changes seed new sessions only and never modify a running session. Running `/scoped-models` in a dashboard session opens this editor with that session's cwd selected. For persisted-setting and RPC details, see [Model Cycling](../coding-agent/docs/settings.md#model-cycling) and [`get_settings` / `set_settings`](../coding-agent/docs/rpc.md#settings).
+
+### Memories
+
+The Memories screen exposes only dreb memory scopes: global `~/.dreb/memory` and populated project `.dreb/memory` directories derived from currently active sessions plus on-disk session cwd inventory. Empty or missing project memory directories are omitted because this screen cannot create entries; the global scope remains visible. Documents are existing-only: `MEMORY.md` is the special index, and entries are direct child `.md` files (excluding hidden/internal/path-like names). Local direct-child links in the rendered index open that entry in the current scope, while external links keep their normal safe behavior. Scope and document changes replace stale editor content with visible loading feedback.
+
+Saves require the exact opaque SHA-256 revision of the UTF-8 content that was loaded. A stale revision returns a conflict and leaves the browser draft intact. Entry saves validate `name`, `description`, and `type` frontmatter (`user-preferences`, `good-practices`, `project`, or `navigation`); listing/reading malformed entries surfaces a metadata error instead of hiding them so they can be repaired. The index accepts Markdown, is shown complete, and warns when it exceeds the 200-line memory-index convention.
+
+Deleting an entry requires both the entry revision and the current index revision (or `null` when no index exists). The server removes only index lines containing a Markdown link whose local target is exactly the entry filename or `./filename`; unsafe mixed-content lines fail loudly instead of being rewritten broadly. The cleaned index is written atomically before the entry is unlinked, and the original index is restored if unlinking fails, so a successful delete never leaves a matching dangling index link.
 
 ### Transcript images
 

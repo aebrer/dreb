@@ -38,6 +38,7 @@ export type Route =
 	| { screen: "session"; key: string }
 	| { screen: "subagent"; key: string; agentId: string }
 	| { screen: "files"; path?: string }
+	| { screen: "memories" }
 	| { screen: "settings"; target?: "scoped-models"; cwd?: string }
 	| { screen: "pairing" };
 
@@ -50,6 +51,7 @@ function parseHash(): Route {
 		return { screen: "session", key: rest[0] };
 	}
 	if (head === "files") return { screen: "files", path: rest.length ? decodeURIComponent(rest.join("/")) : undefined };
+	if (head === "memories") return { screen: "memories" };
 	if (head === "settings") {
 		if (rest[0] === "scoped-models") {
 			const cwd = new URLSearchParams(query).get("cwd") || undefined;
@@ -71,6 +73,8 @@ export function routeToHash(route: Route): string {
 			return `#/session/${route.key}/subagent/${route.agentId}`;
 		case "files":
 			return route.path ? `#/files/${encodeURIComponent(route.path)}` : "#/files";
+		case "memories":
+			return "#/memories";
 		case "settings":
 			return route.target === "scoped-models"
 				? `#/settings/scoped-models${route.cwd ? `?cwd=${encodeURIComponent(route.cwd)}` : ""}`

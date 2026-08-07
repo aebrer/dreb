@@ -7,6 +7,7 @@ import { createEffect, type JSX, Match, onCleanup, onMount, Switch } from "solid
 import { ToastRegion } from "./components/common.js";
 import { FilesScreen } from "./screens/files.js";
 import { FleetScreen } from "./screens/fleet.js";
+import { MemoriesScreen } from "./screens/memories.js";
 import { PairingScreen } from "./screens/pairing.js";
 import { SessionScreen } from "./screens/session.js";
 import { SettingsScreen } from "./screens/settings.js";
@@ -168,6 +169,9 @@ export function App(): JSX.Element {
 				</Match>
 				<Match when={store.route().screen === "files"}>
 					<FilesScreen store={store} initialPath={(store.route() as { path?: string }).path} />
+				</Match>
+				<Match when={store.route().screen === "memories"}>
+					<MemoriesScreen store={store} />
 				</Match>
 				<Match when={store.route().screen === "settings"}>
 					<SettingsScreen

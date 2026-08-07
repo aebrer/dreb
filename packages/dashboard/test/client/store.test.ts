@@ -153,6 +153,14 @@ afterEach(() => {
 });
 
 describe("settings routes", () => {
+	it("round-trips the memories hash route", () => {
+		expect(routeToHash({ screen: "memories" })).toBe("#/memories");
+		window.location.hash = "#/memories";
+		const store = createAppStore();
+		expect(store.route()).toEqual({ screen: "memories" });
+		store.stop();
+	});
+
 	it("preserves the legacy settings hash and round-trips scoped-model context", () => {
 		expect(routeToHash({ screen: "settings" })).toBe("#/settings");
 		expect(routeToHash({ screen: "settings", target: "scoped-models", cwd: "/tmp/a b" })).toBe(
