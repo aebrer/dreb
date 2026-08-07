@@ -10,6 +10,10 @@ over [RPC mode](rpc.md): the server maintains a pool of `dreb --mode rpc`
 child processes, one per live session. The server uses dreb's public session
 APIs for on-disk inventory/delete and serves its own host file API.
 
+## Memories
+
+The Memories tab keeps the global dreb scope visible and lists only populated project `.dreb/memory` directories discovered from active and on-disk sessions. Empty or missing project scopes are omitted because the dashboard edits and deletes existing documents but does not create entries. The complete `MEMORY.md` index and direct-child entries are editable with revision conflicts, sanitized previews, and synchronized index cleanup on delete. Local direct-child links in the rendered index open the entry within the current scope; external links retain normal safe link behavior. Scope and document changes immediately hide stale editor content and show loading feedback while fresh data is read.
+
 ## Launching
 
 ```bash

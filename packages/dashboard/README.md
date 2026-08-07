@@ -92,7 +92,7 @@ The selected project context reads effective global + project settings, but save
 
 ### Memories
 
-The Memories screen exposes only dreb memory scopes: global `~/.dreb/memory` and project `.dreb/memory` directories derived from currently active sessions plus on-disk session cwd inventory. Missing memory directories are shown as missing and are not created by listing. Documents are existing-only: `MEMORY.md` is the special index, and entries are direct child `.md` files (excluding hidden/internal/path-like names).
+The Memories screen exposes only dreb memory scopes: global `~/.dreb/memory` and populated project `.dreb/memory` directories derived from currently active sessions plus on-disk session cwd inventory. Empty or missing project memory directories are omitted because this screen cannot create entries; the global scope remains visible. Documents are existing-only: `MEMORY.md` is the special index, and entries are direct child `.md` files (excluding hidden/internal/path-like names). Local direct-child links in the rendered index open that entry in the current scope, while external links keep their normal safe behavior. Scope and document changes replace stale editor content with visible loading feedback.
 
 Saves require the exact opaque SHA-256 revision of the UTF-8 content that was loaded. A stale revision returns a conflict and leaves the browser draft intact. Entry saves validate `name`, `description`, and `type` frontmatter (`user-preferences`, `good-practices`, `project`, or `navigation`); listing/reading malformed entries surfaces a metadata error instead of hiding them so they can be repaired. The index accepts Markdown, is shown complete, and warns when it exceeds the 200-line memory-index convention.
 

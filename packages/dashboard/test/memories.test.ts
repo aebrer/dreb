@@ -34,6 +34,8 @@ describe("MemoryApi", () => {
 		await mkdir(join(home, ".git"), { recursive: true });
 		const b = await makeProject("b-project");
 		const a = await makeProject("a-project");
+		await writeFile(join(a, ".dreb", "memory", "MEMORY.md"), "# A\n");
+		await writeFile(join(b, ".dreb", "memory", "b.md"), entry("B"));
 		await mkdir(join(a, "src"), { recursive: true });
 		const aAlias = join(await tempDir(), "a-alias");
 		await symlink(a, aAlias);
@@ -47,6 +49,21 @@ describe("MemoryApi", () => {
 		);
 		expect(new Set(scopes.map((scope) => scope.id)).size).toBe(scopes.length);
 		expect(new Set(scopes.map((scope) => scope.memoryDir)).size).toBe(scopes.length);
+	});
+
+	it("omits project scopes whose memory directory is missing or empty", async () => {
+		const home = await tempDir();
+		const missing = join(await tempDir(), "missing-memory");
+		await mkdir(join(missing, ".git"), { recursive: true });
+		const empty = await makeProject("empty-memory");
+		const populated = await makeProject("populated-memory");
+		await writeFile(join(populated, ".dreb", "memory", "MEMORY.md"), "# Project memory\n");
+		const api = new MemoryApi(home, vi.fn());
+
+		const scopes = await api.scopes([missing, empty, populated]);
+
+		expect(scopes.map((scope) => scope.kind)).toEqual(["global", "project"]);
+		expect(scopes[1]?.projectRoot).toBe(populated);
 	});
 
 	it("lists missing directories without creating them and flags long complete indexes", async () => {

@@ -2571,6 +2571,53 @@ describe("screen smoke tests", () => {
 		expect(api.deleteMemoryEntry).toHaveBeenCalled();
 	});
 
+	it("opens rendered local index links in the current memory scope", async () => {
+		const el = mount(() => <MemoriesScreen store={makeStore()} />);
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		const link = el.querySelector('.memory-preview a[href="entry.md"]') as HTMLAnchorElement;
+
+		link.click();
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		expect(window.location.hash).toBe("#/");
+		expect(api.memoryDocument).toHaveBeenLastCalledWith("global", "entry.md");
+		expect(el.querySelector("textarea")?.value).toContain("name: Entry");
+	});
+
+	it("hides stale editor content and announces document loading", async () => {
+		let resolveEntry!: (value: Awaited<ReturnType<typeof api.memoryDocument>>) => void;
+		vi.mocked(api.memoryDocument).mockImplementationOnce(async (_scopeId, file) => ({
+			kind: "index",
+			file,
+			content: "- [Entry](entry.md)\n",
+			revision: "idx1",
+		}));
+		const pending = new Promise<Awaited<ReturnType<typeof api.memoryDocument>>>((resolve) => {
+			resolveEntry = resolve;
+		});
+		vi.mocked(api.memoryDocument).mockImplementationOnce(() => pending);
+		const el = mount(() => <MemoriesScreen store={makeStore()} />);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		const entryButton = [...el.querySelectorAll("button")].find((button) =>
+			button.textContent?.includes("entry.md"),
+		)!;
+		entryButton.click();
+		await Promise.resolve();
+		expect(el.querySelector(".memory-loading")?.textContent).toContain("loading selected memory");
+		expect(el.querySelector("textarea")).toBeNull();
+
+		resolveEntry({
+			kind: "entry",
+			file: "entry.md",
+			content: "---\nname: Entry\ndescription: Test entry\ntype: project\n---\n",
+			revision: "rev1",
+			metadata: { name: "Entry", description: "Test entry", type: "project" },
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(el.querySelector("textarea")).not.toBeNull();
+	});
+
 	it("memories keeps repeated multi-scope navigation bounded and ignores stale loads", async () => {
 		vi.mocked(api.memoryListing).mockClear();
 		vi.mocked(api.memoryDocument).mockClear();

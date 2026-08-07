@@ -252,13 +252,27 @@ export class MemoryApi {
 		}
 		for (const root of [...roots.keys()].sort((a, b) => a.localeCompare(b))) {
 			const memoryDir = join(root, ".dreb", "memory");
+			const canonicalMemoryDir = await canonicalExistingDirectory(memoryDir);
+			if (!canonicalMemoryDir) continue;
+			const dirents = await readdir(canonicalMemoryDir, { withFileTypes: true });
+			const browseable = dirents.some((dirent) => {
+				if (!dirent.isFile()) return false;
+				if (dirent.name === MEMORY_INDEX_FILE) return true;
+				try {
+					validateEntryFile(dirent.name);
+					return true;
+				} catch {
+					return false;
+				}
+			});
+			if (!browseable) continue;
 			scopes.push({
 				id: projectScopeId(root),
 				kind: "project",
 				label: basename(root) || root,
 				projectRoot: root,
-				memoryDir,
-				exists: await pathExists(memoryDir),
+				memoryDir: canonicalMemoryDir,
+				exists: true,
 			});
 		}
 		return scopes;

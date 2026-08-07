@@ -36,6 +36,20 @@ function selectDefaultFile(listing: MemoryListingDto | undefined): string | unde
 	return listing.entries[0]?.file;
 }
 
+function localMemoryFile(href: string | null, listing: MemoryListingDto | undefined): string | undefined {
+	if (!href || !listing) return undefined;
+	let target: string;
+	try {
+		target = decodeURIComponent(href);
+	} catch {
+		return undefined;
+	}
+	if (target.startsWith("./")) target = target.slice(2);
+	if (!target || target.includes("/") || target.includes("\\") || target.includes("?") || target.includes("#"))
+		return undefined;
+	return listing.entries.some((entry) => entry.file === target) ? target : undefined;
+}
+
 export function MemoriesScreen(props: { store: AppStore }): JSX.Element {
 	const [selectedScopeId, setSelectedScopeId] = createSignal<string>();
 	const [selectedFile, setSelectedFile] = createSignal<string>();
@@ -129,6 +143,15 @@ export function MemoriesScreen(props: { store: AppStore }): JSX.Element {
 		mutateDocument(undefined);
 		setDirty(false);
 		setDraft("");
+	}
+
+	function followMemoryLink(event: Event) {
+		const anchor = (event.target as Element | null)?.closest("a");
+		if (!(anchor instanceof HTMLAnchorElement)) return;
+		const file = localMemoryFile(anchor.getAttribute("href"), listing());
+		if (!file) return;
+		event.preventDefault();
+		chooseFile(file);
 	}
 
 	async function refreshAll() {
@@ -290,91 +313,107 @@ export function MemoriesScreen(props: { store: AppStore }): JSX.Element {
 						</section>
 					</aside>
 
-					<section class="memory-editor">
-						<Show when={listing()?.indexOverLimit}>
-							<div class="context-trust-warning">
-								<strong>Complete index warning:</strong> MEMORY.md is over 200 lines. The dashboard shows the
-								full file for repair, while the agent prompt may only load the indexed prefix.
-							</div>
-						</Show>
-						<Show when={document()} fallback={<p class="muted">Select an existing memory document.</p>}>
-							{(doc) => (
-								<>
-									<div class="memory-doc-head">
-										<div>
-											<h2>{documentTitle(doc(), selectedFile())}</h2>
-											<p class="scope-note">
-												{doc().file} · revision {doc().revision.slice(0, 12)}
-											</p>
+					<section class="memory-editor" aria-busy={listing.loading || document.loading}>
+						<Show
+							when={!listing.loading && !document.loading}
+							fallback={<output class="memory-loading">loading selected memory…</output>}
+						>
+							<Show when={listing()?.indexOverLimit}>
+								<div class="context-trust-warning">
+									<strong>Complete index warning:</strong> MEMORY.md is over 200 lines. The dashboard shows the
+									full file for repair, while the agent prompt may only load the indexed prefix.
+								</div>
+							</Show>
+							<Show when={document()} fallback={<p class="muted">Select an existing memory document.</p>}>
+								{(doc) => (
+									<>
+										<div class="memory-doc-head">
+											<div>
+												<h2>{documentTitle(doc(), selectedFile())}</h2>
+												<p class="scope-note">
+													{doc().file} · revision {doc().revision.slice(0, 12)}
+												</p>
+											</div>
+											<div class="head-actions">
+												<button
+													type="button"
+													class="btn"
+													disabled={document.loading}
+													onClick={() => void refetchDocument()}
+												>
+													reload
+												</button>
+												<Show when={doc().kind === "entry"}>
+													<button
+														type="button"
+														class="btn btn-danger"
+														onClick={() => setDeleteTarget(doc())}
+													>
+														delete entry
+													</button>
+												</Show>
+											</div>
 										</div>
-										<div class="head-actions">
+
+										<Show when={doc().metadata}>
+											{(meta) => (
+												<div class="memory-metadata">
+													<strong>{meta().name}</strong>
+													<span>{meta().type}</span>
+													<span>{meta().description}</span>
+												</div>
+											)}
+										</Show>
+										<Show when={doc().metadataError}>
+											<p class="settings-error">Metadata error: {doc().metadataError}</p>
+										</Show>
+
+										<div class="memory-edit-actions">
+											<button
+												type="button"
+												class="btn btn-primary"
+												disabled={!dirty() || saving()}
+												onClick={() => void save()}
+											>
+												{saving() ? "saving…" : "save"}
+											</button>
 											<button
 												type="button"
 												class="btn"
-												disabled={document.loading}
-												onClick={() => void refetchDocument()}
+												disabled={!dirty() || saving()}
+												onClick={() => {
+													setDraft(doc().content);
+													setDirty(false);
+												}}
 											>
-												reload
+												revert draft
 											</button>
-											<Show when={doc().kind === "entry"}>
-												<button type="button" class="btn btn-danger" onClick={() => setDeleteTarget(doc())}>
-													delete entry
-												</button>
-											</Show>
+											<span class="muted">{dirty() ? "unsaved draft" : "saved revision loaded"}</span>
 										</div>
-									</div>
 
-									<Show when={doc().metadata}>
-										{(meta) => (
-											<div class="memory-metadata">
-												<strong>{meta().name}</strong>
-												<span>{meta().type}</span>
-												<span>{meta().description}</span>
-											</div>
-										)}
-									</Show>
-									<Show when={doc().metadataError}>
-										<p class="settings-error">Metadata error: {doc().metadataError}</p>
-									</Show>
+										<textarea
+											class="memory-textarea"
+											value={draft()}
+											onInput={(event) => {
+												setDraft(event.currentTarget.value);
+												setDirty(event.currentTarget.value !== doc().content);
+											}}
+										/>
 
-									<div class="memory-edit-actions">
-										<button
-											type="button"
-											class="btn btn-primary"
-											disabled={!dirty() || saving()}
-											onClick={() => void save()}
-										>
-											{saving() ? "saving…" : "save"}
-										</button>
-										<button
-											type="button"
-											class="btn"
-											disabled={!dirty() || saving()}
-											onClick={() => {
-												setDraft(doc().content);
-												setDirty(false);
+										<details
+											class="memory-preview"
+											open
+											onClick={followMemoryLink}
+											onKeyDown={(event) => {
+												if (event.key === "Enter") followMemoryLink(event);
 											}}
 										>
-											revert draft
-										</button>
-										<span class="muted">{dirty() ? "unsaved draft" : "saved revision loaded"}</span>
-									</div>
-
-									<textarea
-										class="memory-textarea"
-										value={draft()}
-										onInput={(event) => {
-											setDraft(event.currentTarget.value);
-											setDirty(event.currentTarget.value !== doc().content);
-										}}
-									/>
-
-									<details class="memory-preview" open>
-										<summary>preview</summary>
-										<MarkdownBody text={draft()} throttle />
-									</details>
-								</>
-							)}
+											<summary>preview</summary>
+											<MarkdownBody text={draft()} throttle />
+										</details>
+									</>
+								)}
+							</Show>
 						</Show>
 					</section>
 				</div>
