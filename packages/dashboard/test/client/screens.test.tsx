@@ -81,6 +81,7 @@ vi.mock("../../src/client/api.js", () => ({
 		branch: vi.fn(async () => ({ branch: null })),
 		forkMessages: vi.fn(async () => ({ messages: [] })),
 		fork: vi.fn(async () => ({ text: "", cancelled: false })),
+		forkCurrent: vi.fn(async () => ({ cancelled: false })),
 		dailyCost: vi.fn(async () => ({ cost: 0.42 })),
 		settings: vi.fn(async () => ({ defaultProvider: "anthropic", defaultModel: "m1" })),
 		devices: vi.fn(async () => ({ devices: [] })),
@@ -5817,6 +5818,36 @@ describe("dashboard client regressions", () => {
 		expect(refreshDiskSessions).toHaveBeenCalledOnce();
 		expect(api.fleet).not.toHaveBeenCalled();
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("original prompt");
+	});
+
+	it("fork modal can fork from current state without prefilling the composer", async () => {
+		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
+		vi.mocked(api.forkCurrent).mockResolvedValue({ cancelled: false });
+		const store = makeStore() as any;
+		const hydrateSession = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
+		const fakeStore = {
+			...store,
+			sessions: { forkcur: createSessionViewState("forkcur") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession,
+			refreshDiskSessions,
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkcur" />);
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		// Mocks are not auto-cleared between tests; ignore any api.fork calls from prior tests.
+		vi.mocked(api.fork).mockClear();
+		(el.querySelector(".fork-current-btn") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.forkCurrent).toHaveBeenCalledWith("forkcur");
+		expect(api.fork).not.toHaveBeenCalled();
+		expect(hydrateSession).toHaveBeenCalledWith("forkcur");
+		expect(refreshDiskSessions).toHaveBeenCalledOnce();
+		// No composer pre-fill: the branch already includes the last response.
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
 	});
 
 	it("session stats popover shows the detailed stats breakdown", async () => {

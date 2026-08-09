@@ -121,7 +121,7 @@ import { TasksPanelComponent } from "./components/tasks-panel.js";
 import { ToolExecutionComponent } from "./components/tool-execution.js";
 import { TreeSelectorComponent } from "./components/tree-selector.js";
 import { UserMessageComponent } from "./components/user-message.js";
-import { UserMessageSelectorComponent } from "./components/user-message-selector.js";
+import { FORK_FROM_CURRENT_ID, UserMessageSelectorComponent } from "./components/user-message-selector.js";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -4297,16 +4297,46 @@ export class InteractiveMode {
 
 	private showUserMessageSelector(): void {
 		const userMessages = this.session.getUserMessagesForForking();
+		const hasCurrentState = this.sessionManager.getLeafId() !== null;
 
-		if (userMessages.length === 0) {
+		if (userMessages.length === 0 && !hasCurrentState) {
 			this.showStatus("No messages to fork from");
 			return;
 		}
 
+		// Build the selector list: history messages (rewind + re-run), plus a
+		// trailing "fork from current state" action that keeps the last response.
+		const items: Array<{ id: string; text: string; isAction?: boolean }> = userMessages.map((m) => ({
+			id: m.entryId,
+			text: m.text,
+		}));
+		if (hasCurrentState) {
+			items.push({
+				id: FORK_FROM_CURRENT_ID,
+				text: "Fork from current state (include last response)",
+				isAction: true,
+			});
+		}
+
 		this.showSelector((done) => {
 			const selector = new UserMessageSelectorComponent(
-				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
+				items,
 				async (entryId) => {
+					if (entryId === FORK_FROM_CURRENT_ID) {
+						const result = await this.session.forkFromCurrent();
+						if (result.cancelled) {
+							done();
+							this.ui.requestRender();
+							return;
+						}
+
+						this.resetChatDisplay();
+						this.editor.setText("");
+						done();
+						this.showStatus("Branched to new session (including last response)");
+						return;
+					}
+
 					const result = await this.session.fork(entryId);
 					if (result.cancelled) {
 						// Extension cancelled the fork

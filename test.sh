@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 set -e
 
+# When invoked from a git hook (e.g. husky pre-commit), git exports repo-location
+# variables (GIT_DIR, GIT_INDEX_FILE, GIT_WORK_TREE, …) into the environment.
+# These leak into tests that shell out to `git` in throwaway temp repos
+# (git-update.test.ts, tools.test.ts's .gitignore cases, …), redirecting their
+# `git init`/`clone`/`commit` at the parent repo and making them fail — even
+# though the same tests pass when run standalone. Unset the location-pinning
+# vars so subprocess git operations resolve against their own cwd. Identity
+# vars (GIT_AUTHOR_*/GIT_COMMITTER_*) are intentionally left intact.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR \
+    GIT_NAMESPACE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
 # Skip local LLM tests (ollama, lmstudio) — no local server expected in CI/hooks
 export DREB_NO_LOCAL_LLM=1
 

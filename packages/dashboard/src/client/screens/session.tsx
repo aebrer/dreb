@@ -1282,6 +1282,19 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
+	async function forkFromCurrentState() {
+		setForkError(undefined);
+		try {
+			await api.forkCurrent(props.sessionKey);
+			// No composer pre-fill: the branch already includes the last response.
+			await props.store.hydrateSession(props.sessionKey);
+			await props.store.refreshDiskSessions();
+			setShowForkModal(false);
+		} catch (err) {
+			setForkError(err instanceof Error ? err.message : String(err));
+		}
+	}
+
 	async function openStatsPopover() {
 		setShowStatsPopover(true);
 		setStatsPopoverError(undefined);
@@ -2327,6 +2340,10 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					<Show when={forkError()}>
 						<p class="pair-error">{forkError()}</p>
 					</Show>
+					<button type="button" class="fork-current-btn" onClick={() => forkFromCurrentState()}>
+						<span class="fork-entry-id">current</span>
+						<span>fork from current state (include last response)</span>
+					</button>
 					<Show when={forkMessages().length > 0} fallback={<p class="muted small">loading forkable messages…</p>}>
 						<div class="fork-message-list">
 							<For each={forkMessages()}>

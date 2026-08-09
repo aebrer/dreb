@@ -158,6 +158,7 @@ export const api = {
 		request<{ messages: Array<{ entryId: string; text: string }> }>(`/api/runtimes/${key}/fork-messages`),
 	fork: (key: string, entryId: string) =>
 		request<{ text: string; cancelled: boolean }>(`/api/runtimes/${key}/fork`, json({ entryId })),
+	forkCurrent: (key: string) => request<{ cancelled: boolean }>(`/api/runtimes/${key}/fork-current`, json({})),
 	tree: (key: string) => request<{ roots: SessionTreeNodeDto[]; leafId: string | null }>(`/api/runtimes/${key}/tree`),
 	navigateTree: (key: string, targetId: string) =>
 		request<{ cancelled: boolean; editorText?: string }>(`/api/runtimes/${key}/tree`, json({ targetId })),

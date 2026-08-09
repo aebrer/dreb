@@ -3636,7 +3636,6 @@ export class AgentSession {
 	 *   - cancelled: True if an extension cancelled the fork
 	 */
 	async fork(entryId: string): Promise<{ selectedText: string; cancelled: boolean }> {
-		const previousSessionFile = this.sessionFile;
 		const selectedEntry = this.sessionManager.getEntry(entryId);
 
 		if (!selectedEntry || selectedEntry.type !== "message" || selectedEntry.message.role !== "user") {
@@ -3644,6 +3643,61 @@ export class AgentSession {
 		}
 
 		const selectedText = this._extractUserMessageText(selectedEntry.message.content);
+
+		// Existing fork semantics: rewind to *before* the selected user message by
+		// branching from its parent, so the selected message (and everything after
+		// it) is dropped and its text is offered as editor pre-fill.
+		const { cancelled } = await this._performFork(entryId, (previousSessionFile) => {
+			if (!selectedEntry.parentId) {
+				this.sessionManager.newSession({ parentSession: previousSessionFile });
+			} else {
+				this.sessionManager.createBranchedSession(selectedEntry.parentId);
+			}
+		});
+
+		return { selectedText, cancelled };
+	}
+
+	/**
+	 * Create a fork from the current state, including the last model response.
+	 *
+	 * Unlike fork(), which rewinds to *before* a selected user message, this
+	 * branches from the current leaf entry — so the new branch's tail is the
+	 * latest entry (typically the last assistant response). There is no editor
+	 * pre-fill; the new session is ready for a fresh turn on top of the captured
+	 * history.
+	 *
+	 * @returns Object with `cancelled` (true if an extension cancelled the fork,
+	 *   or if there is no current leaf to fork from — i.e. an empty session).
+	 */
+	async forkFromCurrent(): Promise<{ cancelled: boolean }> {
+		const leafId = this.sessionManager.getLeafId();
+
+		// Nothing to fork from (fresh/empty session).
+		if (!leafId) {
+			return { cancelled: true };
+		}
+
+		return this._performFork(leafId, () => {
+			// Branch from the leaf itself so the last entry is included.
+			this.sessionManager.createBranchedSession(leafId);
+		});
+	}
+
+	/**
+	 * Shared fork machinery: emit the cancellable session_before_fork event,
+	 * clear pending state, create the branch via the supplied strategy, reload
+	 * the conversation, and emit session_fork.
+	 *
+	 * @param entryId Entry the fork is anchored to (reported to extensions).
+	 * @param branch Strategy that creates the branched/new session. Receives the
+	 *   previous session file so callers can set it as the parent when needed.
+	 */
+	private async _performFork(
+		entryId: string,
+		branch: (previousSessionFile: string | undefined) => void,
+	): Promise<{ cancelled: boolean }> {
+		const previousSessionFile = this.sessionFile;
 
 		let skipConversationRestore = false;
 
@@ -3655,7 +3709,7 @@ export class AgentSession {
 			})) as SessionBeforeForkResult | undefined;
 
 			if (result?.cancel) {
-				return { selectedText, cancelled: true };
+				return { cancelled: true };
 			}
 			skipConversationRestore = result?.skipConversationRestore ?? false;
 		}
@@ -3663,11 +3717,7 @@ export class AgentSession {
 		// Clear pending messages (bound to old session state)
 		this._pendingNextTurnMessages = [];
 
-		if (!selectedEntry.parentId) {
-			this.sessionManager.newSession({ parentSession: previousSessionFile });
-		} else {
-			this.sessionManager.createBranchedSession(selectedEntry.parentId);
-		}
+		branch(previousSessionFile);
 		this.agent.sessionId = this.sessionManager.getSessionId();
 
 		// Reload messages from entries (works for both file and in-memory mode)
@@ -3687,7 +3737,7 @@ export class AgentSession {
 			this.agent.replaceMessages(sessionContext.messages);
 		}
 
-		return { selectedText, cancelled: false };
+		return { cancelled: false };
 	}
 
 	// =========================================================================

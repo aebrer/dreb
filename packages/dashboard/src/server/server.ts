@@ -954,6 +954,10 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		withRuntime(req, res, (h) => h.client.fork(entryId));
 	});
 
+	app.post("/api/runtimes/:key/fork-current", (req, res) => {
+		withRuntime(req, res, (h) => h.client.forkCurrent());
+	});
+
 	app.get("/api/runtimes/:key/tree", (req, res) => {
 		withRuntime(req, res, (h) => h.client.getTree());
 	});

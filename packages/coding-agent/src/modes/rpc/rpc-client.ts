@@ -627,6 +627,16 @@ export class RpcClient {
 	}
 
 	/**
+	 * Fork from the current state, including the last model response.
+	 * Unlike fork(), this branches from the current leaf (no editor pre-fill).
+	 * @returns Object with `cancelled` (if an extension cancelled, or the session is empty)
+	 */
+	async forkCurrent(): Promise<{ cancelled: boolean }> {
+		const response = await this.send({ type: "fork_current" });
+		return this.getData(response);
+	}
+
+	/**
 	 * Get messages available for forking.
 	 */
 	async getForkMessages(): Promise<Array<{ entryId: string; text: string }>> {

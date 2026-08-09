@@ -6,7 +6,11 @@ interface UserMessageItem {
 	id: string; // Entry ID in the session
 	text: string; // The message text
 	timestamp?: string; // Optional timestamp if available
+	isAction?: boolean; // Special action row (e.g. "fork from current state") rather than a history message
 }
+
+/** Sentinel entry id for the "fork from current state (include last response)" action row. */
+export const FORK_FROM_CURRENT_ID = "__fork_from_current__";
 
 /**
  * Custom user message list component with selection
@@ -45,6 +49,7 @@ class UserMessageList implements Component {
 		const endIndex = Math.min(startIndex + this.maxVisible, this.messages.length);
 
 		// Render visible messages (2 lines per message + blank line)
+		const totalRealMessages = this.messages.filter((m) => !m.isAction).length;
 		for (let i = startIndex; i < endIndex; i++) {
 			const message = this.messages[i];
 			const isSelected = i === this.selectedIndex;
@@ -55,14 +60,25 @@ class UserMessageList implements Component {
 			// First line: cursor + message
 			const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
 			const maxMsgWidth = width - 2; // Account for cursor (2 chars)
+
+			if (message.isAction) {
+				// Distinct styling for the action row (e.g. "fork from current state").
+				const label = truncateToWidth(`⎇ ${normalizedMessage}`, maxMsgWidth);
+				const styled = isSelected ? theme.fg("accent", theme.bold(label)) : theme.fg("accent", label);
+				lines.push(cursor + styled);
+				lines.push(theme.fg("muted", "  Branch here, including the last response"));
+				lines.push(""); // Blank line between entries
+				continue;
+			}
+
 			const truncatedMsg = truncateToWidth(normalizedMessage, maxMsgWidth);
 			const messageLine = cursor + (isSelected ? theme.bold(truncatedMsg) : truncatedMsg);
 
 			lines.push(messageLine);
 
-			// Second line: metadata (position in history)
-			const position = i + 1;
-			const metadata = `  Message ${position} of ${this.messages.length}`;
+			// Second line: metadata (position in history, counting only real messages)
+			const position = this.messages.slice(0, i + 1).filter((m) => !m.isAction).length;
+			const metadata = `  Message ${position} of ${totalRealMessages}`;
 			const metadataLine = theme.fg("muted", metadata);
 			lines.push(metadataLine);
 			lines.push(""); // Blank line between messages
@@ -115,7 +131,13 @@ export class UserMessageSelectorComponent extends Container {
 		// Add header
 		this.addChild(new Spacer(1));
 		this.addChild(new Text(theme.bold("Branch from Message"), 1, 0));
-		this.addChild(new Text(theme.fg("muted", "Select a message to create a new branch from that point"), 1, 0));
+		this.addChild(
+			new Text(
+				theme.fg("muted", "Pick a message to rewind and re-run, or fork from current state (keeps last response)"),
+				1,
+				0,
+			),
+		);
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));

@@ -1083,6 +1083,13 @@ describe("dashboard server — fleet and runtimes", () => {
 				body: JSON.stringify({ targetId: "entry-1" }),
 			}).then((r) => r.json()),
 		).resolves.toEqual({ cancelled: false });
+		await expect(
+			fetch(`${base}/api/runtimes/${key}/fork-current`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({}),
+			}).then((r) => r.json()),
+		).resolves.toEqual({ cancelled: false });
 		await expect(fetch(`${base}/api/runtimes/${key}/sessions`).then((r) => r.json())).resolves.toEqual({
 			sessions: [],
 		});
@@ -1107,6 +1114,7 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients[0].importJsonl).toHaveBeenCalledWith("/tmp/session.jsonl");
 		expect(clients[0].getTree).toHaveBeenCalled();
 		expect(clients[0].navigateTree).toHaveBeenCalledWith("entry-1");
+		expect(clients[0].forkCurrent).toHaveBeenCalled();
 		expect(clients[0].listSessions).toHaveBeenCalled();
 		expect(clients[0].switchSession).toHaveBeenCalledWith("/tmp/session.jsonl");
 		expect(clients[1].getDailyCost).toHaveBeenCalled();
