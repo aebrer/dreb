@@ -1269,11 +1269,18 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
-	async function selectForkMessage(entryId: string) {
+	// Shared completion for both fork flows: run the fork action, inform the user
+	// (keeping the modal open) if no branch was created, otherwise pre-fill the
+	// composer when the action returns re-ask text, refresh, and close.
+	async function finishFork(action: () => Promise<{ cancelled: boolean; text?: string }>, cancelMessage: string) {
 		setForkError(undefined);
 		try {
-			const result = await api.fork(props.sessionKey, entryId);
-			if (!result.cancelled) setComposerText(result.text);
+			const result = await action();
+			if (result.cancelled) {
+				setForkError(cancelMessage);
+				return;
+			}
+			if (result.text !== undefined) setComposerText(result.text);
 			await props.store.hydrateSession(props.sessionKey);
 			await props.store.refreshDiskSessions();
 			setShowForkModal(false);
@@ -1282,18 +1289,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
-	async function forkFromCurrentState() {
-		setForkError(undefined);
-		try {
-			await api.forkCurrent(props.sessionKey);
-			// No composer pre-fill: the branch already includes the last response.
-			await props.store.hydrateSession(props.sessionKey);
-			await props.store.refreshDiskSessions();
-			setShowForkModal(false);
-		} catch (err) {
-			setForkError(err instanceof Error ? err.message : String(err));
-		}
-	}
+	const selectForkMessage = (entryId: string) =>
+		finishFork(() => api.fork(props.sessionKey, entryId), "Fork cancelled — no new branch was created.");
+
+	const forkFromCurrentState = () =>
+		finishFork(
+			() => api.forkCurrent(props.sessionKey),
+			"Can't fork from current state — the session is empty or the fork was cancelled.",
+		);
 
 	async function openStatsPopover() {
 		setShowStatsPopover(true);

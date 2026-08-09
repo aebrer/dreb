@@ -5850,6 +5850,39 @@ describe("dashboard client regressions", () => {
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
 	});
 
+	it("fork modal informs the user and stays open when fork-from-current is cancelled", async () => {
+		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
+		// Empty session / extension veto → backend returns cancelled with no branch created.
+		vi.mocked(api.forkCurrent).mockResolvedValue({ cancelled: true });
+		const store = makeStore() as any;
+		const hydrateSession = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
+		const fakeStore = {
+			...store,
+			sessions: { forkcancel: createSessionViewState("forkcancel") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession,
+			refreshDiskSessions,
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkcancel" />);
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		// Ignore the mount-time hydration; assert only what the fork handler does.
+		hydrateSession.mockClear();
+		refreshDiskSessions.mockClear();
+		(el.querySelector(".fork-current-btn") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.forkCurrent).toHaveBeenCalledWith("forkcancel");
+		// The user is informed: the modal stays open with a message, and no session
+		// churn happens as if a branch had been created.
+		expect(el.querySelector(".fork-current-btn")).not.toBeNull();
+		expect(el.querySelector(".pair-error")?.textContent ?? "").toMatch(/can't fork|cancelled/i);
+		expect(hydrateSession).not.toHaveBeenCalled();
+		expect(refreshDiskSessions).not.toHaveBeenCalled();
+	});
+
 	it("session stats popover shows the detailed stats breakdown", async () => {
 		const store = makeStore() as any;
 		const fakeStore = {

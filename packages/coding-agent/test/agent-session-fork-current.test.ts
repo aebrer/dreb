@@ -77,4 +77,51 @@ describe("AgentSession.forkFromCurrent", () => {
 		expect(sessionManager.getLeafId()).toBe(leafBefore);
 		expect(sessionManager.getEntries()).toEqual(entriesBefore);
 	});
+
+	it("emits session_fork after the branch is created", async () => {
+		const forkEvents: Array<{ type: string }> = [];
+		harness = await createHarnessWithExtensions({
+			extensionFactories: [
+				(dreb) => {
+					dreb.on("session_fork", async (event) => {
+						forkEvents.push(event);
+					});
+				},
+			],
+		});
+		const { session, sessionManager } = harness;
+
+		sessionManager.appendMessage(userMsg("q1"));
+		sessionManager.appendMessage(assistantMsg("a1"));
+
+		const result = await session.forkFromCurrent();
+		expect(result.cancelled).toBe(false);
+
+		// AC5: the after-fork event must fire exactly once on the new leaf-based path.
+		expect(forkEvents).toHaveLength(1);
+		expect(forkEvents[0].type).toBe("session_fork");
+	});
+
+	it("does not emit session_fork when a session_before_fork handler cancels", async () => {
+		const forkEvents: Array<{ type: string }> = [];
+		harness = await createHarnessWithExtensions({
+			extensionFactories: [
+				(dreb) => {
+					dreb.on("session_before_fork", async () => ({ cancel: true }));
+					dreb.on("session_fork", async (event) => {
+						forkEvents.push(event);
+					});
+				},
+			],
+		});
+		const { session, sessionManager } = harness;
+
+		sessionManager.appendMessage(userMsg("q1"));
+		sessionManager.appendMessage(assistantMsg("a1"));
+
+		const result = await session.forkFromCurrent();
+		expect(result.cancelled).toBe(true);
+		// A vetoed fork must not fire the after-fork event.
+		expect(forkEvents).toHaveLength(0);
+	});
 });

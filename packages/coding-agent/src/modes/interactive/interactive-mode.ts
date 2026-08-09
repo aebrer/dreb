@@ -4322,33 +4322,27 @@ export class InteractiveMode {
 			const selector = new UserMessageSelectorComponent(
 				items,
 				async (entryId) => {
-					if (entryId === FORK_FROM_CURRENT_ID) {
-						const result = await this.session.forkFromCurrent();
-						if (result.cancelled) {
-							done();
-							this.ui.requestRender();
-							return;
-						}
+					const isCurrent = entryId === FORK_FROM_CURRENT_ID;
+					const result = isCurrent ? await this.session.forkFromCurrent() : await this.session.fork(entryId);
 
-						this.resetChatDisplay();
-						this.editor.setText("");
-						done();
-						this.showStatus("Branched to new session (including last response)");
-						return;
-					}
-
-					const result = await this.session.fork(entryId);
 					if (result.cancelled) {
-						// Extension cancelled the fork
+						// Empty session (nothing to branch from) or an extension vetoed
+						// the fork — tell the user rather than silently dismissing the
+						// selector.
 						done();
-						this.ui.requestRender();
+						this.showStatus("Fork cancelled — no new branch was created");
 						return;
 					}
 
 					this.resetChatDisplay();
-					this.editor.setText(result.selectedText);
+					// The current-state branch already includes the last response, so
+					// there is nothing to re-ask; the message branch pre-fills the editor
+					// with the selected question for re-running.
+					this.editor.setText((result as { selectedText?: string }).selectedText ?? "");
 					done();
-					this.showStatus("Branched to new session");
+					this.showStatus(
+						isCurrent ? "Branched to new session (including last response)" : "Branched to new session",
+					);
 				},
 				() => {
 					done();
