@@ -5883,6 +5883,41 @@ describe("dashboard client regressions", () => {
 		expect(refreshDiskSessions).not.toHaveBeenCalled();
 	});
 
+	it("fork modal informs the user and stays open when a message fork is cancelled", async () => {
+		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
+		// Extension veto → api.fork returns cancelled with no branch created.
+		vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: true });
+		const store = makeStore() as any;
+		const hydrateSession = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
+		const fakeStore = {
+			...store,
+			sessions: { forkmsgcancel: createSessionViewState("forkmsgcancel") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession,
+			refreshDiskSessions,
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkmsgcancel" />);
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		// Ignore the mount-time hydration; assert only what the fork handler does.
+		hydrateSession.mockClear();
+		refreshDiskSessions.mockClear();
+		(el.querySelector(".fork-message") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.fork).toHaveBeenCalledWith("forkmsgcancel", "u1");
+		// The shared finishFork helper must inform the user for the message-fork flow too:
+		// the modal stays open with a message, the composer is not pre-filled, and no
+		// session churn happens as if a branch had been created.
+		expect(el.querySelector(".fork-message")).not.toBeNull();
+		expect(el.querySelector(".pair-error")?.textContent ?? "").toMatch(/no new branch|cancelled/i);
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+		expect(hydrateSession).not.toHaveBeenCalled();
+		expect(refreshDiskSessions).not.toHaveBeenCalled();
+	});
+
 	it("session stats popover shows the detailed stats breakdown", async () => {
 		const store = makeStore() as any;
 		const fakeStore = {
