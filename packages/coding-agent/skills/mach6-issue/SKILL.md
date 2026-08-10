@@ -117,6 +117,7 @@ An initial request to "create," "post," or "open" an issue is a request to draft
 
 Create a structured issue with:
 - **Title**: Clear, concise, action-oriented (under 80 chars, imperative form)
+- **Original Request**: A clearly identified block quote containing the user's original request/input verbatim; do not paraphrase, correct, or omit any part of it
 - **Summary**: 2-3 sentences describing the problem or feature
 - **Current Behavior** (for bugs/improvements): What happens now
 - **Proposed Behavior**: What should happen
@@ -125,10 +126,13 @@ Create a structured issue with:
 - **Technical Notes**: Implementation hints, relevant files, architectural considerations
 - **Labels**: Suggest appropriate labels based on the issue type
 
+Keep the issue limited to what the user explicitly requested. Before adding any acceptance criterion that the user did not explicitly ask for, present the proposed criterion separately with `ask_user` and obtain explicit confirmation that it is valid scope. Do not include an unrequested criterion without that confirmation, and do not treat approval of the completed issue draft as retroactive scope confirmation.
+
 Determine the candidate target repository as an exact `owner/repo`; do not rely on ambient `gh` context when posting. Use `ask_user` to present one Markdown-formatted approval question containing all of the following without summarizing or truncating them:
 - The exact target `owner/repo`
 - The complete issue title
-- The complete Markdown issue body
+- The complete Markdown issue body, including the verbatim **Original Request** block quote
+- The complete proposed label list, or an explicit statement that no labels are proposed
 
 The question must offer exactly these three options and allow free-text discussion:
 - **Approve**
@@ -137,13 +141,13 @@ The question must offer exactly these three options and allow free-text discussi
 
 Only an explicit selection of **Approve** authorizes posting. Free text, a skipped or unanswered question, cancellation, **Deny/Discuss**, or the explanation option are not approval and must never fall through to issue creation.
 
-If the user selects **Deny/Discuss**, discuss or revise the draft without posting. If the user requests the detailed explanation, explain every acceptance criterion with minimal jargon without posting. After either path, present the complete draft and target through this approval gate again before posting. Any change to the title, body, or target repository invalidates prior approval and requires a fresh approval.
+If the user selects **Deny/Discuss**, discuss or revise the draft without posting. If the user requests the detailed explanation, explain every acceptance criterion with minimal jargon without posting. After either path, present the complete draft, target, and proposed labels through this approval gate again before posting. Any change to the title, body, target repository, or proposed labels invalidates prior approval and requires a fresh approval.
 
 Stop and wait for the distinct `ask_user` response before continuing to Step 3. The non-interactive `gh` rule applies only to CLI execution; it does not replace this human approval gate.
 
 ### Step 3: Create the issue
 
-Proceed only after the approval gate in Step 2 returned **Approve** for the exact title, body, and target used below.
+Proceed only after the approval gate in Step 2 returned **Approve** for the exact title, body, target, and proposed labels used below.
 
 ```bash
 GH_BODY="$(mktemp /tmp/gh-body.$$.XXXXXXXX)"

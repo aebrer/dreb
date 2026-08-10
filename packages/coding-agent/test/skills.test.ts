@@ -539,6 +539,27 @@ describe("skills", () => {
 			}
 		});
 
+		it("mach6-issue should preserve CREATE-mode scope and posting guardrails", () => {
+			const body = readBuiltInSkill("mach6-issue");
+			expect(body).toContain("Never create an issue in the same turn as that initial request");
+			expect(body).toContain("user's original request/input verbatim");
+			expect(body).toContain("do not paraphrase, correct, or omit any part of it");
+			expect(body).toContain("Before adding any acceptance criterion that the user did not explicitly ask for");
+			expect(body).toContain("do not treat approval of the completed issue draft as retroactive scope confirmation");
+			expect(body).toContain("The exact target `owner/repo`");
+			expect(body).toContain("The complete issue title");
+			expect(body).toContain("including the verbatim **Original Request** block quote");
+			expect(body).toContain(
+				"The complete proposed label list, or an explicit statement that no labels are proposed",
+			);
+			expect(body).toContain("- **Approve**");
+			expect(body).toContain("- **Deny/Discuss**");
+			expect(body).toContain("- **Detailed Explanation with minimal jargon of each acceptance criteria**");
+			expect(body).toContain("Free text, a skipped or unanswered question, cancellation");
+			expect(body).toContain("title, body, target repository, or proposed labels invalidates prior approval");
+			expect(body).toContain('gh issue create --repo "<owner/repo>"');
+		});
+
 		it("mach6 CI workflows use watch_github_ci instead of polling or wait", () => {
 			for (const name of ["mach6-implement", "mach6-publish"]) {
 				const body = readBuiltInSkill(name);
