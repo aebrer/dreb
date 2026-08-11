@@ -42,6 +42,7 @@ describe("output-guard", () => {
 		restoreStdout();
 		process.stdout.write = originalStdoutWrite;
 		process.stderr.write = originalStderrWrite;
+		vi.restoreAllMocks();
 	});
 
 	it("isStdoutTakenOver returns false initially", () => {
@@ -120,6 +121,21 @@ describe("output-guard", () => {
 		expect(chunks).toEqual(["first", "second", "third", "fourth"]);
 	});
 
+	it("queues and drains through the raw stdout writer while taken over", () => {
+		let writable = false;
+		const rawStdoutChunks = fakeStdoutWrite(() => writable);
+		takeOverStdout();
+
+		writeRawStdout("first");
+		writeRawStdout("second");
+		writeRawStdout("third");
+		expect(rawStdoutChunks).toEqual(["first"]);
+
+		writable = true;
+		process.stdout.emit("drain");
+		expect(rawStdoutChunks).toEqual(["first", "second", "third"]);
+	});
+
 	it("does not duplicate the chunk whose write returned false", () => {
 		let writable = true;
 		const chunks = fakeStdoutWrite(() => writable);
@@ -152,24 +168,59 @@ describe("output-guard", () => {
 		expect(chunks).toEqual(["one", "two", "three"]);
 	});
 
-	it("keeps queueing bounded: exceeding the byte cap fails loudly", () => {
+	it("keeps takeover queueing bounded and flushes the fatal diagnostic before exit", () => {
 		const stderrChunks: string[] = [];
-		process.stderr.write = ((chunk: string | Uint8Array) => {
+		let stderrCallback: ((error?: Error | null) => void) | undefined;
+		process.stderr.write = ((
+			chunk: string | Uint8Array,
+			encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+			callback?: (error?: Error | null) => void,
+		) => {
 			stderrChunks.push(String(chunk));
-			return true;
+			stderrCallback = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+			return false;
 		}) as typeof process.stderr.write;
 		const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
 			throw new Error("process.exit");
 		}) as never);
 
-		fakeStdoutWrite(() => false); // permanently backpressured
+		let writable = false;
+		fakeStdoutWrite(() => writable);
+		takeOverStdout();
 		writeRawStdout("trigger"); // accepted, signals backpressure
 		writeRawStdout("small"); // queued
 
 		const oversized = "x".repeat(MAX_QUEUED_STDOUT_BYTES);
-		expect(() => writeRawStdout(oversized)).toThrow("process.exit");
-		expect(exitSpy).toHaveBeenCalledWith(1);
+		writeRawStdout(oversized);
+		expect(exitSpy).not.toHaveBeenCalled();
 		expect(stderrChunks.join("")).toContain("stdout write queue exceeded");
+		expect(stderrCallback).toBeTypeOf("function");
+		expect(() => stderrCallback?.()).toThrow("process.exit");
+		expect(exitSpy).toHaveBeenCalledWith(1);
+
+		writable = true;
+		process.stdout.emit("drain");
+	});
+
+	it("forces a bounded exit when the fatal stderr diagnostic never flushes", () => {
+		vi.useFakeTimers();
+		try {
+			process.stderr.write = (() => false) as typeof process.stderr.write;
+			const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+				throw new Error("process.exit");
+			}) as never);
+
+			fakeStdoutWrite(() => false);
+			writeRawStdout("trigger");
+			writeRawStdout("small");
+			writeRawStdout("x".repeat(MAX_QUEUED_STDOUT_BYTES));
+
+			expect(exitSpy).not.toHaveBeenCalled();
+			expect(() => vi.advanceTimersByTime(1_000)).toThrow("process.exit");
+			expect(exitSpy).toHaveBeenCalledWith(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("flushRawStdout resolves immediately when nothing is queued", async () => {

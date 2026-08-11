@@ -62,6 +62,8 @@ export function isStdoutTakenOver(): boolean {
 /** Maximum bytes allowed to queue behind a backpressured stdout before aborting. */
 export const MAX_QUEUED_STDOUT_BYTES = 16 * 1024 * 1024; // 16 MiB
 
+const FATAL_DIAGNOSTIC_FLUSH_TIMEOUT_MS = 1_000;
+
 const stdoutQueue: string[] = [];
 let stdoutQueuedBytes = 0;
 let stdoutBackpressured = false;
@@ -107,12 +109,21 @@ function flushStdoutQueue(): void {
 function enqueueStdout(text: string): void {
 	const bytes = Buffer.byteLength(text);
 	if (stdoutQueuedBytes + bytes > MAX_QUEUED_STDOUT_BYTES) {
-		process.stderr.write(
+		const diagnostic =
 			`Fatal: stdout write queue exceeded ${MAX_QUEUED_STDOUT_BYTES} bytes while the stream was ` +
-				"backpressured. The consumer of this process's stdout is not reading; refusing " +
-				"unbounded memory growth. Aborting.\n",
-		);
-		process.exit(1);
+			"backpressured. The consumer of this process's stdout is not reading; refusing " +
+			"unbounded memory growth. Aborting.\n";
+		let exiting = false;
+		const exit = (): void => {
+			if (exiting) return;
+			exiting = true;
+			clearTimeout(forceExit);
+			process.exit(1);
+		};
+		const forceExit = setTimeout(exit, FATAL_DIAGNOSTIC_FLUSH_TIMEOUT_MS);
+		forceExit.unref();
+		process.stderr.write(diagnostic, exit);
+		return;
 	}
 	stdoutQueue.push(text);
 	stdoutQueuedBytes += bytes;
