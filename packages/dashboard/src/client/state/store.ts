@@ -94,6 +94,8 @@ const RESYNC_TIMEOUT_MS = 30_000;
 const FLEET_STATS_REQUEST_TIMEOUT_MS = 10_000;
 const RESYNC_RETRY_BASE_MS = 1_000;
 const RESYNC_RETRY_MAX_MS = 30_000;
+const PAIRING_EXPIRY_RETRY_BASE_MS = 5_000;
+const PAIRING_EXPIRY_RETRY_MAX_MS = 5 * 60_000;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const textEncoder = new TextEncoder();
 
@@ -184,6 +186,7 @@ export function createAppStore() {
 	let fleetStatsPromise: Promise<void> | undefined;
 	let pairingExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 	let pairingExpiryTarget: number | undefined;
+	let pairingExpiryRetryAttempt = 0;
 	/** Runtime keys removed by lifecycle events cannot be revived by an older snapshot. */
 	const removedRuntimeKeys = new Set<string>();
 	let stopped = false;
@@ -276,6 +279,18 @@ export function createAppStore() {
 		if (pairingExpiryTimer !== undefined) clearTimeout(pairingExpiryTimer);
 		pairingExpiryTimer = undefined;
 		pairingExpiryTarget = undefined;
+		pairingExpiryRetryAttempt = 0;
+	}
+
+	function armPairingExpiryCheck(target: number): void {
+		if (stopped || pairingExpiryTarget !== target) return;
+		const remaining = target - Date.now();
+		if (remaining <= 0) {
+			pairingExpiryTimer = undefined;
+			void refreshAuthStatus(target);
+			return;
+		}
+		pairingExpiryTimer = setTimeout(() => armPairingExpiryCheck(target), Math.min(remaining, MAX_TIMER_DELAY_MS));
 	}
 
 	function schedulePairingExpiryCheck(checkAt: string | undefined): void {
@@ -287,18 +302,18 @@ export function createAppStore() {
 			return;
 		}
 		pairingExpiryTarget = target;
-		const arm = () => {
-			if (stopped || pairingExpiryTarget !== target) return;
-			const remaining = target - Date.now();
-			if (remaining <= 0) {
-				pairingExpiryTimer = undefined;
-				pairingExpiryTarget = undefined;
-				void refreshAuthStatus();
-				return;
-			}
-			pairingExpiryTimer = setTimeout(arm, Math.min(remaining, MAX_TIMER_DELAY_MS));
-		};
-		arm();
+		armPairingExpiryCheck(target);
+	}
+
+	function schedulePairingExpiryRetry(target: number): void {
+		if (stopped || pairingExpiryTarget !== target) return;
+		pairingExpiryRetryAttempt += 1;
+		const exponent = Math.min(10, pairingExpiryRetryAttempt - 1);
+		const delay = Math.min(PAIRING_EXPIRY_RETRY_MAX_MS, PAIRING_EXPIRY_RETRY_BASE_MS * 2 ** exponent);
+		pairingExpiryTimer = setTimeout(() => {
+			pairingExpiryTimer = undefined;
+			if (!stopped && pairingExpiryTarget === target) void refreshAuthStatus(target);
+		}, delay);
 	}
 
 	function applyAuthStatus(status: AuthStatusResponse): void {
@@ -312,11 +327,14 @@ export function createAppStore() {
 		schedulePairingExpiryCheck(status.pairingExpiryCheckAt);
 	}
 
-	async function refreshAuthStatus(): Promise<void> {
+	async function refreshAuthStatus(target: number): Promise<void> {
 		try {
-			applyAuthStatus(await api.auth());
+			const status = await api.auth();
+			if (!stopped && pairingExpiryTarget === target) applyAuthStatus(status);
 		} catch (err: any) {
+			if (stopped || pairingExpiryTarget !== target) return;
 			if (err?.status === 401 || err?.status === 403) {
+				clearPairingExpiryTimer();
 				setAuth({
 					mode: "remote",
 					needsPairing: err?.body?.needsPairing ?? false,
@@ -326,7 +344,10 @@ export function createAppStore() {
 				navigate({ screen: "pairing" });
 				return;
 			}
-			pushNotice(`Could not check pairing expiry: ${err instanceof Error ? err.message : String(err)}`, "error");
+			if (pairingExpiryRetryAttempt === 0) {
+				pushNotice(`Could not check pairing expiry: ${err instanceof Error ? err.message : String(err)}`, "error");
+			}
+			schedulePairingExpiryRetry(target);
 		}
 	}
 

@@ -242,6 +242,56 @@ describe("pairing expiry auth status", () => {
 		vi.useRealTimers();
 	});
 
+	it("retries a transient failure at the scheduled expiry check", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+		vi.mocked(api.auth)
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryCheckAt: "2030-01-01T00:00:01.000Z",
+			})
+			.mockRejectedValueOnce(new Error("temporary network failure"))
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryWarning: { expiresAt: "2030-01-20T00:00:00.000Z" },
+			});
+		const store = await makeStartedStore();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(api.auth).toHaveBeenCalledTimes(2);
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: expect.stringContaining("temporary network failure"), tone: "error" }),
+		]);
+
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(api.auth).toHaveBeenCalledTimes(3);
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: expect.stringContaining("temporary network failure"), tone: "error" }),
+			expect.objectContaining({ text: expect.stringContaining("expires on 2030-01-20"), tone: "warning" }),
+		]);
+		store.stop();
+		vi.useRealTimers();
+	});
+
+	it("cancels a pending expiry check when the store stops", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+		vi.mocked(api.auth).mockResolvedValueOnce({
+			mode: "remote",
+			needsPairing: false,
+			identity: "alice@example.com",
+			pairingExpiryCheckAt: "2030-01-01T00:01:00.000Z",
+		});
+		const store = await makeStartedStore();
+		store.stop();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(api.auth).toHaveBeenCalledOnce();
+		vi.useRealTimers();
+	});
+
 	it("does not schedule or warn for local auth status", async () => {
 		const store = await makeStartedStore();
 		expect(store.auth()).toEqual({ mode: "local", needsPairing: false });

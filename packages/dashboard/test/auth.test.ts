@@ -143,6 +143,14 @@ describe("TailscaleWhoisResolver", () => {
 	it("reports timeout, execution, parse, and schema failures distinctly and retries after failure", async () => {
 		const errors = [
 			{ error: Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" }), kind: "timeout" },
+			{
+				error: Object.assign(new Error("timed out"), {
+					killed: true,
+					signal: "SIGTERM",
+					stderr: "peer not found\n",
+				}),
+				kind: "timeout",
+			},
 			{ error: Object.assign(new Error("failed"), { stderr: "daemon unavailable" }), kind: "execution" },
 		] as const;
 		for (const item of errors) {

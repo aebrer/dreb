@@ -144,8 +144,9 @@ export class TailscaleWhoisResolver implements TailscaleResolver {
 		try {
 			({ stdout } = await this.runWhois(target));
 		} catch (error) {
+			if (isTimeoutError(error)) throw new TailscaleResolverError("timeout");
 			if (isPeerNotFoundError(error)) return null;
-			throw new TailscaleResolverError(isTimeoutError(error) ? "timeout" : "execution");
+			throw new TailscaleResolverError("execution");
 		}
 
 		let whois: TailscaleWhoisJson;

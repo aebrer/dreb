@@ -354,6 +354,18 @@ footer {
 	font-size: 10px;
 }
 
+.mode-badge {
+	min-width: 0;
+	max-width: min(16rem, 100%);
+}
+
+.mode-badge-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .chip-running {
 	border-color: var(--status-running);
 	color: var(--status-running);

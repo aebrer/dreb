@@ -722,6 +722,24 @@ describe("app store integration", () => {
 		expect(el.querySelector("output")).not.toBeNull();
 	});
 
+	it("constrains a long remote device label while preserving its full text", async () => {
+		const device = "phone.a-very-long-tailnet-name.ts.net";
+		vi.mocked(api.auth).mockResolvedValueOnce({
+			mode: "remote",
+			needsPairing: false,
+			identity: "alice@example.com",
+			device,
+		});
+		const store = makeStore();
+		await store.start();
+		const el = mount(() => <Topbar store={store} active="fleet" />);
+		const badge = el.querySelector(".mode-badge");
+		const label = `remote · ${device} via tailscale`;
+		expect(badge?.getAttribute("title")).toBe(label);
+		expect(badge?.querySelector(".mode-badge-text")?.textContent).toBe(label);
+		store.stop();
+	});
+
 	it("session view anchors live connection status in the persistent session header", async () => {
 		stubMobile(true);
 		let captured: EventStreamHandlers | undefined;
