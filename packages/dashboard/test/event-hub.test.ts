@@ -523,6 +523,187 @@ describe("EventHub", () => {
 		]);
 	});
 
+	it("projects toolcall stream deltas and preserves final toolCall through bounded transport", () => {
+		const toolMessage = (args: Record<string, unknown>) => ({
+			role: "assistant",
+			model: "fast-local",
+			content: [{ type: "toolCall", id: "tc1", name: "bash", arguments: args }],
+		});
+		const toolCall = { type: "toolCall", id: "tc1", name: "bash", arguments: { cmd: "ls" } };
+		const start = {
+			type: "message_update",
+			message: toolMessage({}),
+			assistantMessageEvent: { type: "toolcall_start", contentIndex: 2, partial: toolMessage({}) },
+		};
+		const delta = {
+			type: "message_update",
+			message: toolMessage({ cmd: 'ls /tmp"' }),
+			assistantMessageEvent: {
+				type: "toolcall_delta",
+				contentIndex: 2,
+				delta: 'ls /tmp"',
+				partial: toolMessage({ cmd: 'ls /tmp"' }),
+				futureField: "kept",
+			},
+			transportField: "kept",
+		};
+		const end = {
+			type: "message_update",
+			message: toolMessage({ cmd: "ls /tmp" }),
+			assistantMessageEvent: {
+				type: "toolcall_end",
+				contentIndex: 2,
+				toolCall,
+				partial: toolMessage({ cmd: "ls /tmp" }),
+			},
+		};
+		const childEnd = {
+			type: "background_agent_event",
+			agentId: "child",
+			event: {
+				type: "message_update",
+				message: toolMessage({ cmd: "ls /tmp" }),
+				assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall, partial: toolMessage({}) },
+			},
+		};
+
+		const events = [start, delta, end, childEnd] as Record<string, unknown>[];
+		const full = createSessionViewState("k");
+		const projected = createSessionViewState("k");
+		for (const event of events) {
+			applySessionEvent(full, event);
+			applySessionEvent(projected, projectDashboardEvent(event));
+		}
+		expect(projected).toEqual(full);
+
+		const projectedStart = projectDashboardEvent(start);
+		expect(projectedStart).not.toHaveProperty("message");
+		expect(projectedStart.assistantMessageEvent).not.toHaveProperty("partial");
+		expect(projectedStart).toMatchObject({ assistantMessageEvent: { type: "toolcall_start", contentIndex: 2 } });
+
+		const projectedDelta = projectDashboardEvent(delta);
+		expect(projectedDelta).not.toHaveProperty("message");
+		expect(projectedDelta.assistantMessageEvent).not.toHaveProperty("partial");
+		expect(projectedDelta).toMatchObject({
+			transportField: "kept",
+			assistantMessageEvent: {
+				type: "toolcall_delta",
+				contentIndex: 2,
+				delta: 'ls /tmp"',
+				futureField: "kept",
+			},
+		});
+
+		const projectedEnd = projectDashboardEvent(end);
+		expect(projectedEnd).not.toHaveProperty("message");
+		expect(projectedEnd.assistantMessageEvent).not.toHaveProperty("partial");
+		expect(projectedEnd.assistantMessageEvent).toMatchObject({
+			type: "toolcall_end",
+			contentIndex: 2,
+			toolCall,
+		});
+
+		const projectedChild = projectDashboardEvent(childEnd).event as Record<string, unknown>;
+		expect(projectedChild).not.toHaveProperty("message");
+		expect(projectedChild.assistantMessageEvent).not.toHaveProperty("partial");
+		expect(projectedChild.assistantMessageEvent).toMatchObject({ type: "toolcall_end", toolCall });
+
+		expect(start).toHaveProperty("message");
+		expect(start.assistantMessageEvent).toHaveProperty("partial");
+		expect(delta).toHaveProperty("message");
+		expect(delta.assistantMessageEvent).toHaveProperty("partial");
+		expect(end).toHaveProperty("message");
+		expect(end.assistantMessageEvent).toHaveProperty("partial");
+		expect(childEnd.event).toHaveProperty("message");
+		expect((childEnd.event as Record<string, unknown>).assistantMessageEvent).toHaveProperty("partial");
+
+		const deltaCount = 2_000;
+		const byteBudget = 512 * 1024;
+		const eventBytes = 512;
+		const hub = new EventHub({
+			bufferSize: deltaCount + 3,
+			bufferBytes: byteBudget,
+			replayBytes: byteBudget,
+			eventBytes,
+		});
+		const live = collectClient();
+		hub.attach(live.client);
+
+		hub.publish("runtime", { type: "message_start", message: toolMessage({}) });
+		hub.publish("runtime", {
+			type: "message_update",
+			message: toolMessage({}),
+			assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: toolMessage({}) },
+		});
+		let expectedArgs = "";
+		let lastRawEvent: Record<string, unknown> | undefined;
+		for (let index = 0; index < deltaCount; index += 1) {
+			expectedArgs += `arg${index} `;
+			const partial = toolMessage({ cmd: expectedArgs });
+			lastRawEvent = {
+				type: "message_update",
+				message: partial,
+				assistantMessageEvent: {
+					type: "toolcall_delta",
+					contentIndex: 0,
+					delta: `arg${index} `,
+					partial,
+				},
+			};
+			hub.publish("runtime", lastRawEvent);
+		}
+		hub.publish("runtime", {
+			type: "message_update",
+			message: toolMessage({ cmd: expectedArgs }),
+			assistantMessageEvent: {
+				type: "toolcall_end",
+				contentIndex: 0,
+				toolCall,
+				partial: toolMessage({ cmd: expectedArgs }),
+			},
+		});
+
+		expect(lastRawEvent).toBeDefined();
+		expect(
+			Buffer.byteLength(formatSseFrame({ seq: deltaCount + 2, key: "runtime", event: lastRawEvent! })),
+		).toBeGreaterThan(eventBytes);
+		expect(hub.clientCount).toBe(1);
+		expect(hub.historyCount).toBe(deltaCount + 3);
+		expect(hub.historyBytes).toBeLessThan(byteBudget);
+		const liveEnvelopes = live.envelopes();
+		expect(liveEnvelopes).toHaveLength(deltaCount + 3);
+		expect(liveEnvelopes.some((envelope) => envelope.event.type === "dashboard_resync")).toBe(false);
+		expect(liveEnvelopes.at(-1)?.event).toMatchObject({
+			type: "message_update",
+			assistantMessageEvent: { type: "toolcall_end", toolCall },
+		});
+		const deltaFrameBytes = live.chunks
+			.filter((chunk) => chunk.includes('"type":"toolcall_delta"'))
+			.map((chunk) => Buffer.byteLength(chunk));
+		expect(deltaFrameBytes).toHaveLength(deltaCount);
+		expect(Math.max(...deltaFrameBytes)).toBeLessThan(eventBytes);
+		expect(Math.max(...deltaFrameBytes) - Math.min(...deltaFrameBytes)).toBeLessThan(16);
+
+		const replayed = collectClient();
+		const replayDiagnostic = vi.fn();
+		hub.attach(replayed.client, 0, replayDiagnostic);
+		expect(replayDiagnostic).toHaveBeenCalledWith({
+			kind: "replay",
+			count: deltaCount + 3,
+			bytes: hub.historyBytes,
+			fromSeq: 1,
+			toSeq: deltaCount + 3,
+		});
+		expect(replayed.envelopes()).toHaveLength(deltaCount + 3);
+		expect(replayed.envelopes().some((envelope) => envelope.event.type === "dashboard_resync")).toBe(false);
+
+		const liveState = createSessionViewState("runtime");
+		const replayedState = createSessionViewState("runtime");
+		for (const envelope of liveEnvelopes) applySessionEvent(liveState, envelope.event);
+		for (const envelope of replayed.envelopes()) applySessionEvent(replayedState, envelope.event);
+		expect(replayedState).toEqual(liveState);
+	});
+
 	it("preserves assistant stop reason and provider error text on projected message_end", () => {
 		const event = {
 			type: "message_end",
