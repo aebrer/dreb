@@ -307,12 +307,109 @@ describe("dashboard server — pairing code", () => {
 			resolver: { resolve: async () => alice },
 			storage: new MemoryPairingStorage(),
 		});
-		vi.spyOn(auth, "authenticate").mockResolvedValue({ allowed: true, mode: "remote", identity: alice });
+		vi.spyOn(auth, "authenticate").mockResolvedValue({
+			allowed: true,
+			mode: "remote",
+			identity: alice,
+			pairing: {
+				id: "device-1",
+				identity: alice.loginName,
+				device: alice.device,
+				createdAt: "2030-01-01T00:00:00.000Z",
+				expiresAt: "2030-07-01T00:00:00.000Z",
+			},
+		});
 		const { base } = await startServer({ auth });
 		const res = await fetch(`${base}/api/pairing-code`);
 
 		expect(res.status).toBe(403);
 		await expect(res.json()).resolves.toMatchObject({ error: expect.stringContaining("host machine") });
+	});
+
+	it("GET/PUT /api/pairing-settings persists validated whole-day values", async () => {
+		const auth = new DashboardAuth();
+		const { base } = await startServer({ auth });
+
+		const initial = await fetch(`${base}/api/pairing-settings`);
+		expect(initial.status).toBe(200);
+		await expect(initial.json()).resolves.toEqual({ pairingTtlDays: 180 });
+
+		for (const body of [{ pairingTtlDays: 0 }, { pairingTtlDays: 1.5 }, { pairingTtlDays: "30" }]) {
+			const invalid = await fetch(`${base}/api/pairing-settings`, {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(body),
+			});
+			expect(invalid.status).toBe(400);
+		}
+
+		const saved = await fetch(`${base}/api/pairing-settings`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ pairingTtlDays: 3650 }),
+		});
+		expect(saved.status).toBe(200);
+		await expect(saved.json()).resolves.toEqual({ pairingTtlDays: 3650 });
+		await expect(auth.getPairingSettings()).resolves.toEqual({ pairingTtlDays: 3650 });
+	});
+
+	it("GET /api/auth returns only atomically claimed remote expiry warning metadata", async () => {
+		const auth = new DashboardAuth();
+		const pairing = {
+			id: "device-1",
+			identity: alice.loginName,
+			device: alice.device,
+			createdAt: "2030-01-01T00:00:00.000Z",
+			expiresAt: "2030-07-01T00:00:00.000Z",
+		};
+		vi.spyOn(auth, "authenticate").mockResolvedValue({ allowed: true, mode: "remote", identity: alice, pairing });
+		const claim = vi.spyOn(auth, "claimPairingExpiryStatus").mockResolvedValue({
+			warning: { expiresAt: pairing.expiresAt },
+			nextCheckAt: "2030-06-15T00:00:00.000Z",
+		});
+		const { base } = await startServer({ auth });
+
+		const status = await fetch(`${base}/api/auth`);
+		expect(status.status).toBe(200);
+		await expect(status.json()).resolves.toEqual({
+			mode: "remote",
+			identity: alice.loginName,
+			device: alice.device,
+			needsPairing: false,
+			pairingExpiryWarning: { expiresAt: pairing.expiresAt },
+			pairingExpiryCheckAt: "2030-06-15T00:00:00.000Z",
+		});
+		expect(claim).toHaveBeenCalledWith(pairing.id);
+	});
+
+	it("keeps unknown-peer and resolver-subsystem denials distinct", async () => {
+		const unknown = new DashboardAuth();
+		vi.spyOn(unknown, "authenticate").mockResolvedValue({
+			allowed: false,
+			status: 403,
+			reason: "Client is not a known Tailscale peer",
+		});
+		const unknownServer = await startServer({ auth: unknown });
+		const unknownResponse = await fetch(`${unknownServer.base}/api/auth`);
+		expect(unknownResponse.status).toBe(403);
+		await expect(unknownResponse.json()).resolves.toMatchObject({
+			error: "Client is not a known Tailscale peer",
+			needsPairing: false,
+		});
+
+		const failed = new DashboardAuth();
+		vi.spyOn(failed, "authenticate").mockResolvedValue({
+			allowed: false,
+			status: 500,
+			reason: "Auth subsystem error — denying: Tailscale identity resolver timeout failure",
+		});
+		const failedServer = await startServer({ auth: failed });
+		const failedResponse = await fetch(`${failedServer.base}/api/auth`);
+		expect(failedResponse.status).toBe(500);
+		await expect(failedResponse.json()).resolves.toMatchObject({
+			error: expect.stringContaining("resolver timeout failure"),
+			needsPairing: false,
+		});
 	});
 
 	it("POST /api/pair sets an HttpOnly strict device cookie without Secure", async () => {

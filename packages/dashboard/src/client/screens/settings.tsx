@@ -255,6 +255,43 @@ export function SettingsScreen(props: {
 		return devices;
 	});
 
+	const [pairingSettingsError, setPairingSettingsError] = createSignal<string>();
+	const [pairingSettingsSaved, setPairingSettingsSaved] = createSignal(false);
+	const [pairingSettingsSaving, setPairingSettingsSaving] = createSignal(false);
+	const [pairingTtlDays, setPairingTtlDays] = createSignal("");
+	const [pairingSettings, { mutate: mutatePairingSettings }] = createResource(async () => {
+		try {
+			return await api.pairingSettings();
+		} catch (err) {
+			setPairingSettingsError(err instanceof Error ? err.message : String(err));
+			return undefined;
+		}
+	});
+	createEffect(() => {
+		const loaded = pairingSettings();
+		if (loaded) setPairingTtlDays(String(loaded.pairingTtlDays));
+	});
+
+	async function savePairingSettings(): Promise<void> {
+		setPairingSettingsError(undefined);
+		setPairingSettingsSaved(false);
+		const days = Number(pairingTtlDays());
+		if (!Number.isSafeInteger(days) || days < 1 || days > 3650) {
+			setPairingSettingsError("pairing lifetime must be a whole number from 1 through 3650 days");
+			return;
+		}
+		setPairingSettingsSaving(true);
+		try {
+			const result = await api.savePairingSettings(days);
+			mutatePairingSettings(result);
+			setPairingSettingsSaved(true);
+		} catch (err) {
+			setPairingSettingsError(err instanceof Error ? err.message : String(err));
+		} finally {
+			setPairingSettingsSaving(false);
+		}
+	}
+
 	const [pairingCode, setPairingCode] = createSignal<PairingCodeDto>();
 	let pairingCodeTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -1141,6 +1178,43 @@ export function SettingsScreen(props: {
 						</span>
 						<span class="meta">local · always allowed</span>
 					</div>
+					<div class="setting-row">
+						<label class="setting-label" for="pairing-ttl-days">
+							<span class="name">new pairing lifetime</span>
+							<span class="hint">
+								applies only to devices paired after saving; existing expiry dates do not change
+							</span>
+						</label>
+						<span class="setting-control">
+							<input
+								id="pairing-ttl-days"
+								type="number"
+								min="1"
+								max="3650"
+								step="1"
+								value={pairingTtlDays()}
+								onInput={(event) => {
+									setPairingTtlDays(event.currentTarget.value);
+									setPairingSettingsSaved(false);
+								}}
+							/>
+							<span>days</span>
+							<button
+								type="button"
+								class="btn btn-small"
+								disabled={pairingSettingsSaving() || pairingSettings.loading}
+								onClick={() => void savePairingSettings()}
+							>
+								{pairingSettingsSaving() ? "saving…" : "save"}
+							</button>
+						</span>
+					</div>
+					<Show when={pairingSettingsSaved()}>
+						<div class="settings-success">new pairing lifetime saved</div>
+					</Show>
+					<Show when={pairingSettingsError()}>
+						<div class="settings-error">{pairingSettingsError()}</div>
+					</Show>
 					<Show when={pairingCode()?.enabled && pairingCode()?.code}>
 						<div class="setting-row">
 							<span class="setting-label">
@@ -1159,7 +1233,8 @@ export function SettingsScreen(props: {
 							<div class="device-row">
 								<span>{device.device ?? device.id}</span>
 								<span class="meta">
-									{device.identity} · paired {relativeTime(device.createdAt)}
+									{device.identity} · paired {relativeTime(device.createdAt)} · expires{" "}
+									{device.expiresAt.slice(0, 10)}
 								</span>
 								<span class="actions">
 									<button

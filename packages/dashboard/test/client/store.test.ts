@@ -192,6 +192,64 @@ describe("composer memory", () => {
 	});
 });
 
+describe("pairing expiry auth status", () => {
+	it("shows a startup warning and processes reconnect auth status through the same path", async () => {
+		vi.mocked(api.auth).mockResolvedValue({
+			mode: "remote",
+			needsPairing: false,
+			identity: "alice@example.com",
+			pairingExpiryWarning: { expiresAt: "2030-07-01T00:00:00.000Z" },
+		});
+		const store = await makeStartedStore();
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: expect.stringContaining("expires on 2030-07-01"), tone: "warning" }),
+		]);
+
+		eventHandlers?.onAuthStatus?.({
+			mode: "remote",
+			needsPairing: false,
+			identity: "alice@example.com",
+			pairingExpiryCheckAt: "2030-06-15T00:00:00.000Z",
+		});
+		expect(store.auth()).toMatchObject({ pairingExpiryCheckAt: "2030-06-15T00:00:00.000Z" });
+		expect(store.notices()).toHaveLength(1);
+		store.stop();
+	});
+
+	it("schedules a long-lived tab's server-authoritative expiry check", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+		vi.mocked(api.auth)
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryCheckAt: "2030-01-01T00:00:01.000Z",
+			})
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryWarning: { expiresAt: "2030-01-20T00:00:00.000Z" },
+			});
+		const store = await makeStartedStore();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(api.auth).toHaveBeenCalledTimes(2);
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: expect.stringContaining("expires on 2030-01-20"), tone: "warning" }),
+		]);
+		store.stop();
+		vi.useRealTimers();
+	});
+
+	it("does not schedule or warn for local auth status", async () => {
+		const store = await makeStartedStore();
+		expect(store.auth()).toEqual({ mode: "local", needsPairing: false });
+		expect(store.notices()).toEqual([]);
+		store.stop();
+	});
+});
+
 describe("app store SSE sync", () => {
 	it("creates per-key session state lazily and routes events", async () => {
 		const store = await makeStartedStore();

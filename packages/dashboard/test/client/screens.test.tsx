@@ -86,6 +86,8 @@ vi.mock("../../src/client/api.js", () => ({
 		devices: vi.fn(async () => ({ devices: [] })),
 		unpair: vi.fn(async () => ({ ok: true })),
 		pairingCode: vi.fn(async () => ({ enabled: false })),
+		pairingSettings: vi.fn(async () => ({ pairingTtlDays: 180 })),
+		savePairingSettings: vi.fn(async (pairingTtlDays: number) => ({ pairingTtlDays })),
 		version: vi.fn(async () => ({ version: "0.0.0-test" })),
 		serverInfo: vi.fn(async () => ({
 			version: "0.0.0-test",
@@ -4390,6 +4392,65 @@ describe("dashboard client regressions", () => {
 			expect(checkbox.disabled).toBe(true);
 			expect(el.textContent).toContain("browser notifications are unavailable in this environment");
 		});
+	});
+
+	it("settings edits only the future-pairing lifetime and shows recorded device expiry", async () => {
+		vi.mocked(api.pairingSettings).mockResolvedValueOnce({ pairingTtlDays: 180 });
+		vi.mocked(api.savePairingSettings).mockClear();
+		vi.mocked(api.devices).mockResolvedValueOnce({
+			devices: [
+				{
+					id: "device-1",
+					identity: "alice@example.com",
+					device: "phone",
+					createdAt: "2030-01-01T00:00:00.000Z",
+					expiresAt: "2030-07-01T00:00:00.000Z",
+				},
+			],
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const input = el.querySelector("#pairing-ttl-days") as HTMLInputElement;
+		expect(input.value).toBe("180");
+		expect(el.textContent).toContain("applies only to devices paired after saving");
+		expect(el.textContent).toContain("expires 2030-07-01");
+
+		input.value = "90";
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		const save = input.parentElement?.querySelector("button") as HTMLButtonElement;
+		save.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.savePairingSettings).toHaveBeenCalledWith(90);
+		expect(el.textContent).toContain("new pairing lifetime saved");
+	});
+
+	it("settings rejects an invalid pairing lifetime before sending it", async () => {
+		vi.mocked(api.savePairingSettings).mockClear();
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const input = el.querySelector("#pairing-ttl-days") as HTMLInputElement;
+		input.value = "1.5";
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		(input.parentElement?.querySelector("button") as HTMLButtonElement).click();
+		await Promise.resolve();
+		expect(api.savePairingSettings).not.toHaveBeenCalled();
+		expect(el.textContent).toContain("whole number from 1 through 3650 days");
+	});
+
+	it("settings surfaces pairing lifetime save failures", async () => {
+		vi.mocked(api.savePairingSettings).mockRejectedValueOnce(new Error("pairing settings write failed"));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const input = el.querySelector("#pairing-ttl-days") as HTMLInputElement;
+		input.value = "30";
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		(input.parentElement?.querySelector("button") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("pairing settings write failed");
 	});
 
 	it("settings refreshes pairing code and unpairs devices", async () => {

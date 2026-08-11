@@ -23,6 +23,7 @@ import type {
 	ModelInfoDto,
 	PairedDeviceDto,
 	PairingCodeDto,
+	PairingSettingsDto,
 	PendingMessagesDto,
 	PerformanceStatsDto,
 	ResourcesDto,
@@ -37,6 +38,12 @@ import type {
 	SettingsUpdateDto,
 	TrustedFolderRemovalResultDto,
 } from "../shared/protocol.js";
+
+export type AuthStatusResponse = AuthStatusDto & {
+	needsPairing: boolean;
+	identity?: string;
+	error?: string;
+};
 
 /**
  * Turn a non-JSON error body (typically Express's default HTML 404 page —
@@ -95,12 +102,14 @@ export function dashboardImageUrl(
 }
 
 export const api = {
-	auth: (signal?: AbortSignal) =>
-		request<AuthStatusDto & { needsPairing: boolean; identity?: string; error?: string }>("/api/auth", { signal }),
+	auth: (signal?: AbortSignal) => request<AuthStatusResponse>("/api/auth", { signal }),
 	connectionDiagnostic: (summary: ClientConnectionDiagnosticDto) =>
 		request<{ ok: true }>("/api/events/diagnostic", json(summary)),
 	pair: (pin: string) => request<{ device: PairedDeviceDto }>("/api/pair", json({ pin })),
 	pairingCode: () => request<PairingCodeDto>("/api/pairing-code"),
+	pairingSettings: () => request<PairingSettingsDto>("/api/pairing-settings"),
+	savePairingSettings: (pairingTtlDays: number) =>
+		request<PairingSettingsDto>("/api/pairing-settings", jsonWithMethod("PUT", { pairingTtlDays })),
 	devices: () => request<{ devices: PairedDeviceDto[] }>("/api/devices"),
 	unpair: (id: string) => request<{ ok: true }>(`/api/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
@@ -240,6 +249,8 @@ export interface EventStreamHandlers {
 	/** Must synchronously apply the event. A thrown error triggers full recovery. */
 	onEnvelope: (envelope: EventEnvelope) => void;
 	onStatusChange?: (status: EventConnectionStatus) => void;
+	/** Successful foreground/reconnect validation uses the same auth-status path as startup. */
+	onAuthStatus?: (status: AuthStatusResponse) => void;
 	/** Protocol/handler failure; the store starts its authoritative full resync. */
 	onRecovery?: (reason: "protocol" | "handler" | "watchdog") => void;
 	onConnectionMetadata?: (connectionId: string) => void;
@@ -265,7 +276,7 @@ export interface EventStreamDependencies {
 	clearInterval?: typeof clearInterval;
 	visibility?: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
 	/** Authenticated /api/auth validation differentiates expiry from a network failure. */
-	status?: (signal?: AbortSignal) => Promise<unknown>;
+	status?: (signal?: AbortSignal) => Promise<AuthStatusResponse>;
 	diagnostic?: (summary: ClientConnectionDiagnosticDto) => void | Promise<void>;
 	baseDelayMs?: number;
 	maxDelayMs?: number;
@@ -451,7 +462,11 @@ export function connectEvents(handlers: EventStreamHandlers, injected: EventStre
 		}, statusTimeoutMs);
 		try {
 			void Promise.resolve(statusCheck(current.controller.signal)).then(
-				() => finish(onSuccess),
+				(status) =>
+					finish(() => {
+						handlers.onAuthStatus?.(status);
+						onSuccess();
+					}),
 				(error: { status?: number }) => finish(() => onFailure(error)),
 			);
 		} catch (error) {
