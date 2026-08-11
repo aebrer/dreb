@@ -73,8 +73,13 @@ export function projectDashboardEvent(event: Record<string, unknown>): Record<st
 			return omit(event, "messages");
 		case "turn_end":
 			return omit(event, "message", "toolResults");
-		case "message_update":
-			return omit(event, "message");
+		case "message_update": {
+			const projected = omit(event, "message");
+			const streamEvent = event.assistantMessageEvent;
+			return streamEvent && typeof streamEvent === "object" && !Array.isArray(streamEvent)
+				? { ...projected, assistantMessageEvent: omit(streamEvent as Record<string, unknown>, "partial") }
+				: projected;
+		}
 		case "tool_execution_update":
 			return omit(event, "args");
 		case "stream_retry":
