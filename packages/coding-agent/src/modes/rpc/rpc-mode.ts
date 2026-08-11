@@ -58,6 +58,7 @@ import {
 } from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
+import { projectDashboardRpcEvent } from "./rpc-event-projection.js";
 import type {
 	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,
@@ -1806,6 +1807,15 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				})
 			: undefined;
 
+	// Dashboard-launched runtimes (--ui dashboard) get message_update events
+	// projected before serialization: the cumulative `message` and
+	// `assistantMessageEvent.partial` fields are quadratic in response length on
+	// the JSONL pipe, and no dashboard consumer reads them (deltas, message_end,
+	// and get_dashboard_snapshot responses carry the authoritative data). Generic
+	// RPC consumers keep the full protocol unchanged. Only the event stream is
+	// projected — command responses (output() calls below) always stay complete.
+	const projectEvents = session.uiType === "dashboard";
+
 	// Output all agent events as JSON
 	session.subscribe((event) => {
 		if (tabTitleGenerator && !session.sessionName) {
@@ -1819,7 +1829,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				tabTitleGenerator.onMessageEnd(event.message);
 			}
 		}
-		output(event);
+		output(projectEvents ? projectDashboardRpcEvent(event as unknown as Record<string, unknown>) : event);
 	});
 
 	// Handle a single command

@@ -1794,6 +1794,12 @@ Example streaming a text response:
 {"type":"message_update","message":{...},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello world","partial":{...}}}
 ```
 
+#### Dashboard-mode wire projection (`--ui dashboard`)
+
+When the RPC server is launched with `--ui dashboard`, `message_update` events are projected **before serialization**: the cumulative top-level `message` field and the nested `assistantMessageEvent.partial` field are omitted from every frame. Both fields grow with the response, so carrying them on every delta makes the JSONL stream quadratic in response length; the dashboard reducer consumes only the delta fields (`type`, `contentIndex`, `delta`, `content`, `toolCall`), which are preserved unchanged.
+
+The projection applies recursively to `message_update` events nested inside `background_agent_event` payloads. It does **not** apply to command responses — `get_dashboard_snapshot` still returns complete messages — and `message_end` always carries the full final message as the authoritative transcript record. RPC servers launched without `--ui dashboard` emit the full unprojected protocol shown above.
+
 ### tool_execution_start / tool_execution_update / tool_execution_end
 
 Emitted when a tool begins, streams progress, and completes execution.
@@ -1961,7 +1967,7 @@ Chain completions omit ambiguous scalar model/thinking fields and instead includ
 }
 ```
 
-`background_agent_event` relays every JSONL event the child process emits (the same event union documented here, plus the initial session header), verbatim, tagged with the child's `agentId`. This is the live-transcript transport for observers like the dashboard — no session-file tailing needed. Streaming children emit `message_update` deltas at high frequency; consumers that fan events out further (e.g. over a network) should batch or throttle:
+`background_agent_event` relays every JSONL event the child process emits (the same event union documented here, plus the initial session header), verbatim, tagged with the child's `agentId`. This is the live-transcript transport for observers like the dashboard — no session-file tailing needed. Streaming children emit `message_update` deltas at high frequency; consumers that fan events out further (e.g. over a network) should batch or throttle. Under `--ui dashboard`, the [wire projection](#dashboard-mode-wire-projection---ui-dashboard) described above applies recursively to nested `message_update` events, so relayed frames omit the cumulative `message` and `partial` fields just like top-level ones:
 
 ```json
 {

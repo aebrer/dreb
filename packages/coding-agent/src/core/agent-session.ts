@@ -1464,6 +1464,14 @@ export class AgentSession {
 		return this.sessionManager.getSessionName();
 	}
 
+	/**
+	 * UI surface this session was launched for (e.g. "tui", "rpc", "dashboard",
+	 * "agent", "cli"), from the --ui flag or the mode-based default.
+	 */
+	get uiType(): string | undefined {
+		return this._uiType;
+	}
+
 	/** Scoped models for cycling (from --models flag) */
 	get scopedModels(): ReadonlyArray<{ model: Model<any>; thinkingLevel?: ThinkingLevel }> {
 		return this._scopedModels;
