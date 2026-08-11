@@ -220,9 +220,13 @@ debounce from its in-memory state, so an update performs neither child RPC calls
 nor a disk inventory scan.
 
 Live runtime state and on-disk session inventory have separate refresh paths.
-After creating, resuming, stopping, or deleting a session, the client narrowly
-refreshes the disk list through `GET /api/sessions` rather than reloading the
-whole fleet. While the Fleet screen is visible, it polls each live runtime's
+Before fleet, inventory, or resync serialization, the server explicitly projects
+each on-disk session to the declared browser DTO and bounds its first-message
+preview to 256 Unicode characters. Internal parent paths and complete searchable
+transcript text never cross this browser boundary. After creating, resuming,
+stopping, or deleting a session, the client narrowly refreshes the disk list
+through `GET /api/sessions` rather than reloading the whole fleet. While the
+Fleet screen is visible, it polls each live runtime's
 stats no more often than every 30 seconds. That poll is single-flight, retains a
 card's last good stats if an update fails, and surfaces failures in the Fleet UI.
 

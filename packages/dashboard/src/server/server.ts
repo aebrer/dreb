@@ -25,7 +25,11 @@ import type {
 	SessionInfoDto,
 	SessionInventoryDto,
 } from "../shared/protocol.js";
-import { MAX_CLIENT_DIAGNOSTIC_BYTES, MAX_PROMPT_BODY_BYTES } from "../shared/protocol.js";
+import {
+	MAX_CLIENT_DIAGNOSTIC_BYTES,
+	MAX_PROMPT_BODY_BYTES,
+	MAX_SESSION_PREVIEW_CHARACTERS,
+} from "../shared/protocol.js";
 import type { AuthDecision, DashboardAuth } from "./auth.js";
 import {
 	DASHBOARD_IMAGE_ID_PATTERN,
@@ -46,13 +50,24 @@ export type DashboardServerApp = express.Express & {
 	closeDashboard(): Promise<void>;
 };
 
+export interface DashboardSessionInfoSource {
+	path: string;
+	id: string;
+	cwd: string;
+	name?: string;
+	created: Date;
+	modified: Date;
+	messageCount: number;
+	firstMessage: string;
+}
+
 export interface DashboardServerOptions {
 	auth: DashboardAuth;
 	pool: RuntimePool;
 	/** Directory of built client assets; omit to skip static serving (tests). */
 	staticDir?: string;
 	/** Session listing (cross-project) — injected so tests can stub it. */
-	listAllSessions: () => Promise<unknown[]>;
+	listAllSessions: () => Promise<DashboardSessionInfoSource[]>;
 	deleteSession: (path: string) => Promise<unknown>;
 	logger?: (line: string) => void;
 	/** Build version of the running server process (for the settings footer / stale-server detection). */
@@ -73,6 +88,30 @@ const DEVICE_COOKIE = "dreb_dashboard_device";
 export const MAX_SSE_BUFFERED_BYTES = 4 * 1024 * 1024;
 export const CLIENT_DIAGNOSTIC_RATE_LIMIT_MS = 30_000;
 const CLIENT_DIAGNOSTIC_CONNECTION_TTL_MS = 10 * 60_000;
+
+function boundedSessionPreview(text: string): string {
+	let preview = "";
+	let characters = 0;
+	for (const character of text) {
+		if (characters === MAX_SESSION_PREVIEW_CHARACTERS) break;
+		preview += character;
+		characters++;
+	}
+	return preview;
+}
+
+function toSessionInfoDto(session: DashboardSessionInfoSource): SessionInfoDto {
+	return {
+		path: session.path,
+		id: session.id,
+		cwd: session.cwd,
+		name: session.name,
+		created: session.created.toISOString(),
+		modified: session.modified.toISOString(),
+		messageCount: session.messageCount,
+		firstMessage: boundedSessionPreview(session.firstMessage),
+	};
+}
 
 function isClientDiagnostic(value: unknown): value is ClientConnectionDiagnosticDto {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -439,7 +478,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	// -- fleet -----------------------------------------------------------------
 	const listDiskSessions = async (): Promise<SessionInfoDto[]> =>
-		((await options.listAllSessions()) as SessionInfoDto[]).filter((session) => existsSync(session.cwd));
+		(await options.listAllSessions()).filter((session) => existsSync(session.cwd)).map(toSessionInfoDto);
 
 	const currentCwdInventory = async (): Promise<string[]> => [
 		...pool.list().map((handle) => handle.cwd),

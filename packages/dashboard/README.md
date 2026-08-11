@@ -153,9 +153,13 @@ live runtime cards are updated by global, event-derived `fleet_snapshot` SSE
 frames, debounced by 200 ms. Those frames are built from the pool's in-memory
 runtime state, so they do not trigger child RPC calls or a disk inventory scan.
 
-Disk inventory is separate from live-runtime state. The client narrowly refreshes
-it with `GET /api/sessions` after create, resume, stop, or delete, rather than
-reloading the whole fleet. While the Fleet screen is visible, it refreshes
+Disk inventory is separate from live-runtime state. Before fleet, inventory, or
+resync serialization, the server projects each on-disk session to the declared
+browser DTO and bounds its first-message preview to 256 Unicode characters;
+internal parent paths and complete searchable transcript text never cross this
+boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
+create, resume, stop, or delete, rather than reloading the whole fleet. While the
+Fleet screen is visible, it refreshes
 per-runtime stats no more often than every 30 seconds; the refresh is
 single-flight, preserves each card's last good values, and exposes refresh
 failures in the UI.
