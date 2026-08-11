@@ -4,16 +4,16 @@ import { DynamicBorder } from "./dynamic-border.js";
 
 interface UserMessageItem {
 	id: string; // Entry ID in the session
-	text: string; // The message text
+	text: string; // The message text (preview)
+	role: "user" | "assistant"; // Whose message this is — drives fork semantics
 	timestamp?: string; // Optional timestamp if available
-	isAction?: boolean; // Special action row (e.g. "fork from current state") rather than a history message
 }
 
-/** Sentinel entry id for the "fork from current state (include last response)" action row. */
-export const FORK_FROM_CURRENT_ID = "__fork_from_current__";
-
 /**
- * Custom user message list component with selection
+ * Custom message list component with selection. Lists both user and assistant
+ * messages as fork points; the role determines the branch semantics:
+ *   - assistant → continue from that answer (branch includes it)
+ *   - user → rewind to before it and re-ask (editor pre-filled)
  */
 class UserMessageList implements Component {
 	private messages: UserMessageItem[] = [];
@@ -37,7 +37,7 @@ class UserMessageList implements Component {
 		const lines: string[] = [];
 
 		if (this.messages.length === 0) {
-			lines.push(theme.fg("muted", "  No user messages found"));
+			lines.push(theme.fg("muted", "  No messages found"));
 			return lines;
 		}
 
@@ -49,38 +49,29 @@ class UserMessageList implements Component {
 		const endIndex = Math.min(startIndex + this.maxVisible, this.messages.length);
 
 		// Render visible messages (2 lines per message + blank line)
-		const totalRealMessages = this.messages.filter((m) => !m.isAction).length;
 		for (let i = startIndex; i < endIndex; i++) {
 			const message = this.messages[i];
 			const isSelected = i === this.selectedIndex;
+			const isAssistant = message.role === "assistant";
 
 			// Normalize message to single line
 			const normalizedMessage = message.text.replace(/\n/g, " ").trim();
 
-			// First line: cursor + message
+			// First line: cursor + role badge + message preview
 			const cursor = isSelected ? theme.fg("accent", "› ") : "  ";
-			const maxMsgWidth = width - 2; // Account for cursor (2 chars)
-
-			if (message.isAction) {
-				// Distinct styling for the action row (e.g. "fork from current state").
-				const label = truncateToWidth(`⎇ ${normalizedMessage}`, maxMsgWidth);
-				const styled = isSelected ? theme.fg("accent", theme.bold(label)) : theme.fg("accent", label);
-				lines.push(cursor + styled);
-				lines.push(theme.fg("muted", "  Branch here, including the last response"));
-				lines.push(""); // Blank line between entries
-				continue;
-			}
-
-			const truncatedMsg = truncateToWidth(normalizedMessage, maxMsgWidth);
-			const messageLine = cursor + (isSelected ? theme.bold(truncatedMsg) : truncatedMsg);
+			const badgeText = isAssistant ? "[Assistant] " : "[You] ";
+			const badge = theme.fg(isAssistant ? "accent" : "muted", badgeText);
+			const maxMsgWidth = width - 2 - badgeText.length; // cursor (2) + badge
+			const truncatedMsg = truncateToWidth(normalizedMessage, Math.max(0, maxMsgWidth));
+			const messageLine = cursor + badge + (isSelected ? theme.bold(truncatedMsg) : truncatedMsg);
 
 			lines.push(messageLine);
 
-			// Second line: metadata (position in history, counting only real messages)
-			const position = this.messages.slice(0, i + 1).filter((m) => !m.isAction).length;
-			const metadata = `  Message ${position} of ${totalRealMessages}`;
-			const metadataLine = theme.fg("muted", metadata);
-			lines.push(metadataLine);
+			// Second line: position + what forking here does
+			const position = i + 1;
+			const hint = isAssistant ? "continue from here" : "rewind & re-ask";
+			const metadata = `  Message ${position} of ${this.messages.length} · ${hint}`;
+			lines.push(theme.fg("muted", metadata));
 			lines.push(""); // Blank line between messages
 		}
 
@@ -120,7 +111,8 @@ class UserMessageList implements Component {
 }
 
 /**
- * Component that renders a user message selector for branching
+ * Component that renders a message selector for branching. Any user or assistant
+ * message is a valid fork point.
  */
 export class UserMessageSelectorComponent extends Container {
 	private messageList: UserMessageList;
@@ -133,7 +125,10 @@ export class UserMessageSelectorComponent extends Container {
 		this.addChild(new Text(theme.bold("Branch from Message"), 1, 0));
 		this.addChild(
 			new Text(
-				theme.fg("muted", "Pick a message to rewind and re-run, or fork from current state (keeps last response)"),
+				theme.fg(
+					"muted",
+					"Pick any message: an assistant reply continues from that answer, a question rewinds to re-ask it",
+				),
 				1,
 				0,
 			),

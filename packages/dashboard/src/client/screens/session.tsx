@@ -891,7 +891,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [fileAttachments, setFileAttachments] = createSignal<UploadedFileAttachment[]>([]);
 	const [historyIndex, setHistoryIndex] = createSignal<number>();
 	const [showForkModal, setShowForkModal] = createSignal(false);
-	const [forkMessages, setForkMessages] = createSignal<Array<{ entryId: string; text: string }>>([]);
+	const [forkMessages, setForkMessages] = createSignal<
+		Array<{ entryId: string; text: string; role: "user" | "assistant" }>
+	>([]);
 	const [forkError, setForkError] = createSignal<string>();
 	const [showTreeModal, setShowTreeModal] = createSignal(false);
 	const [treeRoots, setTreeRoots] = createSignal<SessionTreeNodeDto[]>([]);
@@ -1280,7 +1282,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				setForkError(cancelMessage);
 				return;
 			}
-			if (result.text !== undefined) setComposerText(result.text);
+			// Only user (re-ask) forks return text; assistant forks return "" and must
+			// not clobber whatever the user has already typed into the composer.
+			if (result.text) setComposerText(result.text);
 			await props.store.hydrateSession(props.sessionKey);
 			await props.store.refreshDiskSessions();
 			setShowForkModal(false);
@@ -1291,12 +1295,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 
 	const selectForkMessage = (entryId: string) =>
 		finishFork(() => api.fork(props.sessionKey, entryId), "Fork cancelled — no new branch was created.");
-
-	const forkFromCurrentState = () =>
-		finishFork(
-			() => api.forkCurrent(props.sessionKey),
-			"Can't fork from current state — the session is empty or the fork was cancelled.",
-		);
 
 	async function openStatsPopover() {
 		setShowStatsPopover(true);
@@ -2343,10 +2341,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					<Show when={forkError()}>
 						<p class="pair-error">{forkError()}</p>
 					</Show>
-					<button type="button" class="fork-current-btn" onClick={() => forkFromCurrentState()}>
-						<span class="fork-entry-id">current</span>
-						<span>fork from current state (include last response)</span>
-					</button>
 					<Show when={forkMessages().length > 0} fallback={<p class="muted small">loading forkable messages…</p>}>
 						<div class="fork-message-list">
 							<For each={forkMessages()}>
@@ -2356,7 +2350,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 										class="fork-message"
 										onClick={() => selectForkMessage(message.entryId)}
 									>
-										<span class="fork-entry-id">{message.entryId}</span>
+										<span class="fork-role">{message.role === "assistant" ? "assistant" : "you"}</span>
 										<span>{message.text}</span>
 									</button>
 								)}

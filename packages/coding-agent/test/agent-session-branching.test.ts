@@ -4,7 +4,7 @@
  * These tests verify:
  * - Forking from a single message works
  * - Forking in --no-session mode (in-memory only)
- * - getUserMessagesForForking returns correct entries
+ * - getForkableMessages returns correct entries
  */
 
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -80,7 +80,7 @@ describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !API_KEY)("AgentSessio
 		await session.agent.waitForIdle();
 
 		// Should have exactly 1 user message available for forking
-		const userMessages = session.getUserMessagesForForking();
+		const userMessages = session.getForkableMessages().filter((m) => m.role === "user");
 		expect(userMessages.length).toBe(1);
 		expect(userMessages[0].text).toBe("Say hello");
 
@@ -108,7 +108,7 @@ describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !API_KEY)("AgentSessio
 		await session.agent.waitForIdle();
 
 		// Should have 1 user message
-		const userMessages = session.getUserMessagesForForking();
+		const userMessages = session.getForkableMessages().filter((m) => m.role === "user");
 		expect(userMessages.length).toBe(1);
 
 		// Verify we have messages before forking
@@ -140,7 +140,7 @@ describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !API_KEY)("AgentSessio
 		await session.agent.waitForIdle();
 
 		// Should have 3 user messages
-		const userMessages = session.getUserMessagesForForking();
+		const userMessages = session.getForkableMessages().filter((m) => m.role === "user");
 		expect(userMessages.length).toBe(3);
 
 		// Fork from second message (keeps first message + response)

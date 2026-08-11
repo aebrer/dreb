@@ -81,7 +81,6 @@ vi.mock("../../src/client/api.js", () => ({
 		branch: vi.fn(async () => ({ branch: null })),
 		forkMessages: vi.fn(async () => ({ messages: [] })),
 		fork: vi.fn(async () => ({ text: "", cancelled: false })),
-		forkCurrent: vi.fn(async () => ({ cancelled: false })),
 		dailyCost: vi.fn(async () => ({ cost: 0.42 })),
 		settings: vi.fn(async () => ({ defaultProvider: "anthropic", defaultModel: "m1" })),
 		devices: vi.fn(async () => ({ devices: [] })),
@@ -5792,7 +5791,9 @@ describe("dashboard client regressions", () => {
 	});
 
 	it("fork modal rewinds to a selected user message and prefills the composer", async () => {
-		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
+		vi.mocked(api.forkMessages).mockResolvedValue({
+			messages: [{ entryId: "u1", text: "original prompt", role: "user" }],
+		});
 		vi.mocked(api.fork).mockResolvedValue({ text: "original prompt", cancelled: false });
 		const store = makeStore() as any;
 		const hydrateSession = vi.fn(async () => {});
@@ -5820,71 +5821,42 @@ describe("dashboard client regressions", () => {
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("original prompt");
 	});
 
-	it("fork modal can fork from current state without prefilling the composer", async () => {
-		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
-		vi.mocked(api.forkCurrent).mockResolvedValue({ cancelled: false });
+	it("fork modal forks at an assistant message without prefilling the composer", async () => {
+		vi.mocked(api.forkMessages).mockResolvedValue({
+			messages: [{ entryId: "a1", text: "the answer", role: "assistant" }],
+		});
+		// Assistant forks return empty re-ask text (branch already includes the answer).
+		vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: false });
 		const store = makeStore() as any;
 		const hydrateSession = vi.fn(async () => {});
 		const refreshDiskSessions = vi.fn(async () => {});
 		const fakeStore = {
 			...store,
-			sessions: { forkcur: createSessionViewState("forkcur") },
+			sessions: { forkasst: createSessionViewState("forkasst") },
 			fleet: () => ({ runtimes: [], diskSessions: [] }),
 			hydrateSession,
 			refreshDiskSessions,
 		};
-		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkcur" />);
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkasst" />);
 		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		// Mocks are not auto-cleared between tests; ignore any api.fork calls from prior tests.
-		vi.mocked(api.fork).mockClear();
-		(el.querySelector(".fork-current-btn") as HTMLButtonElement).click();
+		// The row is labeled by role.
+		expect(el.querySelector(".fork-role")?.textContent).toBe("assistant");
+		(el.querySelector(".fork-message") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(api.forkCurrent).toHaveBeenCalledWith("forkcur");
-		expect(api.fork).not.toHaveBeenCalled();
-		expect(hydrateSession).toHaveBeenCalledWith("forkcur");
+		expect(api.fork).toHaveBeenCalledWith("forkasst", "a1");
+		expect(hydrateSession).toHaveBeenCalledWith("forkasst");
 		expect(refreshDiskSessions).toHaveBeenCalledOnce();
 		// No composer pre-fill: the branch already includes the last response.
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
 	});
 
-	it("fork modal informs the user and stays open when fork-from-current is cancelled", async () => {
-		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
-		// Empty session / extension veto → backend returns cancelled with no branch created.
-		vi.mocked(api.forkCurrent).mockResolvedValue({ cancelled: true });
-		const store = makeStore() as any;
-		const hydrateSession = vi.fn(async () => {});
-		const refreshDiskSessions = vi.fn(async () => {});
-		const fakeStore = {
-			...store,
-			sessions: { forkcancel: createSessionViewState("forkcancel") },
-			fleet: () => ({ runtimes: [], diskSessions: [] }),
-			hydrateSession,
-			refreshDiskSessions,
-		};
-		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkcancel" />);
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		// Ignore the mount-time hydration; assert only what the fork handler does.
-		hydrateSession.mockClear();
-		refreshDiskSessions.mockClear();
-		(el.querySelector(".fork-current-btn") as HTMLButtonElement).click();
-		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(api.forkCurrent).toHaveBeenCalledWith("forkcancel");
-		// The user is informed: the modal stays open with a message, and no session
-		// churn happens as if a branch had been created.
-		expect(el.querySelector(".fork-current-btn")).not.toBeNull();
-		expect(el.querySelector(".pair-error")?.textContent ?? "").toMatch(/can't fork|cancelled/i);
-		expect(hydrateSession).not.toHaveBeenCalled();
-		expect(refreshDiskSessions).not.toHaveBeenCalled();
-	});
-
 	it("fork modal informs the user and stays open when a message fork is cancelled", async () => {
-		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
+		vi.mocked(api.forkMessages).mockResolvedValue({
+			messages: [{ entryId: "u1", text: "original prompt", role: "user" }],
+		});
 		// Extension veto → api.fork returns cancelled with no branch created.
 		vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: true });
 		const store = makeStore() as any;

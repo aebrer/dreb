@@ -2126,13 +2126,8 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
 			}
 
-			case "fork_current": {
-				const result = await session.forkFromCurrent();
-				return success(id, "fork_current", { cancelled: result.cancelled });
-			}
-
 			case "get_fork_messages": {
-				const messages = session.getUserMessagesForForking();
+				const messages = session.getForkableMessages();
 				return success(id, "get_fork_messages", { messages });
 			}
 

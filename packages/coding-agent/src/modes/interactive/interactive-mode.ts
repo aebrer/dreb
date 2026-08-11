@@ -121,7 +121,7 @@ import { TasksPanelComponent } from "./components/tasks-panel.js";
 import { ToolExecutionComponent } from "./components/tool-execution.js";
 import { TreeSelectorComponent } from "./components/tree-selector.js";
 import { UserMessageComponent } from "./components/user-message.js";
-import { FORK_FROM_CURRENT_ID, UserMessageSelectorComponent } from "./components/user-message-selector.js";
+import { UserMessageSelectorComponent } from "./components/user-message-selector.js";
 import {
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
@@ -4296,53 +4296,44 @@ export class InteractiveMode {
 	}
 
 	private showUserMessageSelector(): void {
-		const userMessages = this.session.getUserMessagesForForking();
-		const hasCurrentState = this.sessionManager.getLeafId() !== null;
+		const messages = this.session.getForkableMessages();
 
-		if (userMessages.length === 0 && !hasCurrentState) {
+		if (messages.length === 0) {
 			this.showStatus("No messages to fork from");
 			return;
 		}
 
-		// Build the selector list: history messages (rewind + re-run), plus a
-		// trailing "fork from current state" action that keeps the last response.
-		const items: Array<{ id: string; text: string; isAction?: boolean }> = userMessages.map((m) => ({
-			id: m.entryId,
-			text: m.text,
-		}));
-		if (hasCurrentState) {
-			items.push({
-				id: FORK_FROM_CURRENT_ID,
-				text: "Fork from current state (include last response)",
-				isAction: true,
-			});
-		}
+		// Every user or assistant message is a fork point. Assistant replies branch
+		// so the answer is kept (continue from here); user messages rewind to before
+		// the question and pre-fill the editor (re-ask).
+		const items = messages.map((m) => ({ id: m.entryId, text: m.text, role: m.role }));
 
 		this.showSelector((done) => {
 			const selector = new UserMessageSelectorComponent(
 				items,
 				async (entryId) => {
-					const isCurrent = entryId === FORK_FROM_CURRENT_ID;
-					const result = isCurrent ? await this.session.forkFromCurrent() : await this.session.fork(entryId);
+					try {
+						const result = await this.session.fork(entryId);
+						if (result.cancelled) {
+							// An extension vetoed the fork — tell the user rather than
+							// silently dismissing the selector.
+							done();
+							this.showStatus("Fork cancelled — no new branch was created");
+							return;
+						}
 
-					if (result.cancelled) {
-						// Empty session (nothing to branch from) or an extension vetoed
-						// the fork — tell the user rather than silently dismissing the
-						// selector.
+						this.resetChatDisplay();
+						// Assistant forks return empty text (nothing to re-ask); user forks
+						// pre-fill the editor with the selected question.
+						this.editor.setText(result.selectedText);
 						done();
-						this.showStatus("Fork cancelled — no new branch was created");
-						return;
+						this.showStatus("Branched to new session");
+					} catch (err) {
+						// Forking can throw (e.g. a stale entry or a filesystem error while
+						// writing the branch). Surface it instead of crashing the TUI.
+						done();
+						this.showStatus(`Fork failed: ${err instanceof Error ? err.message : String(err)}`);
 					}
-
-					this.resetChatDisplay();
-					// The current-state branch already includes the last response, so
-					// there is nothing to re-ask; the message branch pre-fills the editor
-					// with the selected question for re-running.
-					this.editor.setText((result as { selectedText?: string }).selectedText ?? "");
-					done();
-					this.showStatus(
-						isCurrent ? "Branched to new session (including last response)" : "Branched to new session",
-					);
 				},
 				() => {
 					done();

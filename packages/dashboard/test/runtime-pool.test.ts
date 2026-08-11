@@ -187,7 +187,6 @@ export function makeFakeClient() {
 		navigateTree: vi.fn(async () => ({ cancelled: false })),
 		getForkMessages: vi.fn(async () => []),
 		fork: vi.fn(async () => ({ text: "", cancelled: false })),
-		forkCurrent: vi.fn(async () => ({ cancelled: false })),
 		listSessions: vi.fn(async () => []),
 		switchSession: vi.fn(async () => ({ cancelled: false })),
 		prompt: vi.fn(async () => {}),

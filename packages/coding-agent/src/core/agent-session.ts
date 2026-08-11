@@ -3627,26 +3627,49 @@ export class AgentSession {
 	}
 
 	/**
-	 * Create a fork from a specific entry.
+	 * Create a fork from a specific entry. The fork point may be any user or
+	 * assistant message in the transcript; branch semantics depend on the role:
+	 *
+	 * - **Assistant message** -> the new branch *includes* the selected response
+	 *   (and everything before it); no editor pre-fill. "Continue from this answer."
+	 *   Forking at the last assistant message keeps the entire current state.
+	 * - **User message** -> rewind to *before* the selected message (branch from its
+	 *   parent, dropping the message and everything after it) and offer its text as
+	 *   editor pre-fill. "Edit / re-ask this question."
+	 *
 	 * Emits before_fork/fork session events to extensions.
 	 *
-	 * @param entryId ID of the entry to fork from
+	 * @param entryId ID of the message entry to fork from
 	 * @returns Object with:
-	 *   - selectedText: The text of the selected user message (for editor pre-fill)
+	 *   - selectedText: The selected user message text for editor pre-fill (empty
+	 *     when forking at an assistant message).
 	 *   - cancelled: True if an extension cancelled the fork
 	 */
 	async fork(entryId: string): Promise<{ selectedText: string; cancelled: boolean }> {
 		const selectedEntry = this.sessionManager.getEntry(entryId);
 
-		if (!selectedEntry || selectedEntry.type !== "message" || selectedEntry.message.role !== "user") {
+		if (
+			!selectedEntry ||
+			selectedEntry.type !== "message" ||
+			(selectedEntry.message.role !== "user" && selectedEntry.message.role !== "assistant")
+		) {
 			throw new Error("Invalid entry ID for forking");
 		}
 
-		const selectedText = this._extractUserMessageText(selectedEntry.message.content);
+		if (selectedEntry.message.role === "assistant") {
+			// Continue-from-answer: branch from the assistant entry itself so it (and
+			// everything before it) is retained. No editor pre-fill.
+			const { cancelled } = await this._performFork(entryId, () => {
+				this.sessionManager.createBranchedSession(entryId);
+			});
+			return { selectedText: "", cancelled };
+		}
 
-		// Existing fork semantics: rewind to *before* the selected user message by
-		// branching from its parent, so the selected message (and everything after
-		// it) is dropped and its text is offered as editor pre-fill.
+		const selectedText = this._extractMessageText(selectedEntry.message.content);
+
+		// Rewind to *before* the selected user message by branching from its parent,
+		// so the selected message (and everything after it) is dropped and its text is
+		// offered as editor pre-fill.
 		const { cancelled } = await this._performFork(entryId, (previousSessionFile) => {
 			if (!selectedEntry.parentId) {
 				this.sessionManager.newSession({ parentSession: previousSessionFile });
@@ -3656,32 +3679,6 @@ export class AgentSession {
 		});
 
 		return { selectedText, cancelled };
-	}
-
-	/**
-	 * Create a fork from the current state, including the last model response.
-	 *
-	 * Unlike fork(), which rewinds to *before* a selected user message, this
-	 * branches from the current leaf entry — so the new branch's tail is the
-	 * latest entry (typically the last assistant response). There is no editor
-	 * pre-fill; the new session is ready for a fresh turn on top of the captured
-	 * history.
-	 *
-	 * @returns Object with `cancelled` (true if an extension cancelled the fork,
-	 *   or if there is no current leaf to fork from — i.e. an empty session).
-	 */
-	async forkFromCurrent(): Promise<{ cancelled: boolean }> {
-		const leafId = this.sessionManager.getLeafId();
-
-		// Nothing to fork from (fresh/empty session).
-		if (!leafId) {
-			return { cancelled: true };
-		}
-
-		return this._performFork(leafId, () => {
-			// Branch from the leaf itself so the last entry is included.
-			this.sessionManager.createBranchedSession(leafId);
-		});
 	}
 
 	/**
@@ -3902,7 +3899,7 @@ export class AgentSession {
 			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
 				// User message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
-				editorText = this._extractUserMessageText(targetEntry.message.content);
+				editorText = this._extractMessageText(targetEntry.message.content);
 			} else if (targetEntry.type === "custom_message") {
 				// Custom message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
@@ -3972,26 +3969,35 @@ export class AgentSession {
 	}
 
 	/**
-	 * Get all user messages from session for fork selector.
+	 * Get all forkable messages (user *and* assistant) for the fork selector.
+	 *
+	 * Each entry carries its role so callers can label it and choose the right
+	 * fork semantics (assistant = continue-from-answer, user = rewind + re-ask).
+	 * Assistant turns with no renderable text (pure tool-call turns) still appear
+	 * as fork points, with a generic label.
 	 */
-	getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
+	getForkableMessages(): Array<{ entryId: string; text: string; role: "user" | "assistant" }> {
 		const entries = this.sessionManager.getEntries();
-		const result: Array<{ entryId: string; text: string }> = [];
+		const result: Array<{ entryId: string; text: string; role: "user" | "assistant" }> = [];
 
 		for (const entry of entries) {
 			if (entry.type !== "message") continue;
-			if (entry.message.role !== "user") continue;
+			const role = entry.message.role;
+			if (role !== "user" && role !== "assistant") continue;
 
-			const text = this._extractUserMessageText(entry.message.content);
-			if (text) {
-				result.push({ entryId: entry.id, text });
+			const text = this._extractMessageText(entry.message.content);
+			if (role === "user") {
+				// Preserve existing behavior: skip empty user messages.
+				if (text) result.push({ entryId: entry.id, text, role });
+			} else {
+				result.push({ entryId: entry.id, text: text || "(assistant response)", role });
 			}
 		}
 
 		return result;
 	}
 
-	private _extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
+	private _extractMessageText(content: string | Array<{ type: string; text?: string }>): string {
 		if (typeof content === "string") return content;
 		if (Array.isArray(content)) {
 			return content
