@@ -375,6 +375,40 @@ describe("cmdStats", () => {
 		expect(sentMessage).not.toContain("last 24h");
 	});
 
+	it.each([
+		{
+			name: "below trend",
+			delta: { direction: "below" as const, percentDelta: -19.6, recentCount: 10, baselineCount: 10000 },
+			expected: "  anthropic/claude-3-sonnet: ~31 tok/s [100] · 20% ↓ median [10000]",
+		},
+		{
+			name: "stable trend",
+			delta: { direction: "stable" as const, percentDelta: 0.8, recentCount: 10, baselineCount: 10000 },
+			expected: "  anthropic/claude-3-sonnet: ~31 tok/s [100] · 0% → median [10000]",
+		},
+		{
+			name: "insufficient recent samples",
+			delta: { direction: "above" as const, percentDelta: 20, recentCount: 2, baselineCount: 10000 },
+			expected: "  anthropic/claude-3-sonnet: ~31 tok/s [100]",
+		},
+		{
+			name: "insufficient baseline samples",
+			delta: { direction: "above" as const, percentDelta: 20, recentCount: 10, baselineCount: 2 },
+			expected: "  anthropic/claude-3-sonnet: ~31 tok/s [100]",
+		},
+	])("formats $name with TUI semantics", async ({ delta, expected }) => {
+		const bridge = createMockBridge();
+		const perf = await bridge.getPerformanceStats();
+		Object.assign(perf.models[0].delta, delta);
+		const userState = createUserState({ bridge });
+
+		await cmdStats(ctx, userState);
+
+		const sentMessage = mockSafeSend.mock.calls[0][2] as string;
+		const modelLine = sentMessage.split("\n").find((line) => line.includes("anthropic/claude-3-sonnet"));
+		expect(modelLine).toBe(expected);
+	});
+
 	it("omits performance section when models array is empty", async () => {
 		const userState = createUserState({ bridge: createMockBridge({ perf: { models: [] } }) });
 		await cmdStats(ctx, userState);

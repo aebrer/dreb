@@ -232,6 +232,30 @@ describe("PerformanceTracker", () => {
 		expect(summary.delta.recentCount).toBe(10);
 	});
 
+	it("getAllModelSummaries() caps its delta baseline at the newest 10,000 samples", () => {
+		const entryCount = 10_002;
+		const now = Date.now();
+		const lines = Array.from({ length: entryCount }, (_, index) =>
+			JSON.stringify(
+				makeEntry({
+					timestamp: new Date(now - (entryCount - index) * 1000).toISOString(),
+					tps: index + 1,
+				}),
+			),
+		);
+		writeFileSync(logPath, `${lines.join("\n")}\n`, "utf8");
+		tracker = new PerformanceTracker(logPath);
+
+		const [summary] = tracker.getAllModelSummaries();
+
+		expect(summary.delta).toMatchObject({
+			baselineCount: 10_000,
+			recentCount: 10,
+			baselineMedian: (3 + 10_002) / 2,
+			recentMedian: (9_993 + 10_002) / 2,
+		});
+	});
+
 	// prune() ------------------------------------------------------------------
 
 	it("prune() removes old entries", () => {
