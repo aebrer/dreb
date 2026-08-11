@@ -188,6 +188,38 @@ describe("output-guard", () => {
 		expect(exitSpy).not.toHaveBeenCalled();
 	});
 
+	it("rejects a write queued behind one allowed oversized frame", () => {
+		const stderrChunks: string[] = [];
+		let stderrCallback: ((error?: Error | null) => void) | undefined;
+		process.stderr.write = ((
+			chunk: string | Uint8Array,
+			encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+			callback?: (error?: Error | null) => void,
+		) => {
+			stderrChunks.push(String(chunk));
+			stderrCallback = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+			return false;
+		}) as typeof process.stderr.write;
+		const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new Error("process.exit");
+		}) as never);
+
+		let writable = false;
+		fakeStdoutWrite(() => writable);
+		writeRawStdout("trigger"); // accepted, signals backpressure
+		writeRawStdout("x".repeat(MAX_QUEUED_STDOUT_BYTES + 1)); // one oversized frame is allowed
+		writeRawStdout("next"); // accumulated backlog beyond that frame must fail loudly
+
+		expect(exitSpy).not.toHaveBeenCalled();
+		expect(stderrChunks.join("")).toContain("stdout write queue exceeded");
+		expect(stderrCallback).toBeTypeOf("function");
+		expect(() => stderrCallback?.()).toThrow("process.exit");
+		expect(exitSpy).toHaveBeenCalledWith(1);
+
+		writable = true;
+		process.stdout.emit("drain");
+	});
+
 	it("keeps takeover queueing bounded and flushes the fatal diagnostic before exit", () => {
 		const stderrChunks: string[] = [];
 		let stderrCallback: ((error?: Error | null) => void) | undefined;
