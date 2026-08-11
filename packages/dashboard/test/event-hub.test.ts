@@ -258,42 +258,141 @@ describe("EventHub", () => {
 	});
 
 	it("projects only reducer-unused cumulative fields and preserves reducer behavior", () => {
+		const textMessage = (text: string) => ({
+			role: "assistant",
+			model: "fast-local",
+			content: [{ type: "text", text }],
+		});
+		const thinkingMessage = (thinking: string) => ({
+			role: "assistant",
+			model: "fast-local",
+			content: [{ type: "thinking", thinking }],
+		});
+		const directDelta = {
+			type: "message_update",
+			message: textMessage("hello"),
+			assistantMessageEvent: {
+				type: "text_delta",
+				contentIndex: 0,
+				delta: "hello",
+				partial: textMessage("hello"),
+				futureField: "kept",
+			},
+			transportField: "kept",
+		};
+		const directEnd = {
+			type: "message_update",
+			message: textMessage("hello"),
+			assistantMessageEvent: {
+				type: "text_end",
+				contentIndex: 0,
+				content: "hello",
+				partial: textMessage("hello"),
+			},
+		};
+		const childDelta = {
+			type: "background_agent_event",
+			agentId: "child",
+			event: {
+				type: "message_update",
+				message: thinkingMessage("reasoning"),
+				assistantMessageEvent: {
+					type: "thinking_delta",
+					contentIndex: 0,
+					delta: "reasoning",
+					partial: thinkingMessage("reasoning"),
+				},
+			},
+		};
+		const agentEnd = { type: "agent_end", messages: [{ huge: "x".repeat(200) }] };
+		const toolUpdate = {
+			type: "tool_execution_update",
+			toolCallId: "tool",
+			toolName: "bash",
+			args: { huge: "x".repeat(200) },
+			partialResult: "ok",
+		};
+		const turnEnd = {
+			type: "turn_end",
+			message: { huge: "x".repeat(200) },
+			toolResults: [{ huge: "x".repeat(200) }],
+		};
+		const streamRetry = {
+			type: "stream_retry",
+			attempt: 1,
+			maxAttempts: 2,
+			error: "kept",
+			discardedPartial: { huge: "x".repeat(200) },
+		};
+		const lengthRetry = {
+			type: "length_retry",
+			attempt: 1,
+			maxAttempts: 2,
+			previousMaxTokens: 100,
+			nextMaxTokens: 200,
+			discardedPartial: { huge: "x".repeat(200) },
+		};
+		const childEnd = {
+			type: "background_agent_event",
+			agentId: "child",
+			event: { type: "agent_end", messages: [{ huge: "x".repeat(200) }] },
+		};
+		const unknown = { type: "unknown_extension_event", cumulative: "kept" };
 		const events = [
-			{ type: "agent_end", messages: [{ huge: "x".repeat(200) }] },
+			{ type: "message_start", message: textMessage("") },
 			{
 				type: "message_update",
-				message: { content: "x".repeat(200) },
-				assistantMessageEvent: { type: "text_start" },
+				message: textMessage(""),
+				assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: textMessage("") },
 			},
+			directDelta,
+			directEnd,
+			{ type: "message_end", message: textMessage("hello") },
 			{
-				type: "tool_execution_update",
-				toolCallId: "tool",
-				toolName: "bash",
-				args: { huge: "x".repeat(200) },
-				partialResult: "ok",
-			},
-			{ type: "turn_end", message: { huge: "x".repeat(200) }, toolResults: [{ huge: "x".repeat(200) }] },
-			{
-				type: "stream_retry",
-				attempt: 1,
-				maxAttempts: 2,
-				error: "kept",
-				discardedPartial: { huge: "x".repeat(200) },
-			},
-			{
-				type: "length_retry",
-				attempt: 1,
-				maxAttempts: 2,
-				previousMaxTokens: 100,
-				nextMaxTokens: 200,
-				discardedPartial: { huge: "x".repeat(200) },
+				type: "background_agent_event",
+				agentId: "child",
+				event: { type: "message_start", message: thinkingMessage("") },
 			},
 			{
 				type: "background_agent_event",
 				agentId: "child",
-				event: { type: "agent_end", messages: [{ huge: "x".repeat(200) }] },
+				event: {
+					type: "message_update",
+					message: thinkingMessage(""),
+					assistantMessageEvent: {
+						type: "thinking_start",
+						contentIndex: 0,
+						partial: thinkingMessage(""),
+					},
+				},
 			},
-			{ type: "unknown_extension_event", cumulative: "kept" },
+			childDelta,
+			{
+				type: "background_agent_event",
+				agentId: "child",
+				event: {
+					type: "message_update",
+					message: thinkingMessage("reasoning"),
+					assistantMessageEvent: {
+						type: "thinking_end",
+						contentIndex: 0,
+						content: "reasoning",
+						partial: thinkingMessage("reasoning"),
+					},
+				},
+			},
+			{
+				type: "background_agent_event",
+				agentId: "child",
+				event: { type: "message_end", message: thinkingMessage("reasoning") },
+			},
+			agentEnd,
+			toolUpdate,
+			turnEnd,
+			streamRetry,
+			lengthRetry,
+			childEnd,
+			unknown,
 		] as Record<string, unknown>[];
 		const full = createSessionViewState("k");
 		const projected = createSessionViewState("k");
@@ -301,16 +400,127 @@ describe("EventHub", () => {
 			applySessionEvent(full, event);
 			applySessionEvent(projected, projectDashboardEvent(event));
 		}
+
 		expect(projected).toEqual(full);
-		expect(projectDashboardEvent(events[0]!)).not.toHaveProperty("messages");
-		expect(projectDashboardEvent(events[1]!)).not.toHaveProperty("message");
-		expect(projectDashboardEvent(events[2]!)).not.toHaveProperty("args");
-		expect(projectDashboardEvent(events[2]!)).toMatchObject({ toolName: "bash" });
-		expect(projectDashboardEvent(events[4]!)).not.toHaveProperty("discardedPartial");
-		expect(projectDashboardEvent(events[5]!)).not.toHaveProperty("discardedPartial");
-		expect(projectDashboardEvent(events[6]!)).toMatchObject({ event: { type: "agent_end" } });
-		expect((projectDashboardEvent(events[6]!).event as Record<string, unknown>).messages).toBeUndefined();
-		expect(projectDashboardEvent(events[7]!)).toBe(events[7]);
+		expect(projected.entries).toMatchObject([
+			{ kind: "assistant", streaming: false, blocks: [{ kind: "text", text: "hello" }] },
+		]);
+		expect(projected.subagents.child?.entries).toMatchObject([
+			{ kind: "assistant", streaming: false, blocks: [{ kind: "thinking", text: "reasoning" }] },
+		]);
+		const projectedDirect = projectDashboardEvent(directDelta);
+		expect(projectedDirect).not.toHaveProperty("message");
+		expect(projectedDirect).toMatchObject({
+			transportField: "kept",
+			assistantMessageEvent: {
+				type: "text_delta",
+				contentIndex: 0,
+				delta: "hello",
+				futureField: "kept",
+			},
+		});
+		expect(projectedDirect.assistantMessageEvent).not.toHaveProperty("partial");
+		expect(projectDashboardEvent(directEnd)).toMatchObject({
+			assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "hello" },
+		});
+		expect(directDelta).toHaveProperty("message");
+		expect(directDelta.assistantMessageEvent).toHaveProperty("partial");
+
+		const projectedChild = projectDashboardEvent(childDelta).event as Record<string, unknown>;
+		expect(projectedChild).not.toHaveProperty("message");
+		expect(projectedChild.assistantMessageEvent).not.toHaveProperty("partial");
+		expect(projectedChild).toMatchObject({
+			assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "reasoning" },
+		});
+		expect(projectDashboardEvent(agentEnd)).not.toHaveProperty("messages");
+		expect(projectDashboardEvent(toolUpdate)).not.toHaveProperty("args");
+		expect(projectDashboardEvent(toolUpdate)).toMatchObject({ toolName: "bash" });
+		expect(projectDashboardEvent(turnEnd)).not.toHaveProperty("message");
+		expect(projectDashboardEvent(turnEnd)).not.toHaveProperty("toolResults");
+		expect(projectDashboardEvent(streamRetry)).not.toHaveProperty("discardedPartial");
+		expect(projectDashboardEvent(lengthRetry)).not.toHaveProperty("discardedPartial");
+		expect(projectDashboardEvent(childEnd)).toMatchObject({ event: { type: "agent_end" } });
+		expect((projectDashboardEvent(childEnd).event as Record<string, unknown>).messages).toBeUndefined();
+		expect(projectDashboardEvent(unknown)).toBe(unknown);
+	});
+
+	it("keeps a long cumulative stream bounded, replayable, and transcript-exact", () => {
+		const deltaCount = 2_000;
+		const delta = "token ";
+		const byteBudget = 512 * 1024;
+		const eventBytes = 512;
+		const hub = new EventHub({
+			bufferSize: deltaCount + 2,
+			bufferBytes: byteBudget,
+			replayBytes: byteBudget,
+			eventBytes,
+		});
+		const live = collectClient();
+		hub.attach(live.client);
+		const message = (text: string) => ({
+			role: "assistant",
+			model: "fast-local",
+			content: [{ type: "text", text }],
+		});
+
+		hub.publish("runtime", { type: "message_start", message: message("") });
+		hub.publish("runtime", {
+			type: "message_update",
+			message: message(""),
+			assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: message("") },
+		});
+		let expectedText = "";
+		let lastRawEvent: Record<string, unknown> | undefined;
+		for (let index = 0; index < deltaCount; index += 1) {
+			expectedText += delta;
+			const partial = message(expectedText);
+			lastRawEvent = {
+				type: "message_update",
+				message: partial,
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial },
+			};
+			hub.publish("runtime", lastRawEvent);
+		}
+
+		expect(lastRawEvent).toBeDefined();
+		expect(
+			Buffer.byteLength(formatSseFrame({ seq: deltaCount + 2, key: "runtime", event: lastRawEvent! })),
+		).toBeGreaterThan(eventBytes);
+		expect(hub.clientCount).toBe(1);
+		expect(hub.historyCount).toBe(deltaCount + 2);
+		expect(hub.historyBytes).toBeLessThan(byteBudget);
+		const liveEnvelopes = live.envelopes();
+		expect(liveEnvelopes).toHaveLength(deltaCount + 2);
+		expect(liveEnvelopes.some((envelope) => envelope.event.type === "dashboard_resync")).toBe(false);
+		const deltaFrameBytes = live.chunks
+			.filter((chunk) => chunk.includes('"type":"text_delta"'))
+			.map((chunk) => Buffer.byteLength(chunk));
+		expect(deltaFrameBytes).toHaveLength(deltaCount);
+		expect(Math.max(...deltaFrameBytes)).toBeLessThan(eventBytes);
+		expect(Math.max(...deltaFrameBytes) - Math.min(...deltaFrameBytes)).toBeLessThan(16);
+		expect(live.chunks.reduce((bytes, chunk) => bytes + Buffer.byteLength(chunk), 0)).toBe(hub.historyBytes);
+
+		const replayed = collectClient();
+		const replayDiagnostic = vi.fn();
+		hub.attach(replayed.client, 0, replayDiagnostic);
+		expect(replayDiagnostic).toHaveBeenCalledWith({
+			kind: "replay",
+			count: deltaCount + 2,
+			bytes: hub.historyBytes,
+			fromSeq: 1,
+			toSeq: deltaCount + 2,
+		});
+		expect(replayed.envelopes()).toHaveLength(deltaCount + 2);
+		expect(replayed.envelopes().some((envelope) => envelope.event.type === "dashboard_resync")).toBe(false);
+
+		const liveState = createSessionViewState("runtime");
+		const replayedState = createSessionViewState("runtime");
+		for (const envelope of liveEnvelopes) applySessionEvent(liveState, envelope.event);
+		for (const envelope of replayed.envelopes()) applySessionEvent(replayedState, envelope.event);
+		expect(replayedState).toEqual(liveState);
+		expect(liveState.entries).toMatchObject([
+			{ kind: "assistant", streaming: true, blocks: [{ kind: "text", text: expectedText }] },
+		]);
 	});
 
 	it("preserves assistant stop reason and provider error text on projected message_end", () => {
