@@ -243,7 +243,7 @@ dreb --fork <path>       # Fork specific session file or ID into a new session
 - Filter modes (Ctrl+O): default → no-tools → user-only → labeled-only → all
 - Press `L` (Shift+L) to label entries as bookmarks
 
-**`/fork`** - Create a new session file from the current branch. Opens a selector, copies history up to the selected point, and places that message in the editor for modification.
+**`/fork`** - Create a new session file by branching from any point in the current conversation. Opens a selector listing every user and assistant message: picking an **assistant** message keeps that response and everything before it (continue from that answer) with an empty editor; picking a **user** message rewinds to before it (dropping it and everything after) and places its text in the editor for re-asking.
 
 **`--fork <path|id>`** - Fork an existing session file or partial session UUID directly from the CLI. This copies the full source session into a new session file in the current project.
 

@@ -3659,6 +3659,15 @@ export class AgentSession {
 		if (selectedEntry.message.role === "assistant") {
 			// Continue-from-answer: branch from the assistant entry itself so it (and
 			// everything before it) is retained. No editor pre-fill.
+			//
+			// Reject turns that can't be safely branched from (interrupted, or waiting
+			// on tool results) — branching there would silently produce a branch that
+			// doesn't match the selected turn. See _isForkableAssistant.
+			if (!this._isForkableAssistant(selectedEntry.message)) {
+				throw new Error(
+					"Cannot fork at this assistant turn: it was interrupted or is still waiting on tool results",
+				);
+			}
 			const { cancelled } = await this._performFork(entryId, () => {
 				this.sessionManager.createBranchedSession(entryId);
 			});
@@ -3975,6 +3984,9 @@ export class AgentSession {
 	 * fork semantics (assistant = continue-from-answer, user = rewind + re-ask).
 	 * Assistant turns with no renderable text (pure tool-call turns) still appear
 	 * as fork points, with a generic label.
+	 *
+	 * Assistant turns that cannot be safely branched from (interrupted turns, or
+	 * turns still waiting on tool results) are excluded — see _isForkableAssistant.
 	 */
 	getForkableMessages(): Array<{ entryId: string; text: string; role: "user" | "assistant" }> {
 		const entries = this.sessionManager.getEntries();
@@ -3990,11 +4002,38 @@ export class AgentSession {
 				// Preserve existing behavior: skip empty user messages.
 				if (text) result.push({ entryId: entry.id, text, role });
 			} else {
+				// Only offer assistant turns that can be safely branched from.
+				if (!this._isForkableAssistant(entry.message as AssistantMessage)) continue;
 				result.push({ entryId: entry.id, text: text || "(assistant response)", role });
 			}
 		}
 
 		return result;
+	}
+
+	/**
+	 * Whether an assistant turn can be safely used as a fork point.
+	 *
+	 * Forking anchors on the entry's ancestors only (SessionManager.getBranch
+	 * walks parentId upward), and errored/aborted turns are dropped by
+	 * transformMessages() before every request. Two kinds of assistant turn
+	 * therefore produce a branch that silently does NOT match what was selected:
+	 *
+	 * - stopReason "error"/"aborted": transformMessages() skips the turn, so the
+	 *   reply vanishes from context on the next request (defeating "continue from
+	 *   this answer", and risking back-to-back user messages on strict providers).
+	 * - turns containing tool calls: their tool results are *descendant* entries a
+	 *   branch cannot include, so transformMessages() substitutes a fabricated
+	 *   "No result provided" (isError) result — telling the model a successful
+	 *   tool call failed.
+	 *
+	 * A completed answer (the intended "continue from here" target) has a terminal
+	 * stopReason and no unresolved tool calls, so it passes.
+	 */
+	private _isForkableAssistant(message: AssistantMessage): boolean {
+		if (message.stopReason === "error" || message.stopReason === "aborted") return false;
+		if (Array.isArray(message.content) && message.content.some((c) => c.type === "toolCall")) return false;
+		return true;
 	}
 
 	private _extractMessageText(content: string | Array<{ type: string; text?: string }>): string {

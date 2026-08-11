@@ -5838,6 +5838,11 @@ describe("dashboard client regressions", () => {
 			refreshDiskSessions,
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkasst" />);
+		// Pre-type a draft into the composer. The no-clobber guard in finishFork must
+		// preserve it: an assistant fork returns text "" and must NOT wipe the draft.
+		const composer = el.querySelector("textarea") as HTMLTextAreaElement;
+		composer.value = "draft in progress";
+		composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
 		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
@@ -5849,8 +5854,9 @@ describe("dashboard client regressions", () => {
 		expect(api.fork).toHaveBeenCalledWith("forkasst", "a1");
 		expect(hydrateSession).toHaveBeenCalledWith("forkasst");
 		expect(refreshDiskSessions).toHaveBeenCalledOnce();
-		// No composer pre-fill: the branch already includes the last response.
-		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+		// No composer pre-fill AND no clobber: the user's in-progress draft survives
+		// (assistant forks return "" and must not overwrite the composer).
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("draft in progress");
 	});
 
 	it("fork modal informs the user and stays open when a message fork is cancelled", async () => {
