@@ -7,7 +7,10 @@
  * compatibility at the mapping sites.
  */
 
-/** Session metadata (mirrors RpcSessionInfo). */
+/** Maximum Unicode code points carried for an on-disk session's first-message preview. */
+export const MAX_SESSION_PREVIEW_CHARACTERS = 256;
+
+/** Session metadata (mirrors RpcSessionInfo, with a bounded first-message preview). */
 export interface SessionInfoDto {
 	path: string;
 	id: string;

@@ -7,7 +7,13 @@ import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../
 import { DashboardImageService } from "../src/server/dashboard-images.js";
 import { EventHub, formatSseFrame } from "../src/server/event-hub.js";
 import { RuntimePool } from "../src/server/runtime-pool.js";
-import { createDashboardServer, MAX_SSE_BUFFERED_BYTES, parseDeviceCookie } from "../src/server/server.js";
+import {
+	createDashboardServer,
+	type DashboardSessionInfoSource,
+	MAX_SSE_BUFFERED_BYTES,
+	parseDeviceCookie,
+} from "../src/server/server.js";
+import { MAX_SESSION_PREVIEW_CHARACTERS } from "../src/shared/protocol.js";
 import { makeFakeClient } from "./runtime-pool.test.js";
 
 const servers: Server[] = [];
@@ -22,7 +28,7 @@ afterEach(async () => {
 
 interface TestServerOptions {
 	auth?: DashboardAuth;
-	listAllSessions?: () => Promise<unknown[]>;
+	listAllSessions?: () => Promise<DashboardSessionInfoSource[]>;
 	deleteSession?: (path: string) => Promise<unknown>;
 	staticDir?: string;
 	onRestart?: () => void;
@@ -38,6 +44,20 @@ async function createTempProject(): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
 	tempDirs.push(dir);
 	return dir;
+}
+
+function diskSession(cwd: string, overrides: Partial<DashboardSessionInfoSource> = {}): DashboardSessionInfoSource {
+	return {
+		path: "/sessions/one.jsonl",
+		id: "one",
+		cwd,
+		name: "Session one",
+		created: new Date("2026-01-02T03:04:05.000Z"),
+		modified: new Date("2026-02-03T04:05:06.000Z"),
+		messageCount: 7,
+		firstMessage: "First message",
+		...overrides,
+	};
 }
 
 async function waitUntil(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -344,18 +364,120 @@ describe("dashboard server — pairing code", () => {
 describe("dashboard server — fleet and runtimes", () => {
 	it("GET /api/fleet returns runtimes and disk sessions", async () => {
 		const dir = await createTempProject();
-		const disk = [{ path: "/s/one.jsonl", id: "one", cwd: dir }];
+		const disk = [diskSession(dir, { path: "/s/one.jsonl" })];
 		const { base } = await startServer({ listAllSessions: async () => disk });
 		const res = await fetch(`${base}/api/fleet`);
 		const body = (await res.json()) as { runtimes: unknown[]; diskSessions: unknown[] };
 		expect(body.runtimes).toEqual([]);
-		expect(body.diskSessions).toEqual(disk);
+		expect(body.diskSessions).toEqual([
+			{
+				path: "/s/one.jsonl",
+				id: "one",
+				cwd: dir,
+				name: "Session one",
+				created: "2026-01-02T03:04:05.000Z",
+				modified: "2026-02-03T04:05:06.000Z",
+				messageCount: 7,
+				firstMessage: "First message",
+			},
+		]);
+	});
+
+	it("projects bounded disk-session DTOs for fleet, inventory, and resync responses", async () => {
+		const dir = await createTempProject();
+		const preview = `${"a".repeat(MAX_SESSION_PREVIEW_CHARACTERS - 1)}😀trailing text`;
+		const internalSession = {
+			...diskSession(dir, { firstMessage: preview }),
+			parentSessionPath: "/sessions/private-parent.jsonl",
+			allMessagesText: "private complete searchable transcript",
+			futureInternalField: "must not cross the wire",
+		};
+		const { base } = await startServer({ listAllSessions: async () => [internalSession] });
+
+		const fleet = (await fetch(`${base}/api/fleet`).then((response) => response.json())) as {
+			diskSessions: Array<Record<string, unknown>>;
+		};
+		const inventory = (await fetch(`${base}/api/sessions`).then((response) => response.json())) as {
+			sessions: Array<Record<string, unknown>>;
+		};
+		const resync = (await fetch(`${base}/api/resync`).then((response) => response.json())) as {
+			fleet: { diskSessions: Array<Record<string, unknown>> };
+		};
+
+		for (const session of [fleet.diskSessions[0], inventory.sessions[0], resync.fleet.diskSessions[0]]) {
+			expect(Object.keys(session ?? {}).sort()).toEqual([
+				"created",
+				"cwd",
+				"firstMessage",
+				"id",
+				"messageCount",
+				"modified",
+				"name",
+				"path",
+			]);
+			expect(session).toEqual({
+				path: internalSession.path,
+				id: internalSession.id,
+				cwd: internalSession.cwd,
+				name: internalSession.name,
+				created: internalSession.created.toISOString(),
+				modified: internalSession.modified.toISOString(),
+				messageCount: internalSession.messageCount,
+				firstMessage: `${"a".repeat(MAX_SESSION_PREVIEW_CHARACTERS - 1)}😀`,
+			});
+			expect(Array.from(String(session?.firstMessage))).toHaveLength(MAX_SESSION_PREVIEW_CHARACTERS);
+		}
+		expect(JSON.stringify({ fleet, inventory, resync })).not.toContain("private complete searchable transcript");
+		expect(JSON.stringify({ fleet, inventory, resync })).not.toContain("private-parent");
+		expect(JSON.stringify({ fleet, inventory, resync })).not.toContain("futureInternalField");
+	});
+
+	it("preserves session previews below and at the character limit", async () => {
+		const dir = await createTempProject();
+		const below = "b".repeat(MAX_SESSION_PREVIEW_CHARACTERS - 1);
+		const atLimit = "😀".repeat(MAX_SESSION_PREVIEW_CHARACTERS);
+		const { base } = await startServer({
+			listAllSessions: async () => [
+				diskSession(dir, { id: "below", path: "/sessions/below.jsonl", firstMessage: below }),
+				diskSession(dir, { id: "at-limit", path: "/sessions/at-limit.jsonl", firstMessage: atLimit }),
+			],
+		});
+
+		const body = (await fetch(`${base}/api/sessions`).then((response) => response.json())) as {
+			sessions: Array<{ firstMessage: string }>;
+		};
+		expect(body.sessions.map((session) => session.firstMessage)).toEqual([below, atLimit]);
+	});
+
+	it("bounds fleet growth by session count and preview size instead of searchable transcript size", async () => {
+		const dir = await createTempProject();
+		const sessionCount = 40;
+		const transcriptMarker = "complete-transcript-marker";
+		const sessions = Array.from({ length: sessionCount }, (_, index) => ({
+			...diskSession(dir, {
+				path: `/sessions/${index}.jsonl`,
+				id: `session-${index}`,
+				firstMessage: "😀".repeat(MAX_SESSION_PREVIEW_CHARACTERS * 10),
+			}),
+			allMessagesText: `${transcriptMarker}${"x".repeat(100_000)}`,
+		}));
+		const { base } = await startServer({ listAllSessions: async () => sessions });
+
+		const body = await fetch(`${base}/api/fleet`).then((response) => response.text());
+		const fleet = JSON.parse(body) as { diskSessions: Array<{ firstMessage: string }> };
+
+		expect(fleet.diskSessions).toHaveLength(sessionCount);
+		expect(body).not.toContain(transcriptMarker);
+		expect(Buffer.byteLength(body)).toBeLessThan(sessionCount * (MAX_SESSION_PREVIEW_CHARACTERS * 4 + 512));
+		for (const session of fleet.diskSessions) {
+			expect(Array.from(session.firstMessage)).toHaveLength(MAX_SESSION_PREVIEW_CHARACTERS);
+		}
 	});
 
 	it("logs payload-free structured diagnostics for GET /api/fleet", async () => {
 		const dir = await createTempProject();
 		const secret = "private-cwd-session-prompt-content";
-		const disk = [{ path: `/sessions/${secret}.jsonl`, id: secret, cwd: dir, name: secret }];
+		const disk = [diskSession(dir, { path: `/sessions/${secret}.jsonl`, id: secret, name: secret })];
 		const logs: string[] = [];
 		const { base } = await startServer({ listAllSessions: async () => disk, logger: (line) => logs.push(line) });
 
@@ -471,23 +593,25 @@ describe("dashboard server — fleet and runtimes", () => {
 	it("GET /api/fleet hides disk sessions whose cwd no longer exists", async () => {
 		const liveCwd = await createTempProject();
 		const missingCwd = join(tmpdir(), `dreb-dash-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		const liveSession = { path: "/s/live.jsonl", id: "live", cwd: liveCwd };
-		const missingSession = { path: "/s/missing.jsonl", id: "missing", cwd: missingCwd };
+		const liveSession = diskSession(liveCwd, { path: "/s/live.jsonl", id: "live" });
+		const missingSession = diskSession(missingCwd, { path: "/s/missing.jsonl", id: "missing" });
 		const { base } = await startServer({ listAllSessions: async () => [liveSession, missingSession] });
 
 		const res = await fetch(`${base}/api/fleet`);
 		const body = (await res.json()) as { runtimes: unknown[]; diskSessions: Array<{ id: string; cwd: string }> };
 
 		expect(res.status).toBe(200);
-		expect(body.diskSessions).toEqual([liveSession]);
-		expect(body.diskSessions).not.toContainEqual(missingSession);
+		expect(body.diskSessions).toEqual([
+			expect.objectContaining({ path: liveSession.path, id: liveSession.id, cwd: liveSession.cwd }),
+		]);
+		expect(body.diskSessions).not.toContainEqual(expect.objectContaining({ id: missingSession.id }));
 	});
 
 	it("GET /api/sessions returns only existing disk sessions without describing runtimes", async () => {
 		const liveCwd = await createTempProject();
 		const missingCwd = join(tmpdir(), `dreb-dash-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		const liveSession = { path: "/s/live.jsonl", id: "live", cwd: liveCwd };
-		const missingSession = { path: "/s/missing.jsonl", id: "missing", cwd: missingCwd };
+		const liveSession = diskSession(liveCwd, { path: "/s/live.jsonl", id: "live" });
+		const missingSession = diskSession(missingCwd, { path: "/s/missing.jsonl", id: "missing" });
 		const listAllSessions = vi.fn(async () => [liveSession, missingSession]);
 		const { base, clients, pool } = await startServer({ listAllSessions });
 		await pool.create(liveCwd);
@@ -497,7 +621,15 @@ describe("dashboard server — fleet and runtimes", () => {
 		const body = (await res.json()) as { sessions: Array<{ id: string; cwd: string }> };
 
 		expect(res.status).toBe(200);
-		expect(body).toEqual({ sessions: [liveSession] });
+		expect(body.sessions).toEqual([
+			expect.objectContaining({
+				path: liveSession.path,
+				id: liveSession.id,
+				cwd: liveSession.cwd,
+				created: liveSession.created.toISOString(),
+				modified: liveSession.modified.toISOString(),
+			}),
+		]);
 		expect(listAllSessions).toHaveBeenCalledTimes(1);
 		expect(describe).not.toHaveBeenCalled();
 		expect(clients[0].getState).not.toHaveBeenCalled();
