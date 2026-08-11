@@ -332,6 +332,8 @@ export interface HarnessOptions {
 	tools?: AgentTool[];
 	/** Base tools override (replaces built-in read/bash/edit/write). */
 	baseToolsOverride?: Record<string, AgentTool>;
+	/** UI surface type passed to the session (e.g. "dashboard", "rpc"). */
+	uiType?: string;
 	/** Optional resource loader override. */
 	resourceLoader?: ResourceLoader;
 	/** Inline extensions to load into the session resource loader. */
@@ -400,6 +402,7 @@ function createHarnessWithResourceLoader(
 		modelRegistry,
 		resourceLoader,
 		baseToolsOverride: options.baseToolsOverride,
+		uiType: options.uiType,
 	});
 
 	const events: AgentSessionEvent[] = [];

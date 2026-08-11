@@ -46,15 +46,98 @@ export function isStdoutTakenOver(): boolean {
 	return stdoutTakeoverState !== undefined;
 }
 
-export function writeRawStdout(text: string): void {
+// ---------------------------------------------------------------------------
+// Backpressure-aware bounded write queue
+//
+// stream.write() returns false when the stream's internal buffer is full
+// (backpressure). Ignoring that signal during high-rate event streaming lets
+// output queue up unboundedly inside the process, which is what produced the
+// multi-thousand-event end-of-response bursts in issue 448. While the stream
+// is backpressured we queue subsequent writes and flush them in order on
+// "drain". The queue is byte-capped: a consumer that stalls beyond the cap
+// means this process's primary output channel is dead or hopelessly behind,
+// so we fail loudly instead of growing memory without bound.
+// ---------------------------------------------------------------------------
+
+/** Maximum bytes allowed to queue behind a backpressured stdout before aborting. */
+export const MAX_QUEUED_STDOUT_BYTES = 16 * 1024 * 1024; // 16 MiB
+
+const stdoutQueue: string[] = [];
+let stdoutQueuedBytes = 0;
+let stdoutBackpressured = false;
+let stdoutDrainListening = false;
+let stdoutDrainWaiters: Array<() => void> = [];
+
+function writeToStdout(text: string): boolean {
 	if (stdoutTakeoverState) {
-		stdoutTakeoverState.rawStdoutWrite(text);
+		return stdoutTakeoverState.rawStdoutWrite(text);
+	}
+	return process.stdout.write(text);
+}
+
+function requestDrainFlush(): void {
+	if (stdoutDrainListening) return;
+	stdoutDrainListening = true;
+	process.stdout.once("drain", () => {
+		stdoutDrainListening = false;
+		flushStdoutQueue();
+	});
+}
+
+function flushStdoutQueue(): void {
+	stdoutBackpressured = false;
+	while (stdoutQueue.length > 0) {
+		const next = stdoutQueue.shift() as string;
+		stdoutQueuedBytes -= Buffer.byteLength(next);
+		// A false return means the stream accepted the chunk but its buffer is
+		// full again — stop writing and wait for the next drain.
+		if (!writeToStdout(next)) {
+			stdoutBackpressured = true;
+			requestDrainFlush();
+			return;
+		}
+	}
+	if (stdoutDrainWaiters.length > 0) {
+		const waiters = stdoutDrainWaiters;
+		stdoutDrainWaiters = [];
+		for (const resolve of waiters) resolve();
+	}
+}
+
+function enqueueStdout(text: string): void {
+	const bytes = Buffer.byteLength(text);
+	if (stdoutQueuedBytes + bytes > MAX_QUEUED_STDOUT_BYTES) {
+		process.stderr.write(
+			`Fatal: stdout write queue exceeded ${MAX_QUEUED_STDOUT_BYTES} bytes while the stream was ` +
+				"backpressured. The consumer of this process's stdout is not reading; refusing " +
+				"unbounded memory growth. Aborting.\n",
+		);
+		process.exit(1);
+	}
+	stdoutQueue.push(text);
+	stdoutQueuedBytes += bytes;
+}
+
+export function writeRawStdout(text: string): void {
+	// Queue behind any backpressured/queued writes to preserve ordering.
+	if (stdoutBackpressured || stdoutQueue.length > 0) {
+		enqueueStdout(text);
 		return;
 	}
-	process.stdout.write(text);
+	if (!writeToStdout(text)) {
+		stdoutBackpressured = true;
+		requestDrainFlush();
+	}
 }
 
 export async function flushRawStdout(): Promise<void> {
+	// Wait for any queued output to drain so flushes observe true end-of-stream.
+	if (stdoutBackpressured || stdoutQueue.length > 0) {
+		await new Promise<void>((resolve) => {
+			stdoutDrainWaiters.push(resolve);
+		});
+	}
+
 	if (stdoutTakeoverState) {
 		await new Promise<void>((resolve, reject) => {
 			stdoutTakeoverState?.rawStdoutWrite("", (err) => {
