@@ -23,6 +23,7 @@ import type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcPendingMessages,
+	RpcPerformanceStats,
 	RpcResources,
 	RpcResponse,
 	RpcSessionInfo,
@@ -579,9 +580,7 @@ export class RpcClient {
 	/**
 	 * Get performance statistics.
 	 */
-	async getPerformanceStats(): Promise<{
-		models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
-	}> {
+	async getPerformanceStats(): Promise<RpcPerformanceStats> {
 		const response = await this.send({ type: "get_performance_stats" });
 		return this.getData(response);
 	}

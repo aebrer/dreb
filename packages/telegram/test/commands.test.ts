@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { RpcPerformanceStats } from "@dreb/coding-agent/rpc";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Config } from "../src/config.js";
 import type { UserState } from "../src/types.js";
@@ -328,9 +329,7 @@ describe("cmdStats", () => {
 			cost: number;
 			contextUsage: { percent: number; tokens: number; contextWindow: number };
 		}>;
-		perf?: {
-			models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
-		} | null;
+		perf?: RpcPerformanceStats | null;
 	}) {
 		return {
 			isAlive: true,
@@ -346,7 +345,21 @@ describe("cmdStats", () => {
 			),
 			getPerformanceStats: vi.fn().mockResolvedValue(
 				overrides?.perf ?? {
-					models: [{ provider: "anthropic", modelId: "claude-3-sonnet", median: 30.5, mean: 32, count: 100 }],
+					models: [
+						{
+							provider: "anthropic",
+							modelId: "claude-3-sonnet",
+							rolling: { median: 30.5, mean: 32, count: 100 },
+							delta: {
+								baselineMedian: 25,
+								recentMedian: 30,
+								percentDelta: 20,
+								direction: "above" as const,
+								baselineCount: 10000,
+								recentCount: 10,
+							},
+						},
+					],
 				},
 			),
 		} as any;
@@ -357,8 +370,43 @@ describe("cmdStats", () => {
 		await cmdStats(ctx, userState);
 
 		const sentMessage = mockSafeSend.mock.calls[0][2] as string;
-		expect(sentMessage).toContain("⚡ *Performance (last 24h):*");
-		expect(sentMessage).toContain("anthropic/claude-3-sonnet: ~30.5 tok/s (n=100)");
+		expect(sentMessage).toContain("⚡ *Performance:*");
+		expect(sentMessage).toContain("anthropic/claude-3-sonnet: ~31 tok/s [100] · 20% ↑ median [10000]");
+		expect(sentMessage).not.toContain("last 24h");
+	});
+
+	it.each([
+		{
+			name: "below trend",
+			delta: { direction: "below" as const, percentDelta: -19.6, recentCount: 10, baselineCount: 10000 },
+			expected: "  anthropic/claude-3-sonnet: ~31 tok/s [100] · 20% ↓ median [10000]",
+		},
+		{
+			name: "stable trend",
+			delta: { direction: "stable" as const, percentDelta: 0.8, recentCount: 10, baselineCount: 10000 },
+			expected: "  anthropic/claude-3-sonnet: ~31 tok/s [100] · 0% → median [10000]",
+		},
+		{
+			name: "insufficient recent samples",
+			delta: { direction: "above" as const, percentDelta: 20, recentCount: 2, baselineCount: 10000 },
+			expected: "  anthropic/claude-3-sonnet: ~31 tok/s [100]",
+		},
+		{
+			name: "insufficient baseline samples",
+			delta: { direction: "above" as const, percentDelta: 20, recentCount: 10, baselineCount: 2 },
+			expected: "  anthropic/claude-3-sonnet: ~31 tok/s [100]",
+		},
+	])("formats $name with TUI semantics", async ({ delta, expected }) => {
+		const bridge = createMockBridge();
+		const perf = await bridge.getPerformanceStats();
+		Object.assign(perf.models[0].delta, delta);
+		const userState = createUserState({ bridge });
+
+		await cmdStats(ctx, userState);
+
+		const sentMessage = mockSafeSend.mock.calls[0][2] as string;
+		const modelLine = sentMessage.split("\n").find((line) => line.includes("anthropic/claude-3-sonnet"));
+		expect(modelLine).toBe(expected);
 	});
 
 	it("omits performance section when models array is empty", async () => {
@@ -366,7 +414,18 @@ describe("cmdStats", () => {
 		await cmdStats(ctx, userState);
 
 		const sentMessage = mockSafeSend.mock.calls[0][2] as string;
-		expect(sentMessage).not.toContain("⚡ *Performance (last 24h):*");
+		expect(sentMessage).not.toContain("⚡ *Performance:*");
+	});
+
+	it("omits models with fewer than three rolling samples", async () => {
+		const bridge = createMockBridge();
+		const perf = await bridge.getPerformanceStats();
+		perf.models[0].rolling.count = 2;
+		const userState = createUserState({ bridge });
+		await cmdStats(ctx, userState);
+
+		const sentMessage = mockSafeSend.mock.calls[0][2] as string;
+		expect(sentMessage).not.toContain("⚡ *Performance:*");
 	});
 
 	it("omits performance section when getPerformanceStats throws", async () => {
@@ -376,7 +435,7 @@ describe("cmdStats", () => {
 		await cmdStats(ctx, userState);
 
 		const sentMessage = mockSafeSend.mock.calls[0][2] as string;
-		expect(sentMessage).not.toContain("⚡ *Performance (last 24h):*");
+		expect(sentMessage).not.toContain("⚡ *Performance:*");
 		expect(sentMessage).toContain("Session Stats");
 	});
 

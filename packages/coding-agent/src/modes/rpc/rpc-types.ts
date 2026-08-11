@@ -12,6 +12,7 @@ import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
 import type { DispatchArbitrationRecord } from "../../core/dispatch-arbiter.js";
 import type { ContextUsage } from "../../core/extensions/types.js";
+import type { ModelPerformanceSummary } from "../../core/performance-tracker.js";
 import type { SessionEntry } from "../../core/session-manager.js";
 import type { SubagentArbiterSettings } from "../../core/settings-manager.js";
 import type { SourceInfo } from "../../core/source-info.js";
@@ -173,6 +174,11 @@ export interface RpcResources {
 	extensions: Array<{ name?: string; path: string }>;
 	promptTemplates: Array<{ name: string; description?: string }>;
 	systemPromptPresent: boolean;
+}
+
+export interface RpcPerformanceStats {
+	/** TUI-parity summaries computed by the shared rolling and delta calculators. */
+	models: ModelPerformanceSummary[];
 }
 
 export interface RpcQueuedMessage {
@@ -360,7 +366,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_performance_stats";
 			success: true;
-			data: { models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }> };
+			data: RpcPerformanceStats;
 	  }
 	| { id?: string; type: "response"; command: "export_html"; success: true; data: { path: string } }
 	| { id?: string; type: "response"; command: "import_jsonl"; success: true; data: { cancelled: boolean } }

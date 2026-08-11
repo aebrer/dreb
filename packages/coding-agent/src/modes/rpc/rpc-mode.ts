@@ -69,6 +69,7 @@ import type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcPendingMessages,
+	RpcPerformanceStats,
 	RpcResources,
 	RpcResponse,
 	RpcScopedModel,
@@ -110,11 +111,9 @@ export function toRpcSessionInfo(s: SessionInfo): RpcSessionInfo {
 	};
 }
 
-export function getPerformanceStatsData(session: Pick<AgentSession, "getPerformanceTracker">): {
-	models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
-} {
+export function getPerformanceStatsData(session: Pick<AgentSession, "getPerformanceTracker">): RpcPerformanceStats {
 	const tracker = session.getPerformanceTracker();
-	return { models: tracker.getAllRollingAverages() };
+	return { models: tracker.getAllModelSummaries() };
 }
 
 export function getScopedModelsForRpc(session: Pick<AgentSession, "scopedModels">): RpcScopedModel[] {

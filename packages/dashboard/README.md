@@ -47,7 +47,7 @@ Open `http://127.0.0.1:5343`.
   settings/model/scoped-models, import/export, session tree, fork, new/compact/dream,
   resume/reload, and quit), image attach/paste with sent-image previews retained in user transcript entries,
   queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
-  median tok/s), stats/loaded-context/fork modals, steer/follow-up composer
+  latest-100 median tok/s with sample count and long-term delta), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
   and live auto-naming.
 - **Subagent drill-in** — read-only transcript of a background agent: live

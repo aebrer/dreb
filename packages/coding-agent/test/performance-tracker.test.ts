@@ -184,46 +184,76 @@ describe("PerformanceTracker", () => {
 		expect(delta.recentCount).toBe(2);
 	});
 
-	// getAllRollingAverages() --------------------------------------------------
+	// getAllModelSummaries() ---------------------------------------------------
 
-	it("getAllRollingAverages() returns all provider/model combinations", () => {
+	it("getAllModelSummaries() returns an empty array when no data is recorded", () => {
 		tracker = new PerformanceTracker(logPath);
-		tracker.record(makeEntry({ provider: "anthropic", modelId: "claude-3-sonnet", tps: 10 }));
-		tracker.record(makeEntry({ provider: "anthropic", modelId: "claude-3-sonnet", tps: 20 }));
-		tracker.record(makeEntry({ provider: "anthropic", modelId: "claude-3-opus", tps: 30 }));
-		tracker.record(makeEntry({ provider: "openai", modelId: "gpt-4", tps: 40 }));
-
-		const results = tracker.getAllRollingAverages();
-		expect(results).toHaveLength(3);
-
-		const sonnet = results.find((r) => r.provider === "anthropic" && r.modelId === "claude-3-sonnet");
-		expect(sonnet).toBeDefined();
-		expect(sonnet!.count).toBe(2);
-		expect(sonnet!.mean).toBe(15);
-		expect(sonnet!.median).toBe(15);
-
-		const opus = results.find((r) => r.provider === "anthropic" && r.modelId === "claude-3-opus");
-		expect(opus).toBeDefined();
-		expect(opus!.count).toBe(1);
-		expect(opus!.mean).toBe(30);
-
-		const gpt4 = results.find((r) => r.provider === "openai" && r.modelId === "gpt-4");
-		expect(gpt4).toBeDefined();
-		expect(gpt4!.count).toBe(1);
-		expect(gpt4!.mean).toBe(40);
+		expect(tracker.getAllModelSummaries()).toEqual([]);
 	});
 
-	it("getAllRollingAverages() respects the window", () => {
+	it("getAllModelSummaries() includes retained identities and delegates to the shared calculators", () => {
 		tracker = new PerformanceTracker(logPath);
-		tracker.record(
-			makeEntryAtOffsetMs(25 * 60 * 60 * 1000, { provider: "anthropic", modelId: "claude-3-sonnet", tps: 999 }),
-		);
-		tracker.record(makeEntryAtOffsetMs(60 * 60 * 1000, { provider: "openai", modelId: "gpt-4", tps: 40 }));
+		for (let i = 0; i < 3; i++) {
+			tracker.record(
+				makeEntryAtOffsetMs((25 * 60 * 60 + i) * 1000, {
+					provider: "anthropic",
+					modelId: "claude-3-sonnet",
+					tps: 30,
+				}),
+			);
+			tracker.record(makeEntryAtOffsetMs(i * 1000, { provider: "openai", modelId: "gpt-4", tps: 40 }));
+		}
+		const rollingSpy = vi.spyOn(tracker, "getRollingAverage");
+		const deltaSpy = vi.spyOn(tracker, "getPerformanceDelta");
 
-		const results = tracker.getAllRollingAverages();
-		expect(results).toHaveLength(1);
-		expect(results[0].provider).toBe("openai");
-		expect(results[0].modelId).toBe("gpt-4");
+		const summaries = tracker.getAllModelSummaries();
+
+		expect(summaries).toHaveLength(2);
+		expect(summaries.find((summary) => summary.provider === "anthropic")).toMatchObject({
+			modelId: "claude-3-sonnet",
+			rolling: { median: 30, mean: 30, count: 3 },
+			delta: { baselineMedian: 30, recentMedian: 30, direction: "stable", baselineCount: 3, recentCount: 3 },
+		});
+		expect(rollingSpy).toHaveBeenCalledWith("anthropic", "claude-3-sonnet");
+		expect(rollingSpy).toHaveBeenCalledWith("openai", "gpt-4");
+		expect(deltaSpy).toHaveBeenCalledWith("anthropic", "claude-3-sonnet");
+		expect(deltaSpy).toHaveBeenCalledWith("openai", "gpt-4");
+	});
+
+	it("getAllModelSummaries() uses the newest 100 samples for its rolling statistics", () => {
+		tracker = new PerformanceTracker(logPath);
+		for (let i = 0; i < 102; i++) {
+			tracker.record(makeEntryAtOffsetMs((102 - i) * 1000, { tps: i + 1 }));
+		}
+
+		const [summary] = tracker.getAllModelSummaries();
+		expect(summary.rolling).toEqual({ median: (3 + 102) / 2, mean: (3 + 102) / 2, count: 100 });
+		expect(summary.delta.baselineCount).toBe(102);
+		expect(summary.delta.recentCount).toBe(10);
+	});
+
+	it("getAllModelSummaries() caps its delta baseline at the newest 10,000 samples", () => {
+		const entryCount = 10_002;
+		const now = Date.now();
+		const lines = Array.from({ length: entryCount }, (_, index) =>
+			JSON.stringify(
+				makeEntry({
+					timestamp: new Date(now - (entryCount - index) * 1000).toISOString(),
+					tps: index + 1,
+				}),
+			),
+		);
+		writeFileSync(logPath, `${lines.join("\n")}\n`, "utf8");
+		tracker = new PerformanceTracker(logPath);
+
+		const [summary] = tracker.getAllModelSummaries();
+
+		expect(summary.delta).toMatchObject({
+			baselineCount: 10_000,
+			recentCount: 10,
+			baselineMedian: (3 + 10_002) / 2,
+			recentMedian: (9_993 + 10_002) / 2,
+		});
 	});
 
 	// prune() ------------------------------------------------------------------

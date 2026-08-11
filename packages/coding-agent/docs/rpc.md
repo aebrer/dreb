@@ -796,16 +796,26 @@ Response:
       {
         "provider": "anthropic",
         "modelId": "claude-sonnet-4",
-        "median": 31,
-        "mean": 32,
-        "count": 100
+        "rolling": {
+          "median": 31,
+          "mean": 32,
+          "count": 100
+        },
+        "delta": {
+          "baselineMedian": 30,
+          "recentMedian": 33,
+          "percentDelta": 10,
+          "direction": "above",
+          "baselineCount": 10000,
+          "recentCount": 10
+        }
       }
     ]
   }
 }
 ```
 
-`models` contains per-model rolling averages computed from the agent's performance log. Each entry includes the median TPS, mean TPS, and number of recorded turns for that model. Returns an empty `models` array when no performance data has been recorded.
+`models` includes every provider/model identity in the retained performance log. `rolling` comes from the shared latest-100 calculator, while `delta` compares the latest 10 turns with a baseline of up to 10,000 turns. The TUI, dashboard session details, and Telegram `/stats` all use these shared values; they hide TPS until `rolling.count` reaches three and show trend metadata only when both delta counts reach three. With no recorded performance data, `models` is empty.
 
 #### export_html
 

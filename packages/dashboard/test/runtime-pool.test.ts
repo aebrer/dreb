@@ -68,7 +68,21 @@ export function makeFakeClient() {
 			cost: 0.42,
 		})),
 		getPerformanceStats: vi.fn(async () => ({
-			models: [{ provider: "test", modelId: "m1", median: 42, mean: 43, count: 4 }],
+			models: [
+				{
+					provider: "test",
+					modelId: "m1",
+					rolling: { median: 41, mean: 42, count: 4 },
+					delta: {
+						baselineMedian: 41,
+						recentMedian: 41,
+						percentDelta: 0,
+						direction: "stable" as const,
+						baselineCount: 4,
+						recentCount: 4,
+					},
+				},
+			],
 		})),
 		getResources: vi.fn(async () => ({
 			contextFiles: [{ path: "/tmp/AGENTS.md" }],

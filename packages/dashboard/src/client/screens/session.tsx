@@ -10,6 +10,7 @@ import type {
 	ImageAttachmentDto,
 	ModelInfoDto,
 	PendingMessagesDto,
+	PerformanceModelSummaryDto,
 	PerformanceStatsDto,
 	QueuedMessageDto,
 	ResourcesDto,
@@ -73,6 +74,28 @@ export function formatTokens(count: number): string {
 	if (count < 1000000) return `${Math.round(count / 1000)}k`;
 	if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
 	return `${Math.round(count / 1000000)}M`;
+}
+
+export function formatPerformanceIndicator(summary: PerformanceModelSummaryDto | undefined): string | undefined {
+	if (!summary || summary.rolling.count < 3) return undefined;
+
+	const arrows = { above: "↑", below: "↓", stable: "→" } as const;
+	const deltaPercent = summary.delta.direction === "stable" ? 0 : Math.round(Math.abs(summary.delta.percentDelta));
+	const medianDelta =
+		summary.delta.recentCount >= 3 && summary.delta.baselineCount >= 3
+			? ` · ${deltaPercent}% ${arrows[summary.delta.direction]} median [${summary.delta.baselineCount}]`
+			: "";
+
+	return `~${Math.round(summary.rolling.median)} tok/s [${summary.rolling.count}]${medianDelta}`;
+}
+
+export function performanceIndicatorForModel(
+	performance: PerformanceStatsDto | undefined,
+	model: Pick<ModelInfoDto, "provider" | "id"> | undefined,
+): string | undefined {
+	if (!model) return undefined;
+	const summary = performance?.models.find((entry) => entry.provider === model.provider && entry.modelId === model.id);
+	return formatPerformanceIndicator(summary);
 }
 
 function shortenPath(path: string): string {
@@ -1634,15 +1657,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		const percent = usage.percent === null ? "?" : `${usage.percent.toFixed(0)}%`;
 		return `ctx ${percent}/${formatTokens(usage.contextWindow)}`;
 	};
-	const tokPerSecond = () => {
-		const model = runtime()?.state.model;
-		if (!model) return undefined;
-		const rolling = performance()?.models.find(
-			(entry) => entry.provider === model.provider && entry.modelId === model.id,
-		);
-		if (!rolling || rolling.count < 3) return undefined;
-		return `${Math.round(rolling.median)} tok/s`;
-	};
+	const tokPerSecond = () => performanceIndicatorForModel(performance(), runtime()?.state.model);
 	const infoStats = () =>
 		[tokenSummary(), costSummary(), contextSummary(), tokPerSecond()].filter(Boolean) as string[];
 	const pendingMessageItems = () => [

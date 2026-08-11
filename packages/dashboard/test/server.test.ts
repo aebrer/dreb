@@ -732,7 +732,21 @@ describe("dashboard server — fleet and runtimes", () => {
 		const { key } = (await create.json()) as { key: string };
 
 		await expect(fetch(`${base}/api/runtimes/${key}/performance`).then((r) => r.json())).resolves.toEqual({
-			models: [{ provider: "test", modelId: "m1", median: 42, mean: 43, count: 4 }],
+			models: [
+				{
+					provider: "test",
+					modelId: "m1",
+					rolling: { median: 41, mean: 42, count: 4 },
+					delta: {
+						baselineMedian: 41,
+						recentMedian: 41,
+						percentDelta: 0,
+						direction: "stable",
+						baselineCount: 4,
+						recentCount: 4,
+					},
+				},
+			],
 		});
 		await expect(fetch(`${base}/api/runtimes/${key}/resources`).then((r) => r.json())).resolves.toEqual({
 			contextFiles: [{ path: "/tmp/AGENTS.md" }],

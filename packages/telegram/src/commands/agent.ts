@@ -89,10 +89,20 @@ export async function cmdStats(ctx: Context, userState: UserState): Promise<void
 
 		try {
 			const perf = await bridge.getPerformanceStats();
-			if (perf?.models && perf.models.length > 0) {
-				lines.push("\n⚡ *Performance (last 24h):*");
-				for (const m of perf.models) {
-					lines.push(`  ${m.provider}/${m.modelId}: ~${m.median.toFixed(1)} tok/s (n=${m.count})`);
+			const models = (perf?.models ?? []).filter((model) => model.rolling.count >= 3);
+			if (models.length > 0) {
+				lines.push("\n⚡ *Performance:*");
+				const arrows = { above: "↑", below: "↓", stable: "→" } as const;
+				for (const model of models) {
+					const deltaPercent =
+						model.delta.direction === "stable" ? 0 : Math.round(Math.abs(model.delta.percentDelta));
+					const medianDelta =
+						model.delta.recentCount >= 3 && model.delta.baselineCount >= 3
+							? ` · ${deltaPercent}% ${arrows[model.delta.direction]} median [${model.delta.baselineCount}]`
+							: "";
+					lines.push(
+						`  ${model.provider}/${model.modelId}: ~${Math.round(model.rolling.median)} tok/s [${model.rolling.count}]${medianDelta}`,
+					);
 				}
 			}
 		} catch (e) {

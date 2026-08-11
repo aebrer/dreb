@@ -20,6 +20,7 @@ export type {
 	RpcExtensionUIRequest,
 	RpcExtensionUIResponse,
 	RpcPendingMessages,
+	RpcPerformanceStats,
 	RpcQueuedMessage,
 	RpcResources,
 	RpcResponse,
