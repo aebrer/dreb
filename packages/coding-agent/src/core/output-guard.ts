@@ -59,7 +59,7 @@ export function isStdoutTakenOver(): boolean {
 // so we fail loudly instead of growing memory without bound.
 // ---------------------------------------------------------------------------
 
-/** Maximum bytes allowed to queue behind a backpressured stdout before aborting. */
+/** Maximum aggregate bytes allowed for ordinary queued writes before aborting. */
 export const MAX_QUEUED_STDOUT_BYTES = 16 * 1024 * 1024; // 16 MiB
 
 const FATAL_DIAGNOSTIC_FLUSH_TIMEOUT_MS = 1_000;
@@ -108,7 +108,12 @@ function flushStdoutQueue(): void {
 
 function enqueueStdout(text: string): void {
 	const bytes = Buffer.byteLength(text);
-	if (stdoutQueuedBytes + bytes > MAX_QUEUED_STDOUT_BYTES) {
+	// Bound accumulated ordinary backlog, but allow one legitimate protocol frame
+	// larger than the cap (for example, a complete dashboard snapshot). Once that
+	// oversized frame is queued, any subsequent write still fails the cap check.
+	const exceedsAggregateCap = stdoutQueuedBytes + bytes > MAX_QUEUED_STDOUT_BYTES;
+	const isSingleOversizedFrame = bytes > MAX_QUEUED_STDOUT_BYTES && stdoutQueuedBytes <= MAX_QUEUED_STDOUT_BYTES;
+	if (exceedsAggregateCap && !isSingleOversizedFrame) {
 		const diagnostic =
 			`Fatal: stdout write queue exceeded ${MAX_QUEUED_STDOUT_BYTES} bytes while the stream was ` +
 			"backpressured. The consumer of this process's stdout is not reading; refusing " +

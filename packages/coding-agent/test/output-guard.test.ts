@@ -168,6 +168,26 @@ describe("output-guard", () => {
 		expect(chunks).toEqual(["one", "two", "three"]);
 	});
 
+	it("allows one oversized protocol frame to drain without treating it as accumulated backlog", () => {
+		let writable = false;
+		const chunks = fakeStdoutWrite(() => writable);
+		const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new Error("process.exit");
+		}) as never);
+
+		writeRawStdout("trigger"); // accepted, signals backpressure
+		const oversized = "x".repeat(MAX_QUEUED_STDOUT_BYTES + 1);
+		writeRawStdout(oversized);
+
+		expect(chunks).toEqual(["trigger"]);
+		expect(exitSpy).not.toHaveBeenCalled();
+
+		writable = true;
+		process.stdout.emit("drain");
+		expect(chunks).toEqual(["trigger", oversized]);
+		expect(exitSpy).not.toHaveBeenCalled();
+	});
+
 	it("keeps takeover queueing bounded and flushes the fatal diagnostic before exit", () => {
 		const stderrChunks: string[] = [];
 		let stderrCallback: ((error?: Error | null) => void) | undefined;
