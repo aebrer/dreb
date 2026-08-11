@@ -39,6 +39,13 @@ export interface PerformanceDelta {
 	recentCount: number;
 }
 
+export interface ModelPerformanceSummary {
+	provider: string;
+	modelId: string;
+	rolling: RollingAverage;
+	delta: PerformanceDelta;
+}
+
 export class PerformanceTracker {
 	private static readonly PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 	private static readonly LOCK_TIMEOUT_MS = 1000;
@@ -139,33 +146,21 @@ export class PerformanceTracker {
 		};
 	}
 
-	getAllRollingAverages(
-		windowMs = 24 * 60 * 60 * 1000,
-	): Array<{ provider: string; modelId: string; median: number; mean: number; count: number }> {
-		const cutoff = Date.now() - windowMs;
-		const filtered = this.entries.filter((e) => entryTime(e) >= cutoff);
-
-		const groups = new Map<string, number[]>();
-		for (const entry of filtered) {
+	getAllModelSummaries(): ModelPerformanceSummary[] {
+		const models = new Map<string, { provider: string; modelId: string }>();
+		for (const entry of this.entries) {
 			const key = `${entry.provider}\0${entry.modelId}`;
-			const arr = groups.get(key) ?? [];
-			arr.push(entry.tps);
-			groups.set(key, arr);
+			if (!models.has(key)) {
+				models.set(key, { provider: entry.provider, modelId: entry.modelId });
+			}
 		}
 
-		const results: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }> = [];
-		for (const [key, values] of groups) {
-			const [provider, modelId] = key.split("\0");
-			results.push({
-				provider,
-				modelId,
-				median: computeMedian(values),
-				mean: computeMean(values),
-				count: values.length,
-			});
-		}
-
-		return results;
+		return Array.from(models.values(), ({ provider, modelId }) => ({
+			provider,
+			modelId,
+			rolling: this.getRollingAverage(provider, modelId),
+			delta: this.getPerformanceDelta(provider, modelId),
+		}));
 	}
 
 	prune(ageMs = 30 * 24 * 60 * 60 * 1000): void {

@@ -5,7 +5,7 @@
 
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RpcClient, type RpcSessionInfo } from "@dreb/coding-agent/rpc";
+import { RpcClient, type RpcPerformanceStats, type RpcSessionInfo } from "@dreb/coding-agent/rpc";
 import type { Config } from "./config.js";
 import { log } from "./util/telegram.js";
 
@@ -239,7 +239,7 @@ export class AgentBridge {
 	/**
 	 * Get performance statistics.
 	 */
-	async getPerformanceStats(): Promise<any> {
+	async getPerformanceStats(): Promise<RpcPerformanceStats | null> {
 		if (!this.client) return null;
 		try {
 			return await this.client.getPerformanceStats();

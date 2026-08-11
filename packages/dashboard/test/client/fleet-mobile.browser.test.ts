@@ -86,7 +86,7 @@ function makeFakeRuntimeClient(): FakeRuntimeClient {
 		}),
 		getLastAssistantText: async () => undefined,
 		listBackgroundAgents: async () => [],
-		getPerformanceStats: async () => ({}),
+		getPerformanceStats: async () => ({ models: [] }),
 		getGitBranch: async () => null,
 		getDailyCost: async () => 0,
 		getCommands: async () => [],

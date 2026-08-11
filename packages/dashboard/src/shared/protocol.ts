@@ -138,8 +138,22 @@ export interface SessionStatsDto {
 	contextUsage?: ContextUsageDto;
 }
 
+export interface PerformanceModelSummaryDto {
+	provider: string;
+	modelId: string;
+	rolling: { median: number; mean: number; count: number };
+	delta: {
+		baselineMedian: number;
+		recentMedian: number;
+		percentDelta: number;
+		direction: "above" | "below" | "stable";
+		baselineCount: number;
+		recentCount: number;
+	};
+}
+
 export interface PerformanceStatsDto {
-	models: Array<{ provider: string; modelId: string; median: number; mean: number; count: number }>;
+	models: PerformanceModelSummaryDto[];
 }
 
 export interface ResourcesDto {

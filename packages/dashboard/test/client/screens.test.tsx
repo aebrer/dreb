@@ -260,7 +260,12 @@ import { FilesScreen } from "../../src/client/screens/files.js";
 import { FleetScreen, fleetGroupKey } from "../../src/client/screens/fleet.js";
 import { MemoriesScreen } from "../../src/client/screens/memories.js";
 import { PairingScreen } from "../../src/client/screens/pairing.js";
-import { formatTokens, SessionScreen } from "../../src/client/screens/session.js";
+import {
+	formatPerformanceIndicator,
+	formatTokens,
+	performanceIndicatorForModel,
+	SessionScreen,
+} from "../../src/client/screens/session.js";
 import { SettingsScreen } from "../../src/client/screens/settings.js";
 import { SubagentScreen } from "../../src/client/screens/subagent.js";
 import {
@@ -282,11 +287,37 @@ import { createAppStore } from "../../src/client/state/store.js";
 import {
 	type CommandDto,
 	MAX_TOTAL_IMAGE_BYTES,
+	type PerformanceModelSummaryDto,
+	type PerformanceStatsDto,
 	type RuntimeInfoDto,
 	type SettingsDto,
 } from "../../src/shared/protocol.js";
 
 const disposers: Array<() => void> = [];
+
+function performanceSummary(
+	overrides: {
+		provider?: string;
+		modelId?: string;
+		rolling?: Partial<PerformanceModelSummaryDto["rolling"]>;
+		delta?: Partial<PerformanceModelSummaryDto["delta"]>;
+	} = {},
+): PerformanceModelSummaryDto {
+	return {
+		provider: overrides.provider ?? "test",
+		modelId: overrides.modelId ?? "test-model",
+		rolling: { median: 41.8, mean: 43, count: 100, ...overrides.rolling },
+		delta: {
+			baselineMedian: 38,
+			recentMedian: 41.8,
+			percentDelta: 10,
+			direction: "above",
+			baselineCount: 200,
+			recentCount: 10,
+			...overrides.delta,
+		},
+	};
+}
 
 // jsdom lacks ResizeObserver; real browsers always have it. Install a no-op so
 // the stick-to-bottom controller's observeContent() attaches quietly instead of
@@ -1120,7 +1151,10 @@ describe("screen smoke tests", () => {
 		vi.mocked(api.branch).mockResolvedValue({ branch: "feature/info" });
 		vi.mocked(api.dailyCost).mockResolvedValue({ cost: 1.25 });
 		vi.mocked(api.performance).mockResolvedValue({
-			models: [{ provider: "test", modelId: "test-model", median: 41.8, mean: 43, count: 4 }],
+			models: [
+				performanceSummary({ rolling: { count: 4 }, delta: { baselineCount: 4, recentCount: 4 } }),
+				performanceSummary({ modelId: "other-model", rolling: { median: 99 } }),
+			],
 		});
 		const store = makeStore() as any;
 		// Inject session state directly (store internals sync from the reducer).
@@ -1171,7 +1205,8 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("~/software/dreb (feature/info) • test session");
 		expect(el.textContent).toContain("↑1.2k ↓45k W12");
 		expect(el.textContent).toContain("$0.420 (sub), today: $1.25");
-		expect(el.textContent).toContain("42 tok/s");
+		expect(el.textContent).toContain("~42 tok/s [4] · 10% ↑ median [4]");
+		expect(el.textContent).not.toContain("99 tok/s");
 		expect(el.textContent).toContain("test/test-model");
 		expect(el.textContent).toContain("scan things");
 		// Suggest-next chip
@@ -3525,6 +3560,33 @@ describe("dashboard client regressions", () => {
 		expect(formatTokens(45000)).toBe("45k");
 		expect(formatTokens(1_200_000)).toBe("1.2M");
 		expect(formatTokens(12_000_000)).toBe("12M");
+	});
+
+	it("formats above, below, and stable TPS summaries like the TUI footer", () => {
+		expect(formatPerformanceIndicator(performanceSummary())).toBe("~42 tok/s [100] · 10% ↑ median [200]");
+		expect(
+			formatPerformanceIndicator(performanceSummary({ delta: { direction: "below", percentDelta: -9.6 } })),
+		).toBe("~42 tok/s [100] · 10% ↓ median [200]");
+		expect(formatPerformanceIndicator(performanceSummary({ delta: { direction: "stable", percentDelta: 99 } }))).toBe(
+			"~42 tok/s [100] · 0% → median [200]",
+		);
+	});
+
+	it("applies the TUI sample gates to TPS summaries", () => {
+		expect(formatPerformanceIndicator(performanceSummary({ rolling: { count: 2 } }))).toBeUndefined();
+		expect(formatPerformanceIndicator(undefined)).toBeUndefined();
+		expect(formatPerformanceIndicator(performanceSummary({ delta: { recentCount: 2 } }))).toBe("~42 tok/s [100]");
+		expect(formatPerformanceIndicator(performanceSummary({ delta: { baselineCount: 2 } }))).toBe("~42 tok/s [100]");
+	});
+
+	it("selects only the active model's shared TPS summary", () => {
+		const performance: PerformanceStatsDto = { models: [performanceSummary()] };
+		expect(performanceIndicatorForModel(performance, { provider: "test", id: "test-model" })).toBe(
+			"~42 tok/s [100] · 10% ↑ median [200]",
+		);
+		expect(performanceIndicatorForModel(performance, { provider: "test", id: "other-model" })).toBeUndefined();
+		expect(performanceIndicatorForModel(undefined, { provider: "test", id: "test-model" })).toBeUndefined();
+		expect(performanceIndicatorForModel(performance, undefined)).toBeUndefined();
 	});
 
 	it("transcript render item wrappers stay stable for unchanged rows", () => {
