@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	DashboardAuth,
 	isAllowedLocalHost,
@@ -10,6 +10,8 @@ import {
 	normalizeAddress,
 	type TailscaleIdentity,
 	type TailscaleResolver,
+	TailscaleResolverError,
+	TailscaleWhoisResolver,
 } from "../src/server/auth.js";
 import { FilePairingStorage, loadOrCreateDashboardSecret } from "../src/server/pairing-storage.js";
 
@@ -68,6 +70,114 @@ describe("address helpers", () => {
 		expect(isAllowedLocalHost("127.0.0.1.evil.com")).toBe(false);
 		expect(isAllowedLocalHost(undefined)).toBe(false);
 		expect(isAllowedLocalHost("")).toBe(false);
+	});
+});
+
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
+}
+
+describe("TailscaleWhoisResolver", () => {
+	it("single-flights concurrent normalized peers without caching completed results", async () => {
+		const pending = deferred<{ stdout: string }>();
+		const runner = vi.fn(async (_address: string) => pending.promise);
+		const resolver = new TailscaleWhoisResolver(runner);
+
+		const first = resolver.resolve("::ffff:100.64.0.9");
+		const second = resolver.resolve("100.64.0.9");
+		await Promise.resolve();
+		expect(runner).toHaveBeenCalledOnce();
+		expect(runner).toHaveBeenCalledWith("100.64.0.9");
+
+		pending.resolve({
+			stdout: JSON.stringify({
+				Node: { Name: "phone.tailnet.ts.net." },
+				UserProfile: { LoginName: "alice@example.com" },
+			}),
+		});
+		await expect(first).resolves.toEqual({ loginName: "alice@example.com", device: "phone.tailnet.ts.net" });
+		await expect(second).resolves.toEqual({ loginName: "alice@example.com", device: "phone.tailnet.ts.net" });
+
+		await resolver.resolve("100.64.0.9");
+		expect(runner).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps different peer lookups independent", async () => {
+		const pending = new Map<string, ReturnType<typeof deferred<{ stdout: string }>>>();
+		const runner = vi.fn((address: string) => {
+			const next = deferred<{ stdout: string }>();
+			pending.set(address, next);
+			return next.promise;
+		});
+		const resolver = new TailscaleWhoisResolver(runner);
+		const first = resolver.resolve("100.64.0.1");
+		const second = resolver.resolve("100.64.0.2");
+		await Promise.resolve();
+		expect(runner).toHaveBeenCalledTimes(2);
+		for (const [address, item] of pending) {
+			item.resolve({
+				stdout: JSON.stringify({ Node: { Name: address }, UserProfile: { LoginName: `${address}@test` } }),
+			});
+		}
+		await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+	});
+
+	it("returns null only for clean peer-not-found or a response without a login identity", async () => {
+		const notFound = new TailscaleWhoisResolver(async () => {
+			throw Object.assign(new Error("command failed"), { stderr: "peer not found\n" });
+		});
+		await expect(notFound.resolve("100.64.0.9")).resolves.toBeNull();
+
+		const noIdentity = new TailscaleWhoisResolver(async () => ({
+			stdout: JSON.stringify({ Node: { Name: "tagged-node" }, UserProfile: null }),
+		}));
+		await expect(noIdentity.resolve("100.64.0.9")).resolves.toBeNull();
+	});
+
+	it("reports timeout, execution, parse, and schema failures distinctly and retries after failure", async () => {
+		const errors = [
+			{ error: Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" }), kind: "timeout" },
+			{
+				error: Object.assign(new Error("timed out"), {
+					killed: true,
+					signal: "SIGTERM",
+					stderr: "peer not found\n",
+				}),
+				kind: "timeout",
+			},
+			{ error: Object.assign(new Error("failed"), { stderr: "daemon unavailable" }), kind: "execution" },
+		] as const;
+		for (const item of errors) {
+			const resolver = new TailscaleWhoisResolver(async () => {
+				throw item.error;
+			});
+			await expect(resolver.resolve("100.64.0.9")).rejects.toMatchObject({ kind: item.kind });
+		}
+
+		await expect(
+			new TailscaleWhoisResolver(async () => ({ stdout: "{" })).resolve("100.64.0.9"),
+		).rejects.toMatchObject({ kind: "parse" });
+		await expect(
+			new TailscaleWhoisResolver(async () => ({ stdout: JSON.stringify({ UserProfile: {} }) })).resolve(
+				"100.64.0.9",
+			),
+		).rejects.toMatchObject({ kind: "schema" });
+
+		let attempts = 0;
+		const retrying = new TailscaleWhoisResolver(async () => {
+			attempts += 1;
+			if (attempts === 1) throw Object.assign(new Error("failed"), { stderr: "daemon unavailable" });
+			return { stdout: JSON.stringify({ Node: {}, UserProfile: { LoginName: "alice@example.com" } }) };
+		});
+		await expect(retrying.resolve("100.64.0.9")).rejects.toBeInstanceOf(TailscaleResolverError);
+		await expect(retrying.resolve("100.64.0.9")).resolves.toMatchObject({ loginName: "alice@example.com" });
+		expect(attempts).toBe(2);
 	});
 });
 
@@ -150,6 +260,24 @@ describe("DashboardAuth — remote mode", () => {
 		if (!decision.allowed) expect(decision.reason).toContain("not a known Tailscale peer");
 	});
 
+	it("coalesces parallel page-load authentication without false unknown-peer denials", async () => {
+		const pending = deferred<{ stdout: string }>();
+		const runner = vi.fn(async () => pending.promise);
+		const auth = makeAuth({ resolver: new TailscaleWhoisResolver(runner) });
+		const decisions = [auth.authenticate(REMOTE), auth.authenticate(REMOTE), auth.authenticate(REMOTE)];
+		await Promise.resolve();
+		expect(runner).toHaveBeenCalledOnce();
+		pending.resolve({
+			stdout: JSON.stringify({ Node: { Name: "phone" }, UserProfile: { LoginName: "alice@example.com" } }),
+		});
+		const resolved = await Promise.all(decisions);
+		expect(resolved).toHaveLength(3);
+		for (const decision of resolved) {
+			expect(decision).toMatchObject({ allowed: false, status: 401, needsPairing: true });
+			if (!decision.allowed) expect(decision.reason).not.toContain("not a known Tailscale peer");
+		}
+	});
+
 	it("denies identities not on the allowlist, naming them", async () => {
 		const auth = makeAuth();
 		const decision = await auth.authenticate({ ...REMOTE, remoteAddress: "100.64.0.66" });
@@ -195,6 +323,131 @@ describe("DashboardAuth — remote mode", () => {
 		expect(decision.allowed).toBe(true);
 		if (decision.allowed && decision.mode === "remote") {
 			expect(decision.identity.loginName).toBe("alice@example.com");
+		}
+	});
+
+	it("defaults future pairings to 180 days and persists a validated whole-day setting", async () => {
+		let now = Date.parse("2030-01-01T00:00:00.000Z");
+		const auth = makeAuth({ now: () => now });
+		await expect(auth.getPairingSettings()).resolves.toEqual({ pairingTtlDays: 180 });
+
+		const first = await auth.pair(REMOTE, auth.currentPairingCode().code);
+		expect(Date.parse(first.device.expiresAt) - Date.parse(first.device.createdAt)).toBe(180 * 24 * 60 * 60 * 1000);
+
+		await expect(auth.setPairingSettings(45)).resolves.toEqual({ pairingTtlDays: 45 });
+		expect((await auth.listDevices()).find((device) => device.id === first.device.id)?.expiresAt).toBe(
+			first.device.expiresAt,
+		);
+
+		now += 30_000;
+		const second = await auth.pair(REMOTE, auth.currentPairingCode().code);
+		expect(Date.parse(second.device.expiresAt) - Date.parse(second.device.createdAt)).toBe(45 * 24 * 60 * 60 * 1000);
+		await expect(auth.getPairingSettings()).resolves.toEqual({ pairingTtlDays: 45 });
+	});
+
+	it("rejects out-of-range or fractional pairing lifetime settings", async () => {
+		const auth = makeAuth();
+		for (const value of [0, 3651, 1.5, Number.NaN]) {
+			await expect(auth.setPairingSettings(value)).rejects.toMatchObject({ status: 400 });
+		}
+		await expect(auth.setPairingSettings(1)).resolves.toEqual({ pairingTtlDays: 1 });
+		await expect(auth.setPairingSettings(3650)).resolves.toEqual({ pairingTtlDays: 3650 });
+	});
+
+	it("claims expiry warnings at the 10% boundary at most once per pairing per UTC day", async () => {
+		let now = Date.parse("2030-01-01T00:00:00.000Z");
+		const auth = makeAuth({ now: () => now });
+		await auth.setPairingSettings(20);
+		const { token, device } = await auth.pair(REMOTE, auth.currentPairingCode().code);
+		const warningStartsAt = Date.parse(device.expiresAt) - 2 * 24 * 60 * 60 * 1000;
+		const decision = await auth.authenticate({ ...REMOTE, deviceToken: token });
+		expect(decision.allowed && decision.mode === "remote").toBe(true);
+		if (!decision.allowed || decision.mode !== "remote") throw new Error("expected remote pairing");
+
+		now = warningStartsAt - 1;
+		await expect(auth.claimPairingExpiryStatus(decision.pairing.id)).resolves.toEqual({
+			nextCheckAt: new Date(warningStartsAt).toISOString(),
+		});
+
+		now = warningStartsAt;
+		const claims = await Promise.all([
+			auth.claimPairingExpiryStatus(decision.pairing.id),
+			auth.claimPairingExpiryStatus(decision.pairing.id),
+			auth.claimPairingExpiryStatus(decision.pairing.id),
+		]);
+		expect(claims.filter((claim) => claim.warning).map((claim) => claim.warning)).toEqual([
+			{ expiresAt: device.expiresAt },
+		]);
+
+		now += 24 * 60 * 60 * 1000;
+		await expect(auth.claimPairingExpiryStatus(decision.pairing.id)).resolves.toMatchObject({
+			warning: { expiresAt: device.expiresAt },
+		});
+		now = Date.parse(device.expiresAt);
+		await expect(auth.claimPairingExpiryStatus(decision.pairing.id)).resolves.toEqual({});
+	});
+
+	it("persists pairing settings and daily warning suppression across restarts", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "dreb-dashboard-auth-warning-"));
+		let now = Date.parse("2030-01-01T00:00:00.000Z");
+		try {
+			const pairingsPath = join(dir, "pairings.json");
+			const secret = Buffer.from(TEST_SECRET);
+			const first = makeAuth({ storage: new FilePairingStorage(pairingsPath), secret, now: () => now });
+			await first.setPairingSettings(10);
+			const { token, device } = await first.pair(REMOTE, first.currentPairingCode().code);
+			now = Date.parse(device.expiresAt) - 24 * 60 * 60 * 1000;
+			const decision = await first.authenticate({ ...REMOTE, deviceToken: token });
+			if (!decision.allowed || decision.mode !== "remote") throw new Error("expected remote pairing");
+			await expect(first.claimPairingExpiryStatus(decision.pairing.id)).resolves.toHaveProperty("warning");
+
+			const restarted = makeAuth({ storage: new FilePairingStorage(pairingsPath), secret, now: () => now });
+			await expect(restarted.getPairingSettings()).resolves.toEqual({ pairingTtlDays: 10 });
+			await expect(restarted.claimPairingExpiryStatus(decision.pairing.id)).resolves.not.toHaveProperty("warning");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("migrates legacy version-1 pairing files without changing recorded expiry", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "dreb-dashboard-auth-v1-"));
+		try {
+			const path = join(dir, "pairings.json");
+			const legacyPairing = {
+				id: "legacy",
+				identity: "alice@example.com",
+				createdAt: "2030-01-01T00:00:00.000Z",
+				expiresAt: "2030-02-01T00:00:00.000Z",
+				tokenHmac: "abc",
+			};
+			writeFileSync(path, JSON.stringify({ version: 1, pairings: [legacyPairing], consumedPairingWindows: [] }));
+			const auth = makeAuth({
+				storage: new FilePairingStorage(path),
+				now: () => Date.parse("2030-01-02T00:00:00.000Z"),
+			});
+			await expect(auth.getPairingSettings()).resolves.toEqual({ pairingTtlDays: 180 });
+			await auth.setPairingSettings(90);
+			const saved = JSON.parse(readFileSync(path, "utf8"));
+			expect(saved).toMatchObject({ version: 2, pairingTtlDays: 90 });
+			expect(saved.pairings[0].expiresAt).toBe(legacyPairing.expiresAt);
+			expect(statSync(path).mode & 0o777).toBe(0o600);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects malformed persisted pairing settings instead of resetting them", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "dreb-dashboard-auth-invalid-"));
+		try {
+			const path = join(dir, "pairings.json");
+			writeFileSync(
+				path,
+				JSON.stringify({ version: 2, pairings: [], consumedPairingWindows: [], pairingTtlDays: 0 }),
+			);
+			const auth = makeAuth({ storage: new FilePairingStorage(path) });
+			await expect(auth.getPairingSettings()).rejects.toThrow(/Unrecognized pairing file format/);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
@@ -402,6 +655,24 @@ describe("DashboardAuth — remote mode", () => {
 		const decision = await auth.authenticate(REMOTE);
 		expect(decision.allowed).toBe(false);
 		if (!decision.allowed) expect(decision.reason).toContain("resolver exploded");
+	});
+
+	it("logs sanitized resolver failure categories without peer or command output", async () => {
+		const logs: string[] = [];
+		const auth = makeAuth({
+			resolver: new TailscaleWhoisResolver(async () => {
+				throw Object.assign(new Error("secret daemon detail"), { stderr: "secret daemon detail" });
+			}),
+			logger: (line) => logs.push(line),
+		});
+		const decision = await auth.authenticate(REMOTE);
+		expect(decision).toMatchObject({ allowed: false, status: 500 });
+		if (!decision.allowed) {
+			expect(decision.reason).toContain("resolver execution failure");
+			expect(decision.reason).not.toContain("secret daemon detail");
+			expect(decision.reason).not.toContain(REMOTE.remoteAddress);
+		}
+		expect(logs).toEqual(["identity resolver execution failure — denying"]);
 	});
 
 	it("storage failure denies (fail-closed)", async () => {

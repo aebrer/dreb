@@ -81,7 +81,8 @@ Open `http://127.0.0.1:5343`.
   (entropist.ca / Dim / Solarized / Gruvbox / Caves of Qud / Van Gogh /
   Okabe-Ito / Paul Tol — the last two colorblind-safe — live preview cards,
   system/light/dark mode selector, saved per browser), current pairing code,
-  and paired-devices management.
+  the 1–3650 day lifetime used by future pairings (180 days by default), and
+  paired-device expiry/unpair management.
 - **Pairing** — remote first-login rotating-code flow.
 
 ### Scoped models
@@ -255,13 +256,18 @@ dreb-dashboard --remote --allow you@example.com
 
 Enforcement layers, all fail-closed:
 
-1. Tailscale identity resolution of the peer address (`tailscale status`)
+1. Peer-specific Tailscale identity resolution (`tailscale whois`); concurrent
+   requests for the same normalized peer share one in-flight lookup, while
+   resolver failures remain fail-closed and distinct from a clean unknown peer
 2. Identity allowlist — empty allowlist denies everyone
 3. First-login pairing code: 6 digits, rotates every 30 seconds, shown live in
    the dashboard Settings tab on the host machine (also printed at startup as a
    headless fallback)
-4. Signed per-device cookie thereafter; devices are listed and unpair-able in
-   settings
+4. Signed per-device cookie thereafter. New pairings last 180 days by default;
+   Settings accepts 1–3650 days for future pairings without rewriting existing
+   expiries. Devices in the final 10% of their recorded lifetime receive an
+   advance warning at most once per UTC day. Devices and expiry dates are listed
+   in settings and can be unpaired.
 
 **There is no LAN mode.** Access from another device — even on the same LAN —
 goes through Tailscale.

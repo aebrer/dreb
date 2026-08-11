@@ -267,12 +267,28 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	// -- auth/pairing ----------------------------------------------------------
 	app.get("/api/auth", (req: AuthedRequest, res) => {
 		const decision = req.authDecision!;
-		if (decision.allowed) {
-			const status: AuthStatusDto =
-				decision.mode === "local"
-					? { mode: "local" }
-					: { mode: "remote", identity: decision.identity.loginName, device: decision.identity.device };
+		if (decision.allowed && decision.mode === "local") {
+			const status: AuthStatusDto = { mode: "local" };
 			res.json({ ...status, needsPairing: false });
+			return;
+		}
+		if (decision.allowed) {
+			auth
+				.claimPairingExpiryStatus(decision.pairing.id)
+				.then((expiry) => {
+					const status: AuthStatusDto = {
+						mode: "remote",
+						identity: decision.identity.loginName,
+						device: decision.identity.device,
+						...(expiry.warning ? { pairingExpiryWarning: expiry.warning } : {}),
+						...(expiry.nextCheckAt ? { pairingExpiryCheckAt: expiry.nextCheckAt } : {}),
+					};
+					res.json({ ...status, needsPairing: false });
+				})
+				.catch((err) => {
+					log(`pairing expiry status failed: ${err instanceof Error ? err.message : String(err)}`);
+					res.status(500).json({ error: "Auth subsystem error — denied", needsPairing: false });
+				});
 			return;
 		}
 		res.status(decision.status).json({
@@ -322,6 +338,28 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 				const status = typeof err?.status === "number" ? err.status : 500;
 				log(`pairing failed: ${err instanceof Error ? err.message : String(err)}`);
 				res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+			});
+	});
+
+	app.get("/api/pairing-settings", (_req, res) => {
+		auth
+			.getPairingSettings()
+			.then((settings) => res.json(settings))
+			.catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
+	});
+
+	app.put("/api/pairing-settings", (req, res) => {
+		const pairingTtlDays = req.body?.pairingTtlDays;
+		if (typeof pairingTtlDays !== "number") {
+			res.status(400).json({ error: "pairingTtlDays must be a number" });
+			return;
+		}
+		auth
+			.setPairingSettings(pairingTtlDays)
+			.then((settings) => res.json(settings))
+			.catch((err) => {
+				const status = typeof err?.status === "number" ? err.status : 500;
+				res.status(status).json({ error: String(err?.message ?? err) });
 			});
 	});
 

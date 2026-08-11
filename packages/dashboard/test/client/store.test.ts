@@ -19,7 +19,7 @@ vi.mock("../../src/client/api.js", () => ({
 	connectEvents: vi.fn(() => () => {}),
 }));
 
-import { api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
+import { type AuthStatusResponse, api, connectEvents, type EventStreamHandlers } from "../../src/client/api.js";
 import {
 	addComposerHistoryEntry,
 	evictComposerMemory,
@@ -189,6 +189,188 @@ describe("composer memory", () => {
 
 		expect(getComposerDraft(key)).toBeUndefined();
 		expect(getComposerHistory(key)).toEqual([]);
+	});
+});
+
+describe("pairing expiry auth status", () => {
+	it("shows a startup warning and processes reconnect auth status through the same path", async () => {
+		vi.mocked(api.auth).mockResolvedValue({
+			mode: "remote",
+			needsPairing: false,
+			identity: "alice@example.com",
+			pairingExpiryWarning: { expiresAt: "2030-07-01T00:00:00.000Z" },
+		});
+		const store = await makeStartedStore();
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: expect.stringContaining("expires on 2030-07-01"), tone: "warning" }),
+		]);
+
+		eventHandlers?.onAuthStatus?.({
+			mode: "remote",
+			needsPairing: false,
+			identity: "alice@example.com",
+			pairingExpiryCheckAt: "2030-06-15T00:00:00.000Z",
+		});
+		expect(store.auth()).toMatchObject({ pairingExpiryCheckAt: "2030-06-15T00:00:00.000Z" });
+		expect(store.notices()).toHaveLength(1);
+		store.stop();
+	});
+
+	it("schedules a long-lived tab's server-authoritative expiry check", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+		vi.mocked(api.auth)
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryCheckAt: "2030-01-01T00:00:01.000Z",
+			})
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryWarning: { expiresAt: "2030-01-20T00:00:00.000Z" },
+			});
+		const store = await makeStartedStore();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(api.auth).toHaveBeenCalledTimes(2);
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: expect.stringContaining("expires on 2030-01-20"), tone: "warning" }),
+		]);
+		store.stop();
+		vi.useRealTimers();
+	});
+
+	it("backs off when clock skew makes the server repeat an already-due check time", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2030-01-01T00:00:10.000Z"));
+		const repeatedCheckAt = "2030-01-01T00:00:05.000Z";
+		vi.mocked(api.auth)
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryCheckAt: repeatedCheckAt,
+			})
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryCheckAt: repeatedCheckAt,
+			})
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+			});
+
+		const store = await makeStartedStore();
+		await flushAsyncWork();
+		expect(api.auth).toHaveBeenCalledTimes(2);
+
+		await vi.advanceTimersByTimeAsync(4_999);
+		expect(api.auth).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(api.auth).toHaveBeenCalledTimes(3);
+		store.stop();
+		vi.useRealTimers();
+	});
+
+	it("presents a claimed warning when a concurrent auth status supersedes its timer", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+		const scheduled = deferred<AuthStatusResponse>();
+		vi.mocked(api.auth)
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryCheckAt: "2030-01-01T00:00:01.000Z",
+			})
+			.mockReturnValueOnce(scheduled.promise);
+		const store = await makeStartedStore();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(api.auth).toHaveBeenCalledTimes(2);
+
+		eventHandlers?.onAuthStatus?.({
+			mode: "remote",
+			needsPairing: false,
+			identity: "alice@example.com",
+			pairingExpiryCheckAt: "2030-01-02T00:00:00.000Z",
+		});
+		scheduled.resolve({
+			mode: "remote",
+			needsPairing: false,
+			identity: "alice@example.com",
+			pairingExpiryWarning: { expiresAt: "2030-01-20T00:00:00.000Z" },
+			pairingExpiryCheckAt: "2030-01-01T00:00:01.000Z",
+		});
+		await flushAsyncWork();
+
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: expect.stringContaining("expires on 2030-01-20"), tone: "warning" }),
+		]);
+		expect(store.auth()).toMatchObject({ pairingExpiryCheckAt: "2030-01-02T00:00:00.000Z" });
+		store.stop();
+		vi.useRealTimers();
+	});
+
+	it("retries a transient failure at the scheduled expiry check", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+		vi.mocked(api.auth)
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryCheckAt: "2030-01-01T00:00:01.000Z",
+			})
+			.mockRejectedValueOnce(new Error("temporary network failure"))
+			.mockResolvedValueOnce({
+				mode: "remote",
+				needsPairing: false,
+				identity: "alice@example.com",
+				pairingExpiryWarning: { expiresAt: "2030-01-20T00:00:00.000Z" },
+			});
+		const store = await makeStartedStore();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(api.auth).toHaveBeenCalledTimes(2);
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: expect.stringContaining("temporary network failure"), tone: "error" }),
+		]);
+
+		await vi.advanceTimersByTimeAsync(5_000);
+		expect(api.auth).toHaveBeenCalledTimes(3);
+		expect(store.notices()).toEqual([
+			expect.objectContaining({ text: expect.stringContaining("temporary network failure"), tone: "error" }),
+			expect.objectContaining({ text: expect.stringContaining("expires on 2030-01-20"), tone: "warning" }),
+		]);
+		store.stop();
+		vi.useRealTimers();
+	});
+
+	it("cancels a pending expiry check when the store stops", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+		vi.mocked(api.auth).mockResolvedValueOnce({
+			mode: "remote",
+			needsPairing: false,
+			identity: "alice@example.com",
+			pairingExpiryCheckAt: "2030-01-01T00:01:00.000Z",
+		});
+		const store = await makeStartedStore();
+		store.stop();
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(api.auth).toHaveBeenCalledOnce();
+		vi.useRealTimers();
+	});
+
+	it("does not schedule or warn for local auth status", async () => {
+		const store = await makeStartedStore();
+		expect(store.auth()).toEqual({ mode: "local", needsPairing: false });
+		expect(store.notices()).toEqual([]);
+		store.stop();
 	});
 });
 

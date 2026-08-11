@@ -6,12 +6,27 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type { PairingState, StoredPairing } from "./auth.js";
+import { MAX_PAIRING_TTL_DAYS, MIN_PAIRING_TTL_DAYS, type PairingState, type StoredPairing } from "./auth.js";
 
-interface PairingFile {
+interface PairingFileV1 {
 	version: 1;
 	pairings: StoredPairing[];
 	consumedPairingWindows?: number[];
+}
+
+interface PairingFileV2 {
+	version: 2;
+	pairings: StoredPairing[];
+	consumedPairingWindows: number[];
+	pairingTtlDays?: number;
+}
+
+type PairingFile = PairingFileV1 | PairingFileV2;
+
+function isUtcDate(value: unknown): value is string {
+	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+	const parsed = Date.parse(`${value}T00:00:00.000Z`);
+	return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
 }
 
 /**
@@ -56,24 +71,37 @@ export class FilePairingStorage {
 		}
 		const parsed = JSON.parse(raw) as PairingFile;
 		if (
-			parsed.version !== 1 ||
+			(parsed.version !== 1 && parsed.version !== 2) ||
 			!Array.isArray(parsed.pairings) ||
+			(parsed.version === 2 && !Array.isArray(parsed.consumedPairingWindows)) ||
 			(parsed.consumedPairingWindows !== undefined &&
 				(!Array.isArray(parsed.consumedPairingWindows) ||
-					!parsed.consumedPairingWindows.every((window) => Number.isSafeInteger(window))))
+					!parsed.consumedPairingWindows.every((window) => Number.isSafeInteger(window)))) ||
+			(parsed.version === 2 &&
+				parsed.pairingTtlDays !== undefined &&
+				(!Number.isSafeInteger(parsed.pairingTtlDays) ||
+					parsed.pairingTtlDays < MIN_PAIRING_TTL_DAYS ||
+					parsed.pairingTtlDays > MAX_PAIRING_TTL_DAYS)) ||
+			!parsed.pairings.every(
+				(pairing) =>
+					pairing &&
+					typeof pairing === "object" &&
+					(pairing.lastExpiryWarningUtcDate === undefined || isUtcDate(pairing.lastExpiryWarningUtcDate)),
+			)
 		) {
 			throw new Error(`Unrecognized pairing file format at ${this.path}`);
 		}
 		return {
 			pairings: parsed.pairings,
 			consumedPairingWindows: parsed.consumedPairingWindows ?? [],
+			pairingTtlDays: parsed.version === 2 ? parsed.pairingTtlDays : undefined,
 		};
 	}
 
 	async save(state: PairingState): Promise<void> {
 		const dir = dirname(this.path);
 		mkdirSync(dir, { recursive: true });
-		const file: PairingFile = { version: 1, ...state };
+		const file: PairingFileV2 = { version: 2, ...state };
 		const tmp = join(dir, `.${basename(this.path)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
 		try {
 			writeFileSync(tmp, `${JSON.stringify(file, null, "\t")}\n`, { mode: 0o600, flag: "wx" });

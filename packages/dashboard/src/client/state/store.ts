@@ -8,7 +8,6 @@ import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type {
 	ActiveRuntimeSnapshotDto,
-	AuthStatusDto,
 	EventEnvelope,
 	FleetDto,
 	FleetRuntimeSnapshotDto,
@@ -17,7 +16,7 @@ import type {
 	SessionStateDto,
 	SessionStatsDto,
 } from "../../shared/protocol.js";
-import { api, connectEvents, type EventConnectionStatus } from "../api.js";
+import { type AuthStatusResponse, api, connectEvents, type EventConnectionStatus } from "../api.js";
 import { evictComposerMemory } from "./composer-memory.js";
 import {
 	applySessionEvent,
@@ -95,6 +94,9 @@ const RESYNC_TIMEOUT_MS = 30_000;
 const FLEET_STATS_REQUEST_TIMEOUT_MS = 10_000;
 const RESYNC_RETRY_BASE_MS = 1_000;
 const RESYNC_RETRY_MAX_MS = 30_000;
+const PAIRING_EXPIRY_RETRY_BASE_MS = 5_000;
+const PAIRING_EXPIRY_RETRY_MAX_MS = 5 * 60_000;
+const MAX_TIMER_DELAY_MS = 2_147_000_000;
 const textEncoder = new TextEncoder();
 
 interface PendingResync {
@@ -152,7 +154,7 @@ export function createAppStore() {
 	const [fleetStatsError, setFleetStatsError] = createSignal<string>();
 	const [resyncError, setResyncError] = createSignal<string>();
 	const [resyncing, setResyncing] = createSignal(false);
-	const [auth, setAuth] = createSignal<(AuthStatusDto & { needsPairing?: boolean; error?: string }) | undefined>();
+	const [auth, setAuth] = createSignal<(AuthStatusResponse & { error?: string }) | undefined>();
 	const [connection, setConnection] = createSignal<EventConnectionStatus>({ state: "disconnected", attempt: 0 });
 	const connected = () => connection().state === "connected";
 	const [notices, setNotices] = createSignal<Toast[]>([]);
@@ -182,6 +184,9 @@ export function createAppStore() {
 	/** Latest inventory request wins, so a slow earlier response cannot regress disk rows. */
 	let latestDiskSessionsRequestGeneration = 0;
 	let fleetStatsPromise: Promise<void> | undefined;
+	let pairingExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+	let pairingExpiryTarget: number | undefined;
+	let pairingExpiryRetryAttempt = 0;
 	/** Runtime keys removed by lifecycle events cannot be revived by an older snapshot. */
 	const removedRuntimeKeys = new Set<string>();
 	let stopped = false;
@@ -268,6 +273,103 @@ export function createAppStore() {
 	function pushNotice(text: string, tone: Toast["tone"] = "info"): void {
 		noticeCounter -= 1;
 		setNotices((current) => [...current, { id: noticeCounter, text, tone }].slice(-MAX_NOTICES));
+	}
+
+	function clearPairingExpiryTimer(): void {
+		if (pairingExpiryTimer !== undefined) clearTimeout(pairingExpiryTimer);
+		pairingExpiryTimer = undefined;
+		pairingExpiryTarget = undefined;
+		pairingExpiryRetryAttempt = 0;
+	}
+
+	function armPairingExpiryCheck(target: number): void {
+		if (stopped || pairingExpiryTarget !== target) return;
+		const remaining = target - Date.now();
+		if (remaining <= 0) {
+			pairingExpiryTimer = undefined;
+			void refreshAuthStatus(target);
+			return;
+		}
+		pairingExpiryTimer = setTimeout(() => armPairingExpiryCheck(target), Math.min(remaining, MAX_TIMER_DELAY_MS));
+	}
+
+	function schedulePairingExpiryCheck(checkAt: string | undefined): void {
+		clearPairingExpiryTimer();
+		if (!checkAt) return;
+		const target = Date.parse(checkAt);
+		if (!Number.isFinite(target)) {
+			pushNotice("Dashboard returned an invalid pairing-expiry check time", "error");
+			return;
+		}
+		pairingExpiryTarget = target;
+		armPairingExpiryCheck(target);
+	}
+
+	function schedulePairingExpiryRetry(target: number): void {
+		if (stopped || pairingExpiryTarget !== target) return;
+		pairingExpiryRetryAttempt += 1;
+		const exponent = Math.min(10, pairingExpiryRetryAttempt - 1);
+		const delay = Math.min(PAIRING_EXPIRY_RETRY_MAX_MS, PAIRING_EXPIRY_RETRY_BASE_MS * 2 ** exponent);
+		pairingExpiryTimer = setTimeout(() => {
+			pairingExpiryTimer = undefined;
+			if (!stopped && pairingExpiryTarget === target) void refreshAuthStatus(target);
+		}, delay);
+	}
+
+	function showPairingExpiryWarning(status: AuthStatusResponse): void {
+		if (!status.pairingExpiryWarning) return;
+		pushNotice(
+			`This device pairing expires on ${status.pairingExpiryWarning.expiresAt.slice(0, 10)}. Re-pair before then to avoid losing remote access.`,
+			"warning",
+		);
+	}
+
+	function applyAuthStatus(status: AuthStatusResponse): void {
+		setAuth(status);
+		showPairingExpiryWarning(status);
+		schedulePairingExpiryCheck(status.pairingExpiryCheckAt);
+	}
+
+	async function refreshAuthStatus(target: number): Promise<void> {
+		try {
+			const status = await api.auth();
+			if (stopped) return;
+			if (pairingExpiryTarget !== target) {
+				// A foreground/reconnect check may supersede this timer while its
+				// request is in flight. Its scheduling metadata is stale, but an
+				// atomically claimed warning must still be presented.
+				showPairingExpiryWarning(status);
+				return;
+			}
+			const nextTarget = status.pairingExpiryCheckAt ? Date.parse(status.pairingExpiryCheckAt) : undefined;
+			if (nextTarget === target && target <= Date.now()) {
+				// The browser clock may be ahead of the server. Repeating the same
+				// already-due target immediately would spin on /api/auth, so retain
+				// the target and use the bounded retry schedule.
+				setAuth(status);
+				showPairingExpiryWarning(status);
+				schedulePairingExpiryRetry(target);
+				return;
+			}
+			applyAuthStatus(status);
+		} catch (err: any) {
+			if (stopped || pairingExpiryTarget !== target) return;
+			if (err?.status === 401 || err?.status === 403) {
+				clearPairingExpiryTimer();
+				setAuth({
+					mode: "remote",
+					needsPairing: err?.body?.needsPairing ?? false,
+					identity: err?.body?.identity,
+					error: err?.message,
+				});
+				navigate({ screen: "pairing" });
+				return;
+			}
+			if (pairingExpiryRetryAttempt === 0) {
+				pushNotice(`Could not check pairing expiry: ${err instanceof Error ? err.message : String(err)}`, "error");
+			}
+			schedulePairingExpiryRetry(target);
+		}
 	}
 
 	function currentFleetRuntimeStateGeneration(key: string): number {
@@ -841,8 +943,7 @@ export function createAppStore() {
 	async function start(): Promise<void> {
 		stopped = false;
 		try {
-			const status = await api.auth();
-			setAuth(status);
+			applyAuthStatus(await api.auth());
 		} catch (err: any) {
 			setAuth({
 				mode: "remote",
@@ -856,6 +957,7 @@ export function createAppStore() {
 		await refreshFleet().catch(() => {});
 		disconnect = connectEvents({
 			onEnvelope: handleEnvelope,
+			onAuthStatus: applyAuthStatus,
 			onStatusChange: (status) => {
 				resyncRetryOwnsConnectionStatus = false;
 				resyncRetryPreviousConnection = status.state === "connected" ? status : undefined;
@@ -872,6 +974,7 @@ export function createAppStore() {
 	function stop(): void {
 		stopped = true;
 		disconnect?.();
+		clearPairingExpiryTimer();
 		clearResyncRetry();
 		resyncRetryPreviousConnection = undefined;
 		resyncRetryOwnsConnectionStatus = false;

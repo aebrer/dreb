@@ -22,14 +22,18 @@ export function ModeBadge(props: { store: AppStore }): JSX.Element {
 	const auth = () => props.store.auth();
 	return (
 		<Show when={auth()} fallback={<span class="chip chip-plain">…</span>}>
-			{(a) => (
-				<span class="chip chip-plain">
-					<span class="dot">{a().mode === "local" ? "⌂" : "⇄"}</span>{" "}
-					{a().mode === "local"
+			{(a) => {
+				const label = () =>
+					a().mode === "local"
 						? "local · 127.0.0.1"
-						: `remote · ${a().device ?? a().identity ?? "device"} via tailscale`}
-				</span>
-			)}
+						: `remote · ${a().device ?? a().identity ?? "device"} via tailscale`;
+				return (
+					<span class="chip chip-plain mode-badge" title={label()}>
+						<span class="dot">{a().mode === "local" ? "⌂" : "⇄"}</span>
+						<span class="mode-badge-text">{label()}</span>
+					</span>
+				);
+			}}
 		</Show>
 	);
 }

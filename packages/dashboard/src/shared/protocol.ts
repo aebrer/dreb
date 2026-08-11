@@ -476,6 +476,15 @@ export interface AuthStatusDto {
 	/** Identity string for remote devices (e.g. Tailscale login name). */
 	identity?: string;
 	device?: string;
+	/** Present only when this auth check atomically claimed today's warning. */
+	pairingExpiryWarning?: { expiresAt: string };
+	/** Server-authoritative time for the next expiry-status check. */
+	pairingExpiryCheckAt?: string;
+}
+
+/** Dashboard-auth-owned setting for future pairings. */
+export interface PairingSettingsDto {
+	pairingTtlDays: number;
 }
 
 /** Current rotating pairing code, readable only from the host/local dashboard. */

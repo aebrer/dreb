@@ -24,7 +24,7 @@ import { FilePairingStorage, loadOrCreateDashboardSecret } from "./server/pairin
 import { RuntimePool } from "./server/runtime-pool.js";
 import { createDashboardServer } from "./server/server.js";
 
-export { DashboardAuth, TailscaleStatusResolver } from "./server/auth.js";
+export { DashboardAuth, TailscaleStatusResolver, TailscaleWhoisResolver } from "./server/auth.js";
 export { DashboardImageService } from "./server/dashboard-images.js";
 export { EventHub } from "./server/event-hub.js";
 export { canonicalizePath, FileApi } from "./server/files.js";

@@ -22,6 +22,10 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const PAIRING_CODE_STEP_MS = 30_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_PAIRING_TTL_DAYS = 180;
+export const MIN_PAIRING_TTL_DAYS = 1;
+export const MAX_PAIRING_TTL_DAYS = 3650;
 const DEFAULT_PAIRING_MAX_ATTEMPTS = 5;
 const DEFAULT_PAIRING_LOCKOUT_MS = 60_000;
 
@@ -83,46 +87,104 @@ export interface TailscaleResolver {
 	resolve(address: string): Promise<TailscaleIdentity | null>;
 }
 
-interface TailscaleStatusPeer {
-	TailscaleIPs?: string[];
-	HostName?: string;
-	UserID?: number;
+interface TailscaleWhoisJson {
+	Node?: { Name?: string };
+	UserProfile?: { LoginName?: string } | null;
 }
 
-interface TailscaleStatusJson {
-	Self?: TailscaleStatusPeer & { UserID?: number };
-	Peer?: Record<string, TailscaleStatusPeer>;
-	User?: Record<string, { LoginName?: string }>;
+export type TailscaleWhoisRunner = (address: string) => Promise<{ stdout: string }>;
+
+export class TailscaleResolverError extends Error {
+	constructor(readonly kind: "timeout" | "execution" | "parse" | "schema") {
+		super(`Tailscale identity resolver ${kind} failure`);
+		this.name = "TailscaleResolverError";
+	}
 }
 
-/** Resolves identities via `tailscale status --json`. Any failure resolves null (deny). */
-export class TailscaleStatusResolver implements TailscaleResolver {
+async function runTailscaleWhois(address: string): Promise<{ stdout: string }> {
+	return execFileAsync("tailscale", ["whois", "--json", address], {
+		timeout: 3000,
+		maxBuffer: 1024 * 1024,
+	});
+}
+
+function isPeerNotFoundError(error: unknown): boolean {
+	const stderr = (error as { stderr?: unknown })?.stderr;
+	return typeof stderr === "string" && stderr.trim().toLowerCase() === "peer not found";
+}
+
+function isTimeoutError(error: unknown): boolean {
+	const candidate = error as { killed?: unknown; signal?: unknown };
+	return candidate?.killed === true || candidate?.signal === "SIGTERM";
+}
+
+/** Peer-specific Tailscale identity resolution with same-peer in-flight coalescing. */
+export class TailscaleWhoisResolver implements TailscaleResolver {
+	private readonly inFlight = new Map<string, Promise<TailscaleIdentity | null>>();
+
+	constructor(private readonly runWhois: TailscaleWhoisRunner = runTailscaleWhois) {}
+
 	async resolve(address: string): Promise<TailscaleIdentity | null> {
 		const target = normalizeAddress(address);
 		if (!target) return null;
-		let status: TailscaleStatusJson;
+		const existing = this.inFlight.get(target);
+		if (existing) return existing;
+
+		const lookup = this.lookup(target);
+		this.inFlight.set(target, lookup);
 		try {
-			const { stdout } = await execFileAsync("tailscale", ["status", "--json"], {
-				timeout: 3000,
-				maxBuffer: 4 * 1024 * 1024,
-			});
-			status = JSON.parse(stdout) as TailscaleStatusJson;
-		} catch {
-			// Tailscale absent, not running, or unparseable — fail closed.
-			return null;
+			return await lookup;
+		} finally {
+			if (this.inFlight.get(target) === lookup) this.inFlight.delete(target);
 		}
-		const peers = Object.values(status.Peer ?? {});
-		if (status.Self) peers.push(status.Self);
-		for (const peer of peers) {
-			if (!peer.TailscaleIPs?.some((ip) => normalizeAddress(ip) === target)) continue;
-			const userId = peer.UserID;
-			const loginName = userId !== undefined ? status.User?.[String(userId)]?.LoginName : undefined;
-			if (!loginName) return null; // identity unknown — deny rather than guess
-			return { loginName, device: peer.HostName };
+	}
+
+	private async lookup(target: string): Promise<TailscaleIdentity | null> {
+		let stdout: string;
+		try {
+			({ stdout } = await this.runWhois(target));
+		} catch (error) {
+			if (isTimeoutError(error)) throw new TailscaleResolverError("timeout");
+			if (isPeerNotFoundError(error)) return null;
+			throw new TailscaleResolverError("execution");
 		}
-		return null;
+
+		let whois: TailscaleWhoisJson;
+		try {
+			const parsed: unknown = JSON.parse(stdout);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+				throw new TailscaleResolverError("schema");
+			}
+			whois = parsed as TailscaleWhoisJson;
+		} catch (error) {
+			if (error instanceof TailscaleResolverError) throw error;
+			throw new TailscaleResolverError("parse");
+		}
+
+		if (!whois.Node || typeof whois.Node !== "object" || Array.isArray(whois.Node)) {
+			throw new TailscaleResolverError("schema");
+		}
+		if (whois.Node.Name !== undefined && typeof whois.Node.Name !== "string") {
+			throw new TailscaleResolverError("schema");
+		}
+		if (whois.UserProfile !== undefined && whois.UserProfile !== null) {
+			if (typeof whois.UserProfile !== "object" || Array.isArray(whois.UserProfile)) {
+				throw new TailscaleResolverError("schema");
+			}
+			if (whois.UserProfile.LoginName !== undefined && typeof whois.UserProfile.LoginName !== "string") {
+				throw new TailscaleResolverError("schema");
+			}
+		}
+
+		const loginName = whois.UserProfile?.LoginName?.trim();
+		if (!loginName) return null;
+		const device = whois.Node.Name?.replace(/\.$/, "") || undefined;
+		return { loginName, device };
 	}
 }
+
+/** @deprecated Use TailscaleWhoisResolver. Retained for API compatibility. */
+export class TailscaleStatusResolver extends TailscaleWhoisResolver {}
 
 // ---------------------------------------------------------------------------
 // Pairing store (rotating pairing codes + device tokens)
@@ -139,11 +201,20 @@ export interface PairedDevice {
 export interface StoredPairing extends PairedDevice {
 	/** HMAC of the device token (raw token never stored). */
 	tokenHmac: string;
+	/** UTC date of the last expiry warning claimed by this pairing. */
+	lastExpiryWarningUtcDate?: string;
 }
 
 export interface PairingState {
 	pairings: StoredPairing[];
 	consumedPairingWindows: number[];
+	/** Whole-day lifetime for newly created pairings. Absent in legacy files. */
+	pairingTtlDays?: number;
+}
+
+export interface PairingExpiryStatus {
+	warning?: { expiresAt: string };
+	nextCheckAt?: string;
 }
 
 export interface PairingStorage {
@@ -156,14 +227,16 @@ export class MemoryPairingStorage implements PairingStorage {
 	private state: PairingState = { pairings: [], consumedPairingWindows: [] };
 	async load(): Promise<PairingState> {
 		return {
-			pairings: [...this.state.pairings],
+			pairings: this.state.pairings.map((pairing) => ({ ...pairing })),
 			consumedPairingWindows: [...this.state.consumedPairingWindows],
+			pairingTtlDays: this.state.pairingTtlDays,
 		};
 	}
 	async save(state: PairingState): Promise<void> {
 		this.state = {
-			pairings: [...state.pairings],
+			pairings: state.pairings.map((pairing) => ({ ...pairing })),
 			consumedPairingWindows: [...state.consumedPairingWindows],
+			pairingTtlDays: state.pairingTtlDays,
 		};
 	}
 }
@@ -173,7 +246,7 @@ export interface DashboardAuthOptions {
 	remoteEnabled?: boolean;
 	/** Allowed Tailscale login names. Empty = deny all remote. */
 	allowedIdentities?: string[];
-	/** Device pairing validity. Default 30 days. */
+	/** Test/backward-compatible default when no persisted day setting exists. Production defaults to 180 days. */
 	pairingTtlMs?: number;
 	resolver?: TailscaleResolver;
 	storage?: PairingStorage;
@@ -191,7 +264,7 @@ export interface DashboardAuthOptions {
 
 export type AuthDecision =
 	| { allowed: true; mode: "local" }
-	| { allowed: true; mode: "remote"; identity: TailscaleIdentity }
+	| { allowed: true; mode: "remote"; identity: TailscaleIdentity; pairing: PairedDevice }
 	| {
 			allowed: false;
 			status: number;
@@ -220,7 +293,7 @@ function timingSafeEqualStr(a: string, b: string): boolean {
 export class DashboardAuth {
 	private readonly remoteEnabled: boolean;
 	private readonly allowedIdentities: Set<string>;
-	private readonly pairingTtlMs: number;
+	private readonly defaultPairingTtlMs: number;
 	private readonly resolver: TailscaleResolver;
 	private readonly storage: PairingStorage;
 	private readonly secret: Buffer;
@@ -234,8 +307,8 @@ export class DashboardAuth {
 	constructor(options: DashboardAuthOptions = {}) {
 		this.remoteEnabled = options.remoteEnabled ?? false;
 		this.allowedIdentities = new Set(options.allowedIdentities ?? []);
-		this.pairingTtlMs = options.pairingTtlMs ?? 30 * 24 * 60 * 60 * 1000;
-		this.resolver = options.resolver ?? new TailscaleStatusResolver();
+		this.defaultPairingTtlMs = options.pairingTtlMs ?? DEFAULT_PAIRING_TTL_DAYS * DAY_MS;
+		this.resolver = options.resolver ?? new TailscaleWhoisResolver();
 		this.storage = options.storage ?? new MemoryPairingStorage();
 		this.secret = options.secret ?? randomBytes(32);
 		this.pairingMaxAttempts = options.pairingMaxAttempts ?? DEFAULT_PAIRING_MAX_ATTEMPTS;
@@ -246,6 +319,40 @@ export class DashboardAuth {
 
 	get isRemoteEnabled(): boolean {
 		return this.remoteEnabled;
+	}
+
+	private defaultPairingTtlDays(): number {
+		const days = this.defaultPairingTtlMs / DAY_MS;
+		return Number.isSafeInteger(days) && days >= MIN_PAIRING_TTL_DAYS && days <= MAX_PAIRING_TTL_DAYS
+			? days
+			: DEFAULT_PAIRING_TTL_DAYS;
+	}
+
+	async getPairingSettings(): Promise<{ pairingTtlDays: number }> {
+		return this.withPairingMutation(async () => {
+			const state = await this.loadLiveState();
+			return { pairingTtlDays: state.pairingTtlDays ?? this.defaultPairingTtlDays() };
+		});
+	}
+
+	async setPairingSettings(pairingTtlDays: number): Promise<{ pairingTtlDays: number }> {
+		if (
+			!Number.isSafeInteger(pairingTtlDays) ||
+			pairingTtlDays < MIN_PAIRING_TTL_DAYS ||
+			pairingTtlDays > MAX_PAIRING_TTL_DAYS
+		) {
+			throw Object.assign(
+				new Error(
+					`pairingTtlDays must be a whole number from ${MIN_PAIRING_TTL_DAYS} through ${MAX_PAIRING_TTL_DAYS}`,
+				),
+				{ status: 400 },
+			);
+		}
+		return this.withPairingMutation(async () => {
+			const state = await this.loadLiveState();
+			await this.storage.save({ ...state, pairingTtlDays });
+			return { pairingTtlDays };
+		});
 	}
 
 	private hmac(value: string): string {
@@ -353,6 +460,9 @@ export class DashboardAuth {
 		try {
 			return await this.authenticateInner(info);
 		} catch (err) {
+			if (err instanceof TailscaleResolverError) {
+				this.logger(`identity resolver ${err.kind} failure — denying`);
+			}
 			return {
 				allowed: false,
 				status: 500,
@@ -405,7 +515,8 @@ export class DashboardAuth {
 			};
 		}
 
-		if (!info.deviceToken || !(await this.isPaired(identity, info.deviceToken))) {
+		const pairing = info.deviceToken ? await this.findPairing(identity, info.deviceToken) : undefined;
+		if (!pairing) {
 			return {
 				allowed: false,
 				status: 401,
@@ -415,7 +526,7 @@ export class DashboardAuth {
 			};
 		}
 
-		return { allowed: true, mode: "remote", identity };
+		return { allowed: true, mode: "remote", identity, pairing: this.toPairedDevice(pairing) };
 	}
 
 	/**
@@ -446,28 +557,40 @@ export class DashboardAuth {
 
 			const token = randomBytes(32).toString("base64url");
 			const nowMs = this.now();
+			const pairingTtlMs =
+				state.pairingTtlDays === undefined ? this.defaultPairingTtlMs : state.pairingTtlDays * DAY_MS;
 			const device: PairedDevice = {
 				id: randomBytes(8).toString("hex"),
 				identity: identity.loginName,
 				device: identity.device,
 				createdAt: new Date(nowMs).toISOString(),
-				expiresAt: new Date(nowMs + this.pairingTtlMs).toISOString(),
+				expiresAt: new Date(nowMs + pairingTtlMs).toISOString(),
 			};
 			const pairings = [...state.pairings, { ...device, tokenHmac: this.hmac(token) }];
 			const consumedPairingWindows = this.pruneConsumedPairingWindows([
 				...state.consumedPairingWindows,
 				matchedWindow,
 			]);
-			await this.storage.save({ pairings, consumedPairingWindows });
+			await this.storage.save({ ...state, pairings, consumedPairingWindows });
 			this.clearPairingFailures(failureKey);
 			return { token, device };
 		});
 	}
 
+	private toPairedDevice(pairing: StoredPairing): PairedDevice {
+		return {
+			id: pairing.id,
+			identity: pairing.identity,
+			device: pairing.device,
+			createdAt: pairing.createdAt,
+			expiresAt: pairing.expiresAt,
+		};
+	}
+
 	/** List paired devices (live only). */
 	async listDevices(): Promise<PairedDevice[]> {
 		return this.withPairingMutation(async () =>
-			(await this.loadLive()).map(({ tokenHmac: _tokenHmac, ...device }) => device),
+			(await this.loadLive()).map((pairing) => this.toPairedDevice(pairing)),
 		);
 	}
 
@@ -482,11 +605,41 @@ export class DashboardAuth {
 		});
 	}
 
-	private async isPaired(identity: TailscaleIdentity, token: string): Promise<boolean> {
+	private async findPairing(identity: TailscaleIdentity, token: string): Promise<StoredPairing | undefined> {
 		const tokenHmac = this.hmac(token);
 		return this.withPairingMutation(async () => {
 			const live = await this.loadLive();
-			return live.some((p) => p.identity === identity.loginName && timingSafeEqualStr(p.tokenHmac, tokenHmac));
+			return live.find((p) => p.identity === identity.loginName && timingSafeEqualStr(p.tokenHmac, tokenHmac));
+		});
+	}
+
+	/** Atomically claim any due warning and return the next useful browser check time. */
+	async claimPairingExpiryStatus(pairingId: string): Promise<PairingExpiryStatus> {
+		return this.withPairingMutation(async () => {
+			const state = await this.loadLiveState();
+			const pairing = state.pairings.find((candidate) => candidate.id === pairingId);
+			if (!pairing) return {};
+
+			const nowMs = this.now();
+			const createdAt = Date.parse(pairing.createdAt);
+			const expiresAt = Date.parse(pairing.expiresAt);
+			const originalValidity = expiresAt - createdAt;
+			const remaining = expiresAt - nowMs;
+			if (!Number.isFinite(originalValidity) || originalValidity <= 0 || remaining <= 0) return {};
+
+			const warningStartsAt = expiresAt - originalValidity * 0.1;
+			if (nowMs < warningStartsAt) return { nextCheckAt: new Date(warningStartsAt).toISOString() };
+
+			const utcDate = new Date(nowMs).toISOString().slice(0, 10);
+			const nextUtcMidnight = Date.parse(`${utcDate}T00:00:00.000Z`) + DAY_MS;
+			const nextCheckAt = nextUtcMidnight < expiresAt ? new Date(nextUtcMidnight).toISOString() : undefined;
+			if (pairing.lastExpiryWarningUtcDate === utcDate) return { nextCheckAt };
+
+			const pairings = state.pairings.map((candidate) =>
+				candidate.id === pairingId ? { ...candidate, lastExpiryWarningUtcDate: utcDate } : candidate,
+			);
+			await this.storage.save({ ...state, pairings });
+			return { warning: { expiresAt: pairing.expiresAt }, nextCheckAt };
 		});
 	}
 
@@ -506,8 +659,8 @@ export class DashboardAuth {
 			(pairings.length !== state.pairings.length ||
 				!this.samePairingWindows(consumedPairingWindows, state.consumedPairingWindows))
 		) {
-			await this.storage.save({ pairings, consumedPairingWindows });
+			await this.storage.save({ ...state, pairings, consumedPairingWindows });
 		}
-		return { pairings, consumedPairingWindows };
+		return { ...state, pairings, consumedPairingWindows };
 	}
 }

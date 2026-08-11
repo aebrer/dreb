@@ -72,24 +72,26 @@ function setup(overrides: Partial<EventStreamDependencies> = {}) {
 	let now = 0;
 	const statuses: EventConnectionStatus[] = [];
 	const onEnvelope = vi.fn();
+	const onAuthStatus = vi.fn();
 	const recovery = vi.fn();
 	const deps: EventStreamDependencies = {
 		EventSource: FakeEventSource,
 		now: () => now,
 		random: () => 0.5,
-		status: vi.fn().mockResolvedValue({ mode: "local" }),
+		status: vi.fn().mockResolvedValue({ mode: "local", needsPairing: false }),
 		baseDelayMs: 100,
 		maxDelayMs: 400,
 		watchdogMs: 30_000,
 		...overrides,
 	};
 	const disconnect = connectEvents(
-		{ onEnvelope, onRecovery: recovery, onStatusChange: (status) => statuses.push(status) },
+		{ onEnvelope, onAuthStatus, onRecovery: recovery, onStatusChange: (status) => statuses.push(status) },
 		deps,
 	);
 	return {
 		statuses,
 		onEnvelope,
+		onAuthStatus,
 		recovery,
 		disconnect,
 		source: () => FakeEventSource.instances.at(-1)!,
@@ -394,6 +396,34 @@ describe("connectEvents lifecycle", () => {
 		expect(result.statuses.at(-1)?.state).toBe("auth_failed");
 		await vi.advanceTimersByTimeAsync(30_000);
 		expect(FakeEventSource.instances).toHaveLength(1);
+		result.disconnect();
+	});
+
+	it("propagates successful foreground and reconnect auth status to the shared handler", async () => {
+		vi.useFakeTimers();
+		const visibility = new FakeVisibility();
+		const authStatus = {
+			mode: "remote" as const,
+			needsPairing: false,
+			identity: "alice@example.com",
+			pairingExpiryWarning: { expiresAt: "2030-07-01T00:00:00.000Z" },
+		};
+		const status = vi.fn().mockResolvedValue(authStatus);
+		const result = setup({ visibility, status });
+		result.source().open();
+
+		visibility.visibilityState = "hidden";
+		visibility.emit();
+		visibility.visibilityState = "visible";
+		visibility.emit();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(result.onAuthStatus).toHaveBeenCalledWith(authStatus);
+
+		result.source().error();
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(result.onAuthStatus).toHaveBeenCalledTimes(2);
 		result.disconnect();
 	});
 
