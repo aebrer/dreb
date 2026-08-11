@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DashboardAuth, MemoryPairingStorage, type TailscaleIdentity } from "../src/server/auth.js";
 import { DashboardImageService } from "../src/server/dashboard-images.js";
 import { EventHub, formatSseFrame } from "../src/server/event-hub.js";
+import { FilePairingStorage } from "../src/server/pairing-storage.js";
 import { RuntimePool } from "../src/server/runtime-pool.js";
 import {
 	createDashboardServer,
@@ -353,6 +354,23 @@ describe("dashboard server — pairing code", () => {
 		await expect(auth.getPairingSettings()).resolves.toEqual({ pairingTtlDays: 3650 });
 	});
 
+	it("GET /api/pairing-settings fails loudly for malformed persisted settings", async () => {
+		const dir = await createTempProject();
+		const pairingPath = join(dir, "pairings.json");
+		await writeFile(
+			pairingPath,
+			JSON.stringify({ version: 2, pairings: [], consumedPairingWindows: [], pairingTtlDays: 0 }),
+		);
+		const auth = new DashboardAuth({ storage: new FilePairingStorage(pairingPath) });
+		const { base } = await startServer({ auth });
+
+		const response = await fetch(`${base}/api/pairing-settings`);
+		expect(response.status).toBe(500);
+		await expect(response.json()).resolves.toEqual({
+			error: expect.stringContaining("Unrecognized pairing file format"),
+		});
+	});
+
 	it("GET /api/auth returns only atomically claimed remote expiry warning metadata", async () => {
 		const auth = new DashboardAuth();
 		const pairing = {
@@ -380,6 +398,27 @@ describe("dashboard server — pairing code", () => {
 			pairingExpiryCheckAt: "2030-06-15T00:00:00.000Z",
 		});
 		expect(claim).toHaveBeenCalledWith(pairing.id);
+	});
+
+	it("GET /api/auth fails closed when claiming expiry status rejects", async () => {
+		const auth = new DashboardAuth();
+		const pairing = {
+			id: "device-1",
+			identity: alice.loginName,
+			device: alice.device,
+			createdAt: "2030-01-01T00:00:00.000Z",
+			expiresAt: "2030-07-01T00:00:00.000Z",
+		};
+		vi.spyOn(auth, "authenticate").mockResolvedValue({ allowed: true, mode: "remote", identity: alice, pairing });
+		vi.spyOn(auth, "claimPairingExpiryStatus").mockRejectedValue(new Error("pairing state write failed"));
+		const { base } = await startServer({ auth });
+
+		const response = await fetch(`${base}/api/auth`);
+		expect(response.status).toBe(500);
+		await expect(response.json()).resolves.toEqual({
+			error: "Auth subsystem error — denied",
+			needsPairing: false,
+		});
 	});
 
 	it("keeps unknown-peer and resolver-subsystem denials distinct", async () => {

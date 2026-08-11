@@ -4444,6 +4444,32 @@ describe("dashboard client regressions", () => {
 		expect(el.textContent).toContain("new pairing lifetime saved");
 	});
 
+	it("settings disables the save control while the pairing lifetime is being persisted", async () => {
+		let resolveSave!: (value: { pairingTtlDays: number }) => void;
+		const pendingSave = new Promise<{ pairingTtlDays: number }>((resolve) => {
+			resolveSave = resolve;
+		});
+		vi.mocked(api.savePairingSettings).mockReturnValueOnce(pendingSave);
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const input = el.querySelector("#pairing-ttl-days") as HTMLInputElement;
+		input.value = "90";
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		const save = input.parentElement?.querySelector("button") as HTMLButtonElement;
+
+		save.click();
+		await Promise.resolve();
+		expect(save.disabled).toBe(true);
+		expect(save.textContent).toBe("saving…");
+
+		resolveSave({ pairingTtlDays: 90 });
+		await pendingSave;
+		await Promise.resolve();
+		expect(save.disabled).toBe(false);
+		expect(save.textContent).toBe("save");
+	});
+
 	it("settings rejects an invalid pairing lifetime before sending it", async () => {
 		vi.mocked(api.savePairingSettings).mockClear();
 		const store = makeStore();

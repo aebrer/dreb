@@ -316,21 +316,42 @@ export function createAppStore() {
 		}, delay);
 	}
 
+	function showPairingExpiryWarning(status: AuthStatusResponse): void {
+		if (!status.pairingExpiryWarning) return;
+		pushNotice(
+			`This device pairing expires on ${status.pairingExpiryWarning.expiresAt.slice(0, 10)}. Re-pair before then to avoid losing remote access.`,
+			"warning",
+		);
+	}
+
 	function applyAuthStatus(status: AuthStatusResponse): void {
 		setAuth(status);
-		if (status.pairingExpiryWarning) {
-			pushNotice(
-				`This device pairing expires on ${status.pairingExpiryWarning.expiresAt.slice(0, 10)}. Re-pair before then to avoid losing remote access.`,
-				"warning",
-			);
-		}
+		showPairingExpiryWarning(status);
 		schedulePairingExpiryCheck(status.pairingExpiryCheckAt);
 	}
 
 	async function refreshAuthStatus(target: number): Promise<void> {
 		try {
 			const status = await api.auth();
-			if (!stopped && pairingExpiryTarget === target) applyAuthStatus(status);
+			if (stopped) return;
+			if (pairingExpiryTarget !== target) {
+				// A foreground/reconnect check may supersede this timer while its
+				// request is in flight. Its scheduling metadata is stale, but an
+				// atomically claimed warning must still be presented.
+				showPairingExpiryWarning(status);
+				return;
+			}
+			const nextTarget = status.pairingExpiryCheckAt ? Date.parse(status.pairingExpiryCheckAt) : undefined;
+			if (nextTarget === target && target <= Date.now()) {
+				// The browser clock may be ahead of the server. Repeating the same
+				// already-due target immediately would spin on /api/auth, so retain
+				// the target and use the bounded retry schedule.
+				setAuth(status);
+				showPairingExpiryWarning(status);
+				schedulePairingExpiryRetry(target);
+				return;
+			}
+			applyAuthStatus(status);
 		} catch (err: any) {
 			if (stopped || pairingExpiryTarget !== target) return;
 			if (err?.status === 401 || err?.status === 403) {
