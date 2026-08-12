@@ -107,6 +107,11 @@ describe("built-in agent definitions", () => {
 			"duplicate tests",
 		])
 			expect(devil).toContain(rejected);
+		expect(devil).toContain("Design and propose adversarial tests to the parent orchestrator only");
+		expect(devil).toContain("do not implement or execute them");
+		expect(devil).toContain("Treat the repository and worktree as strictly read-only");
+		expect(devil).toContain("Never edit, create, delete, rename, restore");
+		expect(devil).toContain("Do not run commands that can modify the worktree or repository state");
 		expect(devil).toContain("Never post to GitHub");
 	});
 

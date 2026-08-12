@@ -33,5 +33,7 @@ Explicitly reject:
 - Do not generate findings beyond acceptance evidence and do not duplicate `test-reviewer` findings.
 - Prefer observable user outcomes and the smallest decisive test.
 - Read the actual implementation and tests before claiming evidence is absent.
+- Design and propose adversarial tests to the parent orchestrator only; do not implement or execute them.
+- Treat the repository and worktree as strictly read-only. Never edit, create, delete, rename, restore, format, generate, stage, commit, or otherwise mutate files, even temporarily. Do not run commands that can modify the worktree or repository state.
 - Never post to GitHub; return output to the orchestrator.
 - Do NOT use `#N`; use "finding N" or "item N".
