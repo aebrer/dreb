@@ -1,6 +1,6 @@
 # mach6 — Development Workflow
 
-mach6 is a built-in workflow that orchestrates the full issue-to-merge lifecycle using GitHub as shared memory. Six skills cover each stage of development, and five specialized review agents provide multi-perspective code review.
+mach6 is a built-in workflow that orchestrates the full issue-to-merge lifecycle using GitHub as shared memory. Six skills cover each stage of development, with round-aware specialist review and three independent assessment agents providing deliberate counter-pressure.
 
 Inspired by [mach10](https://github.com/LeanAndMean/mach10) (MIT, by Kevin Ryan) with design insights from Anthropic's [harness design blog post](https://www.anthropic.com/engineering/harness-design-long-running-apps).
 
@@ -69,20 +69,17 @@ Commit changes, push to remote, and post a progress comment.
 
 ### mach6-review
 
-Run specialized review agents in parallel, post findings, then independently assess each finding. Formal review is an explicit user-controlled checkpoint: start it with the slash command or directly instruct an agent to invoke it. Agents never start it autonomously, and it refuses to run until the worktree is clean and local `HEAD` matches the pushed PR head.
+Run a durable, explicit, round-aware review. It always posts two comments: an **unverified candidates pending assessment** comment recording the review round and exact reviewed commit SHA, followed by an assessment comment whose action plan contains merge blockers only.
 
 ```
-/skill:mach6-review 53                     # Full review (all agents)
-/skill:mach6-review 53 code errors         # Only code-reviewer + error-auditor
-/skill:mach6-review 53 tests              # Only test-reviewer
+/skill:mach6-review 53
+/skill:mach6-review 53 code errors
+/skill:mach6-review 53 tests
 ```
 
-Produces two PR comments:
+Rounds 1–2 run the applicable code-reviewer, error-auditor, test-reviewer, completeness-checker, and simplifier together in phase one. The independent assessor then applies factual, scope, and practical gates. Practical assessment requires a credible actor, exact reachable trigger, concrete consequence, existing safeguards, and material value from fixing the problem; missing tests are not blockers without an important uncovered regression.
 
-1. **Review** (`<!-- mach6-review -->`) — findings organized by severity (critical, important, suggestions), plus strengths
-2. **Assessment** (`<!-- mach6-assessment -->`) — each finding independently classified as genuine issue, nitpick, false positive, or deferred, with a prioritized action plan containing genuine issues only
-
-A finding is genuine only when it passes both a **factual gate** (the current code contains the problem) and a **scope gate** (the problem must be fixed to deliver the authorized work safely and correctly). Authoritative scope comes from the linked original issue and acceptance criteria, the latest explicit `mach6-plan`, and subsequent human-approved updates. Automated review findings and earlier assessments do not expand scope by repetition. Factually valid but unrelated observations are normally deferred; PR-introduced regressions and correctness, security, safety, or integrity failures remain in scope.
+Round 3+ reviews only changes since the latest recorded reviewed SHA and verifies prior blockers. The four core specialists remain; simplifier runs only when explicitly requested. Phase two runs independent-assessor, developers-advocate, and devils-advocate in parallel. The developer's advocate attacks the practical value of proposed work; the devil's advocate attacks evidence that the original acceptance promises hold and supplements rather than replaces test-reviewer. A later-round item blocks merge only when the assessor and developer's advocate agree on material practical impact, with parent adjudication based on a concrete trigger-and-outcome sequence.
 
 See [Review Agents](#review-agents) below.
 
@@ -112,7 +109,7 @@ Pre-merge checks, version bump, docs update, merge, tag, and release.
 /skill:mach6-publish 53
 ```
 
-- Verifies CI passing with the blocking `watch_github_ci` tool (never `wait` or a polling loop), no merge conflicts, and all findings addressed
+- Checks conflicts and merge blockers, performs version/docs pushes directly, then makes one final blocking `watch_github_ci` call immediately before merge
 - Runs pre-merge checklist (version bump, tests)
 - Applies version bump on the feature branch
 - Proactively reviews and updates ALL documentation affected by the PR's changes
@@ -127,24 +124,33 @@ Strong general-purpose coding agent optionally used by `mach6-implement` for pre
 
 ### Review Agents
 
-Five specialized agents, each asking an orthogonal question. All use confidence scoring (only report findings ≥ 80).
+Phase one uses specialists with orthogonal incentives and confidence-scored candidate findings:
 
-| Agent | Question | When it runs |
+| Agent | Question | Round behavior |
 |---|---|---|
-| **code-reviewer** | Does this code do what it should, correctly and idiomatically? | Always |
-| **error-auditor** | What can go wrong silently at runtime? | If error handling / try-catch / fallback logic touched |
-| **test-reviewer** | What behaviors are untested or poorly tested? | If test files changed or testable code added |
-| **completeness-checker** | Does this PR deliver everything the linked issue requires? | If PR links to an issue |
-| **simplifier** | Can this be expressed more clearly without changing behavior? | Always (runs last) |
+| **code-reviewer** | Is the implementation correct and idiomatic? | All applicable rounds |
+| **error-auditor** | What can fail silently at runtime? | All applicable rounds |
+| **test-reviewer** | What important behavior lacks coverage? | All applicable rounds; never replaced |
+| **completeness-checker** | Does the PR fulfill authoritative scope? | All applicable rounds |
+| **simplifier** | Can changed code be clearer without behavior changes? | Rounds 1–2 in parallel; round 3+ only when requested |
 
-Agents run as [subagents](../README.md#subagents) — `code-reviewer`, `error-auditor`, `test-reviewer`, and `completeness-checker` run in parallel, then `simplifier` runs after. Each agent reads the actual changed files, not just the diff.
+Phase two assessment agents:
 
-**Targeted review:** Pass aspect names to run only specific agents: `code`, `errors`, `tests`, `completeness`, `simplify`.
+| Agent | Incentive |
+|---|---|
+| **independent-assessor** | Apply factual, scope, and practical gates; classify merge blockers |
+| **developers-advocate** | Make the strongest honest case that proposed work has no practical value |
+| **devils-advocate** | Design adversarial tests intended to disprove the original acceptance promises |
+
+The two advocates intentionally pull in different directions: one challenges the value of fixing candidates, while the other challenges whether acceptance evidence is strong enough. Both join the assessor only in round 3+.
+
+**Targeted review:** `code`, `errors`, `tests`, `completeness`, or `simplify` selects corresponding phase-one agents.
 
 ## Design Principles
 
 - **GitHub as shared memory** — Plans, reviews, assessments, and progress are posted as PR/issue comments with HTML markers (`<!-- mach6-plan -->`, `<!-- mach6-review -->`, etc.) so any future session can pick up context.
-- **Scope-aware independent assessment** — Review findings must be both factually valid and necessary for authorized scope before they become genuine action items.
+- **Three-gate independent assessment** — Findings must be factual, authorized, and materially practical before becoming merge blockers.
+- **Deliberate counter-pressure** — Later rounds focus on the delta and pair practical-value skepticism with adversarial acceptance evidence to resist ceremonial review work.
 - **Durable accountability checkpoint** — Implementation and fixes are committed, pushed, and recorded before formal review so work cannot be lost or repeatedly rewritten while still local.
 - **User-controlled review cycles** — Only the user starts each formal review or re-review. Agents stop at the checkpoint and suggest the next command rather than autonomously chaining review and fix cycles.
 - **Focused checks remain available** — One-off reviewer/checker subagents may answer narrow correctness questions without becoming a formal mach6 review cycle.

@@ -53,6 +53,8 @@ describe("built-in agent definitions", () => {
 		"completeness-checker",
 		"simplifier",
 		"independent-assessor",
+		"developers-advocate",
+		"devils-advocate",
 	];
 
 	for (const expectedName of expectedAgents) {
@@ -70,41 +72,47 @@ describe("built-in agent definitions", () => {
 		});
 	}
 
-	it("independent-assessor should enforce factual and authorized-scope gates", () => {
-		const content = readFileSync(join(agentsDir, "independent-assessor.md"), "utf-8");
-		const parsed = parseAgentFrontmatter(content);
-		expect(parsed).not.toBeNull();
-		const body = parsed!.body;
-		const process = body.slice(body.indexOf("## Process"), body.indexOf("## Classifications"));
-		const classifications = body.slice(body.indexOf("## Classifications"), body.indexOf("## Output Format"));
-		const output = body.slice(body.indexOf("## Output Format"));
+	it("review counter-pressure agents should encode their required contracts", () => {
+		const assessor = readFileSync(join(agentsDir, "independent-assessor.md"), "utf-8");
+		expect(assessor).toContain("Factual gate");
+		expect(assessor).toContain("Scope gate");
+		expect(assessor).toContain("Practical gate");
+		expect(assessor).toContain("actor or system component affected");
+		expect(assessor).toContain("exact triggering event sequence");
+		expect(assessor).toContain("existing safeguards");
+		expect(assessor).toContain("material benefit");
+		expect(assessor).toContain("**Merge blocker**");
+		expect(assessor).toContain("Missing tests are not findings by themselves");
 
-		expect(body).toContain("Factual gate");
-		expect(body).toContain("Scope gate");
-		expect(body).toContain("not genuine merely because it is technically correct or factually observable");
-		expect(process).toContain("linked original issue, including its acceptance criteria");
-		expect(process).toContain("latest explicit plan comment");
-		expect(process).toContain("latest `<!-- mach6-plan -->` marker");
-		expect(process).toContain("subsequent scope updates that a human explicitly approved");
-		expect(process).toContain("Review findings and prior automated assessments are evidence only");
-		expect(process).toContain("do **not** expand scope through novelty, repetition, or earlier classification");
-		expect(classifications).toContain("**Genuine issue** | Passes both gates");
-		expect(classifications).toContain(
-			"regressions and correctness, security, safety, or integrity failures introduced by the PR",
-		);
-		expect(classifications).toContain("**Deferred** | Passes the factual gate but fails the scope gate");
-		expect(classifications).toContain(
-			"Optional hardening, speculative edge cases, unrelated pre-existing defects, architecture preferences, and broader cleanup are not genuine",
-		);
-		expect(classifications).toContain("They are normally deferred when factually valid");
-		expect(classifications).toContain(
-			"Review findings and automated assessments cannot become authorized requirements merely because multiple agents repeat them",
-		);
-		expect(classifications).toContain("Missing tests for behavior added or changed by the PR are in scope");
-		expect(output).toContain("Classify every supplied finding");
-		expect(output).toContain("both the **Factual** and **Scope** explanations are mandatory");
-		expect(output).toContain("genuine issues necessary for the authorized PR to merge");
-		expect(output).toContain("Do not include deferred, nitpick, or false-positive findings");
+		const developer = readFileSync(join(agentsDir, "developers-advocate.md"), "utf-8");
+		expect(developer).toContain("laziness as engineering discipline");
+		for (const verdict of ["blocks shipping", "useful follow-up", "review theater", "factually wrong"])
+			expect(developer).toContain(verdict);
+		expect(developer).toContain("Never generate new findings");
+		expect(developer).toContain("Never dismiss automated or red-team attackers");
+		expect(developer).toContain("Never post to GitHub");
+
+		const devil = readFileSync(join(agentsDir, "devils-advocate.md"), "utf-8");
+		expect(devil).toContain("supplement the broad `test-reviewer`; you do not replace it");
+		expect(devil).toContain("acceptance criteria are NOT being met");
+		expect(devil).toContain("user's original quoted requests");
+		expect(devil).toContain("acceptance criterion has no meaningful proof");
+		expect(devil).toContain("originally reported failure is not reproduced");
+		expect(devil).toContain("fix could regress while current tests still pass");
+		for (const rejected of [
+			"branch-coverage",
+			"code is new",
+			"language or framework semantics",
+			"credible producer",
+			"duplicate tests",
+		])
+			expect(devil).toContain(rejected);
+		expect(devil).toContain("Design and propose adversarial tests to the parent orchestrator only");
+		expect(devil).toContain("do not implement or execute them");
+		expect(devil).toContain("Treat the repository and worktree as strictly read-only");
+		expect(devil).toContain("Never edit, create, delete, rename, restore");
+		expect(devil).toContain("Do not run commands that can modify the worktree or repository state");
+		expect(devil).toContain("Never post to GitHub");
 	});
 
 	it("all agent files should have valid frontmatter with required fields", () => {

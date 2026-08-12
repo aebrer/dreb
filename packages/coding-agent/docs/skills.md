@@ -282,7 +282,7 @@ dreb ships with **mach6**, a development workflow that orchestrates the full iss
 | `mach6-issue` | Assess an existing issue or create a new one |
 | `mach6-plan` | Explore codebase, plan, create branch and draft PR |
 | `mach6-push` | Commit, push, post progress comment |
-| `mach6-review` | Explicitly user-triggered multi-agent review with scope-aware independent assessment |
+| `mach6-review` | Explicit round-aware review with delta re-reviews, three-gate assessment, and later-round adversarial counter-pressure |
 | `mach6-implement` | Implement plans, fix review findings, or fix CI failures |
 | `mach6-publish` | Pre-merge checks, docs update, merge, tag, release |
 | `model-routing-guide` | Research scoped models and sanitized local subagent evidence into a validated routing guide |

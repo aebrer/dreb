@@ -154,7 +154,7 @@ Find the review (`<!-- mach6-review -->`) and assessment (`<!-- mach6-assessment
 
 #### If no finding numbers and not `ci`:
 
-Read ALL PR comments, find review/assessment comments, present genuine findings, and ask which to fix.
+Read ALL PR comments, find review/assessment comments, present the merge blockers from the latest assessment comment, and ask which to fix.
 
 ### Step 5f: Batch sizing
 

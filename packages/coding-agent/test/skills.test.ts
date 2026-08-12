@@ -569,68 +569,52 @@ describe("skills", () => {
 			}
 		});
 
-		it("mach6-review should remain user-controlled while supporting direct agent invocation", () => {
+		it("mach6-review should be durable, round-aware, and counter-pressured", () => {
 			const review = getBuiltInSkill("mach6-review");
 			expect(review.disableModelInvocation).toBe(false);
 			expect(review.userInvocable).toBe(true);
-
 			const body = readBuiltInSkill("mach6-review");
-			expect(body).toContain("either through its slash command or a direct instruction to an agent to invoke it");
-			expect(body).toContain("An agent may invoke it in response to that request");
+			expect(body).toContain("explicit user request");
 			expect(body).toContain("never invoke it autonomously or start a review-fix-review loop");
+			expect(body).toContain(`PR_HEAD="$(gh pr view <pr-number> --json headRefOid --jq '.headRefOid')"`);
+			expect(body).toContain("PRIOR_ROUNDS");
+			expect(body).toContain('REVIEW_ROUND="$((PRIOR_ROUNDS + 1))"');
+			expect(body).toContain("Reviewed commit:");
+			expect(body).toContain("Review round:");
+			expect(body).toContain("Unverified Review Candidates — Pending Assessment");
+			expect(body).toContain("git diff <sha>..HEAD");
+			expect(body).toContain("Reject unchanged-code findings");
+			expect(body).toContain("verify that each is fixed");
+			expect(body).toContain("one parallel `subagent` `tasks` call");
+			expect(body).toContain("Skip `simplifier` unless `simplify` was explicitly requested");
+			for (const agent of [
+				"code-reviewer",
+				"error-auditor",
+				"test-reviewer",
+				"completeness-checker",
+				"independent-assessor",
+				"developers-advocate",
+				"devils-advocate",
+			])
+				expect(body).toContain(`\`${agent}\``);
+			expect(body).toContain(
+				"both the independent assessor and developer's advocate find material practical impact",
+			);
+			expect(body).toContain("concrete actor, exact reachable trigger sequence");
+			expect(body).toContain("<!-- mach6-review -->");
+			expect(body).toContain("<!-- mach6-assessment -->");
+			expect(body).toContain("merge blockers only");
 		});
 
-		it("mach6-review should enforce durable work and scope-aware assessment", () => {
-			const body = readBuiltInSkill("mach6-review");
-			const prepare = body.slice(body.indexOf("## Step 3"), body.indexOf("## Step 4"));
-			const preCheckout = prepare.slice(0, prepare.indexOf("Check out and update the PR branch"));
-			const reviewHandoff = body.slice(body.indexOf("## Step 4"), body.indexOf("## Step 5"));
-			const assessorHandoff = body.slice(body.indexOf("## Step 6"), body.indexOf("## Step 7"));
-
-			expect(body).toContain("User-controlled checkpoint");
-			expect(preCheckout).toContain("Before switching branches, run `git status --porcelain`");
-			expect(preCheckout).toContain("If it returns anything, stop");
-			expect(preCheckout).toContain("use `suggest_next` to offer `/skill:mach6-push`");
-			expect(preCheckout).not.toContain("gh pr checkout <pr-number>");
-			expect(prepare.indexOf("gh pr checkout <pr-number>")).toBeGreaterThan(preCheckout.length);
-			expect(prepare.match(/^git status --porcelain$/gm)).toHaveLength(1);
-			expect(prepare).toContain('LOCAL_HEAD="$(git rev-parse HEAD)"');
-			expect(prepare).toContain("PR_HEAD=\"$(gh pr view <pr-number> --json headRefOid --jq '.headRefOid')\"");
-			const pushedHeadCheck = prepare.indexOf('test "$LOCAL_HEAD" = "$PR_HEAD"');
-			expect(pushedHeadCheck).toBeGreaterThan(-1);
-			expect(prepare.indexOf("gh pr ready <pr-number>")).toBeGreaterThan(pushedHeadCheck);
-			expect(prepare).toContain(
-				"Before marking the PR ready, reading local source for review, or launching any review agent",
-			);
-			expect(prepare).toContain("Do not mark the PR ready, post review comments, or launch review agents");
-			expect(prepare).toContain("use `suggest_next` to offer `/skill:mach6-push`");
-
-			expect(reviewHandoff).toContain("The full PR context: title, body, and all comments");
-			expect(reviewHandoff).toContain("linked original issue and acceptance criteria");
-			expect(reviewHandoff).toContain("latest explicit `mach6-plan`");
-			expect(reviewHandoff).toContain("subsequent human-approved scope updates");
-			expect(reviewHandoff).toContain("review findings and prior automated assessments are evidence only");
-			expect(reviewHandoff).toContain("cannot expand scope");
-
-			expect(assessorHandoff).toContain("The full review text");
-			expect(assessorHandoff).toContain("The PR context (title, body, and all comments)");
-			expect(assessorHandoff).toContain(
-				"linked original issue, acceptance criteria, latest explicit `mach6-plan`, and subsequent human-approved scope updates",
-			);
-			expect(assessorHandoff).toContain("Factual gate");
-			expect(assessorHandoff).toContain("Scope gate");
-			expect(assessorHandoff).toContain(
-				"not genuine merely because it is technically correct or factually observable",
-			);
-			expect(assessorHandoff).toContain("only when both gates pass");
-			expect(assessorHandoff).toContain("Passes the factual gate but fails the scope gate");
-			expect(assessorHandoff).toContain(
-				"Regressions and correctness, security, safety, or integrity failures introduced by the PR remain eligible",
-			);
-			expect(assessorHandoff).toContain("prior automated assessments are not scope updates");
-			expect(assessorHandoff).toContain(
-				"action plan containing only genuine issues** necessary for the scoped PR to merge",
-			);
+		it("mach6-publish should watch CI once after final push and authorize pushes", () => {
+			const body = readBuiltInSkill("mach6-publish");
+			expect(body.match(/watch_github_ci/g)).toHaveLength(1);
+			const finalPush = body.indexOf("After the final pre-merge push");
+			const watch = body.indexOf("watch_github_ci");
+			const merge = body.indexOf("gh pr merge");
+			expect(watch).toBeGreaterThan(finalPush);
+			expect(merge).toBeGreaterThan(watch);
+			expect(body).toContain("version-bump push, documentation push, and tag push directly without asking");
 		});
 
 		it("mach6-implement should keep reasoning with the parent and stop before formal review", () => {
