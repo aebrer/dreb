@@ -3982,11 +3982,12 @@ export class AgentSession {
 	 *
 	 * Each entry carries its role so callers can label it and choose the right
 	 * fork semantics (assistant = continue-from-answer, user = rewind + re-ask).
-	 * Assistant turns with no renderable text (pure tool-call turns) still appear
-	 * as fork points, with a generic label.
+	 * A forkable assistant turn with no renderable text (e.g. a thinking-only
+	 * turn) still appears as a fork point, with a generic label.
 	 *
 	 * Assistant turns that cannot be safely branched from (interrupted turns, or
-	 * turns still waiting on tool results) are excluded — see _isForkableAssistant.
+	 * turns containing a tool call whose result lives in a descendant entry) are
+	 * excluded — see _isForkableAssistant.
 	 */
 	getForkableMessages(): Array<{ entryId: string; text: string; role: "user" | "assistant" }> {
 		const entries = this.sessionManager.getEntries();

@@ -175,7 +175,7 @@ Type `/` in the editor to trigger commands. [Extensions](#extensions) can regist
 | `/name <name>` | Set session display name |
 | `/session` | Show session info (path, tokens, cost) |
 | `/tree` | Jump to any point in the session and continue from there |
-| `/fork` | Create a new session from the current branch |
+| `/fork` | Branch a new session from any user or assistant message (assistant = continue from that answer, user = rewind and re-ask) |
 | `/compact [prompt]` | Manually compact context, optional custom instructions |
 | `/copy` | Open multi-select message picker to copy any messages to clipboard. Assistant reasoning is excluded by default and offered as a separate, selectable `Thinking` row. |
 | `/dream` | Consolidate and prune memories — backs up, merges duplicates, scans sessions for patterns |

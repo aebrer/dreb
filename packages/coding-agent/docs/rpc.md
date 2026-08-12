@@ -932,13 +932,13 @@ Response (forking at an assistant message — no pre-fill):
 }
 ```
 
-If an extension cancelled the fork:
+If an extension cancelled the fork, `text` still mirrors what the corresponding successful fork would have returned — the user message's text for a user-message fork, or `""` for an assistant-message fork:
 ```json
 {
   "type": "response",
   "command": "fork",
   "success": true,
-  "data": {"text": "", "cancelled": true}
+  "data": {"text": "The original prompt text...", "cancelled": true}
 }
 ```
 

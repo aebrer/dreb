@@ -203,6 +203,19 @@ function toolCallAssistant() {
 		stopReason: "toolUse" as const,
 	};
 }
+// The dominant real tool-call shape: narration text AND a tool call in the same
+// content array. Distinguishes `.some()` (correct — any toolCall block excludes)
+// from `.every()`, which the single-element toolCallAssistant() fixture cannot.
+function mixedToolCallAssistant() {
+	return {
+		...assistantMsg(""),
+		content: [
+			{ type: "text" as const, text: "checking the files" },
+			{ type: "toolCall" as const, id: "tc2", name: "bash", arguments: { cmd: "ls" } },
+		],
+		stopReason: "toolUse" as const,
+	};
+}
 // A completed turn that renders no text (e.g. thinking-only): still a valid fork
 // point, exercised for the "(assistant response)" fallback label.
 function emptyTextAssistant() {
@@ -275,6 +288,24 @@ describe("AgentSession.getForkableMessages", () => {
 		expect(assistants[0].entryId).toBe(finalId);
 	});
 
+	it("excludes assistant turns that mix narration text with a tool call (pins .some, not .every)", async () => {
+		harness = await createHarnessWithExtensions();
+		const { session, sessionManager } = harness;
+
+		sessionManager.appendMessage(userMsg("list files"));
+		// A turn with BOTH text and a toolCall: `.every(isToolCall)` is false here,
+		// so only `.some(isToolCall)` correctly excludes it.
+		sessionManager.appendMessage(mixedToolCallAssistant());
+		const finalId = sessionManager.appendMessage(assistantMsg("here are the files"));
+
+		const list = session.getForkableMessages();
+		const assistants = list.filter((m) => m.role === "assistant");
+		expect(assistants).toHaveLength(1);
+		expect(assistants[0].entryId).toBe(finalId);
+		// The mixed turn's narration text must not leak in as a fork point.
+		expect(list.some((m) => m.text === "checking the files")).toBe(false);
+	});
+
 	it("fork() rejects a direct call on an errored assistant entry", async () => {
 		harness = await createHarnessWithExtensions();
 		const { session, sessionManager } = harness;
@@ -293,5 +324,15 @@ describe("AgentSession.getForkableMessages", () => {
 		const tcId = sessionManager.appendMessage(toolCallAssistant());
 
 		await expect(session.fork(tcId)).rejects.toThrow(/interrupted|waiting on tool results/i);
+	});
+
+	it("fork() rejects a direct call on a mixed text+tool-call assistant entry", async () => {
+		harness = await createHarnessWithExtensions();
+		const { session, sessionManager } = harness;
+
+		sessionManager.appendMessage(userMsg("list files"));
+		const mixedId = sessionManager.appendMessage(mixedToolCallAssistant());
+
+		await expect(session.fork(mixedId)).rejects.toThrow(/interrupted|waiting on tool results/i);
 	});
 });

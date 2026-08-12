@@ -26,20 +26,26 @@ function makeItems(): Item[] {
 }
 
 describe("UserMessageSelectorComponent render", () => {
-	test("renders role badges and role-specific fork hints for both roles", () => {
+	test("renders role badges and role-specific fork hints tied to the correct message line", () => {
 		const component = new UserMessageSelectorComponent(makeItems(), vi.fn(), vi.fn());
 		const lines = component.getMessageList().render(80);
-		const blob = lines.join("\n");
 
-		// Role badges distinguish the two message kinds.
-		expect(blob).toContain("[Assistant]");
-		expect(blob).toContain("[You]");
-		// Role-specific hints describe the opposite-consequence actions.
-		expect(blob).toContain("continue from here"); // assistant
-		expect(blob).toContain("rewind & re-ask"); // user
-		// Message previews appear.
-		expect(blob).toContain("the assistant answer");
-		expect(blob).toContain("first question");
+		// Each message renders as: line N = cursor + role badge + preview,
+		// line N+1 = the role-specific hint. Assert the badge and hint are attached
+		// to the CORRECT message line, so a swapped badge/hint mapping fails.
+		const assistantIdx = lines.findIndex((l) => l.includes("the assistant answer"));
+		expect(assistantIdx).toBeGreaterThanOrEqual(0);
+		expect(lines[assistantIdx]).toContain("[Assistant]");
+		expect(lines[assistantIdx]).not.toContain("[You]");
+		expect(lines[assistantIdx + 1]).toContain("continue from here");
+		expect(lines[assistantIdx + 1]).not.toContain("rewind & re-ask");
+
+		const userIdx = lines.findIndex((l) => l.includes("first question"));
+		expect(userIdx).toBeGreaterThanOrEqual(0);
+		expect(lines[userIdx]).toContain("[You]");
+		expect(lines[userIdx]).not.toContain("[Assistant]");
+		expect(lines[userIdx + 1]).toContain("rewind & re-ask");
+		expect(lines[userIdx + 1]).not.toContain("continue from here");
 	});
 
 	test("bottom-anchors selection on the most recent message", () => {
