@@ -15,6 +15,7 @@ argument-hint: "<pr-number>"
 3. **Safe git** — Never use `git add -A` or `git add .`. Stage files by name. Never stage secrets.
 4. **Task tracking** — Use the `tasks_update` tool to show progress.
 5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
+6. **Authorized pushes** — The agent performs the version-bump push, documentation push, and tag push directly without asking for per-step confirmation. The remaining user checkpoints are bump level when unclear, whether to create a GitHub release, and release-notes approval.
 
 ## Step 1: Set up task tracking
 
@@ -36,14 +37,11 @@ git pull
 gh pr view <pr-number> --json mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,comments,body
 ```
 
-Use `watch_github_ci` with `pr: "<pr-number>"` to block until CI passes or fails. Do not use `wait`, sleep, or repeated polling commands for CI.
-
 Read ALL PR comments to understand the full history — plans, reviews, assessments, progress updates, and discussion.
 
 Verify:
-- [ ] CI is passing
 - [ ] No merge conflicts
-- [ ] All review findings addressed (check for genuine items in latest assessment)
+- [ ] All merge blockers in the latest assessment are addressed
 
 If there are blocking issues, report them and suggest fixes:
 - **Failed CI**: `/skill:mach6-implement <pr-number> ci`
@@ -89,7 +87,7 @@ Update task: checks → completed, version → in_progress.
    git push
    ```
 
-5. Use `watch_github_ci` with `pr: "<pr-number>"` and proceed only after it reports that CI passed on the version bump commit.
+The agent performs this version-bump push directly without asking for confirmation.
 
 If the project doesn't use versioning, skip this step.
 
@@ -126,13 +124,19 @@ Proactively review and update ALL documentation affected by the PR's changes. Th
    git push
    ```
 
-5. Use `watch_github_ci` with `pr: "<pr-number>"` and proceed only after it reports that CI passed on the docs commit.
+The agent performs this documentation push directly without asking for confirmation.
 
 If no documentation changes are needed (rare), skip this step.
 
 Update task: docs → completed, merge → in_progress.
 
-## Step 5: Merge
+## Step 5: Final CI gate and merge
+
+After the final pre-merge push (version bump and/or documentation), make the workflow's single CI watch:
+
+Use `watch_github_ci` with `pr: "<pr-number>"` and proceed only after it passes. Do not use `wait`, sleep, or repeated polling commands for CI. If CI fails, stop and suggest `/skill:mach6-implement <pr-number> ci`.
+
+Immediately after that successful watch:
 
 ```bash
 gh pr merge <pr-number> --squash --delete-branch
@@ -161,7 +165,7 @@ Ask the user if they want to create a GitHub release:
 
 ### Always create the git tag
 
-The tag is created on the default branch after merge, using the version from Step 3:
+The tag is created on the default branch after merge, using the version from Step 3. The agent performs the tag push directly without asking for confirmation:
 
 ```bash
 git tag v<version>

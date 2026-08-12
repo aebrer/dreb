@@ -1,243 +1,147 @@
 ---
 name: mach6-review
-description: "Run specialized review agents in parallel on a PR (code-reviewer, error-auditor, test-reviewer, completeness-checker, simplifier), post findings, then independently assess each finding to separate genuine issues from nitpicks and false positives. Usage: mach6-review 42 [aspects]"
+description: "Run round-aware specialist review, post unverified candidates, then assess practical merge blockers with adversarial counter-pressure. Usage: mach6-review 42 [aspects]"
 argument-hint: "<pr-number> [code|errors|tests|completeness|simplify]"
 ---
 
-# mach6-review — Multi-Agent PR Review
+# mach6-review — Round-Aware Multi-Agent PR Review
 
 **User input:** $ARGUMENTS
 
 ## Global Rules
 
-1. **GitHub as shared memory** — Reviews and assessments are posted as PR comments so any future session can pick up context.
-2. **HTML markers** — Use `<!-- mach6-review -->` and `<!-- mach6-assessment -->` as the first line of comment bodies.
-3. **No `#N` in comment bodies** — Use "finding 3", "item 3", "stage 2" etc. instead.
-4. **Task tracking** — Use the `tasks_update` tool to show progress.
-5. **Non-interactive `gh`** — Set `GH_PAGER=cat` and `GH_EDITOR=cat` before all `gh` commands to prevent interactive prompts from hanging the agent. Use `--body-file` instead of inline `--body` for all `gh pr comment`, `gh pr create`, and `gh issue create` calls to avoid shell interpretation of backticks. Write each body to a **unique per-invocation temp file** via `mktemp` (e.g. `GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"`) — never a fixed path like `/tmp/gh-comment.md`, which concurrent mach6 sessions on the same machine would clobber, cross-posting one session's body to another's PR/issue.
-6. **User-controlled checkpoint** — This formal multi-agent review runs only from an explicit user request, either through its slash command or a direct instruction to an agent to invoke it. An agent may invoke it in response to that request; otherwise agents must only offer it with `suggest_next`, never invoke it autonomously or start a review-fix-review loop.
-7. **Review durable work only** — Do not launch formal review agents against uncommitted or unpushed work. The commit, push, and GitHub progress comment are the accountability and recovery boundary.
+1. GitHub is shared memory. Post two comments in every round: `<!-- mach6-review -->`, then `<!-- mach6-assessment -->` as each body's first line.
+2. Never use `#N` in comment bodies; say "finding N".
+3. Track work with `tasks_update`.
+4. Set `GH_PAGER=cat` and `GH_EDITOR=cat` for every `gh` command. Use `--body-file` with a unique `mktemp /tmp/gh-comment.$$.XXXXXXXX` file.
+5. Formal review runs only from an explicit user request; never invoke it autonomously or start a review-fix-review loop.
+6. Review durable work only. Do not review uncommitted or unpushed work.
+7. Do not fix findings in this session; fixes require a later user-invoked `/skill:mach6-implement`.
 
-**Important: Do NOT fix any issues in this session. Fixes happen via a later, user-invoked `/skill:mach6-implement`.**
+## Step 1: Track tasks
 
-## Step 1: Set up task tracking
-
-```
-tasks_update([
-  { id: "prepare", title: "Prepare — checkout and gather context", status: "in_progress" },
-  { id: "review", title: "Run review agents", status: "pending" },
-  { id: "post-review", title: "Post review findings", status: "pending" },
-  { id: "assess", title: "Independent assessment", status: "pending" },
-  { id: "post-assess", title: "Post assessment", status: "pending" },
-  { id: "summary", title: "Present CLI summary", status: "pending" }
-])
-```
+Track prepare, phase-one review, findings comment, phase-two assessment, assessment comment, and summary; keep at most one task in progress.
 
 ## Step 2: Parse input
 
-Extract:
-- **PR number** (required)
-- **Review aspects** (optional) — if specified, only run matching agents
+Extract the required PR number and optional aspects: `code`, `errors`, `tests`, `completeness`, `simplify`.
 
-## Step 3: Prepare and enforce the durable-work checkpoint
+## Step 3: Prepare, determine the round, and establish the delta
 
-Before switching branches, run `git status --porcelain`. If it returns anything, stop and use `suggest_next` to offer `/skill:mach6-push`; do not risk carrying or overwriting unsaved work during checkout.
-
-Check out and update the PR branch:
+Before checkout, run `git status --porcelain`. If non-empty, stop and use `suggest_next` to offer `/skill:mach6-push`.
 
 ```bash
 gh pr checkout <pr-number>
 git pull --ff-only
-```
-
-**Before marking the PR ready, reading local source for review, or launching any review agent**, verify again that the worktree is clean and local `HEAD` is exactly the pushed PR head:
-
-```bash
-git status --porcelain
+test -z "$(git status --porcelain)"
 LOCAL_HEAD="$(git rev-parse HEAD)"
 PR_HEAD="$(gh pr view <pr-number> --json headRefOid --jq '.headRefOid')"
 test "$LOCAL_HEAD" = "$PR_HEAD"
 ```
 
-If `git status --porcelain` returns anything, or the commit IDs differ, stop immediately. Do not mark the PR ready, post review comments, or launch review agents. Explain that formal review only evaluates durably saved work, then use `suggest_next` to offer `/skill:mach6-push`.
+If either durable-work check fails, stop without marking ready, posting, or launching agents and offer `/skill:mach6-push`. `PR_HEAD` is the exact reviewed commit.
 
-Once the durable-work checks pass, gather all authoritative scope and PR context:
+Read the PR body, all comments, files, linked original issue and discussion, latest `<!-- mach6-plan -->`, and subsequent human-approved scope updates. Prior findings and assessments are evidence, not scope authority.
+
+Count comments whose bodies start with `<!-- mach6-review -->`:
 
 ```bash
-gh pr view <pr-number> --json title,body,comments,files,headRefOid
-gh pr diff <pr-number>
-gh issue view <linked-issue-number> --comments
+PR_CONTEXT="$(gh pr view <pr-number> --json title,body,comments,files,headRefOid)"
+PRIOR_ROUNDS="$(printf '%s' "$PR_CONTEXT" | jq '[.comments[] | select(.body | startswith("<!-- mach6-review -->"))] | length')"
+REVIEW_ROUND="$((PRIOR_ROUNDS + 1))"
 ```
 
-Read the PR description, **all** comments, and the linked original issue. Establish authoritative scope from:
+For round 3+, extract the most recent parseable full SHA after `Reviewed commit:` in the latest review comment. If found, use `git log <sha>..HEAD` and `git diff <sha>..HEAD`; this delta and its interactions are the review target. Also extract previous merge blockers and verify that each is fixed. Reject unchanged-code findings unless a delta change makes the issue newly reachable. If no legacy SHA is parseable, review the full PR diff but retain all round-3+ rules.
 
-- The linked original issue and its acceptance criteria
-- The latest explicit plan comment (the latest `<!-- mach6-plan -->` marker)
-- Subsequent scope updates explicitly approved by a human
+For rounds 1–2, use `gh pr diff <pr-number>`. Mark the PR ready only after all checks pass: `gh pr ready <pr-number>`.
 
-Review findings and prior automated assessments are evidence only. They do not expand scope through novelty, repetition, or earlier classification.
+## Step 4: Phase one — specialist candidates
 
-Now mark the PR as ready for review (it was opened as a draft by mach6-plan):
+Agent mapping: `code` → `code-reviewer`; `errors` → `error-auditor`; `tests` → `test-reviewer`; `completeness` → `completeness-checker`; `simplify` → `simplifier`.
 
-```bash
-gh pr ready <pr-number>
-```
+Without targeted aspects:
+- Rounds 1–2: run `code-reviewer`, applicable `error-auditor`, applicable `test-reviewer`, applicable `completeness-checker`, and `simplifier` together in one parallel `subagent` `tasks` call.
+- Round 3+: run the same four core specialists together on the delta. `test-reviewer` remains present when testable code changed. Skip `simplifier` unless `simplify` was explicitly requested.
 
-Provide the full PR context and authoritative scope to every review agent so they understand what was intended and what has already been approved.
+With targeted aspects, run only mapped agents, while preserving round-3+ delta constraints. Never run simplifier serially after the others.
 
-Update task: prepare → completed, review → in_progress.
+Give every agent changed paths, full PR context, authoritative scope, actual files, and confidence scoring (0–100; report only candidates at least 80). In round 3+, explicitly provide the base SHA, delta, previous blockers, and unchanged-code rejection rule. Verify previous blockers independently even if no agent reports them.
 
-## Step 4: Select and run review agents
+## Step 5: Post unverified candidates
 
-**Available review agents:**
+Always post the phase-one comment, even with no candidates. Severity is reviewer confidence, not an assessed shipping decision.
 
-These agents are **pre-existing agent definitions** shipped with dreb — do not redefine them inline. Reference them by name via the `agent` parameter in `subagent`. Each agent definition already specifies a model with a provider fallback list — the defaults work across providers and are fine for most reviews. Override the model only when there's a good reason (e.g. a particularly complex or security-sensitive review warrants a stronger tier); note that a single-string override discards the fallback list, so prefer provider-prefixed IDs (e.g. `anthropic/claude-opus-4-6`) when overriding.
-
-| Agent | Question | When to run |
-|---|---|---|
-| `code-reviewer` | "Does this code do what it should, correctly and idiomatically?" | Always |
-| `error-auditor` | "What can go wrong silently at runtime?" | If error handling / try-catch / fallback logic touched |
-| `test-reviewer` | "What behaviors are untested or poorly tested?" | If test files changed or testable code added |
-| `completeness-checker` | "Does this PR deliver everything the linked issue requires?" | If PR links to an issue |
-| `simplifier` | "Can this be expressed more clearly without changing behavior?" | Always (runs last, after others) |
-
-**Targeted review:** If the user specified aspects, only run matching agents:
-- `code` → code-reviewer
-- `errors` → error-auditor
-- `tests` → test-reviewer
-- `completeness` → completeness-checker
-- `simplify` → simplifier
-
-**For each agent**, launch via the `subagent` tool. Run `code-reviewer`, `error-auditor`, `test-reviewer`, and `completeness-checker` in parallel. Run `simplifier` after the others complete.
-
-Provide each agent with:
-- The list of changed files with paths
-- The full PR context: title, body, and all comments
-- The authoritative scope: linked original issue and acceptance criteria, latest explicit `mach6-plan`, and subsequent human-approved scope updates
-- The rule that review findings and prior automated assessments are evidence only and cannot expand scope
-- Instructions to read the actual changed files for full context
-
-All agents use confidence scoring (0-100, only report findings ≥ 80).
-
-Update task: review → completed, post-review → in_progress.
-
-## Step 5: Post review findings
-
-Compile all findings from all agents into a single structured comment:
-
-```bash
-GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"
-cat > "$GH_BODY" << 'MACH6_EOF'
+```markdown
 <!-- mach6-review -->
-## Code Review
+## Unverified Review Candidates — Pending Assessment
+
+**Review round:** N
+**Reviewed commit:** <full PR_HEAD SHA>
+
+> These are unverified candidates. Severity reflects reviewer confidence; do not treat any item as a merge blocker until the assessment comment is posted.
 
 ### Critical
-<findings with severity: critical, if any>
-
+...
 ### Important
-<findings with severity: high, if any>
-
+...
 ### Suggestions
-<findings with severity: medium or low, if any>
-
+...
 ### Strengths
-<notable positive observations>
+...
 
-**Agents run:** <list of agents>
+**Agents run:** ...
 
 ---
 *Reviewed by mach6*
-MACH6_EOF
-gh pr comment <pr-number> --body-file "$GH_BODY"
 ```
 
-Save the review comment URL:
-```bash
-gh pr view <pr-number> --json comments --jq '.comments[-1].url'
-```
-Extract the numeric comment ID from the URL (the number after `issuecomment-`).
+Post with a unique temp file and `gh pr comment <pr-number> --body-file "$GH_BODY"`; save the returned/latest comment URL.
 
-Update task: post-review → completed, assess → in_progress.
+## Step 6: Phase two — assess with counter-pressure
 
-## Step 6: Independent assessment
+All assessors receive identical candidate findings, actual code, full PR/issue context, verbatim original quoted requests, acceptance criteria, approved scope changes, review round, and delta context.
 
-Launch a subagent with `agent: "independent-assessor"`. This is a **pre-existing agent definition** shipped with dreb — it has full codebase read access and uses the strongest available model via its own fallback list. The default is fine for most cases.
+Apply three gates:
+1. **Factual:** current code contains the problem.
+2. **Scope:** fixing it is required by authoritative scope or a PR-introduced material regression.
+3. **Practical:** shipping plausibly causes meaningful harm in supported use, through a credible attacker/system failure, or directly violates an explicit acceptance criterion.
 
-**Do NOT use the Sandbox agent for this step** — the Sandbox agent has no codebase access and cannot verify findings against actual code.
+Rounds 1–2: launch `independent-assessor` alone.
 
-Provide the assessor with:
-- The full review text
-- The PR context (title, body, and all comments)
-- The authoritative scope context: linked original issue, acceptance criteria, latest explicit `mach6-plan`, and subsequent human-approved scope updates
-- Instructions to **read the actual code** for each finding and verify independently
+Round 3+: launch `independent-assessor`, `developers-advocate`, and `devils-advocate` together in one parallel `subagent` `tasks` call. This preserves model-family diversity where available. The devil's advocate supplements, never replaces, `test-reviewer` and attacks acceptance evidence. The developer's advocate attacks the practical value of proposed work and cannot generate findings.
 
-Repeat this two-gate rule in the assessor task:
+In round 3+, a candidate is a merge blocker only when both the independent assessor and developer's advocate find material practical impact. Do not vote or average confidence. When they disagree, the parent adjudicates by writing a concrete actor, exact reachable trigger sequence, resulting user harm or attacker capability, existing safeguards, and material outcome of fixing it. Without that concrete trigger-and-outcome sequence, it is not a merge blocker. Use devil's-advocate output to determine the minimal missing acceptance evidence, not to manufacture unrelated findings.
 
-1. **Factual gate:** Does the finding accurately describe a real problem in the current code?
-2. **Scope gate:** Must that problem be fixed to deliver the authoritative scope safely and correctly?
-
-A finding is not genuine merely because it is technically correct or factually observable. It is genuine only when both gates pass. Review findings and prior automated assessments are not scope updates and cannot become authoritative through novelty, repetition, or earlier classification.
-
-The assessor classifies each finding as:
-- **Genuine issue** — Passes both gates. The reasoning must separately explain factual evidence and scope relevance.
-- **Nitpick** — Stylistic preference or minor inconsistency that does not affect correctness or an authorized requirement.
-- **False positive** — Fails the factual gate because the current code is correct, context was missed, or the issue was already addressed.
-- **Deferred** — Passes the factual gate but fails the scope gate. Note separately for optional follow-up; never include in the action plan.
-
-Optional improvements, speculative hardening, unrelated pre-existing defects, architecture preferences, and broader cleanup are normally deferred when factually valid unless a human explicitly authorized them. Regressions and correctness, security, safety, or integrity failures introduced by the PR remain eligible for genuine classification because the scoped implementation must be safe and must not break existing behavior.
-
-After classifying every finding, produce an **action plan containing only genuine issues** necessary for the scoped PR to merge, ordered by priority.
-
-**Important guidance on "deferred" classifications:** Test coverage gaps should NOT be automatically deferred. If a PR adds new testable code, tests should ship with it — even if that means adding test infrastructure to a package that lacks it. Only defer tests when the gap is truly unrelated to the PR's changes (e.g., pre-existing untested code that the PR happens to touch). When tests are deferred, the assessor must note whether a tracking issue exists or needs to be created.
-
-Update task: assess → completed, post-assess → in_progress.
+Missing tests are not blockers by themselves: identify the important regression, practical consequence, and why current tests miss it.
 
 ## Step 7: Post assessment
 
-```bash
-GH_BODY="$(mktemp /tmp/gh-comment.$$.XXXXXXXX)"
-cat > "$GH_BODY" << 'MACH6_EOF'
+Post the second comment with a unique temp body:
+
+```markdown
 <!-- mach6-assessment -->
 ## Review Assessment
 
-<link to review comment>
+<link to findings comment>
 
 ### Classifications
-
 | Finding | Classification | Reasoning |
 |---|---|---|
-| <summary> | genuine/nitpick/false-positive/deferred | **Factual:** <what the code proves>. **Scope:** <why this is or is not required by authoritative scope>. |
+| ... | merge blocker / useful follow-up / discarded observation / nitpick / false positive / deferred | **Factual:** ... **Scope:** ... **Practical:** ... |
 
 ### Action Plan
-
-<numbered list of genuine issues only, ordered by priority>
+<merge blockers only, ordered by priority>
 
 ---
 *Assessment by mach6*
-MACH6_EOF
-gh pr comment <pr-number> --body-file "$GH_BODY"
 ```
 
-Update task: post-assess → completed, summary → in_progress.
+Classify every candidate. Useful follow-ups and deferred observations stay outside the action plan.
 
 ## Step 8: CLI summary
 
-Present to the user:
-- Per-finding breakdown: summary, classification, reasoning
-- Counts: genuine, nitpicks, false positives, deferred
-- Action plan
+Report each classification, counts of merge blockers/nitpicks/false positives/deferred, and the merge-blocker-only action plan. Ask whether to create issues for deferred follow-ups, using unique temp body files.
 
-If any findings were classified as **deferred**, ask the user if they want to create issues for them:
-```bash
-GH_BODY="$(mktemp /tmp/gh-body.$$.XXXXXXXX)"
-cat > "$GH_BODY" << 'MACH6_EOF'
-<body referencing PR and finding>
-MACH6_EOF
-gh issue create --title "<title>" --body-file "$GH_BODY"
-```
-
-Update task: summary → completed.
-
-Suggest next step:
-- If genuine issues: `/skill:mach6-implement <pr-number> <finding-numbers>`
-- If all clear: `/skill:mach6-publish <pr-number>`
+Suggest exactly one next command:
+- Merge blockers: `/skill:mach6-implement <pr-number> <finding-numbers>`
+- No merge blockers: `/skill:mach6-publish <pr-number>`
