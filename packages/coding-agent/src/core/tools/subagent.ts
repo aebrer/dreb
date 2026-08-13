@@ -439,6 +439,7 @@ async function spawnSubagent(
 		let resolvedThinking: ThinkingLevel | undefined;
 		let rpcRequestId = 0;
 		let rpcCompleted = false;
+		let controlError: Error | undefined;
 		const pendingRpc = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>();
 		const sendRpc = <T>(command: Record<string, unknown>): Promise<T> => {
 			if (!proc.stdin?.writable) return Promise.reject(new Error("Subagent control channel is unavailable."));
@@ -455,6 +456,18 @@ async function spawnSubagent(
 					getState: async () => sendRpc<{ steeringMode: "all" | "one-at-a-time" }>({ type: "get_state" }),
 				} as RpcClient)
 			: undefined;
+
+		proc.stdin?.on("error", (err) => {
+			controlError = err;
+			log.warn(`[subagent] stdin stream error (agent=${agentConfig.name}): ${err.message}`);
+			for (const request of pendingRpc.values()) request.reject(err);
+			pendingRpc.clear();
+			try {
+				proc.kill("SIGTERM");
+			} catch {
+				/* process already exited */
+			}
+		});
 
 		// Drain stderr concurrently to avoid pipe deadlock (capped to prevent OOM from verbose subagents)
 		proc.stderr?.on("data", (chunk: Buffer) => {
@@ -587,7 +600,10 @@ async function spawnSubagent(
 				const stderrTrimmed = stderr.trim();
 				const plainOutput = plainStdoutLines.join("\n").trim();
 				errorMessage =
-					stderrTrimmed.slice(0, 500) || plainOutput.slice(0, 500) || `Subagent exited with code ${exitCode}`;
+					controlError?.message.slice(0, 500) ||
+					stderrTrimmed.slice(0, 500) ||
+					plainOutput.slice(0, 500) ||
+					`Subagent exited with code ${exitCode}`;
 			} else if (output.trim() === "") {
 				// Clean exit but no output — surface why instead of returning a silent empty result.
 				if (lastStopReason === "length") {

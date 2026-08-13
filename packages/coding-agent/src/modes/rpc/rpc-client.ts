@@ -349,7 +349,8 @@ export class RpcClient {
 
 	/** Queue an unchanged steering message in a specific live background agent. */
 	async steerBackgroundAgent(agentId: string, message: string): Promise<void> {
-		await this.send({ type: "steer_background_agent", agentId, message });
+		const response = await this.send({ type: "steer_background_agent", agentId, message });
+		this.getData(response);
 	}
 
 	/** Read the selected live background agent's pending steering queue. */

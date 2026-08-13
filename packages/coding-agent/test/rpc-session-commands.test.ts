@@ -85,6 +85,21 @@ describe("RPC session commands", () => {
 			agentId: "agent-1",
 		});
 	});
+
+	it("rejects failed agent-scoped steering responses", async () => {
+		const client = new RpcClient() as any;
+		client.send = vi.fn().mockResolvedValue({
+			type: "response",
+			command: "steer_background_agent",
+			success: false,
+			error: "Background agent is no longer running.",
+		});
+
+		await expect(client.steerBackgroundAgent("agent-1", "too late")).rejects.toThrow(
+			"Background agent is no longer running.",
+		);
+	});
+
 	it("RpcClient.listAllSessions sends the list_all_sessions command and unwraps sessions", async () => {
 		const client = new RpcClient() as any;
 		const sessions: RpcSessionInfo[] = [
