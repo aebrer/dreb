@@ -802,6 +802,19 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		withRuntime(req, res, (h) => h.client.getPendingMessages());
 	});
 
+	app.get("/api/runtimes/:key/subagents/:agentId/pending", (req, res) => {
+		withRuntime(req, res, (h) => h.client.getBackgroundAgentPending(String(req.params.agentId)));
+	});
+
+	app.post("/api/runtimes/:key/subagents/:agentId/steer", (req, res) => {
+		const { message } = req.body ?? {};
+		if (typeof message !== "string" || message.length === 0) {
+			res.status(400).json({ error: "message is required" });
+			return;
+		}
+		withRuntime(req, res, (h) => h.client.steerBackgroundAgent(String(req.params.agentId), message));
+	});
+
 	app.post("/api/runtimes/:key/dequeue", (req, res) => {
 		withRuntime(req, res, (h) => h.client.clearPendingMessages());
 	});

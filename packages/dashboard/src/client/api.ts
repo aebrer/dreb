@@ -171,6 +171,12 @@ export const api = {
 			`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/messages`,
 			{ signal },
 		),
+	subagentPending: (key: string, agentId: string) =>
+		request<{ steeringMode: "all" | "one-at-a-time"; pending: PendingMessagesDto }>(
+			`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/pending`,
+		),
+	steerSubagent: (key: string, agentId: string, message: string) =>
+		request<{ ok: true }>(`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/steer`, json({ message })),
 	extensionUiResponse: (key: string, response: Record<string, unknown>) =>
 		request<{ ok: true }>(`/api/runtimes/${key}/extension-ui-response`, json(response)),
 	exportHtmlUrl: (key: string) => `/api/runtimes/${key}/export-html`,

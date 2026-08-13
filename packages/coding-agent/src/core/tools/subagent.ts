@@ -9,7 +9,9 @@ import { Text } from "@dreb/tui";
 import { type Static, Type } from "@sinclair/typebox";
 import { CONFIG_DIR_NAME, getPackageDir, getSubagentSessionsDir } from "../../config.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
-import { attachJsonlLineReader } from "../../modes/rpc/jsonl.js";
+import { attachJsonlLineReader, serializeJsonLine } from "../../modes/rpc/jsonl.js";
+import type { RpcClient } from "../../modes/rpc/rpc-client.js";
+import type { RpcPendingMessages } from "../../modes/rpc/rpc-types.js";
 import type {
 	DispatchAgentSummary,
 	DispatchArbitrationRecord,
@@ -339,6 +341,7 @@ async function spawnSubagent(
 	parentSessionFile?: string,
 	onChildEvent?: (event: Record<string, unknown>) => void,
 	thinkingOverride?: ThinkingLevel,
+	onControlAvailable?: (client: RpcClient | undefined) => void,
 ): Promise<SubagentResult> {
 	const drebBin = findDrebBinary();
 	log.debug(`[subagent] spawn: agent=${agentConfig.name} cwd=${cwd}`);
@@ -390,6 +393,11 @@ async function spawnSubagent(
 		args.push("--parent-session", parentSessionFile);
 	}
 	args.push("-p", task);
+	if (onControlAvailable) {
+		const rpcModeIndex = args.indexOf("json");
+		if (rpcModeIndex !== -1) args[rpcModeIndex] = "rpc";
+		args.splice(args.length - 2, 2);
+	}
 
 	// Early abort check — if the signal is already aborted (e.g. queued task whose
 	// AbortController was aborted while waiting on bgAcquire), bail out before
@@ -411,7 +419,7 @@ async function spawnSubagent(
 		try {
 			proc = spawn(NODE_EXEC, [drebBin, ...args], {
 				cwd,
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: [onControlAvailable ? "pipe" : "ignore", "pipe", "pipe"],
 				env: { ...process.env },
 			});
 		} catch (err) {
@@ -429,6 +437,52 @@ async function spawnSubagent(
 		const toolNameRef = { current: "" };
 		let resolvedModel: string | undefined;
 		let resolvedThinking: ThinkingLevel | undefined;
+		let rpcRequestId = 0;
+		let rpcCompleted = false;
+		let controlError: Error | undefined;
+		const pendingRpc = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+		const sendRpc = <T>(command: Record<string, unknown>): Promise<T> => {
+			if (!proc.stdin?.writable) return Promise.reject(new Error("Subagent control channel is unavailable."));
+			const id = `subagent-${++rpcRequestId}`;
+			proc.stdin.write(serializeJsonLine({ ...command, id }));
+			return new Promise<T>((resolve, reject) => pendingRpc.set(id, { resolve, reject }));
+		};
+		const controlClient = onControlAvailable
+			? ({
+					steer: async (message: string) => {
+						await sendRpc({ type: "steer", message });
+					},
+					getPendingMessages: async () => sendRpc<RpcPendingMessages>({ type: "get_pending_messages" }),
+					getState: async () => sendRpc<{ steeringMode: "all" | "one-at-a-time" }>({ type: "get_state" }),
+				} as RpcClient)
+			: undefined;
+
+		// Terminally fail a controlled child: remember the first failure, reject all
+		// in-flight control requests, and stop the process (with the same SIGKILL
+		// backstop as the abort path) so the close handler settles instead of the
+		// child idling in RPC mode forever.
+		const failControlledChild = (err: Error) => {
+			if (!controlError) controlError = err;
+			for (const request of pendingRpc.values()) request.reject(err);
+			pendingRpc.clear();
+			try {
+				proc.kill("SIGTERM");
+			} catch {
+				/* process already exited */
+			}
+			killTimer ??= setTimeout(() => {
+				try {
+					if (!proc.killed) proc.kill("SIGKILL");
+				} catch {
+					/* process already exited */
+				}
+			}, 5000);
+		};
+
+		proc.stdin?.on("error", (err) => {
+			log.warn(`[subagent] stdin stream error (agent=${agentConfig.name}): ${err.message}`);
+			failControlledChild(err);
+		});
 
 		// Drain stderr concurrently to avoid pipe deadlock (capped to prevent OOM from verbose subagents)
 		proc.stderr?.on("data", (chunk: Buffer) => {
@@ -448,6 +502,34 @@ async function spawnSubagent(
 				log.warn(`[subagent] stdout stream error (agent=${agentConfig.name}): ${err.message}`);
 			});
 			attachJsonlLineReader(proc.stdout, (line) => {
+				if (onControlAvailable) {
+					try {
+						const message = JSON.parse(line);
+						if (message?.type === "agent_end" && !rpcCompleted) {
+							rpcCompleted = true;
+							setImmediate(() => proc.kill("SIGTERM"));
+						}
+						if (message?.type === "response" && typeof message.id === "string") {
+							const pending = pendingRpc.get(message.id);
+							if (pending) {
+								pendingRpc.delete(message.id);
+								if (message.success) pending.resolve(message.data);
+								else pending.reject(new Error(message.error ?? "Subagent RPC command failed."));
+							} else if (message.command === "prompt" && message.success === false && !rpcCompleted) {
+								// Late failure of the initial prompt: the child acknowledged the
+								// command synchronously, then failed before the agent loop started
+								// (e.g. model/API-key validation, or the task was consumed without
+								// starting the loop), so no agent_end will ever settle this process.
+								failControlledChild(
+									new Error(typeof message.error === "string" ? message.error : "Subagent prompt failed."),
+								);
+							}
+							return;
+						}
+					} catch {
+						// The normal line handler preserves non-JSON diagnostics.
+					}
+				}
 				handleChildJsonlLine(line, {
 					onEvent: onChildEvent,
 					onAssistantMessage: (message) => collectedMessages.push(message),
@@ -461,6 +543,17 @@ async function spawnSubagent(
 					onPlainLine: (plain) => plainStdoutLines.push(plain),
 					toolNameRef,
 				});
+			});
+		}
+
+		if (onControlAvailable && controlClient) {
+			onControlAvailable(controlClient);
+			void sendRpc({ type: "prompt", message: task }).catch((err) => {
+				const error = err instanceof Error ? err : new Error(String(err));
+				log.warn(`[subagent] initial RPC prompt failed (agent=${agentConfig.name}): ${error.message}`);
+				// A rejected initial prompt means the agent loop never starts and the
+				// child would idle in RPC mode forever — terminate it and fail loudly.
+				failControlledChild(error);
 			});
 		}
 
@@ -484,6 +577,9 @@ async function spawnSubagent(
 		proc.on("error", (err) => {
 			if (settled) return;
 			settled = true;
+			onControlAvailable?.(undefined);
+			for (const request of pendingRpc.values()) request.reject(err);
+			pendingRpc.clear();
 			if (killTimer) clearTimeout(killTimer);
 			signal?.removeEventListener("abort", onAbort);
 			rejectPromise(new Error(`Subagent process error: ${err.message}`));
@@ -492,9 +588,12 @@ async function spawnSubagent(
 		proc.on("close", (code) => {
 			if (settled) return;
 			settled = true;
+			onControlAvailable?.(undefined);
+			for (const request of pendingRpc.values()) request.reject(new Error("Subagent process exited."));
+			pendingRpc.clear();
 			if (killTimer) clearTimeout(killTimer);
 			signal?.removeEventListener("abort", onAbort);
-			const exitCode = code ?? 1;
+			const exitCode = rpcCompleted ? 0 : (code ?? 1);
 			const stderr = stderrChunks.join("");
 			log.debug(
 				`[subagent] close: agent=${agentConfig.name} exit=${exitCode} messages=${collectedMessages.length}${exitCode !== 0 ? ` stderr=${stderr.slice(0, 200)} stdout=${plainStdoutLines.join("|").slice(0, 200)}` : ""}`,
@@ -526,7 +625,10 @@ async function spawnSubagent(
 				const stderrTrimmed = stderr.trim();
 				const plainOutput = plainStdoutLines.join("\n").trim();
 				errorMessage =
-					stderrTrimmed.slice(0, 500) || plainOutput.slice(0, 500) || `Subagent exited with code ${exitCode}`;
+					controlError?.message.slice(0, 500) ||
+					stderrTrimmed.slice(0, 500) ||
+					plainOutput.slice(0, 500) ||
+					`Subagent exited with code ${exitCode}`;
 			} else if (output.trim() === "") {
 				// Clean exit but no output — surface why instead of returning a silent empty result.
 				if (lastStopReason === "length") {
@@ -1073,6 +1175,7 @@ export async function executeSingle(
 	onChildEvent?: (event: Record<string, unknown>) => void,
 	thinkingOverride?: ThinkingLevel,
 	arbitration?: SubagentArbitrationHooks,
+	onControlAvailable?: (client: RpcClient | undefined) => void,
 ): Promise<SubagentResult> {
 	let name = agentName || DEFAULT_AGENT;
 	let config = agents.get(name);
@@ -1323,6 +1426,7 @@ export async function executeSingle(
 		parentSessionFile,
 		onChildEvent,
 		finalThinking,
+		onControlAvailable,
 	);
 	const finalSelectedModel = result.model ?? (usedModel ? canonicalModelRef(resolvedProvider, usedModel) : undefined);
 	result.output = prependModelFallbackSummary(
@@ -1355,6 +1459,7 @@ async function executeChain(
 	parentSessionFile?: string,
 	onChildEvent?: (event: Record<string, unknown>) => void,
 	arbitration?: Omit<SubagentArbitrationHooks, "step">,
+	onControlAvailable?: (client: RpcClient | undefined) => void,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -1412,6 +1517,7 @@ async function executeChain(
 			onChildEvent,
 			resolveSubagentThinkingOverride(step.thinking, defaultThinking),
 			arbitration ? { ...arbitration, step: i + 1 } : undefined,
+			onControlAvailable,
 		);
 		results.push(result);
 
@@ -1454,6 +1560,7 @@ export interface BackgroundAgentInfo {
 
 const backgroundAgentRegistry = new Map<string, BackgroundAgentInfo>();
 const backgroundAbortControllers = new Map<string, AbortController>();
+const backgroundControlClients = new Map<string, RpcClient>();
 
 const REHYDRATED_AGENT_ID_PREFIX = "rehydrated-";
 const HEADER_READ_CHUNK_BYTES = 8192;
@@ -1741,6 +1848,29 @@ export function getRunningBackgroundAgents(): readonly Readonly<BackgroundAgentI
 	return [...backgroundAgentRegistry.values()].filter((a) => a.status === "running").map(cloneBackgroundAgentInfo);
 }
 
+function getBackgroundControlClient(agentId: string): RpcClient {
+	const info = backgroundAgentRegistry.get(agentId);
+	if (!info) throw new Error(`Unknown background agent "${agentId}".`);
+	if (info.status !== "running") throw new Error(`Background agent "${agentId}" is no longer running.`);
+	const client = backgroundControlClients.get(agentId);
+	if (!client) throw new Error(`Background agent "${agentId}" has not started a controllable child yet.`);
+	return client;
+}
+
+/** Queue the user's message unchanged in the selected live child session. */
+export async function steerBackgroundAgent(agentId: string, message: string): Promise<void> {
+	await getBackgroundControlClient(agentId).steer(message);
+}
+
+/** Read pending steering messages and the effective delivery mode from the selected live child. */
+export async function getBackgroundAgentPendingSteering(
+	agentId: string,
+): Promise<{ steeringMode: "all" | "one-at-a-time"; pending: RpcPendingMessages }> {
+	const client = getBackgroundControlClient(agentId);
+	const [state, pending] = await Promise.all([client.getState(), client.getPendingMessages()]);
+	return { steeringMode: state.steeringMode, pending };
+}
+
 /** Abort all running background agents. */
 export function abortBackgroundAgents(): void {
 	for (const [id, controller] of backgroundAbortControllers) {
@@ -1751,6 +1881,7 @@ export function abortBackgroundAgents(): void {
 		}
 	}
 	backgroundAbortControllers.clear();
+	backgroundControlClients.clear();
 }
 
 /** Remove completed/failed entries older than the given age (ms). Default: 5 minutes. */
@@ -1760,6 +1891,7 @@ export function pruneBackgroundAgents(maxAgeMs = 5 * 60 * 1000): void {
 		if (info.status !== "running" && now - info.startedAt > maxAgeMs) {
 			backgroundAgentRegistry.delete(id);
 			backgroundAbortControllers.delete(id);
+			backgroundControlClients.delete(id);
 		}
 	}
 }
@@ -2098,6 +2230,7 @@ export function createSubagentToolDefinition(
 						signal: AbortSignal,
 						onChildEvent: ((event: Record<string, unknown>) => void) | undefined,
 						onArbitrationRecord: (record: DispatchArbitrationRecord) => void,
+						onControlAvailable: (client: RpcClient | undefined) => void,
 					) => Promise<SubagentResult>,
 				): string => {
 					const agentId = generateAgentId();
@@ -2139,6 +2272,10 @@ export function createSubagentToolDefinition(
 					};
 
 					const bgSignal = bgAbort.signal;
+					const onControlAvailable = (client: RpcClient | undefined) => {
+						if (client) backgroundControlClients.set(agentId, client);
+						else backgroundControlClients.delete(agentId);
+					};
 
 					const safeNotify = (result: SubagentResult) => {
 						try {
@@ -2153,7 +2290,7 @@ export function createSubagentToolDefinition(
 					const run = async () => {
 						await bgAcquire();
 						try {
-							const result = await runFn(bgSignal, onChildEvent, onArbitrationRecord);
+							const result = await runFn(bgSignal, onChildEvent, onArbitrationRecord, onControlAvailable);
 							const entry = backgroundAgentRegistry.get(agentId);
 							if (entry && !bgSignal.aborted) entry.status = result.exitCode === 0 ? "completed" : "failed";
 							if (entry && result.sessionFile) entry.sessionFile = result.sessionFile;
@@ -2172,6 +2309,7 @@ export function createSubagentToolDefinition(
 								errorMessage: err instanceof Error ? err.message : String(err),
 							});
 						} finally {
+							backgroundControlClients.delete(agentId);
 							bgRelease();
 						}
 					};
@@ -2225,7 +2363,7 @@ export function createSubagentToolDefinition(
 						taskLabel,
 						sessionDir,
 						resolvedCwd,
-						(signal, onChildEvent, onArbitrationRecord) =>
+						(signal, onChildEvent, onArbitrationRecord, onControlAvailable) =>
 							executeSingle(
 								agents,
 								agentName === DEFAULT_AGENT ? undefined : agentName,
@@ -2250,6 +2388,7 @@ export function createSubagentToolDefinition(
 											getAgentModelsForAgent,
 										}
 									: undefined,
+								onControlAvailable,
 							),
 					);
 				};
@@ -2334,7 +2473,7 @@ export function createSubagentToolDefinition(
 						taskSummary,
 						chainSessionDir,
 						cwd,
-						async (signal, onChildEvent, onArbitrationRecord) => {
+						async (signal, onChildEvent, onArbitrationRecord, onControlAvailable) => {
 							const results = await executeChain(
 								agents,
 								chainSteps,
@@ -2359,6 +2498,7 @@ export function createSubagentToolDefinition(
 											getAgentModelsForAgent,
 										}
 									: undefined,
+								onControlAvailable,
 							);
 							const resultText = results
 								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)

@@ -56,6 +56,11 @@ vi.mock("../../src/client/api.js", () => ({
 			},
 			messages: [],
 		})),
+		subagentPending: vi.fn(async () => ({
+			steeringMode: "one-at-a-time",
+			pending: { steering: [], followUp: [] },
+		})),
+		steerSubagent: vi.fn(async () => ({ ok: true })),
 		models: vi.fn(async () => ({ models: [] })),
 		settingsModels: vi.fn(async () => ({ models: [] })),
 		agentTypes: vi.fn(async () => ({ agentTypes: [] })),
@@ -2266,7 +2271,7 @@ describe("screen smoke tests", () => {
 		expect(navigate).toHaveBeenCalledWith({ screen: "subagent", key: "k-submany", agentId: "bg6" });
 	});
 
-	it("subagent drill-in renders read-only with the fixed note and no composer", () => {
+	it("subagent drill-in renders completed transcripts read-only", () => {
 		const store = makeStore() as any;
 		const session = populatedSession("k1");
 		applySessionEvent(session, {
@@ -2285,6 +2290,12 @@ describe("screen smoke tests", () => {
 				message: { role: "assistant", model: "haiku", content: [{ type: "text", text: "subagent says hi" }] },
 			},
 		});
+		applySessionEvent(session, {
+			type: "background_agent_end",
+			agentId: "bg1",
+			agentType: "feature-dev",
+			success: true,
+		});
 		const fakeStore = {
 			...store,
 			sessions: { k1: session },
@@ -2294,8 +2305,41 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("subagent says hi");
 		expect(el.textContent).toContain("agent, model, thinking changed");
 		expect(el.textContent).toContain("feature-dev · provider/cheap · low");
-		expect(el.textContent).toContain("subagents can't be steered yet");
-		expect(el.querySelector("textarea")).toBeNull(); // no composer
+		expect(el.textContent).toContain("no longer running");
+		expect(el.querySelector("textarea")).toBeNull();
+	});
+
+	it("subagent drill-in sends unchanged steering text and shows the child queue mode", async () => {
+		const store = makeStore() as any;
+		const session = populatedSession("k-live-steer");
+		applySessionEvent(session, {
+			type: "background_agent_start",
+			agentId: "bg-live",
+			agentType: "Explore",
+			taskSummary: "scan things",
+		});
+		const fakeStore = {
+			...store,
+			sessions: { "k-live-steer": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+		};
+		vi.mocked(api.subagentPending).mockResolvedValue({
+			steeringMode: "one-at-a-time",
+			pending: { steering: ["first"], followUp: [] },
+		});
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-live-steer" agentId="bg-live" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		expect(textarea).not.toBeNull();
+		expect(el.textContent).toContain("steering delivery: one-at-a-time");
+		expect(el.textContent).toContain("steer: first");
+		textarea.value = "Whatever the user wants";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		(el.querySelector("button.send") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(api.steerSubagent).toHaveBeenCalledWith("k-live-steer", "bg-live", "Whatever the user wants");
 	});
 
 	it("subagent drill-in renders failed arbitration with safe host metadata", () => {

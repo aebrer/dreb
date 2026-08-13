@@ -50,10 +50,11 @@ Open `http://127.0.0.1:5343`.
   latest-100 median tok/s with sample count and long-term delta), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
   and live auto-naming.
-- **Subagent drill-in** — read-only transcript of a background agent: live
-  events via the relay, hydrated from the agent's on-disk session log so the
-  view survives browser reloads. No composer: the parent session controls the
-  agent.
+- **Subagent drill-in** — transcript of a background agent: live events via
+  the relay, hydrated from the agent's on-disk session log so the view survives
+  browser reloads. While the child is running, its composer queues user-written
+  steering messages directly to that child and shows its effective queue mode;
+  completed and rehydrated transcripts remain read-only.
 - **Files** — host-wide browse with places shortcuts, upload (collision
   prompts before overwrite), download, new-folder, "new session here", and the
   effective global nested-context trust for the viewed canonical folder. Trust

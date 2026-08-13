@@ -1141,6 +1141,24 @@ Response:
 }
 ```
 
+#### steer_background_agent
+
+Queue the exact user-provided text as steering input for a specific live child. The command fails if the ID is unknown, completed, rehydrated, waiting for a concurrency slot, or between chain steps; it never falls back to the parent or another child. Built-in slash commands are rejected at the RPC boundary just like parent steering.
+
+```json
+{"type":"steer_background_agent","agentId":"a1b2c3d4e5f6","message":"Please finish with your current findings."}
+```
+
+#### get_background_agent_pending
+
+Read the selected live child's authoritative pending queues and effective steering delivery mode.
+
+```json
+{"type":"get_background_agent_pending","agentId":"a1b2c3d4e5f6"}
+```
+
+The response data is `{ "steeringMode": "one-at-a-time" | "all", "pending": RpcPendingMessages }`. Multiple `steer_background_agent` commands therefore use the target child's existing queue semantics.
+
 #### list_agent_types
 
 List discoverable subagent types for the current session working directory. This includes package-bundled agents, user-level agents, and project-level agents in `.dreb/agents/*.md`. Results are sorted by `name`.

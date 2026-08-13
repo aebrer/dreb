@@ -111,6 +111,8 @@ export type RpcCommand =
 
 	// Background agents
 	| { id?: string; type: "list_background_agents" }
+	| { id?: string; type: "steer_background_agent"; agentId: string; message: string }
+	| { id?: string; type: "get_background_agent_pending"; agentId: string }
 	| { id?: string; type: "list_agent_types" }
 
 	// Settings (persistent defaults)
@@ -438,6 +440,14 @@ export type RpcResponse =
 			command: "list_background_agents";
 			success: true;
 			data: { agents: RpcBackgroundAgentInfo[] };
+	  }
+	| { id?: string; type: "response"; command: "steer_background_agent"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_background_agent_pending";
+			success: true;
+			data: { steeringMode: "all" | "one-at-a-time"; pending: RpcPendingMessages };
 	  }
 	| {
 			id?: string;
