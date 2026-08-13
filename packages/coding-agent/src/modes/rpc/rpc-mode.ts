@@ -1849,13 +1849,42 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				// Don't await - events will stream
 				// Extension commands are executed immediately, file prompt templates are expanded
 				// If streaming and streamingBehavior specified, queues via steer/followUp
+				//
+				// A subagent child (--ui agent) whose prompt settles without the agent
+				// loop ever starting (e.g. an extension command consumed the task) would
+				// otherwise idle forever: its parent waits on agent_end for completion.
+				// Report that outcome as a late failure so the parent can terminate it.
+				// The agent's own subscription delivers agent_start synchronously — the
+				// session-level event queue would race the settled prompt promise.
+				const isSubagentChild = session.uiType === "agent";
+				let sawAgentStart = false;
+				const unsubscribe = isSubagentChild
+					? session.agent.subscribe((event) => {
+							if (event.type === "agent_start") sawAgentStart = true;
+						})
+					: undefined;
 				session
 					.prompt(command.message, {
 						images: command.images,
 						streamingBehavior: command.streamingBehavior,
 						source: "rpc",
 					})
-					.catch((e) => output(error(id, "prompt", e.message)));
+					.then(() => {
+						unsubscribe?.();
+						if (isSubagentChild && !sawAgentStart) {
+							output(
+								error(
+									id,
+									"prompt",
+									"Prompt was handled without starting the agent loop (for example, an extension command consumed the task).",
+								),
+							);
+						}
+					})
+					.catch((e) => {
+						unsubscribe?.();
+						output(error(id, "prompt", e.message));
+					});
 				return success(id, "prompt");
 			}
 

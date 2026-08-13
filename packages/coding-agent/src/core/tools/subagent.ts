@@ -457,9 +457,12 @@ async function spawnSubagent(
 				} as RpcClient)
 			: undefined;
 
-		proc.stdin?.on("error", (err) => {
-			controlError = err;
-			log.warn(`[subagent] stdin stream error (agent=${agentConfig.name}): ${err.message}`);
+		// Terminally fail a controlled child: remember the first failure, reject all
+		// in-flight control requests, and stop the process (with the same SIGKILL
+		// backstop as the abort path) so the close handler settles instead of the
+		// child idling in RPC mode forever.
+		const failControlledChild = (err: Error) => {
+			if (!controlError) controlError = err;
 			for (const request of pendingRpc.values()) request.reject(err);
 			pendingRpc.clear();
 			try {
@@ -467,6 +470,18 @@ async function spawnSubagent(
 			} catch {
 				/* process already exited */
 			}
+			killTimer ??= setTimeout(() => {
+				try {
+					if (!proc.killed) proc.kill("SIGKILL");
+				} catch {
+					/* process already exited */
+				}
+			}, 5000);
+		};
+
+		proc.stdin?.on("error", (err) => {
+			log.warn(`[subagent] stdin stream error (agent=${agentConfig.name}): ${err.message}`);
+			failControlledChild(err);
 		});
 
 		// Drain stderr concurrently to avoid pipe deadlock (capped to prevent OOM from verbose subagents)
@@ -500,6 +515,14 @@ async function spawnSubagent(
 								pendingRpc.delete(message.id);
 								if (message.success) pending.resolve(message.data);
 								else pending.reject(new Error(message.error ?? "Subagent RPC command failed."));
+							} else if (message.command === "prompt" && message.success === false && !rpcCompleted) {
+								// Late failure of the initial prompt: the child acknowledged the
+								// command synchronously, then failed before the agent loop started
+								// (e.g. model/API-key validation, or the task was consumed without
+								// starting the loop), so no agent_end will ever settle this process.
+								failControlledChild(
+									new Error(typeof message.error === "string" ? message.error : "Subagent prompt failed."),
+								);
 							}
 							return;
 						}
@@ -526,9 +549,11 @@ async function spawnSubagent(
 		if (onControlAvailable && controlClient) {
 			onControlAvailable(controlClient);
 			void sendRpc({ type: "prompt", message: task }).catch((err) => {
-				log.warn(
-					`[subagent] initial RPC prompt failed (agent=${agentConfig.name}): ${err instanceof Error ? err.message : String(err)}`,
-				);
+				const error = err instanceof Error ? err : new Error(String(err));
+				log.warn(`[subagent] initial RPC prompt failed (agent=${agentConfig.name}): ${error.message}`);
+				// A rejected initial prompt means the agent loop never starts and the
+				// child would idle in RPC mode forever — terminate it and fail loudly.
+				failControlledChild(error);
 			});
 		}
 
