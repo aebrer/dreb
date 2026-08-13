@@ -347,6 +347,20 @@ export class RpcClient {
 		await this.send({ type: "follow_up", message, images });
 	}
 
+	/** Queue an unchanged steering message in a specific live background agent. */
+	async steerBackgroundAgent(agentId: string, message: string): Promise<void> {
+		await this.send({ type: "steer_background_agent", agentId, message });
+	}
+
+	/** Read the selected live background agent's pending steering queue. */
+	async getBackgroundAgentPending(agentId: string): Promise<{
+		steeringMode: "all" | "one-at-a-time";
+		pending: RpcPendingMessages;
+	}> {
+		const response = await this.send({ type: "get_background_agent_pending", agentId });
+		return this.getData(response);
+	}
+
 	/**
 	 * Abort current operation.
 	 */

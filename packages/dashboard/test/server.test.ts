@@ -960,6 +960,45 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(pool.get(key)).toBeDefined();
 	});
 
+	it("subagent steering endpoints target the selected child and validate messages", async () => {
+		const dir = await createTempProject();
+		const { base, clients } = await startServer();
+		const create = await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const { key } = (await create.json()) as { key: string };
+		const client = clients[0] as any;
+		client.steerBackgroundAgent = vi.fn(async () => {});
+		client.getBackgroundAgentPending = vi.fn(async () => ({
+			steeringMode: "all",
+			pending: { steering: ["queued"], followUp: [] },
+		}));
+
+		const steer = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/steer`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ message: "unchanged text" }),
+		});
+		expect(steer.status).toBe(200);
+		expect(client.steerBackgroundAgent).toHaveBeenCalledWith("bg1", "unchanged text");
+
+		const pending = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/pending`);
+		await expect(pending.json()).resolves.toEqual({
+			steeringMode: "all",
+			pending: { steering: ["queued"], followUp: [] },
+		});
+		expect(client.getBackgroundAgentPending).toHaveBeenCalledWith("bg1");
+
+		const invalid = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/steer`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		expect(invalid.status).toBe(400);
+	});
+
 	it("POST /api/runtimes/:key/abort aborts the runtime and unknown keys 404", async () => {
 		const dir = await createTempProject();
 		const { base, clients } = await startServer();

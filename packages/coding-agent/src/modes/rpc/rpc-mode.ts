@@ -53,8 +53,10 @@ import { resolveToCwd } from "../../core/tools/path-utils.js";
 import {
 	type BackgroundAgentInfo,
 	discoverAgentTypes,
+	getBackgroundAgentPendingSteering,
 	getBackgroundAgents,
 	rehydrateBackgroundAgentsFromDisk,
+	steerBackgroundAgent,
 } from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -2198,6 +2200,21 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "list_background_agents", {
 					agents: getBackgroundAgents().map(toRpcBackgroundAgentInfo),
 				});
+			}
+
+			case "steer_background_agent": {
+				const rejection = getBuiltinPromptRejection(command.message);
+				if (rejection) return error(id, "steer_background_agent", rejection);
+				await steerBackgroundAgent(command.agentId, command.message);
+				return success(id, "steer_background_agent");
+			}
+
+			case "get_background_agent_pending": {
+				return success(
+					id,
+					"get_background_agent_pending",
+					await getBackgroundAgentPendingSteering(command.agentId),
+				);
 			}
 
 			case "list_agent_types": {

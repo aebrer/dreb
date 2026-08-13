@@ -381,7 +381,7 @@ Task tracking is prompt-driven: the system prompt includes guidelines for when t
 
 ## Subagents
 
-The optional `subagent` tool runs focused, role-matched work in independent child agent processes. Each subagent runs in its own process with its own context window, and notifies the parent when complete.
+The optional `subagent` tool runs focused, role-matched work in independent child agent processes. Each subagent runs in its own process with its own context window, and notifies the parent when complete. In the dashboard, a live child's transcript view can accept the user's own steering messages directly; repeated messages use that child's configured one-at-a-time or all-at-once steering queue. Completed and rehydrated transcripts remain read-only.
 
 When `agent` is omitted, dreb selects the default `Explore` agent. Explore retrieves concrete, bounded evidence: files, symbols, documentation, call sites, exact snippets, tests for a named behavior, and explicitly named data flows. The primary agent must synthesize that evidence and owns root-cause diagnosis, ambiguous-requirement interpretation, architecture/design decisions, implementation recommendations, planning, and final conclusions.
 

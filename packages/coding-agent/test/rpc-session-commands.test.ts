@@ -55,6 +55,36 @@ describe("toRpcSessionInfo", () => {
 });
 
 describe("RPC session commands", () => {
+	it("serializes agent-scoped steering and pending requests", async () => {
+		const client = new RpcClient() as any;
+		client.send = vi
+			.fn()
+			.mockResolvedValueOnce({ type: "response", command: "steer_background_agent", success: true })
+			.mockResolvedValueOnce({
+				type: "response",
+				command: "get_background_agent_pending",
+				success: true,
+				data: {
+					steeringMode: "one-at-a-time",
+					pending: { steering: ["first", "second"], followUp: [] },
+				},
+			});
+
+		await client.steerBackgroundAgent("agent-1", "Whatever the user writes");
+		await expect(client.getBackgroundAgentPending("agent-1")).resolves.toEqual({
+			steeringMode: "one-at-a-time",
+			pending: { steering: ["first", "second"], followUp: [] },
+		});
+		expect(client.send).toHaveBeenNthCalledWith(1, {
+			type: "steer_background_agent",
+			agentId: "agent-1",
+			message: "Whatever the user writes",
+		});
+		expect(client.send).toHaveBeenNthCalledWith(2, {
+			type: "get_background_agent_pending",
+			agentId: "agent-1",
+		});
+	});
 	it("RpcClient.listAllSessions sends the list_all_sessions command and unwraps sessions", async () => {
 		const client = new RpcClient() as any;
 		const sessions: RpcSessionInfo[] = [
