@@ -78,6 +78,21 @@ describe("supportsXhigh", () => {
 		},
 	);
 
+	it.each([
+		"deepseek-r1-distill-qwen-32b",
+		"Qwen-7B-Chat",
+		"qwen-14b",
+		"qwen-32b",
+		"qwen4b",
+		"copyqwen4gate",
+	] as const)(
+		"returns false for model %s whose digits are a parameter count or embedded substring, not a Qwen version",
+		(id) => {
+			const base = getModel("openai-codex", "gpt-5.4")!;
+			expect(supportsXhigh({ ...base, id })).toBe(false);
+		},
+	);
+
 	it("returns true for GPT-5.4 models", () => {
 		const model = getModel("openai-codex", "gpt-5.4");
 		expect(model).toBeDefined();

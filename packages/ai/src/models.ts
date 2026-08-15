@@ -163,10 +163,13 @@ function claudeFamilyVersion(modelId: string): ClaudeFamilyVersion | undefined {
 /**
  * Parse Qwen family versions without mistaking parameter counts for minor versions.
  * Only a dot separates major from minor (qwen3.8-27b, Qwen-3.8); a hyphen after the
- * major version introduces the parameter size (qwen3-32b → 3.0, not 3.32).
+ * major version introduces the parameter size (qwen3-32b → 3.0, not 3.32). A capture
+ * directly followed by a `b`-suffixed size token is a parameter count, not a version
+ * (qwen-32b, Qwen-7B-Chat, deepseek-r1-distill-qwen-32b), and Qwen majors never reach
+ * two digits, so only a single digit is accepted.
  */
 function qwenFamilyVersion(modelId: string): { major: number; minor: number } | undefined {
-	const match = modelId.match(/qwen[\s_-]*v?(\d+)(?:\.(\d+))?/i);
+	const match = modelId.match(/\bqwen[\s_-]*v?(\d)(?:\.(\d+))?(?![\d.]*b\b)/i);
 	if (!match) return undefined;
 	return {
 		major: Number.parseInt(match[1], 10),

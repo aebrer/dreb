@@ -174,4 +174,13 @@ describe("openai-completions qwen-chat-template thinkingFormat (pre-3.8 Qwen and
 
 		expect(getParams().reasoning_effort).toBe("medium");
 	});
+
+	it("does not apply the Qwen3.8+ default map to ids whose digits are parameter counts", async () => {
+		// Qwen distills use the Qwen chat template, so this is a plausible local config —
+		// but 32 is a parameter count, not a Qwen 32.x family version.
+		const model: Model<"openai-completions"> = { ...QWEN38_MODEL, id: "deepseek-r1-distill-qwen-32b" };
+		await stream(model, "high");
+
+		expect(getParams().reasoning_effort).toBe("high");
+	});
 });
