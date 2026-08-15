@@ -289,7 +289,7 @@ export interface OpenAICompletionsCompat {
 	requiresAssistantAfterToolResult?: boolean;
 	/** Whether thinking blocks must be converted to text blocks with <thinking> delimiters. Default: auto-detected from URL. */
 	requiresThinkingAsText?: boolean;
-	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, "qwen-chat-template" uses chat_template_kwargs.enable_thinking, and "kimi" uses nested thinking: { type, effort? } plus prompt_cache_key. Default: "openai". */
+	/** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, "qwen-chat-template" uses chat_template_kwargs.enable_thinking plus a top-level mapped reasoning_effort (Qwen3.8+ models default-map dreb levels onto the native low/medium/xhigh tiers), and "kimi" uses nested thinking: { type, effort? } plus prompt_cache_key. Default: "openai". */
 	thinkingFormat?: "openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template" | "kimi";
 	/** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
 	openRouterRouting?: OpenRouterRouting;
