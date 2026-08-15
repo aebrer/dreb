@@ -161,15 +161,41 @@ function claudeFamilyVersion(modelId: string): ClaudeFamilyVersion | undefined {
 }
 
 /**
+ * Parse Qwen family versions without mistaking parameter counts for minor versions.
+ * Only a dot separates major from minor (qwen3.8-27b, Qwen-3.8); a hyphen after the
+ * major version introduces the parameter size (qwen3-32b → 3.0, not 3.32).
+ */
+function qwenFamilyVersion(modelId: string): { major: number; minor: number } | undefined {
+	const match = modelId.match(/qwen[\s_-]*v?(\d+)(?:\.(\d+))?/i);
+	if (!match) return undefined;
+	return {
+		major: Number.parseInt(match[1], 10),
+		minor: match[2] === undefined ? 0 : Number.parseInt(match[2], 10),
+	};
+}
+
+/**
+ * Check whether a model id belongs to Qwen 3.8 or a later Qwen generation — the first
+ * Qwen family with graded `reasoning_effort` tiers (low/medium/xhigh, default xhigh).
+ */
+export function isQwen38OrLater(modelId: string): boolean {
+	const qwen = qwenFamilyVersion(modelId);
+	if (!qwen) return false;
+	return qwen.major > 3 || (qwen.major === 3 && qwen.minor >= 8);
+}
+
+/**
  * Check if a model supports xhigh thinking level.
  *
  * Supported today:
  * - GPT-5.2 through GPT-5.6 model families
  * - Claude Opus 4.6–4.x and Claude 5 model families
  * - Kimi Code K3 (xhigh maps to its advertised "max" effort)
+ * - Qwen 3.8+ model families (xhigh is their top native effort tier)
  */
 export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
 	if (model.provider === "kimi-coding-oauth" && model.id === "k3") return true;
+	if (isQwen38OrLater(model.id)) return true;
 	if (
 		model.id.includes("gpt-5.2") ||
 		model.id.includes("gpt-5.3") ||
