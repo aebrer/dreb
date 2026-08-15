@@ -320,7 +320,7 @@ For providers with partial OpenAI compatibility, use the `compat` field.
 | `openRouterRouting` | OpenRouter routing config passed to OpenRouter for model/provider selection |
 | `vercelGatewayRouting` | Vercel AI Gateway routing config for provider selection (`only`, `order`) |
 
-`qwen` uses top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that require `chat_template_kwargs.enable_thinking`.
+`qwen` uses top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that require `chat_template_kwargs.enable_thinking`. When reasoning is enabled, dreb also forwards the mapped level as `chat_template_kwargs.reasoning_effort`.
 
 Example:
 

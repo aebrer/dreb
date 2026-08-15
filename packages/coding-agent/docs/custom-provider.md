@@ -188,7 +188,7 @@ models: [{
   }]
 ```
 
-Use `qwen-chat-template` instead for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`.
+Use `qwen-chat-template` instead for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`. When reasoning is enabled, dreb also forwards the mapped level as `chat_template_kwargs.reasoning_effort`.
 
 > Migration note: Mistral moved from `openai-completions` to `mistral-conversations`.
 > Use `mistral-conversations` for native Mistral models.
@@ -630,4 +630,4 @@ interface ProviderModelConfig {
 }
 ```
 
-`qwen` is for DashScope-style top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`.
+`qwen` is for DashScope-style top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`. When reasoning is enabled, dreb also forwards the mapped level as `chat_template_kwargs.reasoning_effort`.

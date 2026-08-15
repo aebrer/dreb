@@ -417,7 +417,13 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
 		(params as any).enable_thinking = !!options?.reasoningEffort;
 	} else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
-		(params as any).chat_template_kwargs = { enable_thinking: !!options?.reasoningEffort };
+		const chatTemplateKwargs: Record<string, unknown> = {
+			enable_thinking: !!options?.reasoningEffort,
+		};
+		if (options?.reasoningEffort) {
+			chatTemplateKwargs.reasoning_effort = mapReasoningEffort(options.reasoningEffort, compat.reasoningEffortMap);
+		}
+		(params as any).chat_template_kwargs = chatTemplateKwargs;
 	} else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
 		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
 		const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
