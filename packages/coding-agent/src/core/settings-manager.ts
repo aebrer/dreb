@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import type { ContextTrustPolicy } from "./context-trust.js";
+import { log } from "./logger.js";
 import { expandPath } from "./tools/path-utils.js";
 
 export interface CompactionSettings {
@@ -37,6 +38,7 @@ export interface RetrySettings {
 }
 
 export const DEFAULT_BG_PARENT_TURN_LIMIT = 3;
+export const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 4;
 
 export interface BackgroundAgentsSettings {
 	/**
@@ -47,6 +49,8 @@ export interface BackgroundAgentsSettings {
 	parentTurnGuardrail?: boolean;
 	/** Number of parent turns allowed while background agents run before pausing. default: 3 */
 	parentTurnLimit?: number;
+	/** Maximum child agents that one parent session may run concurrently. Zero disables the tool. default: 4 */
+	maxConcurrentSubagents?: number;
 }
 
 export interface TerminalSettings {
@@ -979,6 +983,34 @@ export class SettingsManager {
 			enabled: this.getBackgroundAgentGuardrailEnabled(),
 			turnLimit,
 		};
+	}
+
+	getMaxConcurrentSubagents(): number {
+		const value = this.settings.backgroundAgents?.maxConcurrentSubagents;
+		if (value === undefined) {
+			return DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+		}
+		if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+			return value;
+		}
+		log.warn(
+			`[settings] Ignoring invalid backgroundAgents.maxConcurrentSubagents ${JSON.stringify(value)}; ` +
+				`it must be a non-negative whole number. Falling back to ${DEFAULT_MAX_CONCURRENT_SUBAGENTS}. ` +
+				"Fix the value in your settings file to silence this warning.",
+		);
+		return DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+	}
+
+	setMaxConcurrentSubagents(value: number): void {
+		if (!Number.isSafeInteger(value) || value < 0) {
+			throw new Error("maxConcurrentSubagents must be a non-negative whole number");
+		}
+		if (!this.globalSettings.backgroundAgents) {
+			this.globalSettings.backgroundAgents = {};
+		}
+		this.globalSettings.backgroundAgents.maxConcurrentSubagents = value;
+		this.markModified("backgroundAgents", "maxConcurrentSubagents");
+		this.save();
 	}
 
 	getHideThinkingBlock(): boolean {

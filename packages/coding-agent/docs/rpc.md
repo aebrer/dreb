@@ -1314,7 +1314,7 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with global-only control/security-policy exceptions:
 
-- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, `enabledModels`, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
+- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, `maxConcurrentSubagents`, `enabledModels`, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
 - **Global nested-context trust policy** (`autoLoadNestedContext`, `trustedContextFolders`, `effectiveTrustedContextRoots`, and the trust commands below): this is read from `~/.dreb/agent/settings.json` only, never project settings. Active main/subagent processes observe it for **future lazy nested/out-of-cwd loads**; it cannot remove content already injected into a conversation. It does not govern the separate initial upward context scan from the launch cwd.
 - **Global Dispatch Arbiter policy** (`subagentArbiter`): the complete object is read/written globally and project settings cannot shadow it. Enabled runtimes consume it before future subagent spawns; it does not rewrite already-started children.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
@@ -1343,6 +1343,7 @@ Response:
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
     "retryEnabled": true,
+    "maxConcurrentSubagents": 4,
     "imageAutoResize": true,
     "blockImages": false,
     "enableSkillCommands": true,
@@ -1386,6 +1387,12 @@ Update persistent default settings. Takes a partial payload — only the supplie
 
 ```json
 {"type": "set_settings", "settings": {"defaultThinkingLevel": "low", "retryEnabled": false}}
+```
+
+Set the maximum concurrency for newly started parent sessions. Zero removes the `subagent` tool and adds explicit parent-model guidance; positive values limit running children without changing the separate eight-item parallel-call input bound:
+
+```json
+{"type": "set_settings", "settings": {"maxConcurrentSubagents": 1}}
 ```
 
 Replace the global trusted-root list atomically (paths must be existing directories and are persisted as canonical roots):
@@ -1453,6 +1460,7 @@ Response is the full settings snapshot after the write (same shape as `get_setti
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
     "retryEnabled": false,
+    "maxConcurrentSubagents": 1,
     "imageAutoResize": true,
     "blockImages": false,
     "enableSkillCommands": true,
@@ -1478,6 +1486,7 @@ Project-shadow warning example (the global write still lands, but the returned m
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
     "retryEnabled": true,
+    "maxConcurrentSubagents": 4,
     "imageAutoResize": true,
     "blockImages": false,
     "enableSkillCommands": true,
@@ -1506,6 +1515,7 @@ Valid keys and values:
 | `followUpMode` | `"all"`, `"one-at-a-time"` |
 | `compactionEnabled` | boolean |
 | `retryEnabled` | boolean |
+| `maxConcurrentSubagents` | Non-negative safe integer; default `4`. Captured by new parent sessions; `0` removes the subagent tool and adds explicit self-execution guidance. |
 | `imageAutoResize` | boolean |
 | `blockImages` | boolean |
 | `enableSkillCommands` | boolean |

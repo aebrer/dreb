@@ -33,6 +33,8 @@ export interface BuildSystemPromptOptions {
 	gitRepoState?: GitRepoState;
 	/** Identity of the currently active model (provider and model ID). */
 	currentModel?: { provider: string; id: string };
+	/** Whether this parent session was launched with subagents disabled by settings. */
+	subagentsDisabled?: boolean;
 }
 
 function formatMemoryScope(sources: readonly import("./resource-loader.js").MemorySource[], heading: string): string {
@@ -181,6 +183,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		toolSnippets,
 		promptGuidelines,
 		appendSystemPrompt,
+		subagentsDisabled,
 		cwd,
 		contextFiles: providedContextFiles,
 		skills: providedSkills,
@@ -191,6 +194,9 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	const date = new Date().toISOString().slice(0, 10);
 
 	const appendSection = appendSystemPrompt ? `\n\n${appendSystemPrompt}` : "";
+	const subagentsDisabledSection = subagentsDisabled
+		? "\n\nSubagents are disabled for this session. The user launched dreb without the subagent tool. Do all work yourself that you would normally delegate to a subagent."
+		: "";
 
 	const contextFiles = providedContextFiles ?? [];
 	const skills = providedSkills ?? [];
@@ -201,6 +207,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		if (appendSection) {
 			prompt += appendSection;
 		}
+		prompt += subagentsDisabledSection;
 
 		// Append project context files
 		if (contextFiles.length > 0) {
@@ -332,6 +339,7 @@ Dreb documentation (read only when the user asks about dreb itself, its SDK, ext
 	if (appendSection) {
 		prompt += appendSection;
 	}
+	prompt += subagentsDisabledSection;
 
 	// Append project context files
 	if (contextFiles.length > 0) {

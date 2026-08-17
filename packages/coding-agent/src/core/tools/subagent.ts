@@ -23,6 +23,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { log } from "../logger.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { resolveCliModel } from "../model-resolver.js";
+import { DEFAULT_MAX_CONCURRENT_SUBAGENTS } from "../settings-manager.js";
 import { resolveEffectiveThinkingLevel, thinkingLevelToReasoning, validateThinkingLevelForModel } from "../thinking.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -1098,8 +1099,51 @@ function formatSkippedModelFailureDetails(skippedModels: SkippedFallbackModel[])
 }
 
 const MAX_PARALLEL_TASKS = 8;
-const MAX_CONCURRENCY = 4;
 const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
+
+/**
+ * Bounds the number of concurrently running background subagents. Ownership of the gate is kept
+ * separate from the subagent tool definition so that a single logical session keeps one accurate
+ * running-child count even when its tool definitions are rebuilt (e.g. on `/reload`).
+ */
+export interface SubagentConcurrencyGate {
+	/** Resolves immediately if a slot is free, otherwise queues until one is released. */
+	acquire(): Promise<void>;
+	/** Returns a slot and wakes the next waiter, if any. */
+	release(): void;
+}
+
+/**
+ * Create a concurrency gate limited to `maxConcurrent` simultaneous holders. The count lives in
+ * this closure, so a single gate instance shared across tool rebuilds keeps counting in-flight
+ * children accurately, while distinct instances stay fully isolated from one another.
+ */
+export function createSubagentConcurrencyGate(maxConcurrent: number): SubagentConcurrencyGate {
+	if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1) {
+		throw new Error("Subagent tool concurrency must be a positive whole number");
+	}
+	let running = 0;
+	const waiters: Array<() => void> = [];
+	return {
+		acquire(): Promise<void> {
+			if (running < maxConcurrent) {
+				running++;
+				return Promise.resolve();
+			}
+			return new Promise<void>((resolve) => {
+				waiters.push(() => {
+					running++;
+					resolve();
+				});
+			});
+		},
+		release(): void {
+			running--;
+			const next = waiters.shift();
+			if (next) next();
+		},
+	};
+}
 
 /** Resolve per-task thinking precedence for parallel and chain modes. */
 export function resolveSubagentThinkingOverride(
@@ -1107,29 +1151,6 @@ export function resolveSubagentThinkingOverride(
 	topLevelThinking: ThinkingLevel | undefined,
 ): ThinkingLevel | undefined {
 	return taskThinking ?? topLevelThinking;
-}
-
-// Semaphore for background task concurrency — shared across all background launches
-let bgRunning = 0;
-const bgWaiters: Array<() => void> = [];
-
-async function bgAcquire(): Promise<void> {
-	if (bgRunning < MAX_CONCURRENCY) {
-		bgRunning++;
-		return;
-	}
-	return new Promise<void>((resolve) => {
-		bgWaiters.push(() => {
-			bgRunning++;
-			resolve();
-		});
-	});
-}
-
-function bgRelease(): void {
-	bgRunning--;
-	const next = bgWaiters.shift();
-	if (next) next();
 }
 
 /**
@@ -1923,6 +1944,18 @@ export interface SubagentToolOptions {
 	onArbitration?: (event: SubagentArbitrationEvent) => void;
 	/** Effective default used to make an omitted proposed thinking level concrete for the arbiter. */
 	defaultThinkingLevel?: () => ThinkingLevel;
+	/**
+	 * Maximum children this parent tool instance may run concurrently. Must be at least one.
+	 * Used for the model-visible description and, when `concurrencyGate` is omitted, to size a
+	 * fresh per-instance gate.
+	 */
+	maxConcurrentSubagents?: number;
+	/**
+	 * Externally owned concurrency gate. Supply this so the running-child count survives tool
+	 * definition rebuilds (e.g. on `/reload`); without it the tool creates its own gate sized by
+	 * `maxConcurrentSubagents`, which resets to zero each time the tool is recreated.
+	 */
+	concurrencyGate?: SubagentConcurrencyGate;
 }
 
 // ---------------------------------------------------------------------------
@@ -2131,6 +2164,19 @@ export function createSubagentToolDefinition(
 	const arbitrate = options?.arbitrate;
 	const onArbitration = options?.onArbitration;
 	const getDefaultThinkingLevel = options?.defaultThinkingLevel;
+	const maxConcurrentSubagents = options?.maxConcurrentSubagents ?? DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+	if (!Number.isSafeInteger(maxConcurrentSubagents) || maxConcurrentSubagents < 1) {
+		throw new Error("Subagent tool concurrency must be a positive whole number");
+	}
+
+	// The concurrency gate is owned by the caller (e.g. AgentSession) so that it survives
+	// runtime rebuilds/reloads: the tool definition is recreated on every `/reload`, but the
+	// gate must keep counting in-flight children launched before the reload. When no gate is
+	// supplied (external SDK callers, tests) the tool owns a fresh per-instance gate, which
+	// still keeps separately embedded sessions from coupling through module-global state.
+	const concurrencyGate = options?.concurrencyGate ?? createSubagentConcurrencyGate(maxConcurrentSubagents);
+	const acquireBackgroundSlot = (): Promise<void> => concurrencyGate.acquire();
+	const releaseBackgroundSlot = (): void => concurrencyGate.release();
 
 	// Discover agents at definition time to build the prompt guidelines.
 	// This is cheap (reads .md files) and the same call happens on every execute().
@@ -2149,7 +2195,7 @@ export function createSubagentToolDefinition(
 		description:
 			"Run focused, independent work in a child agent when the task matches that agent's defined role " +
 			"(Explore for concrete evidence gathering, Sandbox for isolated /tmp-only analysis). " +
-			"Supports `task` for a single task, `tasks` for parallel execution in one call (up to 8, max 4 concurrent), " +
+			`Supports \`task\` for a single task, \`tasks\` for parallel execution in one call (up to 8, max ${maxConcurrentSubagents} concurrent), ` +
 			"and `chain` for a sequential pipeline with {previous} substitution. " +
 			"All subagents run in background — returns immediately, notifies on completion.",
 		promptSnippet: "Run role-matched work in independent child agents",
@@ -2288,7 +2334,7 @@ export function createSubagentToolDefinition(
 					};
 
 					const run = async () => {
-						await bgAcquire();
+						await acquireBackgroundSlot();
 						try {
 							const result = await runFn(bgSignal, onChildEvent, onArbitrationRecord, onControlAvailable);
 							const entry = backgroundAgentRegistry.get(agentId);
@@ -2310,7 +2356,7 @@ export function createSubagentToolDefinition(
 							});
 						} finally {
 							backgroundControlClients.delete(agentId);
-							bgRelease();
+							releaseBackgroundSlot();
 						}
 					};
 					run().catch((err) => {

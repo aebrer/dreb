@@ -599,6 +599,8 @@ export interface RpcSettingsSnapshot {
 	compactionEnabled: boolean;
 	/** Whether automatic retry on transient errors is enabled */
 	retryEnabled: boolean;
+	/** Maximum child agents a new parent session may run concurrently; zero disables the tool */
+	maxConcurrentSubagents: number;
 	/** Whether image inputs are automatically resized before sending to providers */
 	imageAutoResize?: boolean;
 	/** Whether image inputs are blocked from being sent to providers */
@@ -675,6 +677,7 @@ export interface RpcSettingsUpdate {
 	followUpMode?: "all" | "one-at-a-time";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
+	maxConcurrentSubagents?: number;
 	imageAutoResize?: boolean;
 	blockImages?: boolean;
 	enableSkillCommands?: boolean;

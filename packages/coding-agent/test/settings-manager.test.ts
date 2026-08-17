@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matchContextTrust } from "../src/core/context-trust.js";
+import { log } from "../src/core/logger.js";
 import { DEFAULT_BG_PARENT_TURN_LIMIT, SettingsManager, type SettingsStorage } from "../src/core/settings-manager.js";
 
 describe("SettingsManager", () => {
@@ -911,6 +912,69 @@ describe("SettingsManager", () => {
 
 			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
 			expect(saved.modelSettings).toEqual({ "claude-opus-4-8": { thinkingDisplay: "omitted" } });
+		});
+	});
+
+	describe("maximum concurrent subagents", () => {
+		it("defaults to four silently when the setting is absent", () => {
+			const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+			try {
+				const manager = SettingsManager.create(projectDir, agentDir);
+				expect(manager.getMaxConcurrentSubagents()).toBe(4);
+				expect(warn).not.toHaveBeenCalled();
+			} finally {
+				warn.mockRestore();
+			}
+		});
+
+		it.each([-1, 1.5, Number.NaN, "3"])(
+			"falls back to four and warns loudly for malformed stored value %s",
+			(stored) => {
+				const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+				try {
+					writeFileSync(
+						join(agentDir, "settings.json"),
+						JSON.stringify({ backgroundAgents: { maxConcurrentSubagents: stored } }),
+					);
+					const manager = SettingsManager.create(projectDir, agentDir);
+					expect(manager.getMaxConcurrentSubagents()).toBe(4);
+					expect(warn).toHaveBeenCalledWith(expect.stringContaining("maxConcurrentSubagents"));
+				} finally {
+					warn.mockRestore();
+				}
+			},
+		);
+
+		it("persists zero without replacing sibling background-agent settings", async () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ backgroundAgents: { parentTurnGuardrail: false, parentTurnLimit: 7 } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setMaxConcurrentSubagents(0);
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.backgroundAgents).toEqual({
+				parentTurnGuardrail: false,
+				parentTurnLimit: 7,
+				maxConcurrentSubagents: 0,
+			});
+		});
+
+		it("uses the merged project override and rejects invalid setter values", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ backgroundAgents: { maxConcurrentSubagents: 2 } }),
+			);
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ backgroundAgents: { maxConcurrentSubagents: 1 } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getMaxConcurrentSubagents()).toBe(1);
+			expect(() => manager.setMaxConcurrentSubagents(1.5)).toThrow("non-negative whole number");
+			expect(() => manager.setMaxConcurrentSubagents(-1)).toThrow("non-negative whole number");
 		});
 	});
 

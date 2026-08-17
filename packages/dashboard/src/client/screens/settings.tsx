@@ -904,6 +904,33 @@ export function SettingsScreen(props: {
 										/>
 									</span>
 								</div>
+								<div class="setting-row">
+									<label class="setting-label" for="max-concurrent-subagents">
+										<span class="name">max concurrent subagents</span>
+										<span class="hint">
+											new parent sessions only; 0 removes the subagent tool (default 4)
+										</span>
+									</label>
+									<span class="setting-control">
+										<input
+											id="max-concurrent-subagents"
+											type="number"
+											min="0"
+											step="1"
+											value={current().maxConcurrentSubagents ?? 4}
+											onChange={(event) => {
+												const rawValue = event.currentTarget.value.trim();
+												const value = rawValue.length > 0 ? Number(rawValue) : Number.NaN;
+												if (!Number.isSafeInteger(value) || value < 0) {
+													setError("Max concurrent subagents must be a non-negative whole number");
+													event.currentTarget.value = String(current().maxConcurrentSubagents ?? 4);
+													return;
+												}
+												void save({ maxConcurrentSubagents: value });
+											}}
+										/>
+									</span>
+								</div>
 								<div class="context-trust-subsection">
 									<h3>trusted context folders</h3>
 									<p class="muted small">

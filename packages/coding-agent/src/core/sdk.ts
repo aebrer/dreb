@@ -428,6 +428,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		customTools: options.customTools,
 		modelRegistry,
 		initialActiveToolNames,
+		maxConcurrentSubagents: settingsManager.getMaxConcurrentSubagents(),
 		extensionRunnerRef,
 		uiType: options.uiType,
 	});
