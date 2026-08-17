@@ -519,6 +519,7 @@ export interface SettingsDto {
 	followUpMode?: "all" | "one-at-a-time";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
+	maxConcurrentSubagents?: number;
 	imageAutoResize?: boolean;
 	blockImages?: boolean;
 	enableSkillCommands?: boolean;
@@ -553,6 +554,7 @@ export type SettingsUpdateDto = Partial<
 		| "followUpMode"
 		| "compactionEnabled"
 		| "retryEnabled"
+		| "maxConcurrentSubagents"
 		| "imageAutoResize"
 		| "blockImages"
 		| "enableSkillCommands"

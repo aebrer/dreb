@@ -59,6 +59,7 @@ describe("getSettingsForRpc", () => {
 			followUpMode: "one-at-a-time",
 			compactionEnabled: true,
 			retryEnabled: true,
+			maxConcurrentSubagents: 4,
 			imageAutoResize: true,
 			blockImages: false,
 			enableSkillCommands: true,
@@ -86,6 +87,7 @@ describe("getSettingsForRpc", () => {
 			followUpMode: "all",
 			compaction: { enabled: false },
 			retry: { enabled: false },
+			backgroundAgents: { maxConcurrentSubagents: 1 },
 			images: { autoResize: false, blockImages: true },
 			enableSkillCommands: false,
 			context: { autoLoadNested: false },
@@ -103,6 +105,7 @@ describe("getSettingsForRpc", () => {
 			followUpMode: "all",
 			compactionEnabled: false,
 			retryEnabled: false,
+			maxConcurrentSubagents: 1,
 			imageAutoResize: false,
 			blockImages: true,
 			enableSkillCommands: false,
@@ -461,6 +464,23 @@ describe("setSettingsForRpc validation", () => {
 		expect(result.error).toContain(`Invalid ${key}`);
 		expect(result.error).toContain("Must be a boolean");
 	});
+
+	it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "1"])(
+		"rejects invalid maxConcurrentSubagents value %s atomically",
+		async (value) => {
+			const manager = SettingsManager.inMemory({ backgroundAgents: { maxConcurrentSubagents: 2 } });
+			const result = await setSettingsForRpc(manager, stubRegistry([]), {
+				retryEnabled: false,
+				maxConcurrentSubagents: value as never,
+			});
+
+			expect(result.ok).toBe(false);
+			if (result.ok) throw new Error("unreachable");
+			expect(result.error).toContain("Invalid maxConcurrentSubagents");
+			expect(manager.getMaxConcurrentSubagents()).toBe(2);
+			expect(manager.getRetryEnabled()).toBe(true);
+		},
+	);
 
 	it("rejects an invalid transport, listing valid values", async () => {
 		const manager = SettingsManager.inMemory();
@@ -837,6 +857,7 @@ describe("setSettingsForRpc writes", () => {
 			followUpMode: "all",
 			compactionEnabled: false,
 			retryEnabled: false,
+			maxConcurrentSubagents: 0,
 			imageAutoResize: false,
 			blockImages: true,
 			enableSkillCommands: false,
@@ -857,6 +878,7 @@ describe("setSettingsForRpc writes", () => {
 			followUpMode: "all",
 			compactionEnabled: false,
 			retryEnabled: false,
+			maxConcurrentSubagents: 0,
 			imageAutoResize: false,
 			blockImages: true,
 			enableSkillCommands: false,
@@ -1651,6 +1673,7 @@ describe("RpcClient settings methods", () => {
 		followUpMode: "one-at-a-time",
 		compactionEnabled: true,
 		retryEnabled: true,
+		maxConcurrentSubagents: 4,
 		imageAutoResize: true,
 		blockImages: false,
 		enableSkillCommands: true,

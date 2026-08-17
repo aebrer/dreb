@@ -2840,6 +2840,38 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("devices");
 	});
 
+	it("settings exposes and saves the maximum concurrent subagent count", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ maxConcurrentSubagents: 4 });
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const input = el.querySelector("#max-concurrent-subagents") as HTMLInputElement;
+		expect(input.value).toBe("4");
+		expect(el.textContent).toContain("0 removes the subagent tool");
+		input.value = "1";
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenCalledWith({ maxConcurrentSubagents: 1 });
+		vi.mocked(api.saveSettings).mockClear();
+	});
+
+	it("settings rejects an invalid maximum concurrent subagent count before saving", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ maxConcurrentSubagents: 4 });
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const input = el.querySelector("#max-concurrent-subagents") as HTMLInputElement;
+		for (const invalid of ["-1", "1.5", ""]) {
+			input.value = invalid;
+			input.dispatchEvent(new Event("change", { bubbles: true }));
+			expect(el.querySelector(".settings-error")?.textContent).toContain("non-negative whole number");
+			expect(input.value).toBe("4");
+		}
+		expect(api.saveSettings).not.toHaveBeenCalled();
+	});
+
 	it("settings exposes complete global Dispatch Arbiter controls and readiness", async () => {
 		vi.mocked(api.settings).mockResolvedValue({
 			subagentArbiter: {

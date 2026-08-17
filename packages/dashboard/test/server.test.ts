@@ -1221,7 +1221,7 @@ describe("dashboard server — fleet and runtimes", () => {
 		const saved = await fetch(`${base}/api/settings${query}`, {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ enabledModels: null }),
+			body: JSON.stringify({ enabledModels: null, maxConcurrentSubagents: 1 }),
 		});
 
 		expect(settings.status).toBe(200);
@@ -1230,7 +1230,7 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients).toHaveLength(1);
 		expect(clients[0].getSettings).toHaveBeenCalled();
 		expect(clients[0].getAvailableModels).toHaveBeenCalled();
-		expect(clients[0].setSettings).toHaveBeenCalledWith({ enabledModels: null });
+		expect(clients[0].setSettings).toHaveBeenCalledWith({ enabledModels: null, maxConcurrentSubagents: 1 });
 
 		for (const path of ["/api/settings", "/api/settings/models"]) {
 			const missing = await fetch(`${base}${path}?cwd=${encodeURIComponent(`${dir}/missing`)}`);

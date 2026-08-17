@@ -87,7 +87,11 @@ import { type SecretPattern, scrubSecrets } from "./secret-scrubber.js";
 import { isSensitivePath } from "./sensitive-paths.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
-import { DEFAULT_BG_PARENT_TURN_LIMIT, type SettingsManager } from "./settings-manager.js";
+import {
+	DEFAULT_BG_PARENT_TURN_LIMIT,
+	DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+	type SettingsManager,
+} from "./settings-manager.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
@@ -206,6 +210,8 @@ export interface AgentSessionConfig {
 	modelRegistry: ModelRegistry;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
+	/** Parent-session concurrency setting captured at startup. Zero disables the subagent tool. */
+	maxConcurrentSubagents?: number;
 	/**
 	 * Override base tools (useful for custom runtimes).
 	 *
@@ -383,6 +389,8 @@ export class AgentSession {
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
 	private _uiType?: string;
+	private readonly _maxConcurrentSubagents: number;
+	private readonly _subagentsDisabledBySetting: boolean;
 
 	private performanceTracker: PerformanceTracker;
 	private _ownsPerformanceTracker: boolean;
@@ -419,6 +427,15 @@ export class AgentSession {
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._uiType = config.uiType;
+		const configuredMaxConcurrentSubagents =
+			config.maxConcurrentSubagents ?? this.settingsManager.getMaxConcurrentSubagents();
+		if (!Number.isSafeInteger(configuredMaxConcurrentSubagents) || configuredMaxConcurrentSubagents < 0) {
+			throw new Error("maxConcurrentSubagents must be a non-negative whole number");
+		}
+		const isChildAgentSession = this.sessionManager.getHeader()?.agentType !== undefined;
+		this._subagentsDisabledBySetting = !isChildAgentSession && configuredMaxConcurrentSubagents === 0;
+		this._maxConcurrentSubagents =
+			configuredMaxConcurrentSubagents > 0 ? configuredMaxConcurrentSubagents : DEFAULT_MAX_CONCURRENT_SUBAGENTS;
 
 		// Capture git repo state once at session start (before building runtime/system prompt)
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
@@ -1412,6 +1429,7 @@ export class AgentSession {
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
 		for (const name of toolNames) {
+			if (this._subagentsDisabledBySetting && name === "subagent") continue;
 			const tool = this._toolRegistry.get(name);
 			if (tool) {
 				tools.push(tool);
@@ -1560,6 +1578,7 @@ export class AgentSession {
 			uiType: this._uiType,
 			gitRepoState: this._gitRepoState,
 			currentModel: this.model ? { provider: this.model.provider, id: this.model.id } : undefined,
+			subagentsDisabled: this._subagentsDisabledBySetting,
 		});
 	}
 
@@ -3121,7 +3140,12 @@ export class AgentSession {
 			}
 		}
 
-		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
+		const uniqueActiveToolNames = [...new Set(nextActiveToolNames)];
+		this.setActiveToolsByName(
+			this._subagentsDisabledBySetting
+				? uniqueActiveToolNames.filter((name) => name !== "subagent")
+				: uniqueActiveToolNames,
+		);
 	}
 
 	private _buildRuntime(options: {
@@ -3181,6 +3205,7 @@ export class AgentSession {
 						modelRegistry: this._modelRegistry,
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
 						defaultThinkingLevel: () => this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+						maxConcurrentSubagents: this._maxConcurrentSubagents,
 						arbitrate: (request, signal) => this._dispatchArbiter.arbitrate(request, signal),
 						onArbitration: (event) => {
 							this.sessionManager.appendCustomEntry("subagent_arbitration", event);

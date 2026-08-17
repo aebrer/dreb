@@ -23,6 +23,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { log } from "../logger.js";
 import type { ModelRegistry } from "../model-registry.js";
 import { resolveCliModel } from "../model-resolver.js";
+import { DEFAULT_MAX_CONCURRENT_SUBAGENTS } from "../settings-manager.js";
 import { resolveEffectiveThinkingLevel, thinkingLevelToReasoning, validateThinkingLevelForModel } from "../thinking.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -1098,7 +1099,6 @@ function formatSkippedModelFailureDetails(skippedModels: SkippedFallbackModel[])
 }
 
 const MAX_PARALLEL_TASKS = 8;
-const MAX_CONCURRENCY = 4;
 const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
 
 /** Resolve per-task thinking precedence for parallel and chain modes. */
@@ -1107,29 +1107,6 @@ export function resolveSubagentThinkingOverride(
 	topLevelThinking: ThinkingLevel | undefined,
 ): ThinkingLevel | undefined {
 	return taskThinking ?? topLevelThinking;
-}
-
-// Semaphore for background task concurrency — shared across all background launches
-let bgRunning = 0;
-const bgWaiters: Array<() => void> = [];
-
-async function bgAcquire(): Promise<void> {
-	if (bgRunning < MAX_CONCURRENCY) {
-		bgRunning++;
-		return;
-	}
-	return new Promise<void>((resolve) => {
-		bgWaiters.push(() => {
-			bgRunning++;
-			resolve();
-		});
-	});
-}
-
-function bgRelease(): void {
-	bgRunning--;
-	const next = bgWaiters.shift();
-	if (next) next();
 }
 
 /**
@@ -1923,6 +1900,8 @@ export interface SubagentToolOptions {
 	onArbitration?: (event: SubagentArbitrationEvent) => void;
 	/** Effective default used to make an omitted proposed thinking level concrete for the arbiter. */
 	defaultThinkingLevel?: () => ThinkingLevel;
+	/** Maximum children this parent tool instance may run concurrently. Must be at least one. */
+	maxConcurrentSubagents?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -2131,6 +2110,32 @@ export function createSubagentToolDefinition(
 	const arbitrate = options?.arbitrate;
 	const onArbitration = options?.onArbitration;
 	const getDefaultThinkingLevel = options?.defaultThinkingLevel;
+	const maxConcurrentSubagents = options?.maxConcurrentSubagents ?? DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+	if (!Number.isSafeInteger(maxConcurrentSubagents) || maxConcurrentSubagents < 1) {
+		throw new Error("Subagent tool concurrency must be a positive whole number");
+	}
+
+	// Each parent tool instance owns its gate so separately embedded sessions do not
+	// couple their configured limits through module-global mutable state.
+	let backgroundRunning = 0;
+	const backgroundWaiters: Array<() => void> = [];
+	const acquireBackgroundSlot = async (): Promise<void> => {
+		if (backgroundRunning < maxConcurrentSubagents) {
+			backgroundRunning++;
+			return;
+		}
+		return new Promise<void>((resolve) => {
+			backgroundWaiters.push(() => {
+				backgroundRunning++;
+				resolve();
+			});
+		});
+	};
+	const releaseBackgroundSlot = (): void => {
+		backgroundRunning--;
+		const next = backgroundWaiters.shift();
+		if (next) next();
+	};
 
 	// Discover agents at definition time to build the prompt guidelines.
 	// This is cheap (reads .md files) and the same call happens on every execute().
@@ -2149,7 +2154,7 @@ export function createSubagentToolDefinition(
 		description:
 			"Run focused, independent work in a child agent when the task matches that agent's defined role " +
 			"(Explore for concrete evidence gathering, Sandbox for isolated /tmp-only analysis). " +
-			"Supports `task` for a single task, `tasks` for parallel execution in one call (up to 8, max 4 concurrent), " +
+			`Supports \`task\` for a single task, \`tasks\` for parallel execution in one call (up to 8, max ${maxConcurrentSubagents} concurrent), ` +
 			"and `chain` for a sequential pipeline with {previous} substitution. " +
 			"All subagents run in background — returns immediately, notifies on completion.",
 		promptSnippet: "Run role-matched work in independent child agents",
@@ -2288,7 +2293,7 @@ export function createSubagentToolDefinition(
 					};
 
 					const run = async () => {
-						await bgAcquire();
+						await acquireBackgroundSlot();
 						try {
 							const result = await runFn(bgSignal, onChildEvent, onArbitrationRecord, onControlAvailable);
 							const entry = backgroundAgentRegistry.get(agentId);
@@ -2310,7 +2315,7 @@ export function createSubagentToolDefinition(
 							});
 						} finally {
 							backgroundControlClients.delete(agentId);
-							bgRelease();
+							releaseBackgroundSlot();
 						}
 					};
 					run().catch((err) => {

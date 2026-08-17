@@ -91,6 +91,58 @@ describe("AgentSession dynamic tool registration", () => {
 		session.dispose();
 	});
 
+	it("removes subagent and adds explicit guidance when new parent sessions configure zero", async () => {
+		const settingsManager = SettingsManager.inMemory({
+			backgroundAgents: { maxConcurrentSubagents: 0 },
+		});
+		const sessionManager = SessionManager.inMemory();
+		const resourceLoader = new DefaultResourceLoader({ cwd: tempDir, agentDir, settingsManager });
+		await resourceLoader.reload();
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: findModel("anthropic", "sonnet")!,
+			settingsManager,
+			sessionManager,
+			resourceLoader,
+		});
+
+		expect(session.getActiveToolNames()).not.toContain("subagent");
+		expect(session.agent.state.tools.map((tool) => tool.name)).not.toContain("subagent");
+		expect(session.systemPrompt).toContain("The user launched dreb without the subagent tool");
+		session.setActiveToolsByName(["read", "subagent"]);
+		expect(session.getActiveToolNames()).toEqual(["read"]);
+		await session.reload();
+		expect(session.getActiveToolNames()).not.toContain("subagent");
+		expect(session.systemPrompt).toContain("Do all work yourself that you would normally delegate to a subagent");
+		session.dispose();
+	});
+
+	it("does not label an ordinary child tool restriction as user-disabled subagents", async () => {
+		const settingsManager = SettingsManager.inMemory({
+			backgroundAgents: { maxConcurrentSubagents: 0 },
+		});
+		const sessionManager = SessionManager.inMemory();
+		sessionManager.setAgentType("Explore");
+		const resourceLoader = new DefaultResourceLoader({ cwd: tempDir, agentDir, settingsManager });
+		await resourceLoader.reload();
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: findModel("anthropic", "sonnet")!,
+			settingsManager,
+			sessionManager,
+			resourceLoader,
+			tools: [],
+		});
+
+		expect(session.getActiveToolNames()).not.toContain("subagent");
+		expect(session.systemPrompt).not.toContain("The user launched dreb without the subagent tool");
+		session.dispose();
+	});
+
 	it("keeps ask_user active and binds UI context when no extensions are installed", async () => {
 		const settingsManager = SettingsManager.create(tempDir, agentDir);
 		const sessionManager = SessionManager.inMemory();

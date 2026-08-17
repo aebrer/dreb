@@ -914,6 +914,52 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("maximum concurrent subagents", () => {
+		it("defaults to four and falls back for malformed stored values", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getMaxConcurrentSubagents()).toBe(4);
+
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ backgroundAgents: { maxConcurrentSubagents: -1 } }),
+			);
+			manager.reload();
+			expect(manager.getMaxConcurrentSubagents()).toBe(4);
+		});
+
+		it("persists zero without replacing sibling background-agent settings", async () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ backgroundAgents: { parentTurnGuardrail: false, parentTurnLimit: 7 } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setMaxConcurrentSubagents(0);
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.backgroundAgents).toEqual({
+				parentTurnGuardrail: false,
+				parentTurnLimit: 7,
+				maxConcurrentSubagents: 0,
+			});
+		});
+
+		it("uses the merged project override and rejects invalid setter values", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ backgroundAgents: { maxConcurrentSubagents: 2 } }),
+			);
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ backgroundAgents: { maxConcurrentSubagents: 1 } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getMaxConcurrentSubagents()).toBe(1);
+			expect(() => manager.setMaxConcurrentSubagents(1.5)).toThrow("non-negative whole number");
+			expect(() => manager.setMaxConcurrentSubagents(-1)).toThrow("non-negative whole number");
+		});
+	});
+
 	describe("global-only subagent arbiter settings", () => {
 		it("refreshes enable, disable, and policy changes written by another runtime", async () => {
 			writeFileSync(

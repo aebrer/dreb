@@ -390,14 +390,20 @@ describe.skipIf(
 		expect(typeof before.retryEnabled).toBe("boolean");
 
 		// Write persistent defaults; response is the post-write snapshot
-		const after = await client.setSettings({ defaultThinkingLevel: "low", retryEnabled: false });
+		const after = await client.setSettings({
+			defaultThinkingLevel: "low",
+			retryEnabled: false,
+			maxConcurrentSubagents: 1,
+		});
 		expect(after.defaultThinkingLevel).toBe("low");
 		expect(after.retryEnabled).toBe(false);
+		expect(after.maxConcurrentSubagents).toBe(1);
 
 		// Reflected in a subsequent read
 		const reread = await client.getSettings();
 		expect(reread.defaultThinkingLevel).toBe("low");
 		expect(reread.retryEnabled).toBe(false);
+		expect(reread.maxConcurrentSubagents).toBe(1);
 
 		// set_settings does NOT touch live runtime state
 		const state = await client.getState();

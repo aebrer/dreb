@@ -43,6 +43,7 @@ function makeConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
 		autocompleteMaxVisible: 7,
 		quietStartup: false,
 		autoLoadNestedContext: false,
+		maxConcurrentSubagents: 4,
 		agentModels: {},
 		agentNames: [],
 		availableModelIds: [],
@@ -73,6 +74,7 @@ function makeCallbacks(): SettingsCallbacks {
 		onEditorPaddingXChange: vi.fn(),
 		onAutocompleteMaxVisibleChange: vi.fn(),
 		onQuietStartupChange: vi.fn(),
+		onMaxConcurrentSubagentsChange: vi.fn(() => true),
 		onAgentModelsChange: vi.fn(),
 		onSubagentArbiterChange: vi.fn(() => true),
 		onCancel: vi.fn(),
@@ -91,6 +93,37 @@ function focusThinkingDisplay(component: SettingsSelectorComponent): void {
 		list.handleInput(ch);
 	}
 }
+
+describe("SettingsSelectorComponent — subagent concurrency", () => {
+	test("shows the effective value and emits a validated numeric edit", () => {
+		const callbacks = makeCallbacks();
+		const component = new SettingsSelectorComponent(makeConfig({ maxConcurrentSubagents: 4 }), callbacks);
+		const list = component.getSettingsList();
+		for (const ch of "maxconcurrent") list.handleInput(ch);
+		expect(list.render(120).join("\n")).toContain("Max concurrent subagents");
+		expect(list.render(120).join("\n")).toContain("0 removes the subagent tool");
+
+		list.handleInput(ENTER);
+		list.handleInput("\x1b[3~");
+		list.handleInput("1");
+		list.handleInput(ENTER);
+		expect(callbacks.onMaxConcurrentSubagentsChange).toHaveBeenCalledWith(1);
+	});
+
+	test("keeps the submenu open when validation rejects an edit", () => {
+		const callbacks = makeCallbacks();
+		vi.mocked(callbacks.onMaxConcurrentSubagentsChange).mockReturnValue(false);
+		const component = new SettingsSelectorComponent(makeConfig(), callbacks);
+		const list = component.getSettingsList();
+		for (const ch of "maxconcurrent") list.handleInput(ch);
+		list.handleInput(ENTER);
+		list.handleInput("\x1b[3~");
+		list.handleInput("-");
+		list.handleInput("1");
+		list.handleInput(ENTER);
+		expect(callbacks.onMaxConcurrentSubagentsChange).toHaveBeenCalledWith(-1);
+	});
+});
 
 describe("SettingsSelectorComponent — Dispatch Arbiter controls", () => {
 	test("shows enable, model, thinking, and guide controls with global fail-closed guidance", () => {

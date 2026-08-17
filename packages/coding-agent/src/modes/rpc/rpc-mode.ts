@@ -379,6 +379,7 @@ type SettingsReader = Pick<
 	| "getFollowUpMode"
 	| "getCompactionEnabled"
 	| "getRetryEnabled"
+	| "getMaxConcurrentSubagents"
 	| "getImageAutoResize"
 	| "getBlockImages"
 	| "getEnableSkillCommands"
@@ -407,6 +408,7 @@ type SettingsWriter = SettingsRefresher &
 		| "setFollowUpMode"
 		| "setCompactionEnabled"
 		| "setRetryEnabled"
+		| "setMaxConcurrentSubagents"
 		| "setImageAutoResize"
 		| "setBlockImages"
 		| "setEnableSkillCommands"
@@ -448,6 +450,7 @@ export function getSettingsForRpc(
 		followUpMode: settingsManager.getFollowUpMode(),
 		compactionEnabled: settingsManager.getCompactionEnabled(),
 		retryEnabled: settingsManager.getRetryEnabled(),
+		maxConcurrentSubagents: settingsManager.getMaxConcurrentSubagents(),
 		imageAutoResize: settingsManager.getImageAutoResize(),
 		blockImages: settingsManager.getBlockImages(),
 		enableSkillCommands: settingsManager.getEnableSkillCommands(),
@@ -553,6 +556,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"followUpMode",
 	"compactionEnabled",
 	"retryEnabled",
+	"maxConcurrentSubagents",
 	"imageAutoResize",
 	"blockImages",
 	"enableSkillCommands",
@@ -892,6 +896,16 @@ export async function setSettingsForRpc(
 		}
 	}
 
+	if (
+		update.maxConcurrentSubagents !== undefined &&
+		(!Number.isSafeInteger(update.maxConcurrentSubagents) || update.maxConcurrentSubagents < 0)
+	) {
+		return {
+			ok: false,
+			error: `Invalid maxConcurrentSubagents: ${JSON.stringify(update.maxConcurrentSubagents)}. Must be a non-negative whole number`,
+		};
+	}
+
 	if (update.transport !== undefined) {
 		if (
 			typeof update.transport !== "string" ||
@@ -1094,6 +1108,9 @@ export async function setSettingsForRpc(
 			}
 			if (update.retryEnabled !== undefined) {
 				settingsManager.setRetryEnabled(update.retryEnabled);
+			}
+			if (update.maxConcurrentSubagents !== undefined) {
+				settingsManager.setMaxConcurrentSubagents(update.maxConcurrentSubagents);
 			}
 			if (update.imageAutoResize !== undefined) {
 				settingsManager.setImageAutoResize(update.imageAutoResize);

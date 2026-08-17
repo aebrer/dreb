@@ -210,6 +210,9 @@ When a provider requests a retry delay longer than `maxDelayMs` (e.g., Google's 
 |---------|------|---------|-------------|
 | `backgroundAgents.parentTurnGuardrail` | boolean | `true` | Pause the parent agent after `parentTurnLimit` turns while background subagents are still running |
 | `backgroundAgents.parentTurnLimit` | number | `3` | Parent turns allowed while background agents run before pausing |
+| `backgroundAgents.maxConcurrentSubagents` | non-negative integer | `4` | Maximum children a new parent session may run at once; `0` removes the subagent tool |
+
+`maxConcurrentSubagents` is captured when a parent session starts. Positive values bound that session's running children while additional work waits for a slot. A value of `0` starts the parent without the `subagent` tool and adds explicit system-prompt guidance to perform normally delegated work itself. Changing the persistent value does not retrofit an already-running parent session. The separate `tasks` input limit remains eight items per parallel call.
 
 When you launch background subagents, the parent agent keeps working and returns control to you while subagents run. The guardrail pauses the parent after `parentTurnLimit` turns so it doesn't spin ahead of results — when this happens, dreb surfaces a friendly, non-error notification in the TUI and Telegram explaining that background agents are still working and the parent paused intentionally (it resumes when they report back, or you can send a message to steer it).
 
@@ -219,7 +222,8 @@ Set `parentTurnGuardrail` to `false` to let the parent keep running with no turn
 {
   "backgroundAgents": {
     "parentTurnGuardrail": true,
-    "parentTurnLimit": 3
+    "parentTurnLimit": 3,
+    "maxConcurrentSubagents": 4
   }
 }
 ```

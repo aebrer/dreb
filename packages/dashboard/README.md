@@ -69,13 +69,13 @@ Open `http://127.0.0.1:5343`.
   matching safe index links.
 - **Settings** — persistent defaults (provider-grouped model dropdown,
   thinking, queue modes, image handling, skill commands, transport,
-  hide-thinking, compaction/retry), a scoped-models editor, per-agent model
+  hide-thinking, compaction/retry, and maximum concurrent subagents), a scoped-models editor, per-agent model
   fallback editor, and the global-only nested-context policy: an auditable trusted-roots list with
   revoke and simple add-by-path controls, plus a prominent expert trust-all
   warning. The Files view remains the primary trust-grant flow. Most defaults
   seed new sessions; opening Settings flushes pending writes and reloads durable
   global + project settings so external edits appear, while read/parse/write
-  failures are shown instead of stale values. Trust changes are observed by
+  failures are shown instead of stale values. Maximum concurrent subagents defaults to 4; `0` starts new parents without the subagent tool and adds explicit self-execution guidance. Trust changes are observed by
   active processes for future lazy loads and cannot retract already injected
   context. Also includes dashboard-local preferences (thinking expansion,
   transcript image display mode, and notification permission), an appearance section with a curated-theme gallery

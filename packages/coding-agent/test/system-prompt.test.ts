@@ -26,6 +26,29 @@ describe("buildSystemPrompt", () => {
 		});
 	});
 
+	describe("subagents disabled notice", () => {
+		test("adds explicit guidance to the default prompt", () => {
+			const prompt = buildSystemPrompt({
+				selectedTools: ["read"],
+				subagentsDisabled: true,
+				contextFiles: [],
+				skills: [],
+			});
+
+			expect(prompt).toContain("The user launched dreb without the subagent tool");
+			expect(prompt).toContain("Do all work yourself that you would normally delegate to a subagent");
+			expect(prompt).not.toContain("- subagent:");
+		});
+
+		test("adds the same guidance to a custom prompt only when requested", () => {
+			const disabled = buildSystemPrompt({ customPrompt: "Custom base", subagentsDisabled: true });
+			const enabled = buildSystemPrompt({ customPrompt: "Custom base", subagentsDisabled: false });
+
+			expect(disabled).toContain("The user launched dreb without the subagent tool");
+			expect(enabled).not.toContain("The user launched dreb without the subagent tool");
+		});
+	});
+
 	describe("default tools", () => {
 		test("includes all default tools when snippets are provided", () => {
 			const prompt = buildSystemPrompt({
