@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matchContextTrust } from "../src/core/context-trust.js";
+import { log } from "../src/core/logger.js";
 import { DEFAULT_BG_PARENT_TURN_LIMIT, SettingsManager, type SettingsStorage } from "../src/core/settings-manager.js";
 
 describe("SettingsManager", () => {
@@ -915,17 +916,34 @@ describe("SettingsManager", () => {
 	});
 
 	describe("maximum concurrent subagents", () => {
-		it("defaults to four and falls back for malformed stored values", () => {
-			const manager = SettingsManager.create(projectDir, agentDir);
-			expect(manager.getMaxConcurrentSubagents()).toBe(4);
-
-			writeFileSync(
-				join(agentDir, "settings.json"),
-				JSON.stringify({ backgroundAgents: { maxConcurrentSubagents: -1 } }),
-			);
-			manager.reload();
-			expect(manager.getMaxConcurrentSubagents()).toBe(4);
+		it("defaults to four silently when the setting is absent", () => {
+			const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+			try {
+				const manager = SettingsManager.create(projectDir, agentDir);
+				expect(manager.getMaxConcurrentSubagents()).toBe(4);
+				expect(warn).not.toHaveBeenCalled();
+			} finally {
+				warn.mockRestore();
+			}
 		});
+
+		it.each([-1, 1.5, Number.NaN, "3"])(
+			"falls back to four and warns loudly for malformed stored value %s",
+			(stored) => {
+				const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+				try {
+					writeFileSync(
+						join(agentDir, "settings.json"),
+						JSON.stringify({ backgroundAgents: { maxConcurrentSubagents: stored } }),
+					);
+					const manager = SettingsManager.create(projectDir, agentDir);
+					expect(manager.getMaxConcurrentSubagents()).toBe(4);
+					expect(warn).toHaveBeenCalledWith(expect.stringContaining("maxConcurrentSubagents"));
+				} finally {
+					warn.mockRestore();
+				}
+			},
+		);
 
 		it("persists zero without replacing sibling background-agent settings", async () => {
 			writeFileSync(

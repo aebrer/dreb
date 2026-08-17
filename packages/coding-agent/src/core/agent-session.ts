@@ -99,10 +99,12 @@ import { resolveThinkingDisplay } from "./thinking.js";
 import type { BashOperations } from "./tools/bash.js";
 import {
 	createAllToolDefinitions,
+	createSubagentConcurrencyGate,
 	discoverAgentTypes,
 	getRunningBackgroundAgents,
 	type SessionTask,
 	type SubagentArbitrationEvent,
+	type SubagentConcurrencyGate,
 	type SubagentResult,
 	type SubagentStepMetadata,
 } from "./tools/index.js";
@@ -391,6 +393,12 @@ export class AgentSession {
 	private _uiType?: string;
 	private readonly _maxConcurrentSubagents: number;
 	private readonly _subagentsDisabledBySetting: boolean;
+	/**
+	 * Session-owned concurrency gate. Created once and reused across `_buildRuntime` rebuilds so
+	 * the running-child count stays accurate through `/reload` while children launched before the
+	 * reload are still in flight.
+	 */
+	private readonly _subagentConcurrencyGate: SubagentConcurrencyGate;
 
 	private performanceTracker: PerformanceTracker;
 	private _ownsPerformanceTracker: boolean;
@@ -436,6 +444,7 @@ export class AgentSession {
 		this._subagentsDisabledBySetting = !isChildAgentSession && configuredMaxConcurrentSubagents === 0;
 		this._maxConcurrentSubagents =
 			configuredMaxConcurrentSubagents > 0 ? configuredMaxConcurrentSubagents : DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+		this._subagentConcurrencyGate = createSubagentConcurrencyGate(this._maxConcurrentSubagents);
 
 		// Capture git repo state once at session start (before building runtime/system prompt)
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
@@ -3206,6 +3215,7 @@ export class AgentSession {
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
 						defaultThinkingLevel: () => this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
 						maxConcurrentSubagents: this._maxConcurrentSubagents,
+						concurrencyGate: this._subagentConcurrencyGate,
 						arbitrate: (request, signal) => this._dispatchArbiter.arbitrate(request, signal),
 						onArbitration: (event) => {
 							this.sessionManager.appendCustomEntry("subagent_arbitration", event);

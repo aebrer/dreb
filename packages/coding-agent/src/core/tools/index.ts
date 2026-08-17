@@ -87,6 +87,7 @@ export {
 export {
 	abortBackgroundAgents,
 	type BackgroundAgentInfo,
+	createSubagentConcurrencyGate,
 	createSubagentTool,
 	createSubagentToolDefinition,
 	discoverAgentTypes,
@@ -95,6 +96,7 @@ export {
 	getRunningBackgroundAgents,
 	pruneBackgroundAgents,
 	type SubagentArbitrationEvent,
+	type SubagentConcurrencyGate,
 	type SubagentResult,
 	type SubagentStepMetadata,
 	type SubagentToolDetails,

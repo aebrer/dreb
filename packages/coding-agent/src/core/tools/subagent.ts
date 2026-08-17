@@ -1101,6 +1101,50 @@ function formatSkippedModelFailureDetails(skippedModels: SkippedFallbackModel[])
 const MAX_PARALLEL_TASKS = 8;
 const MAX_TASK_LENGTH = 32_768; // 32 KB — prevent E2BIG from oversized argv
 
+/**
+ * Bounds the number of concurrently running background subagents. Ownership of the gate is kept
+ * separate from the subagent tool definition so that a single logical session keeps one accurate
+ * running-child count even when its tool definitions are rebuilt (e.g. on `/reload`).
+ */
+export interface SubagentConcurrencyGate {
+	/** Resolves immediately if a slot is free, otherwise queues until one is released. */
+	acquire(): Promise<void>;
+	/** Returns a slot and wakes the next waiter, if any. */
+	release(): void;
+}
+
+/**
+ * Create a concurrency gate limited to `maxConcurrent` simultaneous holders. The count lives in
+ * this closure, so a single gate instance shared across tool rebuilds keeps counting in-flight
+ * children accurately, while distinct instances stay fully isolated from one another.
+ */
+export function createSubagentConcurrencyGate(maxConcurrent: number): SubagentConcurrencyGate {
+	if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1) {
+		throw new Error("Subagent tool concurrency must be a positive whole number");
+	}
+	let running = 0;
+	const waiters: Array<() => void> = [];
+	return {
+		acquire(): Promise<void> {
+			if (running < maxConcurrent) {
+				running++;
+				return Promise.resolve();
+			}
+			return new Promise<void>((resolve) => {
+				waiters.push(() => {
+					running++;
+					resolve();
+				});
+			});
+		},
+		release(): void {
+			running--;
+			const next = waiters.shift();
+			if (next) next();
+		},
+	};
+}
+
 /** Resolve per-task thinking precedence for parallel and chain modes. */
 export function resolveSubagentThinkingOverride(
 	taskThinking: ThinkingLevel | undefined,
@@ -1900,8 +1944,18 @@ export interface SubagentToolOptions {
 	onArbitration?: (event: SubagentArbitrationEvent) => void;
 	/** Effective default used to make an omitted proposed thinking level concrete for the arbiter. */
 	defaultThinkingLevel?: () => ThinkingLevel;
-	/** Maximum children this parent tool instance may run concurrently. Must be at least one. */
+	/**
+	 * Maximum children this parent tool instance may run concurrently. Must be at least one.
+	 * Used for the model-visible description and, when `concurrencyGate` is omitted, to size a
+	 * fresh per-instance gate.
+	 */
 	maxConcurrentSubagents?: number;
+	/**
+	 * Externally owned concurrency gate. Supply this so the running-child count survives tool
+	 * definition rebuilds (e.g. on `/reload`); without it the tool creates its own gate sized by
+	 * `maxConcurrentSubagents`, which resets to zero each time the tool is recreated.
+	 */
+	concurrencyGate?: SubagentConcurrencyGate;
 }
 
 // ---------------------------------------------------------------------------
@@ -2115,27 +2169,14 @@ export function createSubagentToolDefinition(
 		throw new Error("Subagent tool concurrency must be a positive whole number");
 	}
 
-	// Each parent tool instance owns its gate so separately embedded sessions do not
-	// couple their configured limits through module-global mutable state.
-	let backgroundRunning = 0;
-	const backgroundWaiters: Array<() => void> = [];
-	const acquireBackgroundSlot = async (): Promise<void> => {
-		if (backgroundRunning < maxConcurrentSubagents) {
-			backgroundRunning++;
-			return;
-		}
-		return new Promise<void>((resolve) => {
-			backgroundWaiters.push(() => {
-				backgroundRunning++;
-				resolve();
-			});
-		});
-	};
-	const releaseBackgroundSlot = (): void => {
-		backgroundRunning--;
-		const next = backgroundWaiters.shift();
-		if (next) next();
-	};
+	// The concurrency gate is owned by the caller (e.g. AgentSession) so that it survives
+	// runtime rebuilds/reloads: the tool definition is recreated on every `/reload`, but the
+	// gate must keep counting in-flight children launched before the reload. When no gate is
+	// supplied (external SDK callers, tests) the tool owns a fresh per-instance gate, which
+	// still keeps separately embedded sessions from coupling through module-global state.
+	const concurrencyGate = options?.concurrencyGate ?? createSubagentConcurrencyGate(maxConcurrentSubagents);
+	const acquireBackgroundSlot = (): Promise<void> => concurrencyGate.acquire();
+	const releaseBackgroundSlot = (): void => concurrencyGate.release();
 
 	// Discover agents at definition time to build the prompt guidelines.
 	// This is cheap (reads .md files) and the same call happens on every execute().

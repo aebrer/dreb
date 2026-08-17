@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import type { ContextTrustPolicy } from "./context-trust.js";
+import { log } from "./logger.js";
 import { expandPath } from "./tools/path-utils.js";
 
 export interface CompactionSettings {
@@ -986,9 +987,18 @@ export class SettingsManager {
 
 	getMaxConcurrentSubagents(): number {
 		const value = this.settings.backgroundAgents?.maxConcurrentSubagents;
-		return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-			? value
-			: DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+		if (value === undefined) {
+			return DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+		}
+		if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+			return value;
+		}
+		log.warn(
+			`[settings] Ignoring invalid backgroundAgents.maxConcurrentSubagents ${JSON.stringify(value)}; ` +
+				`it must be a non-negative whole number. Falling back to ${DEFAULT_MAX_CONCURRENT_SUBAGENTS}. ` +
+				"Fix the value in your settings file to silence this warning.",
+		);
+		return DEFAULT_MAX_CONCURRENT_SUBAGENTS;
 	}
 
 	setMaxConcurrentSubagents(value: number): void {
