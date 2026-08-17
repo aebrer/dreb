@@ -2254,6 +2254,43 @@ describe("dashboard server — files", () => {
 		const traversal = await fetch(`${base}/api/files?path=${encodeURIComponent("/tmp/%2e%2e/etc")}`);
 		expect(traversal.status).toBe(400);
 	});
+
+	it("uploads JSON payloads byte-for-byte without the body parser consuming the stream", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
+		tempDirs.push(dir);
+		const canonical = await realpath(dir);
+		const { base } = await startServer();
+		const payload = JSON.stringify({ name: "payload.json", nested: { values: [1, 2, 3] } });
+
+		const upload = await fetch(
+			`${base}/api/files/upload?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent("payload.json")}`,
+			{ method: "POST", headers: { "content-type": "application/json" }, body: payload },
+		);
+		expect(upload.status).toBe(200);
+		await expect(upload.json()).resolves.toEqual({ path: join(canonical, "payload.json") });
+
+		// Pre-fix, the global express.json() middleware drained the request stream
+		// before the upload handler could pipe it, committing a 0-byte file.
+		expect(await readFile(join(canonical, "payload.json"), "utf8")).toBe(payload);
+	});
+
+	it("downloads files under dot-prefixed directory components", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
+		tempDirs.push(dir);
+		const uploadsDir = join(dir, ".dreb-dashboard-uploads", "nested");
+		await mkdir(uploadsDir, { recursive: true });
+		const content = "dot-prefixed directory download";
+		await writeFile(join(uploadsDir, "report.txt"), content);
+		const { base } = await startServer();
+
+		// Pre-fix, res.download() inherited send's dotfiles: "ignore" default and
+		// 404'd for any path containing a dot-prefixed component.
+		const download = await fetch(
+			`${base}/api/files/download?path=${encodeURIComponent(join(uploadsDir, "report.txt"))}`,
+		);
+		expect(download.status).toBe(200);
+		expect(await download.text()).toBe(content);
+	});
 });
 
 describe("dashboard server — remote pairing flow", () => {

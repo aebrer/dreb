@@ -255,7 +255,15 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	// Authenticate before consuming request bodies. Diagnostics have their own
 	// small parser limit; the larger limit exists only for prompt image payloads.
 	app.use("/api/events/diagnostic", express.json({ limit: MAX_CLIENT_DIAGNOSTIC_BYTES }));
-	app.use(express.json({ limit: MAX_PROMPT_BODY_BYTES }));
+	const jsonBodyParser = express.json({ limit: MAX_PROMPT_BODY_BYTES });
+	app.use((req: Request, res: Response, next: NextFunction) => {
+		// /api/files/upload pipes the raw request stream into the destination
+		// file, so the parser must not run first — it would drain the stream
+		// and the upload would commit 0 bytes. Express 5 matching is
+		// non-strict, so the route also accepts the trailing-slash variant.
+		if (req.path === "/api/files/upload" || req.path === "/api/files/upload/") return next();
+		jsonBodyParser(req, res, next);
+	});
 	app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
 		if ((err as { type?: string }).type === "entity.too.large") {
 			res.status(413).json({ error: "Request body is too large" });
@@ -1229,7 +1237,11 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		files
 			.resolveDownload(path)
 			.then(({ path: real }) => {
-				res.download(real);
+				// send's default (dotfiles: "ignore") would 404 any dot-prefixed
+				// component; resolveDownload already canonicalized and validated.
+				// The explicit filename keeps the Content-Disposition identical to
+				// the no-filename form (content-disposition basenames internally).
+				res.download(real, basename(real), { dotfiles: "allow" });
 			})
 			.catch((err) => res.status(err?.status ?? 500).json({ error: String(err?.message ?? err) }));
 	});
