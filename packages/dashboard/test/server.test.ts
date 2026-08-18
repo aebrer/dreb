@@ -2272,6 +2272,24 @@ describe("dashboard server — files", () => {
 		// Pre-fix, the global express.json() middleware drained the request stream
 		// before the upload handler could pipe it, committing a 0-byte file.
 		expect(await readFile(join(canonical, "payload.json"), "utf8")).toBe(payload);
+
+		// Express 5 route matching is case-insensitive, so /API/files/upload is
+		// the same upload route. Pre-fix, the case-sensitive skip let the parser
+		// drain the stream and commit a 0-byte file on case-variant URLs.
+		const caseVariant = await fetch(
+			`${base}/API/files/upload?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent("case-variant.json")}`,
+			{ method: "POST", headers: { "content-type": "application/json" }, body: payload },
+		);
+		expect(caseVariant.status).toBe(200);
+		expect(await readFile(join(canonical, "case-variant.json"), "utf8")).toBe(payload);
+
+		// Non-strict matching also accepts the trailing-slash variant.
+		const trailingSlash = await fetch(
+			`${base}/api/files/upload/?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent("trailing-slash.json")}`,
+			{ method: "POST", headers: { "content-type": "application/json" }, body: payload },
+		);
+		expect(trailingSlash.status).toBe(200);
+		expect(await readFile(join(canonical, "trailing-slash.json"), "utf8")).toBe(payload);
 	});
 
 	it("downloads files under dot-prefixed directory components", async () => {

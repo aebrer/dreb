@@ -260,8 +260,10 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		// /api/files/upload pipes the raw request stream into the destination
 		// file, so the parser must not run first — it would drain the stream
 		// and the upload would commit 0 bytes. Express 5 matching is
-		// non-strict, so the route also accepts the trailing-slash variant.
-		if (req.path === "/api/files/upload" || req.path === "/api/files/upload/") return next();
+		// case-insensitive and non-strict, so the route also accepts
+		// case-variant and trailing-slash URLs; the skip must cover all of them.
+		const uploadPath = req.path.toLowerCase();
+		if (uploadPath === "/api/files/upload" || uploadPath === "/api/files/upload/") return next();
 		jsonBodyParser(req, res, next);
 	});
 	app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
