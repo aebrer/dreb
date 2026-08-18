@@ -577,6 +577,7 @@ export function createAppStore() {
 				if (!session.closed) return;
 				session.closed.resuming = false;
 				session.closed.resumeError = message;
+				session.closed.bannerDismissed = false;
 			});
 			return;
 		}

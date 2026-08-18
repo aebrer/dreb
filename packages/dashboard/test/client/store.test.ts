@@ -1358,7 +1358,7 @@ describe("app store SSE sync", () => {
 		expect(api.sessions).toHaveBeenCalledOnce();
 	});
 
-	it("records resume failures on the retained closed view", async () => {
+	it("re-exposes resume failures after the close banner is dismissed while pending", async () => {
 		const runtime = runtimeSnapshot("closed", false);
 		runtime.cwd = "/tmp/resume-project";
 		runtime.state.sessionFile = "/tmp/resume-project/closed.jsonl";
@@ -1367,12 +1367,18 @@ describe("app store SSE sync", () => {
 		const store = await makeStartedStore();
 		emit("closed", { type: "runtime_removed" });
 		await flushAsyncWork();
-		vi.mocked(api.createRuntime).mockRejectedValueOnce(new Error("resume rejected"));
+		const request = deferred<RuntimeInfoDto>();
+		vi.mocked(api.createRuntime).mockReturnValueOnce(request.promise);
 
-		await store.resumeClosedSession("closed");
+		const resume = store.resumeClosedSession("closed");
+		expect(store.sessions.closed?.closed?.resuming).toBe(true);
+		store.dismissClosedBanner("closed");
+		expect(store.sessions.closed?.closed?.bannerDismissed).toBe(true);
+		request.reject(new Error("resume rejected"));
+		await resume;
 
 		expect(store.sessions.closed).toMatchObject({
-			closed: { resuming: false, resumeError: "resume rejected" },
+			closed: { resuming: false, resumeError: "resume rejected", bannerDismissed: false },
 		});
 		expect(window.location.hash).toBe("#/session/closed");
 	});
