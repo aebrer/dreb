@@ -401,7 +401,12 @@ describe("EventHub", () => {
 			applySessionEvent(projected, projectDashboardEvent(event));
 		}
 
-		expect(projected).toEqual(full);
+		// Status entry IDs are intentionally unique presentation identities, so
+		// applying the equivalent streams sequentially gives them different IDs.
+		expect({ ...projected, statusEntries: projected.statusEntries.map(({ id: _id, ...entry }) => entry) }).toEqual({
+			...full,
+			statusEntries: full.statusEntries.map(({ id: _id, ...entry }) => entry),
+		});
 		expect(projected.entries).toMatchObject([
 			{ kind: "assistant", streaming: false, blocks: [{ kind: "text", text: "hello" }] },
 		]);

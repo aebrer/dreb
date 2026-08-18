@@ -98,9 +98,20 @@ export type TranscriptEntry = UserEntry | AgentResultEntry | AssistantEntry | To
 // ---------------------------------------------------------------------------
 
 export interface StatusLineEntry {
+	id: number;
 	key: string;
 	text: string;
 	tone: "info" | "warning" | "error";
+	/** Presentation-only acknowledgement; underlying status and attention remain active. */
+	dismissed?: boolean;
+}
+
+export interface ClosedSessionViewState {
+	cwd?: string;
+	sessionFile?: string;
+	bannerDismissed?: boolean;
+	resuming?: boolean;
+	resumeError?: string;
 }
 
 /** A single question inside an `ask` extension-UI request (mirrors RpcAskQuestion). */
@@ -203,6 +214,8 @@ export interface SessionViewState {
 	lastError?: string;
 	contextUsage?: ContextUsageDto;
 	model?: string;
+	/** Browser-retained, read-only snapshot after the backing runtime closes. */
+	closed?: ClosedSessionViewState;
 	/** Sub-view states for background agents (agentId → view). */
 	subagents: Record<string, SubagentViewState>;
 }
@@ -433,6 +446,12 @@ export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 // ---------------------------------------------------------------------------
 
 let toastCounter = 0;
+let statusEntryCounter = 0;
+
+export function createStatusLineEntry(entry: Omit<StatusLineEntry, "id" | "dismissed">): StatusLineEntry {
+	statusEntryCounter += 1;
+	return { id: statusEntryCounter, ...entry };
+}
 
 // The UI renders only the newest few global toasts; keep a bounded per-session
 // backing list so older, undismissable notifications do not accumulate forever.
@@ -494,7 +513,7 @@ function clearProviderErrorState(state: SessionViewState): void {
 
 function setProviderErrorState(state: SessionViewState, error: string): void {
 	clearProviderErrorState(state);
-	state.statusEntries.push({ key: PROVIDER_ERROR_STATUS_KEY, text: error, tone: "error" });
+	state.statusEntries.push(createStatusLineEntry({ key: PROVIDER_ERROR_STATUS_KEY, text: error, tone: "error" }));
 	state.lastError = error;
 }
 
@@ -749,7 +768,9 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			// Context-overflow errors are provisional while automatic compaction
 			// recovers the turn, just like provider errors entering auto-retry.
 			if (event.reason === "overflow") clearProviderErrorState(state);
-			state.statusEntries.push({ key: "compaction", text: "compacting context…", tone: "info" });
+			state.statusEntries.push(
+				createStatusLineEntry({ key: "compaction", text: "compacting context…", tone: "info" }),
+			);
 			break;
 		}
 		case "auto_compaction_end": {
@@ -765,18 +786,22 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 				});
 			}
 			if (event.errorMessage) {
-				state.statusEntries.push({ key: "compaction-error", text: String(event.errorMessage), tone: "error" });
+				state.statusEntries.push(
+					createStatusLineEntry({ key: "compaction-error", text: String(event.errorMessage), tone: "error" }),
+				);
 			}
 			break;
 		}
 		case "auto_retry_start": {
 			clearProviderErrorState(state);
 			state.statusEntries = state.statusEntries.filter((s) => s.key !== "retry");
-			state.statusEntries.push({
-				key: "retry",
-				text: `retrying (${event.attempt}/${event.maxAttempts}) — ${event.errorMessage}`,
-				tone: "warning",
-			});
+			state.statusEntries.push(
+				createStatusLineEntry({
+					key: "retry",
+					text: `retrying (${event.attempt}/${event.maxAttempts}) — ${event.errorMessage}`,
+					tone: "warning",
+				}),
+			);
 			break;
 		}
 		case "auto_retry_end": {
@@ -787,11 +812,13 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 		}
 		case "stream_retry": {
 			state.statusEntries = state.statusEntries.filter((s) => s.key !== "retry");
-			state.statusEntries.push({
-				key: "retry",
-				text: `stream dropped, retrying (${event.attempt}/${event.maxAttempts})`,
-				tone: "warning",
-			});
+			state.statusEntries.push(
+				createStatusLineEntry({
+					key: "retry",
+					text: `stream dropped, retrying (${event.attempt}/${event.maxAttempts})`,
+					tone: "warning",
+				}),
+			);
 			// Discarded partial: remove the streaming tail so the retry re-streams it.
 			const tail = lastAssistant(state);
 			if (tail?.streaming) state.entries.splice(state.entries.indexOf(tail), 1);
@@ -799,11 +826,13 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 		}
 		case "length_retry": {
 			state.statusEntries = state.statusEntries.filter((s) => s.key !== "retry");
-			state.statusEntries.push({
-				key: "retry",
-				text: `response truncated, retrying with larger budget (${event.attempt}/${event.maxAttempts})`,
-				tone: "warning",
-			});
+			state.statusEntries.push(
+				createStatusLineEntry({
+					key: "retry",
+					text: `response truncated, retrying with larger budget (${event.attempt}/${event.maxAttempts})`,
+					tone: "warning",
+				}),
+			);
 			const tail = lastAssistant(state);
 			if (tail?.streaming) state.entries.splice(state.entries.indexOf(tail), 1);
 			break;
@@ -874,11 +903,13 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 		}
 		case "parent_paused_for_background_agents": {
 			state.statusEntries = state.statusEntries.filter((s) => s.key !== "paused");
-			state.statusEntries.push({
-				key: "paused",
-				text: `paused — waiting on ${event.runningAgentCount} background agent${event.runningAgentCount === 1 ? "" : "s"}`,
-				tone: "warning",
-			});
+			state.statusEntries.push(
+				createStatusLineEntry({
+					key: "paused",
+					text: `paused — waiting on ${event.runningAgentCount} background agent${event.runningAgentCount === 1 ? "" : "s"}`,
+					tone: "warning",
+				}),
+			);
 			break;
 		}
 		case "extension_ui_response_handled": {
@@ -898,7 +929,9 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			} else if (method === "setStatus") {
 				const key = `ext:${event.statusKey ?? "default"}`;
 				state.statusEntries = state.statusEntries.filter((s) => s.key !== key);
-				if (event.statusText) state.statusEntries.push({ key, text: String(event.statusText), tone: "info" });
+				if (event.statusText) {
+					state.statusEntries.push(createStatusLineEntry({ key, text: String(event.statusText), tone: "info" }));
+				}
 			} else if (method === "setWidget") {
 				const placement = event.widgetPlacement === "belowEditor" ? "below" : "above";
 				state.widgets[placement] = Array.isArray(event.widgetLines) ? (event.widgetLines as string[]) : [];

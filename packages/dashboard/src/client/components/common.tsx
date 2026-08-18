@@ -143,6 +143,58 @@ export function Modal(props: {
 	);
 }
 
+export interface BannerAction {
+	label: string;
+	run: () => void | Promise<void>;
+	disabled?: boolean;
+}
+
+export interface BannerItem {
+	key: string;
+	text: string;
+	tone: "info" | "warning" | "error";
+	onDismiss: () => void;
+	actions?: BannerAction[];
+}
+
+export function BannerRegion(props: { banners: BannerItem[] }): JSX.Element {
+	return (
+		<Show when={props.banners.length > 0}>
+			<div class="container banner-region" aria-live="polite">
+				<For each={props.banners}>
+					{(banner) => (
+						<div class={`banner ${banner.tone}`} data-banner-key={banner.key}>
+							<span class="banner-glyph" aria-hidden="true">
+								◆
+							</span>
+							<span class="banner-text">{banner.text}</span>
+							<Show when={(banner.actions?.length ?? 0) > 0}>
+								<span class="banner-actions">
+									<For each={banner.actions}>
+										{(action) => (
+											<button
+												type="button"
+												class="btn btn-small"
+												disabled={action.disabled}
+												onClick={() => void action.run()}
+											>
+												{action.label}
+											</button>
+										)}
+									</For>
+								</span>
+							</Show>
+							<button type="button" class="btn btn-small banner-dismiss" onClick={banner.onDismiss}>
+								dismiss
+							</button>
+						</div>
+					)}
+				</For>
+			</div>
+		</Show>
+	);
+}
+
 export function ToastRegion(props: { toasts: Toast[]; onDismiss: (id: number) => void }): JSX.Element {
 	return (
 		<div class="toast-region">

@@ -406,11 +406,9 @@ describe("applySessionEvent — streaming lifecycle", () => {
 				{ kind: "text", text: "partial answer" },
 			],
 		});
-		expect(state.statusEntries).toContainEqual({
-			key: "provider-error",
-			text: "upstream 503",
-			tone: "error",
-		});
+		expect(state.statusEntries).toContainEqual(
+			expect.objectContaining({ key: "provider-error", text: "upstream 503", tone: "error" }),
+		);
 		expect(state.lastError).toBe("upstream 503");
 		expect(state.needsAttention).toBe(true);
 	});
@@ -739,11 +737,13 @@ describe("applySessionEvent — streaming lifecycle", () => {
 
 		applySessionEvent(state, { type: "length_retry", attempt: 2, maxAttempts: 4 });
 		expect(state.entries).toHaveLength(0);
-		expect(state.statusEntries).toContainEqual({
-			key: "retry",
-			text: "response truncated, retrying with larger budget (2/4)",
-			tone: "warning",
-		});
+		expect(state.statusEntries).toContainEqual(
+			expect.objectContaining({
+				key: "retry",
+				text: "response truncated, retrying with larger budget (2/4)",
+				tone: "warning",
+			}),
+		);
 	});
 });
 
@@ -816,7 +816,9 @@ describe("applySessionEvent — session-level events", () => {
 
 		expect(state.compacting).toBe(true);
 		expect(state.lastError).toBeUndefined();
-		expect(state.statusEntries).toEqual([{ key: "compaction", text: "compacting context…", tone: "info" }]);
+		expect(state.statusEntries).toEqual([
+			expect.objectContaining({ key: "compaction", text: "compacting context…", tone: "info" }),
+		]);
 		expect(state.needsAttention).toBe(false);
 
 		applySessionEvent(state, {
@@ -825,11 +827,9 @@ describe("applySessionEvent — session-level events", () => {
 			aborted: false,
 			willRetry: false,
 		});
-		expect(state.statusEntries).toContainEqual({
-			key: "compaction-error",
-			text: "summarizer failed",
-			tone: "error",
-		});
+		expect(state.statusEntries).toContainEqual(
+			expect.objectContaining({ key: "compaction-error", text: "summarizer failed", tone: "error" }),
+		);
 		expect(state.needsAttention).toBe(true);
 	});
 
@@ -845,11 +845,9 @@ describe("applySessionEvent — session-level events", () => {
 		});
 
 		expect(state.compacting).toBe(false);
-		expect(state.statusEntries).toContainEqual({
-			key: "compaction-error",
-			text: "summarizer failed",
-			tone: "error",
-		});
+		expect(state.statusEntries).toContainEqual(
+			expect.objectContaining({ key: "compaction-error", text: "summarizer failed", tone: "error" }),
+		);
 		expect(state.needsAttention).toBe(true);
 	});
 
@@ -945,6 +943,21 @@ describe("applySessionEvent — session-level events", () => {
 		expect(state.statusEntries.some((s) => s.key === "paused")).toBe(true);
 		applySessionEvent(state, { type: "agent_end", messages: [] });
 		expect(state.statusEntries.some((s) => s.key === "paused")).toBe(false);
+	});
+
+	it("assigns distinct numeric IDs to repeated and new status occurrences", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "stream_retry", attempt: 1, maxAttempts: 3 });
+		const firstRetry = state.statusEntries[0];
+		applySessionEvent(state, { type: "length_retry", attempt: 2, maxAttempts: 4 });
+		const secondRetry = state.statusEntries[0];
+		applySessionEvent(state, { type: "parent_paused_for_background_agents", runningAgentCount: 1 });
+		const paused = state.statusEntries.find((entry) => entry.key === "paused");
+
+		expect(firstRetry).toMatchObject({ id: expect.any(Number), key: "retry" });
+		expect(secondRetry).toMatchObject({ id: expect.any(Number), key: "retry" });
+		expect(paused).toMatchObject({ id: expect.any(Number), key: "paused" });
+		expect(new Set([firstRetry?.id, secondRetry?.id, paused?.id]).size).toBe(3);
 	});
 });
 

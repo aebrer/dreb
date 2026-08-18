@@ -147,12 +147,18 @@ export function App(): JSX.Element {
 		}
 	});
 
-	// All toasts across sessions, newest last.
-	const allToasts = () =>
-		[
-			...Object.values(store.sessions).flatMap((s) => s.toasts.map((t) => ({ ...t, sessionKey: s.key }))),
+	// Session-local toasts render as transcript banners while that parent session
+	// (or one of its subagents) is viewed. Everything else stays app-global.
+	const allToasts = () => {
+		const route = store.route();
+		const viewedKey = route.screen === "session" || route.screen === "subagent" ? route.key : undefined;
+		return [
+			...Object.values(store.sessions).flatMap((session) =>
+				session.key === viewedKey ? [] : session.toasts.map((toast) => ({ ...toast, sessionKey: session.key })),
+			),
 			...store.notices(),
 		].slice(-5);
+	};
 
 	return (
 		<>

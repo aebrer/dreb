@@ -6,7 +6,7 @@
 import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import type { PendingMessagesDto, SubagentArbitrationDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
-import { StatusChip } from "../components/common.js";
+import { type BannerItem, BannerRegion, StatusChip } from "../components/common.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
@@ -35,7 +35,8 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	const [steerError, setSteerError] = createSignal<string>();
 	const [steeringMode, setSteeringMode] = createSignal<"all" | "one-at-a-time">();
 	const [pending, setPending] = createSignal<PendingMessagesDto>({ steering: [], followUp: [] });
-	const isRunning = () => agent()?.status === "running";
+	const closed = () => parent()?.closed;
+	const isRunning = () => !closed() && agent()?.status === "running";
 	const isMobile = () => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches;
 
 	let chatRef: HTMLDivElement | undefined;
@@ -47,10 +48,12 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 		const hydration = new AbortController();
 		// Hydrate from the on-disk session log: after a reload the live relay
 		// state is gone, and even mid-run the log carries everything so far.
-		props.store.hydrateSubagent(props.sessionKey, props.agentId, hydration.signal).catch((err) => {
-			if (hydration.signal.aborted && isAbortError(err)) return;
-			setHydrateError(err instanceof Error ? err.message : String(err));
-		});
+		if (!closed()) {
+			props.store.hydrateSubagent(props.sessionKey, props.agentId, hydration.signal).catch((err) => {
+				if ((hydration.signal.aborted && isAbortError(err)) || closed()) return;
+				setHydrateError(err instanceof Error ? err.message : String(err));
+			});
+		}
 		onCleanup(() => hydration.abort());
 	});
 
@@ -77,7 +80,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 			setPending(result.pending);
 			setSteerError(undefined);
 		} catch (err) {
-			setSteerError(err instanceof Error ? err.message : String(err));
+			if (!closed()) setSteerError(err instanceof Error ? err.message : String(err));
 		}
 	}
 
@@ -104,11 +107,58 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 			setComposerText("");
 			await refreshPending();
 		} catch (err) {
-			setSteerError(err instanceof Error ? err.message : String(err));
+			if (!closed()) setSteerError(err instanceof Error ? err.message : String(err));
 		} finally {
 			setSending(false);
 		}
 	}
+
+	const banners = createMemo<BannerItem[]>(() => {
+		const items: BannerItem[] = [];
+		const closedState = closed();
+		if (closedState && !closedState.bannerDismissed) {
+			const actions: NonNullable<BannerItem["actions"]> = [];
+			if (closedState.cwd && closedState.sessionFile) {
+				actions.push({
+					label: closedState.resuming ? "resuming…" : "Resume session",
+					run: () => props.store.resumeClosedSession(props.sessionKey),
+					disabled: closedState.resuming,
+				});
+			}
+			actions.push({
+				label: "Return to fleet",
+				run: () => props.store.navigate({ screen: "fleet" }),
+				disabled: closedState.resuming,
+			});
+			items.push({
+				key: "closed",
+				text: `session ${props.sessionKey} was closed${
+					closedState.resumeError ? `\nResume failed: ${closedState.resumeError}` : ""
+				}`,
+				tone: closedState.resumeError ? "error" : "warning",
+				onDismiss: () => props.store.dismissClosedBanner(props.sessionKey),
+				actions,
+			});
+		}
+		for (const status of parent()?.statusEntries ?? []) {
+			if (status.dismissed) continue;
+			items.push({
+				key: `status:${status.id}`,
+				text: status.text,
+				tone: status.tone,
+				onDismiss: () => props.store.dismissStatusBanner(props.sessionKey, status.id),
+			});
+		}
+		for (const toast of parent()?.toasts ?? []) {
+			items.push({
+				key: `toast:${toast.id}`,
+				text: toast.text,
+				tone: toast.tone,
+				onDismiss: () => props.store.dismissToast(toast.id),
+			});
+		}
+		return items;
+	});
 
 	return (
 		<div class="session-screen">
@@ -121,9 +171,12 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 					<span class="title">{agent()?.taskSummary ?? props.agentId}</span>
 					<span class="right">
 						<Show
-							when={agent()?.status === "running"}
+							when={isRunning()}
 							fallback={
-								<StatusChip status={agent()?.status === "failed" ? "error" : "idle"} label={agent()?.status} />
+								<StatusChip
+									status={!closed() && agent()?.status === "failed" ? "error" : "idle"}
+									label={closed() ? "closed" : agent()?.status}
+								/>
 							}
 						>
 							<StatusChip status="running" />
@@ -131,6 +184,8 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 					</span>
 				</div>
 			</header>
+
+			<BannerRegion banners={banners()} />
 
 			<main class="chat" ref={chatRef}>
 				<div class="chat-inner" ref={chatInnerRef}>
@@ -179,7 +234,11 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 					<Show
 						when={isRunning()}
 						fallback={
-							<div class="readonly-note">This subagent is no longer running; its transcript is read-only.</div>
+							<div class="readonly-note">
+								{closed()
+									? "This session is closed; the subagent transcript is read-only."
+									: "This subagent is no longer running; its transcript is read-only."}
+							</div>
 						}
 					>
 						<Show when={steerError()}>
