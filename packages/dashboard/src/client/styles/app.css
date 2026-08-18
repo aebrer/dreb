@@ -2989,6 +2989,11 @@ details.thinking .thinking-body {
 		overscroll-behavior: contain;
 	}
 
+	/* Keep the mobile command menu in the composer's scroll area instead of clipping it. */
+	.command-popover {
+		position: static;
+	}
+
 	.composer {
 		flex: 0 0 auto;
 		min-height: 0;

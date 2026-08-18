@@ -39,9 +39,13 @@ interface SessionLayoutState {
 	subagentsOpen: boolean;
 	headerCollapsed: boolean;
 	overflowOpen: boolean;
+	commandMenuOpen?: boolean;
 }
 
 function sessionFixture(state: SessionLayoutState): string {
+	const commandMenu = state.commandMenuOpen
+		? `<div class="command-popover" role="listbox" id="command-listbox" aria-label="slash commands"><button type="button" class="command-option" role="option">/compact</button></div>`
+		: "";
 	const headerOverflow = state.overflowOpen
 		? `<div class="session-bar-inner" style="justify-content:flex-end;gap:8px"><button type="button" class="btn btn-small">export HTML</button><button type="button" class="btn btn-small">compact now</button><button type="button" class="btn btn-small">expand tools</button><button type="button" class="btn btn-small">rename</button><button type="button" class="btn btn-small">stop runtime</button></div>`
 		: "";
@@ -87,6 +91,7 @@ function sessionFixture(state: SessionLayoutState): string {
 				<div class="composer">
 					<div class="queued-message-row"><span class="queued-chip">steer: ${longText}</span><span class="queued-chip">follow-up: ${longText}</span><button type="button" class="btn btn-small">restore to composer</button></div>
 					<div class="attachment-strip"><span class="attachment-file">📎 ${longText}</span><span class="attachment-file">📎 ${longText}</span></div>
+					${commandMenu}
 					${textarea}
 					<div class="composer-row">
 						<button type="button" class="btn btn-small" data-composer-action>📎 file</button>
@@ -173,6 +178,32 @@ describe("session layout in a real browser", () => {
 		expect(measured.sendVisible).toBe(true);
 		expect(measured.composerActionsVisible).toBe(true);
 		expect(measured.headerAtViewportTop).toBe(true);
+	});
+
+	it("keeps the slash-command popover visible on mobile", async () => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.setContent(
+			sessionFixture({
+				composerMaxed: true,
+				bannerCount: 4,
+				tasksOpen: true,
+				subagentsOpen: true,
+				headerCollapsed: false,
+				overflowOpen: true,
+				commandMenuOpen: true,
+			}),
+		);
+		const visible = await page.evaluate(() => {
+			const popover = document.querySelector<HTMLElement>(".command-popover");
+			if (!popover) return false;
+			const rect = popover.getBoundingClientRect();
+			if (rect.bottom <= 0 || rect.top >= innerHeight) return false;
+			const x = (rect.left + rect.right) / 2;
+			const y = Math.max(0, Math.min(innerHeight - 1, (rect.top + rect.bottom) / 2));
+			return popover.contains(document.elementFromPoint(x, y));
+		});
+
+		expect(visible).toBe(true);
 	});
 
 	it("keeps the composer visible in the worst-case keyboard-sized viewport", async () => {
