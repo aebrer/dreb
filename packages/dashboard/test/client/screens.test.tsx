@@ -2300,6 +2300,28 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("compose ▴");
 	});
 
+	it("keeps dock panels together and the composer outside their scroll wrapper", () => {
+		const store = makeStore() as any;
+		const session = populatedSession("k-dock-layout");
+		const fakeStore = {
+			...store,
+			sessions: { "k-dock-layout": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-dock-layout" />);
+		const dockInner = el.querySelector(".dock-inner");
+		const dockPanels = dockInner?.querySelector(".dock-panels");
+		const composer = dockInner?.querySelector(".composer");
+
+		expect(dockPanels?.parentElement).toBe(dockInner);
+		expect(dockPanels?.querySelector("details.tasks:not(.subagents)")).not.toBeNull();
+		expect(dockPanels?.querySelector("details.subagents")).not.toBeNull();
+		expect(dockPanels?.querySelector(".status-line")).not.toBeNull();
+		expect(composer?.parentElement).toBe(dockInner);
+		expect(dockPanels?.contains(composer ?? null)).toBe(false);
+	});
+
 	it("in-session subagent panel collapses with the task-tracker details pattern", () => {
 		const store = makeStore() as any;
 		const session = populatedSession("k-subpanel");

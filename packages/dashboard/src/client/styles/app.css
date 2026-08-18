@@ -46,6 +46,7 @@ body,
 
 #root {
 	min-height: 100vh;
+	min-height: 100dvh;
 	display: flex;
 	flex-direction: column;
 }
@@ -473,6 +474,7 @@ body,
 .chat {
 	flex: 1;
 	overflow-y: auto;
+	overscroll-behavior: contain;
 	min-height: 0;
 }
 
@@ -1440,6 +1442,7 @@ details.thinking .thinking-body {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-2);
+	overscroll-behavior: contain;
 }
 
 .banner {
@@ -2951,6 +2954,56 @@ details.thinking .thinking-body {
 		max-width: 100%;
 	}
 
+	.session-bar {
+		flex-shrink: 1;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.dock {
+		display: flex;
+		flex-direction: column;
+		flex-shrink: 1;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.dock-collapse-row {
+		flex: 0 0 auto;
+	}
+
+	.dock-inner {
+		flex: 1 1 auto;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.dock-panels {
+		display: flex;
+		flex: 0 1 auto;
+		flex-direction: column;
+		gap: var(--space-2);
+		min-height: 0;
+		max-height: 30vh;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+	}
+
+	.composer {
+		flex: 0 0 auto;
+		min-height: 0;
+		max-height: 100%;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+	}
+
+	.composer-row {
+		position: sticky;
+		bottom: 0;
+		z-index: 1;
+		background: var(--bg);
+	}
+
 	.entry.user {
 		max-width: 100%;
 	}
@@ -3015,6 +3068,38 @@ details.thinking .thinking-body {
 	.toast-region {
 		width: 100%;
 		max-width: 100%;
+	}
+
+	.banner-region {
+		flex: 0 1 auto;
+		min-height: 0;
+		max-height: 20vh;
+		overflow-y: auto;
+		overscroll-behavior: contain;
+	}
+
+	.banner-text {
+		max-height: 18vh;
+	}
+
+	.queued-message-row {
+		max-height: 8vh;
+		overflow-y: auto;
+	}
+
+	.attachment-strip {
+		max-height: 10vh;
+		overflow-y: auto;
+	}
+
+	.pending-chips {
+		display: block;
+		max-height: 8vh;
+		overflow-y: auto;
+	}
+
+	.composer textarea {
+		max-height: 26vh;
 	}
 
 	.toast-region {

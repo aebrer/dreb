@@ -25,6 +25,7 @@ import { api } from "../api.js";
 import { commandMatches, dispatchBuiltinCommand, parseDashboardBuiltin } from "../builtin-commands.js";
 import { type BannerItem, BannerRegion, ConnectionIndicator, Modal } from "../components/common.js";
 import { MarkdownBody, Transcript } from "../components/transcript.js";
+import { composerTextareaMaxHeight } from "../composer-sizing.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
 import {
@@ -137,9 +138,12 @@ function groupedModels(models: ModelChoice[]): Array<{ provider: string; models:
 	return [...groups.entries()].map(([provider, group]) => ({ provider, models: group }));
 }
 
+export { composerTextareaMaxHeight };
+
 export function autoGrowTextarea(textarea: HTMLTextAreaElement): void {
 	textarea.style.height = "auto";
-	const maxHeight = Math.max(120, Math.floor((window.innerHeight || 800) * 0.4));
+	const narrow = window.matchMedia?.("(max-width: 700px)")?.matches ?? false;
+	const maxHeight = composerTextareaMaxHeight(window.innerHeight, narrow);
 	const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
 	if (nextHeight > 0) textarea.style.height = `${nextHeight}px`;
 	textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
@@ -2010,100 +2014,120 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</div>
 				<Show when={!bottomDockCollapsed()}>
 					<div class="dock-inner">
-						<Show when={tasks().length > 0}>
-							<details class="tasks" open={!isMobile()}>
-								<summary>
-									tasks — {tasksDone()} of {tasks().length} done
-								</summary>
-								<ul>
-									<For each={tasks()}>
-										{(task) => (
-											<li
-												classList={{
-													done: task.status === "completed",
-													active: task.status === "in_progress",
-												}}
-											>
-												{task.status === "completed" ? "☑" : task.status === "in_progress" ? "⧖" : "☐"}{" "}
-												{task.title}
-											</li>
-										)}
-									</For>
-								</ul>
-							</details>
-						</Show>
+						<Show
+							when={
+								tasks().length > 0 ||
+								liveAgents().length + doneAgents().length > 0 ||
+								showStopControls() ||
+								abortableStatuses().length > 0
+							}
+						>
+							<div class="dock-panels">
+								<Show when={tasks().length > 0}>
+									<details class="tasks" open={!isMobile()}>
+										<summary>
+											tasks — {tasksDone()} of {tasks().length} done
+										</summary>
+										<ul>
+											<For each={tasks()}>
+												{(task) => (
+													<li
+														classList={{
+															done: task.status === "completed",
+															active: task.status === "in_progress",
+														}}
+													>
+														{task.status === "completed"
+															? "☑"
+															: task.status === "in_progress"
+																? "⧖"
+																: "☐"}{" "}
+														{task.title}
+													</li>
+												)}
+											</For>
+										</ul>
+									</details>
+								</Show>
 
-						<Show when={liveAgents().length + doneAgents().length > 0}>
-							<details class="tasks subagents" open={!isMobile()}>
-								<summary>
-									subagents — {liveAgents().length} running · {doneAgents().length} done
-								</summary>
-								<ul class="subagent-list">
-									<For each={sortedAgents()}>
-										{(agent) => (
-											<li>
+								<Show when={liveAgents().length + doneAgents().length > 0}>
+									<details class="tasks subagents" open={!isMobile()}>
+										<summary>
+											subagents — {liveAgents().length} running · {doneAgents().length} done
+										</summary>
+										<ul class="subagent-list">
+											<For each={sortedAgents()}>
+												{(agent) => (
+													<li>
+														<button
+															type="button"
+															class="agent-chip"
+															title="view this subagent's session"
+															onClick={() =>
+																props.store.navigate({
+																	screen: "subagent",
+																	key: props.sessionKey,
+																	agentId: agent.agentId,
+																})
+															}
+														>
+															<span class={agent.status === "running" && !closed() ? "live" : "done"}>
+																{agent.status === "running"
+																	? closed()
+																		? "○"
+																		: "●"
+																	: agent.status === "completed"
+																		? "✓"
+																		: "✕"}
+															</span>
+															<span class="task">
+																{agent.agentType} — {agent.taskSummary}
+																<Show when={agent.arbitrations?.at(-1)}>
+																	{(record) =>
+																		record().status === "failure"
+																			? " · arbitration failed"
+																			: ` · ${record().final?.model ?? record().proposed.model} @ ${record().final?.thinking ?? record().proposed.thinking}`
+																	}
+																</Show>
+															</span>
+														</button>
+													</li>
+												)}
+											</For>
+										</ul>
+									</details>
+								</Show>
+
+								<Show when={showStopControls() || abortableStatuses().length > 0}>
+									<div class="status-line">
+										<Show when={streaming()}>
+											<span class="working">
+												● working{session()?.workingText ? ` — ${session()!.workingText}` : ""}
+												{elapsed() > 2 ? ` (${elapsed()}s)` : ""}
+											</span>
+										</Show>
+										<For each={abortableStatuses()}>
+											{(status) => (
 												<button
 													type="button"
-													class="agent-chip"
-													title="view this subagent's session"
-													onClick={() =>
-														props.store.navigate({
-															screen: "subagent",
-															key: props.sessionKey,
-															agentId: agent.agentId,
-														})
-													}
+													class="btn btn-small btn-danger inline-stop"
+													onClick={() => abortStatus(status.key)}
 												>
-													<span class={agent.status === "running" && !closed() ? "live" : "done"}>
-														{agent.status === "running"
-															? closed()
-																? "○"
-																: "●"
-															: agent.status === "completed"
-																? "✓"
-																: "✕"}
-													</span>
-													<span class="task">
-														{agent.agentType} — {agent.taskSummary}
-														<Show when={agent.arbitrations?.at(-1)}>
-															{(record) =>
-																record().status === "failure"
-																	? " · arbitration failed"
-																	: ` · ${record().final?.model ?? record().proposed.model} @ ${record().final?.thinking ?? record().proposed.thinking}`
-															}
-														</Show>
-													</span>
+													stop {status.key}
 												</button>
-											</li>
-										)}
-									</For>
-								</ul>
-							</details>
-						</Show>
-
-						<Show when={showStopControls() || abortableStatuses().length > 0}>
-							<div class="status-line">
-								<Show when={streaming()}>
-									<span class="working">
-										● working{session()?.workingText ? ` — ${session()!.workingText}` : ""}
-										{elapsed() > 2 ? ` (${elapsed()}s)` : ""}
-									</span>
-								</Show>
-								<For each={abortableStatuses()}>
-									{(status) => (
-										<button
-											type="button"
-											class="btn btn-small btn-danger inline-stop"
-											onClick={() => abortStatus(status.key)}
-										>
-											stop {status.key}
-										</button>
-									)}
-								</For>
-								<Show when={showStopControls()}>
-									<button type="button" class="btn btn-small btn-danger" disabled={stopping()} onClick={abort}>
-										{stopping() ? "stopping…" : "■ stop"}
-									</button>
+											)}
+										</For>
+										<Show when={showStopControls()}>
+											<button
+												type="button"
+												class="btn btn-small btn-danger"
+												disabled={stopping()}
+												onClick={abort}
+											>
+												{stopping() ? "stopping…" : "■ stop"}
+											</button>
+										</Show>
+									</div>
 								</Show>
 							</div>
 						</Show>
