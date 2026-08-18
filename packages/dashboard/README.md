@@ -86,6 +86,20 @@ Open `http://127.0.0.1:5343`.
   paired-device expiry/unpair management.
 - **Pairing** — remote first-login rotating-code flow.
 
+### Notifications and navigation
+
+Notices, warnings, and errors for the viewed main session or subagent share a
+manually dismissible banner region at the top of the transcript. Long mobile
+messages scroll within a capped text area while banner actions and dismissal
+remain reachable. App-global notices and notifications from other sessions use
+a separate fixed top-center stack; neither surface expires automatically.
+
+Creating a runtime from Fleet or Files leaves the current screen in place.
+Closing the runtime currently being viewed likewise keeps the main-session or
+subagent route and its rendered history as a read-only browser snapshot, with
+explicit **Resume session** and **Return to fleet** actions. Closing another
+runtime produces no redundant toast.
+
 ### Scoped models
 
 The Settings scoped-models editor manages the persistent model-cycling scope. Search is grouped by provider, with individual model, provider, and all-model toggles; non-empty partial scopes have accessible up/down ordering controls plus save/reset, and controls remain usable on mobile. An absent `enabledModels` means implicit all available registry models in registry order, including future additions, so that view cannot be reordered. A saved partial scope is an ordered list of exact canonical `provider/model` references; editing legacy glob, fuzzy, or thinking-suffix values normalizes them to exact references.
