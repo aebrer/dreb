@@ -23,7 +23,7 @@ import type {
 import { MAX_TOTAL_IMAGE_BYTES } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { commandMatches, dispatchBuiltinCommand, parseDashboardBuiltin } from "../builtin-commands.js";
-import { ConnectionIndicator, Modal } from "../components/common.js";
+import { type BannerItem, BannerRegion, ConnectionIndicator, Modal } from "../components/common.js";
 import { MarkdownBody, Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
@@ -916,25 +916,31 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	let statsPopoverRef: HTMLDivElement | undefined;
 	let disposed = false;
 
-	const streaming = () => session()?.streaming ?? false;
-	const compacting = () => session()?.compacting ?? false;
+	const closed = () => session()?.closed;
+	const streaming = () => !closed() && (session()?.streaming ?? false);
+	const compacting = () => !closed() && (session()?.compacting ?? false);
 	const parentPaused = () => (session()?.statusEntries ?? []).some((s) => s.key === "paused");
 	const anyLiveAgent = () => Object.values(session()?.backgroundAgents ?? {}).some((a) => a.status === "running");
 	// Show stop controls whenever anything is stoppable — streaming, compacting,
 	// or the parent is paused waiting on still-running background agents. TUI ESC
 	// halts all of these; the dashboard stop button must reach the same states
 	// (a mid-turn refresh or a paused-on-subagents parent must not hide it).
-	const showStopControls = () => streaming() || compacting() || parentPaused() || anyLiveAgent();
+	const showStopControls = () => !closed() && (streaming() || compacting() || parentPaused() || anyLiveAgent());
+	const abortableStatuses = () =>
+		closed()
+			? []
+			: (session()?.statusEntries ?? []).filter((entry) => entry.key === "compaction" || entry.key === "retry");
 	const stickToBottom = createStickToBottom({ scroller: () => chatRef });
 
 	async function refreshRuntimeDetails(includeDailyCost = false) {
+		if (closed()) return;
 		const [statsResult, performanceResult, branchResult] = await Promise.allSettled([
 			api.stats(props.sessionKey),
 			api.performance(props.sessionKey),
 			api.branch(props.sessionKey),
 		] as const);
 		const dailyCostResult = includeDailyCost ? await Promise.allSettled([api.dailyCost()] as const) : undefined;
-		if (disposed) return;
+		if (disposed || closed()) return;
 		if (statsResult.status === "fulfilled") setStats(statsResult.value);
 		if (performanceResult.status === "fulfilled") setPerformance(performanceResult.value);
 		if (branchResult.status === "fulfilled") setBranch(branchResult.value.branch);
@@ -948,11 +954,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	}
 
 	async function fetchCommands() {
+		if (closed()) return;
 		try {
 			const { commands } = await api.commands(props.sessionKey);
 			if (!disposed) setCommands(commands);
 		} catch (err) {
-			if (!disposed) setActionError(err instanceof Error ? err.message : String(err));
+			if (!disposed && !closed()) setActionError(err instanceof Error ? err.message : String(err));
 		}
 	}
 
@@ -967,13 +974,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	}
 
 	async function refreshPendingMessages() {
+		if (closed()) return;
 		// Always ask the runtime — never gate on the fleet's pendingMessageCount.
 		// The fleet snapshot only refreshes on agent start/end, so a steer/follow-up
 		// submitted mid-turn would be invisible if we trusted the stale count.
 		try {
 			setPendingMessages(await api.pending(props.sessionKey));
 		} catch (err) {
-			setActionError(err instanceof Error ? err.message : String(err));
+			if (!closed()) setActionError(err instanceof Error ? err.message : String(err));
 		}
 	}
 
@@ -1283,6 +1291,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	}
 
 	async function openStatsPopover() {
+		if (closed()) return;
 		setShowStatsPopover(true);
 		setStatsPopoverError(undefined);
 		try {
@@ -1294,10 +1303,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 
 	onMount(() => {
 		const hydration = new AbortController();
-		props.store.hydrateSession(props.sessionKey, hydration.signal).catch((err) => {
-			if (hydration.signal.aborted && isAbortError(err)) return;
-			setActionError(err instanceof Error ? err.message : String(err));
-		});
+		if (!closed()) {
+			props.store.hydrateSession(props.sessionKey, hydration.signal).catch((err) => {
+				if ((hydration.signal.aborted && isAbortError(err)) || closed()) return;
+				setActionError(err instanceof Error ? err.message : String(err));
+			});
+		}
 		void refreshRuntimeDetails(true);
 		void fetchCommands();
 		void refreshPendingMessages();
@@ -1334,6 +1345,20 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		clearInterval(timer);
 		stickToBottom.dispose();
 		clearImageAttachments();
+	});
+
+	createEffect(() => {
+		if (!closed()) return;
+		setShowModelSelector(false);
+		setShowCompactModal(false);
+		setShowRenameModal(false);
+		setShowContextModal(false);
+		setShowForkModal(false);
+		setShowTreeModal(false);
+		setShowResumeModal(false);
+		setShowImportModal(false);
+		setShowOverflow(false);
+		setBottomDockCollapsed(false);
 	});
 
 	// Composer prefill from set_editor_text / fork.
@@ -1581,9 +1606,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setStoppingRuntime(true);
 		setActionError(undefined);
 		try {
-			await api.stopRuntime(props.sessionKey);
-			await props.store.removeRuntime(props.sessionKey);
-			props.store.navigate({ screen: "fleet" });
+			await props.store.stopRuntime(props.sessionKey);
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -1606,8 +1629,10 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		});
 	}
 
-	const liveAgents = () => Object.values(session()?.backgroundAgents ?? {}).filter((a) => a.status === "running");
-	const doneAgents = () => Object.values(session()?.backgroundAgents ?? {}).filter((a) => a.status !== "running");
+	const liveAgents = () =>
+		closed() ? [] : Object.values(session()?.backgroundAgents ?? {}).filter((agent) => agent.status === "running");
+	const doneAgents = () =>
+		Object.values(session()?.backgroundAgents ?? {}).filter((agent) => closed() || agent.status !== "running");
 	// Newest spawned subagent first, oldest last. Array.prototype.sort is stable,
 	// so equal timestamps keep spawn (insertion) order.
 	const sortedAgents = () =>
@@ -1620,8 +1645,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const isMobile = () => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches;
 	const displaySessionName = () => session()?.sessionName ?? runtime()?.state.sessionName;
 	const headerTitle = () => displaySessionName() ?? session()?.title ?? props.sessionKey;
+	const sessionCwd = () => runtime()?.cwd ?? closed()?.cwd;
 	const cwdWithBranch = () => {
-		const cwd = runtime()?.cwd;
+		const cwd = sessionCwd();
 		if (!cwd) return undefined;
 		const currentBranch = branch();
 		return `${shortenPath(cwd)}${currentBranch ? ` (${currentBranch})` : ""}`;
@@ -1696,6 +1722,77 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		if (commandSelection() >= length) setCommandSelection(Math.max(0, length - 1));
 	});
 
+	const banners = createMemo<BannerItem[]>(() => {
+		const items: BannerItem[] = [];
+		const closedState = closed();
+		if (closedState && !closedState.bannerDismissed) {
+			const resumeErrorText = closedState.resumeError ? `\nResume failed: ${closedState.resumeError}` : "";
+			const actions: NonNullable<BannerItem["actions"]> = [];
+			if (closedState.cwd && closedState.sessionFile) {
+				actions.push({
+					label: closedState.resuming ? "resuming…" : "Resume session",
+					run: () => props.store.resumeClosedSession(props.sessionKey),
+					disabled: closedState.resuming,
+				});
+			}
+			actions.push({
+				label: "Return to fleet",
+				run: () => props.store.navigate({ screen: "fleet" }),
+				disabled: closedState.resuming,
+			});
+			items.push({
+				key: "closed",
+				text: `session ${props.sessionKey} was closed${resumeErrorText}`,
+				tone: closedState.resumeError ? "error" : "warning",
+				onDismiss: () => props.store.dismissClosedBanner(props.sessionKey),
+				actions,
+			});
+		}
+		const fallbackMessage = runtime()?.state.modelFallbackMessage;
+		if (fallbackMessage && !fallbackDismissed()) {
+			items.push({
+				key: "fallback",
+				text: fallbackMessage,
+				tone: "warning",
+				onDismiss: () => setFallbackDismissed(true),
+			});
+		}
+		for (const status of session()?.statusEntries ?? []) {
+			if (status.dismissed) continue;
+			items.push({
+				key: `status:${status.id}`,
+				text: status.text,
+				tone: status.tone,
+				onDismiss: () => props.store.dismissStatusBanner(props.sessionKey, status.id),
+			});
+		}
+		for (const toast of session()?.toasts ?? []) {
+			items.push({
+				key: `toast:${toast.id}`,
+				text: toast.text,
+				tone: toast.tone,
+				onDismiss: () => props.store.dismissToast(toast.id),
+			});
+		}
+		if (actionError()) {
+			items.push({
+				key: "action-error",
+				text: actionError()!,
+				tone: "error",
+				onDismiss: () => setActionError(undefined),
+			});
+		}
+		if (actionNotice()) {
+			items.push({
+				key: "action-notice",
+				text: actionNotice()!,
+				tone: "info",
+				onDismiss: () => setActionNotice(undefined),
+			});
+		}
+		return items;
+	});
+
 	return (
 		<div class="session-screen">
 			<header class="session-bar" classList={{ collapsed: topChromeCollapsed() }}>
@@ -1705,10 +1802,10 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					</a>
 					<span class="title">{headerTitle()}</span>
 					<Show when={!topChromeCollapsed()}>
-						<span class="project">{runtime()?.cwd ? shortenPath(runtime()!.cwd) : undefined}</span>
+						<span class="project">{sessionCwd() ? shortenPath(sessionCwd()!) : undefined}</span>
 					</Show>
 					<ConnectionIndicator store={props.store} class="session-connection-indicator" />
-					<Show when={!topChromeCollapsed()}>
+					<Show when={!topChromeCollapsed() && !closed()}>
 						<span class="right">
 							<button
 								type="button"
@@ -1758,7 +1855,12 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				<Show when={!topChromeCollapsed()}>
 					<div class="session-bar-inner session-info-bar">
 						<span class="session-info-left">{infoLeft()}</span>
-						<button type="button" class="session-info-right stats-trigger" onClick={openStatsPopover}>
+						<button
+							type="button"
+							class="session-info-right stats-trigger"
+							disabled={!!closed()}
+							onClick={openStatsPopover}
+						>
 							<For each={infoStats()}>{(item) => <span>{item}</span>}</For>
 						</button>
 						<Show when={showStatsPopover()}>
@@ -1853,16 +1955,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</Show>
 			</header>
 
-			<Show when={!topChromeCollapsed() && runtime()?.state.modelFallbackMessage && !fallbackDismissed()}>
-				<div class="container" style={{ "padding-top": "8px" }}>
-					<div class="fallback-banner">
-						<span>◆ {runtime()!.state.modelFallbackMessage}</span>
-						<button type="button" class="btn btn-small dismiss" onClick={() => setFallbackDismissed(true)}>
-							dismiss
-						</button>
-					</div>
-				</div>
-			</Show>
+			<BannerRegion banners={banners()} />
 
 			<main class="chat" ref={chatRef}>
 				<div class="chat-inner" ref={chatInnerRef}>
@@ -1893,10 +1986,17 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					<button
 						type="button"
 						class="chrome-toggle"
-						title={bottomDockCollapsed() ? "show composer and controls" : "hide composer and controls"}
+						title={
+							closed()
+								? "closed session transcript"
+								: bottomDockCollapsed()
+									? "show composer and controls"
+									: "hide composer and controls"
+						}
+						disabled={!!closed()}
 						onClick={() => setBottomDockCollapsed(!bottomDockCollapsed())}
 					>
-						{bottomDockCollapsed() ? "compose ▴" : "compose ▾"}
+						{closed() ? "closed" : bottomDockCollapsed() ? "compose ▴" : "compose ▾"}
 					</button>
 					<Show when={bottomDockCollapsed()}>
 						<span class="dock-collapsed-hint">
@@ -1954,8 +2054,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 														})
 													}
 												>
-													<span class={agent.status === "running" ? "live" : "done"}>
-														{agent.status === "running" ? "●" : agent.status === "completed" ? "✓" : "✕"}
+													<span class={agent.status === "running" && !closed() ? "live" : "done"}>
+														{agent.status === "running"
+															? closed()
+																? "○"
+																: "●"
+															: agent.status === "completed"
+																? "✓"
+																: "✕"}
 													</span>
 													<span class="task">
 														{agent.agentType} — {agent.taskSummary}
@@ -1975,14 +2081,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							</details>
 						</Show>
 
-						<Show
-							when={
-								showStopControls() ||
-								(session()?.statusEntries.length ?? 0) > 0 ||
-								actionError() ||
-								actionNotice()
-							}
-						>
+						<Show when={showStopControls() || abortableStatuses().length > 0}>
 							<div class="status-line">
 								<Show when={streaming()}>
 									<span class="working">
@@ -1990,28 +2089,17 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 										{elapsed() > 2 ? ` (${elapsed()}s)` : ""}
 									</span>
 								</Show>
-								<For each={session()?.statusEntries ?? []}>
+								<For each={abortableStatuses()}>
 									{(status) => (
-										<span class={status.tone === "info" ? "queued" : status.tone}>
-											{status.text}
-											<Show when={status.key === "compaction" || status.key === "retry"}>
-												<button
-													type="button"
-													class="btn btn-small btn-danger inline-stop"
-													onClick={() => abortStatus(status.key)}
-												>
-													stop
-												</button>
-											</Show>
-										</span>
+										<button
+											type="button"
+											class="btn btn-small btn-danger inline-stop"
+											onClick={() => abortStatus(status.key)}
+										>
+											stop {status.key}
+										</button>
 									)}
 								</For>
-								<Show when={actionError()}>
-									<span class="error">{actionError()}</span>
-								</Show>
-								<Show when={actionNotice()}>
-									<span class="queued">{actionNotice()}</span>
-								</Show>
 								<Show when={showStopControls()}>
 									<button type="button" class="btn btn-small btn-danger" disabled={stopping()} onClick={abort}>
 										{stopping() ? "stopping…" : "■ stop"}
@@ -2020,244 +2108,251 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							</div>
 						</Show>
 
-						<div class="composer">
-							<Show when={pendingMessageItems().length > 0}>
-								<div class="queued-message-row">
-									<For each={pendingMessageItems()}>
-										{(item) => (
-											<span class="queued-chip" title={item.text}>
-												<span class="queued-kind">{item.kind}</span>
-												{item.text}
-											</span>
-										)}
-									</For>
-									<button type="button" class="btn btn-small" onClick={restorePendingToComposer}>
-										restore to composer
-									</button>
-								</div>
-							</Show>
-							<Show when={fileAttachments().length > 0 || imageAttachments().length > 0}>
-								<div class="attachment-strip">
-									<For each={fileAttachments()}>
-										{(file, index) => (
-											<span class="attachment-file" title={file.path}>
-												<span>📎 {file.fileName}</span>
-												<span class="muted">{formatBytes(file.size)}</span>
+						<Show
+							when={!closed()}
+							fallback={<div class="readonly-note">This session is closed; its transcript is read-only.</div>}
+						>
+							<div class="composer">
+								<Show when={pendingMessageItems().length > 0}>
+									<div class="queued-message-row">
+										<For each={pendingMessageItems()}>
+											{(item) => (
+												<span class="queued-chip" title={item.text}>
+													<span class="queued-kind">{item.kind}</span>
+													{item.text}
+												</span>
+											)}
+										</For>
+										<button type="button" class="btn btn-small" onClick={restorePendingToComposer}>
+											restore to composer
+										</button>
+									</div>
+								</Show>
+								<Show when={fileAttachments().length > 0 || imageAttachments().length > 0}>
+									<div class="attachment-strip">
+										<For each={fileAttachments()}>
+											{(file, index) => (
+												<span class="attachment-file" title={file.path}>
+													<span>📎 {file.fileName}</span>
+													<span class="muted">{formatBytes(file.size)}</span>
+													<button
+														type="button"
+														aria-label="remove file attachment"
+														onClick={() =>
+															setFileAttachments((current) => current.filter((_, i) => i !== index()))
+														}
+													>
+														×
+													</button>
+												</span>
+											)}
+										</For>
+										<For each={imageAttachments()}>
+											{(image, index) => (
+												<span
+													class="attachment-thumb"
+													title={`${image.fileName} (${formatBytes(image.size)})`}
+												>
+													<img src={image.previewUrl} alt={image.fileName} />
+													<button
+														type="button"
+														aria-label="remove image"
+														onClick={() => removeImageAttachment(index())}
+													>
+														×
+													</button>
+												</span>
+											)}
+										</For>
+									</div>
+								</Show>
+								<Show when={showCommandMenu()}>
+									<div class="command-popover" role="listbox" id="command-listbox" aria-label="slash commands">
+										<For each={commandMatchesForComposer()}>
+											{(command, index) => (
 												<button
 													type="button"
-													aria-label="remove file attachment"
-													onClick={() =>
-														setFileAttachments((current) => current.filter((_, i) => i !== index()))
-													}
+													id={`command-option-${index()}`}
+													role="option"
+													aria-selected={commandSelection() === index()}
+													class="command-option"
+													classList={{ selected: commandSelection() === index() }}
+													onMouseEnter={() => setCommandSelection(index())}
+													onClick={() => acceptCommand(command)}
 												>
-													×
+													<span class="command-name">/{command.name}</span>
+													<Show when={command.description}>
+														<span class="command-description">{command.description}</span>
+													</Show>
+													<span class="command-source">{command.source}</span>
 												</button>
-											</span>
-										)}
-									</For>
-									<For each={imageAttachments()}>
-										{(image, index) => (
-											<span
-												class="attachment-thumb"
-												title={`${image.fileName} (${formatBytes(image.size)})`}
-											>
-												<img src={image.previewUrl} alt={image.fileName} />
-												<button
-													type="button"
-													aria-label="remove image"
-													onClick={() => removeImageAttachment(index())}
-												>
-													×
-												</button>
-											</span>
-										)}
-									</For>
-								</div>
-							</Show>
-							<Show when={showCommandMenu()}>
-								<div class="command-popover" role="listbox" id="command-listbox" aria-label="slash commands">
-									<For each={commandMatchesForComposer()}>
-										{(command, index) => (
-											<button
-												type="button"
-												id={`command-option-${index()}`}
-												role="option"
-												aria-selected={commandSelection() === index()}
-												class="command-option"
-												classList={{ selected: commandSelection() === index() }}
-												onMouseEnter={() => setCommandSelection(index())}
-												onClick={() => acceptCommand(command)}
-											>
-												<span class="command-name">/{command.name}</span>
-												<Show when={command.description}>
-													<span class="command-description">{command.description}</span>
-												</Show>
-												<span class="command-source">{command.source}</span>
-											</button>
-										)}
-									</For>
-								</div>
-							</Show>
-							<textarea
-								ref={composerRef}
-								placeholder={streaming() ? "Message dreb — sends as steer while it works…" : "Message dreb…"}
-								value={composerText()}
-								aria-controls={showCommandMenu() ? "command-listbox" : undefined}
-								aria-activedescendant={showCommandMenu() ? `command-option-${commandSelection()}` : undefined}
-								onPaste={(e) => {
-									const files = [...(e.clipboardData?.items ?? [])]
-										.filter((item) => item.type.startsWith("image/"))
-										.map((item) => item.getAsFile())
-										.filter((file): file is File => !!file);
-									if (files.length > 0) {
-										e.preventDefault();
-										void addImageFiles(files);
+											)}
+										</For>
+									</div>
+								</Show>
+								<textarea
+									ref={composerRef}
+									placeholder={streaming() ? "Message dreb — sends as steer while it works…" : "Message dreb…"}
+									value={composerText()}
+									aria-controls={showCommandMenu() ? "command-listbox" : undefined}
+									aria-activedescendant={
+										showCommandMenu() ? `command-option-${commandSelection()}` : undefined
 									}
-								}}
-								onInput={(e) => {
-									setCommandMenuClosed(false);
-									setCommandSelection(0);
-									setHistoryIndex(undefined);
-									setComposerText(e.currentTarget.value);
-									autoGrowTextarea(e.currentTarget);
-								}}
-								onKeyDown={(e) => {
-									if (showCommandMenu()) {
-										if (e.key === "ArrowDown") {
+									onPaste={(e) => {
+										const files = [...(e.clipboardData?.items ?? [])]
+											.filter((item) => item.type.startsWith("image/"))
+											.map((item) => item.getAsFile())
+											.filter((file): file is File => !!file);
+										if (files.length > 0) {
 											e.preventDefault();
-											setCommandSelection((commandSelection() + 1) % commandMatchesForComposer().length);
-											return;
+											void addImageFiles(files);
 										}
-										if (e.key === "ArrowUp") {
-											e.preventDefault();
-											setCommandSelection(
-												(commandSelection() - 1 + commandMatchesForComposer().length) %
-													commandMatchesForComposer().length,
-											);
-											return;
-										}
-										if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !isMobile())) {
-											e.preventDefault();
-											const command = commandMatchesForComposer()[commandSelection()];
-											if (command && e.key === "Enter" && composerText() === `/${command.name}`) {
-												setCommandMenuClosed(true);
-												void send();
-											} else if (command) {
-												acceptCommand(command);
+									}}
+									onInput={(e) => {
+										setCommandMenuClosed(false);
+										setCommandSelection(0);
+										setHistoryIndex(undefined);
+										setComposerText(e.currentTarget.value);
+										autoGrowTextarea(e.currentTarget);
+									}}
+									onKeyDown={(e) => {
+										if (showCommandMenu()) {
+											if (e.key === "ArrowDown") {
+												e.preventDefault();
+												setCommandSelection((commandSelection() + 1) % commandMatchesForComposer().length);
+												return;
 											}
-											return;
-										}
-										if (e.key === "Escape") {
-											e.preventDefault();
-											setCommandMenuClosed(true);
-											return;
-										}
-									}
-									if (
-										(e.key === "ArrowUp" || e.key === "ArrowDown") &&
-										(composerText() === "" || historyIndex() !== undefined)
-									) {
-										const history = getComposerHistory(props.sessionKey);
-										if (history.length > 0) {
-											e.preventDefault();
 											if (e.key === "ArrowUp") {
-												const next =
-													historyIndex() === undefined
-														? history.length - 1
-														: Math.max(0, historyIndex()! - 1);
-												setHistoryIndex(next);
-												setComposerText(history[next] ?? "");
-											} else if (historyIndex() !== undefined) {
-												const next = historyIndex()! + 1;
-												if (next >= history.length) {
-													setHistoryIndex(undefined);
-													setComposerText("");
-												} else {
+												e.preventDefault();
+												setCommandSelection(
+													(commandSelection() - 1 + commandMatchesForComposer().length) %
+														commandMatchesForComposer().length,
+												);
+												return;
+											}
+											if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !isMobile())) {
+												e.preventDefault();
+												const command = commandMatchesForComposer()[commandSelection()];
+												if (command && e.key === "Enter" && composerText() === `/${command.name}`) {
+													setCommandMenuClosed(true);
+													void send();
+												} else if (command) {
+													acceptCommand(command);
+												}
+												return;
+											}
+											if (e.key === "Escape") {
+												e.preventDefault();
+												setCommandMenuClosed(true);
+												return;
+											}
+										}
+										if (
+											(e.key === "ArrowUp" || e.key === "ArrowDown") &&
+											(composerText() === "" || historyIndex() !== undefined)
+										) {
+											const history = getComposerHistory(props.sessionKey);
+											if (history.length > 0) {
+												e.preventDefault();
+												if (e.key === "ArrowUp") {
+													const next =
+														historyIndex() === undefined
+															? history.length - 1
+															: Math.max(0, historyIndex()! - 1);
 													setHistoryIndex(next);
 													setComposerText(history[next] ?? "");
+												} else if (historyIndex() !== undefined) {
+													const next = historyIndex()! + 1;
+													if (next >= history.length) {
+														setHistoryIndex(undefined);
+														setComposerText("");
+													} else {
+														setHistoryIndex(next);
+														setComposerText(history[next] ?? "");
+													}
 												}
 											}
+											return;
 										}
-										return;
-									}
-									if (e.key === "Enter" && !e.shiftKey && !isMobile()) {
-										e.preventDefault();
-										send();
-									}
-								}}
-							/>
-							<div class="composer-row">
-								<input
-									ref={genericFileInputRef}
-									type="file"
-									multiple
-									class="hidden-file-input"
-									onChange={(e) => {
-										void addGenericFiles(e.currentTarget.files ?? []);
-										e.currentTarget.value = "";
+										if (e.key === "Enter" && !e.shiftKey && !isMobile()) {
+											e.preventDefault();
+											send();
+										}
 									}}
 								/>
-								<input
-									ref={imageFileInputRef}
-									type="file"
-									accept="image/*"
-									multiple
-									class="hidden-file-input"
-									onChange={(e) => {
-										void addImageFiles(e.currentTarget.files ?? []);
-										e.currentTarget.value = "";
-									}}
-								/>
-								<button
-									type="button"
-									class="btn btn-small"
-									title="attach file (uploads to workspace and sends path)"
-									onClick={() => genericFileInputRef?.click()}
-								>
-									📎 file
-								</button>
-								<button
-									type="button"
-									class="btn btn-small"
-									title="attach image inline"
-									onClick={() => imageFileInputRef?.click()}
-								>
-									🖼 photo
-								</button>
-								<Show when={streaming()}>
-									<span class="mode-toggle" role="radiogroup" aria-label="send mode">
-										<button
-											type="button"
-											classList={{ selected: sendMode() === "steer" }}
-											title="Deliver now — injected into the running turn"
-											onClick={() => setSendMode("steer")}
-										>
-											steer
-										</button>
-										<button
-											type="button"
-											classList={{ selected: sendMode() === "follow_up" }}
-											title="Queue — delivered after the agent finishes"
-											onClick={() => setSendMode("follow_up")}
-										>
-											follow-up
-										</button>
-									</span>
-								</Show>
-								<Show when={session()?.suggestedCommand}>
+								<div class="composer-row">
+									<input
+										ref={genericFileInputRef}
+										type="file"
+										multiple
+										class="hidden-file-input"
+										onChange={(e) => {
+											void addGenericFiles(e.currentTarget.files ?? []);
+											e.currentTarget.value = "";
+										}}
+									/>
+									<input
+										ref={imageFileInputRef}
+										type="file"
+										accept="image/*"
+										multiple
+										class="hidden-file-input"
+										onChange={(e) => {
+											void addImageFiles(e.currentTarget.files ?? []);
+											e.currentTarget.value = "";
+										}}
+									/>
 									<button
 										type="button"
-										class="ghost-suggest"
-										onClick={() => setComposerText(session()!.suggestedCommand!)}
+										class="btn btn-small"
+										title="attach file (uploads to workspace and sends path)"
+										onClick={() => genericFileInputRef?.click()}
 									>
-										suggested: <code>{session()!.suggestedCommand}</code> <span class="key">tap</span>
+										📎 file
 									</button>
-								</Show>
-								<button type="button" class="btn btn-primary btn-small send" onClick={send}>
-									send ↵
-								</button>
+									<button
+										type="button"
+										class="btn btn-small"
+										title="attach image inline"
+										onClick={() => imageFileInputRef?.click()}
+									>
+										🖼 photo
+									</button>
+									<Show when={streaming()}>
+										<span class="mode-toggle" role="radiogroup" aria-label="send mode">
+											<button
+												type="button"
+												classList={{ selected: sendMode() === "steer" }}
+												title="Deliver now — injected into the running turn"
+												onClick={() => setSendMode("steer")}
+											>
+												steer
+											</button>
+											<button
+												type="button"
+												classList={{ selected: sendMode() === "follow_up" }}
+												title="Queue — delivered after the agent finishes"
+												onClick={() => setSendMode("follow_up")}
+											>
+												follow-up
+											</button>
+										</span>
+									</Show>
+									<Show when={session()?.suggestedCommand}>
+										<button
+											type="button"
+											class="ghost-suggest"
+											onClick={() => setComposerText(session()!.suggestedCommand!)}
+										>
+											suggested: <code>{session()!.suggestedCommand}</code> <span class="key">tap</span>
+										</button>
+									</Show>
+									<button type="button" class="btn btn-primary btn-small send" onClick={send}>
+										send ↵
+									</button>
+								</div>
 							</div>
-						</div>
+						</Show>
 					</div>
 				</Show>
 			</footer>

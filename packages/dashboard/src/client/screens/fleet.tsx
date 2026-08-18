@@ -175,7 +175,6 @@ function NewSessionModal(props: {
 			props.store.upsertRuntime(runtime);
 			await props.store.refreshDiskSessions();
 			props.onClose();
-			props.store.navigate({ screen: "session", key: runtime.key });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
 		} finally {

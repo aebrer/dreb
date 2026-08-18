@@ -22,6 +22,7 @@ import {
 	applySessionEvent,
 	capBackgroundAgents,
 	createSessionViewState,
+	createStatusLineEntry,
 	deriveProviderErrorState,
 	dismissToast as dismissReducerToast,
 	extensionUiRequestFromEvent,
@@ -60,6 +61,10 @@ function parseHash(): Route {
 	}
 	if (head === "pairing") return { screen: "pairing" };
 	return { screen: "fleet" };
+}
+
+function routeSessionKey(route: Route): string | undefined {
+	return route.screen === "session" || route.screen === "subagent" ? route.key : undefined;
 }
 
 export function routeToHash(route: Route): string {
@@ -127,11 +132,13 @@ function restoreSnapshotOutcomeState(session: SessionViewState, messages: any[],
 			(entry) => entry.kind === "assistant" && entry.stopReason === "error",
 		);
 		const errorSuffix = failedAttempt?.errorMessage ? ` — ${failedAttempt.errorMessage}` : "";
-		session.statusEntries.push({
-			key: "retry",
-			text: `retrying (attempt ${retryAttempt})${errorSuffix}`,
-			tone: "warning",
-		});
+		session.statusEntries.push(
+			createStatusLineEntry({
+				key: "retry",
+				text: `retrying (attempt ${retryAttempt})${errorSuffix}`,
+				tone: "warning",
+			}),
+		);
 	}
 	deriveProviderErrorState(
 		session,
@@ -191,9 +198,22 @@ export function createAppStore() {
 	const removedRuntimeKeys = new Set<string>();
 	let stopped = false;
 
-	window.addEventListener("hashchange", () => setRouteSignal(parseHash()));
+	function releaseClosedRoute(previous: Route, next: Route): void {
+		const previousKey = routeSessionKey(previous);
+		if (!previousKey || previousKey === routeSessionKey(next) || !sessions[previousKey]?.closed) return;
+		deleteSessionState(previousKey);
+	}
+
+	function syncRouteFromHash(): void {
+		const next = parseHash();
+		releaseClosedRoute(route(), next);
+		setRouteSignal(next);
+	}
+
+	window.addEventListener("hashchange", syncRouteFromHash);
 
 	function navigate(next: Route): void {
+		releaseClosedRoute(route(), next);
 		window.location.hash = routeToHash(next);
 	}
 
@@ -266,8 +286,7 @@ export function createAppStore() {
 	}
 
 	function routedSessionKey(): string | undefined {
-		const current = parseHash();
-		return current.screen === "session" || current.screen === "subagent" ? current.key : undefined;
+		return routeSessionKey(parseHash());
 	}
 
 	function pushNotice(text: string, tone: Toast["tone"] = "info"): void {
@@ -454,8 +473,37 @@ export function createAppStore() {
 		if (membershipChanged) void refreshDiskSessions().catch(() => {});
 	}
 
-	/** Apply the same narrow local transition for SSE and directly confirmed stops. */
-	function removeRuntime(key: string): Promise<void> {
+	function retainClosedSession(key: string, runtime?: RuntimeInfoDto): void {
+		clearHydrationTransaction(key);
+		bumpHydrationGeneration(key);
+		mutateSession(key, (session) => {
+			const previous = session.closed;
+			session.closed = {
+				...(runtime?.cwd || previous?.cwd ? { cwd: previous?.cwd ?? runtime?.cwd } : {}),
+				...(runtime?.state.sessionFile || previous?.sessionFile
+					? { sessionFile: previous?.sessionFile ?? runtime?.state.sessionFile }
+					: {}),
+				...(previous?.bannerDismissed ? { bannerDismissed: true } : {}),
+				...(previous?.resuming ? { resuming: true } : {}),
+				...(previous?.resumeError ? { resumeError: previous.resumeError } : {}),
+			};
+			session.streaming = false;
+			session.compacting = false;
+			session.workingSince = undefined;
+			session.workingText = undefined;
+			session.statusEntries = session.statusEntries.filter(
+				(entry) => entry.key !== "retry" && entry.key !== "paused" && entry.key !== "compaction",
+			);
+			session.suggestedCommand = undefined;
+			session.uiRequests = [];
+			for (const subagent of Object.values(session.subagents)) subagent.streaming = false;
+			updateAttention(session);
+		});
+	}
+
+	/** Apply the same idempotent local transition for SSE and directly confirmed stops. */
+	function removeRuntime(key: string, capturedRuntime?: RuntimeInfoDto, refreshInventory = true): Promise<void> {
+		const runtime = capturedRuntime ?? fleet().runtimes.find((candidate) => candidate.key === key);
 		const alreadyRemoved = removedRuntimeKeys.has(key);
 		removedRuntimeKeys.add(key);
 		if (!alreadyRemoved) {
@@ -463,15 +511,81 @@ export function createAppStore() {
 			// still be unable to resurrect a just-removed runtime.
 			mutateFleet((current) => ({
 				...current,
-				runtimes: current.runtimes.filter((runtime) => runtime.key !== key),
+				runtimes: current.runtimes.filter((candidate) => candidate.key !== key),
 			}));
-			deleteSessionState(key);
-			return refreshDiskSessions();
 		}
+
+		if (routedSessionKey() === key) retainClosedSession(key, runtime);
+		else deleteSessionState(key);
+
 		// A directly confirmed stop may be followed by its SSE echo. Keep the
 		// transition idempotent so that echo does not trigger a duplicate scan.
-		deleteSessionState(key);
-		return Promise.resolve();
+		return alreadyRemoved || !refreshInventory ? Promise.resolve() : refreshDiskSessions();
+	}
+
+	async function stopRuntime(key: string): Promise<void> {
+		const capturedRuntime = fleet().runtimes.find((runtime) => runtime.key === key);
+		try {
+			await api.stopRuntime(key);
+		} catch (error) {
+			// The SSE removal may win the race with the DELETE response. In that case
+			// the close succeeded and the late transport error must not replace it.
+			if (removedRuntimeKeys.has(key)) return;
+			throw error;
+		}
+		await removeRuntime(key, capturedRuntime);
+	}
+
+	function dismissStatusBanner(key: string, id: number): void {
+		if (!sessions[key]?.statusEntries.some((entry) => entry.id === id)) return;
+		mutateSession(key, (session) => {
+			const entry = session.statusEntries.find((candidate) => candidate.id === id);
+			if (entry) entry.dismissed = true;
+		});
+	}
+
+	function dismissClosedBanner(key: string): void {
+		if (!sessions[key]?.closed) return;
+		mutateSession(key, (session) => {
+			if (session.closed) session.closed.bannerDismissed = true;
+		});
+	}
+
+	async function resumeClosedSession(key: string): Promise<void> {
+		const closed = sessions[key]?.closed;
+		if (!closed || closed.resuming) return;
+		if (!closed.cwd || !closed.sessionFile) {
+			mutateSession(key, (session) => {
+				if (session.closed) session.closed.resumeError = "This closed session has no captured resume path.";
+			});
+			return;
+		}
+		const cwd = closed.cwd;
+		const sessionFile = closed.sessionFile;
+		mutateSession(key, (session) => {
+			if (!session.closed) return;
+			session.closed.resuming = true;
+			session.closed.resumeError = undefined;
+		});
+		let runtime: RuntimeInfoDto;
+		try {
+			runtime = await api.createRuntime(cwd, { sessionPath: sessionFile });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (!sessions[key]?.closed) return;
+			mutateSession(key, (session) => {
+				if (!session.closed) return;
+				session.closed.resuming = false;
+				session.closed.resumeError = message;
+				session.closed.bannerDismissed = false;
+			});
+			return;
+		}
+		upsertRuntime(runtime);
+		// The runtime is authoritative. Do not hold navigation behind the secondary
+		// disk inventory scan; that failure is independently exposed as fleetError.
+		void refreshDiskSessions().catch(() => {});
+		navigate({ screen: "session", key: runtime.key });
 	}
 
 	function refreshFleet(): Promise<void> {
@@ -714,14 +828,7 @@ export function createAppStore() {
 			// back the expensive full fleet endpoint.
 			void refreshDiskSessions().catch(() => {});
 		} else if (type === "runtime_removed") {
-			if (envelope.key) {
-				const wasViewingRemovedRuntime = routedSessionKey() === envelope.key;
-				void removeRuntime(envelope.key).catch(() => {});
-				if (wasViewingRemovedRuntime) {
-					pushNotice(`session ${envelope.key} was stopped`, "warning");
-					navigate({ screen: "fleet" });
-				}
-			}
+			if (envelope.key) void removeRuntime(envelope.key).catch(() => {});
 		} else if (envelope.key) {
 			mutateSession(envelope.key, (session) => applySessionEvent(session, envelope.event));
 			if (type === "tasks_update") bumpTaskRevision(envelope.key);
@@ -732,6 +839,7 @@ export function createAppStore() {
 		const subagent = active.subagent;
 		mutateSession(active.key, (session) => {
 			const messages = active.messages as any[];
+			session.closed = undefined;
 			session.entries = messagesToEntries(messages);
 			session.tasks = (active.state.tasks ?? []).map((task) => ({ ...task }));
 			session.streaming = active.state.isStreaming;
@@ -789,17 +897,18 @@ export function createAppStore() {
 		restoreConnectionAfterResyncRetry();
 		const barrierSeq = pending.barrierSeq;
 		authoritativeBarrierSeq = barrierSeq;
+		const activeRouteKey = routedSessionKey();
+		const previousRuntime = activeRouteKey
+			? fleet().runtimes.find((runtime) => runtime.key === activeRouteKey)
+			: undefined;
 		replaceFleet(snapshot.fleet);
 		setFleetError(undefined);
 		if (snapshot.active) {
 			hydrateSnapshot(snapshot.active);
-		} else {
-			const activeRouteKey = routedSessionKey();
-			if (activeRouteKey) {
-				deleteSessionState(activeRouteKey);
-				pushNotice(`session ${activeRouteKey} was stopped`, "warning");
-				navigate({ screen: "fleet" });
-			}
+		} else if (activeRouteKey) {
+			// The authoritative resync Fleet already includes disk inventory and
+			// replaceFleet schedules any membership refresh it needs.
+			void removeRuntime(activeRouteKey, previousRuntime, false).catch(() => {});
 		}
 		// /api/resync's barrierSeq is the parent snapshot ordering point. The
 		// subagent disk transcript is captured earlier, so relay its matching child
@@ -1032,6 +1141,7 @@ export function createAppStore() {
 			}
 			mutateSession(key, (session) => {
 				const messages = snapshot.messages as any[];
+				session.closed = undefined;
 				session.entries = messagesToEntries(messages);
 				session.backgroundAgents = Object.fromEntries(
 					snapshot.backgroundAgents.map((agent) => [agent.agentId, agent]),
@@ -1108,6 +1218,10 @@ export function createAppStore() {
 		refreshDiskSessions,
 		refreshFleetStats,
 		removeRuntime,
+		stopRuntime,
+		resumeClosedSession,
+		dismissClosedBanner,
+		dismissStatusBanner,
 		upsertRuntime,
 		setRuntimeModel,
 		setRuntimeThinkingLevel,
