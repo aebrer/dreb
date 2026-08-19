@@ -124,9 +124,14 @@ interface PendingHydration {
 	queuedBytes: number;
 }
 
+interface PendingRuntimeSetting<T> {
+	value: T;
+	settingsRevision: number;
+}
+
 interface PendingRuntimeSettings {
-	model?: NonNullable<SessionStateDto["model"]>;
-	thinkingLevel?: string;
+	model?: PendingRuntimeSetting<NonNullable<SessionStateDto["model"]>>;
+	thinkingLevel?: PendingRuntimeSetting<string>;
 }
 
 function restoreSnapshotOutcomeState(session: SessionViewState, messages: any[], snapshotState: SessionStateDto): void {
@@ -445,10 +450,6 @@ export function createAppStore() {
 		mutateFleet(() => next);
 	}
 
-	function runtimeModelsMatch(left: SessionStateDto["model"], right: SessionStateDto["model"]): boolean {
-		return left?.provider === right?.provider && left?.id === right?.id;
-	}
-
 	function reconcilePendingRuntimeSettings(
 		runtime: FleetRuntimeSnapshotDto,
 		previous: RuntimeInfoDto | undefined,
@@ -456,13 +457,14 @@ export function createAppStore() {
 		const pending = pendingRuntimeSettings.get(runtime.key);
 		if (!pending) return runtime.state;
 		const state = { ...runtime.state };
+		const settingsRevision = runtime.settingsRevision ?? 0;
 		if (pending.model) {
-			if (runtimeModelsMatch(runtime.state.model, pending.model)) delete pending.model;
-			else state.model = previous?.state.model ?? pending.model;
+			if (settingsRevision >= pending.model.settingsRevision) delete pending.model;
+			else state.model = previous?.state.model ?? pending.model.value;
 		}
-		if (pending.thinkingLevel !== undefined) {
-			if (runtime.state.thinkingLevel === pending.thinkingLevel) delete pending.thinkingLevel;
-			else state.thinkingLevel = previous?.state.thinkingLevel ?? pending.thinkingLevel;
+		if (pending.thinkingLevel) {
+			if (settingsRevision >= pending.thinkingLevel.settingsRevision) delete pending.thinkingLevel;
+			else state.thinkingLevel = previous?.state.thinkingLevel ?? pending.thinkingLevel.value;
 		}
 		if (pending.model === undefined && pending.thinkingLevel === undefined)
 			pendingRuntimeSettings.delete(runtime.key);
@@ -708,34 +710,36 @@ export function createAppStore() {
 		}));
 	}
 
-	/** Patch the card from a confirmed response until the matching SSE snapshot arrives. */
-	function setRuntimeModel(key: string, model: { provider: string; id: string }): void {
-		const currentModel = fleet().runtimes.find((runtime) => runtime.key === key)?.state.model;
+	/** Patch the card until a snapshot reaches this confirmed mutation's revision. */
+	function setRuntimeModel(key: string, model: { provider: string; id: string }, settingsRevision: number): void {
+		const runtime = fleet().runtimes.find((candidate) => candidate.key === key);
 		const pending = pendingRuntimeSettings.get(key) ?? {};
-		if (runtimeModelsMatch(currentModel, model)) delete pending.model;
-		else pending.model = model;
+		if ((runtime?.settingsRevision ?? 0) >= settingsRevision) delete pending.model;
+		else pending.model = { value: model, settingsRevision };
 		if (pending.model === undefined && pending.thinkingLevel === undefined) pendingRuntimeSettings.delete(key);
 		else pendingRuntimeSettings.set(key, pending);
+		if ((runtime?.settingsRevision ?? 0) >= settingsRevision) return;
 		mutateFleet((current) => ({
 			...current,
-			runtimes: current.runtimes.map((runtime) =>
-				runtime.key === key ? { ...runtime, state: { ...runtime.state, model } } : runtime,
+			runtimes: current.runtimes.map((candidate) =>
+				candidate.key === key ? { ...candidate, state: { ...candidate.state, model } } : candidate,
 			),
 		}));
 	}
 
-	/** Patch thinking state from a confirmed response until its SSE snapshot arrives. */
-	function setRuntimeThinkingLevel(key: string, thinkingLevel: string): void {
-		const currentLevel = fleet().runtimes.find((runtime) => runtime.key === key)?.state.thinkingLevel;
+	/** Patch thinking state until a snapshot reaches this confirmed mutation's revision. */
+	function setRuntimeThinkingLevel(key: string, thinkingLevel: string, settingsRevision: number): void {
+		const runtime = fleet().runtimes.find((candidate) => candidate.key === key);
 		const pending = pendingRuntimeSettings.get(key) ?? {};
-		if (currentLevel === thinkingLevel) delete pending.thinkingLevel;
-		else pending.thinkingLevel = thinkingLevel;
+		if ((runtime?.settingsRevision ?? 0) >= settingsRevision) delete pending.thinkingLevel;
+		else pending.thinkingLevel = { value: thinkingLevel, settingsRevision };
 		if (pending.model === undefined && pending.thinkingLevel === undefined) pendingRuntimeSettings.delete(key);
 		else pendingRuntimeSettings.set(key, pending);
+		if ((runtime?.settingsRevision ?? 0) >= settingsRevision) return;
 		mutateFleet((current) => ({
 			...current,
-			runtimes: current.runtimes.map((runtime) =>
-				runtime.key === key ? { ...runtime, state: { ...runtime.state, thinkingLevel } } : runtime,
+			runtimes: current.runtimes.map((candidate) =>
+				candidate.key === key ? { ...candidate, state: { ...candidate.state, thinkingLevel } } : candidate,
 			),
 		}));
 	}

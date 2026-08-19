@@ -614,7 +614,7 @@ function ModelSelectorModal(props: {
 	state?: SessionStateDto;
 	initialFilter?: string;
 	onClose: () => void;
-	onSelected: (model: { provider: string; id: string }) => void;
+	onSelected: (model: { provider: string; id: string; settingsRevision: number }) => void;
 }): JSX.Element {
 	const [models, setModels] = createSignal<ModelInfoDto[]>([]);
 	const [filter, setFilter] = createSignal(props.initialFilter ?? "");
@@ -1836,8 +1836,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 									const next =
 										THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
 									try {
-										await api.setThinking(props.sessionKey, next);
-										props.store.setRuntimeThinkingLevel(props.sessionKey, next);
+										const result = await api.setThinking(props.sessionKey, next);
+										props.store.setRuntimeThinkingLevel(props.sessionKey, next, result.settingsRevision);
 									} catch (err) {
 										setActionError(err instanceof Error ? err.message : String(err));
 									}
@@ -1945,8 +1945,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 										const next =
 											THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
 										try {
-											await api.setThinking(props.sessionKey, next);
-											props.store.setRuntimeThinkingLevel(props.sessionKey, next);
+											const result = await api.setThinking(props.sessionKey, next);
+											props.store.setRuntimeThinkingLevel(props.sessionKey, next, result.settingsRevision);
 										} catch (err) {
 											setActionError(err instanceof Error ? err.message : String(err));
 										}
@@ -2408,7 +2408,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						setShowModelSelector(false);
 						setModelFilter("");
 					}}
-					onSelected={(model) => props.store.setRuntimeModel(props.sessionKey, model)}
+					onSelected={({ provider, id, settingsRevision }) =>
+						props.store.setRuntimeModel(props.sessionKey, { provider, id }, settingsRevision)
+					}
 				/>
 			</Show>
 

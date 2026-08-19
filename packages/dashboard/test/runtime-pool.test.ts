@@ -249,16 +249,23 @@ describe("RuntimePool", () => {
 			await expect(pool.setModel(handle, "test", "new-model")).resolves.toEqual({
 				provider: "test",
 				id: "new-model",
+				settingsRevision: 1,
 			});
-			await expect(pool.setThinkingLevel(handle, "high")).resolves.toBeUndefined();
+			await expect(pool.setThinkingLevel(handle, "high")).resolves.toEqual({
+				ok: true,
+				settingsRevision: 2,
+			});
 			await vi.runAllTimersAsync();
 
 			expect(clients[0].setModel).toHaveBeenCalledWith("test", "new-model");
 			expect(clients[0].setThinkingLevel).toHaveBeenCalledWith("high");
 			expect(snapshots).toHaveBeenCalledOnce();
-			expect(snapshots.mock.calls[0]?.[0].runtimes[0].state).toMatchObject({
-				model: { provider: "test", id: "new-model" },
-				thinkingLevel: "high",
+			expect(snapshots.mock.calls[0]?.[0].runtimes[0]).toMatchObject({
+				settingsRevision: 2,
+				state: {
+					model: { provider: "test", id: "new-model" },
+					thinkingLevel: "high",
+				},
 			});
 
 			vi.mocked(clients[0].setModel).mockRejectedValueOnce(new Error("model failed"));

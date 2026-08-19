@@ -2077,9 +2077,10 @@ describe("app store hydration", () => {
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("mixed-freshness");
-		store.setRuntimeModel("mixed-freshness", { provider: "test", id: "new-model" });
+		store.setRuntimeModel("mixed-freshness", { provider: "test", id: "new-model" }, 1);
 		const preBarrierSnapshot = runtimeSnapshot("mixed-freshness", true);
 		preBarrierSnapshot.state.model = { provider: "test", id: "new-model" };
+		preBarrierSnapshot.settingsRevision = 1;
 		preBarrierSnapshot.state.messageCount = 6;
 		emit("", { type: "fleet_snapshot", runtimes: [preBarrierSnapshot] });
 
@@ -2415,8 +2416,8 @@ describe("fleet snapshot and inventory store foundation", () => {
 
 		const refresh = store.refreshFleet();
 		store.upsertRuntime(fleetSnapshot("created"));
-		store.setRuntimeModel("created", { provider: "test", id: "new-model" });
-		store.setRuntimeThinkingLevel("created", "high");
+		store.setRuntimeModel("created", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeThinkingLevel("created", "high", 2);
 		delayed.resolve({ runtimes: [fleetSnapshot("stale")], diskSessions: [] });
 		await refresh;
 
@@ -2433,8 +2434,8 @@ describe("fleet snapshot and inventory store foundation", () => {
 		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
 		const store = await makeStartedStore();
 
-		store.setRuntimeModel("live", { provider: "test", id: "new-model" });
-		store.setRuntimeThinkingLevel("live", "high");
+		store.setRuntimeModel("live", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeThinkingLevel("live", "high", 2);
 		const stale = fleetSnapshot("live");
 		stale.state.model = { provider: "test", id: "old-model" };
 		emit("", { type: "fleet_snapshot", runtimes: [stale] });
@@ -2446,14 +2447,44 @@ describe("fleet snapshot and inventory store foundation", () => {
 		const matching = fleetSnapshot("live");
 		matching.state.model = { provider: "test", id: "new-model" };
 		matching.state.thinkingLevel = "high";
+		matching.settingsRevision = 2;
 		emit("", { type: "fleet_snapshot", runtimes: [matching] });
 
 		const later = fleetSnapshot("live");
 		later.state.model = { provider: "test", id: "later-model" };
 		later.state.thinkingLevel = "low";
+		later.settingsRevision = 3;
 		emit("", { type: "fleet_snapshot", runtimes: [later] });
 		expect(store.fleet().runtimes[0]?.state).toMatchObject({
 			model: { provider: "test", id: "later-model" },
+			thinkingLevel: "low",
+		});
+	});
+
+	it("accepts a newer settings revision when the matching snapshot was coalesced away", async () => {
+		const initial = fleetSnapshot("live");
+		initial.state.model = { provider: "test", id: "old-model" };
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const store = await makeStartedStore();
+
+		store.setRuntimeModel("live", { provider: "test", id: "confirmed-model" }, 1);
+		store.setRuntimeThinkingLevel("live", "high", 2);
+		const stale = fleetSnapshot("live");
+		stale.state.model = { provider: "test", id: "old-model" };
+		emit("", { type: "fleet_snapshot", runtimes: [stale] });
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "confirmed-model" },
+			thinkingLevel: "high",
+		});
+
+		const newer = fleetSnapshot("live");
+		newer.state.model = { provider: "test", id: "other-client-model" };
+		newer.state.thinkingLevel = "low";
+		newer.settingsRevision = 3;
+		emit("", { type: "fleet_snapshot", runtimes: [newer] });
+
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "other-client-model" },
 			thinkingLevel: "low",
 		});
 	});
@@ -2462,14 +2493,16 @@ describe("fleet snapshot and inventory store foundation", () => {
 		const initial = fleetSnapshot("live");
 		initial.state.model = { provider: "test", id: "new-model" };
 		initial.state.thinkingLevel = "high";
+		initial.settingsRevision = 2;
 		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
 		const store = await makeStartedStore();
 
-		store.setRuntimeModel("live", { provider: "test", id: "new-model" });
-		store.setRuntimeThinkingLevel("live", "high");
+		store.setRuntimeModel("live", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeThinkingLevel("live", "high", 2);
 		const later = fleetSnapshot("live");
 		later.state.model = { provider: "test", id: "later-model" };
 		later.state.thinkingLevel = "low";
+		later.settingsRevision = 3;
 		emit("", { type: "fleet_snapshot", runtimes: [later] });
 
 		expect(store.fleet().runtimes[0]?.state).toMatchObject({

@@ -1010,7 +1010,11 @@ describe("dashboard server — fleet and runtimes", () => {
 			body: JSON.stringify({ provider: "test", modelId: "new-model" }),
 		});
 		expect(model.status).toBe(200);
-		await expect(model.json()).resolves.toEqual({ provider: "test", id: "new-model" });
+		await expect(model.json()).resolves.toEqual({
+			provider: "test",
+			id: "new-model",
+			settingsRevision: 1,
+		});
 
 		const thinking = await fetch(`${base}/api/runtimes/${runtime.key}/thinking`, {
 			method: "POST",
@@ -1018,7 +1022,7 @@ describe("dashboard server — fleet and runtimes", () => {
 			body: JSON.stringify({ level: "high" }),
 		});
 		expect(thinking.status).toBe(200);
-		await expect(thinking.json()).resolves.toEqual({ ok: true });
+		await expect(thinking.json()).resolves.toEqual({ ok: true, settingsRevision: 2 });
 		expect(clients[0].setModel).toHaveBeenCalledWith("test", "new-model");
 		expect(clients[0].setThinkingLevel).toHaveBeenCalledWith("high");
 		expect(pool.fleetSnapshot()[0]?.state).toMatchObject({
