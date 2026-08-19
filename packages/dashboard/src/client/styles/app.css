@@ -44,9 +44,20 @@ body,
 	min-width: 0;
 }
 
+/* Anchor full-viewport sizing to the initial containing block (percentage
+   chain from html) instead of viewport units. In installed Android PWAs
+   (display: standalone/fullscreen), Chromium can pin vh/dvh resolution to a
+   transitional launch viewport and never re-resolve it (no resize event
+   fires), leaving every vh/dvh-sized element ~system-chrome-height too tall
+   and the document scrollable (chromium issue 453570183). Percentage heights
+   resolve against the ICB, which is correct in that state. */
+html,
+body {
+	height: 100%;
+}
+
 #root {
-	min-height: 100vh;
-	min-height: 100dvh;
+	height: 100%;
 	display: flex;
 	flex-direction: column;
 }
@@ -278,8 +289,11 @@ body,
 	width: 100%;
 	max-width: 100%;
 	min-width: 0;
-	height: 100vh;
-	height: 100dvh;
+	/* Percentage of #root's definite height — see the html/body height note
+	   in the app shell section. Do not reintroduce vh/dvh here: stale
+	   viewport-unit resolution in installed Android PWAs reopens the
+	   document-scroll bug this screen's overflow: hidden cannot contain. */
+	height: 100%;
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
@@ -2227,7 +2241,7 @@ details.thinking .thinking-body {
 /* ---------------------------------------------------------------- pairing */
 
 .pair-wrap {
-	min-height: 100vh;
+	min-height: 100%;
 	display: flex;
 	align-items: center;
 	justify-content: center;
