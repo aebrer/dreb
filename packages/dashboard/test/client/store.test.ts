@@ -2077,9 +2077,10 @@ describe("app store hydration", () => {
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("mixed-freshness");
-		store.setRuntimeModel("mixed-freshness", { provider: "test", id: "new-model" });
+		store.setRuntimeModel("mixed-freshness", { provider: "test", id: "new-model" }, 1);
 		const preBarrierSnapshot = runtimeSnapshot("mixed-freshness", true);
 		preBarrierSnapshot.state.model = { provider: "test", id: "new-model" };
+		preBarrierSnapshot.settingsRevision = 1;
 		preBarrierSnapshot.state.messageCount = 6;
 		emit("", { type: "fleet_snapshot", runtimes: [preBarrierSnapshot] });
 
@@ -2187,6 +2188,20 @@ describe("fleet snapshot and inventory store foundation", () => {
 			contextUsage: { tokens: tokensTotal, contextWindow: 100_000, percent: 10 },
 		};
 	}
+
+	it("does not invalidate the initial fleet when a routed-session stats request finishes first", async () => {
+		const initialFleet = deferred<{ runtimes: RuntimeInfoDto[]; diskSessions: [] }>();
+		vi.mocked(api.fleet).mockReturnValueOnce(initialFleet.promise);
+		const store = createAppStore();
+		const start = store.start();
+		await vi.waitFor(() => expect(api.fleet).toHaveBeenCalledOnce());
+
+		await store.refreshRuntimeStats("live");
+		initialFleet.resolve({ runtimes: [fleetSnapshot("live")], diskSessions: [] });
+		await start;
+
+		expect(store.fleet().runtimes.map((runtime) => runtime.key)).toEqual(["live"]);
+	});
 
 	it("does not fetch the full fleet for lifecycle events", async () => {
 		const store = await makeStartedStore();
@@ -2401,15 +2416,98 @@ describe("fleet snapshot and inventory store foundation", () => {
 
 		const refresh = store.refreshFleet();
 		store.upsertRuntime(fleetSnapshot("created"));
-		store.setRuntimeModel("created", { provider: "test", id: "new-model" });
-		store.setRuntimeThinkingLevel("created", "high");
+		store.setRuntimeModel("created", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeThinkingLevel("created", "high", 2);
 		delayed.resolve({ runtimes: [fleetSnapshot("stale")], diskSessions: [] });
 		await refresh;
 
 		expect(store.fleet().runtimes).toHaveLength(1);
 		expect(store.fleet().runtimes[0]).toMatchObject({
 			key: "created",
-			state: { model: { provider: "test", id: "new-model" } },
+			state: { model: { provider: "test", id: "new-model" }, thinkingLevel: "high" },
+		});
+	});
+
+	it("keeps confirmed settings through stale snapshots, then resumes authoritative updates", async () => {
+		const initial = fleetSnapshot("live");
+		initial.state.model = { provider: "test", id: "old-model" };
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const store = await makeStartedStore();
+
+		store.setRuntimeModel("live", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeThinkingLevel("live", "high", 2);
+		const stale = fleetSnapshot("live");
+		stale.state.model = { provider: "test", id: "old-model" };
+		emit("", { type: "fleet_snapshot", runtimes: [stale] });
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "high",
+		});
+
+		const matching = fleetSnapshot("live");
+		matching.state.model = { provider: "test", id: "new-model" };
+		matching.state.thinkingLevel = "high";
+		matching.settingsRevision = 2;
+		emit("", { type: "fleet_snapshot", runtimes: [matching] });
+
+		const later = fleetSnapshot("live");
+		later.state.model = { provider: "test", id: "later-model" };
+		later.state.thinkingLevel = "low";
+		later.settingsRevision = 3;
+		emit("", { type: "fleet_snapshot", runtimes: [later] });
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "later-model" },
+			thinkingLevel: "low",
+		});
+	});
+
+	it("accepts a newer settings revision when the matching snapshot was coalesced away", async () => {
+		const initial = fleetSnapshot("live");
+		initial.state.model = { provider: "test", id: "old-model" };
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const store = await makeStartedStore();
+
+		store.setRuntimeModel("live", { provider: "test", id: "confirmed-model" }, 1);
+		store.setRuntimeThinkingLevel("live", "high", 2);
+		const stale = fleetSnapshot("live");
+		stale.state.model = { provider: "test", id: "old-model" };
+		emit("", { type: "fleet_snapshot", runtimes: [stale] });
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "confirmed-model" },
+			thinkingLevel: "high",
+		});
+
+		const newer = fleetSnapshot("live");
+		newer.state.model = { provider: "test", id: "other-client-model" };
+		newer.state.thinkingLevel = "low";
+		newer.settingsRevision = 3;
+		emit("", { type: "fleet_snapshot", runtimes: [newer] });
+
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "other-client-model" },
+			thinkingLevel: "low",
+		});
+	});
+
+	it("does not leave a pending setting when its matching snapshot won the HTTP race", async () => {
+		const initial = fleetSnapshot("live");
+		initial.state.model = { provider: "test", id: "new-model" };
+		initial.state.thinkingLevel = "high";
+		initial.settingsRevision = 2;
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const store = await makeStartedStore();
+
+		store.setRuntimeModel("live", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeThinkingLevel("live", "high", 2);
+		const later = fleetSnapshot("live");
+		later.state.model = { provider: "test", id: "later-model" };
+		later.state.thinkingLevel = "low";
+		later.settingsRevision = 3;
+		emit("", { type: "fleet_snapshot", runtimes: [later] });
+
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "later-model" },
+			thinkingLevel: "low",
 		});
 	});
 
@@ -2449,6 +2547,43 @@ describe("fleet snapshot and inventory store foundation", () => {
 		});
 		expect(store.fleet().runtimes[1]).not.toHaveProperty("stats");
 		expect(store.fleetStatsError()).toContain("b stats unavailable");
+	});
+
+	it("updates one live runtime from mounted-session stats and ignores an older overlapping response", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("live", 4)], diskSessions: [] });
+		const first = deferred<ReturnType<typeof stats>>();
+		const second = deferred<ReturnType<typeof stats>>();
+		vi.mocked(api.stats).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const store = await makeStartedStore();
+
+		const firstRefresh = store.refreshRuntimeStats("live");
+		const secondRefresh = store.refreshRuntimeStats("live");
+		second.resolve(stats(6, 60, 0.6));
+		await secondRefresh;
+		first.resolve(stats(5, 50, 0.5));
+		await firstRefresh;
+
+		expect(store.fleet().runtimes[0]).toMatchObject({
+			stats: { tokensTotal: 60, cost: 0.6 },
+			state: { messageCount: 6, contextUsage: { tokens: 60 } },
+		});
+	});
+
+	it("preserves newer live message state while applying mounted-session context stats", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("live", 4)], diskSessions: [] });
+		const delayed = deferred<ReturnType<typeof stats>>();
+		vi.mocked(api.stats).mockReturnValueOnce(delayed.promise);
+		const store = await makeStartedStore();
+		const refresh = store.refreshRuntimeStats("live");
+
+		emit("", { type: "fleet_snapshot", runtimes: [fleetSnapshot("live", 9)] });
+		delayed.resolve(stats(5, 50, 0.5));
+		await refresh;
+
+		expect(store.fleet().runtimes[0]).toMatchObject({
+			stats: { tokensTotal: 50, cost: 0.5 },
+			state: { messageCount: 9, contextUsage: { tokens: 50 } },
+		});
 	});
 
 	it("times out a stalled stats request, preserves last-good values, and allows the next poll", async () => {

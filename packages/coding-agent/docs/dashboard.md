@@ -265,14 +265,21 @@ card's last good stats if an update fails, and surfaces failures in the Fleet UI
 For the activity preview, a card prefers the newest assistant text derived from
 its hydrated client transcript entries. Until those entries exist, the
 authoritative initial-load or resync fleet preview is the fallback. `ctx%` is
-never a browser estimate: it comes from authoritative session state or stats.
+never estimated in the browser: it comes from authoritative session state or
+stats. Immediately after compaction, the session reports a conservative estimate
+over its rebuilt message context until fresh provider usage becomes available.
 Live card ordering remains deterministic by project path and then session start
 time, not mutable activity.
 
 A session drill-in hydrates through one `GET /api/runtimes/:key/hydrate` request.
 The server backs it with one `getDashboardSnapshot` RPC call and its matching
 barrier, rather than three independently timed state/message/background-agent
-calls. Replay and resync retain their ordering guarantees below.
+calls. While mounted, the view applies periodic, turn-end, and compaction-end
+authoritative detail refreshes to its header and the shared runtime. Successful
+model/thinking mutations update the pool's snapshot state; the client protects
+their confirmed values from older in-flight frames only until the matching
+sequenced snapshot arrives, after which later authoritative changes flow
+normally. Replay and resync retain their ordering guarantees below.
 
 ## Live connection and recovery
 
@@ -467,7 +474,9 @@ Browser dashboard (SolidJS + Vite, tokens.css design system)
   the same path. Deleting a runtime publishes `runtime_removed` so browsers
   evict that session's transcript state.
 - **ctx%** comes from the session itself (`get_state.contextUsage` — the same
-  numbers the TUI footer shows), never client-side estimates.
+  numbers the TUI footer shows), never browser-side estimates. The session uses
+  rebuilt-message estimation only during the post-compaction gap before fresh
+  provider usage exists.
 - **Auto-naming** runs in the shared `AgentSession` layer, so dashboard-created
   RPC sessions get the same LLM-generated session names as the TUI and update
   live via `session_name_changed`.

@@ -999,6 +999,48 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(invalid.status).toBe(400);
 	});
 
+	it("synchronizes model and thinking routes through the runtime pool", async () => {
+		const dir = await createTempProject();
+		const { base, pool, clients } = await startServer();
+		const runtime = await pool.create(dir);
+
+		const model = await fetch(`${base}/api/runtimes/${runtime.key}/model`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ provider: "test", modelId: "new-model" }),
+		});
+		expect(model.status).toBe(200);
+		await expect(model.json()).resolves.toEqual({
+			provider: "test",
+			id: "new-model",
+			settingsRevision: 1,
+		});
+
+		const thinking = await fetch(`${base}/api/runtimes/${runtime.key}/thinking`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ level: "high" }),
+		});
+		expect(thinking.status).toBe(200);
+		await expect(thinking.json()).resolves.toEqual({ ok: true, settingsRevision: 2 });
+		expect(clients[0].setModel).toHaveBeenCalledWith("test", "new-model");
+		expect(clients[0].setThinkingLevel).toHaveBeenCalledWith("high");
+		expect(pool.fleetSnapshot()[0]?.state).toMatchObject({
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "high",
+		});
+
+		vi.mocked(clients[0].setThinkingLevel).mockRejectedValueOnce(new Error("thinking unavailable"));
+		const failed = await fetch(`${base}/api/runtimes/${runtime.key}/thinking`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ level: "low" }),
+		});
+		expect(failed.status).toBe(502);
+		await expect(failed.json()).resolves.toEqual({ error: "thinking unavailable" });
+		expect(pool.fleetSnapshot()[0]?.state.thinkingLevel).toBe("high");
+	});
+
 	it("POST /api/runtimes/:key/abort aborts the runtime and unknown keys 404", async () => {
 		const dir = await createTempProject();
 		const { base, clients } = await startServer();
