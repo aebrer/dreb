@@ -919,6 +919,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	let imageFileInputRef: HTMLInputElement | undefined;
 	let statsPopoverRef: HTMLDivElement | undefined;
 	let disposed = false;
+	let runtimeDetailsRequestGeneration = 0;
 
 	const closed = () => session()?.closed;
 	const streaming = () => !closed() && (session()?.streaming ?? false);
@@ -938,13 +939,14 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 
 	async function refreshRuntimeDetails(includeDailyCost = false) {
 		if (closed()) return;
+		const requestGeneration = ++runtimeDetailsRequestGeneration;
 		const [statsResult, performanceResult, branchResult] = await Promise.allSettled([
-			api.stats(props.sessionKey),
+			props.store.refreshRuntimeStats(props.sessionKey),
 			api.performance(props.sessionKey),
 			api.branch(props.sessionKey),
 		] as const);
 		const dailyCostResult = includeDailyCost ? await Promise.allSettled([api.dailyCost()] as const) : undefined;
-		if (disposed || closed()) return;
+		if (disposed || closed() || requestGeneration !== runtimeDetailsRequestGeneration) return;
 		if (statsResult.status === "fulfilled") setStats(statsResult.value);
 		if (performanceResult.status === "fulfilled") setPerformance(performanceResult.value);
 		if (branchResult.status === "fulfilled") setBranch(branchResult.value.branch);
@@ -1404,6 +1406,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		wasStreaming = nowStreaming;
 	});
 
+	let wasCompacting = false;
+	createEffect(() => {
+		const nowCompacting = compacting();
+		if (wasCompacting && !nowCompacting) void refreshRuntimeDetails(true);
+		wasCompacting = nowCompacting;
+	});
+
 	createEffect(() => {
 		// Re-fetch pending whenever the fleet-driven count changes; refreshPendingMessages
 		// is authoritative (returns empty when there are none) so this never clears
@@ -1645,7 +1654,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		);
 	const tasks = () => session()?.tasks ?? [];
 	const tasksDone = () => tasks().filter((t) => t.status === "completed").length;
-	const ctx = () => runtime()?.state.contextUsage ?? stats()?.contextUsage;
+	const ctx = () => stats()?.contextUsage ?? runtime()?.state.contextUsage;
 	const isMobile = () => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches;
 	const displaySessionName = () => session()?.sessionName ?? runtime()?.state.sessionName;
 	const headerTitle = () => displaySessionName() ?? session()?.title ?? props.sessionKey;

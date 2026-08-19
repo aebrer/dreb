@@ -124,6 +124,11 @@ interface PendingHydration {
 	queuedBytes: number;
 }
 
+interface PendingRuntimeSettings {
+	model?: NonNullable<SessionStateDto["model"]>;
+	thinkingLevel?: string;
+}
+
 function restoreSnapshotOutcomeState(session: SessionViewState, messages: any[], snapshotState: SessionStateDto): void {
 	session.statusEntries = session.statusEntries.filter((entry) => entry.key !== "retry");
 	const retryAttempt = snapshotState.retryAttempt ?? 0;
@@ -187,6 +192,10 @@ export function createAppStore() {
 	const latestFleetRuntimeNonSnapshotGenerations = new Map<string, number>();
 	/** Latest fleet snapshot sequence that changed each runtime's projected state. */
 	const latestFleetRuntimeSnapshotSequences = new Map<string, number>();
+	/** Confirmed HTTP setting mutations waiting for the pool's matching SSE snapshot. */
+	const pendingRuntimeSettings = new Map<string, PendingRuntimeSettings>();
+	/** Latest per-runtime stats request wins when mounted-screen refreshes overlap. */
+	const runtimeStatsRequestGenerations = new Map<string, number>();
 	let latestFleetRequestGeneration = 0;
 	/** Latest inventory request wins, so a slow earlier response cannot regress disk rows. */
 	let latestDiskSessionsRequestGeneration = 0;
@@ -431,7 +440,33 @@ export function createAppStore() {
 
 	function replaceFleet(next: FleetDto): void {
 		removedRuntimeKeys.clear();
+		pendingRuntimeSettings.clear();
+		runtimeStatsRequestGenerations.clear();
 		mutateFleet(() => next);
+	}
+
+	function runtimeModelsMatch(left: SessionStateDto["model"], right: SessionStateDto["model"]): boolean {
+		return left?.provider === right?.provider && left?.id === right?.id;
+	}
+
+	function reconcilePendingRuntimeSettings(
+		runtime: FleetRuntimeSnapshotDto,
+		previous: RuntimeInfoDto | undefined,
+	): SessionStateDto {
+		const pending = pendingRuntimeSettings.get(runtime.key);
+		if (!pending) return runtime.state;
+		const state = { ...runtime.state };
+		if (pending.model) {
+			if (runtimeModelsMatch(runtime.state.model, pending.model)) delete pending.model;
+			else state.model = previous?.state.model ?? pending.model;
+		}
+		if (pending.thinkingLevel !== undefined) {
+			if (runtime.state.thinkingLevel === pending.thinkingLevel) delete pending.thinkingLevel;
+			else state.thinkingLevel = previous?.state.thinkingLevel ?? pending.thinkingLevel;
+		}
+		if (pending.model === undefined && pending.thinkingLevel === undefined)
+			pendingRuntimeSettings.delete(runtime.key);
+		return state;
 	}
 
 	/**
@@ -456,7 +491,7 @@ export function createAppStore() {
 						return {
 							...runtime,
 							state: {
-								...runtime.state,
+								...reconcilePendingRuntimeSettings(runtime, previous),
 								// Context usage is refreshed through the slower authoritative stats
 								// path. Message count belongs to this sequenced snapshot and may
 								// legitimately decrease after a fork/rewind.
@@ -506,6 +541,8 @@ export function createAppStore() {
 		const runtime = capturedRuntime ?? fleet().runtimes.find((candidate) => candidate.key === key);
 		const alreadyRemoved = removedRuntimeKeys.has(key);
 		removedRuntimeKeys.add(key);
+		pendingRuntimeSettings.delete(key);
+		runtimeStatsRequestGenerations.delete(key);
 		if (!alreadyRemoved) {
 			// Bump even when the card was not rendered: an older full response must
 			// still be unable to resurrect a just-removed runtime.
@@ -671,8 +708,14 @@ export function createAppStore() {
 		}));
 	}
 
-	/** Patch the card immediately from the authoritative set-model response. */
+	/** Patch the card from a confirmed response until the matching SSE snapshot arrives. */
 	function setRuntimeModel(key: string, model: { provider: string; id: string }): void {
+		const currentModel = fleet().runtimes.find((runtime) => runtime.key === key)?.state.model;
+		const pending = pendingRuntimeSettings.get(key) ?? {};
+		if (runtimeModelsMatch(currentModel, model)) delete pending.model;
+		else pending.model = model;
+		if (pending.model === undefined && pending.thinkingLevel === undefined) pendingRuntimeSettings.delete(key);
+		else pendingRuntimeSettings.set(key, pending);
 		mutateFleet((current) => ({
 			...current,
 			runtimes: current.runtimes.map((runtime) =>
@@ -681,8 +724,14 @@ export function createAppStore() {
 		}));
 	}
 
-	/** Patch thinking state after the direct RPC response; no session event carries it. */
+	/** Patch thinking state from a confirmed response until its SSE snapshot arrives. */
 	function setRuntimeThinkingLevel(key: string, thinkingLevel: string): void {
+		const currentLevel = fleet().runtimes.find((runtime) => runtime.key === key)?.state.thinkingLevel;
+		const pending = pendingRuntimeSettings.get(key) ?? {};
+		if (currentLevel === thinkingLevel) delete pending.thinkingLevel;
+		else pending.thinkingLevel = thinkingLevel;
+		if (pending.model === undefined && pending.thinkingLevel === undefined) pendingRuntimeSettings.delete(key);
+		else pendingRuntimeSettings.set(key, pending);
 		mutateFleet((current) => ({
 			...current,
 			runtimes: current.runtimes.map((runtime) =>
@@ -708,6 +757,28 @@ export function createAppStore() {
 			},
 			stats: { tokensTotal: stats.tokens.total, cost: stats.cost },
 		};
+	}
+
+	async function refreshRuntimeStats(key: string, signal?: AbortSignal): Promise<SessionStatsDto> {
+		const requestGeneration = (runtimeStatsRequestGenerations.get(key) ?? 0) + 1;
+		runtimeStatsRequestGenerations.set(key, requestGeneration);
+		const stateGenerationAtRequest = currentFleetRuntimeStateGeneration(key);
+		const stats = await api.stats(key, signal);
+		if (
+			runtimeStatsRequestGenerations.get(key) !== requestGeneration ||
+			!fleet().runtimes.some((runtime) => runtime.key === key)
+		) {
+			return stats;
+		}
+		mutateFleet((current) => ({
+			...current,
+			runtimes: current.runtimes.map((runtime) =>
+				runtime.key === key
+					? mergeRuntimeStats(runtime, stats, currentFleetRuntimeStateGeneration(key) !== stateGenerationAtRequest)
+					: runtime,
+			),
+		}));
+		return stats;
 	}
 
 	function fetchFleetRuntimeStats(key: string): Promise<SessionStatsDto> {
@@ -1217,6 +1288,7 @@ export function createAppStore() {
 		refreshFleet,
 		refreshDiskSessions,
 		refreshFleetStats,
+		refreshRuntimeStats,
 		removeRuntime,
 		stopRuntime,
 		resumeClosedSession,

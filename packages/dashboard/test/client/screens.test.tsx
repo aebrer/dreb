@@ -1352,6 +1352,67 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("/skill:test");
 	});
 
+	it("keeps mounted header details live and refreshes context when compaction ends", async () => {
+		const baseStore = makeStore() as any;
+		const session = createSessionViewState("live");
+		session.compacting = true;
+		const [sessions, setSessions] = createStore({ live: session });
+		const runtime = runtimeInfo("live");
+		runtime.state.model = { provider: "test", id: "old-model" };
+		runtime.state.contextUsage = { tokens: null, contextWindow: 200_000, percent: null };
+		const [fleet, setFleet] = createSignal({ runtimes: [runtime], diskSessions: [] });
+		const detailStats = (tokens: number, percent: number) => ({
+			sessionId: "live",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 2,
+			tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
+			cost: 0.1,
+			contextUsage: { tokens, contextWindow: 200_000, percent },
+		});
+		const refreshRuntimeStats = vi
+			.fn()
+			.mockResolvedValueOnce(detailStats(50_000, 25))
+			.mockResolvedValueOnce(detailStats(20_000, 10));
+		const fakeStore = {
+			...baseStore,
+			sessions,
+			fleet,
+			hydrateSession: vi.fn(async () => {}),
+			refreshRuntimeStats,
+		};
+
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="live" />);
+		await vi.waitFor(() => expect(el.querySelector(".session-bar output.switcher")?.textContent).toContain("25%"));
+		expect(el.textContent).not.toContain("ctx ?");
+
+		setFleet((current) => ({
+			...current,
+			runtimes: current.runtimes.map((item) =>
+				item.key === "live"
+					? { ...item, state: { ...item.state, model: { provider: "test", id: "live-model" } } }
+					: item,
+			),
+		}));
+		await vi.waitFor(() => expect(el.textContent).toContain("test/live-model"));
+
+		refreshRuntimeStats.mockClear();
+		setSessions("live", "compacting", false);
+		await vi.waitFor(() => expect(refreshRuntimeStats).toHaveBeenCalledOnce());
+		await vi.waitFor(() => expect(el.querySelector(".session-bar output.switcher")?.textContent).toContain("10%"));
+
+		refreshRuntimeStats.mockClear();
+		refreshRuntimeStats.mockRejectedValueOnce(new Error("stats unavailable"));
+		setSessions("live", "compacting", true);
+		await Promise.resolve();
+		setSessions("live", "compacting", false);
+		await vi.waitFor(() => expect(refreshRuntimeStats).toHaveBeenCalledOnce());
+		await vi.waitFor(() => expect(el.textContent).toContain("stats unavailable"));
+		expect(el.querySelector(".session-bar output.switcher")?.textContent).toContain("10%");
+	});
+
 	it("session view without streaming hides stop and mode toggle", () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("k2");

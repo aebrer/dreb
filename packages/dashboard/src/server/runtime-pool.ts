@@ -191,6 +191,21 @@ export class RuntimePool {
 		return this.runtimes.get(key);
 	}
 
+	/** Apply a confirmed model mutation to both the child and the pool snapshot. */
+	async setModel(handle: RuntimeHandle, provider: string, modelId: string): Promise<{ provider: string; id: string }> {
+		const model = await handle.client.setModel(provider, modelId);
+		handle.lastState = { ...this.fallbackState(handle), model };
+		if (this.runtimes.get(handle.key) === handle) this.scheduleFleetSnapshot();
+		return model;
+	}
+
+	/** Apply a confirmed thinking mutation to both the child and the pool snapshot. */
+	async setThinkingLevel(handle: RuntimeHandle, level: Parameters<RpcClient["setThinkingLevel"]>[0]): Promise<void> {
+		await handle.client.setThinkingLevel(level);
+		handle.lastState = { ...this.fallbackState(handle), thinkingLevel: level };
+		if (this.runtimes.get(handle.key) === handle) this.scheduleFleetSnapshot();
+	}
+
 	/**
 	 * Record the EventHub sequence synchronously when the RPC snapshot marker
 	 * arrives. The marker line precedes its response on stdout, so this runs
