@@ -2151,6 +2151,7 @@ export class AgentSession {
 		if (!apiKey) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
+		this._validateModelPromptSettings(model);
 
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
@@ -2178,6 +2179,11 @@ export class AgentSession {
 			model,
 			this.settingsManager.getModelThinkingDisplay(model.id),
 		);
+	}
+
+	/** Reject malformed target-model prompt settings before a model switch mutates session state. */
+	private _validateModelPromptSettings(model: Model<any>): void {
+		this.settingsManager.getModelPromptSettings(model.provider, model.id);
 	}
 
 	/**
@@ -2226,6 +2232,7 @@ export class AgentSession {
 		const len = scopedModels.length;
 		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
 		const next = scopedModels[nextIndex];
+		this._validateModelPromptSettings(next.model);
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.thinkingLevel);
 
 		// Apply model
@@ -2263,6 +2270,7 @@ export class AgentSession {
 		if (!apiKey) {
 			throw new Error(`No API key for ${nextModel.provider}/${nextModel.id}`);
 		}
+		this._validateModelPromptSettings(nextModel);
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.setModel(this._applyContextTier(nextModel));

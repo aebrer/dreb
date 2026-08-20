@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type ThinkingLevel } from "@dreb/agent-core";
 import { type Api, findModel, type Model } from "@dreb/ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
@@ -40,6 +40,7 @@ function createSession({
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
 	authStorage.setRuntimeApiKey("openai", "test-key");
 	authStorage.setRuntimeApiKey(initialModel.provider, "test-key");
+	const modelRegistry = new ModelRegistry(authStorage, undefined);
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",
@@ -53,12 +54,12 @@ function createSession({
 		sessionManager,
 		settingsManager,
 		cwd: process.cwd(),
-		modelRegistry: new ModelRegistry(authStorage, undefined),
+		modelRegistry,
 		resourceLoader,
 		scopedModels,
 	});
 
-	return { session, sessionManager, settingsManager };
+	return { session, sessionManager, settingsManager, modelRegistry };
 }
 
 function createThinkingDisplaySession(settingsManager: SettingsManager = SettingsManager.inMemory()) {
@@ -117,6 +118,50 @@ describe("AgentSession model switching", () => {
 			session.dispose();
 		}
 	});
+});
+
+describe("AgentSession model switching — prompt validation", () => {
+	it.each(["setModel", "scoped cycle", "available cycle"] as const)(
+		"rejects malformed target prompt settings atomically via %s",
+		async (switchPath) => {
+			const settingsManager = SettingsManager.inMemory({
+				defaultProvider: reasoningModel.provider,
+				defaultModel: reasoningModel.id,
+				modelSettings: {
+					[`${nonReasoningModel.provider}/${nonReasoningModel.id}`]: {
+						systemPrompt: "REPLACEMENT",
+						appendSystemPrompt: "APPEND",
+					},
+				},
+			});
+			const { session, sessionManager, modelRegistry } = createSession({
+				settingsManager,
+				scopedModels:
+					switchPath === "scoped cycle" ? [{ model: reasoningModel }, { model: nonReasoningModel }] : undefined,
+			});
+			if (switchPath === "available cycle") {
+				vi.spyOn(modelRegistry, "getAvailable").mockResolvedValue([reasoningModel, nonReasoningModel]);
+			}
+			const initialPrompt = session.systemPrompt;
+			const initialEntries = sessionManager.getEntries();
+
+			try {
+				const switchModel = switchPath === "setModel" ? session.setModel(nonReasoningModel) : session.cycleModel();
+				await expect(switchModel).rejects.toThrow("cannot define both systemPrompt and appendSystemPrompt");
+
+				expect(session.model).toMatchObject({
+					provider: reasoningModel.provider,
+					id: reasoningModel.id,
+				});
+				expect(session.systemPrompt).toBe(initialPrompt);
+				expect(sessionManager.getEntries()).toEqual(initialEntries);
+				expect(settingsManager.getDefaultProvider()).toBe(reasoningModel.provider);
+				expect(settingsManager.getDefaultModel()).toBe(reasoningModel.id);
+			} finally {
+				session.dispose();
+			}
+		},
+	);
 });
 
 describe("AgentSession model switching — thinkingDisplay", () => {
