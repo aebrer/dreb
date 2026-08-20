@@ -283,6 +283,44 @@ describe("AgentSession switchSession — thinkingDisplay", () => {
 		}
 	});
 
+	it("rejects malformed restored-model prompt settings before changing or disconnecting the active session", async () => {
+		const settingsManager = SettingsManager.inMemory({
+			modelSettings: {
+				[`${adaptiveModel.provider}/${adaptiveModel.id}`]: {
+					systemPrompt: "REPLACEMENT",
+					appendSystemPrompt: "APPEND",
+				},
+			},
+		});
+		const { session, sessionManager } = createSession({ settingsManager });
+		const sessionPath = writeSessionFileWithModel(adaptiveModel);
+		const initialModel = session.model;
+		const initialPrompt = session.systemPrompt;
+		const initialMessages = session.messages;
+		const initialEntries = sessionManager.getEntries();
+		const initialSessionFile = session.sessionFile;
+		const initialSessionId = session.sessionId;
+		const initialAgentSessionId = session.agent.sessionId;
+		const initialSubscription = (session as unknown as { _unsubscribeAgent?: () => void })._unsubscribeAgent;
+
+		try {
+			await expect(session.switchSession(sessionPath)).rejects.toThrow(
+				"cannot define both systemPrompt and appendSystemPrompt",
+			);
+
+			expect(session.model).toBe(initialModel);
+			expect(session.systemPrompt).toBe(initialPrompt);
+			expect(session.messages).toEqual(initialMessages);
+			expect(sessionManager.getEntries()).toEqual(initialEntries);
+			expect(session.sessionFile).toBe(initialSessionFile);
+			expect(session.sessionId).toBe(initialSessionId);
+			expect(session.agent.sessionId).toBe(initialAgentSessionId);
+			expect((session as unknown as { _unsubscribeAgent?: () => void })._unsubscribeAgent).toBe(initialSubscription);
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("honors stored model settings when resuming an adaptive model", async () => {
 		const resumedModelAppend = "RESUMED MODEL APPEND";
 		const settingsManager = SettingsManager.inMemory({

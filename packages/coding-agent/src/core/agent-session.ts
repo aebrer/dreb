@@ -86,8 +86,13 @@ import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
 import { type SecretPattern, scrubSecrets } from "./secret-scrubber.js";
 import { isSensitivePath } from "./sensitive-paths.js";
-import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
-import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
+import type { BranchSummaryEntry, CompactionEntry } from "./session-manager.js";
+import {
+	CURRENT_SESSION_VERSION,
+	getLatestCompactionEntry,
+	type SessionHeader,
+	SessionManager,
+} from "./session-manager.js";
 import {
 	DEFAULT_BG_PARENT_TURN_LIMIT,
 	DEFAULT_MAX_CONCURRENT_SUBAGENTS,
@@ -3604,6 +3609,20 @@ export class AgentSession {
 			}
 		}
 
+		// Resolve and validate the target model before disconnecting or mutating the active session.
+		// Prompt validation can throw for malformed settings, so it belongs in this preflight phase.
+		const targetModel = SessionManager.open(sessionPath).buildSessionContext().model;
+		let restoredModel: Model<any> | undefined;
+		if (targetModel) {
+			const availableModels = await this._modelRegistry.getAvailable();
+			restoredModel = availableModels.find(
+				(m) => m.provider === targetModel.provider && m.id === targetModel.modelId,
+			);
+			if (restoredModel) {
+				this._validateModelPromptSettings(restoredModel);
+			}
+		}
+
 		this._disconnectFromAgent();
 		await this.abort();
 		this._steeringMessages = [];
@@ -3631,18 +3650,12 @@ export class AgentSession {
 
 		this.agent.replaceMessages(sessionContext.messages);
 
-		// Restore model if saved
-		if (sessionContext.model) {
+		// Restore the preflighted model if the target session saved one that is still available.
+		if (restoredModel) {
 			const previousModel = this.model;
-			const availableModels = await this._modelRegistry.getAvailable();
-			const match = availableModels.find(
-				(m) => m.provider === sessionContext.model!.provider && m.id === sessionContext.model!.modelId,
-			);
-			if (match) {
-				this.agent.setModel(this._applyContextTier(match));
-				this._refreshThinkingDisplay(match);
-				await this._emitModelSelect(match, previousModel, "restore");
-			}
+			this.agent.setModel(this._applyContextTier(restoredModel));
+			this._refreshThinkingDisplay(restoredModel);
+			await this._emitModelSelect(restoredModel, previousModel, "restore");
 		}
 
 		const hasThinkingEntry = this.sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change");

@@ -583,15 +583,19 @@ describe("skills", () => {
 			expect(body).toContain("Review round:");
 			expect(body).toContain("Unverified Review Candidates — Pending Assessment");
 			expect(body).toContain("git diff <sha>..HEAD");
-			expect(body).toContain("Reject unchanged-code findings");
+			expect(body).toContain("The full PR and the interactions among all of its changes are the review target");
+			expect(body).toContain("Do not reject a finding merely because the relevant lines are unchanged");
 			expect(body).toContain("verify that each is fixed");
 			expect(body).toContain("one parallel `subagent` `tasks` call");
-			expect(body).toContain("Skip `simplifier` unless `simplify` was explicitly requested");
+			expect(body).toContain("If dispatch arbitration or a specialist agent fails, retry that specialist");
+			expect(body).toContain("A retry may run separately after the original parallel batch");
+			expect(body).not.toContain("Skip `simplifier` unless `simplify` was explicitly requested");
 			for (const agent of [
 				"code-reviewer",
 				"error-auditor",
 				"test-reviewer",
 				"completeness-checker",
+				"simplifier",
 				"independent-assessor",
 				"developers-advocate",
 				"devils-advocate",
