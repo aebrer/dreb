@@ -207,6 +207,12 @@ Current behavior:
 - `/model` and `--list-models` list entries by model `id`.
 - The configured `name` is used for model matching and detail/status text.
 
+To give one custom or built-in model persistent behavioral instructions, add an exact
+`provider/model` entry under [`modelSettings`](settings.md#modelsettings) in `settings.json`.
+There you can replace dreb's built-in system prompt with `systemPrompt` or preserve it and
+add instructions with `appendSystemPrompt`. This stays separate from model transport and
+capability metadata in `models.json`.
+
 ## Overriding Built-in Providers
 
 Route a built-in provider through a proxy without redefining models:

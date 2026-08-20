@@ -21,7 +21,7 @@ Edit directly or use `/settings` for common options.
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level |
 | `agentModels.models` | object | - | Per-agent model fallback lists for subagents (map of agent name → ordered model IDs). See [agent-models.md](agent-models.md) |
-| `modelSettings` | object | - | Per-model overrides keyed by model ID (e.g. thinking display). See [modelSettings](#modelsettings) |
+| `modelSettings` | object | - | Per-model thinking-display and provider/model system-prompt overrides. See [modelSettings](#modelsettings) |
 
 #### agentModels.models
 
@@ -55,9 +55,12 @@ Configurable in the TUI via `/settings` → **Agent Models**. See [agent-models.
 
 #### modelSettings
 
-Per-model overrides keyed by model ID. Currently supports `thinkingDisplay`, which controls
-whether adaptive-thinking Claude models (Opus and Sonnet 4.6–4.x, plus Claude 5 families)
-return thinking summaries.
+`modelSettings` supports thinking-display preferences and persistent model-specific system
+prompts.
+
+`thinkingDisplay` remains keyed by bare model ID for compatibility. It controls whether
+adaptive-thinking Claude models (Opus and Sonnet 4.6–4.x, plus Claude 5 families) return
+thinking summaries:
 
 ```json
 {
@@ -73,12 +76,50 @@ return thinking summaries.
 
 Anthropic's API defaults Opus 4.7+ to `"omitted"`, so dreb sends `"summarized"` by default
 on adaptive models to keep thinking visible. Set `"omitted"` here to opt into the
-lower-latency behavior. The setting is **keyed by model ID**, so it is honored identically
-by the main session and by any subagent that uses the same model. Non-adaptive models
-ignore the setting.
+lower-latency behavior. The setting is honored identically by the main session and by any
+subagent that uses the same model. Non-adaptive models ignore it. It is configurable in the
+TUI via `/settings` → **Show thinking summaries** (shown only when the current model supports
+adaptive thinking).
 
-Configurable in the TUI via `/settings` → **Show thinking summaries** (shown only when the
-current model supports adaptive thinking).
+System-prompt settings require an exact canonical `provider/model` key. Use `systemPrompt`
+to replace dreb's built-in prompt, or `appendSystemPrompt` to preserve the selected base
+prompt and append model-specific instructions:
+
+```json
+{
+  "modelSettings": {
+    "openai-codex/gpt-5.6-sol": {
+      "appendSystemPrompt": "When implementing a mach6 plan, stop when the work is ready to commit and push."
+    },
+    "ollama/qwen2.5-coder:7b": {
+      "systemPrompt": "You are a coding assistant for this local model. Verify external facts against authoritative sources before answering."
+    }
+  }
+}
+```
+
+Prompt behavior:
+
+- The key is matched as one exact string. Model IDs may themselves contain `/`, so
+  `openrouter/anthropic/claude-sonnet-4` means provider `openrouter` and model ID
+  `anthropic/claude-sonnet-4`.
+- Bare model-ID keys never apply prompt instructions; this prevents instructions from
+  leaking to another provider exposing the same ID.
+- Configure exactly one of `systemPrompt` and `appendSystemPrompt` for a canonical model.
+  Defining both, or using an empty/non-string value, fails loudly when dreb builds that
+  model's prompt.
+- An explicit session replacement from `--system-prompt`, `SYSTEM.md`, or an SDK resource
+  loader takes precedence over `systemPrompt`. `appendSystemPrompt` still appends after
+  existing session append sources such as `--append-system-prompt`, `APPEND_SYSTEM.md`, and
+  subagent-definition instructions.
+- Switching or cycling models rebuilds the prompt immediately: instructions from the old
+  model are removed and instructions for the new model are applied. `/reload` picks up
+  external `settings.json` edits.
+- Global and project entries follow the existing per-property merge. A project value wins
+  for the same field; a merged entry that supplies both prompt modes is rejected rather
+  than choosing one silently.
+- Built-in and custom models use the same lookup. Register a local model in `models.json`,
+  then use its exact `provider/id` here.
 
 ### UI & Display
 

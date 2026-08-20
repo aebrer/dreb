@@ -1569,8 +1569,15 @@ export class AgentSession {
 
 		const loaderSystemPrompt = this._resourceLoader.getSystemPrompt();
 		const loaderAppendSystemPrompt = this._resourceLoader.getAppendSystemPrompt();
-		const appendSystemPrompt =
-			loaderAppendSystemPrompt.length > 0 ? loaderAppendSystemPrompt.join("\n\n") : undefined;
+		const modelPromptSettings = this.model
+			? this.settingsManager.getModelPromptSettings(this.model.provider, this.model.id)
+			: undefined;
+		const customPrompt = loaderSystemPrompt ?? modelPromptSettings?.systemPrompt;
+		const appendPromptParts = [...loaderAppendSystemPrompt];
+		if (modelPromptSettings?.appendSystemPrompt) {
+			appendPromptParts.push(modelPromptSettings.appendSystemPrompt);
+		}
+		const appendSystemPrompt = appendPromptParts.length > 0 ? appendPromptParts.join("\n\n") : undefined;
 		const loadedSkills = this._getFilteredSkills();
 		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
 		const memoryIndexes = this._resourceLoader.getMemoryIndexes();
@@ -1580,7 +1587,7 @@ export class AgentSession {
 			skills: loadedSkills,
 			contextFiles: loadedContextFiles,
 			memoryIndexes,
-			customPrompt: loaderSystemPrompt,
+			customPrompt,
 			appendSystemPrompt,
 			selectedTools: validToolNames,
 			toolSnippets,
@@ -3649,6 +3656,7 @@ export class AgentSession {
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
 		this._resourceLoader.refreshDreamLastRun();
 		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.setSystemPrompt(this._baseSystemPrompt);
 
 		this._reconnectToAgent();
 		return true;

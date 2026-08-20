@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent, type ThinkingLevel } from "@dreb/agent-core";
-import { findModel } from "@dreb/ai";
+import { type Api, findModel, type Model } from "@dreb/ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -23,21 +23,28 @@ function createSession({
 	thinkingLevel = "high",
 	defaultThinkingLevel = thinkingLevel,
 	scopedModels,
+	settingsManager: providedSettingsManager,
+	initialModel = reasoningModel,
+	resourceLoader = createTestResourceLoader(),
 }: {
 	thinkingLevel?: ThinkingLevel;
 	defaultThinkingLevel?: ThinkingLevel;
-	scopedModels?: Array<{ model: typeof reasoningModel; thinkingLevel?: ThinkingLevel }>;
+	scopedModels?: Array<{ model: Model<Api>; thinkingLevel?: ThinkingLevel }>;
+	settingsManager?: SettingsManager;
+	initialModel?: Model<Api>;
+	resourceLoader?: ReturnType<typeof createTestResourceLoader>;
 } = {}) {
-	const settingsManager = SettingsManager.inMemory({ defaultThinkingLevel });
+	const settingsManager = providedSettingsManager ?? SettingsManager.inMemory({ defaultThinkingLevel });
 	const sessionManager = SessionManager.inMemory();
 	const authStorage = AuthStorage.inMemory();
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
 	authStorage.setRuntimeApiKey("openai", "test-key");
+	authStorage.setRuntimeApiKey(initialModel.provider, "test-key");
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",
 			initialState: {
-				model: reasoningModel,
+				model: initialModel,
 				systemPrompt: "You are a helpful assistant.",
 				tools: [],
 				thinkingLevel,
@@ -47,7 +54,7 @@ function createSession({
 		settingsManager,
 		cwd: process.cwd(),
 		modelRegistry: new ModelRegistry(authStorage, undefined),
-		resourceLoader: createTestResourceLoader(),
+		resourceLoader,
 		scopedModels,
 	});
 
@@ -231,8 +238,13 @@ describe("AgentSession switchSession — thinkingDisplay", () => {
 		}
 	});
 
-	it("honors a stored thinkingDisplay override when resuming an adaptive model", async () => {
-		const settingsManager = SettingsManager.inMemory();
+	it("honors stored model settings when resuming an adaptive model", async () => {
+		const resumedModelAppend = "RESUMED MODEL APPEND";
+		const settingsManager = SettingsManager.inMemory({
+			modelSettings: {
+				[`${adaptiveModel.provider}/${adaptiveModel.id}`]: { appendSystemPrompt: resumedModelAppend },
+			},
+		});
 		settingsManager.setModelThinkingDisplay(adaptiveModel.id, "omitted");
 		const sessionManager = SessionManager.inMemory();
 		const authStorage = AuthStorage.inMemory();
@@ -261,6 +273,7 @@ describe("AgentSession switchSession — thinkingDisplay", () => {
 			expect(switched).toBe(true);
 			expect(session.model?.id).toBe(adaptiveModel.id);
 			expect(session.agent.thinkingDisplay).toBe("omitted");
+			expect(session.systemPrompt).toContain(resumedModelAppend);
 		} finally {
 			session.dispose();
 		}
@@ -296,6 +309,131 @@ describe("AgentSession model switching — system prompt identity", () => {
 				`You are running on: ${nonReasoningModel.provider}/${nonReasoningModel.id}`,
 			);
 			expect(session.systemPrompt).not.toContain(reasoningModel.id);
+		} finally {
+			session.dispose();
+		}
+	});
+});
+
+describe("AgentSession model-specific system prompts", () => {
+	it("uses a canonical model replacement prompt while retaining runtime context", () => {
+		const settingsManager = SettingsManager.inMemory({
+			modelSettings: {
+				[`${reasoningModel.provider}/${reasoningModel.id}`]: {
+					systemPrompt: "MODEL REPLACEMENT",
+				},
+			},
+		});
+		const { session } = createSession({ settingsManager });
+
+		try {
+			expect(session.systemPrompt).toMatch(/^MODEL REPLACEMENT/);
+			expect(session.systemPrompt).toContain(`You are running on: ${reasoningModel.provider}/${reasoningModel.id}`);
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("keeps an explicit session replacement ahead of the model replacement", () => {
+		const settingsManager = SettingsManager.inMemory({
+			modelSettings: {
+				[`${reasoningModel.provider}/${reasoningModel.id}`]: {
+					systemPrompt: "MODEL REPLACEMENT",
+				},
+			},
+		});
+		const { session } = createSession({
+			settingsManager,
+			resourceLoader: createTestResourceLoader({ systemPrompt: "EXPLICIT REPLACEMENT" }),
+		});
+
+		try {
+			expect(session.systemPrompt).toMatch(/^EXPLICIT REPLACEMENT/);
+			expect(session.systemPrompt).not.toContain("MODEL REPLACEMENT");
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("appends after loader prompts and replaces model instructions when cycling", async () => {
+		const firstAppend = "FIRST MODEL APPEND";
+		const secondAppend = "SECOND MODEL APPEND";
+		const loaderAppend = "LOADER APPEND";
+		const settingsManager = SettingsManager.inMemory({
+			modelSettings: {
+				[`${reasoningModel.provider}/${reasoningModel.id}`]: { appendSystemPrompt: firstAppend },
+				[`${nonReasoningModel.provider}/${nonReasoningModel.id}`]: { appendSystemPrompt: secondAppend },
+			},
+		});
+		const { session } = createSession({
+			settingsManager,
+			resourceLoader: createTestResourceLoader({ appendSystemPrompt: [loaderAppend] }),
+			scopedModels: [{ model: reasoningModel }, { model: nonReasoningModel }],
+		});
+
+		try {
+			expect(session.systemPrompt.indexOf(loaderAppend)).toBeLessThan(session.systemPrompt.indexOf(firstAppend));
+			expect(session.systemPrompt).not.toContain(secondAppend);
+
+			await session.cycleModel();
+
+			expect(session.systemPrompt).toContain(loaderAppend);
+			expect(session.systemPrompt).not.toContain(firstAppend);
+			expect(session.systemPrompt).toContain(secondAppend);
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("reloads externally edited model prompt settings", async () => {
+		const projectDir = mkdtempSync(join(tmpdir(), "dreb-model-prompt-project-"));
+		const agentDir = mkdtempSync(join(tmpdir(), "dreb-model-prompt-agent-"));
+		const settingsPath = join(agentDir, "settings.json");
+		const modelRef = `${reasoningModel.provider}/${reasoningModel.id}`;
+		writeFileSync(
+			settingsPath,
+			JSON.stringify({ modelSettings: { [modelRef]: { appendSystemPrompt: "BEFORE RELOAD" } } }),
+		);
+		const settingsManager = SettingsManager.create(projectDir, agentDir);
+		const { session } = createSession({ settingsManager });
+
+		try {
+			expect(session.systemPrompt).toContain("BEFORE RELOAD");
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({ modelSettings: { [modelRef]: { appendSystemPrompt: "AFTER RELOAD" } } }),
+			);
+
+			await session.reload();
+
+			expect(session.systemPrompt).not.toContain("BEFORE RELOAD");
+			expect(session.systemPrompt).toContain("AFTER RELOAD");
+		} finally {
+			session.dispose();
+			rmSync(projectDir, { recursive: true, force: true });
+			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("applies prompt settings to a custom model whose ID contains slashes", () => {
+		const customModel: Model<Api> = {
+			...nonReasoningModel,
+			provider: "ollama",
+			id: "team/qwen-local",
+			name: "Qwen Local",
+			baseUrl: "http://localhost:11434/v1",
+		};
+		const customAppend = "CUSTOM LOCAL MODEL APPEND";
+		const settingsManager = SettingsManager.inMemory({
+			modelSettings: {
+				[`${customModel.provider}/${customModel.id}`]: { appendSystemPrompt: customAppend },
+			},
+		});
+		const { session } = createSession({ settingsManager, initialModel: customModel });
+
+		try {
+			expect(session.systemPrompt).toContain(customAppend);
+			expect(session.systemPrompt).toContain("You are running on: ollama/team/qwen-local");
 		} finally {
 			session.dispose();
 		}
