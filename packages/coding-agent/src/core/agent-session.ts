@@ -96,6 +96,7 @@ import {
 import {
 	DEFAULT_BG_PARENT_TURN_LIMIT,
 	DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+	type ModelPromptSettings,
 	type SettingsManager,
 } from "./settings-manager.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
@@ -1556,6 +1557,20 @@ export class AgentSession {
 		return this.getFilteredSkills();
 	}
 
+	private _resolveModelPromptSettings(model: Model<any> | undefined): ModelPromptSettings | undefined {
+		if (!model) return undefined;
+
+		const modelRef = `${model.provider}/${model.id}`;
+		const modelsJsonSettings = this._modelRegistry.getModelPromptSettings(model.provider, model.id);
+		const settingsJsonSettings = this.settingsManager.getModelPromptSettings(model.provider, model.id);
+		if (modelsJsonSettings && settingsJsonSettings) {
+			throw new Error(
+				`System prompt behavior for ${modelRef} is configured in both models.json and settings.json; remove one source`,
+			);
+		}
+		return modelsJsonSettings ?? settingsJsonSettings;
+	}
+
 	private _rebuildSystemPrompt(toolNames: string[]): string {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
 		const toolSnippets: Record<string, string> = {};
@@ -1574,9 +1589,7 @@ export class AgentSession {
 
 		const loaderSystemPrompt = this._resourceLoader.getSystemPrompt();
 		const loaderAppendSystemPrompt = this._resourceLoader.getAppendSystemPrompt();
-		const modelPromptSettings = this.model
-			? this.settingsManager.getModelPromptSettings(this.model.provider, this.model.id)
-			: undefined;
+		const modelPromptSettings = this._resolveModelPromptSettings(this.model);
 		const customPrompt = loaderSystemPrompt ?? modelPromptSettings?.systemPrompt;
 		const appendPromptParts = [...loaderAppendSystemPrompt];
 		if (modelPromptSettings?.appendSystemPrompt) {
@@ -2186,9 +2199,9 @@ export class AgentSession {
 		);
 	}
 
-	/** Reject malformed target-model prompt settings before a model switch mutates session state. */
+	/** Reject malformed or conflicting target-model prompt settings before mutating session state. */
 	private _validateModelPromptSettings(model: Model<any>): void {
-		this.settingsManager.getModelPromptSettings(model.provider, model.id);
+		this._resolveModelPromptSettings(model);
 	}
 
 	/**
@@ -3313,9 +3326,20 @@ export class AgentSession {
 	}
 
 	async reload(): Promise<void> {
+		// Refresh and validate prompt configuration before tearing down the active runtime.
+		// A bad external edit must leave the current prompt and extension runtime usable.
+		this.settingsManager.reload();
+		this._modelRegistry.refresh();
+		const modelRegistryError = this._modelRegistry.getError();
+		if (modelRegistryError) {
+			throw new Error(modelRegistryError);
+		}
+		if (this.model) {
+			this._validateModelPromptSettings(this.model);
+		}
+
 		const previousFlagValues = this._extensionRunner?.getFlagValues();
 		await this._extensionRunner?.emit({ type: "session_shutdown" });
-		this.settingsManager.reload();
 		resetApiProviders();
 		await this._resourceLoader.reload();
 		this._buildRuntime({

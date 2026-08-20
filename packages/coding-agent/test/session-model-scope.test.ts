@@ -29,6 +29,7 @@ function registry(models: Model<any>[]): ModelRegistry {
 		getAvailable: async () => models,
 		getApiKey: async () => "test-key",
 		getApiKeyForProvider: async () => "test-key",
+		getModelPromptSettings: () => undefined,
 		isUsingOAuth: () => false,
 	} as unknown as ModelRegistry;
 }

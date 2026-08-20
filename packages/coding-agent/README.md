@@ -319,7 +319,7 @@ A trusted root permits lazy loading for that existing directory and all of its d
 
 Replace the default system prompt with `.dreb/SYSTEM.md` (project) or `~/.dreb/agent/SYSTEM.md` (global). Append without replacing via `APPEND_SYSTEM.md`.
 
-For persistent instructions that apply only to one exact provider/model pair, use `modelSettings` in `settings.json` with a canonical key such as `openai-codex/gpt-5.6-sol`. Set `systemPrompt` to replace dreb's built-in prompt or `appendSystemPrompt` to append instructions. The same mechanism works for local/custom models registered in `models.json`, and the prompt updates immediately when the model changes. Explicit session replacements (`--system-prompt`, `SYSTEM.md`, or SDK hooks) take precedence. See [Model settings](docs/settings.md#modelsettings).
+For persistent instructions that apply only to one exact provider/model pair, set `systemPrompt` to replace dreb's built-in prompt or `appendSystemPrompt` to append instructions. Put the field directly on a custom `models[]` entry or built-in `modelOverrides` entry in `models.json`, or use `modelSettings` in `settings.json` with a canonical key such as `openai-codex/gpt-5.6-sol`. Configure prompt behavior in only one file for a canonical model: dreb fails loudly instead of applying implicit precedence when both files declare it. Prompt changes apply when the model changes, and `/reload` picks up edits from either file. Explicit session replacements (`--system-prompt`, `SYSTEM.md`, or SDK hooks) take precedence over model replacement; model append instructions still follow the selected base. See [Custom models](docs/models.md#model-configuration) and [Model settings](docs/settings.md#modelsettings).
 
 ---
 
