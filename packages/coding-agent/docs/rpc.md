@@ -225,6 +225,7 @@ Response:
       {"id": "inspect", "title": "Inspect the implementation", "status": "in_progress"}
     ],
     "thinkingLevel": "medium",
+    "availableThinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh"],
     "isStreaming": false,
     "isRetrying": false,
     "retryAttempt": 0,
@@ -1531,7 +1532,7 @@ Errors are explicit `success: false` responses (nothing is applied on any of the
 
 - Missing/empty payload: `set_settings requires at least one setting to change`
 - Unknown key: `Unknown settings key(s): ...`
-- Invalid enum value: `Invalid defaultThinkingLevel: "extreme". Valid values: off, minimal, low, medium, high, xhigh`
+- Invalid enum value: `Invalid defaultThinkingLevel: "extreme". Valid values: off, minimal, low, medium, high, xhigh, max`
 - Invalid transport: `Invalid transport: "http". Valid values: sse, websocket, auto`
 - Non-boolean toggle: `Invalid retryEnabled: "yes". Must be a boolean`
 - Invalid `agentModels` object: `Invalid agentModels: must be a plain object mapping agent names to model fallback arrays`

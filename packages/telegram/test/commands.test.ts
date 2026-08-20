@@ -29,7 +29,7 @@ vi.mock("node:os", async () => {
 
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
-import { cmdStats } from "../src/commands/agent.js";
+import { cmdStats, cmdThinking } from "../src/commands/agent.js";
 // Import after mock setup
 import { cmdNew } from "../src/commands/core.js";
 
@@ -463,5 +463,25 @@ describe("cmdStats", () => {
 
 		expect(mockSafeSend).toHaveBeenCalledWith(expect.anything(), 100, expect.stringContaining("Failed to get stats"));
 		expect(mockSafeSend).toHaveBeenCalledWith(expect.anything(), 100, expect.stringContaining("RPC timeout"));
+	});
+});
+
+describe("cmdThinking", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	it.each(["xhigh", "max"])("accepts %s", async (level) => {
+		const bridge = { isAlive: true, setThinkingLevel: vi.fn().mockResolvedValue(undefined) } as any;
+		await cmdThinking(createMockContext(), createUserState({ bridge }), level);
+		expect(bridge.setThinkingLevel).toHaveBeenCalledWith(level);
+	});
+
+	it("lists the complete scale for invalid input", async () => {
+		const bridge = { isAlive: true, setThinkingLevel: vi.fn() } as any;
+		await cmdThinking(createMockContext(), createUserState({ bridge }), "ultra");
+		expect(mockSafeSend).toHaveBeenCalledWith(
+			expect.anything(),
+			100,
+			"Invalid level. Options: off, minimal, low, medium, high, xhigh, max",
+		);
 	});
 });

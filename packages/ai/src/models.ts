@@ -196,6 +196,11 @@ export function isQwen38OrLater(modelId: string): boolean {
  * - Kimi Code K3 (xhigh maps to its advertised "max" effort)
  * - Qwen 3.8+ model families (xhigh is their top native effort tier)
  */
+/** Check if a model supports the native GPT-5.6 `max` reasoning tier. */
+export function supportsMax<TApi extends Api>(model: Model<TApi>): boolean {
+	return /(?:^|\/)gpt-5\.6(?:$|[-.])/.test(model.id.toLowerCase());
+}
+
 export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
 	if (model.provider === "kimi-coding-oauth" && model.id === "k3") return true;
 	if (isQwen38OrLater(model.id)) return true;

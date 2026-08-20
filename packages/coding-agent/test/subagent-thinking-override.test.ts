@@ -171,7 +171,7 @@ afterEach(() => {
 });
 
 describe("subagent thinking schema", () => {
-	test.each(["off", "minimal", "low", "medium", "high", "xhigh"] satisfies ThinkingLevel[])(
+	test.each(["off", "minimal", "low", "medium", "high", "xhigh", "max"] satisfies ThinkingLevel[])(
 		"accepts %s in single, parallel, and chain modes",
 		(thinking) => {
 			expect(Value.Check(subagentToolDefinition.parameters, { task: "single", thinking })).toBe(true);

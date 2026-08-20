@@ -2077,7 +2077,11 @@ describe("app store hydration", () => {
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("mixed-freshness");
-		store.setRuntimeModel("mixed-freshness", { provider: "test", id: "new-model" });
+		store.setRuntimeModel("mixed-freshness", {
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+		});
 		const preBarrierSnapshot = runtimeSnapshot("mixed-freshness", true);
 		preBarrierSnapshot.state.model = { provider: "test", id: "new-model" };
 		preBarrierSnapshot.state.messageCount = 6;
@@ -2401,7 +2405,11 @@ describe("fleet snapshot and inventory store foundation", () => {
 
 		const refresh = store.refreshFleet();
 		store.upsertRuntime(fleetSnapshot("created"));
-		store.setRuntimeModel("created", { provider: "test", id: "new-model" });
+		store.setRuntimeModel("created", {
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+		});
 		store.setRuntimeThinkingLevel("created", "high");
 		delayed.resolve({ runtimes: [fleetSnapshot("stale")], diskSessions: [] });
 		await refresh;

@@ -9,6 +9,7 @@ import {
 	DEFAULT_MAX_OUTPUT_TOKENS,
 	EventStream,
 	streamSimple,
+	supportsMax,
 	supportsXhigh,
 	type ToolResultMessage,
 	validateToolArguments,
@@ -30,6 +31,7 @@ export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 function getEffectiveThinkingLevel(config: AgentLoopConfig): ThinkingLevel {
 	const requested = config.reasoning ?? "off";
 	if (!config.model.reasoning) return "off";
+	if (requested === "max" && !supportsMax(config.model)) return supportsXhigh(config.model) ? "xhigh" : "high";
 	return requested === "xhigh" && !supportsXhigh(config.model) ? "high" : requested;
 }
 

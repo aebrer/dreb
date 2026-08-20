@@ -443,7 +443,8 @@ if (model.reasoning) {
 const response = await completeSimple(model, {
   messages: [{ role: 'user', content: 'Solve: 2x + 5 = 13' }]
 }, {
-  reasoning: 'medium'  // 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' (xhigh maps to 'max' on Claude Opus 4.6–4.x and Claude 5 families; 'high' on other Anthropic models)
+  reasoning: 'medium'  // 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  // Native normalized 'max' is GPT-5.6-specific. Claude's established xhigh mapping still emits provider-native 'max'.
 });
 
 // Access thinking and text blocks

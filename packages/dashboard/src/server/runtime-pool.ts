@@ -644,6 +644,7 @@ export class RuntimePool {
 			sessionId: previous?.sessionId ?? handle.key,
 			tasks: previous?.tasks ? [...previous.tasks] : [],
 			thinkingLevel: previous?.thinkingLevel ?? "off",
+			availableThinkingLevels: previous?.availableThinkingLevels ? [...previous.availableThinkingLevels] : ["off"],
 			isStreaming: previous?.isStreaming ?? false,
 			isRetrying: previous?.isRetrying ?? false,
 			retryAttempt: previous?.retryAttempt ?? 0,

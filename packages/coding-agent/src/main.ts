@@ -5,7 +5,7 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { type ImageContent, modelsAreEqual, supportsXhigh } from "@dreb/ai";
+import { type ImageContent, modelsAreEqual, supportsMax, supportsXhigh } from "@dreb/ai";
 import chalk from "chalk";
 import { createInterface } from "readline";
 import { type Args, parseArgs, printHelp } from "./cli/args.js";
@@ -934,6 +934,15 @@ export async function main(args: string[]) {
 	// This covers both --thinking <level> and --model <pattern>:<thinking>.
 	const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 	if (session.model && cliThinkingOverride) {
+		const requestedThinking = parsed.thinking ?? sessionOptions.thinkingLevel;
+		if (requestedThinking === "max" && !supportsMax(session.model)) {
+			log.error(
+				chalk.red(
+					`Thinking level "max" is not supported by model "${session.model.provider}/${session.model.id}". Use "xhigh" or choose a max-capable GPT-5.6 model.`,
+				),
+			);
+			process.exit(1);
+		}
 		let effectiveThinking = session.thinkingLevel;
 		if (!session.model.reasoning) {
 			effectiveThinking = "off";

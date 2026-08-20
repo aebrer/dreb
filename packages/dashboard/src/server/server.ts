@@ -889,7 +889,15 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			res.status(400).json({ error: "provider and modelId are required" });
 			return;
 		}
-		withRuntime(req, res, (h) => h.client.setModel(provider, modelId));
+		withRuntime(req, res, async (h) => {
+			const model = await h.client.setModel(provider, modelId);
+			const state = await h.client.getState();
+			return {
+				model,
+				thinkingLevel: state.thinkingLevel,
+				availableThinkingLevels: state.availableThinkingLevels,
+			};
+		});
 	});
 
 	app.get("/api/runtimes/:key/models", (req, res) => {

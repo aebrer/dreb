@@ -37,7 +37,6 @@ import {
 import type { AskUiQuestion, ExtensionUiRequest, SessionViewState } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const UPLOAD_DIR_NAME = ".dreb-dashboard-uploads";
 
@@ -614,7 +613,11 @@ function ModelSelectorModal(props: {
 	state?: SessionStateDto;
 	initialFilter?: string;
 	onClose: () => void;
-	onSelected: (model: { provider: string; id: string }) => void;
+	onSelected: (result: {
+		model: { provider: string; id: string };
+		thinkingLevel: string;
+		availableThinkingLevels: string[];
+	}) => void;
 }): JSX.Element {
 	const [models, setModels] = createSignal<ModelInfoDto[]>([]);
 	const [filter, setFilter] = createSignal(props.initialFilter ?? "");
@@ -864,6 +867,7 @@ function ImportModal(props: {
 export function SessionScreen(props: { store: AppStore; sessionKey: string }): JSX.Element {
 	const session = (): SessionViewState | undefined => props.store.sessions[props.sessionKey];
 	const runtime = createMemo(() => props.store.fleet().runtimes.find((r) => r.key === props.sessionKey));
+	const availableThinkingLevels = createMemo(() => runtime()?.state.availableThinkingLevels ?? ["off"]);
 
 	const [composerText, setComposerText] = createSignal(getComposerDraft(props.sessionKey) ?? "");
 	const [sendMode, setSendMode] = createSignal<"steer" | "follow_up">("steer");
@@ -1824,8 +1828,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 								class="switcher optional"
 								onClick={async () => {
 									const current = runtime()?.state.thinkingLevel ?? "off";
-									const next =
-										THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
+									const levels = availableThinkingLevels();
+									const next = levels[(levels.indexOf(current) + 1) % levels.length];
 									try {
 										await api.setThinking(props.sessionKey, next);
 										props.store.setRuntimeThinkingLevel(props.sessionKey, next);
@@ -1933,8 +1937,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 									class="btn btn-small"
 									onClick={async () => {
 										const current = runtime()?.state.thinkingLevel ?? "off";
-										const next =
-											THINKING_LEVELS[(THINKING_LEVELS.indexOf(current) + 1) % THINKING_LEVELS.length];
+										const levels = availableThinkingLevels();
+										const next = levels[(levels.indexOf(current) + 1) % levels.length];
 										try {
 											await api.setThinking(props.sessionKey, next);
 											props.store.setRuntimeThinkingLevel(props.sessionKey, next);

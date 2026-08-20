@@ -15,7 +15,7 @@ const MAX_METADATA_CHARS = 2_000;
 const MAX_CONTEXT_ENTRY_CHARS = 2_000;
 const MAX_ARBITER_PACKAGE_CHARS = 180_000;
 const MAX_SAFE_ERROR_CHARS = 500;
-const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export interface DispatchRoute {
 	agent: string;
@@ -373,7 +373,7 @@ export class DispatchArbiter {
 				context.messages.push({
 					role: "user",
 					content:
-						'Your previous response did not match the required exact three-key JSON object. Return only {"agent":string,"model":"provider/model","thinking":"off|minimal|low|medium|high|xhigh"}.',
+						'Your previous response did not match the required exact three-key JSON object. Return only {"agent":string,"model":"provider/model","thinking":"off|minimal|low|medium|high|xhigh|max"}.',
 					timestamp: Date.now(),
 				});
 			}

@@ -671,12 +671,29 @@ export function createAppStore() {
 		}));
 	}
 
-	/** Patch the card immediately from the authoritative set-model response. */
-	function setRuntimeModel(key: string, model: { provider: string; id: string }): void {
+	/** Patch model and model-aware thinking state atomically from the authoritative response. */
+	function setRuntimeModel(
+		key: string,
+		result: {
+			model: { provider: string; id: string };
+			thinkingLevel: string;
+			availableThinkingLevels: string[];
+		},
+	): void {
 		mutateFleet((current) => ({
 			...current,
 			runtimes: current.runtimes.map((runtime) =>
-				runtime.key === key ? { ...runtime, state: { ...runtime.state, model } } : runtime,
+				runtime.key === key
+					? {
+							...runtime,
+							state: {
+								...runtime.state,
+								model: result.model,
+								thinkingLevel: result.thinkingLevel,
+								availableThinkingLevels: [...result.availableThinkingLevels],
+							},
+						}
+					: runtime,
 			),
 		}));
 	}

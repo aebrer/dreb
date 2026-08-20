@@ -3,7 +3,10 @@
 	"title": "Pi Coding Agent Theme",
 	"description": "Theme schema for Pi coding agent",
 	"type": "object",
-	"required": ["name", "colors"],
+	"required": [
+		"name",
+		"colors"
+	],
 	"properties": {
 		"$schema": {
 			"type": "string",
@@ -85,6 +88,7 @@
 				"thinkingMedium",
 				"thinkingHigh",
 				"thinkingXhigh",
+				"thinkingMax",
 				"bashMode"
 			],
 			"properties": {
@@ -286,7 +290,11 @@
 				},
 				"thinkingXhigh": {
 					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: xhigh (OpenAI codex-max only)"
+					"description": "Thinking level border: xhigh"
+				},
+				"thinkingMax": {
+					"$ref": "#/$defs/colorValue",
+					"description": "Thinking level border: GPT-5.6 max"
 				},
 				"bashMode": {
 					"$ref": "#/$defs/colorValue",

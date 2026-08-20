@@ -188,7 +188,7 @@ export async function cmdThinking(ctx: Context, userState: UserState, args: stri
 		}
 
 		const level = args.trim().toLowerCase();
-		const valid = ["off", "minimal", "low", "medium", "high"];
+		const valid = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 		if (!valid.includes(level)) {
 			await safeSend(ctx.api, chatId, `Invalid level. Options: ${valid.join(", ")}`);
 			return;
