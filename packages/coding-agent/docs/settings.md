@@ -98,6 +98,12 @@ prompt and append model-specific instructions:
 }
 ```
 
+For a model defined or overridden in `~/.dreb/agent/models.json`, the same two fields may
+instead live directly on its custom `models[]` object or built-in `modelOverrides` object.
+This keeps a custom model and its behavior together. Do not use both surfaces for one
+canonical model: any prompt declaration in both files is rejected, even if both declarations
+use the same mode.
+
 Prompt behavior:
 
 - The key is matched as one exact string. Model IDs may themselves contain `/`, so
@@ -114,12 +120,14 @@ Prompt behavior:
   subagent-definition instructions.
 - Switching or cycling models rebuilds the prompt immediately: instructions from the old
   model are removed and instructions for the new model are applied. `/reload` picks up
-  external `settings.json` edits.
+  external prompt edits and removals from both `settings.json` and `models.json`.
 - Global and project entries follow the existing per-property merge. A project value wins
   for the same field; a merged entry that supplies both prompt modes is rejected rather
   than choosing one silently.
-- Built-in and custom models use the same lookup. Register a local model in `models.json`,
-  then use its exact `provider/id` here.
+- Built-in and custom models use the same exact identity. A `models.json` custom model or
+  built-in override can own the prompt directly; otherwise use its exact `provider/id` here.
+- A canonical model with prompt behavior in both files is invalid. There is no source
+  precedence between `models.json` and `settings.json`.
 
 ### UI & Display
 

@@ -101,6 +101,7 @@ const registry = {
 	getAll: () => models,
 	find: (provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id),
 	getApiKey: vi.fn().mockResolvedValue("test-key"),
+	getModelPromptSettings: () => undefined,
 	authStorage: { hasAuth: () => true },
 } as unknown as Parameters<typeof executeSingle>[8];
 

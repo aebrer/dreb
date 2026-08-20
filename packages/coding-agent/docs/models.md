@@ -81,7 +81,8 @@ Override defaults when you need specific values:
           "input": ["text"],
           "contextWindow": 128000,
           "maxTokens": 32000,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "appendSystemPrompt": "Prefer solutions that fit this local model's context and tool capabilities."
         }
       ]
     }
@@ -89,7 +90,7 @@ Override defaults when you need specific values:
 }
 ```
 
-The file reloads each time you open `/model`. Edit during session; no restart needed.
+The file reloads each time you open `/model`. `/reload` also refreshes model-specific prompt metadata for the active model, so prompt edits do not require a restart.
 
 ## Supported APIs
 
@@ -202,16 +203,28 @@ Leave `authHeader` unset or `false` for endpoints that expect `x-api-key`.
 | `maxTokens` | No | `16384` | Maximum output tokens |
 | `cost` | No | all zeros | `{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}` (per million tokens) |
 | `compat` | No | provider `compat` | OpenAI compatibility overrides. Merged with provider-level `compat` when both are set. |
+| `systemPrompt` | No | — | Replace dreb's built-in prompt whenever this exact custom model is active. Mutually exclusive with `appendSystemPrompt`. |
+| `appendSystemPrompt` | No | — | Preserve the selected base prompt and append model-specific instructions. Mutually exclusive with `systemPrompt`. |
 
 Current behavior:
 - `/model` and `--list-models` list entries by model `id`.
 - The configured `name` is used for model matching and detail/status text.
 
-To give one custom or built-in model persistent behavioral instructions, add an exact
-`provider/model` entry under [`modelSettings`](settings.md#modelsettings) in `settings.json`.
-There you can replace dreb's built-in system prompt with `systemPrompt` or preserve it and
-add instructions with `appendSystemPrompt`. This stays separate from model transport and
-capability metadata in `models.json`.
+A custom model can keep its behavioral prompt beside its transport and capability metadata:
+set exactly one of `systemPrompt` and `appendSystemPrompt` on that model object. Values must
+be non-empty strings. Model IDs may contain `/`; dreb retains the provider and complete model
+ID as an exact identity.
+
+The same behavior is also configurable through an exact `provider/model` entry under
+[`modelSettings`](settings.md#modelsettings) in `settings.json`. Configure prompt behavior for
+a canonical model in only one file. If both `models.json` and `settings.json` declare either
+prompt field for that model, dreb fails loudly instead of selecting a source.
+
+An explicit session replacement from `--system-prompt`, `SYSTEM.md`, or an SDK resource
+loader remains stronger than a model's `systemPrompt`. `appendSystemPrompt` follows the
+selected base and existing session append sources. Switching, cycling, or restoring a model
+rebuilds the prompt immediately; `/reload` picks up prompt edits and removals from either
+configuration file.
 
 ## Overriding Built-in Providers
 
@@ -261,6 +274,7 @@ Use `modelOverrides` to customize specific built-in models without replacing the
       "modelOverrides": {
         "anthropic/claude-sonnet-4": {
           "name": "Claude Sonnet 4 (Bedrock Route)",
+          "appendSystemPrompt": "Use APIs and capabilities available through the Bedrock route.",
           "compat": {
             "openRouterRouting": {
               "only": ["amazon-bedrock"]
@@ -273,7 +287,11 @@ Use `modelOverrides` to customize specific built-in models without replacing the
 }
 ```
 
-`modelOverrides` supports these fields per model: `name`, `reasoning`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `headers`, `compat`.
+`modelOverrides` supports these fields per model: `name`, `reasoning`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `headers`, `compat`, `systemPrompt`, `appendSystemPrompt`.
+
+Prompt fields follow the same rules as custom model entries: choose replacement or append,
+not both; use a non-empty string; and do not also configure prompt behavior for the canonical
+provider/model in `settings.json`.
 
 Behavior notes:
 - `modelOverrides` are applied to built-in provider models.

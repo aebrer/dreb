@@ -26,6 +26,7 @@ function createSession({
 	settingsManager: providedSettingsManager,
 	initialModel = reasoningModel,
 	resourceLoader = createTestResourceLoader(),
+	modelRegistry: providedModelRegistry,
 }: {
 	thinkingLevel?: ThinkingLevel;
 	defaultThinkingLevel?: ThinkingLevel;
@@ -33,6 +34,7 @@ function createSession({
 	settingsManager?: SettingsManager;
 	initialModel?: Model<Api>;
 	resourceLoader?: ReturnType<typeof createTestResourceLoader>;
+	modelRegistry?: ModelRegistry;
 } = {}) {
 	const settingsManager = providedSettingsManager ?? SettingsManager.inMemory({ defaultThinkingLevel });
 	const sessionManager = SessionManager.inMemory();
@@ -40,7 +42,7 @@ function createSession({
 	authStorage.setRuntimeApiKey("anthropic", "test-key");
 	authStorage.setRuntimeApiKey("openai", "test-key");
 	authStorage.setRuntimeApiKey(initialModel.provider, "test-key");
-	const modelRegistry = new ModelRegistry(authStorage, undefined);
+	const modelRegistry = providedModelRegistry ?? new ModelRegistry(authStorage, undefined);
 	const session = new AgentSession({
 		agent: new Agent({
 			getApiKey: () => "test-key",
@@ -60,6 +62,17 @@ function createSession({
 	});
 
 	return { session, sessionManager, settingsManager, modelRegistry };
+}
+
+function createModelsRegistry(providers: Record<string, unknown>) {
+	const dir = mkdtempSync(join(tmpdir(), "dreb-model-prompts-registry-"));
+	const modelsJsonPath = join(dir, "models.json");
+	writeFileSync(modelsJsonPath, JSON.stringify({ providers }));
+	const authStorage = AuthStorage.inMemory();
+	authStorage.setRuntimeApiKey("anthropic", "test-key");
+	authStorage.setRuntimeApiKey("openai", "test-key");
+	const modelRegistry = new ModelRegistry(authStorage, modelsJsonPath);
+	return { dir, modelsJsonPath, modelRegistry };
 }
 
 function createThinkingDisplaySession(settingsManager: SettingsManager = SettingsManager.inMemory()) {
@@ -159,6 +172,52 @@ describe("AgentSession model switching — prompt validation", () => {
 				expect(settingsManager.getDefaultModel()).toBe(reasoningModel.id);
 			} finally {
 				session.dispose();
+			}
+		},
+	);
+
+	it.each(["setModel", "scoped cycle", "available cycle"] as const)(
+		"rejects models.json and settings.json source conflicts atomically via %s",
+		async (switchPath) => {
+			const { dir, modelRegistry } = createModelsRegistry({
+				[nonReasoningModel.provider]: {
+					modelOverrides: {
+						[nonReasoningModel.id]: { systemPrompt: "MODELS JSON REPLACEMENT" },
+					},
+				},
+			});
+			const settingsManager = SettingsManager.inMemory({
+				defaultProvider: reasoningModel.provider,
+				defaultModel: reasoningModel.id,
+				modelSettings: {
+					[`${nonReasoningModel.provider}/${nonReasoningModel.id}`]: {
+						appendSystemPrompt: "SETTINGS JSON APPEND",
+					},
+				},
+			});
+			const { session, sessionManager } = createSession({
+				settingsManager,
+				modelRegistry,
+				scopedModels:
+					switchPath === "scoped cycle" ? [{ model: reasoningModel }, { model: nonReasoningModel }] : undefined,
+			});
+			if (switchPath === "available cycle") {
+				vi.spyOn(modelRegistry, "getAvailable").mockResolvedValue([reasoningModel, nonReasoningModel]);
+			}
+			const initialPrompt = session.systemPrompt;
+			const initialEntries = sessionManager.getEntries();
+
+			try {
+				const switchModel = switchPath === "setModel" ? session.setModel(nonReasoningModel) : session.cycleModel();
+				await expect(switchModel).rejects.toThrow("configured in both models.json and settings.json");
+				expect(session.model).toMatchObject({ provider: reasoningModel.provider, id: reasoningModel.id });
+				expect(session.systemPrompt).toBe(initialPrompt);
+				expect(sessionManager.getEntries()).toEqual(initialEntries);
+				expect(settingsManager.getDefaultProvider()).toBe(reasoningModel.provider);
+				expect(settingsManager.getDefaultModel()).toBe(reasoningModel.id);
+			} finally {
+				session.dispose();
+				rmSync(dir, { recursive: true, force: true });
 			}
 		},
 	);
@@ -283,16 +342,23 @@ describe("AgentSession switchSession — thinkingDisplay", () => {
 		}
 	});
 
-	it("rejects malformed restored-model prompt settings before changing or disconnecting the active session", async () => {
+	it("rejects conflicting restored-model prompt sources before changing or disconnecting the session", async () => {
 		const settingsManager = SettingsManager.inMemory({
 			modelSettings: {
 				[`${adaptiveModel.provider}/${adaptiveModel.id}`]: {
-					systemPrompt: "REPLACEMENT",
-					appendSystemPrompt: "APPEND",
+					appendSystemPrompt: "SETTINGS JSON APPEND",
 				},
 			},
 		});
-		const { session, sessionManager } = createSession({ settingsManager });
+		const { dir, modelRegistry } = createModelsRegistry({
+			[adaptiveModel.provider]: {
+				modelOverrides: {
+					[adaptiveModel.id]: { systemPrompt: "MODELS JSON REPLACEMENT" },
+				},
+			},
+		});
+		tempDirs.push(dir);
+		const { session, sessionManager } = createSession({ settingsManager, modelRegistry });
 		const sessionPath = writeSessionFileWithModel(adaptiveModel);
 		const initialModel = session.model;
 		const initialPrompt = session.systemPrompt;
@@ -305,7 +371,7 @@ describe("AgentSession switchSession — thinkingDisplay", () => {
 
 		try {
 			await expect(session.switchSession(sessionPath)).rejects.toThrow(
-				"cannot define both systemPrompt and appendSystemPrompt",
+				"configured in both models.json and settings.json",
 			);
 
 			expect(session.model).toBe(initialModel);
@@ -399,6 +465,115 @@ describe("AgentSession model switching — system prompt identity", () => {
 });
 
 describe("AgentSession model-specific system prompts", () => {
+	it("uses replacement metadata from a custom models.json model", () => {
+		const { dir, modelRegistry } = createModelsRegistry({
+			ollama: {
+				baseUrl: "http://localhost:11434/v1",
+				apiKey: "ollama",
+				api: "openai-completions",
+				models: [
+					{
+						id: "team/qwen-local",
+						systemPrompt: "CUSTOM MODEL REPLACEMENT",
+					},
+				],
+			},
+		});
+		const customModel = modelRegistry.find("ollama", "team/qwen-local")!;
+		const { session } = createSession({ initialModel: customModel, modelRegistry });
+
+		try {
+			expect(session.systemPrompt).toMatch(/^CUSTOM MODEL REPLACEMENT/);
+			expect(session.systemPrompt).not.toContain("You are an expert coding assistant operating inside dreb");
+			expect(session.systemPrompt).toContain("You are running on: ollama/team/qwen-local");
+		} finally {
+			session.dispose();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("appends built-in override metadata to both default and explicit replacement bases", () => {
+		const modelAppend = "MODELS JSON BUILT-IN APPEND";
+		const { dir, modelRegistry } = createModelsRegistry({
+			[reasoningModel.provider]: {
+				modelOverrides: {
+					[reasoningModel.id]: { appendSystemPrompt: modelAppend },
+				},
+			},
+		});
+		const defaultSession = createSession({ modelRegistry }).session;
+		const explicitSession = createSession({
+			modelRegistry,
+			resourceLoader: createTestResourceLoader({ systemPrompt: "EXPLICIT REPLACEMENT" }),
+		}).session;
+
+		try {
+			expect(defaultSession.systemPrompt).toContain("You are an expert coding assistant operating inside dreb");
+			expect(defaultSession.systemPrompt).toContain(modelAppend);
+			expect(explicitSession.systemPrompt).toMatch(/^EXPLICIT REPLACEMENT/);
+			expect(explicitSession.systemPrompt).toContain(modelAppend);
+			expect(explicitSession.systemPrompt).not.toContain("You are an expert coding assistant operating inside dreb");
+		} finally {
+			defaultSession.dispose();
+			explicitSession.dispose();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("replaces models.json instructions when cycling between built-in models", async () => {
+		const firstAppend = "MODELS JSON FIRST APPEND";
+		const secondAppend = "MODELS JSON SECOND APPEND";
+		const { dir, modelRegistry } = createModelsRegistry({
+			[reasoningModel.provider]: {
+				modelOverrides: { [reasoningModel.id]: { appendSystemPrompt: firstAppend } },
+			},
+			[nonReasoningModel.provider]: {
+				modelOverrides: { [nonReasoningModel.id]: { appendSystemPrompt: secondAppend } },
+			},
+		});
+		const { session } = createSession({
+			modelRegistry,
+			scopedModels: [{ model: reasoningModel }, { model: nonReasoningModel }],
+		});
+
+		try {
+			expect(session.systemPrompt).toContain(firstAppend);
+			expect(session.systemPrompt).not.toContain(secondAppend);
+			await session.cycleModel();
+			expect(session.systemPrompt).not.toContain(firstAppend);
+			expect(session.systemPrompt).toContain(secondAppend);
+		} finally {
+			session.dispose();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it.each([
+		["same mode", { systemPrompt: "SETTINGS JSON REPLACEMENT" }],
+		["mixed mode", { appendSystemPrompt: "SETTINGS JSON APPEND" }],
+	] as const)("rejects a %s cross-source conflict during startup", (_label, settingsPrompt) => {
+		const { dir, modelRegistry } = createModelsRegistry({
+			[reasoningModel.provider]: {
+				modelOverrides: {
+					[reasoningModel.id]: { systemPrompt: "MODELS JSON REPLACEMENT" },
+				},
+			},
+		});
+		const settingsManager = SettingsManager.inMemory({
+			modelSettings: {
+				[`${reasoningModel.provider}/${reasoningModel.id}`]: settingsPrompt,
+			},
+		});
+
+		try {
+			expect(() => createSession({ settingsManager, modelRegistry })).toThrow(
+				"configured in both models.json and settings.json",
+			);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("uses a canonical model replacement prompt while retaining runtime context", () => {
 		const settingsManager = SettingsManager.inMemory({
 			modelSettings: {
@@ -495,6 +670,81 @@ describe("AgentSession model-specific system prompts", () => {
 			session.dispose();
 			rmSync(projectDir, { recursive: true, force: true });
 			rmSync(agentDir, { recursive: true, force: true });
+		}
+	});
+
+	it("reloads changed and removed prompt metadata from models.json", async () => {
+		const beforeReload = "MODELS JSON BEFORE RELOAD";
+		const afterReload = "MODELS JSON AFTER RELOAD";
+		const providers = (appendSystemPrompt: string) => ({
+			[reasoningModel.provider]: {
+				modelOverrides: {
+					[reasoningModel.id]: { appendSystemPrompt },
+				},
+			},
+		});
+		const { dir, modelsJsonPath, modelRegistry } = createModelsRegistry(providers(beforeReload));
+		const { session } = createSession({ modelRegistry });
+
+		try {
+			expect(session.systemPrompt).toContain(beforeReload);
+			writeFileSync(modelsJsonPath, JSON.stringify({ providers: providers(afterReload) }));
+			await session.reload();
+			expect(session.systemPrompt).not.toContain(beforeReload);
+			expect(session.systemPrompt).toContain(afterReload);
+
+			writeFileSync(modelsJsonPath, JSON.stringify({ providers: {} }));
+			await session.reload();
+			expect(session.systemPrompt).not.toContain(afterReload);
+			expect(session.systemPrompt).toContain("You are an expert coding assistant operating inside dreb");
+		} finally {
+			session.dispose();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a reload source conflict before shutting down the active runtime", async () => {
+		const projectDir = mkdtempSync(join(tmpdir(), "dreb-model-prompt-project-"));
+		const agentDir = mkdtempSync(join(tmpdir(), "dreb-model-prompt-agent-"));
+		const settingsPath = join(agentDir, "settings.json");
+		writeFileSync(settingsPath, "{}");
+		const settingsManager = SettingsManager.create(projectDir, agentDir);
+		const { dir, modelRegistry } = createModelsRegistry({
+			[reasoningModel.provider]: {
+				modelOverrides: {
+					[reasoningModel.id]: { appendSystemPrompt: "MODELS JSON APPEND" },
+				},
+			},
+		});
+		const { session } = createSession({ settingsManager, modelRegistry });
+		const initialPrompt = session.systemPrompt;
+		const extensionRunner = (
+			session as unknown as {
+				_extensionRunner?: { emit: (event: { type: string }) => Promise<unknown> };
+			}
+		)._extensionRunner!;
+		const emitSpy = vi.spyOn(extensionRunner, "emit");
+
+		try {
+			writeFileSync(
+				settingsPath,
+				JSON.stringify({
+					modelSettings: {
+						[`${reasoningModel.provider}/${reasoningModel.id}`]: {
+							systemPrompt: "SETTINGS JSON REPLACEMENT",
+						},
+					},
+				}),
+			);
+
+			await expect(session.reload()).rejects.toThrow("configured in both models.json and settings.json");
+			expect(session.systemPrompt).toBe(initialPrompt);
+			expect(emitSpy).not.toHaveBeenCalledWith({ type: "session_shutdown" });
+		} finally {
+			session.dispose();
+			rmSync(projectDir, { recursive: true, force: true });
+			rmSync(agentDir, { recursive: true, force: true });
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 

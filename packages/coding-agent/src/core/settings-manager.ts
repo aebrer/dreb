@@ -95,10 +95,7 @@ export interface ModelSpecificSettings {
 	appendSystemPrompt?: string;
 }
 
-export interface ModelPromptSettings {
-	systemPrompt?: string;
-	appendSystemPrompt?: string;
-}
+export type ModelPromptSettings = Pick<ModelSpecificSettings, "systemPrompt" | "appendSystemPrompt">;
 
 export type TransportSetting = Transport;
 
