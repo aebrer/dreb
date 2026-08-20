@@ -26,7 +26,7 @@ Track prepare, phase-one review, findings comment, phase-two assessment, assessm
 
 Extract the required PR number and optional aspects: `code`, `errors`, `tests`, `completeness`, `simplify`.
 
-## Step 3: Prepare, determine the round, and establish the delta
+## Step 3: Prepare, determine the round, and establish the review context
 
 Before checkout, run `git status --porcelain`. If non-empty, stop and use `suggest_next` to offer `/skill:mach6-push`.
 
@@ -51,21 +51,23 @@ PRIOR_ROUNDS="$(printf '%s' "$PR_CONTEXT" | jq '[.comments[] | select(.body | st
 REVIEW_ROUND="$((PRIOR_ROUNDS + 1))"
 ```
 
-For round 3+, extract the most recent parseable full SHA after `Reviewed commit:` in the latest review comment. If found, use `git log <sha>..HEAD` and `git diff <sha>..HEAD`; this delta and its interactions are the review target. Also extract previous merge blockers and verify that each is fixed. Reject unchanged-code findings unless a delta change makes the issue newly reachable. If no legacy SHA is parseable, review the full PR diff but retain all round-3+ rules.
+Use `gh pr diff <pr-number>` in every round. The full PR and the interactions among all of its changes are the review target unless the user explicitly requests a narrower review.
 
-For rounds 1–2, use `gh pr diff <pr-number>`. Mark the PR ready only after all checks pass: `gh pr ready <pr-number>`.
+For round 3+, also extract the most recent parseable full SHA after `Reviewed commit:` in the latest review comment. If found, use `git log <sha>..HEAD` and `git diff <sha>..HEAD` as supplemental context for identifying new changes and verifying prior fixes, never as a replacement for the full PR diff. Extract previous merge blockers and verify that each is fixed. Do not reject a finding merely because the relevant lines are unchanged since the previous round.
+
+Mark the PR ready only after all checks pass: `gh pr ready <pr-number>`.
 
 ## Step 4: Phase one — specialist candidates
 
 Agent mapping: `code` → `code-reviewer`; `errors` → `error-auditor`; `tests` → `test-reviewer`; `completeness` → `completeness-checker`; `simplify` → `simplifier`.
 
-Without targeted aspects:
-- Rounds 1–2: run `code-reviewer`, applicable `error-auditor`, applicable `test-reviewer`, applicable `completeness-checker`, and `simplifier` together in one parallel `subagent` `tasks` call.
-- Round 3+: run the same four core specialists together on the delta. `test-reviewer` remains present when testable code changed. Skip `simplifier` unless `simplify` was explicitly requested.
+Without targeted aspects, run `code-reviewer`, applicable `error-auditor`, applicable `test-reviewer`, applicable `completeness-checker`, and `simplifier` together in one parallel `subagent` `tasks` call in every round. `test-reviewer` remains present whenever the PR contains testable code changes.
 
-With targeted aspects, run only mapped agents, while preserving round-3+ delta constraints. Never run simplifier serially after the others.
+With targeted aspects, run only mapped agents while still reviewing the full PR unless the user explicitly requests a narrower target.
 
-Give every agent changed paths, full PR context, authoritative scope, actual files, and confidence scoring (0–100; report only candidates at least 80). In round 3+, explicitly provide the base SHA, delta, previous blockers, and unchanged-code rejection rule. Verify previous blockers independently even if no agent reports them.
+If dispatch arbitration or a specialist agent fails, retry that specialist. A retry may run separately after the original parallel batch; do not omit a required or requested specialist because its first attempt failed.
+
+Give every agent changed paths, the full PR diff and context, authoritative scope, actual files, and confidence scoring (0–100; report only candidates at least 80). In round 3+, also provide the prior reviewed SHA, supplemental delta, and previous blockers so agents can verify fixes without narrowing the review target. Verify previous blockers independently even if no agent reports them.
 
 ## Step 5: Post unverified candidates
 
@@ -99,7 +101,7 @@ Post with a unique temp file and `gh pr comment <pr-number> --body-file "$GH_BOD
 
 ## Step 6: Phase two — assess with counter-pressure
 
-All assessors receive identical candidate findings, actual code, full PR/issue context, verbatim original quoted requests, acceptance criteria, approved scope changes, review round, and delta context.
+All assessors receive identical candidate findings, actual code, the full PR diff and PR/issue context, verbatim original quoted requests, acceptance criteria, approved scope changes, and the review round. For round 3+, also provide the latest delta as supplemental fix-verification context without narrowing assessment of the full PR.
 
 Apply three gates:
 1. **Factual:** current code contains the problem.

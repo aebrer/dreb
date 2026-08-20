@@ -913,6 +913,66 @@ describe("SettingsManager", () => {
 			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
 			expect(saved.modelSettings).toEqual({ "claude-opus-4-8": { thinkingDisplay: "omitted" } });
 		});
+
+		it("resolves prompt settings only from the exact canonical provider/model key", () => {
+			const manager = SettingsManager.inMemory({
+				modelSettings: {
+					"openrouter/anthropic/claude-sonnet-4": { appendSystemPrompt: "Use the routed model." },
+					"claude-sonnet-4": { systemPrompt: "Legacy bare-ID prompt must not apply." },
+				},
+			});
+
+			expect(manager.getModelPromptSettings("openrouter", "anthropic/claude-sonnet-4")).toEqual({
+				appendSystemPrompt: "Use the routed model.",
+			});
+			expect(manager.getModelPromptSettings("anthropic", "claude-sonnet-4")).toBeUndefined();
+		});
+
+		it("merges global and project prompt settings at the canonical model key", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ modelSettings: { "openai/gpt-test": { appendSystemPrompt: "Global text" } } }),
+			);
+			writeFileSync(
+				join(projectDir, ".dreb", "settings.json"),
+				JSON.stringify({ modelSettings: { "openai/gpt-test": { appendSystemPrompt: "Project text" } } }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getModelPromptSettings("openai", "gpt-test")).toEqual({
+				appendSystemPrompt: "Project text",
+			});
+		});
+
+		it("fails loudly when replacement and append are both configured", () => {
+			const manager = SettingsManager.inMemory({
+				modelSettings: {
+					"openai/gpt-test": {
+						systemPrompt: "Replacement",
+						appendSystemPrompt: "Append",
+					},
+				},
+			});
+
+			expect(() => manager.getModelPromptSettings("openai", "gpt-test")).toThrow(
+				"cannot define both systemPrompt and appendSystemPrompt",
+			);
+		});
+
+		it.each([
+			["systemPrompt", "   "],
+			["appendSystemPrompt", 42],
+		])("fails loudly when %s is not a non-empty string", (field, value) => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ modelSettings: { "openai/gpt-test": { [field]: value } } }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(() => manager.getModelPromptSettings("openai", "gpt-test")).toThrow(
+				`modelSettings.openai/gpt-test.${field} must be a non-empty string`,
+			);
+		});
 	});
 
 	describe("maximum concurrent subagents", () => {
