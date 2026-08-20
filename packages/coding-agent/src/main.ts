@@ -938,7 +938,7 @@ export async function main(args: string[]) {
 		if (requestedThinking === "max" && !supportsMax(session.model)) {
 			log.error(
 				chalk.red(
-					`Thinking level "max" is not supported by model "${session.model.provider}/${session.model.id}". Use "xhigh" or choose a max-capable GPT-5.6 model.`,
+					`Thinking level "max" is not supported by model "${session.model.provider}/${session.model.id}". Use "xhigh" or choose a max-capable model.`,
 				),
 			);
 			process.exit(1);

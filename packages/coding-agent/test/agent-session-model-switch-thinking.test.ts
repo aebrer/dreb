@@ -82,7 +82,7 @@ function createThinkingDisplaySession(settingsManager: SettingsManager = Setting
 }
 
 describe("AgentSession model switching", () => {
-	it("exposes max only for GPT-5.6 and clamps max to xhigh on model switch", async () => {
+	it("exposes max only for max-capable models and clamps max to xhigh on model switch", async () => {
 		const { session } = createSession({
 			thinkingLevel: "max",
 			scopedModels: [{ model: maxModel }, { model: xhighModel }],

@@ -444,7 +444,7 @@ const response = await completeSimple(model, {
   messages: [{ role: 'user', content: 'Solve: 2x + 5 = 13' }]
 }, {
   reasoning: 'medium'  // 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
-  // Native normalized 'max' is GPT-5.6-specific. Claude's established xhigh mapping still emits provider-native 'max'.
+  // Native normalized 'max' is model-aware (currently GPT-5.6). Claude's established xhigh mapping still emits provider-native 'max'.
 });
 
 // Access thinking and text blocks

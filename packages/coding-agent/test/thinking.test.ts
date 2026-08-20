@@ -62,7 +62,7 @@ describe("resolveEffectiveThinkingLevel", () => {
 		expect(resolveEffectiveThinkingLevel(reasoningModel, "max")).toBe("high");
 	});
 
-	test("GPT-5.6 models preserve max", () => {
+	test("max-capable models preserve max", () => {
 		expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id: "gpt-5.6-sol" }, "max")).toBe("max");
 	});
 });
@@ -100,7 +100,7 @@ describe("validateThinkingLevelForModel", () => {
 		expect(validateThinkingLevelForModel(reasoningModel, "xhigh")).toMatchObject({ ok: false });
 	});
 
-	test("accepts max only for GPT-5.6 models", () => {
+	test("accepts max only for max-capable models", () => {
 		expect(validateThinkingLevelForModel(maxModel, "max")).toEqual({ ok: true });
 		expect(validateThinkingLevelForModel(xhighModel, "max")).toMatchObject({ ok: false });
 	});

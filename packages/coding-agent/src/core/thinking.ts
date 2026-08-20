@@ -58,7 +58,7 @@ export function validateThinkingLevelForModel(
 	if (thinkingLevel === "max" && !supportsMax(model)) {
 		return {
 			ok: false,
-			error: `Thinking level "max" is not supported by model "${modelRef}". Use "xhigh" or choose a max-capable GPT-5.6 model.`,
+			error: `Thinking level "max" is not supported by model "${modelRef}". Use "xhigh" or choose a max-capable model.`,
 		};
 	}
 	if (thinkingLevel === "xhigh" && !supportsXhigh(model)) {

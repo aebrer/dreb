@@ -229,7 +229,7 @@ Editor border colors indicating thinking level (visual hierarchy from subtle to 
 | `thinkingMedium` | Medium thinking |
 | `thinkingHigh` | High thinking |
 | `thinkingXhigh` | Extra high thinking |
-| `thinkingMax` | GPT-5.6 maximum thinking |
+| `thinkingMax` | Maximum thinking effort |
 
 ### Bash Mode (1 color)
 

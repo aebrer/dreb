@@ -293,7 +293,7 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 /** Thinking levels including xhigh (for supported models). */
 const THINKING_LEVELS_WITH_XHIGH: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
-/** Complete ordered scale, including GPT-5.6's native max tier. */
+/** Complete ordered scale, including the native max tier for supported models. */
 const THINKING_LEVELS_WITH_MAX: ThinkingLevel[] = [...THINKING_LEVELS_WITH_XHIGH, "max"];
 const MIN_PERFORMANCE_DURATION_MS = 10;
 

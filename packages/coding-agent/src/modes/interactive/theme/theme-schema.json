@@ -294,7 +294,7 @@
 				},
 				"thinkingMax": {
 					"$ref": "#/$defs/colorValue",
-					"description": "Thinking level border: GPT-5.6 max"
+					"description": "Thinking level border: max"
 				},
 				"bashMode": {
 					"$ref": "#/$defs/colorValue",
