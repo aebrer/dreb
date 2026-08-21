@@ -271,6 +271,8 @@ export interface RuntimeInfoDto {
 	key: string;
 	cwd: string;
 	state: SessionStateDto;
+	/** Monotonic pool revision for confirmed model/thinking mutations. */
+	settingsRevision?: number;
 	/** Lean session stats for fleet cards; omitted when the runtime stats call fails. */
 	stats?: RuntimeStatsSummaryDto;
 	/** Background agents known to this runtime. */
@@ -298,6 +300,8 @@ export interface FleetRuntimeSnapshotDto {
 	key: string;
 	cwd: string;
 	state: SessionStateDto;
+	/** Monotonic pool revision for confirmed model/thinking mutations. */
+	settingsRevision?: number;
 	backgroundAgents: BackgroundAgentDto[];
 	needsAttention: boolean;
 	error?: string;

@@ -216,7 +216,10 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 	if (model.reasoning) {
 		if (options?.reasoningEffort || options?.reasoningSummary) {
 			params.reasoning = {
-				effort: options?.reasoningEffort || "medium",
+				// OpenAI accepts `max` for GPT-5.6, but SDK 6.26's generated union predates it.
+				effort: (options?.reasoningEffort || "medium") as NonNullable<
+					ResponseCreateParamsStreaming["reasoning"]
+				>["effort"],
 				summary: options?.reasoningSummary || "auto",
 			};
 			params.include = ["reasoning.encrypted_content"];

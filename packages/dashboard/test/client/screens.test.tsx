@@ -216,8 +216,13 @@ vi.mock("../../src/client/api.js", () => ({
 		abort: vi.fn(async () => ({})),
 		abortCompaction: vi.fn(async () => ({})),
 		abortRetry: vi.fn(async () => ({})),
-		setModel: vi.fn(async () => ({ provider: "test", id: "m1" })),
-		setThinking: vi.fn(async () => ({})),
+		setModel: vi.fn(async () => ({
+			model: { provider: "test", id: "m1" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			settingsRevision: 1,
+		})),
+		setThinking: vi.fn(async () => ({ ok: true, settingsRevision: 1 })),
 		compact: vi.fn(async () => ({})),
 		newSession: vi.fn(async () => ({ cancelled: false })),
 		reload: vi.fn(async () => ({ ok: true })),
@@ -1350,6 +1355,67 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("scan things");
 		// Suggest-next chip
 		expect(el.textContent).toContain("/skill:test");
+	});
+
+	it("keeps mounted header details live and refreshes context when compaction ends", async () => {
+		const baseStore = makeStore() as any;
+		const session = createSessionViewState("live");
+		session.compacting = true;
+		const [sessions, setSessions] = createStore({ live: session });
+		const runtime = runtimeInfo("live");
+		runtime.state.model = { provider: "test", id: "old-model" };
+		runtime.state.contextUsage = { tokens: null, contextWindow: 200_000, percent: null };
+		const [fleet, setFleet] = createSignal({ runtimes: [runtime], diskSessions: [] });
+		const detailStats = (tokens: number, percent: number) => ({
+			sessionId: "live",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 2,
+			tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
+			cost: 0.1,
+			contextUsage: { tokens, contextWindow: 200_000, percent },
+		});
+		const refreshRuntimeStats = vi
+			.fn()
+			.mockResolvedValueOnce(detailStats(50_000, 25))
+			.mockResolvedValueOnce(detailStats(20_000, 10));
+		const fakeStore = {
+			...baseStore,
+			sessions,
+			fleet,
+			hydrateSession: vi.fn(async () => {}),
+			refreshRuntimeStats,
+		};
+
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="live" />);
+		await vi.waitFor(() => expect(el.querySelector(".session-bar output.switcher")?.textContent).toContain("25%"));
+		expect(el.textContent).not.toContain("ctx ?");
+
+		setFleet((current) => ({
+			...current,
+			runtimes: current.runtimes.map((item) =>
+				item.key === "live"
+					? { ...item, state: { ...item.state, model: { provider: "test", id: "live-model" } } }
+					: item,
+			),
+		}));
+		await vi.waitFor(() => expect(el.textContent).toContain("test/live-model"));
+
+		refreshRuntimeStats.mockClear();
+		setSessions("live", "compacting", false);
+		await vi.waitFor(() => expect(refreshRuntimeStats).toHaveBeenCalledOnce());
+		await vi.waitFor(() => expect(el.querySelector(".session-bar output.switcher")?.textContent).toContain("10%"));
+
+		refreshRuntimeStats.mockClear();
+		refreshRuntimeStats.mockRejectedValueOnce(new Error("stats unavailable"));
+		setSessions("live", "compacting", true);
+		await Promise.resolve();
+		setSessions("live", "compacting", false);
+		await vi.waitFor(() => expect(refreshRuntimeStats).toHaveBeenCalledOnce());
+		await vi.waitFor(() => expect(el.textContent).toContain("stats unavailable"));
+		expect(el.querySelector(".session-bar output.switcher")?.textContent).toContain("10%");
 	});
 
 	it("session view without streaming hides stop and mode toggle", () => {
@@ -6084,7 +6150,9 @@ describe("dashboard client regressions", () => {
 	});
 
 	it("fork modal rewinds to a selected user message and prefills the composer", async () => {
-		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
+		vi.mocked(api.forkMessages).mockResolvedValue({
+			messages: [{ entryId: "u1", text: "original prompt", role: "user" }],
+		});
 		vi.mocked(api.fork).mockResolvedValue({ text: "original prompt", cancelled: false });
 		const store = makeStore() as any;
 		const hydrateSession = vi.fn(async () => {});
@@ -6110,6 +6178,81 @@ describe("dashboard client regressions", () => {
 		expect(refreshDiskSessions).toHaveBeenCalledOnce();
 		expect(api.fleet).not.toHaveBeenCalled();
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("original prompt");
+	});
+
+	it("fork modal forks at an assistant message without prefilling the composer", async () => {
+		vi.mocked(api.forkMessages).mockResolvedValue({
+			messages: [{ entryId: "a1", text: "the answer", role: "assistant" }],
+		});
+		// Assistant forks return empty re-ask text (branch already includes the answer).
+		vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: false });
+		const store = makeStore() as any;
+		const hydrateSession = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
+		const fakeStore = {
+			...store,
+			sessions: { forkasst: createSessionViewState("forkasst") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession,
+			refreshDiskSessions,
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkasst" />);
+		// Pre-type a draft into the composer. The no-clobber guard in finishFork must
+		// preserve it: an assistant fork returns text "" and must NOT wipe the draft.
+		const composer = el.querySelector("textarea") as HTMLTextAreaElement;
+		composer.value = "draft in progress";
+		composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		// The row is labeled by role.
+		expect(el.querySelector(".fork-role")?.textContent).toBe("assistant");
+		(el.querySelector(".fork-message") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.fork).toHaveBeenCalledWith("forkasst", "a1");
+		expect(hydrateSession).toHaveBeenCalledWith("forkasst");
+		expect(refreshDiskSessions).toHaveBeenCalledOnce();
+		// No composer pre-fill AND no clobber: the user's in-progress draft survives
+		// (assistant forks return "" and must not overwrite the composer).
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("draft in progress");
+	});
+
+	it("fork modal informs the user and stays open when a message fork is cancelled", async () => {
+		vi.mocked(api.forkMessages).mockResolvedValue({
+			messages: [{ entryId: "u1", text: "original prompt", role: "user" }],
+		});
+		// Extension veto → api.fork returns cancelled with no branch created.
+		vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: true });
+		const store = makeStore() as any;
+		const hydrateSession = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
+		const fakeStore = {
+			...store,
+			sessions: { forkmsgcancel: createSessionViewState("forkmsgcancel") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession,
+			refreshDiskSessions,
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkmsgcancel" />);
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		// Ignore the mount-time hydration; assert only what the fork handler does.
+		hydrateSession.mockClear();
+		refreshDiskSessions.mockClear();
+		(el.querySelector(".fork-message") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.fork).toHaveBeenCalledWith("forkmsgcancel", "u1");
+		// The shared finishFork helper must inform the user for the message-fork flow too:
+		// the modal stays open with a message, the composer is not pre-filled, and no
+		// session churn happens as if a branch had been created.
+		expect(el.querySelector(".fork-message")).not.toBeNull();
+		expect(el.querySelector(".pair-error")?.textContent ?? "").toMatch(/no new branch|cancelled/i);
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+		expect(hydrateSession).not.toHaveBeenCalled();
+		expect(refreshDiskSessions).not.toHaveBeenCalled();
 	});
 
 	it("session stats popover shows the detailed stats breakdown", async () => {
@@ -6477,7 +6620,12 @@ describe("dashboard client regressions", () => {
 		vi.mocked(api.fleet).mockClear();
 		(el.querySelector(".model-row") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(setRuntimeModel).toHaveBeenCalledWith("k1", { provider: "test", id: "m1" });
+		expect(setRuntimeModel).toHaveBeenCalledWith("k1", {
+			model: { provider: "test", id: "m1" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			settingsRevision: 1,
+		});
 		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 	});
 

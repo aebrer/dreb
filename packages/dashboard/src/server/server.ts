@@ -889,15 +889,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			res.status(400).json({ error: "provider and modelId are required" });
 			return;
 		}
-		withRuntime(req, res, async (h) => {
-			const model = await h.client.setModel(provider, modelId);
-			const state = await h.client.getState();
-			return {
-				model,
-				thinkingLevel: state.thinkingLevel,
-				availableThinkingLevels: state.availableThinkingLevels,
-			};
-		});
+		withRuntime(req, res, (h) => pool.setModel(h, provider, modelId));
 	});
 
 	app.get("/api/runtimes/:key/models", (req, res) => {
@@ -910,7 +902,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			res.status(400).json({ error: "level is required" });
 			return;
 		}
-		withRuntime(req, res, (h) => h.client.setThinkingLevel(level as never));
+		withRuntime(req, res, (h) => pool.setThinkingLevel(h, level as never));
 	});
 
 	app.post("/api/runtimes/:key/compact", (req, res) => {

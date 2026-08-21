@@ -184,13 +184,19 @@ Cards use the latest assistant text in hydrated client transcript entries for
 their activity preview. The authoritative initial-load or resync fleet value is
 the fallback until transcript entries are available. Likewise, `ctx%` is always
 copied from authoritative session state or stats, never calculated in the
-browser. Card position remains deterministic: project path, then session start
+browser. Immediately after compaction, the session supplies a conservative
+estimate over the rebuilt context until a later provider response supplies fresh
+usage. Card position remains deterministic: project path, then session start
 time.
 
 Opening a session uses one `GET /api/runtimes/:key/hydrate` request. It is backed
 by one `getDashboardSnapshot` RPC call and its matching ordering barrier, instead
-of separately fetching state, messages, and background agents. The existing
-replay/resync ordering contract still applies.
+of separately fetching state, messages, and background agents. While that view
+remains mounted, periodic, turn-end, and compaction-end detail refreshes merge
+back into the shared runtime state. Confirmed model/thinking mutations update the
+pool snapshot and are protected from older in-flight SSE frames only until the
+matching sequenced snapshot arrives. The existing replay/resync ordering contract
+still applies.
 
 ## Live connection and recovery
 

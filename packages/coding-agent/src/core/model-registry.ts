@@ -25,6 +25,7 @@ import { join } from "path";
 import { getAgentDir } from "../config.js";
 import type { AuthStorage } from "./auth-storage.js";
 import { clearConfigValueCache, resolveConfigValue, resolveHeaders } from "./resolve-config-value.js";
+import type { ModelPromptSettings } from "./settings-manager.js";
 
 const Ajv = (AjvModule as any).default || AjvModule;
 const ajv = new Ajv();
@@ -102,6 +103,8 @@ const ModelDefinitionSchema = Type.Object({
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(OpenAICompatSchema),
+	systemPrompt: Type.Optional(Type.String({ minLength: 1 })),
+	appendSystemPrompt: Type.Optional(Type.String({ minLength: 1 })),
 });
 
 // Schema for per-model overrides (all fields optional, merged with built-in model)
@@ -121,6 +124,8 @@ const ModelOverrideSchema = Type.Object({
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(OpenAICompatSchema),
+	systemPrompt: Type.Optional(Type.String({ minLength: 1 })),
+	appendSystemPrompt: Type.Optional(Type.String({ minLength: 1 })),
 });
 
 type ModelOverride = Static<typeof ModelOverrideSchema>;
@@ -144,6 +149,33 @@ ajv.addSchema(ModelsConfigSchema, "ModelsConfig");
 
 type ModelsConfig = Static<typeof ModelsConfigSchema>;
 
+function validateModelPromptSettings(settings: ModelPromptSettings, modelRef: string): void {
+	const { systemPrompt, appendSystemPrompt } = settings;
+	if (systemPrompt !== undefined && (typeof systemPrompt !== "string" || systemPrompt.trim().length === 0)) {
+		throw new Error(`models.json entry ${modelRef}.systemPrompt must be a non-empty string`);
+	}
+	if (
+		appendSystemPrompt !== undefined &&
+		(typeof appendSystemPrompt !== "string" || appendSystemPrompt.trim().length === 0)
+	) {
+		throw new Error(`models.json entry ${modelRef}.appendSystemPrompt must be a non-empty string`);
+	}
+	if (systemPrompt !== undefined && appendSystemPrompt !== undefined) {
+		throw new Error(`models.json entry ${modelRef} cannot define both systemPrompt and appendSystemPrompt`);
+	}
+}
+
+function extractModelPromptSettings(settings: ModelPromptSettings): ModelPromptSettings | undefined {
+	const { systemPrompt, appendSystemPrompt } = settings;
+	return systemPrompt === undefined && appendSystemPrompt === undefined
+		? undefined
+		: { systemPrompt, appendSystemPrompt };
+}
+
+function modelRef(provider: string, modelId: string): string {
+	return `${provider}/${modelId}`;
+}
+
 /** Provider override config without custom models. */
 interface ProviderOverride {
 	baseUrl?: string;
@@ -156,6 +188,8 @@ interface ProviderOverride {
 /** Result of loading custom models from models.json */
 interface CustomModelsResult {
 	models: Model<Api>[];
+	/** Prompt settings declared on custom model definitions, keyed by exact provider/model. */
+	customModelPromptSettings: Map<string, ModelPromptSettings>;
 	/** Providers with baseUrl/headers/apiKey overrides for built-in models */
 	overrides: Map<string, ProviderOverride>;
 	/** Per-model overrides: provider -> modelId -> override */
@@ -164,7 +198,13 @@ interface CustomModelsResult {
 }
 
 function emptyCustomModelsResult(error?: string): CustomModelsResult {
-	return { models: [], overrides: new Map(), modelOverrides: new Map(), error };
+	return {
+		models: [],
+		customModelPromptSettings: new Map(),
+		overrides: new Map(),
+		modelOverrides: new Map(),
+		error,
+	};
 }
 
 function withoutHeader(
@@ -278,6 +318,7 @@ export const clearApiKeyCache = clearConfigValueCache;
  */
 export class ModelRegistry {
 	private models: Model<Api>[] = [];
+	private modelPromptSettings: Map<string, ModelPromptSettings> = new Map();
 	private customProviderApiKeys: Map<string, string> = new Map();
 	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
 	private loadError: string | undefined = undefined;
@@ -328,6 +369,7 @@ export class ModelRegistry {
 		// Load custom models and overrides from models.json
 		const {
 			models: customModels,
+			customModelPromptSettings,
 			overrides,
 			modelOverrides,
 			error,
@@ -341,6 +383,21 @@ export class ModelRegistry {
 		const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
 		let combined = this.mergeCustomModels(builtInModels, customModels);
 
+		// Keep coding-agent prompt metadata in a sidecar so it is not serialized in RPC model
+		// state or passed through the generic provider streaming layer. Custom models replace
+		// built-in entries by provider/id, so their prompt declaration (including absence) wins.
+		const promptSettings = new Map<string, ModelPromptSettings>();
+		for (const model of builtInModels) {
+			const settings = extractModelPromptSettings(modelOverrides.get(model.provider)?.get(model.id) ?? {});
+			if (settings) promptSettings.set(modelRef(model.provider, model.id), settings);
+		}
+		for (const model of customModels) {
+			const ref = modelRef(model.provider, model.id);
+			promptSettings.delete(ref);
+			const settings = customModelPromptSettings.get(ref);
+			if (settings) promptSettings.set(ref, settings);
+		}
+
 		// Let OAuth providers modify their models (e.g., update baseUrl)
 		for (const oauthProvider of this.authStorage.getOAuthProviders()) {
 			const cred = this.authStorage.get(oauthProvider.id);
@@ -350,6 +407,7 @@ export class ModelRegistry {
 		}
 
 		this.models = combined;
+		this.modelPromptSettings = promptSettings;
 	}
 
 	/** Load built-in models and apply provider/model overrides */
@@ -429,6 +487,7 @@ export class ModelRegistry {
 			// Additional validation
 			this.validateConfig(config);
 
+			const customModelPromptSettings = new Map<string, ModelPromptSettings>();
 			const overrides = new Map<string, ProviderOverride>();
 			const modelOverrides = new Map<string, Map<string, ModelOverride>>();
 
@@ -458,9 +517,20 @@ export class ModelRegistry {
 				if (providerConfig.modelOverrides) {
 					modelOverrides.set(providerName, new Map(Object.entries(providerConfig.modelOverrides)));
 				}
+
+				for (const model of providerConfig.models ?? []) {
+					const settings = extractModelPromptSettings(model);
+					if (settings) customModelPromptSettings.set(modelRef(providerName, model.id), settings);
+				}
 			}
 
-			return { models: this.parseModels(config), overrides, modelOverrides, error: undefined };
+			return {
+				models: this.parseModels(config),
+				customModelPromptSettings,
+				overrides,
+				modelOverrides,
+				error: undefined,
+			};
 		} catch (error) {
 			if (error instanceof SyntaxError) {
 				return emptyCustomModelsResult(`Failed to parse models.json: ${error.message}\n\nFile: ${modelsJsonPath}`);
@@ -495,7 +565,12 @@ export class ModelRegistry {
 				}
 			}
 
+			for (const [modelId, modelOverride] of Object.entries(providerConfig.modelOverrides ?? {})) {
+				validateModelPromptSettings(modelOverride, `${providerName}/${modelId}`);
+			}
+
 			for (const modelDef of models) {
+				validateModelPromptSettings(modelDef, `${providerName}/${modelDef.id}`);
 				const hasModelApi = !!modelDef.api;
 
 				if (!hasProviderApi && !hasModelApi) {
@@ -582,6 +657,12 @@ export class ModelRegistry {
 	 */
 	find(provider: string, modelId: string): Model<Api> | undefined {
 		return this.models.find((m) => m.provider === provider && m.id === modelId);
+	}
+
+	/** Resolve prompt metadata loaded from models.json for one exact provider/model pair. */
+	getModelPromptSettings(provider: string, modelId: string): ModelPromptSettings | undefined {
+		const settings = this.modelPromptSettings.get(modelRef(provider, modelId));
+		return settings ? { ...settings } : undefined;
 	}
 
 	/**

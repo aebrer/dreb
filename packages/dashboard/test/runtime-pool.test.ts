@@ -24,6 +24,7 @@ export function makeFakeClient() {
 			sessionId: "s1",
 			tasks: [],
 			thinkingLevel: "medium",
+			availableThinkingLevels: ["off", "medium", "high"],
 			isStreaming: false,
 			isRetrying: false,
 			retryAttempt: 0,
@@ -104,6 +105,8 @@ export function makeFakeClient() {
 		getAvailableModels: vi.fn(async () => [
 			{ provider: "test", id: "m1", name: "Test Model", contextWindow: 200000, reasoning: false },
 		]),
+		setModel: vi.fn(async (provider: string, id: string) => ({ provider, id })),
+		setThinkingLevel: vi.fn(async () => {}),
 		getSettings: vi.fn(async () => ({
 			defaultProvider: "test",
 			defaultModel: "m1",
@@ -185,6 +188,8 @@ export function makeFakeClient() {
 		importJsonl: vi.fn(async () => ({ cancelled: false })),
 		getTree: vi.fn(async () => ({ roots: [], leafId: null })),
 		navigateTree: vi.fn(async () => ({ cancelled: false })),
+		getForkMessages: vi.fn(async () => []),
+		fork: vi.fn(async () => ({ text: "", cancelled: false })),
 		listSessions: vi.fn(async () => []),
 		switchSession: vi.fn(async () => ({ cancelled: false })),
 		prompt: vi.fn(async () => {}),
@@ -233,6 +238,54 @@ describe("RuntimePool", () => {
 		expect(clients).toHaveLength(2);
 		expect(clients[0].start).toHaveBeenCalled();
 		expect(pool.list()).toHaveLength(2);
+	});
+
+	it("publishes confirmed model and thinking mutations without committing failures", async () => {
+		vi.useFakeTimers();
+		try {
+			const { pool, clients } = makePool();
+			const handle = await pool.create("/tmp");
+			await vi.runAllTimersAsync();
+			const snapshots = vi.fn();
+			pool.onFleetSnapshot(snapshots);
+
+			await expect(pool.setModel(handle, "test", "new-model")).resolves.toEqual({
+				model: { provider: "test", id: "new-model" },
+				thinkingLevel: "medium",
+				availableThinkingLevels: ["off", "medium", "high"],
+				settingsRevision: 1,
+			});
+			await expect(pool.setThinkingLevel(handle, "high")).resolves.toEqual({
+				ok: true,
+				settingsRevision: 2,
+			});
+			await vi.runAllTimersAsync();
+
+			expect(clients[0].setModel).toHaveBeenCalledWith("test", "new-model");
+			expect(clients[0].setThinkingLevel).toHaveBeenCalledWith("high");
+			expect(snapshots).toHaveBeenCalledOnce();
+			expect(snapshots.mock.calls[0]?.[0].runtimes[0]).toMatchObject({
+				settingsRevision: 2,
+				state: {
+					model: { provider: "test", id: "new-model" },
+					thinkingLevel: "high",
+				},
+			});
+
+			vi.mocked(clients[0].setModel).mockRejectedValueOnce(new Error("model failed"));
+			vi.mocked(clients[0].setThinkingLevel).mockRejectedValueOnce(new Error("thinking failed"));
+			await expect(pool.setModel(handle, "test", "bad-model")).rejects.toThrow("model failed");
+			await expect(pool.setThinkingLevel(handle, "low")).rejects.toThrow("thinking failed");
+			await vi.runAllTimersAsync();
+
+			expect(snapshots).toHaveBeenCalledOnce();
+			expect(pool.fleetSnapshot()[0]?.state).toMatchObject({
+				model: { provider: "test", id: "new-model" },
+				thinkingLevel: "high",
+			});
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("pairs a dashboard snapshot with its explicit EventHub barrier", async () => {

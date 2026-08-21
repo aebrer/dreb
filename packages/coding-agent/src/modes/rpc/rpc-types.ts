@@ -382,7 +382,7 @@ export type RpcResponse =
 			type: "response";
 			command: "get_fork_messages";
 			success: true;
-			data: { messages: Array<{ entryId: string; text: string }> };
+			data: { messages: Array<{ entryId: string; text: string; role: "user" | "assistant" }> };
 	  }
 	| {
 			id?: string;

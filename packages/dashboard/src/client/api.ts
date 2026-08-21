@@ -142,9 +142,11 @@ export const api = {
 			model: { provider: string; id: string };
 			thinkingLevel: string;
 			availableThinkingLevels: string[];
+			settingsRevision: number;
 		}>(`/api/runtimes/${key}/model`, json({ provider, modelId })),
 	models: (key: string) => request<{ models: ModelInfoDto[] }>(`/api/runtimes/${key}/models`),
-	setThinking: (key: string, level: string) => request<{ ok: true }>(`/api/runtimes/${key}/thinking`, json({ level })),
+	setThinking: (key: string, level: string) =>
+		request<{ ok: true; settingsRevision: number }>(`/api/runtimes/${key}/thinking`, json({ level })),
 	compact: (key: string, instructions?: string) =>
 		request<unknown>(`/api/runtimes/${key}/compact`, json({ instructions })),
 	newSession: (key: string) => request<{ cancelled: boolean }>(`/api/runtimes/${key}/new-session`, { method: "POST" }),
@@ -159,7 +161,9 @@ export const api = {
 	commands: (key: string) => request<{ commands: CommandDto[] }>(`/api/runtimes/${key}/commands`),
 	branch: (key: string) => request<{ branch: string | null }>(`/api/runtimes/${key}/branch`),
 	forkMessages: (key: string) =>
-		request<{ messages: Array<{ entryId: string; text: string }> }>(`/api/runtimes/${key}/fork-messages`),
+		request<{ messages: Array<{ entryId: string; text: string; role: "user" | "assistant" }> }>(
+			`/api/runtimes/${key}/fork-messages`,
+		),
 	fork: (key: string, entryId: string) =>
 		request<{ text: string; cancelled: boolean }>(`/api/runtimes/${key}/fork`, json({ entryId })),
 	tree: (key: string) => request<{ roots: SessionTreeNodeDto[]; leafId: string | null }>(`/api/runtimes/${key}/tree`),

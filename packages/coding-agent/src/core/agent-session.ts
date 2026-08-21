@@ -29,6 +29,7 @@ import {
 	collectEntriesForBranchSummary,
 	compact,
 	estimateContextTokens,
+	estimateTokens,
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
@@ -85,11 +86,17 @@ import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
 import { type SecretPattern, scrubSecrets } from "./secret-scrubber.js";
 import { isSensitivePath } from "./sensitive-paths.js";
-import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
-import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
+import type { BranchSummaryEntry, CompactionEntry } from "./session-manager.js";
+import {
+	CURRENT_SESSION_VERSION,
+	getLatestCompactionEntry,
+	type SessionHeader,
+	SessionManager,
+} from "./session-manager.js";
 import {
 	DEFAULT_BG_PARENT_TURN_LIMIT,
 	DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+	type ModelPromptSettings,
 	type SettingsManager,
 } from "./settings-manager.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
@@ -1553,6 +1560,20 @@ export class AgentSession {
 		return this.getFilteredSkills();
 	}
 
+	private _resolveModelPromptSettings(model: Model<any> | undefined): ModelPromptSettings | undefined {
+		if (!model) return undefined;
+
+		const modelRef = `${model.provider}/${model.id}`;
+		const modelsJsonSettings = this._modelRegistry.getModelPromptSettings(model.provider, model.id);
+		const settingsJsonSettings = this.settingsManager.getModelPromptSettings(model.provider, model.id);
+		if (modelsJsonSettings && settingsJsonSettings) {
+			throw new Error(
+				`System prompt behavior for ${modelRef} is configured in both models.json and settings.json; remove one source`,
+			);
+		}
+		return modelsJsonSettings ?? settingsJsonSettings;
+	}
+
 	private _rebuildSystemPrompt(toolNames: string[]): string {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
 		const toolSnippets: Record<string, string> = {};
@@ -1571,8 +1592,13 @@ export class AgentSession {
 
 		const loaderSystemPrompt = this._resourceLoader.getSystemPrompt();
 		const loaderAppendSystemPrompt = this._resourceLoader.getAppendSystemPrompt();
-		const appendSystemPrompt =
-			loaderAppendSystemPrompt.length > 0 ? loaderAppendSystemPrompt.join("\n\n") : undefined;
+		const modelPromptSettings = this._resolveModelPromptSettings(this.model);
+		const customPrompt = loaderSystemPrompt ?? modelPromptSettings?.systemPrompt;
+		const appendPromptParts = [...loaderAppendSystemPrompt];
+		if (modelPromptSettings?.appendSystemPrompt) {
+			appendPromptParts.push(modelPromptSettings.appendSystemPrompt);
+		}
+		const appendSystemPrompt = appendPromptParts.length > 0 ? appendPromptParts.join("\n\n") : undefined;
 		const loadedSkills = this._getFilteredSkills();
 		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
 		const memoryIndexes = this._resourceLoader.getMemoryIndexes();
@@ -1582,7 +1608,7 @@ export class AgentSession {
 			skills: loadedSkills,
 			contextFiles: loadedContextFiles,
 			memoryIndexes,
-			customPrompt: loaderSystemPrompt,
+			customPrompt,
 			appendSystemPrompt,
 			selectedTools: validToolNames,
 			toolSnippets,
@@ -2146,6 +2172,7 @@ export class AgentSession {
 		if (!apiKey) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
+		this._validateModelPromptSettings(model);
 
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
@@ -2173,6 +2200,11 @@ export class AgentSession {
 			model,
 			this.settingsManager.getModelThinkingDisplay(model.id),
 		);
+	}
+
+	/** Reject malformed or conflicting target-model prompt settings before mutating session state. */
+	private _validateModelPromptSettings(model: Model<any>): void {
+		this._resolveModelPromptSettings(model);
 	}
 
 	/**
@@ -2221,6 +2253,7 @@ export class AgentSession {
 		const len = scopedModels.length;
 		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
 		const next = scopedModels[nextIndex];
+		this._validateModelPromptSettings(next.model);
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.thinkingLevel);
 
 		// Apply model
@@ -2258,6 +2291,7 @@ export class AgentSession {
 		if (!apiKey) {
 			throw new Error(`No API key for ${nextModel.provider}/${nextModel.id}`);
 		}
+		this._validateModelPromptSettings(nextModel);
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.setModel(this._applyContextTier(nextModel));
@@ -3301,9 +3335,20 @@ export class AgentSession {
 	}
 
 	async reload(): Promise<void> {
+		// Refresh and validate prompt configuration before tearing down the active runtime.
+		// A bad external edit must leave the current prompt and extension runtime usable.
+		this.settingsManager.reload();
+		this._modelRegistry.refresh();
+		const modelRegistryError = this._modelRegistry.getError();
+		if (modelRegistryError) {
+			throw new Error(modelRegistryError);
+		}
+		if (this.model) {
+			this._validateModelPromptSettings(this.model);
+		}
+
 		const previousFlagValues = this._extensionRunner?.getFlagValues();
 		await this._extensionRunner?.emit({ type: "session_shutdown" });
-		this.settingsManager.reload();
 		resetApiProviders();
 		await this._resourceLoader.reload();
 		this._buildRuntime({
@@ -3597,6 +3642,20 @@ export class AgentSession {
 			}
 		}
 
+		// Resolve and validate the target model before disconnecting or mutating the active session.
+		// Prompt validation can throw for malformed settings, so it belongs in this preflight phase.
+		const targetModel = SessionManager.open(sessionPath).buildSessionContext().model;
+		let restoredModel: Model<any> | undefined;
+		if (targetModel) {
+			const availableModels = await this._modelRegistry.getAvailable();
+			restoredModel = availableModels.find(
+				(m) => m.provider === targetModel.provider && m.id === targetModel.modelId,
+			);
+			if (restoredModel) {
+				this._validateModelPromptSettings(restoredModel);
+			}
+		}
+
 		this._disconnectFromAgent();
 		await this.abort();
 		this._steeringMessages = [];
@@ -3624,18 +3683,12 @@ export class AgentSession {
 
 		this.agent.replaceMessages(sessionContext.messages);
 
-		// Restore model if saved
-		if (sessionContext.model) {
+		// Restore the preflighted model if the target session saved one that is still available.
+		if (restoredModel) {
 			const previousModel = this.model;
-			const availableModels = await this._modelRegistry.getAvailable();
-			const match = availableModels.find(
-				(m) => m.provider === sessionContext.model!.provider && m.id === sessionContext.model!.modelId,
-			);
-			if (match) {
-				this.agent.setModel(this._applyContextTier(match));
-				this._refreshThinkingDisplay(match);
-				await this._emitModelSelect(match, previousModel, "restore");
-			}
+			this.agent.setModel(this._applyContextTier(restoredModel));
+			this._refreshThinkingDisplay(restoredModel);
+			await this._emitModelSelect(restoredModel, previousModel, "restore");
 		}
 
 		const hasThinkingEntry = this.sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change");
@@ -3657,6 +3710,7 @@ export class AgentSession {
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
 		this._resourceLoader.refreshDreamLastRun();
 		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.setSystemPrompt(this._baseSystemPrompt);
 
 		this._reconnectToAgent();
 		return true;
@@ -3671,23 +3725,83 @@ export class AgentSession {
 	}
 
 	/**
-	 * Create a fork from a specific entry.
+	 * Create a fork from a specific entry. The fork point may be any user or
+	 * assistant message in the transcript; branch semantics depend on the role:
+	 *
+	 * - **Assistant message** -> the new branch *includes* the selected response
+	 *   (and everything before it); no editor pre-fill. "Continue from this answer."
+	 *   Forking at the last assistant message keeps the entire current state.
+	 * - **User message** -> rewind to *before* the selected message (branch from its
+	 *   parent, dropping the message and everything after it) and offer its text as
+	 *   editor pre-fill. "Edit / re-ask this question."
+	 *
 	 * Emits before_fork/fork session events to extensions.
 	 *
-	 * @param entryId ID of the entry to fork from
+	 * @param entryId ID of the message entry to fork from
 	 * @returns Object with:
-	 *   - selectedText: The text of the selected user message (for editor pre-fill)
+	 *   - selectedText: The selected user message text for editor pre-fill (empty
+	 *     when forking at an assistant message).
 	 *   - cancelled: True if an extension cancelled the fork
 	 */
 	async fork(entryId: string): Promise<{ selectedText: string; cancelled: boolean }> {
-		const previousSessionFile = this.sessionFile;
 		const selectedEntry = this.sessionManager.getEntry(entryId);
 
-		if (!selectedEntry || selectedEntry.type !== "message" || selectedEntry.message.role !== "user") {
+		if (
+			!selectedEntry ||
+			selectedEntry.type !== "message" ||
+			(selectedEntry.message.role !== "user" && selectedEntry.message.role !== "assistant")
+		) {
 			throw new Error("Invalid entry ID for forking");
 		}
 
-		const selectedText = this._extractUserMessageText(selectedEntry.message.content);
+		if (selectedEntry.message.role === "assistant") {
+			// Continue-from-answer: branch from the assistant entry itself so it (and
+			// everything before it) is retained. No editor pre-fill.
+			//
+			// Reject turns that can't be safely branched from (interrupted, or waiting
+			// on tool results) — branching there would silently produce a branch that
+			// doesn't match the selected turn. See _isForkableAssistant.
+			if (!this._isForkableAssistant(selectedEntry.message)) {
+				throw new Error(
+					"Cannot fork at this assistant turn: it was interrupted or is still waiting on tool results",
+				);
+			}
+			const { cancelled } = await this._performFork(entryId, () => {
+				this.sessionManager.createBranchedSession(entryId);
+			});
+			return { selectedText: "", cancelled };
+		}
+
+		const selectedText = this._extractMessageText(selectedEntry.message.content);
+
+		// Rewind to *before* the selected user message by branching from its parent,
+		// so the selected message (and everything after it) is dropped and its text is
+		// offered as editor pre-fill.
+		const { cancelled } = await this._performFork(entryId, (previousSessionFile) => {
+			if (!selectedEntry.parentId) {
+				this.sessionManager.newSession({ parentSession: previousSessionFile });
+			} else {
+				this.sessionManager.createBranchedSession(selectedEntry.parentId);
+			}
+		});
+
+		return { selectedText, cancelled };
+	}
+
+	/**
+	 * Shared fork machinery: emit the cancellable session_before_fork event,
+	 * clear pending state, create the branch via the supplied strategy, reload
+	 * the conversation, and emit session_fork.
+	 *
+	 * @param entryId Entry the fork is anchored to (reported to extensions).
+	 * @param branch Strategy that creates the branched/new session. Receives the
+	 *   previous session file so callers can set it as the parent when needed.
+	 */
+	private async _performFork(
+		entryId: string,
+		branch: (previousSessionFile: string | undefined) => void,
+	): Promise<{ cancelled: boolean }> {
+		const previousSessionFile = this.sessionFile;
 
 		let skipConversationRestore = false;
 
@@ -3699,7 +3813,7 @@ export class AgentSession {
 			})) as SessionBeforeForkResult | undefined;
 
 			if (result?.cancel) {
-				return { selectedText, cancelled: true };
+				return { cancelled: true };
 			}
 			skipConversationRestore = result?.skipConversationRestore ?? false;
 		}
@@ -3707,11 +3821,7 @@ export class AgentSession {
 		// Clear pending messages (bound to old session state)
 		this._pendingNextTurnMessages = [];
 
-		if (!selectedEntry.parentId) {
-			this.sessionManager.newSession({ parentSession: previousSessionFile });
-		} else {
-			this.sessionManager.createBranchedSession(selectedEntry.parentId);
-		}
+		branch(previousSessionFile);
 		this.agent.sessionId = this.sessionManager.getSessionId();
 
 		// Reload messages from entries (works for both file and in-memory mode)
@@ -3731,7 +3841,7 @@ export class AgentSession {
 			this.agent.replaceMessages(sessionContext.messages);
 		}
 
-		return { selectedText, cancelled: false };
+		return { cancelled: false };
 	}
 
 	// =========================================================================
@@ -3896,7 +4006,7 @@ export class AgentSession {
 			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
 				// User message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
-				editorText = this._extractUserMessageText(targetEntry.message.content);
+				editorText = this._extractMessageText(targetEntry.message.content);
 			} else if (targetEntry.type === "custom_message") {
 				// Custom message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
@@ -3966,26 +4076,66 @@ export class AgentSession {
 	}
 
 	/**
-	 * Get all user messages from session for fork selector.
+	 * Get all forkable messages (user *and* assistant) for the fork selector.
+	 *
+	 * Each entry carries its role so callers can label it and choose the right
+	 * fork semantics (assistant = continue-from-answer, user = rewind + re-ask).
+	 * A forkable assistant turn with no renderable text (e.g. a thinking-only
+	 * turn) still appears as a fork point, with a generic label.
+	 *
+	 * Assistant turns that cannot be safely branched from (interrupted turns, or
+	 * turns containing a tool call whose result lives in a descendant entry) are
+	 * excluded — see _isForkableAssistant.
 	 */
-	getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
+	getForkableMessages(): Array<{ entryId: string; text: string; role: "user" | "assistant" }> {
 		const entries = this.sessionManager.getEntries();
-		const result: Array<{ entryId: string; text: string }> = [];
+		const result: Array<{ entryId: string; text: string; role: "user" | "assistant" }> = [];
 
 		for (const entry of entries) {
 			if (entry.type !== "message") continue;
-			if (entry.message.role !== "user") continue;
+			const role = entry.message.role;
+			if (role !== "user" && role !== "assistant") continue;
 
-			const text = this._extractUserMessageText(entry.message.content);
-			if (text) {
-				result.push({ entryId: entry.id, text });
+			const text = this._extractMessageText(entry.message.content);
+			if (role === "user") {
+				// Preserve existing behavior: skip empty user messages.
+				if (text) result.push({ entryId: entry.id, text, role });
+			} else {
+				// Only offer assistant turns that can be safely branched from.
+				if (!this._isForkableAssistant(entry.message as AssistantMessage)) continue;
+				result.push({ entryId: entry.id, text: text || "(assistant response)", role });
 			}
 		}
 
 		return result;
 	}
 
-	private _extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
+	/**
+	 * Whether an assistant turn can be safely used as a fork point.
+	 *
+	 * Forking anchors on the entry's ancestors only (SessionManager.getBranch
+	 * walks parentId upward), and errored/aborted turns are dropped by
+	 * transformMessages() before every request. Two kinds of assistant turn
+	 * therefore produce a branch that silently does NOT match what was selected:
+	 *
+	 * - stopReason "error"/"aborted": transformMessages() skips the turn, so the
+	 *   reply vanishes from context on the next request (defeating "continue from
+	 *   this answer", and risking back-to-back user messages on strict providers).
+	 * - turns containing tool calls: their tool results are *descendant* entries a
+	 *   branch cannot include, so transformMessages() substitutes a fabricated
+	 *   "No result provided" (isError) result — telling the model a successful
+	 *   tool call failed.
+	 *
+	 * A completed answer (the intended "continue from here" target) has a terminal
+	 * stopReason and no unresolved tool calls, so it passes.
+	 */
+	private _isForkableAssistant(message: AssistantMessage): boolean {
+		if (message.stopReason === "error" || message.stopReason === "aborted") return false;
+		if (Array.isArray(message.content) && message.content.some((c) => c.type === "toolCall")) return false;
+		return true;
+	}
+
+	private _extractMessageText(content: string | Array<{ type: string; text?: string }>): string {
 		if (typeof content === "string") return content;
 		if (Array.isArray(content)) {
 			return content
@@ -4053,12 +4203,13 @@ export class AgentSession {
 
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
-		// If no such assistant exists, context token count is unknown until the next LLM response.
+		// Until then, estimate every rebuilt message independently so the stale kept
+		// assistant usage cannot leak into the current context value.
 		const branchEntries = this.sessionManager.getBranch();
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
 
 		if (latestCompaction) {
-			// Check if there's a valid assistant usage after the compaction boundary
+			// Check if there's a valid assistant usage after the compaction boundary.
 			const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
 			let hasPostCompactionUsage = false;
 			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
@@ -4067,26 +4218,23 @@ export class AgentSession {
 					const assistant = entry.message;
 					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
 						const contextTokens = calculateContextTokens(assistant.usage);
-						if (contextTokens > 0) {
-							hasPostCompactionUsage = true;
-						}
+						if (contextTokens > 0) hasPostCompactionUsage = true;
 						break;
 					}
 				}
 			}
 
 			if (!hasPostCompactionUsage) {
-				return { tokens: null, contextWindow, percent: null };
+				const tokens = this.messages.reduce((total, message) => total + estimateTokens(message), 0);
+				return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 };
 			}
 		}
 
 		const estimate = estimateContextTokens(this.messages);
-		const percent = (estimate.tokens / contextWindow) * 100;
-
 		return {
 			tokens: estimate.tokens,
 			contextWindow,
-			percent,
+			percent: (estimate.tokens / contextWindow) * 100,
 		};
 	}
 

@@ -64,6 +64,8 @@ export interface RuntimeHandle {
 	providerError?: string;
 	/** Last authoritative state, patched only with event-derivable fields between RPC reads. */
 	lastState?: SessionStateDto;
+	/** Monotonic revision for confirmed model/thinking mutations. */
+	settingsRevision: number;
 	/** Resume-path fallback; events must never invent or overwrite session identity. */
 	sessionFileFallback?: string;
 	/** Background agents seen via events (agentId → latest info). */
@@ -191,6 +193,47 @@ export class RuntimePool {
 		return this.runtimes.get(key);
 	}
 
+	/** Apply a confirmed model mutation to both the child and the pool snapshot. */
+	async setModel(
+		handle: RuntimeHandle,
+		provider: string,
+		modelId: string,
+	): Promise<{
+		model: { provider: string; id: string };
+		thinkingLevel: string;
+		availableThinkingLevels: string[];
+		settingsRevision: number;
+	}> {
+		const model = await handle.client.setModel(provider, modelId);
+		const state = await handle.client.getState();
+		handle.lastState = {
+			...this.fallbackState(handle),
+			model,
+			thinkingLevel: state.thinkingLevel,
+			availableThinkingLevels: state.availableThinkingLevels,
+		};
+		handle.settingsRevision += 1;
+		if (this.runtimes.get(handle.key) === handle) this.scheduleFleetSnapshot();
+		return {
+			model,
+			thinkingLevel: state.thinkingLevel,
+			availableThinkingLevels: state.availableThinkingLevels,
+			settingsRevision: handle.settingsRevision,
+		};
+	}
+
+	/** Apply a confirmed thinking mutation to both the child and the pool snapshot. */
+	async setThinkingLevel(
+		handle: RuntimeHandle,
+		level: Parameters<RpcClient["setThinkingLevel"]>[0],
+	): Promise<{ ok: true; settingsRevision: number }> {
+		await handle.client.setThinkingLevel(level);
+		handle.lastState = { ...this.fallbackState(handle), thinkingLevel: level };
+		handle.settingsRevision += 1;
+		if (this.runtimes.get(handle.key) === handle) this.scheduleFleetSnapshot();
+		return { ok: true, settingsRevision: handle.settingsRevision };
+	}
+
 	/**
 	 * Record the EventHub sequence synchronously when the RPC snapshot marker
 	 * arrives. The marker line precedes its response on stdout, so this runs
@@ -289,6 +332,7 @@ export class RuntimePool {
 			createdAt: this.now(),
 			lastActivity: this.now(),
 			attention: new Map(),
+			settingsRevision: 0,
 			sessionFileFallback: sessionPath,
 			backgroundAgents: new Map(),
 		};
@@ -358,6 +402,7 @@ export class RuntimePool {
 				createdAt: this.now(),
 				lastActivity: this.now(),
 				attention: new Map(),
+				settingsRevision: 0,
 				backgroundAgents: new Map(),
 			};
 			const startup = this.startUtilityRuntime(cwd, handle);
@@ -664,6 +709,7 @@ export class RuntimePool {
 			key: handle.key,
 			cwd: handle.cwd,
 			state,
+			settingsRevision: handle.settingsRevision,
 			backgroundAgents: [...handle.backgroundAgents.values()].map((agent) => ({ ...agent })),
 			needsAttention: handle.attention.size > 0,
 			error: handle.error,
@@ -748,6 +794,7 @@ export class RuntimePool {
 			key: handle.key,
 			cwd: handle.cwd,
 			state,
+			settingsRevision: handle.settingsRevision,
 			stats,
 			backgroundAgents: [...handle.backgroundAgents.values()],
 			needsAttention: handle.attention.size > 0,

@@ -644,9 +644,10 @@ export class RpcClient {
 	/**
 	 * Get messages available for forking.
 	 */
-	async getForkMessages(): Promise<Array<{ entryId: string; text: string }>> {
+	async getForkMessages(): Promise<Array<{ entryId: string; text: string; role: "user" | "assistant" }>> {
 		const response = await this.send({ type: "get_fork_messages" });
-		return this.getData<{ messages: Array<{ entryId: string; text: string }> }>(response).messages;
+		return this.getData<{ messages: Array<{ entryId: string; text: string; role: "user" | "assistant" }> }>(response)
+			.messages;
 	}
 
 	/**
