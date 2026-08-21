@@ -236,10 +236,7 @@ function buildParams(
 	if (model.reasoning) {
 		if (options?.reasoningEffort || options?.reasoningSummary) {
 			params.reasoning = {
-				// Azure OpenAI accepts `max` for GPT-5.6, but SDK 6.26's generated union predates it.
-				effort: (options?.reasoningEffort || "medium") as NonNullable<
-					ResponseCreateParamsStreaming["reasoning"]
-				>["effort"],
+				effort: options?.reasoningEffort || "medium",
 				summary: options?.reasoningSummary || "auto",
 			};
 			params.include = ["reasoning.encrypted_content"];
