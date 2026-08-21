@@ -906,13 +906,13 @@ The path uses the same unrestricted, cross-project addressing as [`switch_sessio
 
 #### fork
 
-Create a new fork from a previous user message. Can be cancelled by a `session_before_fork` extension event handler. Returns the text of the message being forked from.
+Create a new fork from any user or assistant message in the transcript. Can be cancelled by a `session_before_fork` extension event handler. For a **user** message the response `text` is that message's text (offered as editor pre-fill for re-asking) and the branch rewinds to before it; for an **assistant** message the branch *includes* that response (continue from that answer) and `text` is empty. Assistant turns that were interrupted (`error`/`aborted`) or are still waiting on tool results are not valid fork points and are rejected.
 
 ```json
 {"type": "fork", "entryId": "abc123"}
 ```
 
-Response:
+Response (forking at a user message — text is offered as editor pre-fill):
 ```json
 {
   "type": "response",
@@ -922,7 +922,17 @@ Response:
 }
 ```
 
-If an extension cancelled the fork:
+Response (forking at an assistant message — no pre-fill):
+```json
+{
+  "type": "response",
+  "command": "fork",
+  "success": true,
+  "data": {"text": "", "cancelled": false}
+}
+```
+
+If an extension cancelled the fork, `text` still mirrors what the corresponding successful fork would have returned — the user message's text for a user-message fork, or `""` for an assistant-message fork:
 ```json
 {
   "type": "response",
@@ -934,7 +944,7 @@ If an extension cancelled the fork:
 
 #### get_fork_messages
 
-Get user messages available for forking.
+Get the messages available for forking (both user and assistant). Each entry carries its `role` so callers can label it and choose the right fork semantics.
 
 ```json
 {"type": "get_fork_messages"}
@@ -948,8 +958,8 @@ Response:
   "success": true,
   "data": {
     "messages": [
-      {"entryId": "abc123", "text": "First prompt..."},
-      {"entryId": "def456", "text": "Second prompt..."}
+      {"entryId": "abc123", "text": "First prompt...", "role": "user"},
+      {"entryId": "def456", "text": "The answer...", "role": "assistant"}
     ]
   }
 }

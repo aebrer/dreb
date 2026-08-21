@@ -2816,7 +2816,8 @@ details.thinking .thinking-body {
 	border-color: var(--text);
 }
 
-.fork-entry-id {
+.fork-entry-id,
+.fork-role {
 	color: var(--muted);
 	font-size: var(--fs-small);
 	flex: 0 0 auto;

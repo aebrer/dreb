@@ -6145,7 +6145,9 @@ describe("dashboard client regressions", () => {
 	});
 
 	it("fork modal rewinds to a selected user message and prefills the composer", async () => {
-		vi.mocked(api.forkMessages).mockResolvedValue({ messages: [{ entryId: "u1", text: "original prompt" }] });
+		vi.mocked(api.forkMessages).mockResolvedValue({
+			messages: [{ entryId: "u1", text: "original prompt", role: "user" }],
+		});
 		vi.mocked(api.fork).mockResolvedValue({ text: "original prompt", cancelled: false });
 		const store = makeStore() as any;
 		const hydrateSession = vi.fn(async () => {});
@@ -6171,6 +6173,81 @@ describe("dashboard client regressions", () => {
 		expect(refreshDiskSessions).toHaveBeenCalledOnce();
 		expect(api.fleet).not.toHaveBeenCalled();
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("original prompt");
+	});
+
+	it("fork modal forks at an assistant message without prefilling the composer", async () => {
+		vi.mocked(api.forkMessages).mockResolvedValue({
+			messages: [{ entryId: "a1", text: "the answer", role: "assistant" }],
+		});
+		// Assistant forks return empty re-ask text (branch already includes the answer).
+		vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: false });
+		const store = makeStore() as any;
+		const hydrateSession = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
+		const fakeStore = {
+			...store,
+			sessions: { forkasst: createSessionViewState("forkasst") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession,
+			refreshDiskSessions,
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkasst" />);
+		// Pre-type a draft into the composer. The no-clobber guard in finishFork must
+		// preserve it: an assistant fork returns text "" and must NOT wipe the draft.
+		const composer = el.querySelector("textarea") as HTMLTextAreaElement;
+		composer.value = "draft in progress";
+		composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		// The row is labeled by role.
+		expect(el.querySelector(".fork-role")?.textContent).toBe("assistant");
+		(el.querySelector(".fork-message") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.fork).toHaveBeenCalledWith("forkasst", "a1");
+		expect(hydrateSession).toHaveBeenCalledWith("forkasst");
+		expect(refreshDiskSessions).toHaveBeenCalledOnce();
+		// No composer pre-fill AND no clobber: the user's in-progress draft survives
+		// (assistant forks return "" and must not overwrite the composer).
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("draft in progress");
+	});
+
+	it("fork modal informs the user and stays open when a message fork is cancelled", async () => {
+		vi.mocked(api.forkMessages).mockResolvedValue({
+			messages: [{ entryId: "u1", text: "original prompt", role: "user" }],
+		});
+		// Extension veto → api.fork returns cancelled with no branch created.
+		vi.mocked(api.fork).mockResolvedValue({ text: "", cancelled: true });
+		const store = makeStore() as any;
+		const hydrateSession = vi.fn(async () => {});
+		const refreshDiskSessions = vi.fn(async () => {});
+		const fakeStore = {
+			...store,
+			sessions: { forkmsgcancel: createSessionViewState("forkmsgcancel") },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession,
+			refreshDiskSessions,
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkmsgcancel" />);
+		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		// Ignore the mount-time hydration; assert only what the fork handler does.
+		hydrateSession.mockClear();
+		refreshDiskSessions.mockClear();
+		(el.querySelector(".fork-message") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.fork).toHaveBeenCalledWith("forkmsgcancel", "u1");
+		// The shared finishFork helper must inform the user for the message-fork flow too:
+		// the modal stays open with a message, the composer is not pre-filled, and no
+		// session churn happens as if a branch had been created.
+		expect(el.querySelector(".fork-message")).not.toBeNull();
+		expect(el.querySelector(".pair-error")?.textContent ?? "").toMatch(/no new branch|cancelled/i);
+		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+		expect(hydrateSession).not.toHaveBeenCalled();
+		expect(refreshDiskSessions).not.toHaveBeenCalled();
 	});
 
 	it("session stats popover shows the detailed stats breakdown", async () => {

@@ -3716,23 +3716,83 @@ export class AgentSession {
 	}
 
 	/**
-	 * Create a fork from a specific entry.
+	 * Create a fork from a specific entry. The fork point may be any user or
+	 * assistant message in the transcript; branch semantics depend on the role:
+	 *
+	 * - **Assistant message** -> the new branch *includes* the selected response
+	 *   (and everything before it); no editor pre-fill. "Continue from this answer."
+	 *   Forking at the last assistant message keeps the entire current state.
+	 * - **User message** -> rewind to *before* the selected message (branch from its
+	 *   parent, dropping the message and everything after it) and offer its text as
+	 *   editor pre-fill. "Edit / re-ask this question."
+	 *
 	 * Emits before_fork/fork session events to extensions.
 	 *
-	 * @param entryId ID of the entry to fork from
+	 * @param entryId ID of the message entry to fork from
 	 * @returns Object with:
-	 *   - selectedText: The text of the selected user message (for editor pre-fill)
+	 *   - selectedText: The selected user message text for editor pre-fill (empty
+	 *     when forking at an assistant message).
 	 *   - cancelled: True if an extension cancelled the fork
 	 */
 	async fork(entryId: string): Promise<{ selectedText: string; cancelled: boolean }> {
-		const previousSessionFile = this.sessionFile;
 		const selectedEntry = this.sessionManager.getEntry(entryId);
 
-		if (!selectedEntry || selectedEntry.type !== "message" || selectedEntry.message.role !== "user") {
+		if (
+			!selectedEntry ||
+			selectedEntry.type !== "message" ||
+			(selectedEntry.message.role !== "user" && selectedEntry.message.role !== "assistant")
+		) {
 			throw new Error("Invalid entry ID for forking");
 		}
 
-		const selectedText = this._extractUserMessageText(selectedEntry.message.content);
+		if (selectedEntry.message.role === "assistant") {
+			// Continue-from-answer: branch from the assistant entry itself so it (and
+			// everything before it) is retained. No editor pre-fill.
+			//
+			// Reject turns that can't be safely branched from (interrupted, or waiting
+			// on tool results) — branching there would silently produce a branch that
+			// doesn't match the selected turn. See _isForkableAssistant.
+			if (!this._isForkableAssistant(selectedEntry.message)) {
+				throw new Error(
+					"Cannot fork at this assistant turn: it was interrupted or is still waiting on tool results",
+				);
+			}
+			const { cancelled } = await this._performFork(entryId, () => {
+				this.sessionManager.createBranchedSession(entryId);
+			});
+			return { selectedText: "", cancelled };
+		}
+
+		const selectedText = this._extractMessageText(selectedEntry.message.content);
+
+		// Rewind to *before* the selected user message by branching from its parent,
+		// so the selected message (and everything after it) is dropped and its text is
+		// offered as editor pre-fill.
+		const { cancelled } = await this._performFork(entryId, (previousSessionFile) => {
+			if (!selectedEntry.parentId) {
+				this.sessionManager.newSession({ parentSession: previousSessionFile });
+			} else {
+				this.sessionManager.createBranchedSession(selectedEntry.parentId);
+			}
+		});
+
+		return { selectedText, cancelled };
+	}
+
+	/**
+	 * Shared fork machinery: emit the cancellable session_before_fork event,
+	 * clear pending state, create the branch via the supplied strategy, reload
+	 * the conversation, and emit session_fork.
+	 *
+	 * @param entryId Entry the fork is anchored to (reported to extensions).
+	 * @param branch Strategy that creates the branched/new session. Receives the
+	 *   previous session file so callers can set it as the parent when needed.
+	 */
+	private async _performFork(
+		entryId: string,
+		branch: (previousSessionFile: string | undefined) => void,
+	): Promise<{ cancelled: boolean }> {
+		const previousSessionFile = this.sessionFile;
 
 		let skipConversationRestore = false;
 
@@ -3744,7 +3804,7 @@ export class AgentSession {
 			})) as SessionBeforeForkResult | undefined;
 
 			if (result?.cancel) {
-				return { selectedText, cancelled: true };
+				return { cancelled: true };
 			}
 			skipConversationRestore = result?.skipConversationRestore ?? false;
 		}
@@ -3752,11 +3812,7 @@ export class AgentSession {
 		// Clear pending messages (bound to old session state)
 		this._pendingNextTurnMessages = [];
 
-		if (!selectedEntry.parentId) {
-			this.sessionManager.newSession({ parentSession: previousSessionFile });
-		} else {
-			this.sessionManager.createBranchedSession(selectedEntry.parentId);
-		}
+		branch(previousSessionFile);
 		this.agent.sessionId = this.sessionManager.getSessionId();
 
 		// Reload messages from entries (works for both file and in-memory mode)
@@ -3776,7 +3832,7 @@ export class AgentSession {
 			this.agent.replaceMessages(sessionContext.messages);
 		}
 
-		return { selectedText, cancelled: false };
+		return { cancelled: false };
 	}
 
 	// =========================================================================
@@ -3941,7 +3997,7 @@ export class AgentSession {
 			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
 				// User message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
-				editorText = this._extractUserMessageText(targetEntry.message.content);
+				editorText = this._extractMessageText(targetEntry.message.content);
 			} else if (targetEntry.type === "custom_message") {
 				// Custom message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
@@ -4011,26 +4067,66 @@ export class AgentSession {
 	}
 
 	/**
-	 * Get all user messages from session for fork selector.
+	 * Get all forkable messages (user *and* assistant) for the fork selector.
+	 *
+	 * Each entry carries its role so callers can label it and choose the right
+	 * fork semantics (assistant = continue-from-answer, user = rewind + re-ask).
+	 * A forkable assistant turn with no renderable text (e.g. a thinking-only
+	 * turn) still appears as a fork point, with a generic label.
+	 *
+	 * Assistant turns that cannot be safely branched from (interrupted turns, or
+	 * turns containing a tool call whose result lives in a descendant entry) are
+	 * excluded — see _isForkableAssistant.
 	 */
-	getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
+	getForkableMessages(): Array<{ entryId: string; text: string; role: "user" | "assistant" }> {
 		const entries = this.sessionManager.getEntries();
-		const result: Array<{ entryId: string; text: string }> = [];
+		const result: Array<{ entryId: string; text: string; role: "user" | "assistant" }> = [];
 
 		for (const entry of entries) {
 			if (entry.type !== "message") continue;
-			if (entry.message.role !== "user") continue;
+			const role = entry.message.role;
+			if (role !== "user" && role !== "assistant") continue;
 
-			const text = this._extractUserMessageText(entry.message.content);
-			if (text) {
-				result.push({ entryId: entry.id, text });
+			const text = this._extractMessageText(entry.message.content);
+			if (role === "user") {
+				// Preserve existing behavior: skip empty user messages.
+				if (text) result.push({ entryId: entry.id, text, role });
+			} else {
+				// Only offer assistant turns that can be safely branched from.
+				if (!this._isForkableAssistant(entry.message as AssistantMessage)) continue;
+				result.push({ entryId: entry.id, text: text || "(assistant response)", role });
 			}
 		}
 
 		return result;
 	}
 
-	private _extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
+	/**
+	 * Whether an assistant turn can be safely used as a fork point.
+	 *
+	 * Forking anchors on the entry's ancestors only (SessionManager.getBranch
+	 * walks parentId upward), and errored/aborted turns are dropped by
+	 * transformMessages() before every request. Two kinds of assistant turn
+	 * therefore produce a branch that silently does NOT match what was selected:
+	 *
+	 * - stopReason "error"/"aborted": transformMessages() skips the turn, so the
+	 *   reply vanishes from context on the next request (defeating "continue from
+	 *   this answer", and risking back-to-back user messages on strict providers).
+	 * - turns containing tool calls: their tool results are *descendant* entries a
+	 *   branch cannot include, so transformMessages() substitutes a fabricated
+	 *   "No result provided" (isError) result — telling the model a successful
+	 *   tool call failed.
+	 *
+	 * A completed answer (the intended "continue from here" target) has a terminal
+	 * stopReason and no unresolved tool calls, so it passes.
+	 */
+	private _isForkableAssistant(message: AssistantMessage): boolean {
+		if (message.stopReason === "error" || message.stopReason === "aborted") return false;
+		if (Array.isArray(message.content) && message.content.some((c) => c.type === "toolCall")) return false;
+		return true;
+	}
+
+	private _extractMessageText(content: string | Array<{ type: string; text?: string }>): string {
 		if (typeof content === "string") return content;
 		if (Array.isArray(content)) {
 			return content

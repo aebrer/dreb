@@ -440,6 +440,30 @@ describe("createBranchedSession", () => {
 		expect(entries[1].id).toBe(id2);
 	});
 
+	it("branching from the current leaf keeps the last assistant response (fork from current state)", () => {
+		const session = SessionManager.inMemory();
+
+		// Conversation: u1 -> a1 -> u2 -> a2 (a2 is the last model response)
+		session.appendMessage(userMsg("q1"));
+		session.appendMessage(assistantMsg("a1"));
+		session.appendMessage(userMsg("q2"));
+		const lastAssistantId = session.appendMessage(assistantMsg("a2"));
+
+		// "Fork from current state" branches from the current leaf itself.
+		expect(session.getLeafId()).toBe(lastAssistantId);
+		session.createBranchedSession(session.getLeafId()!);
+
+		// The whole conversation is preserved, and the tail is the last assistant
+		// response — unlike the user-message rewind fork, which drops it.
+		const messages = session
+			.getEntries()
+			.filter((e): e is Extract<typeof e, { type: "message" }> => e.type === "message");
+		expect(messages).toHaveLength(4);
+		const tail = messages.at(-1)!;
+		expect(tail.id).toBe(lastAssistantId);
+		expect(tail.message.role).toBe("assistant");
+	});
+
 	it("preserves the current session name when branching before its metadata entry", () => {
 		const session = SessionManager.inMemory();
 		session.appendMessage(userMsg("question"));

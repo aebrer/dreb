@@ -895,7 +895,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [fileAttachments, setFileAttachments] = createSignal<UploadedFileAttachment[]>([]);
 	const [historyIndex, setHistoryIndex] = createSignal<number>();
 	const [showForkModal, setShowForkModal] = createSignal(false);
-	const [forkMessages, setForkMessages] = createSignal<Array<{ entryId: string; text: string }>>([]);
+	const [forkMessages, setForkMessages] = createSignal<
+		Array<{ entryId: string; text: string; role: "user" | "assistant" }>
+	>([]);
 	const [forkError, setForkError] = createSignal<string>();
 	const [showTreeModal, setShowTreeModal] = createSignal(false);
 	const [treeRoots, setTreeRoots] = createSignal<SessionTreeNodeDto[]>([]);
@@ -1283,11 +1285,20 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		}
 	}
 
-	async function selectForkMessage(entryId: string) {
+	// Shared completion for both fork flows: run the fork action, inform the user
+	// (keeping the modal open) if no branch was created, otherwise pre-fill the
+	// composer when the action returns re-ask text, refresh, and close.
+	async function finishFork(action: () => Promise<{ cancelled: boolean; text?: string }>, cancelMessage: string) {
 		setForkError(undefined);
 		try {
-			const result = await api.fork(props.sessionKey, entryId);
-			if (!result.cancelled) setComposerText(result.text);
+			const result = await action();
+			if (result.cancelled) {
+				setForkError(cancelMessage);
+				return;
+			}
+			// Only user (re-ask) forks return text; assistant forks return "" and must
+			// not clobber whatever the user has already typed into the composer.
+			if (result.text) setComposerText(result.text);
 			await props.store.hydrateSession(props.sessionKey);
 			await props.store.refreshDiskSessions();
 			setShowForkModal(false);
@@ -1295,6 +1306,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			setForkError(err instanceof Error ? err.message : String(err));
 		}
 	}
+
+	const selectForkMessage = (entryId: string) =>
+		finishFork(() => api.fork(props.sessionKey, entryId), "Fork cancelled — no new branch was created.");
 
 	async function openStatsPopover() {
 		if (closed()) return;
@@ -2466,7 +2480,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 										class="fork-message"
 										onClick={() => selectForkMessage(message.entryId)}
 									>
-										<span class="fork-entry-id">{message.entryId}</span>
+										<span class="fork-role">{message.role === "assistant" ? "assistant" : "you"}</span>
 										<span>{message.text}</span>
 									</button>
 								)}

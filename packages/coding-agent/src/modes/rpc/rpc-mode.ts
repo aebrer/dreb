@@ -2175,7 +2175,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "get_fork_messages": {
-				const messages = session.getUserMessagesForForking();
+				const messages = session.getForkableMessages();
 				return success(id, "get_fork_messages", { messages });
 			}
 

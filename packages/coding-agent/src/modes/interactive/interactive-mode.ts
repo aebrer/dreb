@@ -4309,29 +4309,44 @@ export class InteractiveMode {
 	}
 
 	private showUserMessageSelector(): void {
-		const userMessages = this.session.getUserMessagesForForking();
+		const messages = this.session.getForkableMessages();
 
-		if (userMessages.length === 0) {
+		if (messages.length === 0) {
 			this.showStatus("No messages to fork from");
 			return;
 		}
 
+		// Every user or assistant message is a fork point. Assistant replies branch
+		// so the answer is kept (continue from here); user messages rewind to before
+		// the question and pre-fill the editor (re-ask).
+		const items = messages.map((m) => ({ id: m.entryId, text: m.text, role: m.role }));
+
 		this.showSelector((done) => {
 			const selector = new UserMessageSelectorComponent(
-				userMessages.map((m) => ({ id: m.entryId, text: m.text })),
+				items,
 				async (entryId) => {
-					const result = await this.session.fork(entryId);
-					if (result.cancelled) {
-						// Extension cancelled the fork
-						done();
-						this.ui.requestRender();
-						return;
-					}
+					try {
+						const result = await this.session.fork(entryId);
+						if (result.cancelled) {
+							// An extension vetoed the fork — tell the user rather than
+							// silently dismissing the selector.
+							done();
+							this.showStatus("Fork cancelled — no new branch was created");
+							return;
+						}
 
-					this.resetChatDisplay();
-					this.editor.setText(result.selectedText);
-					done();
-					this.showStatus("Branched to new session");
+						this.resetChatDisplay();
+						// Assistant forks return empty text (nothing to re-ask); user forks
+						// pre-fill the editor with the selected question.
+						this.editor.setText(result.selectedText);
+						done();
+						this.showStatus("Branched to new session");
+					} catch (err) {
+						// Forking can throw (e.g. a stale entry or a filesystem error while
+						// writing the branch). Surface it instead of crashing the TUI.
+						done();
+						this.showStatus(`Fork failed: ${err instanceof Error ? err.message : String(err)}`);
+					}
 				},
 				() => {
 					done();
