@@ -1011,8 +1011,9 @@ describe("dashboard server — fleet and runtimes", () => {
 		});
 		expect(model.status).toBe(200);
 		await expect(model.json()).resolves.toEqual({
-			provider: "test",
-			id: "new-model",
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "medium",
+			availableThinkingLevels: ["off", "medium", "high"],
 			settingsRevision: 1,
 		});
 

@@ -37,7 +37,7 @@ import {
 } from "../state/preferences.js";
 import type { AppStore } from "../state/store.js";
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
 const TRANSPORTS = ["sse", "websocket", "auto"] as const;
 
@@ -655,7 +655,8 @@ export function SettingsScreen(props: {
 														| "low"
 														| "medium"
 														| "high"
-														| "xhigh",
+														| "xhigh"
+														| "max",
 												})
 											}
 										>

@@ -49,6 +49,7 @@ const ReasoningEffortMapSchema = Type.Object({
 	medium: Type.Optional(Type.String()),
 	high: Type.Optional(Type.String()),
 	xhigh: Type.Optional(Type.String()),
+	max: Type.Optional(Type.String()),
 });
 
 const OpenAICompletionsCompatSchema = Type.Object({

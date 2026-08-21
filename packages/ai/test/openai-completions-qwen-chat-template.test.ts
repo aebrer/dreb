@@ -59,7 +59,7 @@ function getParams(): {
 	};
 }
 
-type ReasoningLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
+type ReasoningLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 async function stream(model: Model<"openai-completions">, reasoning?: ReasoningLevel) {
 	await streamSimple(

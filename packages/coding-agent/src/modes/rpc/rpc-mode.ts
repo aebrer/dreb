@@ -287,6 +287,7 @@ export function getStateForRpc(session: AgentSession, modelFallbackMessage?: str
 		tasks: session.tasks.map((task) => ({ ...task })),
 		usingSubscription: session.model ? session.modelRegistry.isUsingOAuth(session.model) : false,
 		thinkingLevel: session.thinkingLevel,
+		availableThinkingLevels: session.getAvailableThinkingLevels(),
 		isStreaming: session.isStreaming,
 		isRetrying: session.isRetrying,
 		retryAttempt: session.retryAttempt,

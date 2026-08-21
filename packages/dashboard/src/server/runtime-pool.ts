@@ -198,12 +198,28 @@ export class RuntimePool {
 		handle: RuntimeHandle,
 		provider: string,
 		modelId: string,
-	): Promise<{ provider: string; id: string; settingsRevision: number }> {
+	): Promise<{
+		model: { provider: string; id: string };
+		thinkingLevel: string;
+		availableThinkingLevels: string[];
+		settingsRevision: number;
+	}> {
 		const model = await handle.client.setModel(provider, modelId);
-		handle.lastState = { ...this.fallbackState(handle), model };
+		const state = await handle.client.getState();
+		handle.lastState = {
+			...this.fallbackState(handle),
+			model,
+			thinkingLevel: state.thinkingLevel,
+			availableThinkingLevels: state.availableThinkingLevels,
+		};
 		handle.settingsRevision += 1;
 		if (this.runtimes.get(handle.key) === handle) this.scheduleFleetSnapshot();
-		return { ...model, settingsRevision: handle.settingsRevision };
+		return {
+			model,
+			thinkingLevel: state.thinkingLevel,
+			availableThinkingLevels: state.availableThinkingLevels,
+			settingsRevision: handle.settingsRevision,
+		};
 	}
 
 	/** Apply a confirmed thinking mutation to both the child and the pool snapshot. */
@@ -673,6 +689,7 @@ export class RuntimePool {
 			sessionId: previous?.sessionId ?? handle.key,
 			tasks: previous?.tasks ? [...previous.tasks] : [],
 			thinkingLevel: previous?.thinkingLevel ?? "off",
+			availableThinkingLevels: previous?.availableThinkingLevels ? [...previous.availableThinkingLevels] : ["off"],
 			isStreaming: previous?.isStreaming ?? false,
 			isRetrying: previous?.isRetrying ?? false,
 			retryAttempt: previous?.retryAttempt ?? 0,

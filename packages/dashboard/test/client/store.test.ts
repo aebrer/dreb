@@ -2077,7 +2077,12 @@ describe("app store hydration", () => {
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("mixed-freshness");
-		store.setRuntimeModel("mixed-freshness", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeModel("mixed-freshness", {
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			settingsRevision: 1,
+		});
 		const preBarrierSnapshot = runtimeSnapshot("mixed-freshness", true);
 		preBarrierSnapshot.state.model = { provider: "test", id: "new-model" };
 		preBarrierSnapshot.settingsRevision = 1;
@@ -2416,7 +2421,12 @@ describe("fleet snapshot and inventory store foundation", () => {
 
 		const refresh = store.refreshFleet();
 		store.upsertRuntime(fleetSnapshot("created"));
-		store.setRuntimeModel("created", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeModel("created", {
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			settingsRevision: 1,
+		});
 		store.setRuntimeThinkingLevel("created", "high", 2);
 		delayed.resolve({ runtimes: [fleetSnapshot("stale")], diskSessions: [] });
 		await refresh;
@@ -2434,7 +2444,12 @@ describe("fleet snapshot and inventory store foundation", () => {
 		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
 		const store = await makeStartedStore();
 
-		store.setRuntimeModel("live", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeModel("live", {
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			settingsRevision: 1,
+		});
 		store.setRuntimeThinkingLevel("live", "high", 2);
 		const stale = fleetSnapshot("live");
 		stale.state.model = { provider: "test", id: "old-model" };
@@ -2467,7 +2482,12 @@ describe("fleet snapshot and inventory store foundation", () => {
 		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
 		const store = await makeStartedStore();
 
-		store.setRuntimeModel("live", { provider: "test", id: "confirmed-model" }, 1);
+		store.setRuntimeModel("live", {
+			model: { provider: "test", id: "confirmed-model" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			settingsRevision: 1,
+		});
 		store.setRuntimeThinkingLevel("live", "high", 2);
 		const stale = fleetSnapshot("live");
 		stale.state.model = { provider: "test", id: "old-model" };
@@ -2497,7 +2517,12 @@ describe("fleet snapshot and inventory store foundation", () => {
 		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
 		const store = await makeStartedStore();
 
-		store.setRuntimeModel("live", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeModel("live", {
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			settingsRevision: 1,
+		});
 		store.setRuntimeThinkingLevel("live", "high", 2);
 		const later = fleetSnapshot("live");
 		later.state.model = { provider: "test", id: "later-model" };

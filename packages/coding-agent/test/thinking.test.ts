@@ -53,8 +53,17 @@ describe("resolveEffectiveThinkingLevel", () => {
 	});
 
 	test("xhigh-capable models preserve xhigh for normal session defaults", () => {
-		const xhighModel = { ...reasoningModel, id: "gpt-5.6-test" } as Model<any>;
+		const xhighModel = { ...reasoningModel, id: "gpt-5.5" } as Model<any>;
 		expect(resolveEffectiveThinkingLevel(xhighModel, "xhigh")).toBe("xhigh");
+	});
+
+	test("unsupported max falls back to xhigh before high", () => {
+		expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id: "gpt-5.5" }, "max")).toBe("xhigh");
+		expect(resolveEffectiveThinkingLevel(reasoningModel, "max")).toBe("high");
+	});
+
+	test("max-capable models preserve max", () => {
+		expect(resolveEffectiveThinkingLevel({ ...reasoningModel, id: "gpt-5.6-sol" }, "max")).toBe("max");
 	});
 });
 
@@ -63,7 +72,7 @@ describe("thinkingLevelToReasoning", () => {
 		expect(thinkingLevelToReasoning("off")).toBeUndefined();
 	});
 
-	test.each(["minimal", "low", "medium", "high", "xhigh"] satisfies AiThinkingLevel[])(
+	test.each(["minimal", "low", "medium", "high", "xhigh", "max"] satisfies AiThinkingLevel[])(
 		"passes through %s",
 		(thinkingLevel) => {
 			expect(thinkingLevelToReasoning(thinkingLevel)).toBe(thinkingLevel);
@@ -72,7 +81,8 @@ describe("thinkingLevelToReasoning", () => {
 });
 
 describe("validateThinkingLevelForModel", () => {
-	const xhighModel = { ...reasoningModel, id: "gpt-5.6-test" } as Model<any>;
+	const xhighModel = { ...reasoningModel, id: "gpt-5.5" } as Model<any>;
+	const maxModel = { ...reasoningModel, id: "gpt-5.6-sol" } as Model<any>;
 
 	test("accepts off without a resolved model", () => {
 		expect(validateThinkingLevelForModel(undefined, "off")).toEqual({ ok: true });
@@ -88,6 +98,11 @@ describe("validateThinkingLevelForModel", () => {
 	test("accepts xhigh only for xhigh-capable models", () => {
 		expect(validateThinkingLevelForModel(xhighModel, "xhigh")).toEqual({ ok: true });
 		expect(validateThinkingLevelForModel(reasoningModel, "xhigh")).toMatchObject({ ok: false });
+	});
+
+	test("accepts max only for max-capable models", () => {
+		expect(validateThinkingLevelForModel(maxModel, "max")).toEqual({ ok: true });
+		expect(validateThinkingLevelForModel(xhighModel, "max")).toMatchObject({ ok: false });
 	});
 
 	test("rejects non-off thinking for non-reasoning models", () => {

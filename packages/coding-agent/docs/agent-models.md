@@ -40,7 +40,7 @@ If the `agentModels.models` list is empty or undefined for a given agent, resolu
 
 The `subagent` tool accepts an optional `thinking` value in single mode, at the top level for parallel/chain inheritance, or on an individual task/step. Per-task values win over the top-level value.
 
-Supported values are `off`, `minimal`, `low`, `medium`, `high`, and `xhigh`. Validation happens after the child model resolves: non-`off` levels fail for non-reasoning models, and `xhigh` fails for models that do not advertise `xhigh` support. Omit the field to preserve the child's normal default/settings behavior. The child's actual effective level is reported in its `agent_start` event, result metadata, and `background_agent_end` event.
+Supported values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Validation happens after the child model resolves: non-`off` levels fail for non-reasoning models, `xhigh` requires advertised xhigh support, and `max` requires a max-capable model (currently GPT-5.6 including Sol, Terra, and Luna). `max` does not replace `xhigh`. Codex `ultra` additionally enables client-side multi-agent orchestration, so it is not accepted or sent as a raw effort. Omit the field to preserve the child's normal default/settings behavior. The child's actual effective level is reported in its `agent_start` event, result metadata, and `background_agent_end` event.
 
 ## Evidence-based Routing Guide
 

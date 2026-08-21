@@ -238,6 +238,8 @@ export interface RpcSessionState {
 	tasks: RpcSessionTask[];
 	usingSubscription: boolean;
 	thinkingLevel: ThinkingLevel;
+	/** Model-aware levels available for selection and cycling. */
+	availableThinkingLevels: ThinkingLevel[];
 	isStreaming: boolean;
 	/** True from retry classification through retry completion, including backoff. */
 	isRetrying: boolean;

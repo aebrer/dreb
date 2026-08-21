@@ -188,6 +188,17 @@ export function isQwen38OrLater(modelId: string): boolean {
 }
 
 /**
+ * Check if a model supports the native `max` reasoning tier.
+ *
+ * Supported today:
+ * - GPT-5.6 model families (Sol, Terra, Luna, and the alias)
+ */
+export function supportsMax<TApi extends Api>(model: Model<TApi>): boolean {
+	if (/(?:^|\/)gpt-5\.6(?:$|[-.])/.test(model.id.toLowerCase())) return true;
+	return false;
+}
+
+/**
  * Check if a model supports xhigh thinking level.
  *
  * Supported today:

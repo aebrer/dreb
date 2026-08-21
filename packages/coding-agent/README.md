@@ -396,7 +396,7 @@ Good Explore requests ask it to locate every renderer of a named component, enum
 
 Set `backgroundAgents.maxConcurrentSubagents` in `/settings`, dashboard Settings, or `settings.json` to control the concurrency of newly started parent sessions. A value of `0` removes the `subagent` tool from new parents and adds explicit system-prompt guidance that the parent must perform normally delegated work itself.
 
-**Agent type and override inheritance:** The top-level `agent` parameter is inherited by parallel tasks and chain steps that don't specify their own. Precedence: per-task `agent` > top-level `agent` > default (`"Explore"`). The `model` and optional `thinking` parameters follow the same per-task-over-top-level inheritance. Explicit thinking accepts `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`; unsupported levels for the resolved model fail before spawn. Omit `thinking` to preserve the child's normal settings/default behavior.
+**Agent type and override inheritance:** The top-level `agent` parameter is inherited by parallel tasks and chain steps that don't specify their own. Precedence: per-task `agent` > top-level `agent` > default (`"Explore"`). The `model` and optional `thinking` parameters follow the same per-task-over-top-level inheritance. Explicit thinking accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; unsupported levels for the resolved model fail before spawn. Omit `thinking` to preserve the child's normal settings/default behavior.
 
 **Agent definitions** live in `~/.dreb/agents/` (global) and `.dreb/agents/` (project). Each is a markdown file with YAML frontmatter specifying `name`, `model` (with provider fallback list), and optional `systemPrompt`. Built-in agents include `Explore` (concrete evidence retrieval with no implementation work), `Sandbox` (restricted to `/tmp`), `feature-dev` (strong-tier coding), and several review agents.
 
@@ -635,9 +635,11 @@ cat README.md | dreb -p "Summarize this text"
 | `--provider <name>` | Provider (anthropic, openai, google, etc.) |
 | `--model <pattern>` | Model pattern or ID (supports `provider/id` and optional `:<thinking>`) |
 | `--api-key <key>` | API key (overrides env vars) |
-| `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh` |
+| `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `--models <patterns>` | Comma-separated patterns for model cycling |
 | `--list-models [search]` | List available models |
+
+`max` is a separate native effort currently supported by GPT-5.6 (including Sol, Terra, and Luna); `xhigh` remains available independently. Codex `ultra` is not a provider effort: it combines `max` with client-side multi-agent orchestration, so dreb does not send `ultra` as a raw value.
 
 ### Session Options
 

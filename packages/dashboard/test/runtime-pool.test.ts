@@ -24,6 +24,7 @@ export function makeFakeClient() {
 			sessionId: "s1",
 			tasks: [],
 			thinkingLevel: "medium",
+			availableThinkingLevels: ["off", "medium", "high"],
 			isStreaming: false,
 			isRetrying: false,
 			retryAttempt: 0,
@@ -249,8 +250,9 @@ describe("RuntimePool", () => {
 			pool.onFleetSnapshot(snapshots);
 
 			await expect(pool.setModel(handle, "test", "new-model")).resolves.toEqual({
-				provider: "test",
-				id: "new-model",
+				model: { provider: "test", id: "new-model" },
+				thinkingLevel: "medium",
+				availableThinkingLevels: ["off", "medium", "high"],
 				settingsRevision: 1,
 			});
 			await expect(pool.setThinkingLevel(handle, "high")).resolves.toEqual({

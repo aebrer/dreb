@@ -13,6 +13,8 @@ import { createTestResourceLoader } from "./utilities.js";
 
 const reasoningModel = findModel("anthropic", "sonnet")!;
 const nonReasoningModel = findModel("openai", "gpt-4o-mini")!;
+const xhighModel = findModel("openai", "gpt-5.5")!;
+const maxModel = findModel("openai", "gpt-5.6-sol")!;
 
 // Adaptive-thinking model (Opus/Sonnet 4.6+): thinkingDisplay is honored, defaults to "summarized".
 const adaptiveModel = findModel("anthropic", "opus-4-8")!;
@@ -101,6 +103,34 @@ function createThinkingDisplaySession(settingsManager: SettingsManager = Setting
 }
 
 describe("AgentSession model switching", () => {
+	it("exposes max only for max-capable models and clamps max to xhigh on model switch", async () => {
+		const { session } = createSession({
+			thinkingLevel: "max",
+			scopedModels: [{ model: maxModel }, { model: xhighModel }],
+		});
+
+		try {
+			await session.setModel(maxModel);
+			expect(session.getAvailableThinkingLevels()).toEqual([
+				"off",
+				"minimal",
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max",
+			]);
+			session.setThinkingLevel("max");
+			expect(session.thinkingLevel).toBe("max");
+
+			await session.setModel(xhighModel);
+			expect(session.getAvailableThinkingLevels()).not.toContain("max");
+			expect(session.thinkingLevel).toBe("xhigh");
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("preserves the saved thinking preference through non-reasoning models", async () => {
 		const { session, sessionManager, settingsManager } = createSession({
 			scopedModels: [{ model: reasoningModel }, { model: nonReasoningModel }],

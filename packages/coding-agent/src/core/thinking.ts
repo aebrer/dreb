@@ -1,5 +1,11 @@
 import type { ThinkingLevel as AgentThinkingLevel } from "@dreb/agent-core";
-import { type ThinkingLevel as AiThinkingLevel, type Model, supportsAdaptiveThinking, supportsXhigh } from "@dreb/ai";
+import {
+	type ThinkingLevel as AiThinkingLevel,
+	type Model,
+	supportsAdaptiveThinking,
+	supportsMax,
+	supportsXhigh,
+} from "@dreb/ai";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 
 /**
@@ -13,6 +19,7 @@ export function resolveEffectiveThinkingLevel(
 ): AgentThinkingLevel {
 	const effectiveThinkingLevel = thinkingLevel ?? defaultThinkingLevel;
 	if (!model?.reasoning) return "off";
+	if (effectiveThinkingLevel === "max" && !supportsMax(model)) return supportsXhigh(model) ? "xhigh" : "high";
 	return effectiveThinkingLevel === "xhigh" && !supportsXhigh(model) ? "high" : effectiveThinkingLevel;
 }
 
@@ -46,6 +53,12 @@ export function validateThinkingLevelForModel(
 		return {
 			ok: false,
 			error: `Thinking level "${thinkingLevel}" is not supported by non-reasoning model "${modelRef}". Use "off" or choose a reasoning model.`,
+		};
+	}
+	if (thinkingLevel === "max" && !supportsMax(model)) {
+		return {
+			ok: false,
+			error: `Thinking level "max" is not supported by model "${modelRef}". Use "xhigh" or choose a max-capable model.`,
 		};
 	}
 	if (thinkingLevel === "xhigh" && !supportsXhigh(model)) {

@@ -30,7 +30,7 @@ export interface SessionInventoryDto {
 export interface ArbitrationRouteDto {
 	agent: string;
 	model: string;
-	thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export interface SubagentArbitrationDto {
@@ -245,6 +245,8 @@ export interface SessionStateDto {
 	/** Current task list, atomically replaced by tasks_update events. */
 	tasks: SessionTaskDto[];
 	thinkingLevel: string;
+	/** Model-aware levels available for selection and cycling. */
+	availableThinkingLevels: string[];
 	isStreaming: boolean;
 	/** True while automatic retry classification, backoff, or execution is active. */
 	isRetrying?: boolean;
@@ -511,7 +513,7 @@ export interface PairedDeviceDto {
 export interface SubagentArbiterSettingsDto {
 	enabled?: boolean;
 	model?: string;
-	thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	guidePath?: string;
 }
 

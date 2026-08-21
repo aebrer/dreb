@@ -198,7 +198,7 @@ models: [{
     thinkingFormat: "qwen-chat-template"
     // The Qwen3.8+ default map below is applied automatically; supply your own
     // reasoningEffortMap to override it:
-    // reasoningEffortMap: { minimal: "low", low: "low", medium: "medium", high: "xhigh", xhigh: "xhigh" }
+    // reasoningEffortMap: { minimal: "low", low: "low", medium: "medium", high: "xhigh", xhigh: "xhigh", max: "xhigh" }
   }
 }]
 ```
@@ -631,7 +631,7 @@ interface ProviderModelConfig {
     supportsStore?: boolean;
     supportsDeveloperRole?: boolean;
     supportsReasoningEffort?: boolean;
-    reasoningEffortMap?: Partial<Record<"minimal" | "low" | "medium" | "high" | "xhigh", string>>;
+    reasoningEffortMap?: Partial<Record<"minimal" | "low" | "medium" | "high" | "xhigh" | "max", string>>;
     supportsUsageInStreaming?: boolean;
     maxTokensField?: "max_completion_tokens" | "max_tokens";
     requiresToolResultName?: boolean;

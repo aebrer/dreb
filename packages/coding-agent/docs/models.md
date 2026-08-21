@@ -344,7 +344,9 @@ For providers with partial OpenAI compatibility, use the `compat` field.
 | `openRouterRouting` | OpenRouter routing config passed to OpenRouter for model/provider selection |
 | `vercelGatewayRouting` | Vercel AI Gateway routing config for provider selection (`only`, `order`) |
 
-`qwen` uses top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that require `chat_template_kwargs.enable_thinking`. When reasoning is enabled, dreb sends the mapped effort as a top-level `reasoning_effort`; Qwen3.8+ models default-map dreb's levels onto the three native tiers (`minimal`/`low` → `low`, `medium` → `medium`, `high`/`xhigh` → `xhigh`).
+The normalized scale is `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` (`off` disables reasoning at the session layer). Native normalized `max` is model-aware and currently supported by GPT-5.6 aliases and Sol/Terra/Luna variants; unsupported defaults fall back `max` → `xhigh` → `high`. Existing provider mappings remain independent—for example, Claude can still map dreb's `xhigh` to Anthropic's provider-native `max`. Codex `ultra` also enables local multi-agent orchestration and is therefore not a raw effort value.
+
+`qwen` uses top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that require `chat_template_kwargs.enable_thinking`. When reasoning is enabled, dreb sends the mapped effort as a top-level `reasoning_effort`; Qwen3.8+ models default-map dreb's levels onto the three native tiers (`minimal`/`low` → `low`, `medium` → `medium`, `high`/`xhigh`/`max` → `xhigh`).
 
 Example:
 

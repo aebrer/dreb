@@ -479,6 +479,7 @@ function mapThinkingLevelToEffort(
 		case "high":
 			return "high";
 		case "xhigh":
+		case "max":
 			return supportsXhigh(model) ? "max" : "high";
 		default:
 			return "high";

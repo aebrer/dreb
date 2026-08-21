@@ -33,7 +33,8 @@ const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 	low: "Light reasoning (~2k tokens)",
 	medium: "Moderate reasoning (~8k tokens)",
 	high: "Deep reasoning (~16k tokens)",
-	xhigh: "Maximum reasoning (~32k tokens)",
+	xhigh: "Extra-high reasoning (~32k tokens)",
+	max: "Maximum reasoning effort",
 };
 
 export interface SettingsConfig {
@@ -658,7 +659,7 @@ export class SettingsSelectorComponent extends Container {
 					new SelectSubmenu(
 						"Dispatch Arbiter Thinking",
 						"Select reasoning depth for the headless arbiter call",
-						(["off", "minimal", "low", "medium", "high", "xhigh"] as ThinkingLevel[]).map((level) => ({
+						(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as ThinkingLevel[]).map((level) => ({
 							value: level,
 							label: level,
 							description: THINKING_DESCRIPTIONS[level],

@@ -138,10 +138,12 @@ export const api = {
 	abortCompaction: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}/abort-compaction`, { method: "POST" }),
 	abortRetry: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}/abort-retry`, { method: "POST" }),
 	setModel: (key: string, provider: string, modelId: string) =>
-		request<{ provider: string; id: string; settingsRevision: number }>(
-			`/api/runtimes/${key}/model`,
-			json({ provider, modelId }),
-		),
+		request<{
+			model: { provider: string; id: string };
+			thinkingLevel: string;
+			availableThinkingLevels: string[];
+			settingsRevision: number;
+		}>(`/api/runtimes/${key}/model`, json({ provider, modelId })),
 	models: (key: string) => request<{ models: ModelInfoDto[] }>(`/api/runtimes/${key}/models`),
 	setThinking: (key: string, level: string) =>
 		request<{ ok: true; settingsRevision: number }>(`/api/runtimes/${key}/thinking`, json({ level })),

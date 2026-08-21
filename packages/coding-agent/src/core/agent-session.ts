@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
-import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@dreb/ai";
+import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsMax, supportsXhigh } from "@dreb/ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { sleep } from "../utils/sleep.js";
@@ -297,8 +297,11 @@ interface ToolDefinitionEntry {
 /** Standard thinking levels */
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
-/** Thinking levels including xhigh (for supported models) */
+/** Thinking levels including xhigh (for supported models). */
 const THINKING_LEVELS_WITH_XHIGH: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+/** Complete ordered scale, including the native max tier for supported models. */
+const THINKING_LEVELS_WITH_MAX: ThinkingLevel[] = [...THINKING_LEVELS_WITH_XHIGH, "max"];
 const MIN_PERFORMANCE_DURATION_MS = 10;
 
 // ============================================================================
@@ -2354,6 +2357,7 @@ export class AgentSession {
 	 */
 	getAvailableThinkingLevels(): ThinkingLevel[] {
 		if (!this.supportsThinking()) return ["off"];
+		if (this.supportsMaxThinking()) return THINKING_LEVELS_WITH_MAX;
 		return this.supportsXhighThinking() ? THINKING_LEVELS_WITH_XHIGH : THINKING_LEVELS;
 	}
 
@@ -2362,6 +2366,11 @@ export class AgentSession {
 	 */
 	supportsXhighThinking(): boolean {
 		return this.model ? supportsXhigh(this.model) : false;
+	}
+
+	/** Check if the current model supports the native max thinking level. */
+	supportsMaxThinking(): boolean {
+		return this.model ? supportsMax(this.model) : false;
 	}
 
 	/**
@@ -2382,7 +2391,7 @@ export class AgentSession {
 	}
 
 	private _clampThinkingLevel(level: ThinkingLevel, availableLevels: ThinkingLevel[]): ThinkingLevel {
-		const ordered = THINKING_LEVELS_WITH_XHIGH;
+		const ordered = THINKING_LEVELS_WITH_MAX;
 		const available = new Set(availableLevels);
 		const requestedIndex = ordered.indexOf(level);
 		if (requestedIndex === -1) {

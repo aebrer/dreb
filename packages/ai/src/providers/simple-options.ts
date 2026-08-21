@@ -1,3 +1,4 @@
+import { supportsMax, supportsXhigh } from "../models.js";
 import type { Api, Model, SimpleStreamOptions, StreamOptions, ThinkingBudgets, ThinkingLevel } from "../types.js";
 
 /**
@@ -24,8 +25,17 @@ export function buildBaseOptions(model: Model<Api>, options?: SimpleStreamOption
 	};
 }
 
-export function clampReasoning(effort: ThinkingLevel | undefined): Exclude<ThinkingLevel, "xhigh"> | undefined {
-	return effort === "xhigh" ? "high" : effort;
+export function clampReasoning(effort: ThinkingLevel | undefined): Exclude<ThinkingLevel, "xhigh" | "max"> | undefined {
+	return effort === "xhigh" || effort === "max" ? "high" : effort;
+}
+
+export function resolveReasoningEffort(
+	model: Model<Api>,
+	effort: ThinkingLevel | undefined,
+): ThinkingLevel | undefined {
+	if (effort === "max" && !supportsMax(model)) return supportsXhigh(model) ? "xhigh" : "high";
+	if (effort === "xhigh" && !supportsXhigh(model)) return "high";
+	return effort;
 }
 
 export function adjustMaxTokensForThinking(

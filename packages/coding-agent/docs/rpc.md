@@ -225,6 +225,7 @@ Response:
       {"id": "inspect", "title": "Inspect the implementation", "status": "in_progress"}
     ],
     "thinkingLevel": "medium",
+    "availableThinkingLevels": ["off", "minimal", "low", "medium", "high", "xhigh"],
     "isStreaming": false,
     "isRetrying": false,
     "retryAttempt": 0,
@@ -486,9 +487,9 @@ Set the reasoning/thinking level for models that support it.
 {"type": "set_thinking_level", "level": "high"}
 ```
 
-Levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`
+Levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`
 
-Note: `"xhigh"` is supported by GPT-5.2 through GPT-5.6 model families, Claude Opus 4.6–4.x and Claude 5 families (where it maps to adaptive effort `"max"`), and Kimi Code K3.
+Note: `"xhigh"` is supported by GPT-5.2 through GPT-5.6 model families, Claude Opus 4.6–4.x and Claude 5 families (where it maps to adaptive effort `"max"`), and Kimi Code K3. The separate normalized `"max"` tier is model-aware and currently supported by GPT-5.6 aliases and Sol/Terra/Luna variants.
 
 Response:
 ```json
@@ -1520,7 +1521,7 @@ Valid keys and values:
 | Key | Values |
 |-----|--------|
 | `defaultProvider` + `defaultModel` | Must be supplied together; must match a model from `get_available_models` |
-| `defaultThinkingLevel` | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` (validated against the full set — a stored default is not tied to the current model's capabilities) |
+| `defaultThinkingLevel` | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` (validated against the full set — a stored default is not tied to the current model's capabilities) |
 | `steeringMode` | `"all"`, `"one-at-a-time"` |
 | `followUpMode` | `"all"`, `"one-at-a-time"` |
 | `compactionEnabled` | boolean |
@@ -1541,7 +1542,7 @@ Errors are explicit `success: false` responses (nothing is applied on any of the
 
 - Missing/empty payload: `set_settings requires at least one setting to change`
 - Unknown key: `Unknown settings key(s): ...`
-- Invalid enum value: `Invalid defaultThinkingLevel: "extreme". Valid values: off, minimal, low, medium, high, xhigh`
+- Invalid enum value: `Invalid defaultThinkingLevel: "extreme". Valid values: off, minimal, low, medium, high, xhigh, max`
 - Invalid transport: `Invalid transport: "http". Valid values: sse, websocket, auto`
 - Non-boolean toggle: `Invalid retryEnabled: "yes". Must be a boolean`
 - Invalid `agentModels` object: `Invalid agentModels: must be a plain object mapping agent names to model fallback arrays`

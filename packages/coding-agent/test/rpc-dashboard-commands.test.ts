@@ -638,6 +638,7 @@ describe("RpcClient dashboard command methods", () => {
 				tasks: [],
 				usingSubscription: false,
 				thinkingLevel: "high",
+				availableThinkingLevels: ["off", "minimal", "low", "medium", "high"],
 				isStreaming: false,
 				isRetrying: false,
 				retryAttempt: 0,

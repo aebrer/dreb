@@ -216,7 +216,12 @@ vi.mock("../../src/client/api.js", () => ({
 		abort: vi.fn(async () => ({})),
 		abortCompaction: vi.fn(async () => ({})),
 		abortRetry: vi.fn(async () => ({})),
-		setModel: vi.fn(async () => ({ provider: "test", id: "m1", settingsRevision: 1 })),
+		setModel: vi.fn(async () => ({
+			model: { provider: "test", id: "m1" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			settingsRevision: 1,
+		})),
 		setThinking: vi.fn(async () => ({ ok: true, settingsRevision: 1 })),
 		compact: vi.fn(async () => ({})),
 		newSession: vi.fn(async () => ({ cancelled: false })),
@@ -6615,7 +6620,12 @@ describe("dashboard client regressions", () => {
 		vi.mocked(api.fleet).mockClear();
 		(el.querySelector(".model-row") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(setRuntimeModel).toHaveBeenCalledWith("k1", { provider: "test", id: "m1" }, 1);
+		expect(setRuntimeModel).toHaveBeenCalledWith("k1", {
+			model: { provider: "test", id: "m1" },
+			thinkingLevel: "off",
+			availableThinkingLevels: ["off"],
+			settingsRevision: 1,
+		});
 		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 	});
 
