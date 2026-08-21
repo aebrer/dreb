@@ -101,6 +101,7 @@ const registry = {
 	getAll: () => models,
 	find: (provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id),
 	getApiKey: vi.fn().mockResolvedValue("test-key"),
+	getModelPromptSettings: () => undefined,
 	authStorage: { hasAuth: () => true },
 } as unknown as Parameters<typeof executeSingle>[8];
 
@@ -889,62 +890,73 @@ describe("pre-spawn subagent arbitration", () => {
 		}
 	});
 
-	test("bounds pending parallel arbitration with the background concurrency gate", async () => {
-		let active = 0;
-		let maxActive = 0;
-		let startedCount = 0;
-		const releases: Array<() => void> = [];
-		const events: SubagentArbitrationEvent[] = [];
-		let completedCount = 0;
-		let resolveCompleted!: () => void;
-		const completed = new Promise<void>((resolve) => {
-			resolveCompleted = resolve;
-		});
-		const tool = createSubagentToolDefinition(tempCwd, {
-			parentProvider: () => "provider",
-			parentModel: () => "worker",
-			modelRegistry: registry,
-			defaultThinkingLevel: () => "high",
-			arbitrate: async (request) => {
-				active += 1;
-				startedCount += 1;
-				maxActive = Math.max(maxActive, active);
-				await new Promise<void>((resolve) => releases.push(resolve));
-				active -= 1;
-				return { enabled: true, ok: true, decision: request.proposed, changed: [] };
-			},
-			onArbitration: (event) => events.push(event),
-			onBackgroundComplete: () => {
-				completedCount += 1;
-				if (completedCount === 8) resolveCompleted();
-			},
-		});
+	test.each([
+		{ configuredLimit: undefined, expectedLimit: 4 },
+		{ configuredLimit: 1, expectedLimit: 1 },
+	])(
+		"bounds pending parallel arbitration at $expectedLimit concurrent children",
+		async ({ configuredLimit, expectedLimit }) => {
+			let active = 0;
+			let maxActive = 0;
+			let startedCount = 0;
+			const releases: Array<() => void> = [];
+			const events: SubagentArbitrationEvent[] = [];
+			let completedCount = 0;
+			let resolveCompleted!: () => void;
+			const completed = new Promise<void>((resolve) => {
+				resolveCompleted = resolve;
+			});
+			const tool = createSubagentToolDefinition(tempCwd, {
+				maxConcurrentSubagents: configuredLimit,
+				parentProvider: () => "provider",
+				parentModel: () => "worker",
+				modelRegistry: registry,
+				defaultThinkingLevel: () => "high",
+				arbitrate: async (request) => {
+					active += 1;
+					startedCount += 1;
+					maxActive = Math.max(maxActive, active);
+					await new Promise<void>((resolve) => releases.push(resolve));
+					active -= 1;
+					return { enabled: true, ok: true, decision: request.proposed, changed: [] };
+				},
+				onArbitration: (event) => events.push(event),
+				onBackgroundComplete: () => {
+					completedCount += 1;
+					if (completedCount === 8) resolveCompleted();
+				},
+			});
+			expect(tool.description).toContain(`max ${expectedLimit} concurrent`);
 
-		await tool.execute(
-			"call",
-			{
-				tasks: Array.from({ length: 8 }, (_, index) => ({
-					agent: "arbiter-a",
-					task: `parallel-${index}`,
-				})),
-			},
-			new AbortController().signal,
-			() => {},
-			undefined as never,
-		);
+			await tool.execute(
+				"call",
+				{
+					tasks: Array.from({ length: 8 }, (_, index) => ({
+						agent: "arbiter-a",
+						task: `parallel-${index}`,
+					})),
+				},
+				new AbortController().signal,
+				() => {},
+				undefined as never,
+			);
 
-		await vi.waitFor(() => expect(startedCount).toBe(4));
-		expect(maxActive).toBe(4);
-		for (const release of releases.splice(0, 4)) release();
-		await vi.waitFor(() => expect(startedCount).toBe(8));
-		expect(maxActive).toBe(4);
-		for (const release of releases.splice(0)) release();
-		await completed;
+			await vi.waitFor(() => expect(startedCount).toBe(expectedLimit));
+			expect(maxActive).toBe(expectedLimit);
+			while (startedCount < 8) {
+				const previousStarted = startedCount;
+				for (const release of releases.splice(0)) release();
+				await vi.waitFor(() => expect(startedCount).toBe(Math.min(previousStarted + expectedLimit, 8)));
+				expect(maxActive).toBe(expectedLimit);
+			}
+			for (const release of releases.splice(0)) release();
+			await completed;
 
-		expect(maxActive).toBe(4);
-		expect(events).toHaveLength(8);
-		expect(spawn).toHaveBeenCalledTimes(8);
-	});
+			expect(maxActive).toBe(expectedLimit);
+			expect(events).toHaveLength(8);
+			expect(spawn).toHaveBeenCalledTimes(8);
+		},
+	);
 
 	test("stops a chain before the failed arbitration spawn and every later step", async () => {
 		outputs = ["FIRST_OUTPUT"];

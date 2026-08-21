@@ -960,6 +960,87 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(pool.get(key)).toBeDefined();
 	});
 
+	it("subagent steering endpoints target the selected child and validate messages", async () => {
+		const dir = await createTempProject();
+		const { base, clients } = await startServer();
+		const create = await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: dir }),
+		});
+		const { key } = (await create.json()) as { key: string };
+		const client = clients[0] as any;
+		client.steerBackgroundAgent = vi.fn(async () => {});
+		client.getBackgroundAgentPending = vi.fn(async () => ({
+			steeringMode: "all",
+			pending: { steering: ["queued"], followUp: [] },
+		}));
+
+		const steer = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/steer`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ message: "unchanged text" }),
+		});
+		expect(steer.status).toBe(200);
+		expect(client.steerBackgroundAgent).toHaveBeenCalledWith("bg1", "unchanged text");
+
+		const pending = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/pending`);
+		await expect(pending.json()).resolves.toEqual({
+			steeringMode: "all",
+			pending: { steering: ["queued"], followUp: [] },
+		});
+		expect(client.getBackgroundAgentPending).toHaveBeenCalledWith("bg1");
+
+		const invalid = await fetch(`${base}/api/runtimes/${key}/subagents/bg1/steer`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		expect(invalid.status).toBe(400);
+	});
+
+	it("synchronizes model and thinking routes through the runtime pool", async () => {
+		const dir = await createTempProject();
+		const { base, pool, clients } = await startServer();
+		const runtime = await pool.create(dir);
+
+		const model = await fetch(`${base}/api/runtimes/${runtime.key}/model`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ provider: "test", modelId: "new-model" }),
+		});
+		expect(model.status).toBe(200);
+		await expect(model.json()).resolves.toEqual({
+			provider: "test",
+			id: "new-model",
+			settingsRevision: 1,
+		});
+
+		const thinking = await fetch(`${base}/api/runtimes/${runtime.key}/thinking`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ level: "high" }),
+		});
+		expect(thinking.status).toBe(200);
+		await expect(thinking.json()).resolves.toEqual({ ok: true, settingsRevision: 2 });
+		expect(clients[0].setModel).toHaveBeenCalledWith("test", "new-model");
+		expect(clients[0].setThinkingLevel).toHaveBeenCalledWith("high");
+		expect(pool.fleetSnapshot()[0]?.state).toMatchObject({
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "high",
+		});
+
+		vi.mocked(clients[0].setThinkingLevel).mockRejectedValueOnce(new Error("thinking unavailable"));
+		const failed = await fetch(`${base}/api/runtimes/${runtime.key}/thinking`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ level: "low" }),
+		});
+		expect(failed.status).toBe(502);
+		await expect(failed.json()).resolves.toEqual({ error: "thinking unavailable" });
+		expect(pool.fleetSnapshot()[0]?.state.thinkingLevel).toBe("high");
+	});
+
 	it("POST /api/runtimes/:key/abort aborts the runtime and unknown keys 404", async () => {
 		const dir = await createTempProject();
 		const { base, clients } = await startServer();
@@ -1182,7 +1263,7 @@ describe("dashboard server — fleet and runtimes", () => {
 		const saved = await fetch(`${base}/api/settings${query}`, {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ enabledModels: null }),
+			body: JSON.stringify({ enabledModels: null, maxConcurrentSubagents: 1 }),
 		});
 
 		expect(settings.status).toBe(200);
@@ -1191,7 +1272,7 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(clients).toHaveLength(1);
 		expect(clients[0].getSettings).toHaveBeenCalled();
 		expect(clients[0].getAvailableModels).toHaveBeenCalled();
-		expect(clients[0].setSettings).toHaveBeenCalledWith({ enabledModels: null });
+		expect(clients[0].setSettings).toHaveBeenCalledWith({ enabledModels: null, maxConcurrentSubagents: 1 });
 
 		for (const path of ["/api/settings", "/api/settings/models"]) {
 			const missing = await fetch(`${base}${path}?cwd=${encodeURIComponent(`${dir}/missing`)}`);
@@ -2214,6 +2295,61 @@ describe("dashboard server — files", () => {
 
 		const traversal = await fetch(`${base}/api/files?path=${encodeURIComponent("/tmp/%2e%2e/etc")}`);
 		expect(traversal.status).toBe(400);
+	});
+
+	it("uploads JSON payloads byte-for-byte without the body parser consuming the stream", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
+		tempDirs.push(dir);
+		const canonical = await realpath(dir);
+		const { base } = await startServer();
+		const payload = JSON.stringify({ name: "payload.json", nested: { values: [1, 2, 3] } });
+
+		const upload = await fetch(
+			`${base}/api/files/upload?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent("payload.json")}`,
+			{ method: "POST", headers: { "content-type": "application/json" }, body: payload },
+		);
+		expect(upload.status).toBe(200);
+		await expect(upload.json()).resolves.toEqual({ path: join(canonical, "payload.json") });
+
+		// Pre-fix, the global express.json() middleware drained the request stream
+		// before the upload handler could pipe it, committing a 0-byte file.
+		expect(await readFile(join(canonical, "payload.json"), "utf8")).toBe(payload);
+
+		// Express 5 route matching is case-insensitive, so /API/files/upload is
+		// the same upload route. Pre-fix, the case-sensitive skip let the parser
+		// drain the stream and commit a 0-byte file on case-variant URLs.
+		const caseVariant = await fetch(
+			`${base}/API/files/upload?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent("case-variant.json")}`,
+			{ method: "POST", headers: { "content-type": "application/json" }, body: payload },
+		);
+		expect(caseVariant.status).toBe(200);
+		expect(await readFile(join(canonical, "case-variant.json"), "utf8")).toBe(payload);
+
+		// Non-strict matching also accepts the trailing-slash variant.
+		const trailingSlash = await fetch(
+			`${base}/api/files/upload/?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent("trailing-slash.json")}`,
+			{ method: "POST", headers: { "content-type": "application/json" }, body: payload },
+		);
+		expect(trailingSlash.status).toBe(200);
+		expect(await readFile(join(canonical, "trailing-slash.json"), "utf8")).toBe(payload);
+	});
+
+	it("downloads files under dot-prefixed directory components", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
+		tempDirs.push(dir);
+		const uploadsDir = join(dir, ".dreb-dashboard-uploads", "nested");
+		await mkdir(uploadsDir, { recursive: true });
+		const content = "dot-prefixed directory download";
+		await writeFile(join(uploadsDir, "report.txt"), content);
+		const { base } = await startServer();
+
+		// Pre-fix, res.download() inherited send's dotfiles: "ignore" default and
+		// 404'd for any path containing a dot-prefixed component.
+		const download = await fetch(
+			`${base}/api/files/download?path=${encodeURIComponent(join(uploadsDir, "report.txt"))}`,
+		);
+		expect(download.status).toBe(200);
+		expect(await download.text()).toBe(content);
 	});
 });
 

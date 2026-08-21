@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import type { ContextTrustPolicy } from "./context-trust.js";
+import { log } from "./logger.js";
 import { expandPath } from "./tools/path-utils.js";
 
 export interface CompactionSettings {
@@ -37,6 +38,7 @@ export interface RetrySettings {
 }
 
 export const DEFAULT_BG_PARENT_TURN_LIMIT = 3;
+export const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 4;
 
 export interface BackgroundAgentsSettings {
 	/**
@@ -47,6 +49,8 @@ export interface BackgroundAgentsSettings {
 	parentTurnGuardrail?: boolean;
 	/** Number of parent turns allowed while background agents run before pausing. default: 3 */
 	parentTurnLimit?: number;
+	/** Maximum child agents that one parent session may run concurrently. Zero disables the tool. default: 4 */
+	maxConcurrentSubagents?: number;
 }
 
 export interface TerminalSettings {
@@ -85,7 +89,13 @@ export interface SubagentArbiterSettings {
 export interface ModelSpecificSettings {
 	/** Thinking display preference for this model: "summarized" shows thinking text, "omitted" hides it (lower latency). */
 	thinkingDisplay?: "summarized" | "omitted";
+	/** Custom system prompt for an exact provider/model key. Replaces dreb's built-in prompt. */
+	systemPrompt?: string;
+	/** Text appended to the system prompt for an exact provider/model key. */
+	appendSystemPrompt?: string;
 }
+
+export type ModelPromptSettings = Pick<ModelSpecificSettings, "systemPrompt" | "appendSystemPrompt">;
 
 export type TransportSetting = Transport;
 
@@ -145,7 +155,7 @@ export interface Settings {
 	agentModels?: AgentModelsSettings;
 	/** Global-only. Project settings must never enable or reconfigure arbitration. */
 	subagentArbiter?: SubagentArbiterSettings;
-	// Per-model overrides keyed by model id (e.g. thinking display). Read identically by main sessions and subagents.
+	// Per-model overrides. Thinking display supports legacy model-ID keys; prompt settings require exact provider/model keys.
 	modelSettings?: Record<string, ModelSpecificSettings>;
 	dream?: {
 		archivePath?: string; // Custom archive location for dream backups (default: ~/.dreb/memory-archive/)
@@ -981,6 +991,34 @@ export class SettingsManager {
 		};
 	}
 
+	getMaxConcurrentSubagents(): number {
+		const value = this.settings.backgroundAgents?.maxConcurrentSubagents;
+		if (value === undefined) {
+			return DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+		}
+		if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+			return value;
+		}
+		log.warn(
+			`[settings] Ignoring invalid backgroundAgents.maxConcurrentSubagents ${JSON.stringify(value)}; ` +
+				`it must be a non-negative whole number. Falling back to ${DEFAULT_MAX_CONCURRENT_SUBAGENTS}. ` +
+				"Fix the value in your settings file to silence this warning.",
+		);
+		return DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+	}
+
+	setMaxConcurrentSubagents(value: number): void {
+		if (!Number.isSafeInteger(value) || value < 0) {
+			throw new Error("maxConcurrentSubagents must be a non-negative whole number");
+		}
+		if (!this.globalSettings.backgroundAgents) {
+			this.globalSettings.backgroundAgents = {};
+		}
+		this.globalSettings.backgroundAgents.maxConcurrentSubagents = value;
+		this.markModified("backgroundAgents", "maxConcurrentSubagents");
+		this.save();
+	}
+
 	getHideThinkingBlock(): boolean {
 		return this.settings.hideThinkingBlock ?? false;
 	}
@@ -1330,17 +1368,49 @@ export class SettingsManager {
 	}
 
 	/**
-	 * Per-model settings merged global + project at the per-model-id level, with project
-	 * winning per key. Reading directly from globalSettings/projectSettings avoids the
-	 * wholesale replacement that deepMergeSettings would do for the shared `modelSettings` key.
+	 * Per-model settings merged global + project at the entry-key level, with project
+	 * winning per property. Entry keys are bare model IDs for legacy settings or canonical
+	 * provider/model references for provider-aware settings. Reading directly from the two
+	 * scopes avoids wholesale replacement of the shared `modelSettings` object.
 	 */
-	getModelSettings(modelId: string): ModelSpecificSettings | undefined {
-		const global = this.globalSettings.modelSettings?.[modelId];
-		const project = this.projectSettings.modelSettings?.[modelId];
+	getModelSettings(modelKey: string): ModelSpecificSettings | undefined {
+		const global = this.globalSettings.modelSettings?.[modelKey];
+		const project = this.projectSettings.modelSettings?.[modelKey];
 		if (!global && !project) {
 			return undefined;
 		}
 		return { ...global, ...project };
+	}
+
+	/**
+	 * Resolve prompt settings for one exact provider/model pair. Prompt settings deliberately
+	 * do not fall back to the legacy bare-model-id keys used by thinkingDisplay because that
+	 * would leak instructions across providers exposing the same model ID.
+	 */
+	getModelPromptSettings(provider: string, modelId: string): ModelPromptSettings | undefined {
+		const modelRef = `${provider}/${modelId}`;
+		const settings = this.getModelSettings(modelRef);
+		if (!settings) {
+			return undefined;
+		}
+
+		const { systemPrompt, appendSystemPrompt } = settings;
+		if (systemPrompt !== undefined && (typeof systemPrompt !== "string" || systemPrompt.trim().length === 0)) {
+			throw new Error(`modelSettings.${modelRef}.systemPrompt must be a non-empty string`);
+		}
+		if (
+			appendSystemPrompt !== undefined &&
+			(typeof appendSystemPrompt !== "string" || appendSystemPrompt.trim().length === 0)
+		) {
+			throw new Error(`modelSettings.${modelRef}.appendSystemPrompt must be a non-empty string`);
+		}
+		if (systemPrompt !== undefined && appendSystemPrompt !== undefined) {
+			throw new Error(`modelSettings.${modelRef} cannot define both systemPrompt and appendSystemPrompt`);
+		}
+		if (systemPrompt === undefined && appendSystemPrompt === undefined) {
+			return undefined;
+		}
+		return { systemPrompt, appendSystemPrompt };
 	}
 
 	getModelThinkingDisplay(modelId: string): "summarized" | "omitted" | undefined {

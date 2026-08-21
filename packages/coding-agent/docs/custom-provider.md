@@ -188,7 +188,22 @@ models: [{
   }]
 ```
 
-Use `qwen-chat-template` instead for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`.
+Use `qwen-chat-template` instead for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`. When reasoning is enabled, dreb sends the mapped effort as a top-level `reasoning_effort`; Qwen3.8+ models (which natively support exactly `low`/`medium`/`xhigh`, default `xhigh`) get this map by default:
+
+```typescript
+models: [{
+  id: "qwen3.8-27b",
+  // ...
+  compat: {
+    thinkingFormat: "qwen-chat-template"
+    // The Qwen3.8+ default map below is applied automatically; supply your own
+    // reasoningEffortMap to override it:
+    // reasoningEffortMap: { minimal: "low", low: "low", medium: "medium", high: "xhigh", xhigh: "xhigh" }
+  }
+}]
+```
+
+Older Qwen models and non-Qwen servers keep identity forwarding, so configure `reasoningEffortMap` yourself if your server's effort vocabulary differs.
 
 > Migration note: Mistral moved from `openai-completions` to `mistral-conversations`.
 > Use `mistral-conversations` for native Mistral models.
@@ -630,4 +645,4 @@ interface ProviderModelConfig {
 }
 ```
 
-`qwen` is for DashScope-style top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`.
+`qwen` is for DashScope-style top-level `enable_thinking`. Use `qwen-chat-template` for local Qwen-compatible servers that read `chat_template_kwargs.enable_thinking`; effort is sent as a top-level `reasoning_effort`, and Qwen3.8+ models get a default map onto the native `low`/`medium`/`xhigh` tiers (see the example above).

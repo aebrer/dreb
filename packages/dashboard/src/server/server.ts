@@ -255,7 +255,17 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	// Authenticate before consuming request bodies. Diagnostics have their own
 	// small parser limit; the larger limit exists only for prompt image payloads.
 	app.use("/api/events/diagnostic", express.json({ limit: MAX_CLIENT_DIAGNOSTIC_BYTES }));
-	app.use(express.json({ limit: MAX_PROMPT_BODY_BYTES }));
+	const jsonBodyParser = express.json({ limit: MAX_PROMPT_BODY_BYTES });
+	app.use((req: Request, res: Response, next: NextFunction) => {
+		// /api/files/upload pipes the raw request stream into the destination
+		// file, so the parser must not run first — it would drain the stream
+		// and the upload would commit 0 bytes. Express 5 matching is
+		// case-insensitive and non-strict, so the route also accepts
+		// case-variant and trailing-slash URLs; the skip must cover all of them.
+		const uploadPath = req.path.toLowerCase();
+		if (uploadPath === "/api/files/upload" || uploadPath === "/api/files/upload/") return next();
+		jsonBodyParser(req, res, next);
+	});
 	app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
 		if ((err as { type?: string }).type === "entity.too.large") {
 			res.status(413).json({ error: "Request body is too large" });
@@ -802,6 +812,19 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		withRuntime(req, res, (h) => h.client.getPendingMessages());
 	});
 
+	app.get("/api/runtimes/:key/subagents/:agentId/pending", (req, res) => {
+		withRuntime(req, res, (h) => h.client.getBackgroundAgentPending(String(req.params.agentId)));
+	});
+
+	app.post("/api/runtimes/:key/subagents/:agentId/steer", (req, res) => {
+		const { message } = req.body ?? {};
+		if (typeof message !== "string" || message.length === 0) {
+			res.status(400).json({ error: "message is required" });
+			return;
+		}
+		withRuntime(req, res, (h) => h.client.steerBackgroundAgent(String(req.params.agentId), message));
+	});
+
 	app.post("/api/runtimes/:key/dequeue", (req, res) => {
 		withRuntime(req, res, (h) => h.client.clearPendingMessages());
 	});
@@ -866,7 +889,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			res.status(400).json({ error: "provider and modelId are required" });
 			return;
 		}
-		withRuntime(req, res, (h) => h.client.setModel(provider, modelId));
+		withRuntime(req, res, (h) => pool.setModel(h, provider, modelId));
 	});
 
 	app.get("/api/runtimes/:key/models", (req, res) => {
@@ -879,7 +902,7 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 			res.status(400).json({ error: "level is required" });
 			return;
 		}
-		withRuntime(req, res, (h) => h.client.setThinkingLevel(level as never));
+		withRuntime(req, res, (h) => pool.setThinkingLevel(h, level as never));
 	});
 
 	app.post("/api/runtimes/:key/compact", (req, res) => {
@@ -1216,7 +1239,11 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 		files
 			.resolveDownload(path)
 			.then(({ path: real }) => {
-				res.download(real);
+				// send's default (dotfiles: "ignore") would 404 any dot-prefixed
+				// component; resolveDownload already canonicalized and validated.
+				// The explicit filename keeps the Content-Disposition identical to
+				// the no-filename form (content-disposition basenames internally).
+				res.download(real, basename(real), { dotfiles: "allow" });
 			})
 			.catch((err) => res.status(err?.status ?? 500).json({ error: String(err?.message ?? err) }));
 	});

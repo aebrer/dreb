@@ -13,6 +13,8 @@ vi.mock("../../src/client/api.js", () => ({
 		messages: vi.fn(),
 		backgroundAgents: vi.fn(),
 		runtime: vi.fn(),
+		createRuntime: vi.fn(),
+		stopRuntime: vi.fn(),
 		stats: vi.fn(),
 		subagentMessages: vi.fn(),
 	},
@@ -129,6 +131,8 @@ beforeEach(() => {
 	vi.mocked(api.messages).mockResolvedValue({ messages: [] });
 	vi.mocked(api.backgroundAgents).mockResolvedValue({ agents: [] });
 	vi.mocked(api.runtime).mockResolvedValue(runtimeSnapshot("default", false));
+	vi.mocked(api.createRuntime).mockResolvedValue(runtimeSnapshot("resumed", false));
+	vi.mocked(api.stopRuntime).mockResolvedValue({ ok: true });
 	vi.mocked(api.stats).mockResolvedValue({
 		sessionId: "default",
 		userMessages: 0,
@@ -451,7 +455,7 @@ describe("app store SSE sync", () => {
 			}),
 		]);
 		expect(store.sessions.a?.statusEntries).toEqual([
-			{ key: "provider-error", text: "snapshot provider failure", tone: "error" },
+			expect.objectContaining({ key: "provider-error", text: "snapshot provider failure", tone: "error" }),
 		]);
 		expect(store.sessions.a?.lastError).toBe("snapshot provider failure");
 		expect(store.sessions.a?.needsAttention).toBe(true);
@@ -493,11 +497,11 @@ describe("app store SSE sync", () => {
 			}),
 		]);
 		expect(store.sessions.a?.statusEntries).toEqual([
-			{
+			expect.objectContaining({
 				key: "retry",
 				text: "retrying (attempt 1) — transient provider failure",
 				tone: "warning",
-			},
+			}),
 		]);
 		expect(store.sessions.a?.lastError).toBeUndefined();
 		expect(store.sessions.a?.needsAttention).toBe(false);
@@ -944,22 +948,26 @@ describe("app store SSE sync", () => {
 		}
 	});
 
-	it("navigates to fleet when active-route resync returns no active runtime", async () => {
+	it("retains the active route as closed when resync has no active runtime", async () => {
+		const runtime = runtimeSnapshot("stale-key", true);
+		runtime.cwd = "/tmp/stale";
+		runtime.state.sessionFile = "/tmp/stale/stale.jsonl";
 		window.location.hash = "#/session/stale-key";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
 		vi.mocked(api.resync).mockResolvedValueOnce({ fleet: { runtimes: [], diskSessions: [] }, barrierSeq: 1 });
 		const store = await makeStartedStore();
 
-		emit("stale-key", { type: "agent_start" });
-		expect(store.sessions["stale-key"]).toBeDefined();
-
+		emit("stale-key", { type: "message_start", message: { role: "user", content: "retain after resync" } });
 		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
-		await vi.waitFor(() => expect(window.location.hash).toBe("#/"));
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
 
 		expect(api.resync).toHaveBeenCalledWith("stale-key", undefined, expect.any(AbortSignal));
-		expect(store.sessions["stale-key"]).toBeUndefined();
-		expect(store.notices()).toEqual([
-			expect.objectContaining({ text: "session stale-key was stopped", tone: "warning" }),
-		]);
+		expect(window.location.hash).toBe("#/session/stale-key");
+		expect(store.sessions["stale-key"]).toMatchObject({
+			entries: [{ kind: "user", text: "retain after resync" }],
+			closed: { cwd: "/tmp/stale", sessionFile: "/tmp/stale/stale.jsonl" },
+		});
+		expect(store.notices()).toEqual([]);
 	});
 
 	it("keeps a failed resync visibly degraded and automatically retries with bounded cleanup", async () => {
@@ -1193,6 +1201,24 @@ describe("app store SSE sync", () => {
 		}
 	});
 
+	it("dismissStatusBanner hides only the banner while terminal error attention remains", async () => {
+		const store = await makeStartedStore();
+		emit("status-session", {
+			type: "message_end",
+			message: { role: "assistant", stopReason: "error", errorMessage: "provider failed", content: [] },
+		});
+		const status = store.sessions["status-session"]?.statusEntries[0];
+		if (!status) throw new Error("provider failure did not create a status banner");
+
+		store.dismissStatusBanner("status-session", status.id);
+
+		expect(store.sessions["status-session"]?.statusEntries).toEqual([
+			expect.objectContaining({ id: status.id, dismissed: true, key: "provider-error" }),
+		]);
+		expect(store.sessions["status-session"]?.lastError).toBe("provider failed");
+		expect(store.sessions["status-session"]?.needsAttention).toBe(true);
+	});
+
 	it("runtime_removed deletes session state, revision state, and composer memory without a fleet fetch", async () => {
 		const store = await makeStartedStore();
 		const key = "removed-session";
@@ -1217,28 +1243,217 @@ describe("app store SSE sync", () => {
 		expect(api.fleet).toHaveBeenCalledOnce();
 	});
 
-	it("runtime_removed redirects the actively viewed session to fleet with a notice", async () => {
+	it("runtime_removed retains the viewed transcript as a closed read-only session without a global notice", async () => {
+		const runtime = runtimeSnapshot("removed-session", true);
+		runtime.cwd = "/tmp/captured-project";
+		runtime.state.sessionFile = "/tmp/captured-project/session.jsonl";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
 		window.location.hash = "#/session/removed-session";
 		const store = await makeStartedStore();
 
+		emit("removed-session", { type: "message_start", message: { role: "user", content: "keep this transcript" } });
 		emit("removed-session", { type: "runtime_removed" });
+		await flushAsyncWork();
 
-		expect(window.location.hash).toBe("#/");
-		expect(store.notices()).toEqual([
-			expect.objectContaining({ text: "session removed-session was stopped", tone: "warning" }),
-		]);
+		expect(window.location.hash).toBe("#/session/removed-session");
+		expect(store.sessions["removed-session"]).toMatchObject({
+			entries: [{ kind: "user", text: "keep this transcript" }],
+			streaming: false,
+			closed: { cwd: "/tmp/captured-project", sessionFile: "/tmp/captured-project/session.jsonl" },
+		});
+		expect(store.fleet().runtimes).toEqual([]);
+		expect(store.notices()).toEqual([]);
 	});
 
-	it("runtime_removed redirects an actively viewed subagent when its parent session stops", async () => {
+	it("runtime_removed retains a viewed subagent transcript under the closed parent route", async () => {
+		const runtime = runtimeSnapshot("parent-session", true);
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
 		window.location.hash = "#/session/parent-session/subagent/bg1";
 		const store = await makeStartedStore();
 
+		emit("parent-session", { type: "background_agent_event", agentId: "bg1", event: { type: "agent_start" } });
+		emit("parent-session", {
+			type: "background_agent_event",
+			agentId: "bg1",
+			event: { type: "message_update", assistantMessageEvent: { type: "text_start", contentIndex: 0 } },
+		});
+		emit("parent-session", {
+			type: "background_agent_event",
+			agentId: "bg1",
+			event: {
+				type: "message_update",
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "keep child" },
+			},
+		});
 		emit("parent-session", { type: "runtime_removed" });
+		await flushAsyncWork();
 
-		expect(window.location.hash).toBe("#/");
-		expect(store.notices()).toEqual([
-			expect.objectContaining({ text: "session parent-session was stopped", tone: "warning" }),
-		]);
+		expect(window.location.hash).toBe("#/session/parent-session/subagent/bg1");
+		expect(store.sessions["parent-session"]).toMatchObject({
+			closed: {},
+			subagents: {
+				bg1: { streaming: false, entries: [{ kind: "assistant", blocks: [{ kind: "text", text: "keep child" }] }] },
+			},
+		});
+		expect(store.notices()).toEqual([]);
+	});
+
+	it("repeats a viewed runtime removal without deleting retained state or rescanning disk", async () => {
+		const runtime = runtimeSnapshot("removed-session", false);
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		window.location.hash = "#/session/removed-session";
+		const store = await makeStartedStore();
+		vi.mocked(api.sessions).mockClear();
+
+		emit("removed-session", { type: "message_start", message: { role: "user", content: "retained" } });
+		emit("removed-session", { type: "runtime_removed" });
+		await flushAsyncWork();
+		emit("removed-session", { type: "runtime_removed" });
+		await flushAsyncWork();
+
+		expect(store.sessions["removed-session"]?.entries).toMatchObject([{ kind: "user", text: "retained" }]);
+		expect(store.sessions["removed-session"]?.closed).toBeDefined();
+		expect(api.sessions).toHaveBeenCalledOnce();
+	});
+
+	it("keeps closed state while navigating within its session family and releases it on exit", async () => {
+		window.location.hash = "#/session/removed-session";
+		const store = await makeStartedStore();
+		emit("removed-session", { type: "runtime_removed" });
+		await flushAsyncWork();
+
+		store.navigate({ screen: "subagent", key: "removed-session", agentId: "bg1" });
+		await flushAsyncWork();
+		expect(store.sessions["removed-session"]?.closed).toBeDefined();
+		store.navigate({ screen: "session", key: "removed-session" });
+		await flushAsyncWork();
+		expect(store.sessions["removed-session"]?.closed).toBeDefined();
+
+		store.navigate({ screen: "fleet" });
+		await flushAsyncWork();
+		expect(store.sessions["removed-session"]).toBeUndefined();
+	});
+
+	it("resumes a closed session with captured metadata and releases the old retained view", async () => {
+		const runtime = runtimeSnapshot("closed", false);
+		runtime.cwd = "/tmp/resume-project";
+		runtime.state.sessionFile = "/tmp/resume-project/closed.jsonl";
+		const resumed = runtimeSnapshot("resumed", false);
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		vi.mocked(api.createRuntime).mockResolvedValueOnce(resumed);
+		window.location.hash = "#/session/closed";
+		const store = await makeStartedStore();
+		emit("closed", { type: "runtime_removed" });
+		await flushAsyncWork();
+		vi.mocked(api.sessions).mockClear();
+
+		await store.resumeClosedSession("closed");
+
+		expect(api.createRuntime).toHaveBeenCalledWith("/tmp/resume-project", {
+			sessionPath: "/tmp/resume-project/closed.jsonl",
+		});
+		expect(store.fleet().runtimes).toEqual([resumed]);
+		expect(window.location.hash).toBe("#/session/resumed");
+		expect(store.sessions.closed).toBeUndefined();
+		expect(api.sessions).toHaveBeenCalledOnce();
+	});
+
+	it("re-exposes resume failures after the close banner is dismissed while pending", async () => {
+		const runtime = runtimeSnapshot("closed", false);
+		runtime.cwd = "/tmp/resume-project";
+		runtime.state.sessionFile = "/tmp/resume-project/closed.jsonl";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		window.location.hash = "#/session/closed";
+		const store = await makeStartedStore();
+		emit("closed", { type: "runtime_removed" });
+		await flushAsyncWork();
+		const request = deferred<RuntimeInfoDto>();
+		vi.mocked(api.createRuntime).mockReturnValueOnce(request.promise);
+
+		const resume = store.resumeClosedSession("closed");
+		expect(store.sessions.closed?.closed?.resuming).toBe(true);
+		store.dismissClosedBanner("closed");
+		expect(store.sessions.closed?.closed?.bannerDismissed).toBe(true);
+		request.reject(new Error("resume rejected"));
+		await resume;
+
+		expect(store.sessions.closed).toMatchObject({
+			closed: { resuming: false, resumeError: "resume rejected", bannerDismissed: false },
+		});
+		expect(window.location.hash).toBe("#/session/closed");
+	});
+
+	it("reports missing captured resume metadata", async () => {
+		window.location.hash = "#/session/closed";
+		const store = await makeStartedStore();
+		emit("closed", { type: "runtime_removed" });
+		await flushAsyncWork();
+
+		await store.resumeClosedSession("closed");
+
+		expect(api.createRuntime).not.toHaveBeenCalled();
+		expect(store.sessions.closed?.closed?.resumeError).toBe("This closed session has no captured resume path.");
+	});
+
+	it("makes resume single-flight while the create request is pending", async () => {
+		const runtime = runtimeSnapshot("closed", false);
+		runtime.cwd = "/tmp/resume-project";
+		runtime.state.sessionFile = "/tmp/resume-project/closed.jsonl";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		window.location.hash = "#/session/closed";
+		const store = await makeStartedStore();
+		emit("closed", { type: "runtime_removed" });
+		await flushAsyncWork();
+		const request = deferred<RuntimeInfoDto>();
+		vi.mocked(api.createRuntime).mockReturnValueOnce(request.promise);
+
+		const first = store.resumeClosedSession("closed");
+		const second = store.resumeClosedSession("closed");
+		expect(api.createRuntime).toHaveBeenCalledOnce();
+		request.resolve(runtimeSnapshot("resumed", false));
+		await Promise.all([first, second]);
+	});
+
+	it("manual stop captures resume metadata and tolerates an SSE removal before DELETE fails", async () => {
+		const runtime = runtimeSnapshot("manual-stop", false);
+		runtime.cwd = "/tmp/manual-stop";
+		runtime.state.sessionFile = "/tmp/manual-stop/manual.jsonl";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		window.location.hash = "#/session/manual-stop";
+		const store = await makeStartedStore();
+		vi.mocked(api.sessions).mockClear();
+		const stopRequest = deferred<{ ok: true }>();
+		vi.mocked(api.stopRuntime).mockReturnValueOnce(stopRequest.promise);
+
+		const stop = store.stopRuntime("manual-stop");
+		emit("manual-stop", { type: "runtime_removed" });
+		stopRequest.reject(new Error("DELETE raced with SSE"));
+		await expect(stop).resolves.toBeUndefined();
+		await flushAsyncWork();
+
+		expect(api.stopRuntime).toHaveBeenCalledWith("manual-stop");
+		expect(store.sessions["manual-stop"]?.closed).toMatchObject({
+			cwd: "/tmp/manual-stop",
+			sessionFile: "/tmp/manual-stop/manual.jsonl",
+		});
+		expect(store.fleet().runtimes).toEqual([]);
+		expect(api.sessions).toHaveBeenCalledOnce();
+	});
+
+	it("manual stop captures metadata after a successful DELETE", async () => {
+		const runtime = runtimeSnapshot("manual-stop-success", false);
+		runtime.cwd = "/tmp/manual-success";
+		runtime.state.sessionFile = "/tmp/manual-success/manual.jsonl";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		window.location.hash = "#/session/manual-stop-success";
+		const store = await makeStartedStore();
+
+		await store.stopRuntime("manual-stop-success");
+
+		expect(store.sessions["manual-stop-success"]?.closed).toMatchObject({
+			cwd: "/tmp/manual-success",
+			sessionFile: "/tmp/manual-success/manual.jsonl",
+		});
 	});
 
 	it("applies streaming text deltas without replacing stable entry identities", async () => {
@@ -1398,11 +1613,9 @@ describe("app store hydration", () => {
 			errorMessage: "provider 500",
 		});
 		expect(store.sessions.s1?.lastError).toBe("provider 500");
-		expect(store.sessions.s1?.statusEntries).toContainEqual({
-			key: "provider-error",
-			text: "provider 500",
-			tone: "error",
-		});
+		expect(store.sessions.s1?.statusEntries).toContainEqual(
+			expect.objectContaining({ key: "provider-error", text: "provider 500", tone: "error" }),
+		);
 		expect(store.sessions.s1?.needsAttention).toBe(true);
 	});
 
@@ -1460,7 +1673,7 @@ describe("app store hydration", () => {
 			errorMessage: "provider overloaded",
 		});
 		expect(store.sessions.s1?.statusEntries).toEqual([
-			{ key: "retry", text: "retrying (attempt 2) — provider overloaded", tone: "warning" },
+			expect.objectContaining({ key: "retry", text: "retrying (attempt 2) — provider overloaded", tone: "warning" }),
 		]);
 		expect(store.sessions.s1?.lastError).toBeUndefined();
 		expect(store.sessions.s1?.needsAttention).toBe(false);
@@ -1864,9 +2077,10 @@ describe("app store hydration", () => {
 		const store = await makeStartedStore();
 
 		const hydrate = store.hydrateSession("mixed-freshness");
-		store.setRuntimeModel("mixed-freshness", { provider: "test", id: "new-model" });
+		store.setRuntimeModel("mixed-freshness", { provider: "test", id: "new-model" }, 1);
 		const preBarrierSnapshot = runtimeSnapshot("mixed-freshness", true);
 		preBarrierSnapshot.state.model = { provider: "test", id: "new-model" };
+		preBarrierSnapshot.settingsRevision = 1;
 		preBarrierSnapshot.state.messageCount = 6;
 		emit("", { type: "fleet_snapshot", runtimes: [preBarrierSnapshot] });
 
@@ -1974,6 +2188,20 @@ describe("fleet snapshot and inventory store foundation", () => {
 			contextUsage: { tokens: tokensTotal, contextWindow: 100_000, percent: 10 },
 		};
 	}
+
+	it("does not invalidate the initial fleet when a routed-session stats request finishes first", async () => {
+		const initialFleet = deferred<{ runtimes: RuntimeInfoDto[]; diskSessions: [] }>();
+		vi.mocked(api.fleet).mockReturnValueOnce(initialFleet.promise);
+		const store = createAppStore();
+		const start = store.start();
+		await vi.waitFor(() => expect(api.fleet).toHaveBeenCalledOnce());
+
+		await store.refreshRuntimeStats("live");
+		initialFleet.resolve({ runtimes: [fleetSnapshot("live")], diskSessions: [] });
+		await start;
+
+		expect(store.fleet().runtimes.map((runtime) => runtime.key)).toEqual(["live"]);
+	});
 
 	it("does not fetch the full fleet for lifecycle events", async () => {
 		const store = await makeStartedStore();
@@ -2188,15 +2416,98 @@ describe("fleet snapshot and inventory store foundation", () => {
 
 		const refresh = store.refreshFleet();
 		store.upsertRuntime(fleetSnapshot("created"));
-		store.setRuntimeModel("created", { provider: "test", id: "new-model" });
-		store.setRuntimeThinkingLevel("created", "high");
+		store.setRuntimeModel("created", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeThinkingLevel("created", "high", 2);
 		delayed.resolve({ runtimes: [fleetSnapshot("stale")], diskSessions: [] });
 		await refresh;
 
 		expect(store.fleet().runtimes).toHaveLength(1);
 		expect(store.fleet().runtimes[0]).toMatchObject({
 			key: "created",
-			state: { model: { provider: "test", id: "new-model" } },
+			state: { model: { provider: "test", id: "new-model" }, thinkingLevel: "high" },
+		});
+	});
+
+	it("keeps confirmed settings through stale snapshots, then resumes authoritative updates", async () => {
+		const initial = fleetSnapshot("live");
+		initial.state.model = { provider: "test", id: "old-model" };
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const store = await makeStartedStore();
+
+		store.setRuntimeModel("live", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeThinkingLevel("live", "high", 2);
+		const stale = fleetSnapshot("live");
+		stale.state.model = { provider: "test", id: "old-model" };
+		emit("", { type: "fleet_snapshot", runtimes: [stale] });
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "new-model" },
+			thinkingLevel: "high",
+		});
+
+		const matching = fleetSnapshot("live");
+		matching.state.model = { provider: "test", id: "new-model" };
+		matching.state.thinkingLevel = "high";
+		matching.settingsRevision = 2;
+		emit("", { type: "fleet_snapshot", runtimes: [matching] });
+
+		const later = fleetSnapshot("live");
+		later.state.model = { provider: "test", id: "later-model" };
+		later.state.thinkingLevel = "low";
+		later.settingsRevision = 3;
+		emit("", { type: "fleet_snapshot", runtimes: [later] });
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "later-model" },
+			thinkingLevel: "low",
+		});
+	});
+
+	it("accepts a newer settings revision when the matching snapshot was coalesced away", async () => {
+		const initial = fleetSnapshot("live");
+		initial.state.model = { provider: "test", id: "old-model" };
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const store = await makeStartedStore();
+
+		store.setRuntimeModel("live", { provider: "test", id: "confirmed-model" }, 1);
+		store.setRuntimeThinkingLevel("live", "high", 2);
+		const stale = fleetSnapshot("live");
+		stale.state.model = { provider: "test", id: "old-model" };
+		emit("", { type: "fleet_snapshot", runtimes: [stale] });
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "confirmed-model" },
+			thinkingLevel: "high",
+		});
+
+		const newer = fleetSnapshot("live");
+		newer.state.model = { provider: "test", id: "other-client-model" };
+		newer.state.thinkingLevel = "low";
+		newer.settingsRevision = 3;
+		emit("", { type: "fleet_snapshot", runtimes: [newer] });
+
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "other-client-model" },
+			thinkingLevel: "low",
+		});
+	});
+
+	it("does not leave a pending setting when its matching snapshot won the HTTP race", async () => {
+		const initial = fleetSnapshot("live");
+		initial.state.model = { provider: "test", id: "new-model" };
+		initial.state.thinkingLevel = "high";
+		initial.settingsRevision = 2;
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [initial], diskSessions: [] });
+		const store = await makeStartedStore();
+
+		store.setRuntimeModel("live", { provider: "test", id: "new-model" }, 1);
+		store.setRuntimeThinkingLevel("live", "high", 2);
+		const later = fleetSnapshot("live");
+		later.state.model = { provider: "test", id: "later-model" };
+		later.state.thinkingLevel = "low";
+		later.settingsRevision = 3;
+		emit("", { type: "fleet_snapshot", runtimes: [later] });
+
+		expect(store.fleet().runtimes[0]?.state).toMatchObject({
+			model: { provider: "test", id: "later-model" },
+			thinkingLevel: "low",
 		});
 	});
 
@@ -2236,6 +2547,43 @@ describe("fleet snapshot and inventory store foundation", () => {
 		});
 		expect(store.fleet().runtimes[1]).not.toHaveProperty("stats");
 		expect(store.fleetStatsError()).toContain("b stats unavailable");
+	});
+
+	it("updates one live runtime from mounted-session stats and ignores an older overlapping response", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("live", 4)], diskSessions: [] });
+		const first = deferred<ReturnType<typeof stats>>();
+		const second = deferred<ReturnType<typeof stats>>();
+		vi.mocked(api.stats).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const store = await makeStartedStore();
+
+		const firstRefresh = store.refreshRuntimeStats("live");
+		const secondRefresh = store.refreshRuntimeStats("live");
+		second.resolve(stats(6, 60, 0.6));
+		await secondRefresh;
+		first.resolve(stats(5, 50, 0.5));
+		await firstRefresh;
+
+		expect(store.fleet().runtimes[0]).toMatchObject({
+			stats: { tokensTotal: 60, cost: 0.6 },
+			state: { messageCount: 6, contextUsage: { tokens: 60 } },
+		});
+	});
+
+	it("preserves newer live message state while applying mounted-session context stats", async () => {
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [fleetSnapshot("live", 4)], diskSessions: [] });
+		const delayed = deferred<ReturnType<typeof stats>>();
+		vi.mocked(api.stats).mockReturnValueOnce(delayed.promise);
+		const store = await makeStartedStore();
+		const refresh = store.refreshRuntimeStats("live");
+
+		emit("", { type: "fleet_snapshot", runtimes: [fleetSnapshot("live", 9)] });
+		delayed.resolve(stats(5, 50, 0.5));
+		await refresh;
+
+		expect(store.fleet().runtimes[0]).toMatchObject({
+			stats: { tokensTotal: 50, cost: 0.5 },
+			state: { messageCount: 9, contextUsage: { tokens: 50 } },
+		});
 	});
 
 	it("times out a stalled stats request, preserves last-good values, and allows the next poll", async () => {

@@ -21,7 +21,7 @@ Edit directly or use `/settings` for common options.
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output |
 | `thinkingBudgets` | object | - | Custom token budgets per thinking level |
 | `agentModels.models` | object | - | Per-agent model fallback lists for subagents (map of agent name → ordered model IDs). See [agent-models.md](agent-models.md) |
-| `modelSettings` | object | - | Per-model overrides keyed by model ID (e.g. thinking display). See [modelSettings](#modelsettings) |
+| `modelSettings` | object | - | Per-model thinking-display and provider/model system-prompt overrides. See [modelSettings](#modelsettings) |
 
 #### agentModels.models
 
@@ -55,9 +55,12 @@ Configurable in the TUI via `/settings` → **Agent Models**. See [agent-models.
 
 #### modelSettings
 
-Per-model overrides keyed by model ID. Currently supports `thinkingDisplay`, which controls
-whether adaptive-thinking Claude models (Opus and Sonnet 4.6–4.x, plus Claude 5 families)
-return thinking summaries.
+`modelSettings` supports thinking-display preferences and persistent model-specific system
+prompts.
+
+`thinkingDisplay` remains keyed by bare model ID for compatibility. It controls whether
+adaptive-thinking Claude models (Opus and Sonnet 4.6–4.x, plus Claude 5 families) return
+thinking summaries:
 
 ```json
 {
@@ -73,12 +76,58 @@ return thinking summaries.
 
 Anthropic's API defaults Opus 4.7+ to `"omitted"`, so dreb sends `"summarized"` by default
 on adaptive models to keep thinking visible. Set `"omitted"` here to opt into the
-lower-latency behavior. The setting is **keyed by model ID**, so it is honored identically
-by the main session and by any subagent that uses the same model. Non-adaptive models
-ignore the setting.
+lower-latency behavior. The setting is honored identically by the main session and by any
+subagent that uses the same model. Non-adaptive models ignore it. It is configurable in the
+TUI via `/settings` → **Show thinking summaries** (shown only when the current model supports
+adaptive thinking).
 
-Configurable in the TUI via `/settings` → **Show thinking summaries** (shown only when the
-current model supports adaptive thinking).
+System-prompt settings require an exact canonical `provider/model` key. Use `systemPrompt`
+to replace dreb's built-in prompt, or `appendSystemPrompt` to preserve the selected base
+prompt and append model-specific instructions:
+
+```json
+{
+  "modelSettings": {
+    "openai-codex/gpt-5.6-sol": {
+      "appendSystemPrompt": "When implementing a mach6 plan, stop when the work is ready to commit and push."
+    },
+    "ollama/qwen2.5-coder:7b": {
+      "systemPrompt": "You are a coding assistant for this local model. Verify external facts against authoritative sources before answering."
+    }
+  }
+}
+```
+
+For a model defined or overridden in `~/.dreb/agent/models.json`, the same two fields may
+instead live directly on its custom `models[]` object or built-in `modelOverrides` object.
+This keeps a custom model and its behavior together. Do not use both surfaces for one
+canonical model: any prompt declaration in both files is rejected, even if both declarations
+use the same mode.
+
+Prompt behavior:
+
+- The key is matched as one exact string. Model IDs may themselves contain `/`, so
+  `openrouter/anthropic/claude-sonnet-4` means provider `openrouter` and model ID
+  `anthropic/claude-sonnet-4`.
+- Bare model-ID keys never apply prompt instructions; this prevents instructions from
+  leaking to another provider exposing the same ID.
+- Configure exactly one of `systemPrompt` and `appendSystemPrompt` for a canonical model.
+  Defining both, or using an empty/non-string value, fails loudly when dreb builds that
+  model's prompt.
+- An explicit session replacement from `--system-prompt`, `SYSTEM.md`, or an SDK resource
+  loader takes precedence over `systemPrompt`. `appendSystemPrompt` still appends after
+  existing session append sources such as `--append-system-prompt`, `APPEND_SYSTEM.md`, and
+  subagent-definition instructions.
+- Switching or cycling models rebuilds the prompt immediately: instructions from the old
+  model are removed and instructions for the new model are applied. `/reload` picks up
+  external prompt edits and removals from both `settings.json` and `models.json`.
+- Global and project entries follow the existing per-property merge. A project value wins
+  for the same field; a merged entry that supplies both prompt modes is rejected rather
+  than choosing one silently.
+- Built-in and custom models use the same exact identity. A `models.json` custom model or
+  built-in override can own the prompt directly; otherwise use its exact `provider/id` here.
+- A canonical model with prompt behavior in both files is invalid. There is no source
+  precedence between `models.json` and `settings.json`.
 
 ### UI & Display
 
@@ -210,6 +259,9 @@ When a provider requests a retry delay longer than `maxDelayMs` (e.g., Google's 
 |---------|------|---------|-------------|
 | `backgroundAgents.parentTurnGuardrail` | boolean | `true` | Pause the parent agent after `parentTurnLimit` turns while background subagents are still running |
 | `backgroundAgents.parentTurnLimit` | number | `3` | Parent turns allowed while background agents run before pausing |
+| `backgroundAgents.maxConcurrentSubagents` | non-negative integer | `4` | Maximum children a new parent session may run at once; `0` removes the subagent tool |
+
+`maxConcurrentSubagents` is captured when a parent session starts. Positive values bound that session's running children while additional work waits for a slot. A value of `0` starts the parent without the `subagent` tool and adds explicit system-prompt guidance to perform normally delegated work itself. Changing the persistent value does not retrofit an already-running parent session. The separate `tasks` input limit remains eight items per parallel call.
 
 When you launch background subagents, the parent agent keeps working and returns control to you while subagents run. The guardrail pauses the parent after `parentTurnLimit` turns so it doesn't spin ahead of results — when this happens, dreb surfaces a friendly, non-error notification in the TUI and Telegram explaining that background agents are still working and the parent paused intentionally (it resumes when they report back, or you can send a message to steer it).
 
@@ -219,7 +271,8 @@ Set `parentTurnGuardrail` to `false` to let the parent keep running with no turn
 {
   "backgroundAgents": {
     "parentTurnGuardrail": true,
-    "parentTurnLimit": 3
+    "parentTurnLimit": 3,
+    "maxConcurrentSubagents": 4
   }
 }
 ```

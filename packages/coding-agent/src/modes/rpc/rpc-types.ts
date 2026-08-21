@@ -111,6 +111,8 @@ export type RpcCommand =
 
 	// Background agents
 	| { id?: string; type: "list_background_agents" }
+	| { id?: string; type: "steer_background_agent"; agentId: string; message: string }
+	| { id?: string; type: "get_background_agent_pending"; agentId: string }
 	| { id?: string; type: "list_agent_types" }
 
 	// Settings (persistent defaults)
@@ -439,6 +441,14 @@ export type RpcResponse =
 			success: true;
 			data: { agents: RpcBackgroundAgentInfo[] };
 	  }
+	| { id?: string; type: "response"; command: "steer_background_agent"; success: true }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_background_agent_pending";
+			success: true;
+			data: { steeringMode: "all" | "one-at-a-time"; pending: RpcPendingMessages };
+	  }
 	| {
 			id?: string;
 			type: "response";
@@ -589,6 +599,8 @@ export interface RpcSettingsSnapshot {
 	compactionEnabled: boolean;
 	/** Whether automatic retry on transient errors is enabled */
 	retryEnabled: boolean;
+	/** Maximum child agents a new parent session may run concurrently; zero disables the tool */
+	maxConcurrentSubagents: number;
 	/** Whether image inputs are automatically resized before sending to providers */
 	imageAutoResize?: boolean;
 	/** Whether image inputs are blocked from being sent to providers */
@@ -665,6 +677,7 @@ export interface RpcSettingsUpdate {
 	followUpMode?: "all" | "one-at-a-time";
 	compactionEnabled?: boolean;
 	retryEnabled?: boolean;
+	maxConcurrentSubagents?: number;
 	imageAutoResize?: boolean;
 	blockImages?: boolean;
 	enableSkillCommands?: boolean;

@@ -77,9 +77,9 @@ Run a durable, explicit, round-aware review. It always posts two comments: an **
 /skill:mach6-review 53 tests
 ```
 
-Rounds 1–2 run the applicable code-reviewer, error-auditor, test-reviewer, completeness-checker, and simplifier together in phase one. The independent assessor then applies factual, scope, and practical gates. Practical assessment requires a credible actor, exact reachable trigger, concrete consequence, existing safeguards, and material value from fixing the problem; missing tests are not blockers without an important uncovered regression.
+Every round runs the applicable code-reviewer, error-auditor, test-reviewer, completeness-checker, and simplifier together in phase one. A specialist is retried rather than omitted if dispatch arbitration or the agent fails. In rounds 1–2, the independent assessor then applies factual, scope, and practical gates. Practical assessment requires a credible actor, exact reachable trigger, concrete consequence, existing safeguards, and material value from fixing the problem; missing tests are not blockers without an important uncovered regression.
 
-Round 3+ reviews only changes since the latest recorded reviewed SHA and verifies prior blockers. The four core specialists remain; simplifier runs only when explicitly requested. Phase two runs independent-assessor, developers-advocate, and devils-advocate in parallel. The developer's advocate attacks the practical value of proposed work; the devil's advocate attacks evidence that the original acceptance promises hold and supplements rather than replaces test-reviewer. A later-round item blocks merge only when the assessor and developer's advocate agree on material practical impact, with parent adjudication based on a concrete trigger-and-outcome sequence.
+Round 3+ continues to review the full PR and all interactions among its changes while using changes since the latest recorded reviewed SHA as supplemental context for verifying prior blockers and identifying new work. Reviews narrow only when the user explicitly requests a targeted scope. Phase two runs independent-assessor, developers-advocate, and devils-advocate in parallel. The developer's advocate attacks the practical value of proposed work; the devil's advocate attacks evidence that the original acceptance promises hold and supplements rather than replaces test-reviewer. A later-round item blocks merge only when the assessor and developer's advocate agree on material practical impact, with parent adjudication based on a concrete trigger-and-outcome sequence.
 
 See [Review Agents](#review-agents) below.
 
@@ -132,7 +132,7 @@ Phase one uses specialists with orthogonal incentives and confidence-scored cand
 | **error-auditor** | What can fail silently at runtime? | All applicable rounds |
 | **test-reviewer** | What important behavior lacks coverage? | All applicable rounds; never replaced |
 | **completeness-checker** | Does the PR fulfill authoritative scope? | All applicable rounds |
-| **simplifier** | Can changed code be clearer without behavior changes? | Rounds 1–2 in parallel; round 3+ only when requested |
+| **simplifier** | Can changed code be clearer without behavior changes? | Every round; retry on dispatch or agent failure |
 
 Phase two assessment agents:
 
@@ -150,7 +150,7 @@ The two advocates intentionally pull in different directions: one challenges the
 
 - **GitHub as shared memory** — Plans, reviews, assessments, and progress are posted as PR/issue comments with HTML markers (`<!-- mach6-plan -->`, `<!-- mach6-review -->`, etc.) so any future session can pick up context.
 - **Three-gate independent assessment** — Findings must be factual, authorized, and materially practical before becoming merge blockers.
-- **Deliberate counter-pressure** — Later rounds focus on the delta and pair practical-value skepticism with adversarial acceptance evidence to resist ceremonial review work.
+- **Deliberate counter-pressure** — Every round reviews the full PR; later-round deltas supplement that view for fix verification while practical-value skepticism and adversarial acceptance evidence resist ceremonial review work.
 - **Durable accountability checkpoint** — Implementation and fixes are committed, pushed, and recorded before formal review so work cannot be lost or repeatedly rewritten while still local.
 - **User-controlled review cycles** — Only the user starts each formal review or re-review. Agents stop at the checkpoint and suggest the next command rather than autonomously chaining review and fix cycles.
 - **Focused checks remain available** — One-off reviewer/checker subagents may answer narrow correctness questions without becoming a formal mach6 review cycle.

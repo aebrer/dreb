@@ -53,8 +53,10 @@ import { resolveToCwd } from "../../core/tools/path-utils.js";
 import {
 	type BackgroundAgentInfo,
 	discoverAgentTypes,
+	getBackgroundAgentPendingSteering,
 	getBackgroundAgents,
 	rehydrateBackgroundAgentsFromDisk,
+	steerBackgroundAgent,
 } from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -377,6 +379,7 @@ type SettingsReader = Pick<
 	| "getFollowUpMode"
 	| "getCompactionEnabled"
 	| "getRetryEnabled"
+	| "getMaxConcurrentSubagents"
 	| "getImageAutoResize"
 	| "getBlockImages"
 	| "getEnableSkillCommands"
@@ -405,6 +408,7 @@ type SettingsWriter = SettingsRefresher &
 		| "setFollowUpMode"
 		| "setCompactionEnabled"
 		| "setRetryEnabled"
+		| "setMaxConcurrentSubagents"
 		| "setImageAutoResize"
 		| "setBlockImages"
 		| "setEnableSkillCommands"
@@ -446,6 +450,7 @@ export function getSettingsForRpc(
 		followUpMode: settingsManager.getFollowUpMode(),
 		compactionEnabled: settingsManager.getCompactionEnabled(),
 		retryEnabled: settingsManager.getRetryEnabled(),
+		maxConcurrentSubagents: settingsManager.getMaxConcurrentSubagents(),
 		imageAutoResize: settingsManager.getImageAutoResize(),
 		blockImages: settingsManager.getBlockImages(),
 		enableSkillCommands: settingsManager.getEnableSkillCommands(),
@@ -551,6 +556,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"followUpMode",
 	"compactionEnabled",
 	"retryEnabled",
+	"maxConcurrentSubagents",
 	"imageAutoResize",
 	"blockImages",
 	"enableSkillCommands",
@@ -890,6 +896,16 @@ export async function setSettingsForRpc(
 		}
 	}
 
+	if (
+		update.maxConcurrentSubagents !== undefined &&
+		(!Number.isSafeInteger(update.maxConcurrentSubagents) || update.maxConcurrentSubagents < 0)
+	) {
+		return {
+			ok: false,
+			error: `Invalid maxConcurrentSubagents: ${JSON.stringify(update.maxConcurrentSubagents)}. Must be a non-negative whole number`,
+		};
+	}
+
 	if (update.transport !== undefined) {
 		if (
 			typeof update.transport !== "string" ||
@@ -1092,6 +1108,9 @@ export async function setSettingsForRpc(
 			}
 			if (update.retryEnabled !== undefined) {
 				settingsManager.setRetryEnabled(update.retryEnabled);
+			}
+			if (update.maxConcurrentSubagents !== undefined) {
+				settingsManager.setMaxConcurrentSubagents(update.maxConcurrentSubagents);
 			}
 			if (update.imageAutoResize !== undefined) {
 				settingsManager.setImageAutoResize(update.imageAutoResize);
@@ -1847,13 +1866,42 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				// Don't await - events will stream
 				// Extension commands are executed immediately, file prompt templates are expanded
 				// If streaming and streamingBehavior specified, queues via steer/followUp
+				//
+				// A subagent child (--ui agent) whose prompt settles without the agent
+				// loop ever starting (e.g. an extension command consumed the task) would
+				// otherwise idle forever: its parent waits on agent_end for completion.
+				// Report that outcome as a late failure so the parent can terminate it.
+				// The agent's own subscription delivers agent_start synchronously — the
+				// session-level event queue would race the settled prompt promise.
+				const isSubagentChild = session.uiType === "agent";
+				let sawAgentStart = false;
+				const unsubscribe = isSubagentChild
+					? session.agent.subscribe((event) => {
+							if (event.type === "agent_start") sawAgentStart = true;
+						})
+					: undefined;
 				session
 					.prompt(command.message, {
 						images: command.images,
 						streamingBehavior: command.streamingBehavior,
 						source: "rpc",
 					})
-					.catch((e) => output(error(id, "prompt", e.message)));
+					.then(() => {
+						unsubscribe?.();
+						if (isSubagentChild && !sawAgentStart) {
+							output(
+								error(
+									id,
+									"prompt",
+									"Prompt was handled without starting the agent loop (for example, an extension command consumed the task).",
+								),
+							);
+						}
+					})
+					.catch((e) => {
+						unsubscribe?.();
+						output(error(id, "prompt", e.message));
+					});
 				return success(id, "prompt");
 			}
 
@@ -2198,6 +2246,21 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				return success(id, "list_background_agents", {
 					agents: getBackgroundAgents().map(toRpcBackgroundAgentInfo),
 				});
+			}
+
+			case "steer_background_agent": {
+				const rejection = getBuiltinPromptRejection(command.message);
+				if (rejection) return error(id, "steer_background_agent", rejection);
+				await steerBackgroundAgent(command.agentId, command.message);
+				return success(id, "steer_background_agent");
+			}
+
+			case "get_background_agent_pending": {
+				return success(
+					id,
+					"get_background_agent_pending",
+					await getBackgroundAgentPendingSteering(command.agentId),
+				);
 			}
 
 			case "list_agent_types": {

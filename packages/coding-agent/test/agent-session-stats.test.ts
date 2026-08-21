@@ -96,7 +96,7 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
-	it("reports unknown current context usage immediately after compaction", () => {
+	it("estimates current context usage immediately after compaction without stale kept usage", () => {
 		const { session, sessionManager } = createSession();
 
 		try {
@@ -111,8 +111,9 @@ describe("AgentSession.getSessionStats", () => {
 			const stats = session.getSessionStats();
 			expect(stats.tokens.input).toBe(195_000);
 			expect(stats.contextUsage).toBeDefined();
-			expect(stats.contextUsage?.tokens).toBeNull();
-			expect(stats.contextUsage?.percent).toBeNull();
+			expect(stats.contextUsage?.tokens).toBeGreaterThan(0);
+			expect(stats.contextUsage?.tokens).toBeLessThan(195_000);
+			expect(stats.contextUsage?.percent).toBe(((stats.contextUsage?.tokens ?? 0) / model.contextWindow) * 100);
 		} finally {
 			session.dispose();
 		}

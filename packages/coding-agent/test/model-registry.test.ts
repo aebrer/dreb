@@ -218,6 +218,53 @@ describe("ModelRegistry", () => {
 			expect(sonnetModels[0].baseUrl).toBe("https://my-proxy.example.com/v1");
 		});
 
+		test("retains and refreshes prompt metadata for custom models", () => {
+			const config = providerConfig("https://custom.example.com/v1", [
+				{ id: "replacement-model" },
+				{ id: "append-model" },
+			]);
+			writeRawModelsJson({
+				custom: {
+					...config,
+					models: config.models.map((model) =>
+						model.id === "replacement-model"
+							? { ...model, systemPrompt: "CUSTOM REPLACEMENT" }
+							: { ...model, appendSystemPrompt: "CUSTOM APPEND" },
+					),
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getModelPromptSettings("custom", "replacement-model")).toEqual({
+				systemPrompt: "CUSTOM REPLACEMENT",
+				appendSystemPrompt: undefined,
+			});
+			expect(registry.getModelPromptSettings("custom", "append-model")).toEqual({
+				systemPrompt: undefined,
+				appendSystemPrompt: "CUSTOM APPEND",
+			});
+			expect(registry.find("custom", "replacement-model")).not.toHaveProperty("systemPrompt");
+			expect(registry.find("custom", "append-model")).not.toHaveProperty("appendSystemPrompt");
+
+			writeRawModelsJson({
+				custom: {
+					...config,
+					models: config.models.map((model) =>
+						model.id === "replacement-model" ? { ...model, appendSystemPrompt: "REFRESHED APPEND" } : model,
+					),
+				},
+			});
+			registry.refresh();
+			expect(registry.getModelPromptSettings("custom", "replacement-model")).toEqual({
+				systemPrompt: undefined,
+				appendSystemPrompt: "REFRESHED APPEND",
+			});
+
+			writeRawModelsJson({});
+			registry.refresh();
+			expect(registry.getModelPromptSettings("custom", "replacement-model")).toBeUndefined();
+		});
+
 		test("custom provider with same name as built-in does not affect other built-in providers", () => {
 			writeModelsJson({
 				anthropic: providerConfig("https://my-proxy.example.com/v1", [{ id: "claude-custom" }]),
@@ -657,6 +704,38 @@ describe("ModelRegistry", () => {
 			expect(other?.name).not.toBe("Custom Name");
 		});
 
+		test("applies prompt metadata only to the exact overridden built-in model", () => {
+			writeRawModelsJson({
+				[testProvider]: {
+					modelOverrides: {
+						[testModel1.id]: { systemPrompt: "BUILT-IN REPLACEMENT" },
+						[testModel2.id]: { appendSystemPrompt: "BUILT-IN APPEND" },
+					},
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getModelPromptSettings(testProvider, testModel1.id)).toEqual({
+				systemPrompt: "BUILT-IN REPLACEMENT",
+				appendSystemPrompt: undefined,
+			});
+			expect(registry.getModelPromptSettings(testProvider, testModel2.id)).toEqual({
+				systemPrompt: undefined,
+				appendSystemPrompt: "BUILT-IN APPEND",
+			});
+			expect(
+				registry
+					.getAll()
+					.filter((model) => model.provider !== testProvider)
+					.some((model) => registry.getModelPromptSettings(model.provider, model.id) !== undefined),
+			).toBe(false);
+
+			writeRawModelsJson({});
+			registry.refresh();
+			expect(registry.getModelPromptSettings(testProvider, testModel1.id)).toBeUndefined();
+			expect(registry.getModelPromptSettings(testProvider, testModel2.id)).toBeUndefined();
+		});
+
 		test("model override with compat.openRouterRouting", () => {
 			writeRawModelsJson({
 				[testProvider]: {
@@ -865,6 +944,59 @@ describe("ModelRegistry", () => {
 
 			const restoredName = getModelsForProvider(registry, testProvider).find((m) => m.id === testModel1.id)?.name;
 			expect(restoredName).not.toBe("Custom Name");
+		});
+	});
+
+	describe("models.json prompt validation", () => {
+		function configWithPromptEntry(target: "custom model" | "built-in override", prompt: Record<string, unknown>) {
+			if (target === "built-in override") {
+				return {
+					[testProvider]: {
+						modelOverrides: { [testModel1.id]: prompt },
+					},
+				};
+			}
+
+			const config = providerConfig("https://custom.example.com/v1", [{ id: "prompt-model" }]);
+			return {
+				custom: {
+					...config,
+					models: [{ ...config.models[0], ...prompt }],
+				},
+			};
+		}
+
+		test.each(["custom model", "built-in override"] as const)(
+			"rejects replacement and append together on a %s",
+			(target) => {
+				writeRawModelsJson(
+					configWithPromptEntry(target, {
+						systemPrompt: "REPLACEMENT",
+						appendSystemPrompt: "APPEND",
+					}),
+				);
+
+				const registry = new ModelRegistry(authStorage, modelsJsonPath);
+				expect(registry.getError()).toContain("cannot define both systemPrompt and appendSystemPrompt");
+				expect(registry.getError()).toContain(
+					target === "custom model" ? "custom/prompt-model" : `${testProvider}/${testModel1.id}`,
+				);
+			},
+		);
+
+		test.each(["custom model", "built-in override"] as const)("rejects a blank prompt on a %s", (target) => {
+			writeRawModelsJson(configWithPromptEntry(target, { systemPrompt: "   " }));
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getError()).toContain("systemPrompt must be a non-empty string");
+		});
+
+		test("rejects non-string prompt metadata through the schema", () => {
+			writeRawModelsJson(configWithPromptEntry("custom model", { appendSystemPrompt: 42 }));
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getError()).toContain("Invalid models.json schema");
+			expect(registry.getError()).toContain("appendSystemPrompt");
 		});
 	});
 

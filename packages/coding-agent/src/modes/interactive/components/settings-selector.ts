@@ -62,6 +62,8 @@ export interface SettingsConfig {
 	quietStartup: boolean;
 	/** Whether nested AGENTS.md/CLAUDE.md auto-loading is enabled. */
 	autoLoadNestedContext: boolean;
+	/** Maximum children a new parent session may run concurrently; zero disables subagents. */
+	maxConcurrentSubagents: number;
 	/** Per-agent model overrides from agentModels settings */
 	agentModels: Record<string, string[]>;
 	/** Known agent names for the mach6 models submenu */
@@ -93,6 +95,7 @@ export interface SettingsCallbacks {
 	onAutocompleteMaxVisibleChange: (maxVisible: number) => void;
 	onQuietStartupChange: (enabled: boolean) => void;
 	onAutoLoadNestedContextChange: (enabled: boolean) => void;
+	onMaxConcurrentSubagentsChange: (value: number) => boolean;
 	onAgentModelsChange: (agentName: string, models: string[]) => void;
 	onSubagentArbiterChange: (settings: SubagentArbiterSettings) => boolean | Promise<boolean>;
 	onCancel: () => void;
@@ -587,6 +590,24 @@ export class SettingsSelectorComponent extends Container {
 		}
 
 		items.push(
+			{
+				id: "max-concurrent-subagents",
+				label: "Max concurrent subagents",
+				description: "Applies to new parent sessions; 0 removes the subagent tool",
+				currentValue: String(config.maxConcurrentSubagents),
+				submenu: (currentValue, done) =>
+					new TextInputSubmenu(
+						"Max Concurrent Subagents",
+						"Enter a non-negative whole number. Zero disables subagents in new parent sessions.",
+						currentValue,
+						(value) => {
+							const normalized = value.trim();
+							const parsed = normalized.length > 0 ? Number(normalized) : Number.NaN;
+							if (callbacks.onMaxConcurrentSubagentsChange(parsed)) done(String(parsed));
+						},
+						() => done(),
+					),
+			},
 			{
 				id: "dispatch-arbiter-enabled",
 				label: "Dispatch Arbiter",

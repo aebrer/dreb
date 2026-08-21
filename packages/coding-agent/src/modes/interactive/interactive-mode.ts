@@ -3947,6 +3947,7 @@ export class InteractiveMode {
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
 					autoLoadNestedContext: this.settingsManager.getAutoLoadNestedContext(),
+					maxConcurrentSubagents: this.settingsManager.getMaxConcurrentSubagents(),
 					agentModels: this.settingsManager.getAgentModels(),
 					agentNames: agentNames,
 					availableModelIds,
@@ -4071,6 +4072,19 @@ export class InteractiveMode {
 							this.editor.setAutocompleteMaxVisible(maxVisible);
 						}
 					},
+					onMaxConcurrentSubagentsChange: (value) => {
+						if (!Number.isSafeInteger(value) || value < 0) {
+							this.showError("Max concurrent subagents must be a non-negative whole number.");
+							return false;
+						}
+						try {
+							this.settingsManager.setMaxConcurrentSubagents(value);
+							return true;
+						} catch (error) {
+							this.showError(error instanceof Error ? error.message : String(error));
+							return false;
+						}
+					},
 					onSubagentArbiterChange: (settings) => this.handleSubagentArbiterSettingsChange(settings),
 					onAgentModelsChange: (agentName, models) => {
 						const shadowedByProject = this.settingsManager.hasProjectAgentModelOverride(agentName);
@@ -4151,7 +4165,6 @@ export class InteractiveMode {
 			const selector = new ModelSelectorComponent(
 				this.ui,
 				this.session.model,
-				this.settingsManager,
 				this.session.modelRegistry,
 				this.session.scopedModels,
 				async (model) => {

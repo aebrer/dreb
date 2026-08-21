@@ -22,6 +22,7 @@ import {
 	applySessionEvent,
 	capBackgroundAgents,
 	createSessionViewState,
+	createStatusLineEntry,
 	deriveProviderErrorState,
 	dismissToast as dismissReducerToast,
 	extensionUiRequestFromEvent,
@@ -60,6 +61,10 @@ function parseHash(): Route {
 	}
 	if (head === "pairing") return { screen: "pairing" };
 	return { screen: "fleet" };
+}
+
+function routeSessionKey(route: Route): string | undefined {
+	return route.screen === "session" || route.screen === "subagent" ? route.key : undefined;
 }
 
 export function routeToHash(route: Route): string {
@@ -119,6 +124,16 @@ interface PendingHydration {
 	queuedBytes: number;
 }
 
+interface PendingRuntimeSetting<T> {
+	value: T;
+	settingsRevision: number;
+}
+
+interface PendingRuntimeSettings {
+	model?: PendingRuntimeSetting<NonNullable<SessionStateDto["model"]>>;
+	thinkingLevel?: PendingRuntimeSetting<string>;
+}
+
 function restoreSnapshotOutcomeState(session: SessionViewState, messages: any[], snapshotState: SessionStateDto): void {
 	session.statusEntries = session.statusEntries.filter((entry) => entry.key !== "retry");
 	const retryAttempt = snapshotState.retryAttempt ?? 0;
@@ -127,11 +142,13 @@ function restoreSnapshotOutcomeState(session: SessionViewState, messages: any[],
 			(entry) => entry.kind === "assistant" && entry.stopReason === "error",
 		);
 		const errorSuffix = failedAttempt?.errorMessage ? ` — ${failedAttempt.errorMessage}` : "";
-		session.statusEntries.push({
-			key: "retry",
-			text: `retrying (attempt ${retryAttempt})${errorSuffix}`,
-			tone: "warning",
-		});
+		session.statusEntries.push(
+			createStatusLineEntry({
+				key: "retry",
+				text: `retrying (attempt ${retryAttempt})${errorSuffix}`,
+				tone: "warning",
+			}),
+		);
 	}
 	deriveProviderErrorState(
 		session,
@@ -180,6 +197,10 @@ export function createAppStore() {
 	const latestFleetRuntimeNonSnapshotGenerations = new Map<string, number>();
 	/** Latest fleet snapshot sequence that changed each runtime's projected state. */
 	const latestFleetRuntimeSnapshotSequences = new Map<string, number>();
+	/** Confirmed HTTP setting mutations waiting for the pool's matching SSE snapshot. */
+	const pendingRuntimeSettings = new Map<string, PendingRuntimeSettings>();
+	/** Latest per-runtime stats request wins when mounted-screen refreshes overlap. */
+	const runtimeStatsRequestGenerations = new Map<string, number>();
 	let latestFleetRequestGeneration = 0;
 	/** Latest inventory request wins, so a slow earlier response cannot regress disk rows. */
 	let latestDiskSessionsRequestGeneration = 0;
@@ -191,9 +212,22 @@ export function createAppStore() {
 	const removedRuntimeKeys = new Set<string>();
 	let stopped = false;
 
-	window.addEventListener("hashchange", () => setRouteSignal(parseHash()));
+	function releaseClosedRoute(previous: Route, next: Route): void {
+		const previousKey = routeSessionKey(previous);
+		if (!previousKey || previousKey === routeSessionKey(next) || !sessions[previousKey]?.closed) return;
+		deleteSessionState(previousKey);
+	}
+
+	function syncRouteFromHash(): void {
+		const next = parseHash();
+		releaseClosedRoute(route(), next);
+		setRouteSignal(next);
+	}
+
+	window.addEventListener("hashchange", syncRouteFromHash);
 
 	function navigate(next: Route): void {
+		releaseClosedRoute(route(), next);
 		window.location.hash = routeToHash(next);
 	}
 
@@ -266,8 +300,7 @@ export function createAppStore() {
 	}
 
 	function routedSessionKey(): string | undefined {
-		const current = parseHash();
-		return current.screen === "session" || current.screen === "subagent" ? current.key : undefined;
+		return routeSessionKey(parseHash());
 	}
 
 	function pushNotice(text: string, tone: Toast["tone"] = "info"): void {
@@ -412,7 +445,30 @@ export function createAppStore() {
 
 	function replaceFleet(next: FleetDto): void {
 		removedRuntimeKeys.clear();
+		pendingRuntimeSettings.clear();
+		runtimeStatsRequestGenerations.clear();
 		mutateFleet(() => next);
+	}
+
+	function reconcilePendingRuntimeSettings(
+		runtime: FleetRuntimeSnapshotDto,
+		previous: RuntimeInfoDto | undefined,
+	): SessionStateDto {
+		const pending = pendingRuntimeSettings.get(runtime.key);
+		if (!pending) return runtime.state;
+		const state = { ...runtime.state };
+		const settingsRevision = runtime.settingsRevision ?? 0;
+		if (pending.model) {
+			if (settingsRevision >= pending.model.settingsRevision) delete pending.model;
+			else state.model = previous?.state.model ?? pending.model.value;
+		}
+		if (pending.thinkingLevel) {
+			if (settingsRevision >= pending.thinkingLevel.settingsRevision) delete pending.thinkingLevel;
+			else state.thinkingLevel = previous?.state.thinkingLevel ?? pending.thinkingLevel.value;
+		}
+		if (pending.model === undefined && pending.thinkingLevel === undefined)
+			pendingRuntimeSettings.delete(runtime.key);
+		return state;
 	}
 
 	/**
@@ -437,7 +493,7 @@ export function createAppStore() {
 						return {
 							...runtime,
 							state: {
-								...runtime.state,
+								...reconcilePendingRuntimeSettings(runtime, previous),
 								// Context usage is refreshed through the slower authoritative stats
 								// path. Message count belongs to this sequenced snapshot and may
 								// legitimately decrease after a fork/rewind.
@@ -454,24 +510,121 @@ export function createAppStore() {
 		if (membershipChanged) void refreshDiskSessions().catch(() => {});
 	}
 
-	/** Apply the same narrow local transition for SSE and directly confirmed stops. */
-	function removeRuntime(key: string): Promise<void> {
+	function retainClosedSession(key: string, runtime?: RuntimeInfoDto): void {
+		clearHydrationTransaction(key);
+		bumpHydrationGeneration(key);
+		mutateSession(key, (session) => {
+			const previous = session.closed;
+			session.closed = {
+				...(runtime?.cwd || previous?.cwd ? { cwd: previous?.cwd ?? runtime?.cwd } : {}),
+				...(runtime?.state.sessionFile || previous?.sessionFile
+					? { sessionFile: previous?.sessionFile ?? runtime?.state.sessionFile }
+					: {}),
+				...(previous?.bannerDismissed ? { bannerDismissed: true } : {}),
+				...(previous?.resuming ? { resuming: true } : {}),
+				...(previous?.resumeError ? { resumeError: previous.resumeError } : {}),
+			};
+			session.streaming = false;
+			session.compacting = false;
+			session.workingSince = undefined;
+			session.workingText = undefined;
+			session.statusEntries = session.statusEntries.filter(
+				(entry) => entry.key !== "retry" && entry.key !== "paused" && entry.key !== "compaction",
+			);
+			session.suggestedCommand = undefined;
+			session.uiRequests = [];
+			for (const subagent of Object.values(session.subagents)) subagent.streaming = false;
+			updateAttention(session);
+		});
+	}
+
+	/** Apply the same idempotent local transition for SSE and directly confirmed stops. */
+	function removeRuntime(key: string, capturedRuntime?: RuntimeInfoDto, refreshInventory = true): Promise<void> {
+		const runtime = capturedRuntime ?? fleet().runtimes.find((candidate) => candidate.key === key);
 		const alreadyRemoved = removedRuntimeKeys.has(key);
 		removedRuntimeKeys.add(key);
+		pendingRuntimeSettings.delete(key);
+		runtimeStatsRequestGenerations.delete(key);
 		if (!alreadyRemoved) {
 			// Bump even when the card was not rendered: an older full response must
 			// still be unable to resurrect a just-removed runtime.
 			mutateFleet((current) => ({
 				...current,
-				runtimes: current.runtimes.filter((runtime) => runtime.key !== key),
+				runtimes: current.runtimes.filter((candidate) => candidate.key !== key),
 			}));
-			deleteSessionState(key);
-			return refreshDiskSessions();
 		}
+
+		if (routedSessionKey() === key) retainClosedSession(key, runtime);
+		else deleteSessionState(key);
+
 		// A directly confirmed stop may be followed by its SSE echo. Keep the
 		// transition idempotent so that echo does not trigger a duplicate scan.
-		deleteSessionState(key);
-		return Promise.resolve();
+		return alreadyRemoved || !refreshInventory ? Promise.resolve() : refreshDiskSessions();
+	}
+
+	async function stopRuntime(key: string): Promise<void> {
+		const capturedRuntime = fleet().runtimes.find((runtime) => runtime.key === key);
+		try {
+			await api.stopRuntime(key);
+		} catch (error) {
+			// The SSE removal may win the race with the DELETE response. In that case
+			// the close succeeded and the late transport error must not replace it.
+			if (removedRuntimeKeys.has(key)) return;
+			throw error;
+		}
+		await removeRuntime(key, capturedRuntime);
+	}
+
+	function dismissStatusBanner(key: string, id: number): void {
+		if (!sessions[key]?.statusEntries.some((entry) => entry.id === id)) return;
+		mutateSession(key, (session) => {
+			const entry = session.statusEntries.find((candidate) => candidate.id === id);
+			if (entry) entry.dismissed = true;
+		});
+	}
+
+	function dismissClosedBanner(key: string): void {
+		if (!sessions[key]?.closed) return;
+		mutateSession(key, (session) => {
+			if (session.closed) session.closed.bannerDismissed = true;
+		});
+	}
+
+	async function resumeClosedSession(key: string): Promise<void> {
+		const closed = sessions[key]?.closed;
+		if (!closed || closed.resuming) return;
+		if (!closed.cwd || !closed.sessionFile) {
+			mutateSession(key, (session) => {
+				if (session.closed) session.closed.resumeError = "This closed session has no captured resume path.";
+			});
+			return;
+		}
+		const cwd = closed.cwd;
+		const sessionFile = closed.sessionFile;
+		mutateSession(key, (session) => {
+			if (!session.closed) return;
+			session.closed.resuming = true;
+			session.closed.resumeError = undefined;
+		});
+		let runtime: RuntimeInfoDto;
+		try {
+			runtime = await api.createRuntime(cwd, { sessionPath: sessionFile });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (!sessions[key]?.closed) return;
+			mutateSession(key, (session) => {
+				if (!session.closed) return;
+				session.closed.resuming = false;
+				session.closed.resumeError = message;
+				session.closed.bannerDismissed = false;
+			});
+			return;
+		}
+		upsertRuntime(runtime);
+		// The runtime is authoritative. Do not hold navigation behind the secondary
+		// disk inventory scan; that failure is independently exposed as fleetError.
+		void refreshDiskSessions().catch(() => {});
+		navigate({ screen: "session", key: runtime.key });
 	}
 
 	function refreshFleet(): Promise<void> {
@@ -557,22 +710,36 @@ export function createAppStore() {
 		}));
 	}
 
-	/** Patch the card immediately from the authoritative set-model response. */
-	function setRuntimeModel(key: string, model: { provider: string; id: string }): void {
+	/** Patch the card until a snapshot reaches this confirmed mutation's revision. */
+	function setRuntimeModel(key: string, model: { provider: string; id: string }, settingsRevision: number): void {
+		const runtime = fleet().runtimes.find((candidate) => candidate.key === key);
+		const pending = pendingRuntimeSettings.get(key) ?? {};
+		if ((runtime?.settingsRevision ?? 0) >= settingsRevision) delete pending.model;
+		else pending.model = { value: model, settingsRevision };
+		if (pending.model === undefined && pending.thinkingLevel === undefined) pendingRuntimeSettings.delete(key);
+		else pendingRuntimeSettings.set(key, pending);
+		if ((runtime?.settingsRevision ?? 0) >= settingsRevision) return;
 		mutateFleet((current) => ({
 			...current,
-			runtimes: current.runtimes.map((runtime) =>
-				runtime.key === key ? { ...runtime, state: { ...runtime.state, model } } : runtime,
+			runtimes: current.runtimes.map((candidate) =>
+				candidate.key === key ? { ...candidate, state: { ...candidate.state, model } } : candidate,
 			),
 		}));
 	}
 
-	/** Patch thinking state after the direct RPC response; no session event carries it. */
-	function setRuntimeThinkingLevel(key: string, thinkingLevel: string): void {
+	/** Patch thinking state until a snapshot reaches this confirmed mutation's revision. */
+	function setRuntimeThinkingLevel(key: string, thinkingLevel: string, settingsRevision: number): void {
+		const runtime = fleet().runtimes.find((candidate) => candidate.key === key);
+		const pending = pendingRuntimeSettings.get(key) ?? {};
+		if ((runtime?.settingsRevision ?? 0) >= settingsRevision) delete pending.thinkingLevel;
+		else pending.thinkingLevel = { value: thinkingLevel, settingsRevision };
+		if (pending.model === undefined && pending.thinkingLevel === undefined) pendingRuntimeSettings.delete(key);
+		else pendingRuntimeSettings.set(key, pending);
+		if ((runtime?.settingsRevision ?? 0) >= settingsRevision) return;
 		mutateFleet((current) => ({
 			...current,
-			runtimes: current.runtimes.map((runtime) =>
-				runtime.key === key ? { ...runtime, state: { ...runtime.state, thinkingLevel } } : runtime,
+			runtimes: current.runtimes.map((candidate) =>
+				candidate.key === key ? { ...candidate, state: { ...candidate.state, thinkingLevel } } : candidate,
 			),
 		}));
 	}
@@ -594,6 +761,28 @@ export function createAppStore() {
 			},
 			stats: { tokensTotal: stats.tokens.total, cost: stats.cost },
 		};
+	}
+
+	async function refreshRuntimeStats(key: string, signal?: AbortSignal): Promise<SessionStatsDto> {
+		const requestGeneration = (runtimeStatsRequestGenerations.get(key) ?? 0) + 1;
+		runtimeStatsRequestGenerations.set(key, requestGeneration);
+		const stateGenerationAtRequest = currentFleetRuntimeStateGeneration(key);
+		const stats = await api.stats(key, signal);
+		if (
+			runtimeStatsRequestGenerations.get(key) !== requestGeneration ||
+			!fleet().runtimes.some((runtime) => runtime.key === key)
+		) {
+			return stats;
+		}
+		mutateFleet((current) => ({
+			...current,
+			runtimes: current.runtimes.map((runtime) =>
+				runtime.key === key
+					? mergeRuntimeStats(runtime, stats, currentFleetRuntimeStateGeneration(key) !== stateGenerationAtRequest)
+					: runtime,
+			),
+		}));
+		return stats;
 	}
 
 	function fetchFleetRuntimeStats(key: string): Promise<SessionStatsDto> {
@@ -714,14 +903,7 @@ export function createAppStore() {
 			// back the expensive full fleet endpoint.
 			void refreshDiskSessions().catch(() => {});
 		} else if (type === "runtime_removed") {
-			if (envelope.key) {
-				const wasViewingRemovedRuntime = routedSessionKey() === envelope.key;
-				void removeRuntime(envelope.key).catch(() => {});
-				if (wasViewingRemovedRuntime) {
-					pushNotice(`session ${envelope.key} was stopped`, "warning");
-					navigate({ screen: "fleet" });
-				}
-			}
+			if (envelope.key) void removeRuntime(envelope.key).catch(() => {});
 		} else if (envelope.key) {
 			mutateSession(envelope.key, (session) => applySessionEvent(session, envelope.event));
 			if (type === "tasks_update") bumpTaskRevision(envelope.key);
@@ -732,6 +914,7 @@ export function createAppStore() {
 		const subagent = active.subagent;
 		mutateSession(active.key, (session) => {
 			const messages = active.messages as any[];
+			session.closed = undefined;
 			session.entries = messagesToEntries(messages);
 			session.tasks = (active.state.tasks ?? []).map((task) => ({ ...task }));
 			session.streaming = active.state.isStreaming;
@@ -789,17 +972,18 @@ export function createAppStore() {
 		restoreConnectionAfterResyncRetry();
 		const barrierSeq = pending.barrierSeq;
 		authoritativeBarrierSeq = barrierSeq;
+		const activeRouteKey = routedSessionKey();
+		const previousRuntime = activeRouteKey
+			? fleet().runtimes.find((runtime) => runtime.key === activeRouteKey)
+			: undefined;
 		replaceFleet(snapshot.fleet);
 		setFleetError(undefined);
 		if (snapshot.active) {
 			hydrateSnapshot(snapshot.active);
-		} else {
-			const activeRouteKey = routedSessionKey();
-			if (activeRouteKey) {
-				deleteSessionState(activeRouteKey);
-				pushNotice(`session ${activeRouteKey} was stopped`, "warning");
-				navigate({ screen: "fleet" });
-			}
+		} else if (activeRouteKey) {
+			// The authoritative resync Fleet already includes disk inventory and
+			// replaceFleet schedules any membership refresh it needs.
+			void removeRuntime(activeRouteKey, previousRuntime, false).catch(() => {});
 		}
 		// /api/resync's barrierSeq is the parent snapshot ordering point. The
 		// subagent disk transcript is captured earlier, so relay its matching child
@@ -1032,6 +1216,7 @@ export function createAppStore() {
 			}
 			mutateSession(key, (session) => {
 				const messages = snapshot.messages as any[];
+				session.closed = undefined;
 				session.entries = messagesToEntries(messages);
 				session.backgroundAgents = Object.fromEntries(
 					snapshot.backgroundAgents.map((agent) => [agent.agentId, agent]),
@@ -1107,7 +1292,12 @@ export function createAppStore() {
 		refreshFleet,
 		refreshDiskSessions,
 		refreshFleetStats,
+		refreshRuntimeStats,
 		removeRuntime,
+		stopRuntime,
+		resumeClosedSession,
+		dismissClosedBanner,
+		dismissStatusBanner,
 		upsertRuntime,
 		setRuntimeModel,
 		setRuntimeThinkingLevel,

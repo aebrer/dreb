@@ -138,9 +138,13 @@ export const api = {
 	abortCompaction: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}/abort-compaction`, { method: "POST" }),
 	abortRetry: (key: string) => request<{ ok: true }>(`/api/runtimes/${key}/abort-retry`, { method: "POST" }),
 	setModel: (key: string, provider: string, modelId: string) =>
-		request<{ provider: string; id: string }>(`/api/runtimes/${key}/model`, json({ provider, modelId })),
+		request<{ provider: string; id: string; settingsRevision: number }>(
+			`/api/runtimes/${key}/model`,
+			json({ provider, modelId }),
+		),
 	models: (key: string) => request<{ models: ModelInfoDto[] }>(`/api/runtimes/${key}/models`),
-	setThinking: (key: string, level: string) => request<{ ok: true }>(`/api/runtimes/${key}/thinking`, json({ level })),
+	setThinking: (key: string, level: string) =>
+		request<{ ok: true; settingsRevision: number }>(`/api/runtimes/${key}/thinking`, json({ level })),
 	compact: (key: string, instructions?: string) =>
 		request<unknown>(`/api/runtimes/${key}/compact`, json({ instructions })),
 	newSession: (key: string) => request<{ cancelled: boolean }>(`/api/runtimes/${key}/new-session`, { method: "POST" }),
@@ -173,6 +177,12 @@ export const api = {
 			`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/messages`,
 			{ signal },
 		),
+	subagentPending: (key: string, agentId: string) =>
+		request<{ steeringMode: "all" | "one-at-a-time"; pending: PendingMessagesDto }>(
+			`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/pending`,
+		),
+	steerSubagent: (key: string, agentId: string, message: string) =>
+		request<{ ok: true }>(`/api/runtimes/${key}/subagents/${encodeURIComponent(agentId)}/steer`, json({ message })),
 	extensionUiResponse: (key: string, response: Record<string, unknown>) =>
 		request<{ ok: true }>(`/api/runtimes/${key}/extension-ui-response`, json(response)),
 	exportHtmlUrl: (key: string) => `/api/runtimes/${key}/export-html`,

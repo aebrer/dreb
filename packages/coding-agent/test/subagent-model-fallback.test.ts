@@ -633,6 +633,92 @@ function makeAgents(model: string | string[]): Map<string, AgentTypeConfig> {
 	]);
 }
 
+function mockControlledSubagent(options: { promptBehavior?: "reject" | "late-error" } = {}) {
+	const stdin = new PassThrough();
+	const stdout = new PassThrough();
+	const stderr = new PassThrough();
+	const commands: Array<Record<string, unknown>> = [];
+	const proc = new EventEmitter() as ReturnType<typeof spawn> & {
+		stdin: PassThrough;
+		stdout: PassThrough;
+		stderr: PassThrough;
+		killed: boolean;
+	};
+	proc.stdin = stdin;
+	proc.stdout = stdout;
+	proc.stderr = stderr;
+	proc.killed = false;
+	let closed = false;
+	proc.kill = vi.fn(() => {
+		proc.killed = true;
+		if (!closed) {
+			closed = true;
+			process.nextTick(() => proc.emit("close", null));
+		}
+		return true;
+	}) as ReturnType<typeof spawn>["kill"];
+
+	let buffered = "";
+	stdin.on("data", (chunk: Buffer) => {
+		buffered += chunk.toString();
+		let newline = buffered.indexOf("\n");
+		while (newline !== -1) {
+			const command = JSON.parse(buffered.slice(0, newline)) as Record<string, unknown>;
+			buffered = buffered.slice(newline + 1);
+			commands.push(command);
+			process.nextTick(() => {
+				if (command.type === "prompt" && options.promptBehavior === "reject") {
+					stdout.write(
+						`${JSON.stringify({
+							type: "response",
+							id: command.id,
+							command: "prompt",
+							success: false,
+							error: "Built-in slash commands cannot be used as prompts.",
+						})}\n`,
+					);
+					return;
+				}
+				stdout.write(
+					`${JSON.stringify({ type: "response", id: command.id, command: command.type, success: true, data: {} })}\n`,
+				);
+				if (command.type === "prompt" && options.promptBehavior === "late-error") {
+					// The child acks the prompt synchronously, then fails before the agent
+					// loop starts and reports it as a second response with the same id.
+					process.nextTick(() => {
+						stdout.write(
+							`${JSON.stringify({
+								type: "response",
+								id: command.id,
+								command: "prompt",
+								success: false,
+								error: "No API key found for anthropic.",
+							})}\n`,
+						);
+					});
+				}
+			});
+			newline = buffered.indexOf("\n");
+		}
+	});
+	vi.mocked(spawn).mockReturnValueOnce(proc);
+
+	return {
+		commands,
+		proc,
+		finish(output = "controlled output") {
+			stdout.write(`${JSON.stringify({ type: "agent_start", model: { id: "controlled-model" } })}\n`);
+			stdout.write(
+				`${JSON.stringify({
+					type: "message_end",
+					message: { role: "assistant", content: [{ type: "text", text: output }] },
+				})}\n`,
+			);
+			stdout.write(`${JSON.stringify({ type: "agent_end" })}\n`);
+		},
+	};
+}
+
 function mockSpawnSubagentResult(
 	options: {
 		model?: string;
@@ -697,6 +783,189 @@ function mockSpawnSubagentResult(
 		return proc;
 	}) as typeof spawn);
 }
+
+describe("controlled subagent RPC lifecycle", () => {
+	test("uses RPC stdio, preserves commands and events, and completes after agent_end", async () => {
+		const child = mockControlledSubagent();
+		const controls: Array<import("../src/modes/rpc/rpc-client.js").RpcClient | undefined> = [];
+		const events: Array<Record<string, unknown>> = [];
+
+		const resultPromise = executeSingle(
+			makeAgents("controlled-model"),
+			"test-agent",
+			"Do the exact task",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			(event) => events.push(event),
+			undefined,
+			undefined,
+			(client) => controls.push(client),
+		);
+
+		await vi.waitFor(() => expect(child.commands[0]).toMatchObject({ type: "prompt", message: "Do the exact task" }));
+		const control = controls[0];
+		expect(control).toBeDefined();
+		const steerPromise = control?.steer("User text / unchanged");
+		await vi.waitFor(() =>
+			expect(child.commands[1]).toMatchObject({ type: "steer", message: "User text / unchanged" }),
+		);
+		await steerPromise;
+
+		const spawnCall = vi.mocked(spawn).mock.calls[0];
+		expect(spawnCall[1]).toContain("rpc");
+		expect(spawnCall[1]).not.toContain("json");
+		expect(spawnCall[1]).not.toContain("-p");
+		expect(spawnCall[2]).toMatchObject({ stdio: ["pipe", "pipe", "pipe"] });
+
+		child.finish();
+		const result = await resultPromise;
+		expect(result).toMatchObject({ exitCode: 0, output: "controlled output" });
+		expect(events.some((event) => event.type === "agent_end")).toBe(true);
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(controls.at(-1)).toBeUndefined();
+	});
+
+	test("rejects pending control requests when the child process errors", async () => {
+		const child = mockControlledSubagent();
+		let control: import("../src/modes/rpc/rpc-client.js").RpcClient | undefined;
+		const resultPromise = executeSingle(
+			makeAgents("controlled-model"),
+			"test-agent",
+			"Do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			(client) => {
+				control = client;
+			},
+		);
+
+		await vi.waitFor(() => expect(control).toBeDefined());
+		const pendingSteer = control?.steer("pending command");
+		child.proc.emit("error", new Error("spawned process failed"));
+		await expect(pendingSteer).rejects.toThrow("spawned process failed");
+		await expect(resultPromise).rejects.toThrow("Subagent process error: spawned process failed");
+		expect(control).toBeUndefined();
+	});
+
+	test("handles child stdin errors without an unhandled stream error", async () => {
+		const child = mockControlledSubagent();
+		let control: import("../src/modes/rpc/rpc-client.js").RpcClient | undefined;
+		const resultPromise = executeSingle(
+			makeAgents("controlled-model"),
+			"test-agent",
+			"Do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			(client) => {
+				control = client;
+			},
+		);
+
+		await vi.waitFor(() => expect(control).toBeDefined());
+		const pendingSteer = control?.steer("race child exit");
+		const pipeError = Object.assign(new Error("broken pipe"), { code: "EPIPE" });
+		expect(() => child.proc.stdin.emit("error", pipeError)).not.toThrow();
+		await expect(pendingSteer).rejects.toThrow("broken pipe");
+		await expect(resultPromise).resolves.toMatchObject({ exitCode: 1, errorMessage: "broken pipe" });
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+	});
+
+	test("fails loudly when the child rejects the initial prompt", async () => {
+		const child = mockControlledSubagent({ promptBehavior: "reject" });
+		const controls: Array<import("../src/modes/rpc/rpc-client.js").RpcClient | undefined> = [];
+		const resultPromise = executeSingle(
+			makeAgents("controlled-model"),
+			"test-agent",
+			"/compact the findings",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			(client) => controls.push(client),
+		);
+
+		// A rejected initial prompt means no agent loop and no agent_end — the child
+		// must be terminated and the subagent settled as a failure, not left running.
+		await expect(resultPromise).resolves.toMatchObject({
+			exitCode: 1,
+			errorMessage: "Built-in slash commands cannot be used as prompts.",
+		});
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(controls.at(-1)).toBeUndefined();
+	});
+
+	test("fails loudly when the initial prompt fails after the synchronous ack", async () => {
+		const child = mockControlledSubagent({ promptBehavior: "late-error" });
+		const controls: Array<import("../src/modes/rpc/rpc-client.js").RpcClient | undefined> = [];
+		const resultPromise = executeSingle(
+			makeAgents("controlled-model"),
+			"test-agent",
+			"Do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			(client) => controls.push(client),
+		);
+
+		// The late same-id error response arrives after the prompt already resolved;
+		// without the agent loop there is no agent_end, so this must also terminate.
+		await expect(resultPromise).resolves.toMatchObject({
+			exitCode: 1,
+			errorMessage: "No API key found for anthropic.",
+		});
+		expect(child.proc.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(controls.at(-1)).toBeUndefined();
+	});
+});
 
 describe("spawn-time model availability probing", () => {
 	test("probeModelAvailability succeeds on a clean completion via completeSimple (streamSimple path)", async () => {

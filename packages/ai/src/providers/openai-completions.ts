@@ -9,7 +9,7 @@ import type {
 	ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost, supportsXhigh } from "../models.js";
+import { calculateCost, isQwen38OrLater, supportsXhigh } from "../models.js";
 import type {
 	AssistantMessage,
 	Context,
@@ -417,7 +417,12 @@ function buildParams(model: Model<"openai-completions">, context: Context, optio
 	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
 		(params as any).enable_thinking = !!options?.reasoningEffort;
 	} else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
+		// Qwen chat-template servers read the thinking toggle from chat_template_kwargs;
+		// effort is the canonical top-level OpenAI reasoning_effort field.
 		(params as any).chat_template_kwargs = { enable_thinking: !!options?.reasoningEffort };
+		if (options?.reasoningEffort) {
+			(params as any).reasoning_effort = mapReasoningEffort(options.reasoningEffort, compat.reasoningEffortMap);
+		}
 	} else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
 		// OpenRouter normalizes reasoning across providers via a nested reasoning object.
 		const openRouterParams = params as typeof params & { reasoning?: { effort?: string } };
@@ -898,14 +903,42 @@ function detectCompat(model: Model<"openai-completions">): Required<OpenAIComple
 }
 
 /**
+ * Default translation of dreb's five thinking levels onto Qwen3.8+'s three native
+ * `reasoning_effort` tiers (low/medium/xhigh, default xhigh). Applied only to
+ * qwen-chat-template models; an explicit per-model reasoningEffortMap wins.
+ */
+const QWEN38_PLUS_EFFORT_MAP: Record<NonNullable<OpenAICompletionsOptions["reasoningEffort"]>, string> = {
+	minimal: "low",
+	low: "low",
+	medium: "medium",
+	high: "xhigh",
+	xhigh: "xhigh",
+};
+
+/**
+ * Apply the default Qwen3.8+ effort translation for qwen-chat-template models.
+ * Older Qwen versions and non-Qwen models keep identity forwarding; a non-empty
+ * resolved map (e.g. a per-model reasoningEffortMap) is never overridden.
+ */
+function maybeApplyQwen38DefaultEffortMap(
+	model: Model<"openai-completions">,
+	compat: Required<OpenAICompletionsCompat>,
+): Required<OpenAICompletionsCompat> {
+	if (compat.thinkingFormat !== "qwen-chat-template") return compat;
+	if (!isQwen38OrLater(model.id)) return compat;
+	if (Object.keys(compat.reasoningEffortMap).length > 0) return compat;
+	return { ...compat, reasoningEffortMap: QWEN38_PLUS_EFFORT_MAP };
+}
+
+/**
  * Get resolved compatibility settings for a model.
  * Uses explicit model.compat if provided, otherwise auto-detects from provider/URL.
  */
 function getCompat(model: Model<"openai-completions">): Required<OpenAICompletionsCompat> {
 	const detected = detectCompat(model);
-	if (!model.compat) return detected;
+	if (!model.compat) return maybeApplyQwen38DefaultEffortMap(model, detected);
 
-	return {
+	return maybeApplyQwen38DefaultEffortMap(model, {
 		supportsStore: model.compat.supportsStore ?? detected.supportsStore,
 		supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
 		supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
@@ -920,5 +953,5 @@ function getCompat(model: Model<"openai-completions">): Required<OpenAICompletio
 		openRouterRouting: model.compat.openRouterRouting ?? {},
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
-	};
+	});
 }

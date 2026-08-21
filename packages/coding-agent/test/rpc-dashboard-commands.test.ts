@@ -487,6 +487,116 @@ describe("runRpcMode dashboard dispatcher", () => {
 	});
 });
 
+describe("runRpcMode prompt handling for subagent children", () => {
+	async function startRpcHarness(session: ReturnType<typeof createTestSession>["session"]): Promise<{
+		outputs: Array<Record<string, unknown>>;
+		handleInputLine: (line: string) => void;
+		cleanupListeners: () => void;
+	}> {
+		const outputs: Array<Record<string, unknown>> = [];
+		let handleInputLine: ((line: string) => void) | undefined;
+		const existingEndListeners = new Set(process.stdin.listeners("end"));
+		const existingErrorListeners = new Set(process.stdin.listeners("error"));
+		vi.spyOn(outputGuard, "takeOverStdout").mockImplementation(() => {});
+		vi.spyOn(outputGuard, "writeRawStdout").mockImplementation((line) => {
+			outputs.push(JSON.parse(line) as Record<string, unknown>);
+		});
+		vi.spyOn(jsonl, "attachJsonlLineReader").mockImplementation((_stream, onLine) => {
+			handleInputLine = onLine;
+			return () => {};
+		});
+		// runRpcMode intentionally never resolves; this exercises its real JSONL
+		// command dispatcher while the test captures the stdout boundary.
+		void runRpcMode(session);
+		await vi.waitFor(() => expect(handleInputLine).toBeDefined());
+		return {
+			outputs,
+			handleInputLine: (line) => handleInputLine!(line),
+			cleanupListeners: () => {
+				for (const listener of process.stdin.listeners("end")) {
+					if (!existingEndListeners.has(listener)) {
+						process.stdin.off("end", listener as (...args: unknown[]) => void);
+					}
+				}
+				for (const listener of process.stdin.listeners("error")) {
+					if (!existingErrorListeners.has(listener)) {
+						process.stdin.off("error", listener as (...args: unknown[]) => void);
+					}
+				}
+			},
+		};
+	}
+
+	it("reports a late failure when a subagent child's prompt settles without an agent loop", async () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		(session as unknown as { _uiType: string })._uiType = "agent";
+		// Extension-command-style settle: prompt resolves without any agent event.
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined);
+		const harness = await startRpcHarness(session);
+
+		try {
+			harness.handleInputLine(JSON.stringify({ id: "p1", type: "prompt", message: "do the task" }));
+			await vi.waitFor(() => expect(harness.outputs).toHaveLength(2));
+			// The instantly-resolving mock can deliver the late failure a microtask
+			// before the synchronous ack is written, so match by content not order.
+			expect(harness.outputs.find((o) => o.id === "p1" && o.success === true)).toBeDefined();
+			expect(harness.outputs.find((o) => o.id === "p1" && o.success === false)).toMatchObject({
+				command: "prompt",
+				error: expect.stringContaining("without starting the agent loop"),
+			});
+		} finally {
+			harness.cleanupListeners();
+			cleanup();
+		}
+	});
+
+	it("reports no late failure when the subagent child's agent loop actually started", async () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		(session as unknown as { _uiType: string })._uiType = "agent";
+		vi.spyOn(session, "prompt").mockImplementation(async () => {
+			(session.agent as unknown as { emit: (event: Record<string, unknown>) => void }).emit({
+				type: "agent_start",
+				model: { provider: "anthropic", id: "claude-sonnet-4-5" },
+			});
+		});
+		const harness = await startRpcHarness(session);
+
+		try {
+			harness.handleInputLine(JSON.stringify({ id: "p2", type: "prompt", message: "do the task" }));
+			await vi.waitFor(() => expect(harness.outputs.some((o) => o.id === "p2")).toBe(true));
+			expect(harness.outputs.find((o) => o.id === "p2")).toMatchObject({
+				id: "p2",
+				command: "prompt",
+				success: true,
+			});
+			// Flush pending microtasks/timers: no late error response may follow the ack.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(harness.outputs.filter((o) => o.id === "p2" && o.success === false)).toHaveLength(0);
+		} finally {
+			harness.cleanupListeners();
+			cleanup();
+		}
+	});
+
+	it("leaves non-subagent sessions without the no-loop failure signal", async () => {
+		const { session, cleanup } = createTestSession({ inMemory: true });
+		vi.spyOn(session, "prompt").mockResolvedValue(undefined);
+		const harness = await startRpcHarness(session);
+
+		try {
+			harness.handleInputLine(JSON.stringify({ id: "p3", type: "prompt", message: "do the task" }));
+			await vi.waitFor(() => expect(harness.outputs).toHaveLength(1));
+			expect(harness.outputs[0]).toMatchObject({ id: "p3", command: "prompt", success: true });
+			// Flush pending microtasks/timers: the ack must remain the only response.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(harness.outputs).toHaveLength(1);
+		} finally {
+			harness.cleanupListeners();
+			cleanup();
+		}
+	});
+});
+
 describe("RpcClient dashboard command methods", () => {
 	it("getResources sends get_resources and unwraps resources", async () => {
 		const client = new RpcClient() as any;

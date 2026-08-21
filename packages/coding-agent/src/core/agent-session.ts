@@ -29,6 +29,7 @@ import {
 	collectEntriesForBranchSummary,
 	compact,
 	estimateContextTokens,
+	estimateTokens,
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
@@ -85,9 +86,19 @@ import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
 import { type SecretPattern, scrubSecrets } from "./secret-scrubber.js";
 import { isSensitivePath } from "./sensitive-paths.js";
-import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
-import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
-import { DEFAULT_BG_PARENT_TURN_LIMIT, type SettingsManager } from "./settings-manager.js";
+import type { BranchSummaryEntry, CompactionEntry } from "./session-manager.js";
+import {
+	CURRENT_SESSION_VERSION,
+	getLatestCompactionEntry,
+	type SessionHeader,
+	SessionManager,
+} from "./session-manager.js";
+import {
+	DEFAULT_BG_PARENT_TURN_LIMIT,
+	DEFAULT_MAX_CONCURRENT_SUBAGENTS,
+	type ModelPromptSettings,
+	type SettingsManager,
+} from "./settings-manager.js";
 import type { SlashCommandInfo } from "./slash-commands.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 import { buildSystemPrompt } from "./system-prompt.js";
@@ -95,10 +106,12 @@ import { resolveThinkingDisplay } from "./thinking.js";
 import type { BashOperations } from "./tools/bash.js";
 import {
 	createAllToolDefinitions,
+	createSubagentConcurrencyGate,
 	discoverAgentTypes,
 	getRunningBackgroundAgents,
 	type SessionTask,
 	type SubagentArbitrationEvent,
+	type SubagentConcurrencyGate,
 	type SubagentResult,
 	type SubagentStepMetadata,
 } from "./tools/index.js";
@@ -206,6 +219,8 @@ export interface AgentSessionConfig {
 	modelRegistry: ModelRegistry;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
+	/** Parent-session concurrency setting captured at startup. Zero disables the subagent tool. */
+	maxConcurrentSubagents?: number;
 	/**
 	 * Override base tools (useful for custom runtimes).
 	 *
@@ -383,6 +398,14 @@ export class AgentSession {
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
 	private _uiType?: string;
+	private readonly _maxConcurrentSubagents: number;
+	private readonly _subagentsDisabledBySetting: boolean;
+	/**
+	 * Session-owned concurrency gate. Created once and reused across `_buildRuntime` rebuilds so
+	 * the running-child count stays accurate through `/reload` while children launched before the
+	 * reload are still in flight.
+	 */
+	private readonly _subagentConcurrencyGate: SubagentConcurrencyGate;
 
 	private performanceTracker: PerformanceTracker;
 	private _ownsPerformanceTracker: boolean;
@@ -419,6 +442,16 @@ export class AgentSession {
 		this._initialActiveToolNames = config.initialActiveToolNames;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._uiType = config.uiType;
+		const configuredMaxConcurrentSubagents =
+			config.maxConcurrentSubagents ?? this.settingsManager.getMaxConcurrentSubagents();
+		if (!Number.isSafeInteger(configuredMaxConcurrentSubagents) || configuredMaxConcurrentSubagents < 0) {
+			throw new Error("maxConcurrentSubagents must be a non-negative whole number");
+		}
+		const isChildAgentSession = this.sessionManager.getHeader()?.agentType !== undefined;
+		this._subagentsDisabledBySetting = !isChildAgentSession && configuredMaxConcurrentSubagents === 0;
+		this._maxConcurrentSubagents =
+			configuredMaxConcurrentSubagents > 0 ? configuredMaxConcurrentSubagents : DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+		this._subagentConcurrencyGate = createSubagentConcurrencyGate(this._maxConcurrentSubagents);
 
 		// Capture git repo state once at session start (before building runtime/system prompt)
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
@@ -1412,6 +1445,7 @@ export class AgentSession {
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
 		for (const name of toolNames) {
+			if (this._subagentsDisabledBySetting && name === "subagent") continue;
 			const tool = this._toolRegistry.get(name);
 			if (tool) {
 				tools.push(tool);
@@ -1523,6 +1557,20 @@ export class AgentSession {
 		return this.getFilteredSkills();
 	}
 
+	private _resolveModelPromptSettings(model: Model<any> | undefined): ModelPromptSettings | undefined {
+		if (!model) return undefined;
+
+		const modelRef = `${model.provider}/${model.id}`;
+		const modelsJsonSettings = this._modelRegistry.getModelPromptSettings(model.provider, model.id);
+		const settingsJsonSettings = this.settingsManager.getModelPromptSettings(model.provider, model.id);
+		if (modelsJsonSettings && settingsJsonSettings) {
+			throw new Error(
+				`System prompt behavior for ${modelRef} is configured in both models.json and settings.json; remove one source`,
+			);
+		}
+		return modelsJsonSettings ?? settingsJsonSettings;
+	}
+
 	private _rebuildSystemPrompt(toolNames: string[]): string {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
 		const toolSnippets: Record<string, string> = {};
@@ -1541,8 +1589,13 @@ export class AgentSession {
 
 		const loaderSystemPrompt = this._resourceLoader.getSystemPrompt();
 		const loaderAppendSystemPrompt = this._resourceLoader.getAppendSystemPrompt();
-		const appendSystemPrompt =
-			loaderAppendSystemPrompt.length > 0 ? loaderAppendSystemPrompt.join("\n\n") : undefined;
+		const modelPromptSettings = this._resolveModelPromptSettings(this.model);
+		const customPrompt = loaderSystemPrompt ?? modelPromptSettings?.systemPrompt;
+		const appendPromptParts = [...loaderAppendSystemPrompt];
+		if (modelPromptSettings?.appendSystemPrompt) {
+			appendPromptParts.push(modelPromptSettings.appendSystemPrompt);
+		}
+		const appendSystemPrompt = appendPromptParts.length > 0 ? appendPromptParts.join("\n\n") : undefined;
 		const loadedSkills = this._getFilteredSkills();
 		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
 		const memoryIndexes = this._resourceLoader.getMemoryIndexes();
@@ -1552,7 +1605,7 @@ export class AgentSession {
 			skills: loadedSkills,
 			contextFiles: loadedContextFiles,
 			memoryIndexes,
-			customPrompt: loaderSystemPrompt,
+			customPrompt,
 			appendSystemPrompt,
 			selectedTools: validToolNames,
 			toolSnippets,
@@ -1560,6 +1613,7 @@ export class AgentSession {
 			uiType: this._uiType,
 			gitRepoState: this._gitRepoState,
 			currentModel: this.model ? { provider: this.model.provider, id: this.model.id } : undefined,
+			subagentsDisabled: this._subagentsDisabledBySetting,
 		});
 	}
 
@@ -2115,6 +2169,7 @@ export class AgentSession {
 		if (!apiKey) {
 			throw new Error(`No API key for ${model.provider}/${model.id}`);
 		}
+		this._validateModelPromptSettings(model);
 
 		const previousModel = this.model;
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
@@ -2142,6 +2197,11 @@ export class AgentSession {
 			model,
 			this.settingsManager.getModelThinkingDisplay(model.id),
 		);
+	}
+
+	/** Reject malformed or conflicting target-model prompt settings before mutating session state. */
+	private _validateModelPromptSettings(model: Model<any>): void {
+		this._resolveModelPromptSettings(model);
 	}
 
 	/**
@@ -2190,6 +2250,7 @@ export class AgentSession {
 		const len = scopedModels.length;
 		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
 		const next = scopedModels[nextIndex];
+		this._validateModelPromptSettings(next.model);
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.thinkingLevel);
 
 		// Apply model
@@ -2227,6 +2288,7 @@ export class AgentSession {
 		if (!apiKey) {
 			throw new Error(`No API key for ${nextModel.provider}/${nextModel.id}`);
 		}
+		this._validateModelPromptSettings(nextModel);
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch();
 		this.agent.setModel(this._applyContextTier(nextModel));
@@ -3121,7 +3183,12 @@ export class AgentSession {
 			}
 		}
 
-		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
+		const uniqueActiveToolNames = [...new Set(nextActiveToolNames)];
+		this.setActiveToolsByName(
+			this._subagentsDisabledBySetting
+				? uniqueActiveToolNames.filter((name) => name !== "subagent")
+				: uniqueActiveToolNames,
+		);
 	}
 
 	private _buildRuntime(options: {
@@ -3181,6 +3248,8 @@ export class AgentSession {
 						modelRegistry: this._modelRegistry,
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
 						defaultThinkingLevel: () => this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+						maxConcurrentSubagents: this._maxConcurrentSubagents,
+						concurrencyGate: this._subagentConcurrencyGate,
 						arbitrate: (request, signal) => this._dispatchArbiter.arbitrate(request, signal),
 						onArbitration: (event) => {
 							this.sessionManager.appendCustomEntry("subagent_arbitration", event);
@@ -3257,9 +3326,20 @@ export class AgentSession {
 	}
 
 	async reload(): Promise<void> {
+		// Refresh and validate prompt configuration before tearing down the active runtime.
+		// A bad external edit must leave the current prompt and extension runtime usable.
+		this.settingsManager.reload();
+		this._modelRegistry.refresh();
+		const modelRegistryError = this._modelRegistry.getError();
+		if (modelRegistryError) {
+			throw new Error(modelRegistryError);
+		}
+		if (this.model) {
+			this._validateModelPromptSettings(this.model);
+		}
+
 		const previousFlagValues = this._extensionRunner?.getFlagValues();
 		await this._extensionRunner?.emit({ type: "session_shutdown" });
-		this.settingsManager.reload();
 		resetApiProviders();
 		await this._resourceLoader.reload();
 		this._buildRuntime({
@@ -3553,6 +3633,20 @@ export class AgentSession {
 			}
 		}
 
+		// Resolve and validate the target model before disconnecting or mutating the active session.
+		// Prompt validation can throw for malformed settings, so it belongs in this preflight phase.
+		const targetModel = SessionManager.open(sessionPath).buildSessionContext().model;
+		let restoredModel: Model<any> | undefined;
+		if (targetModel) {
+			const availableModels = await this._modelRegistry.getAvailable();
+			restoredModel = availableModels.find(
+				(m) => m.provider === targetModel.provider && m.id === targetModel.modelId,
+			);
+			if (restoredModel) {
+				this._validateModelPromptSettings(restoredModel);
+			}
+		}
+
 		this._disconnectFromAgent();
 		await this.abort();
 		this._steeringMessages = [];
@@ -3580,18 +3674,12 @@ export class AgentSession {
 
 		this.agent.replaceMessages(sessionContext.messages);
 
-		// Restore model if saved
-		if (sessionContext.model) {
+		// Restore the preflighted model if the target session saved one that is still available.
+		if (restoredModel) {
 			const previousModel = this.model;
-			const availableModels = await this._modelRegistry.getAvailable();
-			const match = availableModels.find(
-				(m) => m.provider === sessionContext.model!.provider && m.id === sessionContext.model!.modelId,
-			);
-			if (match) {
-				this.agent.setModel(this._applyContextTier(match));
-				this._refreshThinkingDisplay(match);
-				await this._emitModelSelect(match, previousModel, "restore");
-			}
+			this.agent.setModel(this._applyContextTier(restoredModel));
+			this._refreshThinkingDisplay(restoredModel);
+			await this._emitModelSelect(restoredModel, previousModel, "restore");
 		}
 
 		const hasThinkingEntry = this.sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change");
@@ -3613,6 +3701,7 @@ export class AgentSession {
 		this._gitRepoState = getGitRepoState(this._cwd) ?? undefined;
 		this._resourceLoader.refreshDreamLastRun();
 		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.setSystemPrompt(this._baseSystemPrompt);
 
 		this._reconnectToAgent();
 		return true;
@@ -4105,12 +4194,13 @@ export class AgentSession {
 
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
-		// If no such assistant exists, context token count is unknown until the next LLM response.
+		// Until then, estimate every rebuilt message independently so the stale kept
+		// assistant usage cannot leak into the current context value.
 		const branchEntries = this.sessionManager.getBranch();
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
 
 		if (latestCompaction) {
-			// Check if there's a valid assistant usage after the compaction boundary
+			// Check if there's a valid assistant usage after the compaction boundary.
 			const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
 			let hasPostCompactionUsage = false;
 			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
@@ -4119,26 +4209,23 @@ export class AgentSession {
 					const assistant = entry.message;
 					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
 						const contextTokens = calculateContextTokens(assistant.usage);
-						if (contextTokens > 0) {
-							hasPostCompactionUsage = true;
-						}
+						if (contextTokens > 0) hasPostCompactionUsage = true;
 						break;
 					}
 				}
 			}
 
 			if (!hasPostCompactionUsage) {
-				return { tokens: null, contextWindow, percent: null };
+				const tokens = this.messages.reduce((total, message) => total + estimateTokens(message), 0);
+				return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 };
 			}
 		}
 
 		const estimate = estimateContextTokens(this.messages);
-		const percent = (estimate.tokens / contextWindow) * 100;
-
 		return {
 			tokens: estimate.tokens,
 			contextWindow,
-			percent,
+			percent: (estimate.tokens / contextWindow) * 100,
 		};
 	}
 

@@ -56,6 +56,11 @@ vi.mock("../../src/client/api.js", () => ({
 			},
 			messages: [],
 		})),
+		subagentPending: vi.fn(async () => ({
+			steeringMode: "one-at-a-time",
+			pending: { steering: [], followUp: [] },
+		})),
+		steerSubagent: vi.fn(async () => ({ ok: true })),
 		models: vi.fn(async () => ({ models: [] })),
 		settingsModels: vi.fn(async () => ({ models: [] })),
 		agentTypes: vi.fn(async () => ({ agentTypes: [] })),
@@ -211,8 +216,8 @@ vi.mock("../../src/client/api.js", () => ({
 		abort: vi.fn(async () => ({})),
 		abortCompaction: vi.fn(async () => ({})),
 		abortRetry: vi.fn(async () => ({})),
-		setModel: vi.fn(async () => ({ provider: "test", id: "m1" })),
-		setThinking: vi.fn(async () => ({})),
+		setModel: vi.fn(async () => ({ provider: "test", id: "m1", settingsRevision: 1 })),
+		setThinking: vi.fn(async () => ({ ok: true, settingsRevision: 1 })),
 		compact: vi.fn(async () => ({})),
 		newSession: vi.fn(async () => ({ cancelled: false })),
 		reload: vi.fn(async () => ({ ok: true })),
@@ -550,6 +555,7 @@ async function mountCommandComposer(commands: CommandDto[]) {
 		hydrateSession: vi.fn(async () => {}),
 		refreshDiskSessions: vi.fn(async () => {}),
 		removeRuntime: vi.fn(async () => {}),
+		stopRuntime: vi.fn(async () => {}),
 		navigate: vi.fn(),
 	};
 	const element = mount(() => <SessionScreen store={store} sessionKey="k1" />);
@@ -809,6 +815,97 @@ describe("app store integration", () => {
 		captured.onEnvelope({ seq: 2, key: "k1", event: { type: "agent_start" } });
 		expect(store.sessions.k1?.toasts).toHaveLength(0);
 		expect(store.sessions.k1?.toasts.some((item) => item.id === toast.id)).toBe(false);
+	});
+
+	it("session banners collect fallback, status, and toast sources with independent dismissal", async () => {
+		const runtime = runtimeInfo("banner-sources");
+		runtime.state.modelFallbackMessage = "fallback model is active";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		vi.mocked(api.hydrate).mockResolvedValueOnce({
+			key: runtime.key,
+			state: runtime.state,
+			messages: [],
+			backgroundAgents: [],
+			barrierSeq: 0,
+		});
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		window.location.hash = `#/session/${runtime.key}`;
+		const store = makeStore();
+		await store.start();
+		const el = mount(() => <SessionScreen store={store} sessionKey={runtime.key} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		if (!captured) throw new Error("connectEvents was not called");
+
+		captured.onEnvelope({
+			seq: 1,
+			key: runtime.key,
+			event: {
+				type: "message_end",
+				message: {
+					role: "assistant",
+					stopReason: "error",
+					errorMessage: "provider failed terminally",
+					content: [],
+				},
+			},
+		});
+		captured.onEnvelope({ seq: 2, key: runtime.key, event: { type: "extension_error", error: "plugin exploded" } });
+
+		const banner = (key: string) => el.querySelector<HTMLElement>(`[data-banner-key="${key}"]`);
+		const status = store.sessions[runtime.key]?.statusEntries.find(
+			(entry) => entry.text === "provider failed terminally",
+		);
+		const toast = store.sessions[runtime.key]?.toasts.find(
+			(entry) => entry.text === "extension error: plugin exploded",
+		);
+		if (!status || !toast) throw new Error("expected status and toast banner sources");
+		expect(banner("fallback")?.textContent).toContain("fallback model is active");
+		expect(banner(`status:${status.id}`)?.textContent).toContain("provider failed terminally");
+		expect(banner(`toast:${toast.id}`)?.textContent).toContain("extension error: plugin exploded");
+
+		banner("fallback")?.querySelector<HTMLButtonElement>(".banner-dismiss")?.click();
+		expect(banner("fallback")).toBeNull();
+		expect(banner(`status:${status.id}`)).not.toBeNull();
+		expect(banner(`toast:${toast.id}`)).not.toBeNull();
+
+		banner(`status:${status.id}`)?.querySelector<HTMLButtonElement>(".banner-dismiss")?.click();
+		expect(store.sessions[runtime.key]?.statusEntries.find((entry) => entry.id === status.id)?.dismissed).toBe(true);
+		expect(store.sessions[runtime.key]?.needsAttention).toBe(true);
+		expect(banner(`status:${status.id}`)).toBeNull();
+		expect(banner(`toast:${toast.id}`)).not.toBeNull();
+
+		banner(`toast:${toast.id}`)?.querySelector<HTMLButtonElement>(".banner-dismiss")?.click();
+		expect(store.sessions[runtime.key]?.toasts).toHaveLength(0);
+		expect(banner(`toast:${toast.id}`)).toBeNull();
+	});
+
+	it("viewed session toasts render as banners instead of app-global toasts", async () => {
+		const runtime = runtimeInfo("app-viewed-toast");
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		window.location.hash = `#/session/${runtime.key}`;
+		const el = mount(() => <App />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		if (!captured) throw new Error("connectEvents was not called");
+
+		captured.onEnvelope({
+			seq: 1,
+			key: runtime.key,
+			event: { type: "extension_error", error: "visible only in transcript chrome" },
+		});
+
+		expect(el.querySelector('[data-banner-key^="toast:"]')?.textContent).toContain(
+			"extension error: visible only in transcript chrome",
+		);
+		expect(el.querySelector(".toast-region .toast")).toBeNull();
 	});
 
 	it("dashboard_resync rehydrates the active session route", async () => {
@@ -1134,6 +1231,28 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("No sessions yet");
 	});
 
+	it("fleet creates a new session without leaving the fleet", async () => {
+		const store = makeStore() as any;
+		const upsertRuntime = vi.fn();
+		const refreshDiskSessions = vi.fn(async () => {});
+		const navigate = vi.fn();
+		const el = mount(() => <FleetScreen store={{ ...store, upsertRuntime, refreshDiskSessions, navigate }} />);
+
+		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("new session"))?.click();
+		const cwd = el.querySelector<HTMLInputElement>("#new-session-cwd");
+		if (!cwd) throw new Error("new-session cwd input missing");
+		cwd.value = "/workspace/new-project";
+		cwd.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		[...el.querySelectorAll("button")].find((button) => button.textContent === "start session")?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.createRuntime).toHaveBeenCalledWith("/workspace/new-project", { firstPrompt: undefined });
+		expect(upsertRuntime).toHaveBeenCalledWith(expect.objectContaining({ key: "new-key" }));
+		expect(refreshDiskSessions).toHaveBeenCalledOnce();
+		expect(navigate).not.toHaveBeenCalled();
+		expect(el.querySelector(".modal")).toBeNull();
+	});
+
 	it("fleet renders a terminal provider error chip and reason", () => {
 		const store = makeStore() as any;
 		const runtime = runtimeInfo("provider-error");
@@ -1231,6 +1350,67 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("scan things");
 		// Suggest-next chip
 		expect(el.textContent).toContain("/skill:test");
+	});
+
+	it("keeps mounted header details live and refreshes context when compaction ends", async () => {
+		const baseStore = makeStore() as any;
+		const session = createSessionViewState("live");
+		session.compacting = true;
+		const [sessions, setSessions] = createStore({ live: session });
+		const runtime = runtimeInfo("live");
+		runtime.state.model = { provider: "test", id: "old-model" };
+		runtime.state.contextUsage = { tokens: null, contextWindow: 200_000, percent: null };
+		const [fleet, setFleet] = createSignal({ runtimes: [runtime], diskSessions: [] });
+		const detailStats = (tokens: number, percent: number) => ({
+			sessionId: "live",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 2,
+			tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
+			cost: 0.1,
+			contextUsage: { tokens, contextWindow: 200_000, percent },
+		});
+		const refreshRuntimeStats = vi
+			.fn()
+			.mockResolvedValueOnce(detailStats(50_000, 25))
+			.mockResolvedValueOnce(detailStats(20_000, 10));
+		const fakeStore = {
+			...baseStore,
+			sessions,
+			fleet,
+			hydrateSession: vi.fn(async () => {}),
+			refreshRuntimeStats,
+		};
+
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="live" />);
+		await vi.waitFor(() => expect(el.querySelector(".session-bar output.switcher")?.textContent).toContain("25%"));
+		expect(el.textContent).not.toContain("ctx ?");
+
+		setFleet((current) => ({
+			...current,
+			runtimes: current.runtimes.map((item) =>
+				item.key === "live"
+					? { ...item, state: { ...item.state, model: { provider: "test", id: "live-model" } } }
+					: item,
+			),
+		}));
+		await vi.waitFor(() => expect(el.textContent).toContain("test/live-model"));
+
+		refreshRuntimeStats.mockClear();
+		setSessions("live", "compacting", false);
+		await vi.waitFor(() => expect(refreshRuntimeStats).toHaveBeenCalledOnce());
+		await vi.waitFor(() => expect(el.querySelector(".session-bar output.switcher")?.textContent).toContain("10%"));
+
+		refreshRuntimeStats.mockClear();
+		refreshRuntimeStats.mockRejectedValueOnce(new Error("stats unavailable"));
+		setSessions("live", "compacting", true);
+		await Promise.resolve();
+		setSessions("live", "compacting", false);
+		await vi.waitFor(() => expect(refreshRuntimeStats).toHaveBeenCalledOnce());
+		await vi.waitFor(() => expect(el.textContent).toContain("stats unavailable"));
+		expect(el.querySelector(".session-bar output.switcher")?.textContent).toContain("10%");
 	});
 
 	it("session view without streaming hides stop and mode toggle", () => {
@@ -2181,6 +2361,28 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("compose ▴");
 	});
 
+	it("keeps dock panels together and the composer outside their scroll wrapper", () => {
+		const store = makeStore() as any;
+		const session = populatedSession("k-dock-layout");
+		const fakeStore = {
+			...store,
+			sessions: { "k-dock-layout": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+			hydrateSession: async () => {},
+		};
+		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k-dock-layout" />);
+		const dockInner = el.querySelector(".dock-inner");
+		const dockPanels = dockInner?.querySelector(".dock-panels");
+		const composer = dockInner?.querySelector(".composer");
+
+		expect(dockPanels?.parentElement).toBe(dockInner);
+		expect(dockPanels?.querySelector("details.tasks:not(.subagents)")).not.toBeNull();
+		expect(dockPanels?.querySelector("details.subagents")).not.toBeNull();
+		expect(dockPanels?.querySelector(".status-line")).not.toBeNull();
+		expect(composer?.parentElement).toBe(dockInner);
+		expect(dockPanels?.contains(composer ?? null)).toBe(false);
+	});
+
 	it("in-session subagent panel collapses with the task-tracker details pattern", () => {
 		const store = makeStore() as any;
 		const session = populatedSession("k-subpanel");
@@ -2266,7 +2468,7 @@ describe("screen smoke tests", () => {
 		expect(navigate).toHaveBeenCalledWith({ screen: "subagent", key: "k-submany", agentId: "bg6" });
 	});
 
-	it("subagent drill-in renders read-only with the fixed note and no composer", () => {
+	it("subagent drill-in renders completed transcripts read-only", () => {
 		const store = makeStore() as any;
 		const session = populatedSession("k1");
 		applySessionEvent(session, {
@@ -2285,6 +2487,12 @@ describe("screen smoke tests", () => {
 				message: { role: "assistant", model: "haiku", content: [{ type: "text", text: "subagent says hi" }] },
 			},
 		});
+		applySessionEvent(session, {
+			type: "background_agent_end",
+			agentId: "bg1",
+			agentType: "feature-dev",
+			success: true,
+		});
 		const fakeStore = {
 			...store,
 			sessions: { k1: session },
@@ -2294,8 +2502,74 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("subagent says hi");
 		expect(el.textContent).toContain("agent, model, thinking changed");
 		expect(el.textContent).toContain("feature-dev · provider/cheap · low");
-		expect(el.textContent).toContain("subagents can't be steered yet");
-		expect(el.querySelector("textarea")).toBeNull(); // no composer
+		expect(el.textContent).toContain("no longer running");
+		expect(el.querySelector("textarea")).toBeNull();
+	});
+
+	it("closed subagents retain their transcript and all steering controls become read-only", () => {
+		const store = makeStore() as any;
+		const session = populatedSession("closed-subagent");
+		applySessionEvent(session, {
+			type: "background_agent_event",
+			agentId: "bg1",
+			event: {
+				type: "message_end",
+				message: {
+					role: "assistant",
+					model: "test",
+					content: [{ type: "text", text: "closed child transcript remains" }],
+				},
+			},
+		});
+		session.closed = { cwd: "/repo", sessionFile: "/sessions/closed.jsonl" };
+		const fakeStore = {
+			...store,
+			sessions: { "closed-subagent": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+		};
+
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="closed-subagent" agentId="bg1" />);
+
+		expect(el.textContent).toContain("closed child transcript remains");
+		expect(el.textContent).toContain("subagent transcript is read-only");
+		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Resume session");
+		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Return to fleet");
+		expect(el.querySelector("textarea")).toBeNull();
+		expect(el.querySelector(".composer")).toBeNull();
+		expect(el.querySelector("button.send")).toBeNull();
+	});
+
+	it("subagent drill-in sends unchanged steering text and shows the child queue mode", async () => {
+		const store = makeStore() as any;
+		const session = populatedSession("k-live-steer");
+		applySessionEvent(session, {
+			type: "background_agent_start",
+			agentId: "bg-live",
+			agentType: "Explore",
+			taskSummary: "scan things",
+		});
+		const fakeStore = {
+			...store,
+			sessions: { "k-live-steer": session },
+			fleet: () => ({ runtimes: [], diskSessions: [] }),
+		};
+		vi.mocked(api.subagentPending).mockResolvedValue({
+			steeringMode: "one-at-a-time",
+			pending: { steering: ["first"], followUp: [] },
+		});
+		const el = mount(() => <SubagentScreen store={fakeStore} sessionKey="k-live-steer" agentId="bg-live" />);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		const textarea = el.querySelector("textarea") as HTMLTextAreaElement;
+		expect(textarea).not.toBeNull();
+		expect(el.textContent).toContain("steering delivery: one-at-a-time");
+		expect(el.textContent).toContain("steer: first");
+		textarea.value = "Whatever the user wants";
+		textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+		(el.querySelector("button.send") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(api.steerSubagent).toHaveBeenCalledWith("k-live-steer", "bg-live", "Whatever the user wants");
 	});
 
 	it("subagent drill-in renders failed arbitration with safe host metadata", () => {
@@ -2427,7 +2701,7 @@ describe("screen smoke tests", () => {
 		expect(api.createRuntime).toHaveBeenCalledWith("/workspace/selected");
 		expect(upsertRuntime).toHaveBeenCalledWith(runtime);
 		expect(refreshDiskSessions).toHaveBeenCalledOnce();
-		expect(navigate).toHaveBeenCalledWith({ screen: "session", key: "created-here" });
+		expect(navigate).not.toHaveBeenCalled();
 		expect(api.fleet).not.toHaveBeenCalled();
 	});
 
@@ -2794,6 +3068,38 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("already injected content cannot be retracted");
 		expect(el.textContent).toContain("default model");
 		expect(el.textContent).toContain("devices");
+	});
+
+	it("settings exposes and saves the maximum concurrent subagent count", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ maxConcurrentSubagents: 4 });
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const input = el.querySelector("#max-concurrent-subagents") as HTMLInputElement;
+		expect(input.value).toBe("4");
+		expect(el.textContent).toContain("0 removes the subagent tool");
+		input.value = "1";
+		input.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenCalledWith({ maxConcurrentSubagents: 1 });
+		vi.mocked(api.saveSettings).mockClear();
+	});
+
+	it("settings rejects an invalid maximum concurrent subagent count before saving", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ maxConcurrentSubagents: 4 });
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const input = el.querySelector("#max-concurrent-subagents") as HTMLInputElement;
+		for (const invalid of ["-1", "1.5", ""]) {
+			input.value = invalid;
+			input.dispatchEvent(new Event("change", { bubbles: true }));
+			expect(el.querySelector(".settings-error")?.textContent).toContain("non-negative whole number");
+			expect(input.value).toBe("4");
+		}
+		expect(api.saveSettings).not.toHaveBeenCalled();
 	});
 
 	it("settings exposes complete global Dispatch Arbiter controls and readiness", async () => {
@@ -4702,6 +5008,27 @@ describe("dashboard client regressions", () => {
 		expect(el.querySelector('[role="listbox"]')).toBeNull();
 	});
 
+	it("session action notices and errors render as independently dismissible banners", async () => {
+		const { element, textarea } = await mountCommandComposer([
+			{ name: "dream", description: "dream", source: "builtin", dashboard: true },
+		]);
+		vi.mocked(api.dream).mockResolvedValueOnce({ message: "dream action completed" });
+
+		await submitComposer(textarea, "/dream");
+		const notice = element.querySelector<HTMLElement>('[data-banner-key="action-notice"]');
+		expect(notice?.textContent).toContain("dream action completed");
+		notice?.querySelector<HTMLButtonElement>(".banner-dismiss")?.click();
+		expect(element.querySelector('[data-banner-key="action-notice"]')).toBeNull();
+
+		vi.mocked(api.dream).mockRejectedValueOnce(new Error("dream action failed"));
+		await submitComposer(textarea, "/dream");
+		const error = element.querySelector<HTMLElement>('[data-banner-key="action-error"]');
+		expect(error?.textContent).toContain("dream action failed");
+		expect(element.querySelector('[data-banner-key="action-notice"]')).toBeNull();
+		error?.querySelector<HTMLButtonElement>(".banner-dismiss")?.click();
+		expect(element.querySelector('[data-banner-key="action-error"]')).toBeNull();
+	});
+
 	const mappedBuiltinCases = [
 		{ command: "/settings", name: "settings", expected: "settings" },
 		{ command: "/scoped-models", name: "scoped-models", expected: "scoped-models" },
@@ -4747,6 +5074,7 @@ describe("dashboard client regressions", () => {
 		}
 		store.navigate.mockClear();
 		store.removeRuntime.mockClear();
+		store.stopRuntime.mockClear();
 
 		await submitComposer(textarea, testCase.command);
 
@@ -4809,9 +5137,10 @@ describe("dashboard client regressions", () => {
 				expect(api.commands).toHaveBeenCalledWith("k1");
 				break;
 			case "quit":
-				expect(api.stopRuntime).toHaveBeenCalledWith("k1");
-				expect(store.removeRuntime).toHaveBeenCalledWith("k1");
-				expect(store.navigate).toHaveBeenCalledWith({ screen: "fleet" });
+				expect(api.stopRuntime).not.toHaveBeenCalled();
+				expect(store.stopRuntime).toHaveBeenCalledWith("k1");
+				expect(store.removeRuntime).not.toHaveBeenCalled();
+				expect(store.navigate).not.toHaveBeenCalled();
 				break;
 		}
 		exportClick?.mockRestore();
@@ -5194,15 +5523,24 @@ describe("dashboard client regressions", () => {
 		expect(api.fleet).not.toHaveBeenCalled();
 	});
 
-	it("session stop removes local state, refreshes disk inventory, and navigates to fleet", async () => {
+	it("session stop keeps a closed read-only transcript snapshot on the current route", async () => {
 		const runtime = runtimeInfo("stop-from-session");
+		runtime.state.sessionFile = "/sessions/stop-from-session.jsonl";
 		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		vi.mocked(api.hydrate).mockResolvedValueOnce({
+			key: runtime.key,
+			state: runtime.state,
+			messages: [{ role: "assistant", content: [{ type: "text", text: "retained after stop" }] }],
+			backgroundAgents: [],
+			barrierSeq: 0,
+		});
 		const store = makeStore();
 		await store.start();
 		store.navigate({ screen: "session", key: runtime.key });
+		const routeBeforeStop = window.location.hash;
 		const el = mount(() => <SessionScreen store={store} sessionKey={runtime.key} />);
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(store.sessions[runtime.key]).toBeDefined();
+		expect(el.textContent).toContain("retained after stop");
 		vi.mocked(api.stopRuntime).mockClear();
 		vi.mocked(api.sessions).mockClear();
 		vi.mocked(api.fleet).mockClear();
@@ -5213,13 +5551,24 @@ describe("dashboard client regressions", () => {
 		(stop as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
-		expect(api.stopRuntime).toHaveBeenCalledOnce();
 		expect(api.stopRuntime).toHaveBeenCalledWith(runtime.key);
 		expect(store.fleet().runtimes).toEqual([]);
-		expect(store.sessions[runtime.key]).toBeUndefined();
+		expect(store.sessions[runtime.key]?.closed).toMatchObject({
+			cwd: runtime.cwd,
+			sessionFile: runtime.state.sessionFile,
+		});
+		expect(store.sessions[runtime.key]?.entries).not.toHaveLength(0);
 		expect(api.sessions).toHaveBeenCalledOnce();
 		expect(api.fleet).not.toHaveBeenCalled();
-		expect(window.location.hash).toBe("#/");
+		expect(window.location.hash).toBe(routeBeforeStop);
+		expect(el.textContent).toContain("retained after stop");
+		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Resume session");
+		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Return to fleet");
+		expect(el.textContent).toContain("transcript is read-only");
+		expect(el.querySelector(".composer")).toBeNull();
+		expect(el.querySelector("textarea")).toBeNull();
+		expect(el.querySelector(".session-bar .right")).toBeNull();
+		expect(el.querySelector(".status-line")).toBeNull();
 	});
 
 	it("fleet resumes disk sessions with their session path", async () => {
@@ -5629,12 +5978,12 @@ describe("dashboard client regressions", () => {
 		expect(textarea.value).toBe("");
 	});
 
-	it("status compaction and retry entries expose abort buttons", async () => {
+	it("status dock contains only the retry and compaction stop controls", async () => {
 		const store = makeStore() as any;
 		const session = createSessionViewState("abort-status");
 		session.statusEntries = [
-			{ key: "compaction", text: "compacting context…", tone: "info" },
-			{ key: "retry", text: "retrying", tone: "warning" },
+			{ id: 101, key: "compaction", text: "compacting context…", tone: "info" },
+			{ id: 102, key: "retry", text: "retrying", tone: "warning" },
 		];
 		const fakeStore = {
 			...store,
@@ -5643,9 +5992,14 @@ describe("dashboard client regressions", () => {
 			hydrateSession: async () => {},
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="abort-status" />);
-		const buttons = [...el.querySelectorAll(".status-line button")];
-		buttons[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-		buttons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+		const statusLine = el.querySelector("footer.dock .status-line");
+		const buttons = [...(statusLine?.querySelectorAll("button") ?? [])] as HTMLButtonElement[];
+		expect(buttons.map((button) => button.textContent)).toEqual(["stop compaction", "stop retry"]);
+		expect(statusLine?.textContent).not.toContain("compacting context");
+		expect(statusLine?.textContent).not.toContain("retrying");
+
+		buttons.find((button) => button.textContent === "stop compaction")?.click();
+		buttons.find((button) => button.textContent === "stop retry")?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(api.abortCompaction).toHaveBeenCalledWith("abort-status");
 		expect(api.abortRetry).toHaveBeenCalledWith("abort-status");
@@ -6261,7 +6615,7 @@ describe("dashboard client regressions", () => {
 		vi.mocked(api.fleet).mockClear();
 		(el.querySelector(".model-row") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
-		expect(setRuntimeModel).toHaveBeenCalledWith("k1", { provider: "test", id: "m1" });
+		expect(setRuntimeModel).toHaveBeenCalledWith("k1", { provider: "test", id: "m1" }, 1);
 		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 	});
 

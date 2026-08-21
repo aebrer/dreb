@@ -50,10 +50,11 @@ Open `http://127.0.0.1:5343`.
   latest-100 median tok/s with sample count and long-term delta), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
   and live auto-naming.
-- **Subagent drill-in** — read-only transcript of a background agent: live
-  events via the relay, hydrated from the agent's on-disk session log so the
-  view survives browser reloads. No composer: the parent session controls the
-  agent.
+- **Subagent drill-in** — transcript of a background agent: live events via
+  the relay, hydrated from the agent's on-disk session log so the view survives
+  browser reloads. While the child is running, its composer queues user-written
+  steering messages directly to that child and shows its effective queue mode;
+  completed and rehydrated transcripts remain read-only.
 - **Files** — host-wide browse with places shortcuts, upload (collision
   prompts before overwrite), download, new-folder, "new session here", and the
   effective global nested-context trust for the viewed canonical folder. Trust
@@ -68,13 +69,13 @@ Open `http://127.0.0.1:5343`.
   matching safe index links.
 - **Settings** — persistent defaults (provider-grouped model dropdown,
   thinking, queue modes, image handling, skill commands, transport,
-  hide-thinking, compaction/retry), a scoped-models editor, per-agent model
+  hide-thinking, compaction/retry, and maximum concurrent subagents), a scoped-models editor, per-agent model
   fallback editor, and the global-only nested-context policy: an auditable trusted-roots list with
   revoke and simple add-by-path controls, plus a prominent expert trust-all
   warning. The Files view remains the primary trust-grant flow. Most defaults
   seed new sessions; opening Settings flushes pending writes and reloads durable
   global + project settings so external edits appear, while read/parse/write
-  failures are shown instead of stale values. Trust changes are observed by
+  failures are shown instead of stale values. Maximum concurrent subagents defaults to 4; `0` starts new parents without the subagent tool and adds explicit self-execution guidance. Trust changes are observed by
   active processes for future lazy loads and cannot retract already injected
   context. Also includes dashboard-local preferences (thinking expansion,
   transcript image display mode, and notification permission), an appearance section with a curated-theme gallery
@@ -84,6 +85,20 @@ Open `http://127.0.0.1:5343`.
   the 1–3650 day lifetime used by future pairings (180 days by default), and
   paired-device expiry/unpair management.
 - **Pairing** — remote first-login rotating-code flow.
+
+### Notifications and navigation
+
+Notices, warnings, and errors for the viewed main session or subagent share a
+manually dismissible banner region at the top of the transcript. Long mobile
+messages scroll within a capped text area while banner actions and dismissal
+remain reachable. App-global notices and notifications from other sessions use
+a separate fixed top-center stack; neither surface expires automatically.
+
+Creating a runtime from Fleet or Files leaves the current screen in place.
+Closing the runtime currently being viewed likewise keeps the main-session or
+subagent route and its rendered history as a read-only browser snapshot, with
+explicit **Resume session** and **Return to fleet** actions. Closing another
+runtime produces no redundant toast.
 
 ### Scoped models
 
@@ -169,13 +184,19 @@ Cards use the latest assistant text in hydrated client transcript entries for
 their activity preview. The authoritative initial-load or resync fleet value is
 the fallback until transcript entries are available. Likewise, `ctx%` is always
 copied from authoritative session state or stats, never calculated in the
-browser. Card position remains deterministic: project path, then session start
+browser. Immediately after compaction, the session supplies a conservative
+estimate over the rebuilt context until a later provider response supplies fresh
+usage. Card position remains deterministic: project path, then session start
 time.
 
 Opening a session uses one `GET /api/runtimes/:key/hydrate` request. It is backed
 by one `getDashboardSnapshot` RPC call and its matching ordering barrier, instead
-of separately fetching state, messages, and background agents. The existing
-replay/resync ordering contract still applies.
+of separately fetching state, messages, and background agents. While that view
+remains mounted, periodic, turn-end, and compaction-end detail refreshes merge
+back into the shared runtime state. Confirmed model/thinking mutations update the
+pool snapshot and are protected from older in-flight SSE frames only until the
+matching sequenced snapshot arrives. The existing replay/resync ordering contract
+still applies.
 
 ## Live connection and recovery
 
