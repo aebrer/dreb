@@ -696,8 +696,11 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 		if (enableWatcher) {
 			startThemeWatcher();
 		}
-	} catch (_error) {
-		// Theme is invalid - fall back to dark theme silently
+	} catch (error) {
+		// Theme is invalid - warn the user and fall back to dark theme
+		if (error instanceof Error) {
+			process.stderr.write(`\n${error.message}\nFalling back to dark theme.\n\n`);
+		}
 		currentThemeName = "dark";
 		setGlobalTheme(loadTheme("dark"));
 		// Don't start watcher for fallback theme
