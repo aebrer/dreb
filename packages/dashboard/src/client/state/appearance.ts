@@ -1,20 +1,20 @@
 /*
  * dreb dashboard — appearance system (dashboard-native).
  *
- * Four themes, each a *family* with a light and a dark variant. A separate
- * color-mode toggle (system / light / dark) picks which variant renders. This
+ * Eight themes, each a *family* with a light and a dark variant. Separate
+ * color-mode and font controls select the active variant and typography. This
  * is deliberately independent of the TUI theme system — the dashboard owns its
- * own palette surface (see styles/themes.css).
+ * own appearance surface (see styles/themes.css).
  *
  * Persistence mirrors state/preferences.ts: guarded localStorage reads/writes
  * (window-undefined guard + try/catch), an in-memory Solid signal that stays
  * honest even when storage is unavailable, and a "default value ⇒ removeItem"
- * rule so a pristine (default + system) install leaves no keys behind.
+ * rule so a pristine (default + system + theme-default font) install leaves no
+ * keys behind.
  *
- * The catalog order and ids are FIXED and are re-declared as inline literals in
- * index.html's synchronous bootstrap script (which paints the correct theme
- * before any CSS loads, avoiding a wrong-theme flash). A contract test asserts
- * the two allowlists stay in sync.
+ * Catalog ids are FIXED and re-declared as inline literals in index.html's
+ * synchronous bootstrap script, which paints the correct appearance before CSS
+ * loads. Contract tests assert all three allowlists stay in sync.
  */
 
 import { createSignal } from "solid-js";
@@ -26,8 +26,16 @@ export interface ThemeEntry {
 	label: string;
 }
 
+export interface FontEntry {
+	/** Stable id used for the `data-font` attribute and storage. */
+	id: FontId;
+	/** Human label for pickers. */
+	label: string;
+}
+
 export type ThemeId = "default" | "dim" | "solarized" | "gruvbox" | "qud" | "vangogh" | "okabe" | "tol";
 export type ColorMode = "system" | "light" | "dark";
+export type FontId = "theme" | "ibm-plex-mono" | "jetbrains-mono";
 
 /**
  * FIXED catalog — default first, then dim, solarized, gruvbox, qud, vangogh,
@@ -52,11 +60,23 @@ export const THEME_IDS: readonly ThemeId[] = THEMES.map((t) => t.id);
 /** Color modes. `system` follows the OS via prefers-color-scheme. */
 export const MODES: readonly ColorMode[] = ["system", "light", "dark"] as const;
 
+/** Fixed font picker catalog. `theme` preserves each theme's built-in family. */
+export const FONTS: readonly FontEntry[] = [
+	{ id: "theme", label: "Theme default" },
+	{ id: "ibm-plex-mono", label: "IBM Plex Mono" },
+	{ id: "jetbrains-mono", label: "JetBrains Mono" },
+] as const;
+
+/** All font ids in picker order. */
+export const FONT_IDS: readonly FontId[] = FONTS.map((entry) => entry.id);
+
 export const THEME_STORAGE_KEY = "dreb.dashboard.theme";
 export const COLOR_MODE_STORAGE_KEY = "dreb.dashboard.colorMode";
+export const FONT_STORAGE_KEY = "dreb.dashboard.font";
 
 const DEFAULT_THEME: ThemeId = "default";
 const DEFAULT_MODE: ColorMode = "system";
+const DEFAULT_FONT: FontId = "theme";
 
 /** Pure validators — also re-declared inline in index.html's bootstrap. */
 export function isValidTheme(value: unknown): value is ThemeId {
@@ -65,6 +85,10 @@ export function isValidTheme(value: unknown): value is ThemeId {
 
 export function isValidMode(value: unknown): value is ColorMode {
 	return typeof value === "string" && (MODES as readonly string[]).includes(value);
+}
+
+export function isValidFont(value: unknown): value is FontId {
+	return typeof value === "string" && (FONT_IDS as readonly string[]).includes(value);
 }
 
 // ------------------------------------------------------------------ storage
@@ -89,6 +113,16 @@ function readModeStorage(): ColorMode {
 	}
 }
 
+function readFontStorage(): FontId {
+	if (typeof window === "undefined") return DEFAULT_FONT;
+	try {
+		const raw = window.localStorage.getItem(FONT_STORAGE_KEY);
+		return isValidFont(raw) ? raw : DEFAULT_FONT;
+	} catch {
+		return DEFAULT_FONT;
+	}
+}
+
 /**
  * Persist a string setting, removing the key entirely when it equals the
  * default so a pristine install leaves no dashboard keys behind. Never throws —
@@ -108,11 +142,14 @@ function writeSetting(key: string, value: string, defaultValue: string): void {
 
 const [themeSignal, setThemeSignal] = createSignal<ThemeId>(readThemeStorage());
 const [colorModeSignal, setColorModeSignal] = createSignal<ColorMode>(readModeStorage());
+const [fontSignal, setFontSignal] = createSignal<FontId>(readFontStorage());
 
 /** Accessor for the active theme id. */
 export const theme = themeSignal;
 /** Accessor for the active color mode. */
 export const colorMode = colorModeSignal;
+/** Accessor for the active font preference. */
+export const font = fontSignal;
 
 // --------------------------------------------------------------------- DOM
 
@@ -123,9 +160,9 @@ function computedBg(doc: Document): string {
 }
 
 /**
- * Reflect the current signals onto <html>. The attributes are OMITTED for the
- * clean case (default theme / system mode) so the no-attribute selectors in
- * tokens.css + app.css keep rendering exactly as they do today.
+ * Reflect the current signals onto <html>. Attributes are OMITTED for the
+ * clean case (default theme / system mode / theme-default font) so the
+ * no-attribute selectors keep rendering exactly as they do today.
  *
  * `color-scheme` is set on the root ONLY when a curated theme or a forced mode
  * is active — never in the pristine default+system case — so native form
@@ -140,12 +177,16 @@ export function applyAppearance(doc?: Document): void {
 		if (!root) return;
 		const t = themeSignal();
 		const m = colorModeSignal();
+		const f = fontSignal();
 
 		if (t === DEFAULT_THEME) root.removeAttribute("data-theme");
 		else root.setAttribute("data-theme", t);
 
 		if (m === DEFAULT_MODE) root.removeAttribute("data-color-mode");
 		else root.setAttribute("data-color-mode", m);
+
+		if (f === DEFAULT_FONT) root.removeAttribute("data-font");
+		else root.setAttribute("data-font", f);
 
 		const active = t !== DEFAULT_THEME || m !== DEFAULT_MODE;
 		if (!active) {
@@ -205,6 +246,14 @@ export function setColorMode(value: ColorMode): void {
 	updateThemeColorMeta();
 }
 
+/** Set the font preference: update signal, persist, and reflect to the DOM. */
+export function setFont(value: FontId): void {
+	const next = isValidFont(value) ? value : DEFAULT_FONT;
+	setFontSignal(next);
+	writeSetting(FONT_STORAGE_KEY, next, DEFAULT_FONT);
+	applyAppearance();
+}
+
 // ------------------------------------------------------- listeners + reconcile
 
 let mediaQuery: MediaQueryList | null = null;
@@ -215,10 +264,15 @@ function handleOsChange(): void {
 	if (colorModeSignal() === DEFAULT_MODE) updateThemeColorMeta();
 }
 
-/** Cross-tab sync: re-read + re-apply when our two keys change elsewhere. */
+/** Cross-tab sync: re-read + re-apply when our appearance keys change elsewhere. */
 function handleStorage(event: StorageEvent): void {
 	// A null key means storage.clear(); otherwise ignore unrelated keys.
-	if (event.key !== null && event.key !== THEME_STORAGE_KEY && event.key !== COLOR_MODE_STORAGE_KEY) {
+	if (
+		event.key !== null &&
+		event.key !== THEME_STORAGE_KEY &&
+		event.key !== COLOR_MODE_STORAGE_KEY &&
+		event.key !== FONT_STORAGE_KEY
+	) {
 		return;
 	}
 	reloadAppearance();
@@ -228,6 +282,7 @@ function handleStorage(event: StorageEvent): void {
 export function reloadAppearance(): void {
 	setThemeSignal(readThemeStorage());
 	setColorModeSignal(readModeStorage());
+	setFontSignal(readFontStorage());
 	applyAppearance();
 	updateThemeColorMeta();
 }
@@ -286,4 +341,5 @@ export function __resetAppearanceForTests(): void {
 	initialized = false;
 	setThemeSignal(DEFAULT_THEME);
 	setColorModeSignal(DEFAULT_MODE);
+	setFontSignal(DEFAULT_FONT);
 }

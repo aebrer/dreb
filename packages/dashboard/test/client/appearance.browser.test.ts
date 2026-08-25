@@ -6,9 +6,9 @@
  * layer's core contracts can only be verified in a real engine. This suite
  * loads the production stylesheets in their production order (tokens.css →
  * app.css → themes.css) into headless Chromium and asserts the resolved
- * palette, forced-mode precedence, scoped previews, the pristine-default
- * regression, WCAG AA contrast (computed from the live values, NOT duplicated
- * TS palette constants), lazy webfont fetching, the first-paint bootstrap, and
+ * palette, forced-mode precedence, scoped previews, explicit font selection,
+ * the pristine-default regression, WCAG AA contrast (computed from the live
+ * values, NOT duplicated TS palette constants), lazy webfont fetching, the first-paint bootstrap, and
  * the live `<meta name="theme-color">` sync.
  *
  * Uses the default node vitest environment (see fleet-layout.browser.test.ts) —
@@ -42,6 +42,7 @@ const THEME_IDS = ["default", "dim", "solarized", "gruvbox", "qud", "vangogh", "
 const MODES = ["system", "light", "dark"] as const;
 type ThemeId = (typeof THEME_IDS)[number];
 type Mode = (typeof MODES)[number];
+type FontId = "theme" | "ibm-plex-mono" | "jetbrains-mono";
 type Scheme = "light" | "dark";
 
 const BASE_VARS = ["--bg", "--text", "--border", "--muted"] as const;
@@ -135,17 +136,19 @@ function contentType(path: string): string {
 	return "application/octet-stream";
 }
 
-/** Apply theme/mode to <html> exactly as appearance.ts does (omit the defaults). */
-async function applyRoot(target: Page, theme: ThemeId, mode: Mode): Promise<void> {
+/** Apply appearance to <html> exactly as appearance.ts does (omit defaults). */
+async function applyRoot(target: Page, theme: ThemeId, mode: Mode, font: FontId = "theme"): Promise<void> {
 	await target.evaluate(
-		({ theme, mode }) => {
+		({ theme, mode, font }) => {
 			const el = document.documentElement;
 			if (theme === "default") el.removeAttribute("data-theme");
 			else el.setAttribute("data-theme", theme);
 			if (mode === "system") el.removeAttribute("data-color-mode");
 			else el.setAttribute("data-color-mode", mode);
+			if (font === "theme") el.removeAttribute("data-font");
+			else el.setAttribute("data-font", font);
 		},
-		{ theme, mode },
+		{ theme, mode, font },
 	);
 }
 
@@ -206,7 +209,9 @@ beforeAll(async () => {
 			<link rel="stylesheet" href="./styles/tokens.css">
 			<link rel="stylesheet" href="./styles/app.css">
 			<link rel="stylesheet" href="./styles/themes.css">
-		</head><body><pre id="mono">const answer = 42;</pre></body></html>`,
+		</head><body><div id="body-text">body</div><pre id="mono">const answer = 42;</pre>
+			<select id="control"><option>control</option></select>
+			<textarea id="memory" class="memory-textarea">memory</textarea></body></html>`,
 	);
 	// Appearance-module page: real bundled appearance.ts exposed as window.Appearance.
 	const bundle = await build({
@@ -399,7 +404,7 @@ describe("appearance — every resolved variant clears WCAG AA (>=4.5:1)", () =>
 
 // ===================================================== 6. font request isolation
 
-describe("appearance — JetBrains Mono is fetched only when gruvbox is active", () => {
+describe("appearance — theme-default font requests JetBrains Mono only for gruvbox", () => {
 	it.each([
 		["default", false],
 		["dim", false],
@@ -448,6 +453,74 @@ describe("appearance — JetBrains Mono is fetched only when gruvbox is active",
 	});
 });
 
+describe("appearance — explicit font choice overrides theme typography", () => {
+	it.each([
+		["gruvbox", "ibm-plex-mono", "IBM Plex Mono", false],
+		["solarized", "jetbrains-mono", "JetBrains Mono", true],
+	] as Array<[ThemeId, Exclude<FontId, "theme">, string, boolean]>)(
+		"theme=%s font=%s resolves %s",
+		async (theme, selectedFont, expectedFamily, expectJetBrainsRequest) => {
+			const ctx = await browser.newContext();
+			const p = await ctx.newPage();
+			const fontRequests: string[] = [];
+			p.on("request", (request) => {
+				if (request.url().endsWith("jetbrains-mono.woff2")) fontRequests.push(request.url());
+			});
+			await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+			await applyRoot(p, theme, "system", selectedFont);
+			await p.evaluate(() => {
+				for (const id of ["body-text", "mono", "control", "memory"]) {
+					void (document.getElementById(id) as HTMLElement).offsetHeight;
+				}
+			});
+			await p.evaluate(() => document.fonts.ready);
+			await p.waitForTimeout(100);
+
+			const families = await p.evaluate(() =>
+				["body-text", "mono", "control", "memory"].map(
+					(id) => getComputedStyle(document.getElementById(id) as HTMLElement).fontFamily,
+				),
+			);
+			for (const family of families) expect(family).toContain(expectedFamily);
+			if (expectJetBrainsRequest) expect(fontRequests.length).toBeGreaterThan(0);
+			else expect(fontRequests).toEqual([]);
+			await ctx.close();
+		},
+	);
+
+	it("theme-default previews stay on IBM until an explicit JetBrains preview is selected", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const fontRequests: string[] = [];
+		p.on("request", (request) => {
+			if (request.url().endsWith("jetbrains-mono.woff2")) fontRequests.push(request.url());
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		await p.evaluate(() => {
+			document.body.innerHTML =
+				'<button id="card" data-theme="gruvbox" data-font="ibm-plex-mono"><pre class="theme-card-code">preview</pre></button>';
+			void (document.querySelector(".theme-card-code") as HTMLElement).offsetHeight;
+		});
+		await p.waitForTimeout(100);
+		expect(fontRequests).toEqual([]);
+		expect(
+			await p.evaluate(() => getComputedStyle(document.querySelector(".theme-card-code") as HTMLElement).fontFamily),
+		).toContain("IBM Plex Mono");
+
+		await p.evaluate(() => {
+			document.getElementById("card")?.setAttribute("data-font", "jetbrains-mono");
+			void (document.querySelector(".theme-card-code") as HTMLElement).offsetHeight;
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+		expect(fontRequests.length).toBeGreaterThan(0);
+		expect(
+			await p.evaluate(() => getComputedStyle(document.querySelector(".theme-card-code") as HTMLElement).fontFamily),
+		).toContain("JetBrains Mono");
+		await ctx.close();
+	});
+});
+
 // ====================================================== 7. first-paint bootstrap
 
 describe("appearance — the head bootstrap paints the persisted theme on first frame", () => {
@@ -457,16 +530,17 @@ describe("appearance — the head bootstrap paints the persisted theme on first 
 		expect(scriptIdx).toBeGreaterThan(-1);
 		expect(tokensLinkIdx).toBeGreaterThan(-1);
 		// The synchronous bootstrap must run before tokens/app/themes load so the
-		// correct palette is present on the very first paint (no wrong-theme flash).
+		// correct appearance is present on the first paint (no wrong-appearance flash).
 		expect(scriptIdx).toBeLessThan(tokensLinkIdx);
 	});
 
-	it("has data-theme/data-color-mode set from seeded localStorage before any app script runs", async () => {
+	it("has data-theme/data-color-mode/data-font set from storage before any app script runs", async () => {
 		const ctx = await browser.newContext();
 		// Seed BEFORE navigation so the head bootstrap reads it synchronously.
 		await ctx.addInitScript(() => {
 			localStorage.setItem("dreb.dashboard.theme", "gruvbox");
 			localStorage.setItem("dreb.dashboard.colorMode", "dark");
+			localStorage.setItem("dreb.dashboard.font", "ibm-plex-mono");
 		});
 		const p = await ctx.newPage();
 		// The app module (index.tsx) 404s from the temp origin and never executes,
@@ -475,11 +549,24 @@ describe("appearance — the head bootstrap paints the persisted theme on first 
 		const state = await p.evaluate(() => ({
 			theme: document.documentElement.getAttribute("data-theme"),
 			mode: document.documentElement.getAttribute("data-color-mode"),
+			font: document.documentElement.getAttribute("data-font"),
 			colorScheme: document.documentElement.style.getPropertyValue("color-scheme"),
 		}));
 		expect(state.theme).toBe("gruvbox");
 		expect(state.mode).toBe("dark");
+		expect(state.font).toBe("ibm-plex-mono");
 		expect(state.colorScheme).toBe("dark");
+		await ctx.close();
+	});
+
+	it("ignores an invalid persisted font before app code runs", async () => {
+		const ctx = await browser.newContext();
+		await ctx.addInitScript(() => {
+			localStorage.setItem("dreb.dashboard.font", "retired-font");
+		});
+		const p = await ctx.newPage();
+		await p.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+		expect(await p.evaluate(() => document.documentElement.getAttribute("data-font"))).toBeNull();
 		await ctx.close();
 	});
 

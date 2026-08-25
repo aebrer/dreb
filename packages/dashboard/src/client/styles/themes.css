@@ -5,16 +5,17 @@
  * the TUI theme system: the dashboard owns these palettes. Loaded AFTER
  * tokens.css and app.css, it overrides the design tokens (--bg, --text,
  * --border, --muted, the four --status-*, the nine --syntax-*, and --mono-font)
- * when a curated theme or a forced color mode is active.
+ * when a curated theme, forced color mode, or explicit font is active.
  *
- * The no-attribute case (default theme + system mode) is intentionally NOT
- * matched here, so a pristine install renders byte-for-byte identically to the
- * tokens.css / app.css baseline.
+ * The no-attribute case (default theme + system mode + theme-default font) is
+ * intentionally NOT matched here, so a pristine install renders byte-for-byte
+ * identically to the tokens.css / app.css baseline.
  *
  * SCOPING: every rule uses bare attribute selectors ([data-theme='…'],
- * [data-color-mode='…']) rather than :root-anchored ones, so a preview element
- * can carry the attributes and get the palette locally (custom properties then
- * cascade to its subtree). Runtime attributes normally live on <html> (set by
+ * [data-color-mode='…'], [data-font='…']) rather than :root-anchored ones, so a
+ * preview element can carry the attributes and get the appearance locally
+ * (custom properties then cascade to its subtree). Runtime attributes normally
+ * live on <html> (set by
  * state/appearance.ts + the index.html bootstrap).
  *
  * VARIANT MODEL: each curated theme defines BOTH a light and a dark palette as
@@ -35,9 +36,9 @@
 /* ============================================================ fonts */
 
 /*
- * JetBrains Mono — self-hosted, used only by the gruvbox theme. Variable
- * (wght 100–800) so 400/500/600 render natively without faux bold. Fetched
- * lazily by the browser only when gruvbox is active (no <link rel=preload>).
+ * JetBrains Mono — self-hosted for the gruvbox theme and explicit font picker.
+ * Variable (wght 100–800) so 400/500/600 render natively without faux bold.
+ * Fetched lazily only when active typography uses it (no <link rel=preload>).
  * Files + license + provenance live in ../assets/fonts/. url() is resolved
  * relative to this file and fingerprinted by Vite.
  */
@@ -995,4 +996,18 @@
 		--syntax-operator: var(--tol-d-operator);
 		--syntax-punctuation: var(--tol-d-punctuation);
 	}
+}
+
+/* ================================================= explicit font override */
+
+/* Loaded after every theme mapping so an explicit browser-local font choice
+ * wins independently on :root and on scoped preview cards. Theme-default font
+ * omits data-font entirely and therefore preserves each theme's built-in stack.
+ */
+[data-font="ibm-plex-mono"] {
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="jetbrains-mono"] {
+	--mono-font: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
 }

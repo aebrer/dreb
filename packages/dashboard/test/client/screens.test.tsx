@@ -283,6 +283,7 @@ import { SubagentScreen } from "../../src/client/screens/subagent.js";
 import {
 	__resetAppearanceForTests,
 	COLOR_MODE_STORAGE_KEY,
+	FONT_STORAGE_KEY,
 	reloadAppearance,
 	THEME_STORAGE_KEY,
 } from "../../src/client/state/appearance.js";
@@ -4373,6 +4374,7 @@ describe("dashboard client regressions", () => {
 		function resetAppearance() {
 			window.localStorage.removeItem(THEME_STORAGE_KEY);
 			window.localStorage.removeItem(COLOR_MODE_STORAGE_KEY);
+			window.localStorage.removeItem(FONT_STORAGE_KEY);
 			__resetAppearanceForTests();
 			reloadAppearance(); // re-reads (now-empty) storage → removes the <html> attrs
 		}
@@ -4380,7 +4382,7 @@ describe("dashboard client regressions", () => {
 		beforeEach(resetAppearance);
 		afterEach(resetAppearance);
 
-		it("renders the mode selector and theme cards even when settings fails to load", async () => {
+		it("renders appearance selectors and theme cards even when settings fails to load", async () => {
 			// The appearance controls live in the dashboard section, OUTSIDE the
 			// server-settings <Show> boundary — so a rejected api.settings() must not
 			// hide them.
@@ -4390,6 +4392,12 @@ describe("dashboard client regressions", () => {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 
 			expect(el.querySelector("#pref-color-mode")).not.toBeNull();
+			const fontSelect = el.querySelector("#pref-font") as HTMLSelectElement;
+			expect(Array.from(fontSelect.options).map((option) => [option.value, option.textContent])).toEqual([
+				["theme", "Theme default"],
+				["ibm-plex-mono", "IBM Plex Mono"],
+				["jetbrains-mono", "JetBrains Mono"],
+			]);
 			expect(el.querySelectorAll("[data-theme-card]").length).toBe(8);
 			expect(el.querySelector('[data-theme-card="default"]')).not.toBeNull();
 			expect(el.querySelector('[data-theme-card="gruvbox"]')).not.toBeNull();
@@ -4414,9 +4422,10 @@ describe("dashboard client regressions", () => {
 			}
 		});
 
-		it("marks the restored theme card active and selects the restored color mode", async () => {
+		it("restores the selected theme, color mode, and font", async () => {
 			window.localStorage.setItem(THEME_STORAGE_KEY, "solarized");
 			window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");
+			window.localStorage.setItem(FONT_STORAGE_KEY, "jetbrains-mono");
 			reloadAppearance();
 			const store = makeStore();
 			const el = mount(() => <SettingsScreen store={store} />);
@@ -4427,6 +4436,9 @@ describe("dashboard client regressions", () => {
 			expect(card.getAttribute("aria-pressed")).toBe("true");
 			const select = el.querySelector("#pref-color-mode") as HTMLSelectElement;
 			expect(select.value).toBe("dark");
+			const fontSelect = el.querySelector("#pref-font") as HTMLSelectElement;
+			expect(fontSelect.value).toBe("jetbrains-mono");
+			expect(document.documentElement.getAttribute("data-font")).toBe("jetbrains-mono");
 		});
 
 		it("clicking a non-default card sets the documentElement theme attribute and persists it", async () => {
@@ -4472,6 +4484,28 @@ describe("dashboard client regressions", () => {
 
 			expect(document.documentElement.getAttribute("data-color-mode")).toBeNull();
 			expect(window.localStorage.getItem(COLOR_MODE_STORAGE_KEY)).toBeNull();
+		});
+
+		it("selects an explicit font independently and clears it with Theme default", async () => {
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const fontSelect = el.querySelector("#pref-font") as HTMLSelectElement;
+			fontSelect.value = "jetbrains-mono";
+			fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
+			expect(document.documentElement.getAttribute("data-font")).toBe("jetbrains-mono");
+			expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBe("jetbrains-mono");
+
+			const gruvbox = el.querySelector('[data-theme-card="gruvbox"]') as HTMLButtonElement;
+			gruvbox.click();
+			expect(document.documentElement.getAttribute("data-theme")).toBe("gruvbox");
+			expect(document.documentElement.getAttribute("data-font")).toBe("jetbrains-mono");
+
+			fontSelect.value = "theme";
+			fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
+			expect(document.documentElement.getAttribute("data-font")).toBeNull();
+			expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBeNull();
 		});
 
 		it("reflects a forced color mode onto every preview card's data-color-mode", async () => {
@@ -4521,6 +4555,24 @@ describe("dashboard client regressions", () => {
 			for (const card of Array.from(el.querySelectorAll("[data-theme-card]"))) {
 				expect(card.hasAttribute("data-color-mode")).toBe(false);
 			}
+		});
+
+		it("uses IBM for theme-default previews and reflects explicit fonts reactively", async () => {
+			const store = makeStore();
+			const el = mount(() => <SettingsScreen store={store} />);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+
+			const cards = Array.from(el.querySelectorAll("[data-theme-card]"));
+			for (const card of cards) expect(card.getAttribute("data-font")).toBe("ibm-plex-mono");
+
+			const fontSelect = el.querySelector("#pref-font") as HTMLSelectElement;
+			fontSelect.value = "jetbrains-mono";
+			fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
+			for (const card of cards) expect(card.getAttribute("data-font")).toBe("jetbrains-mono");
+
+			fontSelect.value = "ibm-plex-mono";
+			fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
+			for (const card of cards) expect(card.getAttribute("data-font")).toBe("ibm-plex-mono");
 		});
 
 		it("documents that the dashboard appearance is independent of the TUI theme", async () => {
