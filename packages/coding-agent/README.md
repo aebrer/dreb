@@ -414,7 +414,7 @@ Set `backgroundAgents.maxConcurrentSubagents` in `/settings`, dashboard Settings
 
 ### Waiting for GitHub CI
 
-Use `watch_github_ci` to monitor pull-request checks without asking the user to return later or constructing a polling loop. It runs `gh pr checks --watch --fail-fast`, defaults to the pull request for the current branch, accepts an optional PR number/URL/branch, and returns when checks pass or definitively fail. The call is cancellable and requires an installed, authenticated [GitHub CLI](https://cli.github.com/).
+Use `watch_github_ci` to monitor pull-request checks without asking the user to return later or constructing a polling loop. It runs `gh pr checks --watch --fail-fast`, defaults to the pull request for the current branch, accepts an optional PR number/URL/branch, and returns when checks pass or definitively fail. After the watch completes, it makes a plain `gh pr checks` query so the model receives one clean final check listing rather than the repeated polling snapshots shown in live progress. The call is cancellable and requires an installed, authenticated [GitHub CLI](https://cli.github.com/).
 
 The separate `wait` tool is an immediate no-op used when explicitly told to wait or while background subagents are running. It does not monitor CI and must not be used as a sleep or delay.
 
