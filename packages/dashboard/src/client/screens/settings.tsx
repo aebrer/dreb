@@ -22,6 +22,7 @@ import type {
 	SettingsUpdateDto,
 	SubagentArbiterSettingsDto,
 	TabTitleSettingsDto,
+	TabTitleSettingsUpdateDto,
 } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
@@ -134,6 +135,9 @@ function ModelPickerModal(props: {
 	title: string;
 	models: ModelChoice[];
 	selected?: string[];
+	/** Label for an optional first row that clears the selection (e.g. restore the automatic route). */
+	clearLabel?: string;
+	onClear?: () => void;
 	onClose: () => void;
 	onPick: (model: ModelChoice) => void;
 }): JSX.Element {
@@ -156,6 +160,17 @@ function ModelPickerModal(props: {
 				/>
 			</div>
 			<div class="model-list" style={{ "max-height": "320px" }}>
+				<Show when={props.onClear && props.clearLabel}>
+					<button
+						type="button"
+						class="model-row model-clear-row"
+						classList={{ current: selected().size === 0 }}
+						onClick={() => props.onClear?.()}
+					>
+						<span class="model-current">{selected().size === 0 ? "✓" : ""}</span>
+						<span class="model-id">{props.clearLabel}</span>
+					</button>
+				</Show>
 				<Show when={filteredGroups().length > 0} fallback={<p class="muted small">No matching models.</p>}>
 					<For each={filteredGroups()}>
 						{(group) => (
@@ -433,8 +448,11 @@ export function SettingsScreen(props: {
 		return pendingTabTitleSettings ?? settings()?.tabTitle ?? {};
 	}
 
-	function saveTabTitleSettings(update: Partial<TabTitleSettingsDto>): void {
-		const nextSettings = { ...currentTabTitleSettings(), ...update };
+	function saveTabTitleSettings(update: TabTitleSettingsUpdateDto): void {
+		const merged = { ...currentTabTitleSettings(), ...update };
+		// `model: null` clears the pinned model; the optimistic state drops it so the
+		// picker immediately shows the automatic Explore route again.
+		const nextSettings: TabTitleSettingsDto = { ...merged, model: merged.model ?? undefined };
 		pendingTabTitleSettings = nextSettings;
 
 		const currentSettings = settings();
@@ -1439,6 +1457,15 @@ export function SettingsScreen(props: {
 							title={pickerTitle()}
 							models={availableModels() ?? []}
 							selected={selectedKeys()}
+							clearLabel={target().kind === "tabTitle" ? "automatic (Explore route)" : undefined}
+							onClear={
+								target().kind === "tabTitle"
+									? () => {
+											setModelPickerTarget(undefined);
+											saveTabTitleSettings({ model: null });
+										}
+									: undefined
+							}
 							onClose={() => setModelPickerTarget(undefined)}
 							onPick={(model) => {
 								const active = target();

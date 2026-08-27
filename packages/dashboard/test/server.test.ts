@@ -1246,7 +1246,8 @@ describe("dashboard server — fleet and runtimes", () => {
 		};
 		vi.mocked(utility.getSettings).mockImplementation(async () => ({ ...baselineSettings, tabTitle }));
 		vi.mocked(utility.setSettings).mockImplementation(async (update) => {
-			tabTitle = { ...tabTitle, ...(update.tabTitle ?? {}) };
+			const merged = { ...tabTitle, ...(update.tabTitle ?? {}) };
+			tabTitle = { ...merged, model: merged.model ?? undefined };
 			return { ...baselineSettings, tabTitle };
 		});
 

@@ -171,6 +171,9 @@ export interface TabTitleSettings {
 	maxTitleLength?: number; // default: 60 — soft target length hint for generated titles (hard-capped at 300)
 }
 
+/** Partial tab-title update; `model: null` removes the pinned model, restoring Explore-agent routing. */
+export type TabTitleSettingsUpdate = Omit<TabTitleSettings, "model"> & { model?: string | null };
+
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	const result: Settings = { ...base };
@@ -1448,13 +1451,20 @@ export class SettingsManager {
 		return this.settings.tabTitle ? structuredClone(this.settings.tabTitle) : undefined;
 	}
 
-	setGlobalTabTitleSettings(update: TabTitleSettings): void {
+	setGlobalTabTitleSettings(update: TabTitleSettingsUpdate): void {
 		if (!this.globalSettings.tabTitle) {
 			this.globalSettings.tabTitle = {};
 		}
-		for (const [key, value] of Object.entries(update) as [keyof TabTitleSettings, unknown][]) {
+		for (const [key, value] of Object.entries(update) as [keyof TabTitleSettingsUpdate, unknown][]) {
 			if (value === undefined) continue;
-			(this.globalSettings.tabTitle as Record<keyof TabTitleSettings, unknown>)[key] = value;
+			if (value === null) {
+				// Explicit clear: remove the key in memory and mark it modified so the
+				// nested persistence merge drops it from the file (JSON omits undefined).
+				delete (this.globalSettings.tabTitle as Record<keyof TabTitleSettingsUpdate, unknown>)[key];
+				this.markModified("tabTitle", key);
+				continue;
+			}
+			(this.globalSettings.tabTitle as Record<keyof TabTitleSettingsUpdate, unknown>)[key] = value;
 			this.markModified("tabTitle", key);
 		}
 		this.save();

@@ -1063,7 +1063,7 @@ export async function setSettingsForRpc(
 				return { ok: false, error: `tabTitle.${key} must be a positive whole number` };
 			}
 		}
-		if (tabTitle.model !== undefined) {
+		if (tabTitle.model !== undefined && tabTitle.model !== null) {
 			if (typeof tabTitle.model !== "string" || !tabTitle.model.trim()) {
 				return { ok: false, error: "tabTitle.model must be a non-empty exact provider/model string" };
 			}
@@ -1078,6 +1078,8 @@ export async function setSettingsForRpc(
 				return { ok: false, error: `Tab title model not found: ${tabTitle.model}` };
 			}
 		}
+		// `model: null` skips validation above: it removes the pinned model so title
+		// generation restores Explore-agent routing.
 		tabTitle = { ...tabTitle };
 	}
 

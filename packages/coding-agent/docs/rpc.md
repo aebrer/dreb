@@ -1456,10 +1456,14 @@ Setting per-agent model fallback lists:
 
 For `agentModels`, a non-empty array writes the global fallback list for that agent. An empty array removes the global entry, so that agent uses its agent-definition default unless a project-level override exists.
 
-Update one or more tab-title fields. Nested updates are partial, so changing `enabled` or `model` preserves omitted `triggerAfter` and `maxTitleLength` values. A supplied model must be an available exact reference; model IDs may contain `/` after the provider prefix:
+Update one or more tab-title fields. Nested updates are partial, so changing `enabled` or `model` preserves omitted `triggerAfter` and `maxTitleLength` values. A supplied model must be an available exact reference; model IDs may contain `/` after the provider prefix. `model: null` removes the pinned model, restoring Explore-agent routing:
 
 ```json
 {"type":"set_settings","settings":{"tabTitle":{"enabled":true,"model":"anthropic/claude-haiku-4-5"}}}
+```
+
+```json
+{"type":"set_settings","settings":{"tabTitle":{"model":null}}}
 ```
 
 Replace the complete global-only Dispatch Arbiter policy (exact model is validated; explicit thinking is capability-validated):
@@ -1551,7 +1555,7 @@ Valid keys and values:
 | `agentModels` | Plain object mapping agent names to arrays of non-empty model id strings; empty arrays remove the global entry for that agent |
 | `enabledModels` | Non-empty ordered array of available exact `provider/model` references, or explicit `null` to remove the global filter and restore implicit all. Duplicate, glob, fuzzy, and thinking-suffix entries are rejected. |
 | `subagentArbiter` | Complete global-only object or `null`. Keys: `enabled` boolean, exact available `model`, optional valid/capability-supported `thinking`, non-empty `guidePath`. Enabling requires `model`. Unknown nested keys are rejected. |
-| `tabTitle` | Partial object. Keys: `enabled` boolean, exact available `model`, positive whole-number `triggerAfter`, positive whole-number `maxTitleLength`. Unknown nested keys and an empty object are rejected. |
+| `tabTitle` | Partial object. Keys: `enabled` boolean, exact available `model` (`null` removes the pinned model and restores Explore-agent routing), positive whole-number `triggerAfter`, positive whole-number `maxTitleLength`. Unknown nested keys and an empty object are rejected. |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
 

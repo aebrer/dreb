@@ -617,6 +617,7 @@ describe("setSettingsForRpc validation", () => {
 			{ tabTitle: { model: "claude-sonnet-4-5" } },
 			{ tabTitle: { model: "openai/missing" } },
 			{ tabTitle: { enabled: false, extra: true } },
+			{ tabTitle: { model: null, maxTitleLength: 0 } },
 		] as const;
 
 		for (const update of invalidUpdates) {
@@ -893,6 +894,47 @@ describe("setSettingsForRpc writes", () => {
 				},
 			},
 		});
+	});
+
+	it("clears a pinned tab title model with model: null without losing sibling settings", async () => {
+		const manager = SettingsManager.inMemory({
+			tabTitle: { enabled: true, model: "openrouter/vendor/title-model", triggerAfter: 7, maxTitleLength: 90 },
+		});
+
+		const cleared = await setSettingsForRpc(manager, stubRegistry([]), {
+			tabTitle: { model: null },
+		});
+		expect(cleared.ok).toBe(true);
+		if (!cleared.ok) throw new Error("unreachable");
+		expect(cleared.settings.tabTitle).toEqual({ enabled: true, triggerAfter: 7, maxTitleLength: 90 });
+		expect(manager.getTabTitleSettings()).toEqual({ enabled: true, triggerAfter: 7, maxTitleLength: 90 });
+	});
+
+	it("removes a cleared tab title model from the global settings file", async () => {
+		const dir = await createTempDir();
+		const agentDir = join(dir, "agent");
+		const projectDir = join(dir, "project");
+		mkdirSync(agentDir, { recursive: true });
+		mkdirSync(projectDir, { recursive: true });
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ tabTitle: { enabled: true, model: "anthropic/claude-sonnet-4-5", triggerAfter: 6 } }),
+			"utf8",
+		);
+
+		const manager = SettingsManager.create(projectDir, agentDir);
+		const result = await setSettingsForRpc(manager, stubRegistry([anthropicSonnet]), {
+			tabTitle: { model: null },
+		});
+		expect(result.ok).toBe(true);
+
+		// The handler flushes, so the file no longer pins the model.
+		const raw = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"));
+		expect(raw.tabTitle).toEqual({ enabled: true, triggerAfter: 6 });
+
+		// A fresh manager over the same dirs (fresh runtime) observes the cleared model.
+		const fresh = SettingsManager.create(projectDir, agentDir);
+		expect(fresh.getTabTitleSettings()).toEqual({ enabled: true, triggerAfter: 6 });
 	});
 
 	it("expands home-directory trusted folders before persisting canonical roots", async () => {

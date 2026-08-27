@@ -668,6 +668,32 @@ describe("TabTitleGenerator", () => {
 			expect(mockResolveModel).not.toHaveBeenCalled();
 		});
 
+		it.each([
+			["missing slash", "title-model"],
+			["trailing slash", "dedicated-provider/"],
+			["leading slash", "/title-model"],
+			["embedded whitespace", "dedicated provider/title-model"],
+			["well-formed but unavailable", "dedicated-provider/title-model"],
+		])(
+			"falls back to the parent model for a configured model with %s without invoking Explore resolution",
+			async (_label, configuredModel) => {
+				// Hand-edited settings bypass RPC validation; the generator must fall back to
+				// the parent model rather than invoking Explore routing or failing to fire.
+				const deps = createMockDeps();
+				const gen = new TabTitleGenerator({ triggerAfter: 1, model: configuredModel }, deps);
+
+				gen.onToolEnd();
+
+				await vi.waitFor(() => expect(deps.setTitle).toHaveBeenCalledWith("dreb - Fix auth bug"));
+				expect(mockCompleteSimple.mock.calls[0][0]).toMatchObject({
+					provider: "test-provider",
+					id: "test-model",
+				});
+				expect(mockResolveModel).not.toHaveBeenCalled();
+				expect(mockParseAgent).not.toHaveBeenCalled();
+			},
+		);
+
 		it("uses Explore agent model when available", async () => {
 			mockParseAgent.mockReturnValue({
 				ok: true,

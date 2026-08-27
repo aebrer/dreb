@@ -524,6 +524,9 @@ export interface TabTitleSettingsDto {
 	maxTitleLength?: number;
 }
 
+/** Partial tab-title update; `model: null` removes the pinned model, restoring Explore-agent routing. */
+export type TabTitleSettingsUpdateDto = Omit<TabTitleSettingsDto, "model"> & { model?: string | null };
+
 export interface SettingsDto {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -558,7 +561,7 @@ export interface SettingsDto {
 	enabledModelsSource: "default" | "global" | "project";
 }
 
-/** Dashboard settings mutation payload. Unlike a snapshot, null explicitly clears enabledModels. */
+/** Dashboard settings mutation payload. Unlike a snapshot, null explicitly clears enabledModels, and tabTitle.model: null removes the pinned title model. */
 export type SettingsUpdateDto = Partial<
 	Pick<
 		SettingsDto,
@@ -579,9 +582,8 @@ export type SettingsUpdateDto = Partial<
 		| "hideThinkingBlock"
 		| "agentModels"
 		| "subagentArbiter"
-		| "tabTitle"
 	>
-> & { enabledModels?: string[] | null };
+> & { enabledModels?: string[] | null; tabTitle?: TabTitleSettingsUpdateDto };
 
 export type SettingsSaveResultDto = SettingsDto & { warnings?: string[] };
 

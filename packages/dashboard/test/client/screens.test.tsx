@@ -3148,7 +3148,10 @@ describe("screen smoke tests", () => {
 		(section.querySelector(".model-picker-button") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(el.textContent).toContain("select tab title model");
-		(el.querySelector(".model-row") as HTMLButtonElement).click();
+		const modelRow = [...el.querySelectorAll<HTMLButtonElement>(".model-row")].find((row) =>
+			row.textContent?.includes("vendor/title-model"),
+		)!;
+		modelRow.click();
 		await vi.waitFor(() =>
 			expect(api.saveSettings).toHaveBeenCalledWith({
 				tabTitle: { model: "openrouter/vendor/title-model" },
@@ -3196,6 +3199,125 @@ describe("screen smoke tests", () => {
 		);
 		expect(api.saveSettings).toHaveBeenCalledWith({ tabTitle: { enabled: true } });
 		expect(enabled.value).toBe("off");
+		vi.mocked(api.saveSettings).mockClear();
+	});
+
+	it("settings clears a pinned tab title model back to the automatic route", async () => {
+		vi.mocked(api.settings).mockClear();
+		vi.mocked(api.saveSettings).mockClear();
+		let durable: SettingsDto = { tabTitle: { enabled: true, model: "provider/title-model" } };
+		vi.mocked(api.settings).mockImplementation(async () => durable);
+		vi.mocked(api.settingsModels).mockResolvedValue({
+			models: [
+				{
+					provider: "provider",
+					id: "title-model",
+					name: "Title Model",
+					contextWindow: 128000,
+					reasoning: false,
+				},
+			],
+		});
+		vi.mocked(api.saveSettings).mockImplementation(async (update) => {
+			const merged = { ...durable.tabTitle, ...(update.tabTitle ?? {}) };
+			if (update.tabTitle?.model === null) delete merged.model;
+			durable = { tabTitle: { ...merged, model: merged.model ?? undefined } };
+			return durable;
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const section = el.querySelector(".tab-title-settings") as HTMLElement;
+		const pickerButton = section.querySelector(".model-picker-button") as HTMLButtonElement;
+		expect(pickerButton.textContent).toContain("provider/title-model");
+		pickerButton.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.textContent).toContain("select tab title model");
+		const clearRow = el.querySelector(".model-clear-row") as HTMLButtonElement;
+		expect(clearRow.textContent).toContain("automatic (Explore route)");
+		clearRow.click();
+
+		await vi.waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith({ tabTitle: { model: null } }));
+		await vi.waitFor(() => {
+			const button = el.querySelector(".tab-title-settings .model-picker-button") as HTMLButtonElement;
+			expect(button.textContent).toContain("automatic (Explore route)");
+		});
+		expect(durable.tabTitle).toEqual({ enabled: true });
+		vi.mocked(api.saveSettings).mockClear();
+	});
+
+	it("serializes overlapping tab title edits without restoring stale state", async () => {
+		vi.mocked(api.settings).mockClear();
+		vi.mocked(api.saveSettings).mockClear();
+		vi.mocked(api.settings).mockResolvedValue({
+			tabTitle: { enabled: true, model: "provider/title-model", triggerAfter: 9, maxTitleLength: 60 },
+		});
+		vi.mocked(api.settingsModels).mockResolvedValue({
+			models: [
+				{
+					provider: "openrouter",
+					id: "vendor/title-model",
+					name: "Title Model",
+					contextWindow: 128000,
+					reasoning: false,
+				},
+			],
+		});
+		let resolveFirst!: (value: Awaited<ReturnType<typeof api.saveSettings>>) => void;
+		let resolveSecond!: (value: Awaited<ReturnType<typeof api.saveSettings>>) => void;
+		const firstSave = new Promise<Awaited<ReturnType<typeof api.saveSettings>>>((resolve) => {
+			resolveFirst = resolve;
+		});
+		const secondSave = new Promise<Awaited<ReturnType<typeof api.saveSettings>>>((resolve) => {
+			resolveSecond = resolve;
+		});
+		vi.mocked(api.saveSettings)
+			.mockImplementationOnce(() => firstSave)
+			.mockImplementationOnce(() => secondSave);
+
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		// First edit: disable while nothing is in flight → save 1 starts.
+		const section = el.querySelector(".tab-title-settings") as HTMLElement;
+		const enabled = section.querySelector("select") as HTMLSelectElement;
+		enabled.value = "off";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+
+		// Second edit before save 1 resolves: pin a different model via the picker.
+		(section.querySelector(".model-picker-button") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const modelRow = [...el.querySelectorAll<HTMLButtonElement>(".model-row")].find((row) =>
+			row.textContent?.includes("vendor/title-model"),
+		)!;
+		modelRow.click();
+		await Promise.resolve();
+
+		expect(api.saveSettings).toHaveBeenCalledTimes(1);
+		expect(api.saveSettings).toHaveBeenNthCalledWith(1, { tabTitle: { enabled: false } });
+
+		// Save 1 resolves with a snapshot predating the model edit; the newer
+		// optimistic model selection must survive instead of rolling back.
+		resolveFirst({
+			tabTitle: { enabled: false, model: "provider/title-model", triggerAfter: 9, maxTitleLength: 60 },
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(api.saveSettings).toHaveBeenNthCalledWith(2, {
+			tabTitle: { model: "openrouter/vendor/title-model" },
+		});
+
+		const pickerButton = () => el.querySelector(".tab-title-settings .model-picker-button") as HTMLButtonElement;
+		expect(pickerButton().textContent).toContain("openrouter/vendor/title-model");
+		expect((el.querySelector(".tab-title-settings select") as HTMLSelectElement).value).toBe("off");
+
+		resolveSecond({
+			tabTitle: { enabled: false, model: "openrouter/vendor/title-model", triggerAfter: 9, maxTitleLength: 60 },
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(pickerButton().textContent).toContain("openrouter/vendor/title-model");
 		vi.mocked(api.saveSettings).mockClear();
 	});
 

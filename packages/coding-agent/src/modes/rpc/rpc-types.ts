@@ -14,7 +14,7 @@ import type { DispatchArbitrationRecord } from "../../core/dispatch-arbiter.js";
 import type { ContextUsage } from "../../core/extensions/types.js";
 import type { ModelPerformanceSummary } from "../../core/performance-tracker.js";
 import type { SessionEntry } from "../../core/session-manager.js";
-import type { SubagentArbiterSettings, TabTitleSettings } from "../../core/settings-manager.js";
+import type { SubagentArbiterSettings, TabTitleSettings, TabTitleSettingsUpdate } from "../../core/settings-manager.js";
 import type { SourceInfo } from "../../core/source-info.js";
 
 // ============================================================================
@@ -695,8 +695,8 @@ export interface RpcSettingsUpdate {
 	enabledModels?: string[] | null;
 	/** Replaces the complete global-only arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettings | null;
-	/** Partial global automatic tab-title configuration update. */
-	tabTitle?: TabTitleSettings;
+	/** Partial global automatic tab-title configuration update. `model: null` removes the pinned model, restoring Explore-agent routing. */
+	tabTitle?: TabTitleSettingsUpdate;
 }
 
 // ============================================================================
