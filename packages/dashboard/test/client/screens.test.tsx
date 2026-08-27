@@ -3107,6 +3107,98 @@ describe("screen smoke tests", () => {
 		expect(api.saveSettings).not.toHaveBeenCalled();
 	});
 
+	it("settings exposes default-enabled tab title controls and the automatic route", async () => {
+		vi.mocked(api.settings).mockResolvedValue({});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const section = el.querySelector(".tab-title-settings") as HTMLElement;
+		expect(section).not.toBeNull();
+		expect(section.textContent).toContain("title model");
+		expect(section.textContent).toContain("automatic (Explore route)");
+		const enabled = section.querySelector("select") as HTMLSelectElement;
+		expect(enabled.value).toBe("on");
+	});
+
+	it("settings persists tab title model and enable edits as partial nested updates", async () => {
+		let durable: SettingsDto = { tabTitle: { enabled: false, triggerAfter: 7, maxTitleLength: 90 } };
+		vi.mocked(api.settings).mockImplementation(async () => durable);
+		vi.mocked(api.settingsModels).mockResolvedValue({
+			models: [
+				{
+					provider: "openrouter",
+					id: "vendor/title-model",
+					name: "Title Model",
+					contextWindow: 128000,
+					reasoning: false,
+				},
+			],
+		});
+		vi.mocked(api.saveSettings).mockImplementation(async (update) => {
+			durable = { tabTitle: { ...durable.tabTitle, ...(update.tabTitle ?? {}) } };
+			return durable;
+		});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		let section = el.querySelector(".tab-title-settings") as HTMLElement;
+		expect((section.querySelector("select") as HTMLSelectElement).value).toBe("off");
+		(section.querySelector(".model-picker-button") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.textContent).toContain("select tab title model");
+		(el.querySelector(".model-row") as HTMLButtonElement).click();
+		await vi.waitFor(() =>
+			expect(api.saveSettings).toHaveBeenCalledWith({
+				tabTitle: { model: "openrouter/vendor/title-model" },
+			}),
+		);
+		expect(durable.tabTitle).toEqual({
+			enabled: false,
+			model: "openrouter/vendor/title-model",
+			triggerAfter: 7,
+			maxTitleLength: 90,
+		});
+
+		section = el.querySelector(".tab-title-settings") as HTMLElement;
+		const enabled = section.querySelector("select") as HTMLSelectElement;
+		enabled.value = "on";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+		await vi.waitFor(() => expect(api.saveSettings).toHaveBeenLastCalledWith({ tabTitle: { enabled: true } }));
+		expect(durable.tabTitle).toMatchObject({ enabled: true, model: "openrouter/vendor/title-model" });
+		await vi.waitFor(() => {
+			const currentSection = el.querySelector(".tab-title-settings") as HTMLElement;
+			expect((currentSection.querySelector("select") as HTMLSelectElement).value).toBe("on");
+			expect(currentSection.textContent).toContain("openrouter/vendor/title-model");
+		});
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		vi.mocked(api.saveSettings).mockClear();
+	});
+
+	it("settings rolls back a rejected tab title edit and shows the error", async () => {
+		vi.mocked(api.settings).mockClear();
+		vi.mocked(api.saveSettings).mockClear();
+		const durable = { tabTitle: { enabled: false, model: "provider/title-model" } };
+		vi.mocked(api.settings).mockResolvedValue(durable);
+		vi.mocked(api.saveSettings).mockRejectedValueOnce(new Error("tab title setting rejected"));
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		const enabled = el.querySelector(".tab-title-settings select") as HTMLSelectElement;
+
+		enabled.value = "on";
+		enabled.dispatchEvent(new Event("change", { bubbles: true }));
+		expect(enabled.value).toBe("on");
+
+		await vi.waitFor(() =>
+			expect(el.querySelector(".settings-error")?.textContent).toContain("tab title setting rejected"),
+		);
+		expect(api.saveSettings).toHaveBeenCalledWith({ tabTitle: { enabled: true } });
+		expect(enabled.value).toBe("off");
+		vi.mocked(api.saveSettings).mockClear();
+	});
+
 	it("settings exposes complete global Dispatch Arbiter controls and readiness", async () => {
 		vi.mocked(api.settings).mockResolvedValue({
 			subagentArbiter: {

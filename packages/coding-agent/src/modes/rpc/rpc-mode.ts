@@ -390,6 +390,7 @@ type SettingsReader = Pick<
 	| "getHideThinkingBlock"
 	| "getAgentModels"
 	| "getGlobalSubagentArbiterSettings"
+	| "getTabTitleSettings"
 	| "getEnabledModels"
 	| "hasProjectEnabledModelsOverride"
 >;
@@ -423,6 +424,7 @@ type SettingsWriter = SettingsRefresher &
 		| "removeAgentModelsForAgent"
 		| "hasProjectAgentModelOverride"
 		| "setGlobalSubagentArbiterSettings"
+		| "setGlobalTabTitleSettings"
 		| "setEnabledModels"
 	>;
 
@@ -462,6 +464,7 @@ export function getSettingsForRpc(
 		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
 		agentModels: settingsManager.getAgentModels(),
 		subagentArbiter: settingsManager.getGlobalSubagentArbiterSettings(),
+		tabTitle: settingsManager.getTabTitleSettings(),
 		enabledModels,
 		resolvedScopedModels: scopeResolution.models.map(({ model, thinkingLevel }) => ({
 			provider: model.provider,
@@ -568,6 +571,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"agentModels",
 	"enabledModels",
 	"subagentArbiter",
+	"tabTitle",
 ] as const;
 
 const QUEUE_MODES = ["all", "one-at-a-time"] as const;
@@ -1037,6 +1041,46 @@ export async function setSettingsForRpc(
 		}
 	}
 
+	let tabTitle = update.tabTitle;
+	if (tabTitle !== undefined) {
+		if (!isPlainObject(tabTitle)) {
+			return { ok: false, error: "tabTitle must be an object" };
+		}
+		const validKeys = ["enabled", "model", "triggerAfter", "maxTitleLength"];
+		const unknownTabTitleKeys = Object.keys(tabTitle).filter((key) => !validKeys.includes(key));
+		if (unknownTabTitleKeys.length > 0) {
+			return { ok: false, error: `Unknown tabTitle key(s): ${unknownTabTitleKeys.join(", ")}` };
+		}
+		if (Object.values(tabTitle).every((value) => value === undefined)) {
+			return { ok: false, error: "tabTitle requires at least one setting to change" };
+		}
+		if (tabTitle.enabled !== undefined && typeof tabTitle.enabled !== "boolean") {
+			return { ok: false, error: "tabTitle.enabled must be a boolean" };
+		}
+		for (const key of ["triggerAfter", "maxTitleLength"] as const) {
+			const value = tabTitle[key];
+			if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)) {
+				return { ok: false, error: `tabTitle.${key} must be a positive whole number` };
+			}
+		}
+		if (tabTitle.model !== undefined) {
+			if (typeof tabTitle.model !== "string" || !tabTitle.model.trim()) {
+				return { ok: false, error: "tabTitle.model must be a non-empty exact provider/model string" };
+			}
+			const slash = tabTitle.model.indexOf("/");
+			if (slash <= 0 || slash === tabTitle.model.length - 1 || /\s/.test(tabTitle.model)) {
+				return { ok: false, error: "tabTitle.model must be an exact provider/model" };
+			}
+			const provider = tabTitle.model.slice(0, slash);
+			const modelId = tabTitle.model.slice(slash + 1);
+			const models = await modelRegistry.getAvailable();
+			if (!models.some((candidate) => candidate.provider === provider && candidate.id === modelId)) {
+				return { ok: false, error: `Tab title model not found: ${tabTitle.model}` };
+			}
+		}
+		tabTitle = { ...tabTitle };
+	}
+
 	let trustedContextFolders: string[] | undefined;
 	if (update.trustedContextFolders !== undefined) {
 		try {
@@ -1140,6 +1184,9 @@ export async function setSettingsForRpc(
 			}
 			if (update.subagentArbiter !== undefined) {
 				settingsManager.setGlobalSubagentArbiterSettings(subagentArbiter);
+			}
+			if (tabTitle !== undefined) {
+				settingsManager.setGlobalTabTitleSettings(tabTitle);
 			}
 			if (update.agentModels !== undefined) {
 				for (const [agentName, models] of Object.entries(update.agentModels)) {

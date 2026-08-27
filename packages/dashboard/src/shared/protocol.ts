@@ -517,6 +517,13 @@ export interface SubagentArbiterSettingsDto {
 	guidePath?: string;
 }
 
+export interface TabTitleSettingsDto {
+	enabled?: boolean;
+	model?: string;
+	triggerAfter?: number;
+	maxTitleLength?: number;
+}
+
 export interface SettingsDto {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -539,6 +546,8 @@ export interface SettingsDto {
 	agentModels?: Record<string, string[]>;
 	/** Global-only Dispatch Arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettingsDto | null;
+	/** Effective automatic tab-title configuration. */
+	tabTitle?: TabTitleSettingsDto;
 	/** Raw effective persisted patterns; absent means future-inclusive implicit all. */
 	enabledModels?: string[];
 	/** Effective persistent scope resolved by coding-agent core in cycling order. */
@@ -570,6 +579,7 @@ export type SettingsUpdateDto = Partial<
 		| "hideThinkingBlock"
 		| "agentModels"
 		| "subagentArbiter"
+		| "tabTitle"
 	>
 > & { enabledModels?: string[] | null };
 

@@ -146,15 +146,19 @@ Prompt behavior:
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `tabTitle.enabled` | boolean | `true` | Auto-generate terminal tab title from session task |
+| `tabTitle.model` | string | - | Exact `provider/model` for the title call; absent preserves Explore-agent routing |
 | `tabTitle.triggerAfter` | number | `9` | Number of tool calls before generating title |
 | `tabTitle.maxTitleLength` | number | `60` | Soft target length hint for generated titles (clamped to a hard cap of 300) |
 
 After the configured number of tool calls, dreb fires a single background LLM call to summarize the session's task into a terminal tab title, then sets it via OSC 0. The title is based primarily on your actual request and current-session actions, with branch/repo/cwd metadata used only for disambiguation. `maxTitleLength` is a soft target communicated to the model (default 60); titles may run a little longer for clarity and are hard-capped at 300 characters. The TUI truncates long titles visually while the dashboard shows the full name. Only fires once per session, and never overwrites an already-named (e.g. resumed) session. If the LLM call fails, the default title remains and the failure is surfaced (shown in interactive mode, logged to stderr in RPC mode).
 
+`tabTitle.model` pins the primary call to one available exact model. Model IDs may contain `/`, so the first path segment is the provider and the complete remainder is the model ID. When this setting is absent, resolution is unchanged: the Explore `agentModels` override, then Explore agent frontmatter, then the parent session model. If the selected model call fails and differs from the parent session model, dreb retries once with the parent. Dashboard Settings exposes `enabled` and the exact model picker; `triggerAfter` and `maxTitleLength` remain configurable in JSON.
+
 ```json
 {
   "tabTitle": {
     "enabled": true,
+    "model": "anthropic/claude-haiku-4-5",
     "triggerAfter": 9,
     "maxTitleLength": 60
   }

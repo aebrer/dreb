@@ -261,10 +261,17 @@ Compaction is lossy. The full history remains in the JSONL file; use `/tree` to 
 
 After a few tool calls, dreb auto-generates a terminal tab title describing the session's task — based primarily on your actual request and current-session actions, with branch/repo/cwd used only for disambiguation. Useful when multiple tabs are open. Fires once per session via a background LLM call, and never overwrites an already-named (e.g. resumed) session; failures are surfaced (shown in interactive mode, logged to stderr in RPC mode).
 
-Disable, adjust the trigger threshold, or set a title length target in [settings](docs/settings.md):
+Set `tabTitle.model` to pin the primary call to one exact `provider/model`. When it is absent, resolution remains the Explore `agentModels` override, then Explore agent frontmatter, then the parent session model. A failed call on a selected model retries once with a different parent model. Disable generation, select its model, adjust the trigger threshold, or set a title length target in [settings](docs/settings.md). Dashboard Settings exposes the enable toggle and model picker.
 
 ```json
-{ "tabTitle": { "enabled": false } }
+{
+  "tabTitle": {
+    "enabled": true,
+    "model": "anthropic/claude-haiku-4-5",
+    "triggerAfter": 9,
+    "maxTitleLength": 60
+  }
+}
 ```
 
 ---

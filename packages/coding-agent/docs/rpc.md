@@ -1325,7 +1325,7 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with global-only control/security-policy exceptions:
 
-- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, `maxConcurrentSubagents`, `enabledModels`, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
+- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, `maxConcurrentSubagents`, `enabledModels`, `tabTitle`, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
 - **Global nested-context trust policy** (`autoLoadNestedContext`, `trustedContextFolders`, `effectiveTrustedContextRoots`, and the trust commands below): this is read from `~/.dreb/agent/settings.json` only, never project settings. Active main/subagent processes observe it for **future lazy nested/out-of-cwd loads**; it cannot remove content already injected into a conversation. It does not govern the separate initial upward context scan from the launch cwd.
 - **Global Dispatch Arbiter policy** (`subagentArbiter`): the complete object is read/written globally and project settings cannot shadow it. Enabled runtimes consume it before future subagent spawns; it does not rewrite already-started children.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
@@ -1379,6 +1379,12 @@ Response:
       "model": "anthropic/claude-sonnet-4-5",
       "thinking": "medium",
       "guidePath": "~/.dreb/agent/model-routing-guide.md"
+    },
+    "tabTitle": {
+      "enabled": true,
+      "model": "anthropic/claude-haiku-4-5",
+      "triggerAfter": 9,
+      "maxTitleLength": 60
     }
   }
 }
@@ -1391,6 +1397,8 @@ Response:
 `trustedContextFolders` is the raw global configured list, including invalid legacy paths that are ignored fail-closed. `effectiveTrustedContextRoots` is the canonical, existing root set actually enforced after `~` expansion, native `realpath`, deduplication, and ancestor subsumption. `autoLoadNestedContext` defaults to `false`; when `true` it is global expert trust-all for every resolvable target, not a project override. Project `.dreb/settings.json` cannot affect any of these three fields.
 
 `subagentArbiter` is absent when unconfigured. It is always the global object; project `.dreb/settings.json` cannot enable, disable, or alter it.
+
+`tabTitle` is the effective merged object and is absent when unconfigured. Its optional `model` is one exact `provider/model`; when absent, title generation preserves the Explore-agent resolution route documented in [settings.md](settings.md#tab-title).
 
 #### set_settings
 
@@ -1447,6 +1455,12 @@ Setting per-agent model fallback lists:
 ```
 
 For `agentModels`, a non-empty array writes the global fallback list for that agent. An empty array removes the global entry, so that agent uses its agent-definition default unless a project-level override exists.
+
+Update one or more tab-title fields. Nested updates are partial, so changing `enabled` or `model` preserves omitted `triggerAfter` and `maxTitleLength` values. A supplied model must be an available exact reference; model IDs may contain `/` after the provider prefix:
+
+```json
+{"type":"set_settings","settings":{"tabTitle":{"enabled":true,"model":"anthropic/claude-haiku-4-5"}}}
+```
 
 Replace the complete global-only Dispatch Arbiter policy (exact model is validated; explicit thinking is capability-validated):
 
@@ -1537,6 +1551,7 @@ Valid keys and values:
 | `agentModels` | Plain object mapping agent names to arrays of non-empty model id strings; empty arrays remove the global entry for that agent |
 | `enabledModels` | Non-empty ordered array of available exact `provider/model` references, or explicit `null` to remove the global filter and restore implicit all. Duplicate, glob, fuzzy, and thinking-suffix entries are rejected. |
 | `subagentArbiter` | Complete global-only object or `null`. Keys: `enabled` boolean, exact available `model`, optional valid/capability-supported `thinking`, non-empty `guidePath`. Enabling requires `model`. Unknown nested keys are rejected. |
+| `tabTitle` | Partial object. Keys: `enabled` boolean, exact available `model`, positive whole-number `triggerAfter`, positive whole-number `maxTitleLength`. Unknown nested keys and an empty object are rejected. |
 
 Errors are explicit `success: false` responses (nothing is applied on any of them):
 
@@ -1552,6 +1567,7 @@ Errors are explicit `success: false` responses (nothing is applied on any of the
 - Provider without model (or vice versa): `defaultProvider and defaultModel must be set together`
 - Unavailable model: `Model not found: provider/model-id`
 - Invalid arbiter policy: `Enabling subagentArbiter requires an exact provider/model`, `Arbiter model not found: ...`, or a nested-key/type/thinking capability error
+- Invalid tab-title update: `tabTitle.model must be an exact provider/model`, `Tab title model not found: ...`, or a nested-key/type/positive-number error
 - Corrupt settings file: `Cannot write settings: the global settings file failed to load (fix or remove the corrupt settings.json first)` — without this guard the write would silently no-op
 - Write failure (I/O error): `Failed to persist settings: ...`
 

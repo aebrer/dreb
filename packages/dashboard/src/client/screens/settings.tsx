@@ -21,6 +21,7 @@ import type {
 	SettingsDto,
 	SettingsUpdateDto,
 	SubagentArbiterSettingsDto,
+	TabTitleSettingsDto,
 } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, Topbar } from "../components/common.js";
@@ -42,7 +43,11 @@ const QUEUE_MODES = ["all", "one-at-a-time"] as const;
 const TRANSPORTS = ["sse", "websocket", "auto"] as const;
 
 type ModelChoice = Pick<ModelInfoDto, "provider" | "id"> & Partial<Pick<ModelInfoDto, "name" | "reasoning">>;
-type ModelPickerTarget = { kind: "default" } | { kind: "arbiter" } | { kind: "agent"; agentName: string };
+type ModelPickerTarget =
+	| { kind: "default" }
+	| { kind: "arbiter" }
+	| { kind: "tabTitle" }
+	| { kind: "agent"; agentName: string };
 
 function modelKey(model: Pick<ModelInfoDto, "provider" | "id">): string {
 	return `${model.provider}/${model.id}`;
@@ -421,6 +426,49 @@ export function SettingsScreen(props: {
 		});
 	}
 
+	let tabTitleSaveQueue: Promise<void> = Promise.resolve();
+	let pendingTabTitleSettings: TabTitleSettingsDto | undefined;
+
+	function currentTabTitleSettings(): TabTitleSettingsDto {
+		return pendingTabTitleSettings ?? settings()?.tabTitle ?? {};
+	}
+
+	function saveTabTitleSettings(update: Partial<TabTitleSettingsDto>): void {
+		const nextSettings = { ...currentTabTitleSettings(), ...update };
+		pendingTabTitleSettings = nextSettings;
+
+		const currentSettings = settings();
+		if (currentSettings) mutate({ ...currentSettings, tabTitle: nextSettings });
+
+		tabTitleSaveQueue = tabTitleSaveQueue.then(async () => {
+			setError(undefined);
+			setWarnings([]);
+			setSaved(false);
+			try {
+				const savedSettings = await api.saveSettings({ tabTitle: update });
+				setWarnings(savedSettings.warnings ?? []);
+				setSaved(true);
+				setTimeout(() => setSaved(false), 2000);
+
+				if (pendingTabTitleSettings === nextSettings) {
+					pendingTabTitleSettings = savedSettings.tabTitle ?? undefined;
+					mutate(savedSettings);
+				} else {
+					mutate({ ...savedSettings, tabTitle: pendingTabTitleSettings });
+				}
+			} catch (err) {
+				const saveError = err instanceof Error ? err.message : String(err);
+				const refreshed = await refetch();
+				setError(saveError);
+				if (pendingTabTitleSettings === nextSettings) {
+					pendingTabTitleSettings = refreshed?.tabTitle ?? undefined;
+				} else if (refreshed) {
+					mutate({ ...refreshed, tabTitle: pendingTabTitleSettings });
+				}
+			}
+		});
+	}
+
 	async function saveAgentModels(agentName: string, nextList: string[]) {
 		await save({ agentModels: { [agentName]: nextList } });
 	}
@@ -571,6 +619,45 @@ export function SettingsScreen(props: {
 												{(transport) => <option value={transport}>{transport}</option>}
 											</For>
 										</select>
+									</span>
+								</div>
+							</section>
+
+							<section class="settings-section tab-title-settings">
+								<h2>tab title</h2>
+								<p class="muted small" style={{ "margin-bottom": "8px" }}>
+									Automatically names new, unnamed sessions after a few tool calls. Changes apply to new
+									sessions.
+								</p>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">enabled</span>
+										<span class="hint">enabled by default; disabled sessions make no title model call</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().tabTitle?.enabled !== false}
+											onChange={(enabled) => saveTabTitleSettings({ enabled })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">title model</span>
+										<span class="hint">
+											exact authenticated provider/model; parent session model remains the retry
+										</span>
+									</span>
+									<span class="setting-control">
+										<button
+											type="button"
+											class="btn btn-small model-picker-button"
+											onClick={() => setModelPickerTarget({ kind: "tabTitle" })}
+										>
+											{typeof current().tabTitle?.model === "string"
+												? current().tabTitle?.model
+												: "automatic (Explore route)"}
+										</button>
 									</span>
 								</div>
 							</section>
@@ -1329,6 +1416,7 @@ export function SettingsScreen(props: {
 						const active = target();
 						if (active.kind === "default") return "select default model";
 						if (active.kind === "arbiter") return "select Dispatch Arbiter model";
+						if (active.kind === "tabTitle") return "select tab title model";
 						return `add model for ${active.agentName}`;
 					};
 					const selectedKeys = () => {
@@ -1340,6 +1428,9 @@ export function SettingsScreen(props: {
 						}
 						if (active.kind === "arbiter") {
 							return settings()?.subagentArbiter?.model ? [settings()!.subagentArbiter!.model!] : [];
+						}
+						if (active.kind === "tabTitle") {
+							return settings()?.tabTitle?.model ? [settings()!.tabTitle!.model!] : [];
 						}
 						return currentAgentModels(active.agentName);
 					};
@@ -1358,6 +1449,10 @@ export function SettingsScreen(props: {
 								}
 								if (active.kind === "arbiter") {
 									saveArbiterPolicy({ model: modelKey(model) });
+									return;
+								}
+								if (active.kind === "tabTitle") {
+									saveTabTitleSettings({ model: modelKey(model) });
 									return;
 								}
 								const entry = modelKey(model);
