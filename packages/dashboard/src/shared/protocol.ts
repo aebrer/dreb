@@ -517,6 +517,16 @@ export interface SubagentArbiterSettingsDto {
 	guidePath?: string;
 }
 
+export interface TabTitleSettingsDto {
+	enabled?: boolean;
+	model?: string;
+	triggerAfter?: number;
+	maxTitleLength?: number;
+}
+
+/** Partial tab-title update; `model: null` removes the pinned model, restoring Explore-agent routing. */
+export type TabTitleSettingsUpdateDto = Omit<TabTitleSettingsDto, "model"> & { model?: string | null };
+
 export interface SettingsDto {
 	defaultProvider?: string;
 	defaultModel?: string;
@@ -539,6 +549,8 @@ export interface SettingsDto {
 	agentModels?: Record<string, string[]>;
 	/** Global-only Dispatch Arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettingsDto | null;
+	/** Effective automatic tab-title configuration. */
+	tabTitle?: TabTitleSettingsDto;
 	/** Raw effective persisted patterns; absent means future-inclusive implicit all. */
 	enabledModels?: string[];
 	/** Effective persistent scope resolved by coding-agent core in cycling order. */
@@ -549,7 +561,7 @@ export interface SettingsDto {
 	enabledModelsSource: "default" | "global" | "project";
 }
 
-/** Dashboard settings mutation payload. Unlike a snapshot, null explicitly clears enabledModels. */
+/** Dashboard settings mutation payload. Unlike a snapshot, null explicitly clears enabledModels, and tabTitle.model: null removes the pinned title model. */
 export type SettingsUpdateDto = Partial<
 	Pick<
 		SettingsDto,
@@ -571,7 +583,7 @@ export type SettingsUpdateDto = Partial<
 		| "agentModels"
 		| "subagentArbiter"
 	>
-> & { enabledModels?: string[] | null };
+> & { enabledModels?: string[] | null; tabTitle?: TabTitleSettingsUpdateDto };
 
 export type SettingsSaveResultDto = SettingsDto & { warnings?: string[] };
 

@@ -604,6 +604,96 @@ describe("TabTitleGenerator", () => {
 	});
 
 	describe("model resolution", () => {
+		it("uses a dedicated exact model without invoking Explore resolution", async () => {
+			const dedicatedModel = {
+				...MOCK_MODEL,
+				id: "family/title-model",
+				name: "Dedicated Title Model",
+				provider: "dedicated-provider",
+			};
+			const registry = {
+				getApiKey: vi.fn().mockResolvedValue("title-key"),
+				getAvailable: () => [MOCK_MODEL, dedicatedModel],
+				find: vi.fn((provider: string, modelId: string) =>
+					[MOCK_MODEL, dedicatedModel].find((model) => model.provider === provider && model.id === modelId),
+				),
+			};
+			const deps = createMockDeps({ getModelRegistry: () => registry as any });
+			const gen = new TabTitleGenerator({ triggerAfter: 1, model: "dedicated-provider/family/title-model" }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => expect(deps.setTitle).toHaveBeenCalledWith("dreb - Fix auth bug"));
+			expect(registry.find).toHaveBeenCalledWith("dedicated-provider", "family/title-model");
+			expect(mockResolveModel).not.toHaveBeenCalled();
+			expect(mockParseAgent).not.toHaveBeenCalled();
+			expect(mockCompleteSimple.mock.calls[0][0]).toMatchObject({
+				provider: "dedicated-provider",
+				id: "family/title-model",
+			});
+		});
+
+		it("retries with the parent when the dedicated model call fails", async () => {
+			const dedicatedModel = {
+				...MOCK_MODEL,
+				id: "title-model",
+				name: "Dedicated Title Model",
+				provider: "dedicated-provider",
+			};
+			mockCompleteSimple
+				.mockRejectedValueOnce(new Error("dedicated unavailable"))
+				.mockResolvedValueOnce(makeAssistantResponse("Fix auth bug") as any);
+			const registry = {
+				getApiKey: vi.fn().mockResolvedValue("test-key"),
+				getAvailable: () => [MOCK_MODEL, dedicatedModel],
+				find: vi.fn((provider: string, modelId: string) =>
+					[MOCK_MODEL, dedicatedModel].find((model) => model.provider === provider && model.id === modelId),
+				),
+			};
+			const deps = createMockDeps({ getModelRegistry: () => registry as any });
+			const gen = new TabTitleGenerator({ triggerAfter: 1, model: "dedicated-provider/title-model" }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => expect(deps.setTitle).toHaveBeenCalledWith("dreb - Fix auth bug"));
+			expect(mockCompleteSimple).toHaveBeenCalledTimes(2);
+			expect(mockCompleteSimple.mock.calls[0][0]).toMatchObject({
+				provider: "dedicated-provider",
+				id: "title-model",
+			});
+			expect(mockCompleteSimple.mock.calls[1][0]).toMatchObject({
+				provider: "test-provider",
+				id: "test-model",
+			});
+			expect(mockResolveModel).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			["missing slash", "title-model"],
+			["trailing slash", "dedicated-provider/"],
+			["leading slash", "/title-model"],
+			["embedded whitespace", "dedicated provider/title-model"],
+			["well-formed but unavailable", "dedicated-provider/title-model"],
+		])(
+			"falls back to the parent model for a configured model with %s without invoking Explore resolution",
+			async (_label, configuredModel) => {
+				// Hand-edited settings bypass RPC validation; the generator must fall back to
+				// the parent model rather than invoking Explore routing or failing to fire.
+				const deps = createMockDeps();
+				const gen = new TabTitleGenerator({ triggerAfter: 1, model: configuredModel }, deps);
+
+				gen.onToolEnd();
+
+				await vi.waitFor(() => expect(deps.setTitle).toHaveBeenCalledWith("dreb - Fix auth bug"));
+				expect(mockCompleteSimple.mock.calls[0][0]).toMatchObject({
+					provider: "test-provider",
+					id: "test-model",
+				});
+				expect(mockResolveModel).not.toHaveBeenCalled();
+				expect(mockParseAgent).not.toHaveBeenCalled();
+			},
+		);
+
 		it("uses Explore agent model when available", async () => {
 			mockParseAgent.mockReturnValue({
 				ok: true,
