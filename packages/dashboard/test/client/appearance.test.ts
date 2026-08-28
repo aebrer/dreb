@@ -108,11 +108,12 @@ describe("appearance — catalog", () => {
 		for (const m of MODES) expect(isValidMode(m)).toBe(true);
 	});
 
-	it("exposes theme default, IBM Plex Mono, and JetBrains Mono fonts in order", () => {
+	it("exposes theme default, IBM Plex Mono, JetBrains Mono, and OpenDyslexic fonts in order", () => {
 		expect(FONTS).toEqual([
 			{ id: "theme", label: "Theme default" },
 			{ id: "ibm-plex-mono", label: "IBM Plex Mono" },
 			{ id: "jetbrains-mono", label: "JetBrains Mono" },
+			{ id: "opendyslexic", label: "OpenDyslexic" },
 		]);
 		expect(FONT_IDS).toEqual(FONTS.map((entry) => entry.id));
 		for (const entry of FONTS) expect(isValidFont(entry.id)).toBe(true);
@@ -124,6 +125,7 @@ describe("appearance — catalog", () => {
 		expect(isValidMode("sepia")).toBe(false);
 		expect(isValidMode(undefined)).toBe(false);
 		expect(isValidFont("comic-sans")).toBe(false);
+		expect(isValidFont("dyslexic")).toBe(false);
 		expect(isValidFont(null)).toBe(false);
 	});
 });
@@ -219,12 +221,36 @@ describe("appearance — setters", () => {
 		expect(document.documentElement.hasAttribute("data-font")).toBe(false);
 	});
 
+	it("persists and restores the bundled OpenDyslexic font", () => {
+		setFont("opendyslexic");
+		expect(font()).toBe("opendyslexic");
+		expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBe("opendyslexic");
+		expect(document.documentElement.getAttribute("data-font")).toBe("opendyslexic");
+		// A re-read (page reload or another tab) restores the explicit choice.
+		reloadAppearance();
+		expect(font()).toBe("opendyslexic");
+		expect(document.documentElement.getAttribute("data-font")).toBe("opendyslexic");
+	});
+
 	it("removes color-scheme entirely in the pristine default+system case", () => {
 		setColorMode("dark");
 		setTheme("dim");
 		expect(document.documentElement.style.getPropertyValue("color-scheme")).not.toBe("");
 		setTheme("default");
 		setColorMode("system");
+		expect(document.documentElement.style.getPropertyValue("color-scheme")).toBe("");
+	});
+
+	it("an explicit font alone does NOT activate color-scheme (font is excluded from the active check)", () => {
+		// Pristine theme/mode (default + system) with ONLY a font chosen: the
+		// `active` computation deliberately ignores the font, so native
+		// form-control/scrollbar theming must not flip on a font-only choice.
+		// This pins the bootstrap/applyAppearance parity for the font-only state.
+		setFont("opendyslexic");
+		expect(theme()).toBe("default");
+		expect(colorMode()).toBe("system");
+		expect(font()).toBe("opendyslexic");
+		expect(document.documentElement.getAttribute("data-font")).toBe("opendyslexic");
 		expect(document.documentElement.style.getPropertyValue("color-scheme")).toBe("");
 	});
 
@@ -457,6 +483,6 @@ describe("appearance — index.html bootstrap contract", () => {
 	it("lists only non-default theme, mode, and font values in bootstrap arrays", () => {
 		expect(html).toContain('["dim", "solarized", "gruvbox", "qud", "vangogh", "okabe", "tol"]');
 		expect(html).toContain('["light", "dark"]');
-		expect(html).toContain('["ibm-plex-mono", "jetbrains-mono"]');
+		expect(html).toContain('["ibm-plex-mono", "jetbrains-mono", "opendyslexic"]');
 	});
 });

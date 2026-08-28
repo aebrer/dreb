@@ -4397,6 +4397,7 @@ describe("dashboard client regressions", () => {
 				["theme", "Theme default"],
 				["ibm-plex-mono", "IBM Plex Mono"],
 				["jetbrains-mono", "JetBrains Mono"],
+				["opendyslexic", "OpenDyslexic"],
 			]);
 			expect(el.querySelectorAll("[data-theme-card]").length).toBe(8);
 			expect(el.querySelector('[data-theme-card="default"]')).not.toBeNull();
@@ -4425,7 +4426,7 @@ describe("dashboard client regressions", () => {
 		it("restores the selected theme, color mode, and font", async () => {
 			window.localStorage.setItem(THEME_STORAGE_KEY, "solarized");
 			window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");
-			window.localStorage.setItem(FONT_STORAGE_KEY, "jetbrains-mono");
+			window.localStorage.setItem(FONT_STORAGE_KEY, "opendyslexic");
 			reloadAppearance();
 			const store = makeStore();
 			const el = mount(() => <SettingsScreen store={store} />);
@@ -4437,8 +4438,8 @@ describe("dashboard client regressions", () => {
 			const select = el.querySelector("#pref-color-mode") as HTMLSelectElement;
 			expect(select.value).toBe("dark");
 			const fontSelect = el.querySelector("#pref-font") as HTMLSelectElement;
-			expect(fontSelect.value).toBe("jetbrains-mono");
-			expect(document.documentElement.getAttribute("data-font")).toBe("jetbrains-mono");
+			expect(fontSelect.value).toBe("opendyslexic");
+			expect(document.documentElement.getAttribute("data-font")).toBe("opendyslexic");
 		});
 
 		it("clicking a non-default card sets the documentElement theme attribute and persists it", async () => {
@@ -4492,6 +4493,11 @@ describe("dashboard client regressions", () => {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 
 			const fontSelect = el.querySelector("#pref-font") as HTMLSelectElement;
+			fontSelect.value = "opendyslexic";
+			fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
+			expect(document.documentElement.getAttribute("data-font")).toBe("opendyslexic");
+			expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBe("opendyslexic");
+
 			fontSelect.value = "jetbrains-mono";
 			fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
 			expect(document.documentElement.getAttribute("data-font")).toBe("jetbrains-mono");
@@ -4569,6 +4575,10 @@ describe("dashboard client regressions", () => {
 			fontSelect.value = "jetbrains-mono";
 			fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
 			for (const card of cards) expect(card.getAttribute("data-font")).toBe("jetbrains-mono");
+
+			fontSelect.value = "opendyslexic";
+			fontSelect.dispatchEvent(new Event("change", { bubbles: true }));
+			for (const card of cards) expect(card.getAttribute("data-font")).toBe("opendyslexic");
 
 			fontSelect.value = "ibm-plex-mono";
 			fontSelect.dispatchEvent(new Event("change", { bubbles: true }));

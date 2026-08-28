@@ -22,7 +22,9 @@
 		"dist",
 		"README.md",
 		"src/client/assets/fonts/OFL.txt",
-		"src/client/assets/fonts/PROVENANCE.md"
+		"src/client/assets/fonts/PROVENANCE.md",
+		"src/client/assets/fonts/OPENDYSLEXIC-OFL.txt",
+		"src/client/assets/fonts/OPENDYSLEXIC-PROVENANCE.md"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",

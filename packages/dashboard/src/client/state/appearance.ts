@@ -35,7 +35,7 @@ export interface FontEntry {
 
 export type ThemeId = "default" | "dim" | "solarized" | "gruvbox" | "qud" | "vangogh" | "okabe" | "tol";
 export type ColorMode = "system" | "light" | "dark";
-export type FontId = "theme" | "ibm-plex-mono" | "jetbrains-mono";
+export type FontId = "theme" | "ibm-plex-mono" | "jetbrains-mono" | "opendyslexic";
 
 /**
  * FIXED catalog — default first, then dim, solarized, gruvbox, qud, vangogh,
@@ -65,6 +65,7 @@ export const FONTS: readonly FontEntry[] = [
 	{ id: "theme", label: "Theme default" },
 	{ id: "ibm-plex-mono", label: "IBM Plex Mono" },
 	{ id: "jetbrains-mono", label: "JetBrains Mono" },
+	{ id: "opendyslexic", label: "OpenDyslexic" },
 ] as const;
 
 /** All font ids in picker order. */

@@ -4,7 +4,9 @@ These WOFF2 files back the **gruvbox** dashboard appearance theme and the
 explicit JetBrains Mono browser-local font selection (see
 `../../styles/themes.css`). They are fetched only when active typography uses
 JetBrains Mono. Theme default keeps Gruvbox on JetBrains Mono and the other
-themes on IBM Plex Mono; an explicit IBM Plex Mono choice overrides Gruvbox.
+themes on IBM Plex Mono; an explicit IBM Plex Mono choice overrides Gruvbox. A
+second bundled self-hosted family, OpenDyslexic (an explicit dyslexia-friendly
+picker option), lives alongside these files — see `OPENDYSLEXIC-PROVENANCE.md`.
 
 ## Source
 

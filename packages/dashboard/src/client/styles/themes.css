@@ -58,6 +58,46 @@
 	src: url("../assets/fonts/jetbrains-mono-italic.woff2") format("woff2");
 }
 
+/*
+ * OpenDyslexic — self-hosted, explicit font picker only (a bundled
+ * dyslexia-friendly option; see ../assets/fonts/OPENDYSLEXIC-PROVENANCE.md).
+ * Four unmodified upstream static faces; the dashboard's emphasized weights
+ * (500–800) map to the upstream bold face (weight class 800) so headings and
+ * emphasized controls use a real face, never synthesized faux bold. Fetched
+ * lazily only when data-font="opendyslexic" is active (no <link rel=preload>).
+ */
+@font-face {
+	font-family: "OpenDyslexic";
+	font-style: normal;
+	font-weight: 100 499;
+	font-display: swap;
+	src: url("../assets/fonts/opendyslexic-regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "OpenDyslexic";
+	font-style: italic;
+	font-weight: 100 499;
+	font-display: swap;
+	src: url("../assets/fonts/opendyslexic-italic.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "OpenDyslexic";
+	font-style: normal;
+	font-weight: 500 900;
+	font-display: swap;
+	src: url("../assets/fonts/opendyslexic-bold.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "OpenDyslexic";
+	font-style: italic;
+	font-weight: 500 900;
+	font-display: swap;
+	src: url("../assets/fonts/opendyslexic-bold-italic.woff2") format("woff2");
+}
+
 /* ================================================= default: forced modes */
 
 /*
@@ -1010,4 +1050,8 @@
 
 [data-font="jetbrains-mono"] {
 	--mono-font: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="opendyslexic"] {
+	--mono-font: "OpenDyslexic", "IBM Plex Mono", "Courier New", monospace;
 }

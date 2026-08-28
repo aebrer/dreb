@@ -6,7 +6,8 @@
  * layer's core contracts can only be verified in a real engine. This suite
  * loads the production stylesheets in their production order (tokens.css →
  * app.css → themes.css) into headless Chromium and asserts the resolved
- * palette, forced-mode precedence, scoped previews, explicit font selection,
+ * palette, forced-mode precedence, scoped previews, explicit font selection
+ * (incl. the bundled OpenDyslexic faces),
  * the pristine-default regression, WCAG AA contrast (computed from the live
  * values, NOT duplicated TS palette constants), lazy webfont fetching, the first-paint bootstrap, and
  * the live `<meta name="theme-color">` sync.
@@ -42,7 +43,7 @@ const THEME_IDS = ["default", "dim", "solarized", "gruvbox", "qud", "vangogh", "
 const MODES = ["system", "light", "dark"] as const;
 type ThemeId = (typeof THEME_IDS)[number];
 type Mode = (typeof MODES)[number];
-type FontId = "theme" | "ibm-plex-mono" | "jetbrains-mono";
+type FontId = "theme" | "ibm-plex-mono" | "jetbrains-mono" | "opendyslexic";
 type Scheme = "light" | "dark";
 
 const BASE_VARS = ["--bg", "--text", "--border", "--muted"] as const;
@@ -199,10 +200,23 @@ beforeAll(async () => {
 		join(fontsDir, "jetbrains-mono-italic.woff2"),
 		join(tempDir, "assets", "fonts", "jetbrains-mono-italic.woff2"),
 	);
+	// Bundled OpenDyslexic faces — same local-origin treatment so the
+	// data-font="opendyslexic" @font-face srcs resolve against this origin.
+	for (const name of [
+		"opendyslexic-regular.woff2",
+		"opendyslexic-italic.woff2",
+		"opendyslexic-bold.woff2",
+		"opendyslexic-bold-italic.woff2",
+	]) {
+		copyFileSync(join(fontsDir, name), join(tempDir, "assets", "fonts", name));
+	}
 	// Real index.html (bootstrap + stylesheet order) — sub-resource 404s (module
 	// script, manifest, external fonts) are harmless; the head bootstrap runs.
 	writeFileSync(join(tempDir, "index.html"), indexHtml);
 	// Font-probe page links the three stylesheets and renders a mono element.
+	// The face probes exercise every OpenDyslexic @font-face range (400 → the
+	// 100-499 regular faces, 500/600/700 → the 500-900 bold faces, both
+	// styles); #glyphs holds the dashboard status glyphs + coding punctuation.
 	writeFileSync(
 		join(tempDir, "font-probe.html"),
 		`<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -211,7 +225,14 @@ beforeAll(async () => {
 			<link rel="stylesheet" href="./styles/themes.css">
 		</head><body><div id="body-text">body</div><pre id="mono">const answer = 42;</pre>
 			<select id="control"><option>control</option></select>
-			<textarea id="memory" class="memory-textarea">memory</textarea></body></html>`,
+			<textarea id="memory" class="memory-textarea">memory</textarea>
+			<div id="face-400" style="font-weight:400">face probe</div>
+			<div id="face-500" style="font-weight:500">face probe</div>
+			<div id="face-600" style="font-weight:600">face probe</div>
+			<div id="face-700" style="font-weight:700">face probe</div>
+			<div id="face-400i" style="font-weight:400;font-style:italic">face probe</div>
+			<div id="face-700i" style="font-weight:700;font-style:italic">face probe</div>
+			<div id="glyphs">●◆○✕ !\\"#$%&amp;'()*+,-./:;&lt;=&gt;?@[]{}~0Az—…</div></body></html>`,
 	);
 	// Appearance-module page: real bundled appearance.ts exposed as window.Appearance.
 	const bundle = await build({
@@ -521,6 +542,152 @@ describe("appearance — explicit font choice overrides theme typography", () =>
 	});
 });
 
+// ================================================= 6b. OpenDyslexic (bundled)
+
+describe("appearance — explicit OpenDyslexic selection (bundled dyslexia-friendly font)", () => {
+	const OPENDYSLEXIC_FACES = [
+		"opendyslexic-regular.woff2",
+		"opendyslexic-italic.woff2",
+		"opendyslexic-bold.woff2",
+		"opendyslexic-bold-italic.woff2",
+	] as const;
+	const isOpenDyslexicRequest = (url: string): boolean => OPENDYSLEXIC_FACES.some((name) => url.endsWith(name));
+
+	it("theme-default mode (no explicit font) never requests an OpenDyslexic face", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const requests: string[] = [];
+		p.on("request", (request) => {
+			if (isOpenDyslexicRequest(request.url())) requests.push(request.url());
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		// Gruvbox is the strongest case: its theme-default font is JetBrains
+		// Mono, never OpenDyslexic — so rendering it must not touch the bundled
+		// OpenDyslexic faces.
+		await applyRoot(p, "gruvbox", "system");
+		await p.evaluate(() => {
+			for (const id of ["body-text", "mono", "control", "memory", "glyphs"]) {
+				void (document.getElementById(id) as HTMLElement).offsetHeight;
+			}
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+		expect(requests).toEqual([]);
+		// The faces are declared by themes.css but were never fetched or used —
+		// Chromium reports a registered-but-unloaded family as not renderable.
+		const active = await p.evaluate(() => document.fonts.check("16px OpenDyslexic", "A"));
+		expect(active).toBe(false);
+		await ctx.close();
+	});
+
+	it("explicit OpenDyslexic applies to body/code/controls/memory-editor, loads all four bundled faces, and requests nothing remote", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const fontRequests: string[] = [];
+		const remoteRequests: string[] = [];
+		p.on("request", (request) => {
+			const url = request.url();
+			if (isOpenDyslexicRequest(url)) fontRequests.push(url);
+			if (url.includes("fonts.googleapis.com") || url.includes("fonts.gstatic.com")) remoteRequests.push(url);
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		await applyRoot(p, "solarized", "system", "opendyslexic");
+		await p.evaluate(() => {
+			for (const id of [
+				"body-text",
+				"mono",
+				"control",
+				"memory",
+				"face-400",
+				"face-500",
+				"face-600",
+				"face-700",
+				"face-400i",
+				"face-700i",
+				"glyphs",
+			]) {
+				void (document.getElementById(id) as HTMLElement).offsetHeight;
+			}
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+
+		const families = await p.evaluate(() =>
+			["body-text", "mono", "control", "memory"].map(
+				(id) => getComputedStyle(document.getElementById(id) as HTMLElement).fontFamily,
+			),
+		);
+		for (const family of families) expect(family).toContain("OpenDyslexic");
+
+		// Only the bundled local faces are requested — and every one of the
+		// four, because the probes use 400 (regular faces), 500–700 (bold
+		// faces), and both italics. Nothing leaves this origin.
+		const requestedNames = new Set(fontRequests.map((url) => url.split("/").pop()!));
+		for (const name of OPENDYSLEXIC_FACES) expect(requestedNames.has(name), name).toBe(true);
+		expect(fontRequests.every((url) => url.startsWith(baseUrl))).toBe(true);
+		// No CDN request of any kind for the explicit font.
+		expect(remoteRequests).toEqual([]);
+
+		// All four faces are genuinely loaded — real faces, so 500–800 and the
+		// italics render without faux-bold/faux-italic synthesis.
+		const faceStates = await p.evaluate(() =>
+			[...document.fonts]
+				.filter((f) => f.family === "OpenDyslexic")
+				.map((f) => `${f.style}/${String(f.weight)}/${f.status}`),
+		);
+		expect(faceStates).toContain("normal/100 499/loaded");
+		expect(faceStates).toContain("italic/100 499/loaded");
+		expect(faceStates).toContain("normal/500 900/loaded");
+		expect(faceStates).toContain("italic/500 900/loaded");
+
+		// The dashboard's status glyphs + coding punctuation are available
+		// through the active stack: ● ○ and the punctuation come from
+		// OpenDyslexic itself; ◆ ✕ fall back within the stack (the same path
+		// today's IBM themes use, since the Google-hosted IBM slices lack those
+		// geometric shapes too — see OPENDYSLEXIC-PROVENANCE.md).
+		const glyphsAvailable = await p.evaluate(() =>
+			document.fonts.check(
+				'16px "OpenDyslexic", "IBM Plex Mono", "Courier New", monospace',
+				"●◆○✕ !\"#$%&'()*+,-./:;<>?@[]{}~0Az—…",
+			),
+		);
+		expect(glyphsAvailable).toBe(true);
+		await ctx.close();
+	});
+
+	it("theme-default previews never request OpenDyslexic; an explicit preview card does", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const requests: string[] = [];
+		p.on("request", (request) => {
+			if (isOpenDyslexicRequest(request.url())) requests.push(request.url());
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		await p.evaluate(() => {
+			// Mirror the real gallery: theme-default mode pins preview cards to
+			// the baseline IBM family, so merely rendering a card cannot fetch
+			// the bundled OpenDyslexic faces.
+			document.body.innerHTML =
+				'<button id="card" data-theme="gruvbox" data-font="ibm-plex-mono"><pre class="theme-card-code">preview</pre></button>';
+			void (document.querySelector(".theme-card-code") as HTMLElement).offsetHeight;
+		});
+		await p.waitForTimeout(100);
+		expect(requests).toEqual([]);
+
+		await p.evaluate(() => {
+			document.getElementById("card")?.setAttribute("data-font", "opendyslexic");
+			void (document.querySelector(".theme-card-code") as HTMLElement).offsetHeight;
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+		expect(requests.length).toBeGreaterThan(0);
+		expect(
+			await p.evaluate(() => getComputedStyle(document.querySelector(".theme-card-code") as HTMLElement).fontFamily),
+		).toContain("OpenDyslexic");
+		await ctx.close();
+	});
+});
+
 // ====================================================== 7. first-paint bootstrap
 
 describe("appearance — the head bootstrap paints the persisted theme on first frame", () => {
@@ -567,6 +734,27 @@ describe("appearance — the head bootstrap paints the persisted theme on first 
 		const p = await ctx.newPage();
 		await p.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
 		expect(await p.evaluate(() => document.documentElement.getAttribute("data-font"))).toBeNull();
+		await ctx.close();
+	});
+
+	it("restores a persisted OpenDyslexic font before any app script runs (font-only: no theme attr, no color-scheme)", async () => {
+		const ctx = await browser.newContext();
+		await ctx.addInitScript(() => {
+			localStorage.setItem("dreb.dashboard.font", "opendyslexic");
+		});
+		const p = await ctx.newPage();
+		await p.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+		const state = await p.evaluate(() => ({
+			font: document.documentElement.getAttribute("data-font"),
+			theme: document.documentElement.getAttribute("data-theme"),
+			colorScheme: document.documentElement.style.getPropertyValue("color-scheme"),
+		}));
+		// The explicit bundled font restores on the first frame, while the
+		// font-only state deliberately leaves no theme attribute and no
+		// inline color-scheme (font is excluded from the active computation).
+		expect(state.font).toBe("opendyslexic");
+		expect(state.theme).toBeNull();
+		expect(state.colorScheme).toBe("");
 		await ctx.close();
 	});
 
