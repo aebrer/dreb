@@ -10,13 +10,30 @@ import {
 } from "../../src/core/tools/watch-github-ci.js";
 import * as shellModule from "../../src/utils/shell.js";
 
-function operationsResult(exitCode: number | null, output = "checks output"): GithubCiOperations {
+interface OperationStep {
+	exitCode: number | null;
+	output?: string | string[];
+	error?: Error;
+}
+
+function operationsSequence(...steps: OperationStep[]): GithubCiOperations {
+	let callIndex = 0;
 	return {
 		exec: vi.fn(async (_args, _cwd, { onData }) => {
-			if (output) onData(Buffer.from(output));
-			return { exitCode };
+			const step = steps[callIndex++];
+			if (!step) throw new Error(`Unexpected GitHub CI operation ${callIndex}`);
+			const outputs = Array.isArray(step.output) ? step.output : [step.output];
+			for (const output of outputs) {
+				if (output) onData(Buffer.from(output));
+			}
+			if (step.error) throw step.error;
+			return { exitCode: step.exitCode };
 		}),
 	};
+}
+
+function completedOperations(exitCode: 0 | 1, finalOutput: string, watchOutput = "watch output"): GithubCiOperations {
+	return operationsSequence({ exitCode, output: watchOutput }, { exitCode, output: finalOutput });
 }
 
 async function execute(
@@ -30,61 +47,85 @@ async function execute(
 }
 
 describe("watch_github_ci tool", () => {
-	it("uses the current branch pull request by default", async () => {
-		const operations = operationsResult(0);
+	it("watches and then queries the current branch pull request by default", async () => {
+		const operations = completedOperations(0, "build passed");
 		await execute(operations);
 
-		expect(operations.exec).toHaveBeenCalledOnce();
-		const [args, cwd, options] = vi.mocked(operations.exec).mock.calls[0];
-		expect(args).toEqual(["pr", "checks", "--watch", "--fail-fast"]);
-		expect(cwd).toBe("/repo");
-		expect(options.env).toMatchObject({ GH_PAGER: "cat", GH_EDITOR: "cat", NO_COLOR: "1" });
+		expect(operations.exec).toHaveBeenCalledTimes(2);
+		const [watchArgs, watchCwd, watchOptions] = vi.mocked(operations.exec).mock.calls[0];
+		const [finalArgs, finalCwd, finalOptions] = vi.mocked(operations.exec).mock.calls[1];
+		expect(watchArgs).toEqual(["pr", "checks", "--watch", "--fail-fast"]);
+		expect(finalArgs).toEqual(["pr", "checks"]);
+		expect(watchCwd).toBe("/repo");
+		expect(finalCwd).toBe("/repo");
+		expect(watchOptions.env).toMatchObject({ GH_PAGER: "cat", GH_EDITOR: "cat", NO_COLOR: "1" });
+		expect(finalOptions.env).toBe(watchOptions.env);
 	});
 
-	it("forwards a trimmed explicit pull request selector as one argument", async () => {
-		const operations = operationsResult(0);
+	it("forwards a trimmed explicit pull request selector to both commands", async () => {
+		const operations = completedOperations(0, "build passed");
 		await execute(operations, { pr: "  426  " });
 
 		expect(vi.mocked(operations.exec).mock.calls[0][0]).toEqual(["pr", "checks", "426", "--watch", "--fail-fast"]);
+		expect(vi.mocked(operations.exec).mock.calls[1][0]).toEqual(["pr", "checks", "426"]);
 	});
 
 	it("rejects a blank pull request selector", async () => {
-		const operations = operationsResult(0);
+		const operations = operationsSequence({ exitCode: 0 });
 		await expect(execute(operations, { pr: "   " })).rejects.toThrow("must not be blank");
 		expect(operations.exec).not.toHaveBeenCalled();
 	});
 
 	it("rejects option-like selectors before spawning", async () => {
-		const operations = operationsResult(0);
+		const operations = operationsSequence({ exitCode: 0 });
 		await expect(execute(operations, { pr: "--repo" })).rejects.toThrow("must not begin with '-'");
 		expect(operations.exec).not.toHaveBeenCalled();
 	});
 
-	it("returns final output and passed details for exit code zero", async () => {
-		const result = await execute(operationsResult(0, "build passed"));
+	it("returns only clean final output and passed details for exit code zero", async () => {
+		const operations = completedOperations(
+			0,
+			"build passed",
+			"Refreshing checks status every 10 seconds.\n\nbuild\tpending\t0\thttps://example.test/watch",
+		);
+		const result = await execute(operations);
 
-		expect(result.content[0]).toEqual({ type: "text", text: "GitHub CI checks passed.\n\nbuild passed" });
+		expect(result.content[0]).toEqual({
+			type: "text",
+			text: "GitHub CI checks passed.\n\nbuild passed",
+		});
+		expect((result.content[0] as { text: string }).text).not.toContain("Refreshing checks status");
 		expect(result.details).toEqual({ status: "passed", exitCode: 0, outputTruncated: false });
 		expect(result.endTurn).toBeUndefined();
 	});
 
-	it("returns failed check output without turning it into a tool execution error", async () => {
-		const result = await execute(operationsResult(1, "build failed"));
+	it("returns only clean failed-check output without turning it into a tool execution error", async () => {
+		const operations = completedOperations(
+			1,
+			"build failed",
+			"Refreshing checks status every 10 seconds.\n\nbuild\tpending\t0\thttps://example.test/watch",
+		);
+		const result = await execute(operations);
 
 		expect(result.content[0]).toEqual({
 			type: "text",
 			text: "GitHub CI checks did not pass. The GitHub CLI exited with code 1.\n\nbuild failed",
 		});
+		expect((result.content[0] as { text: string }).text).not.toContain("Refreshing checks status");
 		expect(result.details).toEqual({ status: "failed", exitCode: 1, outputTruncated: false });
 	});
 
-	it("rejects a no-pull-request CLI error as a tool error instead of status failed", async () => {
-		await expect(execute(operationsResult(1, 'no pull requests found for branch "ghost-branch"'))).rejects.toThrow(
-			"could not query checks",
-		);
+	it("rejects a no-pull-request watch error without running the final query", async () => {
+		const operations = operationsSequence({
+			exitCode: 1,
+			output: 'no pull requests found for branch "ghost-branch"',
+		});
 
-		const operations = operationsResult(1, 'no pull requests found for branch "ghost-branch"');
-		await expect(execute(operations)).rejects.toThrow("no pull requests found");
+		await expect(execute(operations)).rejects.toThrow("could not query checks");
+		await expect(execute(operationsSequence({ exitCode: 1, output: "no pull requests found" }))).rejects.toThrow(
+			"no pull requests found",
+		);
+		expect(operations.exec).toHaveBeenCalledOnce();
 	});
 
 	it.each([
@@ -92,34 +133,38 @@ describe("watch_github_ci tool", () => {
 		"failed to run git: fatal: not a git repository",
 		"HTTP 401: Bad credentials (https://api.github.com/graphql)",
 		"could not parse the pull request selector",
-	])("rejects CLI failure output %s as a tool error, not status failed", async (output) => {
-		await expect(execute(operationsResult(1, output))).rejects.toThrow("could not query checks");
+	])("rejects watch CLI failure output %s without running the final query", async (output) => {
+		const operations = operationsSequence({ exitCode: 1, output });
+		await expect(execute(operations)).rejects.toThrow("could not query checks");
+		expect(operations.exec).toHaveBeenCalledOnce();
 	});
 
-	it("refuses to treat pending exit code 8 as terminal success", async () => {
-		await expect(execute(operationsResult(8, "checks pending"))).rejects.toThrow(
-			"checks were still pending (exit code 8)",
-		);
+	it("refuses to query final results after pending watch exit code 8", async () => {
+		const operations = operationsSequence({ exitCode: 8, output: "checks pending" });
+		await expect(execute(operations)).rejects.toThrow("checks were still pending (exit code 8)");
+		expect(operations.exec).toHaveBeenCalledOnce();
 	});
 
-	it.each([null, 2, 4])("surfaces unexpected exit code %s loudly", async (exitCode) => {
-		await expect(execute(operationsResult(exitCode, "gh diagnostic"))).rejects.toThrow("exited unexpectedly");
+	it.each([null, 2, 4])("surfaces unexpected watch exit code %s without a final query", async (exitCode) => {
+		const operations = operationsSequence({ exitCode, output: "gh diagnostic" });
+		await expect(execute(operations)).rejects.toThrow("exited unexpectedly");
+		expect(operations.exec).toHaveBeenCalledOnce();
 	});
 
-	it("preserves buffered output when process execution fails", async () => {
-		const operations: GithubCiOperations = {
-			exec: vi.fn(async (_args, _cwd, { onData }) => {
-				onData(Buffer.from("authentication required"));
-				throw new Error("spawn failed");
-			}),
-		};
+	it("preserves buffered watch output when process execution fails", async () => {
+		const operations = operationsSequence({
+			exitCode: null,
+			output: "authentication required",
+			error: new Error("spawn failed"),
+		});
 
 		await expect(execute(operations)).rejects.toThrow(
 			"authentication required\n\nGitHub CI watch could not run: spawn failed",
 		);
+		expect(operations.exec).toHaveBeenCalledOnce();
 	});
 
-	it("reports cancellation distinctly and forwards the AbortSignal", async () => {
+	it("reports watch cancellation distinctly and forwards the AbortSignal", async () => {
 		const controller = new AbortController();
 		const operations: GithubCiOperations = {
 			exec: vi.fn(async (_args, _cwd, { signal }) => {
@@ -129,30 +174,130 @@ describe("watch_github_ci tool", () => {
 		};
 
 		await expect(execute(operations, {}, controller.signal)).rejects.toThrow("GitHub CI watch aborted");
+		expect(operations.exec).toHaveBeenCalledOnce();
 	});
 
-	it("streams watching updates and bounds retained output", async () => {
+	it("forwards the same AbortSignal to the watch and final query", async () => {
+		const controller = new AbortController();
+		const operations = completedOperations(0, "build passed");
+		await execute(operations, {}, controller.signal);
+
+		expect(vi.mocked(operations.exec).mock.calls[0][2].signal).toBe(controller.signal);
+		expect(vi.mocked(operations.exec).mock.calls[1][2].signal).toBe(controller.signal);
+	});
+
+	it("keeps repeated watch output in live updates but not the final result", async () => {
 		const updates: any[] = [];
-		const operations: GithubCiOperations = {
-			exec: vi.fn(async (_args, _cwd, { onData }) => {
-				onData(Buffer.from("x".repeat(DEFAULT_MAX_BYTES * 2)));
-				onData(Buffer.from("y".repeat(DEFAULT_MAX_BYTES * 2)));
-				return { exitCode: 0 };
-			}),
-		};
+		const watchSnapshots = [
+			"Refreshing checks status every 10 seconds.\n\nbuild\tpending\t0\thttps://example.test/build\n",
+			"Refreshing checks status every 10 seconds.\n\nbuild\tpass\t1m\thttps://example.test/build\n",
+		];
+		const operations = operationsSequence(
+			{ exitCode: 0, output: watchSnapshots },
+			{ exitCode: 0, output: "build\tpass\t1m\thttps://example.test/build" },
+		);
 		const result = await execute(operations, {}, undefined, (update) => updates.push(update));
 
 		expect(updates[0]).toEqual({
 			content: [],
 			details: { status: "watching", exitCode: undefined, outputTruncated: false },
 		});
-		expect(updates.at(-1).details.status).toBe("watching");
+		const lastUpdateText = updates.at(-1).content[0].text as string;
+		expect(lastUpdateText).toMatch(/build\s+pending/);
+		expect(lastUpdateText).toMatch(/build\s+pass/);
+		expect((result.content[0] as { text: string }).text).not.toContain("Refreshing checks status");
+	});
+
+	it("keeps watch truncation independent from the final result", async () => {
+		const updates: any[] = [];
+		const operations = operationsSequence(
+			{
+				exitCode: 0,
+				output: ["x".repeat(DEFAULT_MAX_BYTES * 2), "y".repeat(DEFAULT_MAX_BYTES * 2)],
+			},
+			{ exitCode: 0, output: "build passed" },
+		);
+		const result = await execute(operations, {}, undefined, (update) => updates.push(update));
+
+		expect(updates.at(-1).details).toMatchObject({ status: "watching", outputTruncated: true });
+		expect(result.details).toEqual({ status: "passed", exitCode: 0, outputTruncated: false });
+		expect(result.content[0]).toEqual({ type: "text", text: "GitHub CI checks passed.\n\nbuild passed" });
+	});
+
+	it("bounds and reports truncation of the separate final query output", async () => {
+		const updates: any[] = [];
+		const operations = completedOperations(0, "z".repeat(DEFAULT_MAX_BYTES * 3), "watch output");
+		const result = await execute(operations, {}, undefined, (update) => updates.push(update));
+		const resultText = (result.content[0] as { text: string }).text;
+
+		expect(updates.at(-1).details.outputTruncated).toBe(false);
 		expect(result.details?.outputTruncated).toBe(true);
-		expect((result.content[0] as { text: string }).text.length).toBeLessThan(DEFAULT_MAX_BYTES + 500);
+		expect(resultText).toContain("[Earlier final checks output omitted]");
+		expect(resultText.length).toBeLessThan(DEFAULT_MAX_BYTES + 500);
+	});
+
+	it("preserves final query output when that process fails", async () => {
+		const operations = operationsSequence(
+			{ exitCode: 0, output: "watch complete" },
+			{ exitCode: null, output: "final diagnostic", error: new Error("spawn failed") },
+		);
+
+		await expect(execute(operations)).rejects.toThrow(
+			"final diagnostic\n\nGitHub CI final checks query could not run: spawn failed",
+		);
+	});
+
+	it("reports final query cancellation distinctly", async () => {
+		const controller = new AbortController();
+		const operations = operationsSequence(
+			{ exitCode: 0, output: "watch complete" },
+			{ exitCode: null, error: new Error("aborted") },
+		);
+
+		await expect(execute(operations, {}, controller.signal)).rejects.toThrow("final checks query aborted");
+	});
+
+	it("rejects a CLI-level failure from the final query", async () => {
+		const operations = operationsSequence(
+			{ exitCode: 1, output: "build failed" },
+			{ exitCode: 1, output: "HTTP 401: Bad credentials" },
+		);
+
+		await expect(execute(operations)).rejects.toThrow("final checks query failed");
+	});
+
+	it("rejects pending final query results", async () => {
+		const operations = operationsSequence(
+			{ exitCode: 0, output: "watch complete" },
+			{ exitCode: 8, output: "checks pending again" },
+		);
+
+		await expect(execute(operations)).rejects.toThrow("checks still pending (exit code 8)");
+	});
+
+	it.each([null, 2, 4])("surfaces unexpected final query exit code %s loudly", async (exitCode) => {
+		const operations = operationsSequence(
+			{ exitCode: 0, output: "watch complete" },
+			{ exitCode, output: "final diagnostic" },
+		);
+		await expect(execute(operations)).rejects.toThrow("final checks query exited unexpectedly");
+	});
+
+	it.each([
+		{ watchExitCode: 0 as const, finalExitCode: 1 as const },
+		{ watchExitCode: 1 as const, finalExitCode: 0 as const },
+	])("rejects contradictory watch $watchExitCode and final $finalExitCode states", async (testCase) => {
+		const operations = operationsSequence(
+			{ exitCode: testCase.watchExitCode, output: "watch complete" },
+			{ exitCode: testCase.finalExitCode, output: "final state" },
+		);
+		await expect(execute(operations)).rejects.toThrow("status changed between watch completion");
 	});
 
 	it("has prompt metadata that forbids wait and polling", () => {
-		const tool = createWatchGithubCiToolDefinition("/repo", { operations: operationsResult(0) });
+		const tool = createWatchGithubCiToolDefinition("/repo", {
+			operations: completedOperations(0, "build passed"),
+		});
 		const guidance = tool.promptGuidelines?.join(" ") ?? "";
 
 		expect(tool.name).toBe("watch_github_ci");

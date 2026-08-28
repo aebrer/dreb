@@ -1233,6 +1233,43 @@ describe("dashboard server — fleet and runtimes", () => {
 		});
 	});
 
+	it("round-trips tab title settings through the settings utility runtime", async () => {
+		const { base, clients } = await startServer();
+		await fetch(`${base}/api/settings`);
+		const utility = clients[0];
+		if (!utility) throw new Error("utility runtime was not created");
+		const baselineSettings = await utility.getSettings();
+		let tabTitle: NonNullable<typeof baselineSettings.tabTitle> = {
+			enabled: true,
+			triggerAfter: 9,
+			maxTitleLength: 60,
+		};
+		vi.mocked(utility.getSettings).mockImplementation(async () => ({ ...baselineSettings, tabTitle }));
+		vi.mocked(utility.setSettings).mockImplementation(async (update) => {
+			const merged = { ...tabTitle, ...(update.tabTitle ?? {}) };
+			tabTitle = { ...merged, model: merged.model ?? undefined };
+			return { ...baselineSettings, tabTitle };
+		});
+
+		const saved = await fetch(`${base}/api/settings`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ tabTitle: { model: "provider/title-model", enabled: false } }),
+		});
+		expect(saved.status).toBe(200);
+		await expect(saved.json()).resolves.toMatchObject({
+			tabTitle: {
+				enabled: false,
+				model: "provider/title-model",
+				triggerAfter: 9,
+				maxTitleLength: 60,
+			},
+		});
+		await expect(fetch(`${base}/api/settings`).then((response) => response.json())).resolves.toMatchObject({
+			tabTitle: { enabled: false, model: "provider/title-model" },
+		});
+	});
+
 	it("GET /api/settings/models and /api/settings/agent-types use a stable utility runtime", async () => {
 		const dir = await createTempProject();
 		const { base, clients } = await startServer();

@@ -210,12 +210,24 @@ export class TabTitleGenerator {
 	}
 
 	private async resolveModel(signal?: AbortSignal): Promise<Model<Api> | undefined> {
-		// Try to get the Explore agent's model fallback list
-		const exploreModels = this.getExploreAgentModels();
 		const parentModel = this.deps.getModel();
 		const parentProvider = this.deps.getProvider();
 		const registry = this.deps.getModelRegistry();
 
+		// A dedicated exact model bypasses Explore-agent routing. Dashboard/RPC writes
+		// validate availability; a stale hand-edited value falls back to the parent.
+		const configuredModel = this.settings?.model;
+		if (configuredModel) {
+			const slash = configuredModel.indexOf("/");
+			if (slash > 0 && slash < configuredModel.length - 1) {
+				const found = registry.find(configuredModel.slice(0, slash), configuredModel.slice(slash + 1));
+				if (found) return found;
+			}
+			return parentModel;
+		}
+
+		// Without a dedicated model, preserve the Explore agent fallback route.
+		const exploreModels = this.getExploreAgentModels();
 		if (exploreModels) {
 			const resolution = await resolveModelForSubagentSpawn(
 				exploreModels,

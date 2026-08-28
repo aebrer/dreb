@@ -261,10 +261,17 @@ Compaction is lossy. The full history remains in the JSONL file; use `/tree` to 
 
 After a few tool calls, dreb auto-generates a terminal tab title describing the session's task — based primarily on your actual request and current-session actions, with branch/repo/cwd used only for disambiguation. Useful when multiple tabs are open. Fires once per session via a background LLM call, and never overwrites an already-named (e.g. resumed) session; failures are surfaced (shown in interactive mode, logged to stderr in RPC mode).
 
-Disable, adjust the trigger threshold, or set a title length target in [settings](docs/settings.md):
+Set `tabTitle.model` to pin the primary call to one exact `provider/model`. When it is absent, resolution remains the Explore `agentModels` override, then Explore agent frontmatter, then the parent session model. A failed call on a selected model retries once with a different parent model. Disable generation, select its model, adjust the trigger threshold, or set a title length target in [settings](docs/settings.md). Dashboard Settings exposes the enable toggle and model picker, including clearing a pinned model back to the automatic Explore route.
 
 ```json
-{ "tabTitle": { "enabled": false } }
+{
+  "tabTitle": {
+    "enabled": true,
+    "model": "anthropic/claude-haiku-4-5",
+    "triggerAfter": 9,
+    "maxTitleLength": 60
+  }
+}
 ```
 
 ---
@@ -414,7 +421,7 @@ Set `backgroundAgents.maxConcurrentSubagents` in `/settings`, dashboard Settings
 
 ### Waiting for GitHub CI
 
-Use `watch_github_ci` to monitor pull-request checks without asking the user to return later or constructing a polling loop. It runs `gh pr checks --watch --fail-fast`, defaults to the pull request for the current branch, accepts an optional PR number/URL/branch, and returns when checks pass or definitively fail. The call is cancellable and requires an installed, authenticated [GitHub CLI](https://cli.github.com/).
+Use `watch_github_ci` to monitor pull-request checks without asking the user to return later or constructing a polling loop. It runs `gh pr checks --watch --fail-fast`, defaults to the pull request for the current branch, accepts an optional PR number/URL/branch, and returns when checks pass or definitively fail. After the watch completes, it makes a plain `gh pr checks` query so the model receives one clean final check listing rather than the repeated polling snapshots shown in live progress. The call is cancellable and requires an installed, authenticated [GitHub CLI](https://cli.github.com/).
 
 The separate `wait` tool is an immediate no-op used when explicitly told to wait or while background subagents are running. It does not monitor CI and must not be used as a sleep or delay.
 

@@ -69,7 +69,7 @@ Open `http://127.0.0.1:5343`.
   matching safe index links.
 - **Settings** — persistent defaults (provider-grouped model dropdown,
   thinking, queue modes, image handling, skill commands, transport,
-  hide-thinking, compaction/retry, and maximum concurrent subagents), a scoped-models editor, per-agent model
+  hide-thinking, compaction/retry, and maximum concurrent subagents), automatic tab-title enable/model controls, a scoped-models editor, per-agent model
   fallback editor, and the global-only nested-context policy: an auditable trusted-roots list with
   revoke and simple add-by-path controls, plus a prominent expert trust-all
   warning. The Files view remains the primary trust-grant flow. Most defaults
