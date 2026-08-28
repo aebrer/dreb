@@ -304,10 +304,19 @@ describe("matchesKey", () => {
 		it("should treat raw 0x08 as ctrl+backspace in Windows Terminal", () => {
 			setKittyProtocolActive(false);
 			withEnv("WT_SESSION", "test-session", () => {
-				assert.strictEqual(matchesKey("\x08", "ctrl+backspace"), true);
-				assert.strictEqual(matchesKey("\x08", "backspace"), false);
-				assert.strictEqual(parseKey("\x08"), "ctrl+backspace");
-				assert.strictEqual(matchesKey("\x08", "ctrl+h"), true);
+				// The Windows-Terminal guard also requires the SSH_* vars to be
+				// absent (a real WT session is not over SSH); clear them so the
+				// test stays hermetic on SSH hosts.
+				withEnv("SSH_CONNECTION", undefined, () => {
+					withEnv("SSH_CLIENT", undefined, () => {
+						withEnv("SSH_TTY", undefined, () => {
+							assert.strictEqual(matchesKey("\x08", "ctrl+backspace"), true);
+							assert.strictEqual(matchesKey("\x08", "backspace"), false);
+							assert.strictEqual(parseKey("\x08"), "ctrl+backspace");
+							assert.strictEqual(matchesKey("\x08", "ctrl+h"), true);
+						});
+					});
+				});
 			});
 		});
 
