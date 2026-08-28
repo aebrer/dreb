@@ -58,6 +58,7 @@ describe("getSettingsForRpc", () => {
 			steeringMode: "one-at-a-time",
 			followUpMode: "one-at-a-time",
 			compactionEnabled: true,
+			continueAfterAutoCompaction: false,
 			retryEnabled: true,
 			maxConcurrentSubagents: 4,
 			imageAutoResize: true,
@@ -86,7 +87,7 @@ describe("getSettingsForRpc", () => {
 			defaultThinkingLevel: "high",
 			steeringMode: "all",
 			followUpMode: "all",
-			compaction: { enabled: false },
+			compaction: { enabled: false, continueAfterAutoCompaction: true },
 			retry: { enabled: false },
 			backgroundAgents: { maxConcurrentSubagents: 1 },
 			images: { autoResize: false, blockImages: true },
@@ -111,6 +112,7 @@ describe("getSettingsForRpc", () => {
 			steeringMode: "all",
 			followUpMode: "all",
 			compactionEnabled: false,
+			continueAfterAutoCompaction: true,
 			retryEnabled: false,
 			maxConcurrentSubagents: 1,
 			imageAutoResize: false,
@@ -462,6 +464,7 @@ describe("setSettingsForRpc validation", () => {
 
 	it.each([
 		"compactionEnabled",
+		"continueAfterAutoCompaction",
 		"retryEnabled",
 		"imageAutoResize",
 		"blockImages",
@@ -976,6 +979,7 @@ describe("setSettingsForRpc writes", () => {
 			steeringMode: "all",
 			followUpMode: "all",
 			compactionEnabled: false,
+			continueAfterAutoCompaction: true,
 			retryEnabled: false,
 			maxConcurrentSubagents: 0,
 			imageAutoResize: false,
@@ -997,6 +1001,7 @@ describe("setSettingsForRpc writes", () => {
 			steeringMode: "all",
 			followUpMode: "all",
 			compactionEnabled: false,
+			continueAfterAutoCompaction: true,
 			retryEnabled: false,
 			maxConcurrentSubagents: 0,
 			imageAutoResize: false,
@@ -1086,6 +1091,7 @@ describe("setSettingsForRpc writes", () => {
 			defaultProvider: "anthropic",
 			defaultModel: "claude-sonnet-4-5",
 			defaultThinkingLevel: "medium",
+			continueAfterAutoCompaction: true,
 			retryEnabled: false,
 			imageAutoResize: false,
 			blockImages: true,
@@ -1109,6 +1115,7 @@ describe("setSettingsForRpc writes", () => {
 		expect(raw.defaultProvider).toBe("anthropic");
 		expect(raw.defaultModel).toBe("claude-sonnet-4-5");
 		expect(raw.defaultThinkingLevel).toBe("medium");
+		expect(raw.compaction.continueAfterAutoCompaction).toBe(true);
 		expect(raw.retry.enabled).toBe(false);
 		expect(raw.images.autoResize).toBe(false);
 		expect(raw.images.blockImages).toBe(true);
@@ -1805,6 +1812,7 @@ describe("RpcClient settings methods", () => {
 		steeringMode: "one-at-a-time",
 		followUpMode: "one-at-a-time",
 		compactionEnabled: true,
+		continueAfterAutoCompaction: false,
 		retryEnabled: true,
 		maxConcurrentSubagents: 4,
 		imageAutoResize: true,

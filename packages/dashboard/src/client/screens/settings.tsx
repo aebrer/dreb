@@ -1147,6 +1147,20 @@ export function SettingsScreen(props: {
 								</div>
 								<div class="setting-row">
 									<span class="setting-label">
+										<span class="name">continue after auto-compaction</span>
+										<span class="hint">
+											can run and incur cost indefinitely; manual compaction never continues
+										</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().continueAfterAutoCompaction === true}
+											onChange={(value) => save({ continueAfterAutoCompaction: value })}
+										/>
+									</span>
+								</div>
+								<div class="setting-row">
+									<span class="setting-label">
 										<span class="name">auto-retry</span>
 										<span class="hint">retry transient stream errors (rate limits, 5xx)</span>
 									</span>

@@ -56,6 +56,8 @@ vi.mock("../src/core/compaction/index.js", () => ({
 describe("AgentSession auto-compaction queue resume", () => {
 	let session: AgentSession;
 	let sessionManager: SessionManager;
+	let settingsManager: SettingsManager;
+	let modelRegistry: ModelRegistry;
 	let tempDir: string;
 
 	beforeEach(() => {
@@ -73,10 +75,10 @@ describe("AgentSession auto-compaction queue resume", () => {
 		});
 
 		sessionManager = SessionManager.inMemory();
-		const settingsManager = SettingsManager.create(tempDir, tempDir);
+		settingsManager = SettingsManager.create(tempDir, tempDir);
 		const authStorage = AuthStorage.create(join(tempDir, "auth.json"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, tempDir);
+		modelRegistry = new ModelRegistry(authStorage, tempDir);
 
 		session = new AgentSession({
 			agent,
@@ -121,6 +123,113 @@ describe("AgentSession auto-compaction queue resume", () => {
 		await vi.advanceTimersByTimeAsync(100);
 
 		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("should always continue after successful auto-compaction when enabled", async () => {
+		settingsManager.setContinueAfterAutoCompaction(true);
+		const hasQueuedMessagesSpy = vi.spyOn(session.agent, "hasQueuedMessages");
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("threshold", false);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(hasQueuedMessagesSpy).not.toHaveBeenCalled();
+	});
+
+	it("should preserve overflow continuation when unconditional continuation is disabled", async () => {
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("overflow", true);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("should continue exactly once after overflow auto-compaction when enabled", async () => {
+		settingsManager.setContinueAfterAutoCompaction(true);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("overflow", true);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("should preserve empty threshold behavior when unconditional continuation is disabled", async () => {
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("threshold", false);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(continueSpy).not.toHaveBeenCalled();
+	});
+
+	it("should not continue after unsuccessful auto-compaction when enabled", async () => {
+		settingsManager.setContinueAfterAutoCompaction(true);
+		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue(undefined);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("threshold", false);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(continueSpy).not.toHaveBeenCalled();
+	});
+
+	it("should not continue after cancelled auto-compaction when enabled", async () => {
+		settingsManager.setContinueAfterAutoCompaction(true);
+		const extensionRunner = {
+			hasHandlers: vi.fn((event: string) => event === "session_before_compact"),
+			emit: vi.fn().mockResolvedValue({ cancel: true }),
+		};
+		(session as unknown as { _extensionRunner: typeof extensionRunner })._extensionRunner = extensionRunner;
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("threshold", false);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(continueSpy).not.toHaveBeenCalled();
+	});
+
+	it("should not continue after manual compaction when enabled", async () => {
+		settingsManager.setContinueAfterAutoCompaction(true);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+
+		await session.compact();
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(continueSpy).not.toHaveBeenCalled();
 	});
 
 	it("should not compact repeatedly after overflow recovery already attempted", async () => {

@@ -22,6 +22,7 @@ const ENTER = "\r";
 function makeConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
 	return {
 		autoCompact: true,
+		continueAfterAutoCompaction: false,
 		showImages: false,
 		autoResizeImages: false,
 		blockImages: false,
@@ -55,6 +56,7 @@ function makeConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
 function makeCallbacks(): SettingsCallbacks {
 	return {
 		onAutoCompactChange: vi.fn(),
+		onContinueAfterAutoCompactionChange: vi.fn(),
 		onAutoLoadNestedContextChange: vi.fn(),
 		onShowImagesChange: vi.fn(),
 		onAutoResizeImagesChange: vi.fn(),
@@ -224,6 +226,32 @@ describe("SettingsSelectorComponent — Dispatch Arbiter controls", () => {
 			thinking: "medium",
 			guidePath: "~/guide.md",
 		});
+	});
+});
+
+describe("SettingsSelectorComponent — auto-compaction continuation", () => {
+	test("shows the persisted value and explains the automatic-only behavior", () => {
+		const component = new SettingsSelectorComponent(
+			makeConfig({ continueAfterAutoCompaction: true }),
+			makeCallbacks(),
+		);
+		const list = component.getSettingsList();
+		for (const ch of "continueafterauto") list.handleInput(ch);
+
+		const output = list.render(120).join("\n");
+		expect(output).toContain("Continue after auto-compaction");
+		expect(output).toContain("can run and incur cost indefinitely");
+		expect(output).toContain("true");
+	});
+
+	test("toggling the setting invokes its dedicated callback", () => {
+		const callbacks = makeCallbacks();
+		const component = new SettingsSelectorComponent(makeConfig({ continueAfterAutoCompaction: false }), callbacks);
+		const list = component.getSettingsList();
+		for (const ch of "continueafterauto") list.handleInput(ch);
+		list.handleInput(ENTER);
+
+		expect(callbacks.onContinueAfterAutoCompactionChange).toHaveBeenCalledWith(true);
 	});
 });
 

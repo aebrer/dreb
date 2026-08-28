@@ -156,6 +156,24 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("continue after auto-compaction", () => {
+		it("defaults off and persists the effective compaction setting", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getContinueAfterAutoCompaction()).toBe(false);
+			expect(manager.getCompactionSettings().continueAfterAutoCompaction).toBe(false);
+
+			manager.setContinueAfterAutoCompaction(true);
+			await manager.flush();
+			expect(JSON.parse(readFileSync(settingsPath, "utf-8")).compaction.continueAfterAutoCompaction).toBe(true);
+
+			const reloaded = SettingsManager.create(projectDir, agentDir);
+			expect(reloaded.getContinueAfterAutoCompaction()).toBe(true);
+			expect(reloaded.getCompactionSettings().continueAfterAutoCompaction).toBe(true);
+		});
+	});
+
 	describe("reload", () => {
 		it("should reload global settings from disk", () => {
 			const settingsPath = join(agentDir, "settings.json");

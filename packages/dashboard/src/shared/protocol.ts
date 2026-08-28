@@ -534,6 +534,7 @@ export interface SettingsDto {
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
 	compactionEnabled?: boolean;
+	continueAfterAutoCompaction?: boolean;
 	retryEnabled?: boolean;
 	maxConcurrentSubagents?: number;
 	imageAutoResize?: boolean;
@@ -571,6 +572,7 @@ export type SettingsUpdateDto = Partial<
 		| "steeringMode"
 		| "followUpMode"
 		| "compactionEnabled"
+		| "continueAfterAutoCompaction"
 		| "retryEnabled"
 		| "maxConcurrentSubagents"
 		| "imageAutoResize"

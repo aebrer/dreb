@@ -215,6 +215,7 @@ For either permitted lazy-load path, each context file is realpath-deduplicated 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
+| `compaction.continueAfterAutoCompaction` | boolean | `false` | Start another model turn after every successful automatic compaction; manual `/compact` never continues because of this setting |
 | `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
 
@@ -222,11 +223,14 @@ For either permitted lazy-load path, each context file is realpath-deduplicated 
 {
   "compaction": {
     "enabled": true,
+    "continueAfterAutoCompaction": false,
     "reserveTokens": 16384,
     "keepRecentTokens": 20000
   }
 }
 ```
+
+The continuation option is intended for unattended long-running work and can produce model turns and cost without further user input. It applies only after successful automatic threshold or overflow compaction. Failed or cancelled automatic compaction and manual `/compact` do not continue because of it. The option is available in terminal `/settings` and dashboard Settings.
 
 ### Branch Summary
 
@@ -464,6 +468,7 @@ See [packages.md](packages.md) for package management details.
   "theme": "dark",
   "compaction": {
     "enabled": true,
+    "continueAfterAutoCompaction": false,
     "reserveTokens": 16384,
     "keepRecentTokens": 20000
   },

@@ -3076,6 +3076,38 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("devices");
 	});
 
+	it("settings exposes and saves continue-after-auto-compaction off by default", async () => {
+		vi.mocked(api.settings).mockResolvedValue({});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const row = [...el.querySelectorAll(".setting-row")].find((candidate) =>
+			candidate.textContent?.includes("continue after auto-compaction"),
+		) as HTMLElement;
+		expect(row).not.toBeNull();
+		expect(row.textContent).toContain("can run and incur cost indefinitely");
+		const select = row.querySelector("select") as HTMLSelectElement;
+		expect(select.value).toBe("off");
+
+		select.value = "on";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenCalledWith({ continueAfterAutoCompaction: true });
+	});
+
+	it("settings reflects an enabled continue-after-auto-compaction value", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ continueAfterAutoCompaction: true });
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const row = [...el.querySelectorAll(".setting-row")].find((candidate) =>
+			candidate.textContent?.includes("continue after auto-compaction"),
+		) as HTMLElement;
+		expect((row.querySelector("select") as HTMLSelectElement).value).toBe("on");
+	});
+
 	it("settings exposes and saves the maximum concurrent subagent count", async () => {
 		vi.mocked(api.settings).mockResolvedValue({ maxConcurrentSubagents: 4 });
 		const store = makeStore();
