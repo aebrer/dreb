@@ -10,6 +10,7 @@ import { expandPath } from "./tools/path-utils.js";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
+	continueAfterAutoCompaction?: boolean; // default: false
 	reserveTokens?: number; // default: 16384
 	keepRecentTokens?: number; // default: 20000
 }
@@ -781,6 +782,19 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getContinueAfterAutoCompaction(): boolean {
+		return this.settings.compaction?.continueAfterAutoCompaction ?? false;
+	}
+
+	setContinueAfterAutoCompaction(enabled: boolean): void {
+		if (!this.globalSettings.compaction) {
+			this.globalSettings.compaction = {};
+		}
+		this.globalSettings.compaction.continueAfterAutoCompaction = enabled;
+		this.markModified("compaction", "continueAfterAutoCompaction");
+		this.save();
+	}
+
 	/**
 	 * Read the global-only lazy-context policy. File-backed managers re-read this small
 	 * policy on each decision so independently running main/subagent processes observe
@@ -930,9 +944,15 @@ export class SettingsManager {
 		return this.settings.compaction?.keepRecentTokens ?? 20000;
 	}
 
-	getCompactionSettings(): { enabled: boolean; reserveTokens: number; keepRecentTokens: number } {
+	getCompactionSettings(): {
+		enabled: boolean;
+		continueAfterAutoCompaction: boolean;
+		reserveTokens: number;
+		keepRecentTokens: number;
+	} {
 		return {
 			enabled: this.getCompactionEnabled(),
+			continueAfterAutoCompaction: this.getContinueAfterAutoCompaction(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
 		};

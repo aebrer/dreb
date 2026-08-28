@@ -2855,18 +2855,12 @@ export class AgentSession {
 				if (lastMsg?.role === "assistant" && (lastMsg as AssistantMessage).stopReason === "error") {
 					this.agent.replaceMessages(messages.slice(0, -1));
 				}
+			}
 
-				setTimeout(() => {
-					this.agent.continue().catch((err) => {
-						// Agent failed to continue after auto-compaction — surface to session
-						this.warnInSession(
-							`Agent failed to continue after compaction: ${err instanceof Error ? err.message : String(err)}`,
-						);
-					});
-				}, 100);
-			} else if (this.agent.hasQueuedMessages()) {
-				// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-				// Kick the loop so queued messages are actually delivered.
+			// Check the explicit setting first so the continuation decision does not
+			// consult overflow-retry or queued-message state when it is enabled.
+			const shouldContinue = settings.continueAfterAutoCompaction || willRetry || this.agent.hasQueuedMessages();
+			if (shouldContinue) {
 				setTimeout(() => {
 					this.agent.continue().catch((err) => {
 						// Agent failed to continue after auto-compaction — surface to session

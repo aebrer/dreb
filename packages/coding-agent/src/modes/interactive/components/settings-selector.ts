@@ -39,6 +39,7 @@ const THINKING_DESCRIPTIONS: Record<ThinkingLevel, string> = {
 
 export interface SettingsConfig {
 	autoCompact: boolean;
+	continueAfterAutoCompaction: boolean;
 	showImages: boolean;
 	autoResizeImages: boolean;
 	blockImages: boolean;
@@ -77,6 +78,7 @@ export interface SettingsConfig {
 
 export interface SettingsCallbacks {
 	onAutoCompactChange: (enabled: boolean) => void;
+	onContinueAfterAutoCompactionChange: (enabled: boolean) => void;
 	onShowImagesChange: (enabled: boolean) => void;
 	onAutoResizeImagesChange: (enabled: boolean) => void;
 	onBlockImagesChange: (blocked: boolean) => void;
@@ -465,6 +467,14 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "continue-after-auto-compaction",
+				label: "Continue after auto-compaction",
+				description:
+					"Start another model turn after every successful auto-compaction; can run and incur cost indefinitely",
+				currentValue: config.continueAfterAutoCompaction ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "auto-load-nested-context",
 				label: "Unrestricted nested context loading (expert)",
 				description:
@@ -794,6 +804,9 @@ export class SettingsSelectorComponent extends Container {
 				switch (id) {
 					case "autocompact":
 						callbacks.onAutoCompactChange(newValue === "true");
+						break;
+					case "continue-after-auto-compaction":
+						callbacks.onContinueAfterAutoCompactionChange(newValue === "true");
 						break;
 					case "auto-load-nested-context":
 						callbacks.onAutoLoadNestedContextChange(newValue === "true");

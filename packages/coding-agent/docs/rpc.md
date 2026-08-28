@@ -1325,7 +1325,7 @@ Note: with `summarize: true` the command is LLM-bound and can take a while. `Rpc
 
 Persistent settings, backed by the settings file (see [settings.md](settings.md)). They are normally distinct from live session state, with global-only control/security-policy exceptions:
 
-- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, `maxConcurrentSubagents`, `enabledModels`, `tabTitle`, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
+- **Persistent defaults** (`get_settings` / `set_settings`): provider/model, thinking level, queue modes, compaction/retry/image/skill/thinking-display/transport toggles, automatic-compaction continuation, `maxConcurrentSubagents`, `enabledModels`, `tabTitle`, and per-agent model fallback lists seed fresh runtimes. Writing these ordinary defaults does **not** change a running session.
 - **Global nested-context trust policy** (`autoLoadNestedContext`, `trustedContextFolders`, `effectiveTrustedContextRoots`, and the trust commands below): this is read from `~/.dreb/agent/settings.json` only, never project settings. Active main/subagent processes observe it for **future lazy nested/out-of-cwd loads**; it cannot remove content already injected into a conversation. It does not govern the separate initial upward context scan from the launch cwd.
 - **Global Dispatch Arbiter policy** (`subagentArbiter`): the complete object is read/written globally and project settings cannot shadow it. Enabled runtimes consume it before future subagent spawns; it does not rewrite already-started children.
 - **Runtime state** (`get_state` / `set_model` / `set_thinking_level` / `set_steering_mode` / `set_follow_up_mode` / `set_auto_compaction` / `set_auto_retry`): the state of the live session. Note that the runtime setters also persist their values as new defaults as a side effect.
@@ -1353,6 +1353,7 @@ Response:
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
+    "continueAfterAutoCompaction": false,
     "retryEnabled": true,
     "maxConcurrentSubagents": 4,
     "imageAutoResize": true,
@@ -1400,12 +1401,20 @@ Response:
 
 `tabTitle` is the effective merged object and is absent when unconfigured. Its optional `model` is one exact `provider/model`; when absent, title generation preserves the Explore-agent resolution route documented in [settings.md](settings.md#tab-title).
 
+`continueAfterAutoCompaction` defaults to `false`. When true, every successful automatic threshold or overflow compaction starts another model turn even without queued messages. It does not make failed, cancelled, or manual compaction continue.
+
 #### set_settings
 
 Update persistent default settings. Takes a partial payload — only the supplied keys change. The whole payload is validated before anything is applied: on any invalid field, nothing changes and the response is an explicit error. Writes target the global settings file (same scope as every runtime setter).
 
 ```json
 {"type": "set_settings", "settings": {"defaultThinkingLevel": "low", "retryEnabled": false}}
+```
+
+Enable uninterrupted automatic-compaction continuation for unattended work. This can keep producing model turns and cost indefinitely; it never changes manual `compact` behavior:
+
+```json
+{"type": "set_settings", "settings": {"continueAfterAutoCompaction": true}}
 ```
 
 Set the maximum concurrency for newly started parent sessions. Zero removes the `subagent` tool and adds explicit parent-model guidance; positive values limit running children without changing the separate eight-item parallel-call input bound:
@@ -1488,6 +1497,7 @@ Response is the full settings snapshot after the write (same shape as `get_setti
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
+    "continueAfterAutoCompaction": false,
     "retryEnabled": false,
     "maxConcurrentSubagents": 1,
     "imageAutoResize": true,
@@ -1514,6 +1524,7 @@ Project-shadow warning example (the global write still lands, but the returned m
     "steeringMode": "one-at-a-time",
     "followUpMode": "one-at-a-time",
     "compactionEnabled": true,
+    "continueAfterAutoCompaction": false,
     "retryEnabled": true,
     "maxConcurrentSubagents": 4,
     "imageAutoResize": true,
@@ -1543,6 +1554,7 @@ Valid keys and values:
 | `steeringMode` | `"all"`, `"one-at-a-time"` |
 | `followUpMode` | `"all"`, `"one-at-a-time"` |
 | `compactionEnabled` | boolean |
+| `continueAfterAutoCompaction` | boolean; default `false`. Starts another model turn after every successful automatic compaction and never affects manual compaction. |
 | `retryEnabled` | boolean |
 | `maxConcurrentSubagents` | Non-negative safe integer; default `4`. Captured by new parent sessions; `0` removes the subagent tool and adds explicit self-execution guidance. |
 | `imageAutoResize` | boolean |
@@ -1928,7 +1940,7 @@ The `reason` field is `"threshold"` (context getting large) or `"overflow"` (con
 }
 ```
 
-If `reason` was `"overflow"` and compaction succeeds, `willRetry` is `true` and the agent will automatically retry the prompt.
+If `reason` was `"overflow"` and compaction succeeds, `willRetry` is `true` and the agent will automatically retry the prompt. Independently, persistent `continueAfterAutoCompaction: true` starts another model turn after any successful automatic compaction, including a threshold compaction with `willRetry: false` and no queued message. Manual `compact` is outside this event path and does not continue because of that setting.
 
 If compaction was aborted, `result` is `null` and `aborted` is `true`.
 

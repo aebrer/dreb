@@ -379,6 +379,7 @@ type SettingsReader = Pick<
 	| "getSteeringMode"
 	| "getFollowUpMode"
 	| "getCompactionEnabled"
+	| "getContinueAfterAutoCompaction"
 	| "getRetryEnabled"
 	| "getMaxConcurrentSubagents"
 	| "getImageAutoResize"
@@ -409,6 +410,7 @@ type SettingsWriter = SettingsRefresher &
 		| "setSteeringMode"
 		| "setFollowUpMode"
 		| "setCompactionEnabled"
+		| "setContinueAfterAutoCompaction"
 		| "setRetryEnabled"
 		| "setMaxConcurrentSubagents"
 		| "setImageAutoResize"
@@ -452,6 +454,7 @@ export function getSettingsForRpc(
 		steeringMode: settingsManager.getSteeringMode(),
 		followUpMode: settingsManager.getFollowUpMode(),
 		compactionEnabled: settingsManager.getCompactionEnabled(),
+		continueAfterAutoCompaction: settingsManager.getContinueAfterAutoCompaction(),
 		retryEnabled: settingsManager.getRetryEnabled(),
 		maxConcurrentSubagents: settingsManager.getMaxConcurrentSubagents(),
 		imageAutoResize: settingsManager.getImageAutoResize(),
@@ -559,6 +562,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"steeringMode",
 	"followUpMode",
 	"compactionEnabled",
+	"continueAfterAutoCompaction",
 	"retryEnabled",
 	"maxConcurrentSubagents",
 	"imageAutoResize",
@@ -888,6 +892,7 @@ export async function setSettingsForRpc(
 
 	for (const key of [
 		"compactionEnabled",
+		"continueAfterAutoCompaction",
 		"retryEnabled",
 		"imageAutoResize",
 		"blockImages",
@@ -1152,6 +1157,9 @@ export async function setSettingsForRpc(
 			}
 			if (update.compactionEnabled !== undefined) {
 				settingsManager.setCompactionEnabled(update.compactionEnabled);
+			}
+			if (update.continueAfterAutoCompaction !== undefined) {
+				settingsManager.setContinueAfterAutoCompaction(update.continueAfterAutoCompaction);
 			}
 			if (update.retryEnabled !== undefined) {
 				settingsManager.setRetryEnabled(update.retryEnabled);

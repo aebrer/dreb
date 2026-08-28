@@ -36,6 +36,20 @@ By default, `reserveTokens` is 16384 tokens (configurable in `~/.dreb/agent/sett
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
+### Continuing After Auto-Compaction
+
+By default, successful overflow recovery starts another model turn, and successful threshold compaction continues only when a steering, follow-up, or custom message is already queued. Enable **Continue after auto-compaction** in terminal `/settings` or dashboard Settings to keep unattended work running after every successful automatic compaction:
+
+```json
+{
+  "compaction": {
+    "continueAfterAutoCompaction": true
+  }
+}
+```
+
+When enabled, dreb starts exactly one new model turn after any successful automatic threshold or overflow compaction without depending on overflow-retry or queued-message state. This can run and incur model cost indefinitely, so it is off by default. Failed or cancelled automatic compactions do not continue, and manual `/compact` never continues because of this setting.
+
 ### How It Works
 
 1. **Find cut point**: Walk backwards from newest message, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.dreb/agent/settings.json` or `<project-dir>/.dreb/settings.json`) is reached
@@ -377,6 +391,7 @@ Configure compaction in `~/.dreb/agent/settings.json` or `<project-dir>/.dreb/se
 {
   "compaction": {
     "enabled": true,
+    "continueAfterAutoCompaction": false,
     "reserveTokens": 16384,
     "keepRecentTokens": 20000
   }
@@ -386,6 +401,7 @@ Configure compaction in `~/.dreb/agent/settings.json` or `<project-dir>/.dreb/se
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
+| `continueAfterAutoCompaction` | `false` | Start another model turn after every successful automatic compaction; does not affect manual `/compact` |
 | `reserveTokens` | `16384` | Tokens to reserve for LLM response |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
 

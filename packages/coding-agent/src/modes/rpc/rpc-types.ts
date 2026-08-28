@@ -599,6 +599,8 @@ export interface RpcSettingsSnapshot {
 	followUpMode: "all" | "one-at-a-time";
 	/** Whether automatic context compaction is enabled */
 	compactionEnabled: boolean;
+	/** Whether every successful automatic compaction starts another model turn */
+	continueAfterAutoCompaction: boolean;
 	/** Whether automatic retry on transient errors is enabled */
 	retryEnabled: boolean;
 	/** Maximum child agents a new parent session may run concurrently; zero disables the tool */
@@ -680,6 +682,7 @@ export interface RpcSettingsUpdate {
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
 	compactionEnabled?: boolean;
+	continueAfterAutoCompaction?: boolean;
 	retryEnabled?: boolean;
 	maxConcurrentSubagents?: number;
 	imageAutoResize?: boolean;
