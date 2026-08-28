@@ -26,7 +26,7 @@ and the other themes on IBM Plex Mono; an explicit choice overrides any theme.
   ```
   5992ab9640e2df491b2f609467b1de60e8bc39b2c28db184342a0592d98f6117  ttf/FiraCode-Regular.ttf
   97091f90623661fb4f7979c10d188f30f4806d8ce326b0bc8d1acc79dcc20d8f  ttf/FiraCode-Medium.ttf
-  500c74eec6249b06d49aef922dd3e8fc754c70c3b7791cd7b1a09ca9a26140   ttf/FiraCode-SemiBold.ttf
+  500c74eec6249b06d49aef922dd3e8fc754c70c3b3f7791cd7b1a09ca9a26140  ttf/FiraCode-SemiBold.ttf
   ```
 - **License file:** `https://raw.githubusercontent.com/tonsky/FiraCode/6.2/LICENSE`
   (bundled verbatim as `FIRACODE-OFL.txt`)

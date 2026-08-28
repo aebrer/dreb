@@ -68,8 +68,8 @@ U+2100-218F  Letterlike/Number Forms
 U+2190-21FF  Arrows (↻)
 ```
 
-Layout features retained: `calt`, `ccmp`, `liga`, `dlig`, `zero` (coding
-ligatures and the slashed-zero option); the family's ~100 stylistic
+Layout features retained: `calt`, `ccmp`, `dlig`, `zero` (coding ligatures
+and the slashed-zero option); the family's ~100 stylistic
 `cvNN`/vertical-writing features were pruned. Verified post-subset: every
 range above resolves, and the dashboard status glyphs ● (U+25CF) ◆ (U+25C6) ○
 (U+25CB) ✕ (U+2715) ↻ (U+21BB) are all present.
