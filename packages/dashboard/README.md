@@ -82,7 +82,8 @@ Open `http://127.0.0.1:5343`.
   (entropist.ca / Dim / Solarized / Gruvbox / Caves of Qud / Van Gogh /
   Okabe-Ito / Paul Tol — the last two colorblind-safe — live preview cards,
   system/light/dark mode selector, and Theme default / IBM Plex Mono /
-  JetBrains Mono / OpenDyslexic font selector, saved per browser), current pairing code,
+  JetBrains Mono / Fira Code / Iosevka / OpenDyslexic / Atkinson Hyperlegible
+  font selector, saved per browser), current pairing code,
   the 1–3650 day lifetime used by future pairings (180 days by default), and
   paired-device expiry/unpair management.
 - **Pairing** — remote first-login rotating-code flow.
@@ -373,9 +374,11 @@ Browser (SolidJS, hash-routed SPA)
   `tokens.css` baseline exactly). Theme default keeps each theme's built-in
   family: most use Google-hosted IBM Plex Mono, while Gruvbox uses the bundled
   self-hosted JetBrains Mono (OFL, in `src/client/assets/fonts/`). An explicit
-  IBM Plex Mono, JetBrains Mono, or OpenDyslexic selection overrides any theme
-  and is reflected in previews. The self-hosted families — JetBrains Mono and
-  the bundled dyslexia-friendly OpenDyslexic (OFL, same directory) — are
+  IBM Plex Mono, JetBrains Mono, Fira Code, Iosevka, OpenDyslexic, or Atkinson
+  Hyperlegible selection overrides any theme and is reflected in previews. The
+  self-hosted families — JetBrains Mono, Fira Code, Iosevka, the bundled
+  dyslexia-friendly OpenDyslexic, and the low-vision-friendly Atkinson
+  Hyperlegible (all OFL, same directory) — are
   lazy-loaded only when active typography uses them. No `light-dark()` (iOS
   Safari 16.4 floor); a synchronous `index.html` bootstrap
   prevents a wrong-appearance flash. The static

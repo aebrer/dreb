@@ -7,10 +7,11 @@
  * loads the production stylesheets in their production order (tokens.css →
  * app.css → themes.css) into headless Chromium and asserts the resolved
  * palette, forced-mode precedence, scoped previews, explicit font selection
- * (incl. the bundled OpenDyslexic faces),
- * the pristine-default regression, WCAG AA contrast (computed from the live
- * values, NOT duplicated TS palette constants), lazy webfont fetching, the first-paint bootstrap, and
- * the live `<meta name="theme-color">` sync.
+ * (incl. the bundled OpenDyslexic, Fira Code, Iosevka, and Atkinson
+ * Hyperlegible faces), the pristine-default regression, WCAG AA contrast
+ * (computed from the live values, NOT duplicated TS palette constants), lazy
+ * webfont fetching, the first-paint bootstrap, and the live
+ * `<meta name="theme-color">` sync.
  *
  * Uses the default node vitest environment (see fleet-layout.browser.test.ts) —
  * NOT jsdom.
@@ -43,8 +44,50 @@ const THEME_IDS = ["default", "dim", "solarized", "gruvbox", "qud", "vangogh", "
 const MODES = ["system", "light", "dark"] as const;
 type ThemeId = (typeof THEME_IDS)[number];
 type Mode = (typeof MODES)[number];
-type FontId = "theme" | "ibm-plex-mono" | "jetbrains-mono" | "opendyslexic";
+type FontId =
+	| "theme"
+	| "ibm-plex-mono"
+	| "jetbrains-mono"
+	| "fira-code"
+	| "iosevka"
+	| "opendyslexic"
+	| "atkinson-hyperlegible";
 type Scheme = "light" | "dark";
+
+/**
+ * Bundled explicit font families (beyond JetBrains Mono / OpenDyslexic):
+ * storage id, CSS family name, bundled face files, and the exact
+ * `document.fonts` load states the face probes must reach (single-weight
+ * faces report a single weight, not a range).
+ */
+const BUNDLED_FONTS = [
+	{
+		id: "fira-code",
+		family: "Fira Code",
+		faces: ["fira-code-regular.woff2", "fira-code-medium.woff2", "fira-code-semibold.woff2"],
+		loadedStates: ["normal/400/loaded", "normal/500/loaded", "normal/600/loaded"],
+	},
+	{
+		id: "iosevka",
+		family: "Iosevka",
+		faces: ["iosevka-regular.woff2", "iosevka-medium.woff2", "iosevka-semibold.woff2", "iosevka-italic.woff2"],
+		loadedStates: ["normal/400/loaded", "normal/500/loaded", "normal/600/loaded", "italic/400/loaded"],
+	},
+	{
+		id: "atkinson-hyperlegible",
+		family: "Atkinson Hyperlegible Next",
+		faces: [
+			"atkinson-hyperlegible-regular.woff2",
+			"atkinson-hyperlegible-medium.woff2",
+			"atkinson-hyperlegible-semibold.woff2",
+			"atkinson-hyperlegible-italic.woff2",
+		],
+		loadedStates: ["normal/400/loaded", "normal/500/loaded", "normal/600/loaded", "italic/400/loaded"],
+	},
+] as const;
+
+const isBundledFontRequest = (url: string): boolean =>
+	BUNDLED_FONTS.some((font) => (font.faces as readonly string[]).some((name) => url.endsWith(name)));
 
 const BASE_VARS = ["--bg", "--text", "--border", "--muted"] as const;
 const STATUS_VARS = ["--status-running", "--status-attention", "--status-idle", "--status-error"] as const;
@@ -209,6 +252,13 @@ beforeAll(async () => {
 		"opendyslexic-bold-italic.woff2",
 	]) {
 		copyFileSync(join(fontsDir, name), join(tempDir, "assets", "fonts", name));
+	}
+	// Bundled Fira Code / Iosevka / Atkinson Hyperlegible faces — same
+	// local-origin treatment so their @font-face srcs resolve too.
+	for (const font of BUNDLED_FONTS) {
+		for (const name of font.faces) {
+			copyFileSync(join(fontsDir, name), join(tempDir, "assets", "fonts", name));
+		}
 	}
 	// Real index.html (bootstrap + stylesheet order) — sub-resource 404s (module
 	// script, manifest, external fonts) are harmless; the head bootstrap runs.
@@ -684,6 +734,150 @@ describe("appearance — explicit OpenDyslexic selection (bundled dyslexia-frien
 		expect(
 			await p.evaluate(() => getComputedStyle(document.querySelector(".theme-card-code") as HTMLElement).fontFamily),
 		).toContain("OpenDyslexic");
+		await ctx.close();
+	});
+});
+
+// ==================================== 6c. Fira Code / Iosevka / Atkinson
+
+describe("appearance — explicit Fira Code / Iosevka / Atkinson Hyperlegible (bundled)", () => {
+	it.each(BUNDLED_FONTS.map((font) => [font.id, font.family, font.faces, font.loadedStates] as const))(
+		"font=%s on gruvbox overrides the theme default, applies to body/code/controls/memory, loads all faces, and requests nothing remote",
+		async (id, family, faces, loadedStates) => {
+			const ctx = await browser.newContext();
+			const p = await ctx.newPage();
+			const fontRequests: string[] = [];
+			const jetBrainsRequests: string[] = [];
+			const remoteRequests: string[] = [];
+			p.on("request", (request) => {
+				const url = request.url();
+				if (isBundledFontRequest(url)) fontRequests.push(url);
+				if (url.endsWith("jetbrains-mono.woff2")) jetBrainsRequests.push(url);
+				if (url.includes("fonts.googleapis.com") || url.includes("fonts.gstatic.com")) remoteRequests.push(url);
+			});
+			await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+			// Gruvbox is the strongest case: its theme default is JetBrains
+			// Mono, so an explicit family must beat that rule AND not fetch it.
+			await applyRoot(p, "gruvbox", "system", id);
+			await p.evaluate(() => {
+				for (const probeId of [
+					"body-text",
+					"mono",
+					"control",
+					"memory",
+					"face-400",
+					"face-500",
+					"face-600",
+					"face-700",
+					"face-400i",
+					"face-700i",
+				]) {
+					void (document.getElementById(probeId) as HTMLElement).offsetHeight;
+				}
+			});
+			await p.evaluate(() => document.fonts.ready);
+			await p.waitForTimeout(100);
+
+			// The computed family must START with the explicit family — a losing
+			// cascade would leave the gruvbox stack (JetBrains-first) in place.
+			// (Chromium serializes computed font-family without quotes around
+			// unquoted identifiers like `Iosevka`, so normalize before matching.)
+			const families = await p.evaluate(() =>
+				["body-text", "mono", "control", "memory"].map(
+					(id) => getComputedStyle(document.getElementById(id) as HTMLElement).fontFamily,
+				),
+			);
+			for (const computed of families) {
+				expect(computed.replace(/"/g, "").startsWith(`${family},`), computed).toBe(true);
+			}
+
+			// Every bundled face is fetched locally and reaches `loaded` (the
+			// probes use 400, 500, 600 and both italics — 700/700i resolve to
+			// the nearest declared face without a new fetch).
+			const requestedNames = new Set(fontRequests.map((url) => url.split("/").pop()!));
+			for (const name of faces) expect(requestedNames.has(name), name).toBe(true);
+			expect(fontRequests.every((url) => url.startsWith(baseUrl))).toBe(true);
+			const faceStates = await p.evaluate(
+				({ family }) =>
+					[...document.fonts]
+						.filter((f) => f.family === family)
+						.map((f) => `${f.style}/${String(f.weight)}/${f.status}`),
+				{ family },
+			);
+			for (const state of loadedStates) expect(faceStates, state).toContain(state);
+
+			// No JetBrains fetch (explicit choice beats the gruvbox default) and
+			// no CDN request of any kind.
+			expect(jetBrainsRequests).toEqual([]);
+			expect(remoteRequests).toEqual([]);
+			await ctx.close();
+		},
+	);
+
+	it("theme-default mode (no explicit font) never requests a Fira Code, Iosevka, or Atkinson face", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const requests: string[] = [];
+		p.on("request", (request) => {
+			if (isBundledFontRequest(request.url())) requests.push(request.url());
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		// Gruvbox again: the strongest theme-default case (JetBrains default).
+		await applyRoot(p, "gruvbox", "system");
+		await p.evaluate(() => {
+			for (const probeId of ["body-text", "mono", "control", "memory", "glyphs"]) {
+				void (document.getElementById(probeId) as HTMLElement).offsetHeight;
+			}
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+		expect(requests).toEqual([]);
+		// Declared but never fetched — Chromium reports them as not renderable.
+		for (const { family } of BUNDLED_FONTS) {
+			expect(await p.evaluate((f) => document.fonts.check(`16px "${f}"`, "A"), family)).toBe(false);
+		}
+		await ctx.close();
+	});
+
+	it("each family renders the glyphs its provenance record claims, alone", async () => {
+		// Per-family (NOT stack-based) checks: these fail if a bundled face is
+		// missing a glyph the provenance claims it has. The set per family is
+		// exactly what the provenance documents as present — Fira Code lacks
+		// ✕/↻ and Atkinson is Latin-centric (no shapes/arrows), so those are
+		// asserted only where the face really contains them.
+		const claims: Array<{ id: FontId; family: string; glyphs: string }> = [
+			// Iosevka's subset keeps the full symbol set (verified in
+			// IOSEVKA-PROVENANCE.md), including every dashboard status glyph.
+			{ id: "iosevka", family: "Iosevka", glyphs: "●◆○✕↻ !\"#$%&'()*+,-./:;<=>?@[]{}~0Az—…" },
+			// Fira Code covers the shapes + punctuation but not dingbats/arrows.
+			{ id: "fira-code", family: "Fira Code", glyphs: "●◆○ !\"#$%&'()*+,-./:;<=>?@[]{}~0Az—…±×÷≤≥≠" },
+			// Atkinson Hyperlegible is Latin-centric by design.
+			{
+				id: "atkinson-hyperlegible",
+				family: "Atkinson Hyperlegible Next",
+				glyphs: "aA09 !\"#$%&'()*+,-./:;<=>?@[]{}~—…±×÷≤≥≠",
+			},
+		];
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		for (const { id, family, glyphs } of claims) {
+			// Activate the family and force the face probes to render in it so
+			// the faces are genuinely loaded before check() can be trusted.
+			await applyRoot(p, "solarized", "system", id);
+			await p.evaluate(() => {
+				for (const probeId of ["face-400", "face-500", "face-600", "face-400i", "face-700i"]) {
+					void (document.getElementById(probeId) as HTMLElement).offsetHeight;
+				}
+			});
+			await p.evaluate(() => document.fonts.ready);
+			// Family-ALONE check (no fallback stack): fails if the bundled face
+			// lacks a claimed glyph or was never loaded.
+			expect(
+				await p.evaluate((c) => document.fonts.check(`16px "${c.family}"`, c.glyphs), { family, glyphs }),
+				family,
+			).toBe(true);
+		}
 		await ctx.close();
 	});
 });

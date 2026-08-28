@@ -108,12 +108,15 @@ describe("appearance — catalog", () => {
 		for (const m of MODES) expect(isValidMode(m)).toBe(true);
 	});
 
-	it("exposes theme default, IBM Plex Mono, JetBrains Mono, and OpenDyslexic fonts in order", () => {
+	it("exposes the seven font options in picker order", () => {
 		expect(FONTS).toEqual([
 			{ id: "theme", label: "Theme default" },
 			{ id: "ibm-plex-mono", label: "IBM Plex Mono" },
 			{ id: "jetbrains-mono", label: "JetBrains Mono" },
+			{ id: "fira-code", label: "Fira Code" },
+			{ id: "iosevka", label: "Iosevka" },
 			{ id: "opendyslexic", label: "OpenDyslexic" },
+			{ id: "atkinson-hyperlegible", label: "Atkinson Hyperlegible" },
 		]);
 		expect(FONT_IDS).toEqual(FONTS.map((entry) => entry.id));
 		for (const entry of FONTS) expect(isValidFont(entry.id)).toBe(true);
@@ -230,6 +233,22 @@ describe("appearance — setters", () => {
 		reloadAppearance();
 		expect(font()).toBe("opendyslexic");
 		expect(document.documentElement.getAttribute("data-font")).toBe("opendyslexic");
+	});
+
+	it("persists and restores the other bundled families (Fira Code, Iosevka, Atkinson)", () => {
+		for (const id of ["fira-code", "iosevka", "atkinson-hyperlegible"] as const) {
+			setFont(id);
+			expect(font()).toBe(id);
+			expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBe(id);
+			expect(document.documentElement.getAttribute("data-font")).toBe(id);
+			reloadAppearance();
+			expect(font()).toBe(id);
+			expect(document.documentElement.getAttribute("data-font")).toBe(id);
+		}
+		// Back to the clean default: no key, no attribute.
+		setFont("theme");
+		expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBeNull();
+		expect(document.documentElement.hasAttribute("data-font")).toBe(false);
 	});
 
 	it("removes color-scheme entirely in the pristine default+system case", () => {
@@ -483,6 +502,8 @@ describe("appearance — index.html bootstrap contract", () => {
 	it("lists only non-default theme, mode, and font values in bootstrap arrays", () => {
 		expect(html).toContain('["dim", "solarized", "gruvbox", "qud", "vangogh", "okabe", "tol"]');
 		expect(html).toContain('["light", "dark"]');
-		expect(html).toContain('["ibm-plex-mono", "jetbrains-mono", "opendyslexic"]');
+		expect(html).toContain(
+			'["ibm-plex-mono", "jetbrains-mono", "fira-code", "iosevka", "opendyslexic", "atkinson-hyperlegible"]',
+		);
 	});
 });

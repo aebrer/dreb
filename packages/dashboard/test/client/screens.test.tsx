@@ -4397,7 +4397,10 @@ describe("dashboard client regressions", () => {
 				["theme", "Theme default"],
 				["ibm-plex-mono", "IBM Plex Mono"],
 				["jetbrains-mono", "JetBrains Mono"],
+				["fira-code", "Fira Code"],
+				["iosevka", "Iosevka"],
 				["opendyslexic", "OpenDyslexic"],
+				["atkinson-hyperlegible", "Atkinson Hyperlegible"],
 			]);
 			expect(el.querySelectorAll("[data-theme-card]").length).toBe(8);
 			expect(el.querySelector('[data-theme-card="default"]')).not.toBeNull();

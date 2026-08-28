@@ -35,7 +35,14 @@ export interface FontEntry {
 
 export type ThemeId = "default" | "dim" | "solarized" | "gruvbox" | "qud" | "vangogh" | "okabe" | "tol";
 export type ColorMode = "system" | "light" | "dark";
-export type FontId = "theme" | "ibm-plex-mono" | "jetbrains-mono" | "opendyslexic";
+export type FontId =
+	| "theme"
+	| "ibm-plex-mono"
+	| "jetbrains-mono"
+	| "opendyslexic"
+	| "fira-code"
+	| "iosevka"
+	| "atkinson-hyperlegible";
 
 /**
  * FIXED catalog — default first, then dim, solarized, gruvbox, qud, vangogh,
@@ -60,12 +67,19 @@ export const THEME_IDS: readonly ThemeId[] = THEMES.map((t) => t.id);
 /** Color modes. `system` follows the OS via prefers-color-scheme. */
 export const MODES: readonly ColorMode[] = ["system", "light", "dark"] as const;
 
-/** Fixed font picker catalog. `theme` preserves each theme's built-in family. */
+/**
+ * Fixed font picker catalog. `theme` preserves each theme's built-in family.
+ * Monospace families come first, then the explicit accessibility options
+ * (OpenDyslexic for dyslexia, Atkinson Hyperlegible for low vision).
+ */
 export const FONTS: readonly FontEntry[] = [
 	{ id: "theme", label: "Theme default" },
 	{ id: "ibm-plex-mono", label: "IBM Plex Mono" },
 	{ id: "jetbrains-mono", label: "JetBrains Mono" },
+	{ id: "fira-code", label: "Fira Code" },
+	{ id: "iosevka", label: "Iosevka" },
 	{ id: "opendyslexic", label: "OpenDyslexic" },
+	{ id: "atkinson-hyperlegible", label: "Atkinson Hyperlegible" },
 ] as const;
 
 /** All font ids in picker order. */

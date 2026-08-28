@@ -98,6 +98,121 @@
 	src: url("../assets/fonts/opendyslexic-bold-italic.woff2") format("woff2");
 }
 
+/*
+ * Fira Code — self-hosted, explicit font picker only (a monospace with
+ * default-on coding ligatures via the `calt` feature; see
+ * ../assets/fonts/FIRACODE-PROVENANCE.md). Three unsubsetted re-encoded static
+ * faces at the exact weights the dashboard uses. Fira Code ships no italic
+ * face upstream, so italic text is synthesized — an upstream limitation.
+ * Fetched lazily only when data-font="fira-code" is active
+ * (no <link rel=preload>).
+ */
+@font-face {
+	font-family: "Fira Code";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/fira-code-regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Fira Code";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("../assets/fonts/fira-code-medium.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Fira Code";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("../assets/fonts/fira-code-semibold.woff2") format("woff2");
+}
+
+/*
+ * Iosevka — self-hosted, explicit font picker only (a compact monospace with
+ * default-on coding ligatures via the `calt` feature; see
+ * ../assets/fonts/IOSEVKA-PROVENANCE.md). Four static faces subset to the
+ * dashboard's unicode needs (Latin/Extended, Greek, Cyrillic, coding
+ * punctuation and symbols — including all status glyphs) and re-encoded;
+ * the ~100 stylistic/vertical-writing GSUB features were pruned. Fetched
+ * lazily only when data-font="iosevka" is active (no <link rel=preload>).
+ */
+@font-face {
+	font-family: "Iosevka";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/iosevka-regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Iosevka";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("../assets/fonts/iosevka-medium.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Iosevka";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("../assets/fonts/iosevka-semibold.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Iosevka";
+	font-style: italic;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/iosevka-italic.woff2") format("woff2");
+}
+
+/*
+ * Atkinson Hyperlegible — self-hosted, explicit font picker only (a
+ * second bundled accessibility option designed for low-vision readers; see
+ * ../assets/fonts/ATKINSON-PROVENANCE.md). Four unmodified upstream WOFF2
+ * faces (v2.001 "Next") at the exact weights the dashboard uses; the
+ * per-weight upstream family names are declared under a single family name.
+ * Fetched lazily only when data-font="atkinson-hyperlegible" is active
+ * (no <link rel=preload>).
+ */
+@font-face {
+	font-family: "Atkinson Hyperlegible Next";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/atkinson-hyperlegible-regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Atkinson Hyperlegible Next";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("../assets/fonts/atkinson-hyperlegible-medium.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Atkinson Hyperlegible Next";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("../assets/fonts/atkinson-hyperlegible-semibold.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Atkinson Hyperlegible Next";
+	font-style: italic;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/atkinson-hyperlegible-italic.woff2") format("woff2");
+}
+
 /* ================================================= default: forced modes */
 
 /*
@@ -1054,4 +1169,16 @@
 
 [data-font="opendyslexic"] {
 	--mono-font: "OpenDyslexic", "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="fira-code"] {
+	--mono-font: "Fira Code", "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="iosevka"] {
+	--mono-font: "Iosevka", "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="atkinson-hyperlegible"] {
+	--mono-font: "Atkinson Hyperlegible Next", "IBM Plex Mono", "Courier New", monospace;
 }
