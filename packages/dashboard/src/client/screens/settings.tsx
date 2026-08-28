@@ -1161,8 +1161,8 @@ export function SettingsScreen(props: {
 
 							<p class="muted small settings-footnote">
 								TUI-only settings (cursor, editor) are managed in the terminal /settings menu. The dashboard
-								appearance (theme + light/dark mode) is set here, per-browser, and is independent of the TUI
-								theme.
+								appearance (theme + light/dark mode + font) is set here, per-browser, and is independent of the
+								TUI theme.
 							</p>
 						</>
 					)}
@@ -1175,8 +1175,8 @@ export function SettingsScreen(props: {
 							<span class="setting-label">
 								<span class="name">appearance</span>
 								<span class="hint">
-									this browser only — theme and light/dark mode are stored in localStorage and are independent
-									of the TUI theme. Okabe-Ito and Paul Tol are colorblind-safe palettes.
+									this browser only — theme, light/dark mode, and font are stored in localStorage and are
+									independent of the TUI theme. Okabe-Ito and Paul Tol are colorblind-safe palettes.
 								</span>
 							</span>
 						</div>

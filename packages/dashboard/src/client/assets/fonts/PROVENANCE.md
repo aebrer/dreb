@@ -1,8 +1,16 @@
 # JetBrains Mono — self-hosted web font
 
-These WOFF2 files back the **gruvbox** dashboard appearance theme (see
-`../../styles/themes.css`). They are fetched by the browser only when gruvbox is
-the active theme; the default, dim, and solarized themes use IBM Plex Mono.
+These WOFF2 files back the **gruvbox** dashboard appearance theme and the
+explicit JetBrains Mono browser-local font selection (see
+`../../styles/themes.css`). They are fetched only when active typography uses
+JetBrains Mono. Theme default keeps Gruvbox on JetBrains Mono and the other
+themes on IBM Plex Mono; an explicit IBM Plex Mono choice overrides Gruvbox.
+Further bundled self-hosted families — Fira Code, Iosevka, OpenDyslexic (an
+explicit dyslexia-friendly picker option), and Atkinson Hyperlegible (an
+explicit low-vision-friendly picker option) — live alongside these files, each
+with its own license and provenance record (`FIRACODE-PROVENANCE.md`,
+`IOSEVKA-PROVENANCE.md`, `OPENDYSLEXIC-PROVENANCE.md`,
+`ATKINSON-PROVENANCE.md`).
 
 ## Source
 

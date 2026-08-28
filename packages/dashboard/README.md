@@ -81,7 +81,9 @@ Open `http://127.0.0.1:5343`.
   transcript image display mode, and notification permission), an appearance section with a curated-theme gallery
   (entropist.ca / Dim / Solarized / Gruvbox / Caves of Qud / Van Gogh /
   Okabe-Ito / Paul Tol — the last two colorblind-safe — live preview cards,
-  system/light/dark mode selector, saved per browser), current pairing code,
+  system/light/dark mode selector, and Theme default / IBM Plex Mono /
+  JetBrains Mono / Fira Code / Iosevka / OpenDyslexic / Atkinson Hyperlegible
+  font selector, saved per browser), current pairing code,
   the 1–3650 day lifetime used by future pairings (180 days by default), and
   paired-device expiry/unpair management.
 - **Pairing** — remote first-login rotating-code flow.
@@ -366,12 +368,20 @@ Browser (SolidJS, hash-routed SPA)
   Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito
   and Paul Tol palettes), each with light and dark palettes, plus a
   system/light/dark mode.
-  A settings theme gallery renders live preview cards; selections persist per
-  browser in `localStorage` (a pristine entropist.ca + system install leaves no
-  keys and matches the `tokens.css` baseline exactly). Most themes use IBM Plex Mono;
-  Gruvbox uses self-hosted JetBrains Mono (OFL, in `src/client/assets/fonts/`),
-  lazy-loaded only when active. No `light-dark()` (iOS Safari 16.4 floor); a
-  synchronous `index.html` bootstrap prevents a wrong-theme flash. The static
+  A settings theme gallery renders live preview cards beside mode and font
+  selectors; selections persist per browser in `localStorage` (a pristine
+  entropist.ca + system + Theme default install leaves no keys and matches the
+  `tokens.css` baseline exactly). Theme default keeps each theme's built-in
+  family: most use Google-hosted IBM Plex Mono, while Gruvbox uses the bundled
+  self-hosted JetBrains Mono (OFL, in `src/client/assets/fonts/`). An explicit
+  IBM Plex Mono, JetBrains Mono, Fira Code, Iosevka, OpenDyslexic, or Atkinson
+  Hyperlegible selection overrides any theme and is reflected in previews. The
+  self-hosted families — JetBrains Mono, Fira Code, Iosevka, the bundled
+  dyslexia-friendly OpenDyslexic, and the low-vision-friendly Atkinson
+  Hyperlegible (all OFL, same directory) — are
+  lazy-loaded only when active typography uses them. No `light-dark()` (iOS
+  Safari 16.4 floor); a synchronous `index.html` bootstrap
+  prevents a wrong-appearance flash. The static
   `manifest.webmanifest` keeps white (default-light) launch colors as the
   fallback, while the live `theme-color` meta follows the active appearance.
 

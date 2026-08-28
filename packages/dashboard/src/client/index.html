@@ -25,26 +25,30 @@
 		/>
 		<!--
 			Appearance bootstrap — runs synchronously BEFORE the stylesheets so the
-			persisted theme/mode paints on first frame with no wrong-theme flash. The
-			allowlists here are literal copies of the appearance.ts catalog (default
-			theme + system mode are the no-attribute cases and are intentionally
-			absent); a contract test keeps the two in sync. Wrapped in try/catch so a
-			disabled/broken localStorage can never block the page.
+			persisted theme/mode/font paints on first frame with no wrong-appearance
+			flash. The allowlists here are literal copies of the appearance.ts catalog
+			(default theme, system mode, and theme-default font are no-attribute cases
+			and intentionally absent); a contract test keeps them in sync. Wrapped in
+			try/catch so disabled/broken localStorage can never block the page.
 		-->
 		<script>
 			(function () {
 				try {
 					var THEMES = ["dim", "solarized", "gruvbox", "qud", "vangogh", "okabe", "tol"];
 					var MODES = ["light", "dark"];
+					var FONTS = ["ibm-plex-mono", "jetbrains-mono", "fira-code", "iosevka", "opendyslexic", "atkinson-hyperlegible"];
 					var el = document.documentElement;
 					var t = null;
 					var m = null;
+					var f = null;
 					try {
 						t = localStorage.getItem("dreb.dashboard.theme");
 						m = localStorage.getItem("dreb.dashboard.colorMode");
+						f = localStorage.getItem("dreb.dashboard.font");
 					} catch (e) {}
 					if (THEMES.indexOf(t) !== -1) el.setAttribute("data-theme", t);
 					if (MODES.indexOf(m) !== -1) el.setAttribute("data-color-mode", m);
+					if (FONTS.indexOf(f) !== -1) el.setAttribute("data-font", f);
 					var active = THEMES.indexOf(t) !== -1 || MODES.indexOf(m) !== -1;
 					if (active) {
 						el.style.setProperty(

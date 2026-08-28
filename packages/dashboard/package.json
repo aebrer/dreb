@@ -1,6 +1,6 @@
 {
 	"name": "@dreb/dashboard",
-	"version": "2.62.0",
+	"version": "2.63.0",
 	"description": "Web dashboard for dreb — fleet overview, chat parity, subagent observability",
 	"license": "MIT",
 	"type": "module",
@@ -22,7 +22,15 @@
 		"dist",
 		"README.md",
 		"src/client/assets/fonts/OFL.txt",
-		"src/client/assets/fonts/PROVENANCE.md"
+		"src/client/assets/fonts/PROVENANCE.md",
+		"src/client/assets/fonts/OPENDYSLEXIC-OFL.txt",
+		"src/client/assets/fonts/OPENDYSLEXIC-PROVENANCE.md",
+		"src/client/assets/fonts/FIRACODE-OFL.txt",
+		"src/client/assets/fonts/FIRACODE-PROVENANCE.md",
+		"src/client/assets/fonts/IOSEVKA-OFL.txt",
+		"src/client/assets/fonts/IOSEVKA-PROVENANCE.md",
+		"src/client/assets/fonts/ATKINSON-OFL.txt",
+		"src/client/assets/fonts/ATKINSON-PROVENANCE.md"
 	],
 	"scripts": {
 		"clean": "shx rm -rf dist",

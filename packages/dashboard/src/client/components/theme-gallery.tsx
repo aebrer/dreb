@@ -1,8 +1,8 @@
 /**
  * Theme gallery — the dashboard's appearance control surface.
  *
- * A color-mode selector (system / light / dark) plus a grid of scoped preview
- * cards, one per curated theme (default first). Each card is a *self-contained*
+ * Color-mode and font selectors plus a grid of scoped preview cards, one per
+ * curated theme (default first). Each card is a *self-contained*
  * preview: the card element itself carries `data-theme` (INCLUDING "default",
  * which themes.css maps to the tokens.css baseline via an explicit scope) and
  * `data-color-mode` (omitted for system), so themes.css resolves that theme's
@@ -14,7 +14,19 @@
  */
 
 import { For, type JSX } from "solid-js";
-import { type ColorMode, colorMode, MODES, setColorMode, setTheme, THEMES, theme } from "../state/appearance.js";
+import {
+	type ColorMode,
+	colorMode,
+	FONTS,
+	type FontId,
+	font,
+	MODES,
+	setColorMode,
+	setFont,
+	setTheme,
+	THEMES,
+	theme,
+} from "../state/appearance.js";
 import { StatusChip } from "./common.js";
 
 /** Order matters only for display; matches StatusChip's own glyph set. */
@@ -26,6 +38,13 @@ export function ThemeGallery(): JSX.Element {
 	const previewMode = (): ColorMode | undefined => {
 		const mode = colorMode();
 		return mode === "system" ? undefined : mode;
+	};
+
+	// In theme-default mode, preview cards retain the baseline IBM family so the
+	// inactive Gruvbox card cannot fetch JetBrains Mono merely by being rendered.
+	const previewFont = (): Exclude<FontId, "theme"> => {
+		const selected = font();
+		return selected === "theme" ? "ibm-plex-mono" : selected;
 	};
 
 	return (
@@ -46,6 +65,18 @@ export function ThemeGallery(): JSX.Element {
 				</span>
 			</div>
 
+			<div class="setting-row">
+				<label class="setting-label" for="pref-font">
+					<span class="name">font</span>
+					<span class="hint">this browser only — “theme default” keeps each theme’s built-in font</span>
+				</label>
+				<span class="setting-control">
+					<select id="pref-font" value={font()} onChange={(e) => setFont(e.currentTarget.value as FontId)}>
+						<For each={FONTS}>{(entry) => <option value={entry.id}>{entry.label}</option>}</For>
+					</select>
+				</span>
+			</div>
+
 			<div class="theme-gallery">
 				<For each={THEMES}>
 					{(entry) => {
@@ -55,7 +86,8 @@ export function ThemeGallery(): JSX.Element {
 							// over the WHOLE card (chrome + preview + footer), independent of the
 							// theme active on :root. data-theme is set for every card INCLUDING
 							// "default" (themes.css has an explicit [data-theme="default"] scope);
-							// data-color-mode mirrors the current selection (omitted for system).
+							// data-color-mode mirrors the current selection (omitted for system),
+							// while data-font carries the deliberate preview family.
 							<button
 								type="button"
 								class="theme-card"
@@ -63,6 +95,7 @@ export function ThemeGallery(): JSX.Element {
 								data-theme-card={entry.id}
 								data-theme={entry.id}
 								data-color-mode={previewMode()}
+								data-font={previewFont()}
 								aria-pressed={active()}
 								aria-current={active() ? "true" : undefined}
 								title={`use the ${entry.label} theme`}

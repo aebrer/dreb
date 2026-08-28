@@ -6,10 +6,12 @@
  * layer's core contracts can only be verified in a real engine. This suite
  * loads the production stylesheets in their production order (tokens.css →
  * app.css → themes.css) into headless Chromium and asserts the resolved
- * palette, forced-mode precedence, scoped previews, the pristine-default
- * regression, WCAG AA contrast (computed from the live values, NOT duplicated
- * TS palette constants), lazy webfont fetching, the first-paint bootstrap, and
- * the live `<meta name="theme-color">` sync.
+ * palette, forced-mode precedence, scoped previews, explicit font selection
+ * (incl. the bundled OpenDyslexic, Fira Code, Iosevka, and Atkinson
+ * Hyperlegible faces), the pristine-default regression, WCAG AA contrast
+ * (computed from the live values, NOT duplicated TS palette constants), lazy
+ * webfont fetching, the first-paint bootstrap, and the live
+ * `<meta name="theme-color">` sync.
  *
  * Uses the default node vitest environment (see fleet-layout.browser.test.ts) —
  * NOT jsdom.
@@ -42,7 +44,50 @@ const THEME_IDS = ["default", "dim", "solarized", "gruvbox", "qud", "vangogh", "
 const MODES = ["system", "light", "dark"] as const;
 type ThemeId = (typeof THEME_IDS)[number];
 type Mode = (typeof MODES)[number];
+type FontId =
+	| "theme"
+	| "ibm-plex-mono"
+	| "jetbrains-mono"
+	| "fira-code"
+	| "iosevka"
+	| "opendyslexic"
+	| "atkinson-hyperlegible";
 type Scheme = "light" | "dark";
+
+/**
+ * Bundled explicit font families (beyond JetBrains Mono / OpenDyslexic):
+ * storage id, CSS family name, bundled face files, and the exact
+ * `document.fonts` load states the face probes must reach (single-weight
+ * faces report a single weight, not a range).
+ */
+const BUNDLED_FONTS = [
+	{
+		id: "fira-code",
+		family: "Fira Code",
+		faces: ["fira-code-regular.woff2", "fira-code-medium.woff2", "fira-code-semibold.woff2"],
+		loadedStates: ["normal/400/loaded", "normal/500/loaded", "normal/600/loaded"],
+	},
+	{
+		id: "iosevka",
+		family: "Iosevka",
+		faces: ["iosevka-regular.woff2", "iosevka-medium.woff2", "iosevka-semibold.woff2", "iosevka-italic.woff2"],
+		loadedStates: ["normal/400/loaded", "normal/500/loaded", "normal/600/loaded", "italic/400/loaded"],
+	},
+	{
+		id: "atkinson-hyperlegible",
+		family: "Atkinson Hyperlegible Next",
+		faces: [
+			"atkinson-hyperlegible-regular.woff2",
+			"atkinson-hyperlegible-medium.woff2",
+			"atkinson-hyperlegible-semibold.woff2",
+			"atkinson-hyperlegible-italic.woff2",
+		],
+		loadedStates: ["normal/400/loaded", "normal/500/loaded", "normal/600/loaded", "italic/400/loaded"],
+	},
+] as const;
+
+const isBundledFontRequest = (url: string): boolean =>
+	BUNDLED_FONTS.some((font) => (font.faces as readonly string[]).some((name) => url.endsWith(name)));
 
 const BASE_VARS = ["--bg", "--text", "--border", "--muted"] as const;
 const STATUS_VARS = ["--status-running", "--status-attention", "--status-idle", "--status-error"] as const;
@@ -135,17 +180,19 @@ function contentType(path: string): string {
 	return "application/octet-stream";
 }
 
-/** Apply theme/mode to <html> exactly as appearance.ts does (omit the defaults). */
-async function applyRoot(target: Page, theme: ThemeId, mode: Mode): Promise<void> {
+/** Apply appearance to <html> exactly as appearance.ts does (omit defaults). */
+async function applyRoot(target: Page, theme: ThemeId, mode: Mode, font: FontId = "theme"): Promise<void> {
 	await target.evaluate(
-		({ theme, mode }) => {
+		({ theme, mode, font }) => {
 			const el = document.documentElement;
 			if (theme === "default") el.removeAttribute("data-theme");
 			else el.setAttribute("data-theme", theme);
 			if (mode === "system") el.removeAttribute("data-color-mode");
 			else el.setAttribute("data-color-mode", mode);
+			if (font === "theme") el.removeAttribute("data-font");
+			else el.setAttribute("data-font", font);
 		},
-		{ theme, mode },
+		{ theme, mode, font },
 	);
 }
 
@@ -196,17 +243,46 @@ beforeAll(async () => {
 		join(fontsDir, "jetbrains-mono-italic.woff2"),
 		join(tempDir, "assets", "fonts", "jetbrains-mono-italic.woff2"),
 	);
+	// Bundled OpenDyslexic faces — same local-origin treatment so the
+	// data-font="opendyslexic" @font-face srcs resolve against this origin.
+	for (const name of [
+		"opendyslexic-regular.woff2",
+		"opendyslexic-italic.woff2",
+		"opendyslexic-bold.woff2",
+		"opendyslexic-bold-italic.woff2",
+	]) {
+		copyFileSync(join(fontsDir, name), join(tempDir, "assets", "fonts", name));
+	}
+	// Bundled Fira Code / Iosevka / Atkinson Hyperlegible faces — same
+	// local-origin treatment so their @font-face srcs resolve too.
+	for (const font of BUNDLED_FONTS) {
+		for (const name of font.faces) {
+			copyFileSync(join(fontsDir, name), join(tempDir, "assets", "fonts", name));
+		}
+	}
 	// Real index.html (bootstrap + stylesheet order) — sub-resource 404s (module
 	// script, manifest, external fonts) are harmless; the head bootstrap runs.
 	writeFileSync(join(tempDir, "index.html"), indexHtml);
 	// Font-probe page links the three stylesheets and renders a mono element.
+	// The face probes exercise every OpenDyslexic @font-face range (400 → the
+	// 100-499 regular faces, 500/600/700 → the 500-900 bold faces, both
+	// styles); #glyphs holds the dashboard status glyphs + coding punctuation.
 	writeFileSync(
 		join(tempDir, "font-probe.html"),
 		`<!DOCTYPE html><html><head><meta charset="utf-8">
 			<link rel="stylesheet" href="./styles/tokens.css">
 			<link rel="stylesheet" href="./styles/app.css">
 			<link rel="stylesheet" href="./styles/themes.css">
-		</head><body><pre id="mono">const answer = 42;</pre></body></html>`,
+		</head><body><div id="body-text">body</div><pre id="mono">const answer = 42;</pre>
+			<select id="control"><option>control</option></select>
+			<textarea id="memory" class="memory-textarea">memory</textarea>
+			<div id="face-400" style="font-weight:400">face probe</div>
+			<div id="face-500" style="font-weight:500">face probe</div>
+			<div id="face-600" style="font-weight:600">face probe</div>
+			<div id="face-700" style="font-weight:700">face probe</div>
+			<div id="face-400i" style="font-weight:400;font-style:italic">face probe</div>
+			<div id="face-700i" style="font-weight:700;font-style:italic">face probe</div>
+			<div id="glyphs">●◆○✕ !\\"#$%&amp;'()*+,-./:;&lt;=&gt;?@[]{}~0Az—…</div></body></html>`,
 	);
 	// Appearance-module page: real bundled appearance.ts exposed as window.Appearance.
 	const bundle = await build({
@@ -399,7 +475,7 @@ describe("appearance — every resolved variant clears WCAG AA (>=4.5:1)", () =>
 
 // ===================================================== 6. font request isolation
 
-describe("appearance — JetBrains Mono is fetched only when gruvbox is active", () => {
+describe("appearance — theme-default font requests JetBrains Mono only for gruvbox", () => {
 	it.each([
 		["default", false],
 		["dim", false],
@@ -448,6 +524,364 @@ describe("appearance — JetBrains Mono is fetched only when gruvbox is active",
 	});
 });
 
+describe("appearance — explicit font choice overrides theme typography", () => {
+	it.each([
+		["gruvbox", "ibm-plex-mono", "IBM Plex Mono", false],
+		["solarized", "jetbrains-mono", "JetBrains Mono", true],
+	] as Array<[ThemeId, Exclude<FontId, "theme">, string, boolean]>)(
+		"theme=%s font=%s resolves %s",
+		async (theme, selectedFont, expectedFamily, expectJetBrainsRequest) => {
+			const ctx = await browser.newContext();
+			const p = await ctx.newPage();
+			const fontRequests: string[] = [];
+			p.on("request", (request) => {
+				if (request.url().endsWith("jetbrains-mono.woff2")) fontRequests.push(request.url());
+			});
+			await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+			await applyRoot(p, theme, "system", selectedFont);
+			await p.evaluate(() => {
+				for (const id of ["body-text", "mono", "control", "memory"]) {
+					void (document.getElementById(id) as HTMLElement).offsetHeight;
+				}
+			});
+			await p.evaluate(() => document.fonts.ready);
+			await p.waitForTimeout(100);
+
+			const families = await p.evaluate(() =>
+				["body-text", "mono", "control", "memory"].map(
+					(id) => getComputedStyle(document.getElementById(id) as HTMLElement).fontFamily,
+				),
+			);
+			for (const family of families) expect(family).toContain(expectedFamily);
+			if (expectJetBrainsRequest) expect(fontRequests.length).toBeGreaterThan(0);
+			else expect(fontRequests).toEqual([]);
+			await ctx.close();
+		},
+	);
+
+	it("theme-default previews stay on IBM until an explicit JetBrains preview is selected", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const fontRequests: string[] = [];
+		p.on("request", (request) => {
+			if (request.url().endsWith("jetbrains-mono.woff2")) fontRequests.push(request.url());
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		await p.evaluate(() => {
+			document.body.innerHTML =
+				'<button id="card" data-theme="gruvbox" data-font="ibm-plex-mono"><pre class="theme-card-code">preview</pre></button>';
+			void (document.querySelector(".theme-card-code") as HTMLElement).offsetHeight;
+		});
+		await p.waitForTimeout(100);
+		expect(fontRequests).toEqual([]);
+		expect(
+			await p.evaluate(() => getComputedStyle(document.querySelector(".theme-card-code") as HTMLElement).fontFamily),
+		).toContain("IBM Plex Mono");
+
+		await p.evaluate(() => {
+			document.getElementById("card")?.setAttribute("data-font", "jetbrains-mono");
+			void (document.querySelector(".theme-card-code") as HTMLElement).offsetHeight;
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+		expect(fontRequests.length).toBeGreaterThan(0);
+		expect(
+			await p.evaluate(() => getComputedStyle(document.querySelector(".theme-card-code") as HTMLElement).fontFamily),
+		).toContain("JetBrains Mono");
+		await ctx.close();
+	});
+});
+
+// ================================================= 6b. OpenDyslexic (bundled)
+
+describe("appearance — explicit OpenDyslexic selection (bundled dyslexia-friendly font)", () => {
+	const OPENDYSLEXIC_FACES = [
+		"opendyslexic-regular.woff2",
+		"opendyslexic-italic.woff2",
+		"opendyslexic-bold.woff2",
+		"opendyslexic-bold-italic.woff2",
+	] as const;
+	const isOpenDyslexicRequest = (url: string): boolean => OPENDYSLEXIC_FACES.some((name) => url.endsWith(name));
+
+	it("theme-default mode (no explicit font) never requests an OpenDyslexic face", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const requests: string[] = [];
+		p.on("request", (request) => {
+			if (isOpenDyslexicRequest(request.url())) requests.push(request.url());
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		// Gruvbox is the strongest case: its theme-default font is JetBrains
+		// Mono, never OpenDyslexic — so rendering it must not touch the bundled
+		// OpenDyslexic faces.
+		await applyRoot(p, "gruvbox", "system");
+		await p.evaluate(() => {
+			for (const id of ["body-text", "mono", "control", "memory", "glyphs"]) {
+				void (document.getElementById(id) as HTMLElement).offsetHeight;
+			}
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+		expect(requests).toEqual([]);
+		// The faces are declared by themes.css but were never fetched or used —
+		// Chromium reports a registered-but-unloaded family as not renderable.
+		const active = await p.evaluate(() => document.fonts.check("16px OpenDyslexic", "A"));
+		expect(active).toBe(false);
+		await ctx.close();
+	});
+
+	it("explicit OpenDyslexic applies to body/code/controls/memory-editor, loads all four bundled faces, and requests nothing remote", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const fontRequests: string[] = [];
+		const remoteRequests: string[] = [];
+		p.on("request", (request) => {
+			const url = request.url();
+			if (isOpenDyslexicRequest(url)) fontRequests.push(url);
+			if (url.includes("fonts.googleapis.com") || url.includes("fonts.gstatic.com")) remoteRequests.push(url);
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		await applyRoot(p, "solarized", "system", "opendyslexic");
+		await p.evaluate(() => {
+			for (const id of [
+				"body-text",
+				"mono",
+				"control",
+				"memory",
+				"face-400",
+				"face-500",
+				"face-600",
+				"face-700",
+				"face-400i",
+				"face-700i",
+				"glyphs",
+			]) {
+				void (document.getElementById(id) as HTMLElement).offsetHeight;
+			}
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+
+		const families = await p.evaluate(() =>
+			["body-text", "mono", "control", "memory"].map(
+				(id) => getComputedStyle(document.getElementById(id) as HTMLElement).fontFamily,
+			),
+		);
+		for (const family of families) expect(family).toContain("OpenDyslexic");
+
+		// Only the bundled local faces are requested — and every one of the
+		// four, because the probes use 400 (regular faces), 500–700 (bold
+		// faces), and both italics. Nothing leaves this origin.
+		const requestedNames = new Set(fontRequests.map((url) => url.split("/").pop()!));
+		for (const name of OPENDYSLEXIC_FACES) expect(requestedNames.has(name), name).toBe(true);
+		expect(fontRequests.every((url) => url.startsWith(baseUrl))).toBe(true);
+		// No CDN request of any kind for the explicit font.
+		expect(remoteRequests).toEqual([]);
+
+		// All four faces are genuinely loaded — real faces, so 500–800 and the
+		// italics render without faux-bold/faux-italic synthesis.
+		const faceStates = await p.evaluate(() =>
+			[...document.fonts]
+				.filter((f) => f.family === "OpenDyslexic")
+				.map((f) => `${f.style}/${String(f.weight)}/${f.status}`),
+		);
+		expect(faceStates).toContain("normal/100 499/loaded");
+		expect(faceStates).toContain("italic/100 499/loaded");
+		expect(faceStates).toContain("normal/500 900/loaded");
+		expect(faceStates).toContain("italic/500 900/loaded");
+
+		// The dashboard's status glyphs + coding punctuation are available
+		// through the active stack: ● ○ and the punctuation come from
+		// OpenDyslexic itself; ◆ ✕ fall back within the stack (the same path
+		// today's IBM themes use, since the Google-hosted IBM slices lack those
+		// geometric shapes too — see OPENDYSLEXIC-PROVENANCE.md).
+		const glyphsAvailable = await p.evaluate(() =>
+			document.fonts.check(
+				'16px "OpenDyslexic", "IBM Plex Mono", "Courier New", monospace',
+				"●◆○✕ !\"#$%&'()*+,-./:;<>?@[]{}~0Az—…",
+			),
+		);
+		expect(glyphsAvailable).toBe(true);
+		await ctx.close();
+	});
+
+	it("theme-default previews never request OpenDyslexic; an explicit preview card does", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const requests: string[] = [];
+		p.on("request", (request) => {
+			if (isOpenDyslexicRequest(request.url())) requests.push(request.url());
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		await p.evaluate(() => {
+			// Mirror the real gallery: theme-default mode pins preview cards to
+			// the baseline IBM family, so merely rendering a card cannot fetch
+			// the bundled OpenDyslexic faces.
+			document.body.innerHTML =
+				'<button id="card" data-theme="gruvbox" data-font="ibm-plex-mono"><pre class="theme-card-code">preview</pre></button>';
+			void (document.querySelector(".theme-card-code") as HTMLElement).offsetHeight;
+		});
+		await p.waitForTimeout(100);
+		expect(requests).toEqual([]);
+
+		await p.evaluate(() => {
+			document.getElementById("card")?.setAttribute("data-font", "opendyslexic");
+			void (document.querySelector(".theme-card-code") as HTMLElement).offsetHeight;
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+		expect(requests.length).toBeGreaterThan(0);
+		expect(
+			await p.evaluate(() => getComputedStyle(document.querySelector(".theme-card-code") as HTMLElement).fontFamily),
+		).toContain("OpenDyslexic");
+		await ctx.close();
+	});
+});
+
+// ==================================== 6c. Fira Code / Iosevka / Atkinson
+
+describe("appearance — explicit Fira Code / Iosevka / Atkinson Hyperlegible (bundled)", () => {
+	it.each(BUNDLED_FONTS.map((font) => [font.id, font.family, font.faces, font.loadedStates] as const))(
+		"font=%s on gruvbox overrides the theme default, applies to body/code/controls/memory, loads all faces, and requests nothing remote",
+		async (id, family, faces, loadedStates) => {
+			const ctx = await browser.newContext();
+			const p = await ctx.newPage();
+			const fontRequests: string[] = [];
+			const jetBrainsRequests: string[] = [];
+			const remoteRequests: string[] = [];
+			p.on("request", (request) => {
+				const url = request.url();
+				if (isBundledFontRequest(url)) fontRequests.push(url);
+				if (url.endsWith("jetbrains-mono.woff2")) jetBrainsRequests.push(url);
+				if (url.includes("fonts.googleapis.com") || url.includes("fonts.gstatic.com")) remoteRequests.push(url);
+			});
+			await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+			// Gruvbox is the strongest case: its theme default is JetBrains
+			// Mono, so an explicit family must beat that rule AND not fetch it.
+			await applyRoot(p, "gruvbox", "system", id);
+			await p.evaluate(() => {
+				for (const probeId of [
+					"body-text",
+					"mono",
+					"control",
+					"memory",
+					"face-400",
+					"face-500",
+					"face-600",
+					"face-700",
+					"face-400i",
+					"face-700i",
+				]) {
+					void (document.getElementById(probeId) as HTMLElement).offsetHeight;
+				}
+			});
+			await p.evaluate(() => document.fonts.ready);
+			await p.waitForTimeout(100);
+
+			// The computed family must START with the explicit family — a losing
+			// cascade would leave the gruvbox stack (JetBrains-first) in place.
+			// (Chromium serializes computed font-family without quotes around
+			// unquoted identifiers like `Iosevka`, so normalize before matching.)
+			const families = await p.evaluate(() =>
+				["body-text", "mono", "control", "memory"].map(
+					(id) => getComputedStyle(document.getElementById(id) as HTMLElement).fontFamily,
+				),
+			);
+			for (const computed of families) {
+				expect(computed.replace(/"/g, "").startsWith(`${family},`), computed).toBe(true);
+			}
+
+			// Every bundled face is fetched locally and reaches `loaded` (the
+			// probes use 400, 500, 600 and both italics — 700/700i resolve to
+			// the nearest declared face without a new fetch).
+			const requestedNames = new Set(fontRequests.map((url) => url.split("/").pop()!));
+			for (const name of faces) expect(requestedNames.has(name), name).toBe(true);
+			expect(fontRequests.every((url) => url.startsWith(baseUrl))).toBe(true);
+			const faceStates = await p.evaluate(
+				({ family }) =>
+					[...document.fonts]
+						.filter((f) => f.family === family)
+						.map((f) => `${f.style}/${String(f.weight)}/${f.status}`),
+				{ family },
+			);
+			for (const state of loadedStates) expect(faceStates, state).toContain(state);
+
+			// No JetBrains fetch (explicit choice beats the gruvbox default) and
+			// no CDN request of any kind.
+			expect(jetBrainsRequests).toEqual([]);
+			expect(remoteRequests).toEqual([]);
+			await ctx.close();
+		},
+	);
+
+	it("theme-default mode (no explicit font) never requests a Fira Code, Iosevka, or Atkinson face", async () => {
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		const requests: string[] = [];
+		p.on("request", (request) => {
+			if (isBundledFontRequest(request.url())) requests.push(request.url());
+		});
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		// Gruvbox again: the strongest theme-default case (JetBrains default).
+		await applyRoot(p, "gruvbox", "system");
+		await p.evaluate(() => {
+			for (const probeId of ["body-text", "mono", "control", "memory", "glyphs"]) {
+				void (document.getElementById(probeId) as HTMLElement).offsetHeight;
+			}
+		});
+		await p.evaluate(() => document.fonts.ready);
+		await p.waitForTimeout(100);
+		expect(requests).toEqual([]);
+		// Declared but never fetched — Chromium reports them as not renderable.
+		for (const { family } of BUNDLED_FONTS) {
+			expect(await p.evaluate((f) => document.fonts.check(`16px "${f}"`, "A"), family)).toBe(false);
+		}
+		await ctx.close();
+	});
+
+	it("each family renders the glyphs its provenance record claims, alone", async () => {
+		// Per-family (NOT stack-based) checks: these fail if a bundled face is
+		// missing a glyph the provenance claims it has. The set per family is
+		// exactly what the provenance documents as present — Fira Code lacks
+		// ✕/↻ and Atkinson is Latin-centric (no shapes/arrows), so those are
+		// asserted only where the face really contains them.
+		const claims: Array<{ id: FontId; family: string; glyphs: string }> = [
+			// Iosevka's subset keeps the full symbol set (verified in
+			// IOSEVKA-PROVENANCE.md), including every dashboard status glyph.
+			{ id: "iosevka", family: "Iosevka", glyphs: "●◆○✕↻ !\"#$%&'()*+,-./:;<=>?@[]{}~0Az—…" },
+			// Fira Code covers the shapes + punctuation but not dingbats/arrows.
+			{ id: "fira-code", family: "Fira Code", glyphs: "●◆○ !\"#$%&'()*+,-./:;<=>?@[]{}~0Az—…±×÷≤≥≠" },
+			// Atkinson Hyperlegible is Latin-centric by design.
+			{
+				id: "atkinson-hyperlegible",
+				family: "Atkinson Hyperlegible Next",
+				glyphs: "aA09 !\"#$%&'()*+,-./:;<=>?@[]{}~—…±×÷≤≥≠",
+			},
+		];
+		const ctx = await browser.newContext();
+		const p = await ctx.newPage();
+		await p.goto(`${baseUrl}/font-probe.html`, { waitUntil: "load" });
+		for (const { id, family, glyphs } of claims) {
+			// Activate the family and force the face probes to render in it so
+			// the faces are genuinely loaded before check() can be trusted.
+			await applyRoot(p, "solarized", "system", id);
+			await p.evaluate(() => {
+				for (const probeId of ["face-400", "face-500", "face-600", "face-400i", "face-700i"]) {
+					void (document.getElementById(probeId) as HTMLElement).offsetHeight;
+				}
+			});
+			await p.evaluate(() => document.fonts.ready);
+			// Family-ALONE check (no fallback stack): fails if the bundled face
+			// lacks a claimed glyph or was never loaded.
+			expect(
+				await p.evaluate((c) => document.fonts.check(`16px "${c.family}"`, c.glyphs), { family, glyphs }),
+				family,
+			).toBe(true);
+		}
+		await ctx.close();
+	});
+});
+
 // ====================================================== 7. first-paint bootstrap
 
 describe("appearance — the head bootstrap paints the persisted theme on first frame", () => {
@@ -457,16 +891,17 @@ describe("appearance — the head bootstrap paints the persisted theme on first 
 		expect(scriptIdx).toBeGreaterThan(-1);
 		expect(tokensLinkIdx).toBeGreaterThan(-1);
 		// The synchronous bootstrap must run before tokens/app/themes load so the
-		// correct palette is present on the very first paint (no wrong-theme flash).
+		// correct appearance is present on the first paint (no wrong-appearance flash).
 		expect(scriptIdx).toBeLessThan(tokensLinkIdx);
 	});
 
-	it("has data-theme/data-color-mode set from seeded localStorage before any app script runs", async () => {
+	it("has data-theme/data-color-mode/data-font set from storage before any app script runs", async () => {
 		const ctx = await browser.newContext();
 		// Seed BEFORE navigation so the head bootstrap reads it synchronously.
 		await ctx.addInitScript(() => {
 			localStorage.setItem("dreb.dashboard.theme", "gruvbox");
 			localStorage.setItem("dreb.dashboard.colorMode", "dark");
+			localStorage.setItem("dreb.dashboard.font", "ibm-plex-mono");
 		});
 		const p = await ctx.newPage();
 		// The app module (index.tsx) 404s from the temp origin and never executes,
@@ -475,11 +910,45 @@ describe("appearance — the head bootstrap paints the persisted theme on first 
 		const state = await p.evaluate(() => ({
 			theme: document.documentElement.getAttribute("data-theme"),
 			mode: document.documentElement.getAttribute("data-color-mode"),
+			font: document.documentElement.getAttribute("data-font"),
 			colorScheme: document.documentElement.style.getPropertyValue("color-scheme"),
 		}));
 		expect(state.theme).toBe("gruvbox");
 		expect(state.mode).toBe("dark");
+		expect(state.font).toBe("ibm-plex-mono");
 		expect(state.colorScheme).toBe("dark");
+		await ctx.close();
+	});
+
+	it("ignores an invalid persisted font before app code runs", async () => {
+		const ctx = await browser.newContext();
+		await ctx.addInitScript(() => {
+			localStorage.setItem("dreb.dashboard.font", "retired-font");
+		});
+		const p = await ctx.newPage();
+		await p.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+		expect(await p.evaluate(() => document.documentElement.getAttribute("data-font"))).toBeNull();
+		await ctx.close();
+	});
+
+	it("restores a persisted OpenDyslexic font before any app script runs (font-only: no theme attr, no color-scheme)", async () => {
+		const ctx = await browser.newContext();
+		await ctx.addInitScript(() => {
+			localStorage.setItem("dreb.dashboard.font", "opendyslexic");
+		});
+		const p = await ctx.newPage();
+		await p.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+		const state = await p.evaluate(() => ({
+			font: document.documentElement.getAttribute("data-font"),
+			theme: document.documentElement.getAttribute("data-theme"),
+			colorScheme: document.documentElement.style.getPropertyValue("color-scheme"),
+		}));
+		// The explicit bundled font restores on the first frame, while the
+		// font-only state deliberately leaves no theme attribute and no
+		// inline color-scheme (font is excluded from the active computation).
+		expect(state.font).toBe("opendyslexic");
+		expect(state.theme).toBeNull();
+		expect(state.colorScheme).toBe("");
 		await ctx.close();
 	});
 

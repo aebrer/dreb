@@ -5,16 +5,17 @@
  * the TUI theme system: the dashboard owns these palettes. Loaded AFTER
  * tokens.css and app.css, it overrides the design tokens (--bg, --text,
  * --border, --muted, the four --status-*, the nine --syntax-*, and --mono-font)
- * when a curated theme or a forced color mode is active.
+ * when a curated theme, forced color mode, or explicit font is active.
  *
- * The no-attribute case (default theme + system mode) is intentionally NOT
- * matched here, so a pristine install renders byte-for-byte identically to the
- * tokens.css / app.css baseline.
+ * The no-attribute case (default theme + system mode + theme-default font) is
+ * intentionally NOT matched here, so a pristine install renders byte-for-byte
+ * identically to the tokens.css / app.css baseline.
  *
  * SCOPING: every rule uses bare attribute selectors ([data-theme='…'],
- * [data-color-mode='…']) rather than :root-anchored ones, so a preview element
- * can carry the attributes and get the palette locally (custom properties then
- * cascade to its subtree). Runtime attributes normally live on <html> (set by
+ * [data-color-mode='…'], [data-font='…']) rather than :root-anchored ones, so a
+ * preview element can carry the attributes and get the appearance locally
+ * (custom properties then cascade to its subtree). Runtime attributes normally
+ * live on <html> (set by
  * state/appearance.ts + the index.html bootstrap).
  *
  * VARIANT MODEL: each curated theme defines BOTH a light and a dark palette as
@@ -35,9 +36,9 @@
 /* ============================================================ fonts */
 
 /*
- * JetBrains Mono — self-hosted, used only by the gruvbox theme. Variable
- * (wght 100–800) so 400/500/600 render natively without faux bold. Fetched
- * lazily by the browser only when gruvbox is active (no <link rel=preload>).
+ * JetBrains Mono — self-hosted for the gruvbox theme and explicit font picker.
+ * Variable (wght 100–800) so 400/500/600 render natively without faux bold.
+ * Fetched lazily only when active typography uses it (no <link rel=preload>).
  * Files + license + provenance live in ../assets/fonts/. url() is resolved
  * relative to this file and fingerprinted by Vite.
  */
@@ -55,6 +56,161 @@
 	font-weight: 100 800;
 	font-display: swap;
 	src: url("../assets/fonts/jetbrains-mono-italic.woff2") format("woff2");
+}
+
+/*
+ * OpenDyslexic — self-hosted, explicit font picker only (a bundled
+ * dyslexia-friendly option; see ../assets/fonts/OPENDYSLEXIC-PROVENANCE.md).
+ * Four unmodified upstream static faces; the dashboard's emphasized weights
+ * (500–800) map to the upstream bold face (weight class 800) so headings and
+ * emphasized controls use a real face, never synthesized faux bold. Fetched
+ * lazily only when data-font="opendyslexic" is active (no <link rel=preload>).
+ */
+@font-face {
+	font-family: "OpenDyslexic";
+	font-style: normal;
+	font-weight: 100 499;
+	font-display: swap;
+	src: url("../assets/fonts/opendyslexic-regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "OpenDyslexic";
+	font-style: italic;
+	font-weight: 100 499;
+	font-display: swap;
+	src: url("../assets/fonts/opendyslexic-italic.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "OpenDyslexic";
+	font-style: normal;
+	font-weight: 500 900;
+	font-display: swap;
+	src: url("../assets/fonts/opendyslexic-bold.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "OpenDyslexic";
+	font-style: italic;
+	font-weight: 500 900;
+	font-display: swap;
+	src: url("../assets/fonts/opendyslexic-bold-italic.woff2") format("woff2");
+}
+
+/*
+ * Fira Code — self-hosted, explicit font picker only (a monospace with
+ * default-on coding ligatures via the `calt` feature; see
+ * ../assets/fonts/FIRACODE-PROVENANCE.md). Three unsubsetted re-encoded static
+ * faces at the exact weights the dashboard uses. Fira Code ships no italic
+ * face upstream, so italic text is synthesized — an upstream limitation.
+ * Fetched lazily only when data-font="fira-code" is active
+ * (no <link rel=preload>).
+ */
+@font-face {
+	font-family: "Fira Code";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/fira-code-regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Fira Code";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("../assets/fonts/fira-code-medium.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Fira Code";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("../assets/fonts/fira-code-semibold.woff2") format("woff2");
+}
+
+/*
+ * Iosevka — self-hosted, explicit font picker only (a compact monospace with
+ * default-on coding ligatures via the `calt` feature; see
+ * ../assets/fonts/IOSEVKA-PROVENANCE.md). Four static faces subset to the
+ * dashboard's unicode needs (Latin/Extended, Greek, Cyrillic, coding
+ * punctuation and symbols — including all status glyphs) and re-encoded;
+ * the ~100 stylistic/vertical-writing GSUB features were pruned. Fetched
+ * lazily only when data-font="iosevka" is active (no <link rel=preload>).
+ */
+@font-face {
+	font-family: "Iosevka";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/iosevka-regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Iosevka";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("../assets/fonts/iosevka-medium.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Iosevka";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("../assets/fonts/iosevka-semibold.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Iosevka";
+	font-style: italic;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/iosevka-italic.woff2") format("woff2");
+}
+
+/*
+ * Atkinson Hyperlegible — self-hosted, explicit font picker only (a
+ * second bundled accessibility option designed for low-vision readers; see
+ * ../assets/fonts/ATKINSON-PROVENANCE.md). Four unmodified upstream WOFF2
+ * faces (v2.001 "Next") at the exact weights the dashboard uses; the
+ * per-weight upstream family names are declared under a single family name.
+ * Fetched lazily only when data-font="atkinson-hyperlegible" is active
+ * (no <link rel=preload>).
+ */
+@font-face {
+	font-family: "Atkinson Hyperlegible Next";
+	font-style: normal;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/atkinson-hyperlegible-regular.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Atkinson Hyperlegible Next";
+	font-style: normal;
+	font-weight: 500;
+	font-display: swap;
+	src: url("../assets/fonts/atkinson-hyperlegible-medium.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Atkinson Hyperlegible Next";
+	font-style: normal;
+	font-weight: 600;
+	font-display: swap;
+	src: url("../assets/fonts/atkinson-hyperlegible-semibold.woff2") format("woff2");
+}
+
+@font-face {
+	font-family: "Atkinson Hyperlegible Next";
+	font-style: italic;
+	font-weight: 400;
+	font-display: swap;
+	src: url("../assets/fonts/atkinson-hyperlegible-italic.woff2") format("woff2");
 }
 
 /* ================================================= default: forced modes */
@@ -995,4 +1151,34 @@
 		--syntax-operator: var(--tol-d-operator);
 		--syntax-punctuation: var(--tol-d-punctuation);
 	}
+}
+
+/* ================================================= explicit font override */
+
+/* Loaded after every theme mapping so an explicit browser-local font choice
+ * wins independently on :root and on scoped preview cards. Theme-default font
+ * omits data-font entirely and therefore preserves each theme's built-in stack.
+ */
+[data-font="ibm-plex-mono"] {
+	--mono-font: "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="jetbrains-mono"] {
+	--mono-font: "JetBrains Mono", "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="opendyslexic"] {
+	--mono-font: "OpenDyslexic", "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="fira-code"] {
+	--mono-font: "Fira Code", "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="iosevka"] {
+	--mono-font: "Iosevka", "IBM Plex Mono", "Courier New", monospace;
+}
+
+[data-font="atkinson-hyperlegible"] {
+	--mono-font: "Atkinson Hyperlegible Next", "IBM Plex Mono", "Courier New", monospace;
 }

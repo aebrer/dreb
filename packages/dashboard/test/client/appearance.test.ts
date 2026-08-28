@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Appearance system tests — the dashboard-native theme + color-mode foundation
+ * Appearance system tests — the dashboard-native theme + color-mode + font foundation
  * (state/appearance.ts) plus the index.html bootstrap contract.
  *
  * Mirrors the localStorage + jsdom shim pattern from pwa.test.tsx. matchMedia
@@ -18,12 +18,19 @@ import {
 	COLOR_MODE_STORAGE_KEY,
 	type ColorMode,
 	colorMode,
+	FONT_IDS,
+	FONT_STORAGE_KEY,
+	FONTS,
+	type FontId,
+	font,
 	initAppearance,
+	isValidFont,
 	isValidMode,
 	isValidTheme,
 	MODES,
 	reloadAppearance,
 	setColorMode,
+	setFont,
 	setTheme,
 	THEME_IDS,
 	THEME_STORAGE_KEY,
@@ -37,6 +44,7 @@ function resetDom(): void {
 	const root = document.documentElement;
 	root.removeAttribute("data-theme");
 	root.removeAttribute("data-color-mode");
+	root.removeAttribute("data-font");
 	root.style.removeProperty("color-scheme");
 	root.style.removeProperty("--bg");
 	for (const meta of Array.from(document.querySelectorAll('meta[name="theme-color"]'))) {
@@ -100,39 +108,63 @@ describe("appearance — catalog", () => {
 		for (const m of MODES) expect(isValidMode(m)).toBe(true);
 	});
 
-	it("rejects unknown theme / mode values", () => {
+	it("exposes the seven font options in picker order", () => {
+		expect(FONTS).toEqual([
+			{ id: "theme", label: "Theme default" },
+			{ id: "ibm-plex-mono", label: "IBM Plex Mono" },
+			{ id: "jetbrains-mono", label: "JetBrains Mono" },
+			{ id: "fira-code", label: "Fira Code" },
+			{ id: "iosevka", label: "Iosevka" },
+			{ id: "opendyslexic", label: "OpenDyslexic" },
+			{ id: "atkinson-hyperlegible", label: "Atkinson Hyperlegible" },
+		]);
+		expect(FONT_IDS).toEqual(FONTS.map((entry) => entry.id));
+		for (const entry of FONTS) expect(isValidFont(entry.id)).toBe(true);
+	});
+
+	it("rejects unknown theme, mode, and font values", () => {
 		expect(isValidTheme("nope")).toBe(false);
 		expect(isValidTheme(null)).toBe(false);
 		expect(isValidMode("sepia")).toBe(false);
 		expect(isValidMode(undefined)).toBe(false);
+		expect(isValidFont("comic-sans")).toBe(false);
+		expect(isValidFont("dyslexic")).toBe(false);
+		expect(isValidFont(null)).toBe(false);
 	});
 });
 
 describe("appearance — reading persisted state", () => {
-	it("defaults to default/system when keys are missing", () => {
+	it("defaults to default/system/theme-font when keys are missing", () => {
 		reloadAppearance();
 		expect(theme()).toBe("default");
 		expect(colorMode()).toBe("system");
+		expect(font()).toBe("theme");
 	});
 
 	it("restores valid persisted values", () => {
 		window.localStorage.setItem(THEME_STORAGE_KEY, "solarized");
 		window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "dark");
+		window.localStorage.setItem(FONT_STORAGE_KEY, "jetbrains-mono");
 		reloadAppearance();
 		expect(theme()).toBe("solarized");
 		expect(colorMode()).toBe("dark");
+		expect(font()).toBe("jetbrains-mono");
 		expect(document.documentElement.getAttribute("data-theme")).toBe("solarized");
 		expect(document.documentElement.getAttribute("data-color-mode")).toBe("dark");
+		expect(document.documentElement.getAttribute("data-font")).toBe("jetbrains-mono");
 	});
 
-	it("normalizes invalid/retired persisted values to default/system", () => {
+	it("normalizes invalid/retired persisted values to clean defaults", () => {
 		window.localStorage.setItem(THEME_STORAGE_KEY, "retired-theme");
 		window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, "sepia");
+		window.localStorage.setItem(FONT_STORAGE_KEY, "retired-font");
 		reloadAppearance();
 		expect(theme()).toBe("default");
 		expect(colorMode()).toBe("system");
+		expect(font()).toBe("theme");
 		expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
 		expect(document.documentElement.hasAttribute("data-color-mode")).toBe(false);
+		expect(document.documentElement.hasAttribute("data-font")).toBe(false);
 	});
 });
 
@@ -173,6 +205,52 @@ describe("appearance — setters", () => {
 		expect(document.documentElement.hasAttribute("data-color-mode")).toBe(false);
 	});
 
+	it("setFont applies and persists an explicit font independently of theme", () => {
+		setTheme("gruvbox");
+		setFont("ibm-plex-mono");
+		expect(font()).toBe("ibm-plex-mono");
+		expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBe("ibm-plex-mono");
+		expect(document.documentElement.getAttribute("data-font")).toBe("ibm-plex-mono");
+		setTheme("solarized");
+		expect(font()).toBe("ibm-plex-mono");
+		expect(document.documentElement.getAttribute("data-font")).toBe("ibm-plex-mono");
+	});
+
+	it("selecting the theme-default font REMOVES the key and attribute", () => {
+		setFont("jetbrains-mono");
+		setFont("theme");
+		expect(font()).toBe("theme");
+		expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBeNull();
+		expect(document.documentElement.hasAttribute("data-font")).toBe(false);
+	});
+
+	it("persists and restores the bundled OpenDyslexic font", () => {
+		setFont("opendyslexic");
+		expect(font()).toBe("opendyslexic");
+		expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBe("opendyslexic");
+		expect(document.documentElement.getAttribute("data-font")).toBe("opendyslexic");
+		// A re-read (page reload or another tab) restores the explicit choice.
+		reloadAppearance();
+		expect(font()).toBe("opendyslexic");
+		expect(document.documentElement.getAttribute("data-font")).toBe("opendyslexic");
+	});
+
+	it("persists and restores the other bundled families (Fira Code, Iosevka, Atkinson)", () => {
+		for (const id of ["fira-code", "iosevka", "atkinson-hyperlegible"] as const) {
+			setFont(id);
+			expect(font()).toBe(id);
+			expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBe(id);
+			expect(document.documentElement.getAttribute("data-font")).toBe(id);
+			reloadAppearance();
+			expect(font()).toBe(id);
+			expect(document.documentElement.getAttribute("data-font")).toBe(id);
+		}
+		// Back to the clean default: no key, no attribute.
+		setFont("theme");
+		expect(window.localStorage.getItem(FONT_STORAGE_KEY)).toBeNull();
+		expect(document.documentElement.hasAttribute("data-font")).toBe(false);
+	});
+
 	it("removes color-scheme entirely in the pristine default+system case", () => {
 		setColorMode("dark");
 		setTheme("dim");
@@ -182,11 +260,26 @@ describe("appearance — setters", () => {
 		expect(document.documentElement.style.getPropertyValue("color-scheme")).toBe("");
 	});
 
-	it("normalizes an invalid setter argument to the default", () => {
+	it("an explicit font alone does NOT activate color-scheme (font is excluded from the active check)", () => {
+		// Pristine theme/mode (default + system) with ONLY a font chosen: the
+		// `active` computation deliberately ignores the font, so native
+		// form-control/scrollbar theming must not flip on a font-only choice.
+		// This pins the bootstrap/applyAppearance parity for the font-only state.
+		setFont("opendyslexic");
+		expect(theme()).toBe("default");
+		expect(colorMode()).toBe("system");
+		expect(font()).toBe("opendyslexic");
+		expect(document.documentElement.getAttribute("data-font")).toBe("opendyslexic");
+		expect(document.documentElement.style.getPropertyValue("color-scheme")).toBe("");
+	});
+
+	it("normalizes invalid setter arguments to defaults", () => {
 		setTheme("bogus" as ThemeId);
 		expect(theme()).toBe("default");
 		setColorMode("bogus" as ColorMode);
 		expect(colorMode()).toBe("system");
+		setFont("bogus" as FontId);
+		expect(font()).toBe("theme");
 	});
 });
 
@@ -198,6 +291,7 @@ describe("appearance — storage resilience", () => {
 		expect(() => reloadAppearance()).not.toThrow();
 		expect(theme()).toBe("default");
 		expect(colorMode()).toBe("system");
+		expect(font()).toBe("theme");
 		spy.mockRestore();
 	});
 
@@ -206,8 +300,11 @@ describe("appearance — storage resilience", () => {
 			throw new Error("quota exceeded");
 		});
 		expect(() => setTheme("gruvbox")).not.toThrow();
+		expect(() => setFont("jetbrains-mono")).not.toThrow();
 		expect(theme()).toBe("gruvbox");
+		expect(font()).toBe("jetbrains-mono");
 		expect(document.documentElement.getAttribute("data-theme")).toBe("gruvbox");
+		expect(document.documentElement.getAttribute("data-font")).toBe("jetbrains-mono");
 		spy.mockRestore();
 	});
 });
@@ -219,6 +316,14 @@ describe("appearance — cross-tab storage sync", () => {
 		window.dispatchEvent(new StorageEvent("storage", { key: THEME_STORAGE_KEY, newValue: "solarized" }));
 		expect(theme()).toBe("solarized");
 		expect(document.documentElement.getAttribute("data-theme")).toBe("solarized");
+	});
+
+	it("re-reads and applies when the font key changes in another tab", () => {
+		initAppearance();
+		window.localStorage.setItem(FONT_STORAGE_KEY, "jetbrains-mono");
+		window.dispatchEvent(new StorageEvent("storage", { key: FONT_STORAGE_KEY, newValue: "jetbrains-mono" }));
+		expect(font()).toBe("jetbrains-mono");
+		expect(document.documentElement.getAttribute("data-font")).toBe("jetbrains-mono");
 	});
 
 	it("ignores storage events for unrelated keys", () => {
@@ -233,6 +338,7 @@ describe("appearance — cross-tab storage sync", () => {
 		initAppearance();
 		setTheme("solarized");
 		setColorMode("dark");
+		setFont("jetbrains-mono");
 		expect(document.documentElement.getAttribute("data-theme")).toBe("solarized");
 
 		// Another tab called localStorage.clear(): the store empties and the
@@ -243,8 +349,10 @@ describe("appearance — cross-tab storage sync", () => {
 
 		expect(theme()).toBe("default");
 		expect(colorMode()).toBe("system");
+		expect(font()).toBe("theme");
 		expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
 		expect(document.documentElement.hasAttribute("data-color-mode")).toBe(false);
+		expect(document.documentElement.hasAttribute("data-font")).toBe(false);
 	});
 });
 
@@ -370,6 +478,7 @@ describe("appearance — index.html bootstrap contract", () => {
 	it("declares the exact storage keys the module uses", () => {
 		expect(html).toContain(THEME_STORAGE_KEY);
 		expect(html).toContain(COLOR_MODE_STORAGE_KEY);
+		expect(html).toContain(FONT_STORAGE_KEY);
 	});
 
 	it("inline allowlist includes every non-default theme id", () => {
@@ -384,10 +493,17 @@ describe("appearance — index.html bootstrap contract", () => {
 		}
 	});
 
-	it("does not list the default theme or system mode in the bootstrap allowlists", () => {
-		// The bootstrap only sets attributes for non-default/non-system values.
-		// The literal arrays must NOT contain them (guards against drift).
+	it("inline allowlist includes every explicit font id", () => {
+		for (const id of FONT_IDS.filter((entry) => entry !== "theme")) {
+			expect(html).toContain(`"${id}"`);
+		}
+	});
+
+	it("lists only non-default theme, mode, and font values in bootstrap arrays", () => {
 		expect(html).toContain('["dim", "solarized", "gruvbox", "qud", "vangogh", "okabe", "tol"]');
 		expect(html).toContain('["light", "dark"]');
+		expect(html).toContain(
+			'["ibm-plex-mono", "jetbrains-mono", "fira-code", "iosevka", "opendyslexic", "atkinson-hyperlegible"]',
+		);
 	});
 });
