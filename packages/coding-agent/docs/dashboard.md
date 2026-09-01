@@ -183,6 +183,20 @@ bytes, then browser-facing live events, replay, hydrate/resync, parent messages,
 and subagent messages carry only an ID, MIME type, and original binary size.
 Authoritative RPC/session history is not changed.
 
+In dashboard mode the child applies the same reduction one boundary earlier,
+before JSONL serialization: each unique image (exact MIME type plus decoded
+bytes) crosses the child stdout pipe at most once per child process lifetime,
+and every later occurrence — prompt re-emission, each tool-result re-delivery,
+the `agent_end` transcript — becomes the small `image_reference` frame the
+dashboard already understands. The dashboard's image cache holds the binary
+from the first-occurrence event, so references resolve without the slow
+authoritative reload. The child turns a block into a reference only when this
+strict decode accepts it (allowlisted MIME type, canonical base64, matching
+byte signature); anything it would reject stays inline at every occurrence and
+is dropped exactly as before — never becoming an unresolvable reference.
+Command responses (`get_messages`, `get_dashboard_snapshot`) always carry full
+payloads because they are the authoritative source image recovery reads.
+
 The browser-local `dreb.dashboard.imageDisplayMode` setting has three modes:
 
 - **placeholders** — assign no image `src` and make no request until preview or
@@ -285,7 +299,7 @@ normally. Replay and resync retain their ordering guarantees below.
 
 The top bar and persistent session header expose the live-stream state as an accessible text `output`, not color alone: **connecting**, **connected**, **retrying** (including its delay), **resyncing**, **disconnected**, or **auth failed**. The session-header indicator remains visible when the session details or composer controls are collapsed. This is the state of the dashboard's single SSE connection, not the state of an individual agent.
 
-Events are `{seq, key, event}` envelopes. The server retains a **projected** form of reducer-relevant events in a ring bounded by both entry count and encoded bytes; a reconnect can replay only a separately byte-bounded range. Projection removes cumulative fields the browser reducer does not use, rather than silently truncating an event. If history is too old or the requested replay exceeds budget, only that reconnect receives a `dashboard_resync` barrier at the current cursor; healthy browsers are not interrupted. A projected event whose **non-image content** is itself oversized emits a global barrier because every browser missed it; image blocks have already become small references before frame sizing. A slow client's write buffer is bounded too: backpressure closes that SSE connection, then the normal recovery path takes over.
+Events are `{seq, key, event}` envelopes. The server retains a **projected** form of reducer-relevant events in a ring bounded by both entry count and encoded bytes; a reconnect can replay only a separately byte-bounded range. Projection removes cumulative fields the browser reducer does not use, rather than silently truncating an event. If history is too old or the requested replay exceeds budget, only that reconnect receives a `dashboard_resync` barrier at the current cursor; healthy browsers are not interrupted. A projected event whose **non-image content** is itself oversized emits a global barrier because every browser missed it; image blocks have already become small references before frame sizing. A slow client's write buffer is bounded too: backpressure closes that SSE connection, then the normal recovery path takes over. The RPC child side is bounded as well: its stdout write queue may accumulate past **16 MiB** while a slow-but-alive consumer keeps making drain progress, and a backlog over **16 MiB** aborts the child only after **30 seconds without drain progress**, so a briefly stalled dashboard consumer survives multi-image bursts instead of losing the session.
 
 On a barrier, protocol error, reducer error, server restart, sequence gap, or stalled stream, the browser fetches the authoritative `/api/resync` snapshot. For an active runtime, its state (including the atomically replaced task list), transcript, and background-agent registry are paired with the EventHub sequence captured synchronously at the RPC snapshot marker. The HTTP response carries that `barrierSeq`; the browser discards queued envelopes through it, then applies strictly later envelopes. A viewed subagent transcript has its own earlier disk-read boundary so relays between the disk and parent snapshot are also restored. This ordering prevents duplicate or missing transcript/task changes and restores tasks after a hard refresh or recovery gap. The barrier is an ordering contract, not a timing delay; see [Dashboard snapshots](rpc.md#get_dashboard_snapshot).
 

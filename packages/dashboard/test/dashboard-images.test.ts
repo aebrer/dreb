@@ -159,6 +159,56 @@ describe("dashboard image projection and repository", () => {
 		await expect(service.original(scope, id, async () => [])).rejects.toBeInstanceOf(DashboardImageNotFoundError);
 	});
 
+	it("single-flights concurrent original() recovery for the same scope and id (issue 495)", async () => {
+		const service = new DashboardImageService(new FakePreviewGenerator());
+		const id = dashboardImageId("image/png", PNG_BYTES);
+		let loadCalls = 0;
+		let release!: (source: unknown) => void;
+		const loadAuthoritative = (): Promise<unknown> =>
+			new Promise((resolve) => {
+				loadCalls += 1;
+				release = resolve;
+			});
+
+		const first = service.original(scope, id, loadAuthoritative);
+		const second = service.original(scope, id, loadAuthoritative);
+		expect(loadCalls).toBe(1);
+
+		release([imageBlock()]);
+		const [a, b] = await Promise.all([first, second]);
+		expect(loadCalls).toBe(1);
+		expect(a.bytes).toEqual(PNG_BYTES);
+		expect(b.bytes).toEqual(PNG_BYTES);
+	});
+
+	it("does not share original() recovery across scopes", async () => {
+		const service = new DashboardImageService(new FakePreviewGenerator());
+		const id = dashboardImageId("image/png", PNG_BYTES);
+		let loadCalls = 0;
+		const loadAuthoritative = async (): Promise<unknown> => {
+			loadCalls += 1;
+			return [imageBlock()];
+		};
+
+		await Promise.all([
+			service.original(scope, id, loadAuthoritative),
+			service.original({ runtimeKey: "other" }, id, loadAuthoritative),
+		]);
+		expect(loadCalls).toBe(2);
+	});
+
+	it("clears the original flight on rejection so the next request reloads", async () => {
+		const service = new DashboardImageService(new FakePreviewGenerator());
+		const id = dashboardImageId("image/png", PNG_BYTES);
+		let transcript: unknown[] = [];
+		const loadAuthoritative = async (): Promise<unknown> => transcript;
+
+		await expect(service.original(scope, id, loadAuthoritative)).rejects.toBeInstanceOf(DashboardImageNotFoundError);
+		transcript = [imageBlock()];
+		const recovered = await service.original(scope, id, loadAuthoritative);
+		expect(recovered.bytes).toEqual(PNG_BYTES);
+	});
+
 	it("generates previews lazily, single-flights concurrent requests, and caches the bounded result", async () => {
 		let resolve!: (preview: GeneratedImagePreview) => void;
 		const delayed = new Promise<GeneratedImagePreview>((done) => {

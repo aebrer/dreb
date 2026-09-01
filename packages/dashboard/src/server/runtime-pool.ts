@@ -31,7 +31,14 @@ export function resolveDrebCliPath(): string {
 
 function formatRpcExit(info: RpcExitInfo): string {
 	if (info.error) return `RPC process failed: ${info.error.message}`;
-	return `RPC process exited (code ${info.code}, signal ${info.signal})`;
+	const tail = info.stderrTail?.trim();
+	// When the child aborted on its own (e.g. the stdout backpressure guard),
+	// its stderr tail carries the actual reason — surface it instead of a bare
+	// exit code. The tail may be multi-line; the existing UI already renders
+	// multi-line error messages (e.g. timeouts embed full stderr).
+	return tail
+		? `RPC process exited (code ${info.code}, signal ${info.signal}). Stderr tail: ${tail}`
+		: `RPC process exited (code ${info.code}, signal ${info.signal})`;
 }
 
 export type RuntimeEventListener = (key: string, event: Record<string, unknown>) => void;

@@ -598,6 +598,26 @@ describe("RuntimePool", () => {
 		expect(logs.join("\n")).toContain("RPC process exited");
 	});
 
+	it("surfaces the captured stderr tail in the exit diagnostic (issue 495)", async () => {
+		const clients: Array<ReturnType<typeof makeFakeClient>> = [];
+		const pool = new RuntimePool({
+			cliPath: "/fake/cli.js",
+			logger: () => {},
+			clientFactory: () => {
+				const client = makeFakeClient();
+				clients.push(client);
+				return client;
+			},
+		});
+		const handle = await pool.create("/tmp");
+
+		const tail =
+			"Fatal: stdout write queue exceeded 16777216 bytes with no drain progress for 30000 ms.\nAborted to protect the dashboard.\n";
+		clients[0].emitExit({ code: 1, signal: null, stderrTail: tail });
+
+		expect(handle.error).toBe(`RPC process exited (code 1, signal null). Stderr tail: ${tail.trim()}`);
+	});
+
 	it("tags events with the runtime key", async () => {
 		const { pool, clients } = makePool();
 		const handle = await pool.create("/tmp");

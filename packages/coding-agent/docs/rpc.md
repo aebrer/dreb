@@ -18,6 +18,12 @@ await client.start();
 
 This enables per-user filesystem isolation by plain Unix DAC: give each authenticated user a dedicated UID and a working directory owned by that UID at mode `0700`. If the parent lacks the required capability (or the platform doesn't support `uid`/`gid`, e.g. Windows), the spawn fails and `start()` rejects rather than silently running as the parent user.
 
+### Process exit and pipe errors
+
+`RpcClient.onExit(listener)` receives an `RpcExitInfo` when the child dies: `{ code, signal }` from a process `exit`, or `{ error }` from a spawn/runtime `error`. Process exits also carry `stderrTail` — the last **2000 characters** of the child's captured stderr — so a host that only watches for exit codes can still surface the child's own diagnostic (for example the stdout backpressure guard's abort message) instead of an opaque exit code. In-flight requests are rejected with the exit reason.
+
+Child stdio pipe failures (e.g. an `EPIPE` when writing a large prompt to a dying child) are handled the same way: each pipe's `error` event fails in-flight requests with the pipe error and the captured stderr tail instead of crashing the host process.
+
 
 ## Starting RPC Mode
 
@@ -1870,6 +1876,14 @@ Example streaming a text response:
 When the RPC server is launched with `--ui dashboard`, `message_update` events are projected **before serialization**: the cumulative top-level `message` field and the nested `assistantMessageEvent.partial` field are omitted from every frame. Both fields grow with the response, so carrying them on every delta makes the JSONL stream quadratic in response length; the dashboard reducer consumes only the delta fields (`type`, `contentIndex`, `delta`, `content`, `toolCall`), which are preserved unchanged.
 
 The projection applies recursively to `message_update` events nested inside `background_agent_event` payloads. It does **not** apply to command responses — `get_dashboard_snapshot` still returns complete messages — and `message_end` always carries the full final message as the authoritative transcript record. RPC servers launched without `--ui dashboard` emit the full unprojected protocol shown above.
+
+The same dashboard-mode projection also dedupes images across the wire. Inline `image` blocks (PNG, JPEG, GIF, WebP) are content-identified by `sha256(mimeType + 0x00 + decodedBytes)`; the first occurrence of each unique image is sent inline, and every later occurrence anywhere in the event stream is replaced with
+
+```json
+{"type": "image_reference", "id": "<64 hex chars>", "mimeType": "image/png", "size": 12345}
+```
+
+The child process emits each unique image's bytes at most once per process lifetime, which keeps multi-image turns from filling the stdout pipe while the dashboard is busy decoding. The child only dedupes blocks the dashboard's strict decode accepts — allowlisted MIME type, canonical base64, matching byte signature; everything else is left inline at every occurrence (the dashboard rejects it, as before, so it never becomes an unresolvable reference). Command responses are untouched — `get_messages` and `get_dashboard_snapshot` always carry full base64 payloads — and the dedupe state is per-process: a restarted child re-sends. See [Transcript images](dashboard.md#transcript-images) for how the dashboard resolves these references.
 
 ### tool_execution_start / tool_execution_update / tool_execution_end
 

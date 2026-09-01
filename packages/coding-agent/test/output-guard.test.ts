@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	flushRawStdout,
 	isStdoutTakenOver,
+	MAX_NO_DRAIN_GRACE_MS,
 	MAX_QUEUED_STDOUT_BYTES,
+	resetOutputGuardForTests,
 	restoreStdout,
 	takeOverStdout,
 	writeRawStdout,
@@ -25,6 +27,14 @@ function fakeStdoutWrite(impl?: (chunk: string) => boolean) {
 function flushModuleQueue(): void {
 	fakeStdoutWrite();
 	process.stdout.emit("drain");
+	resetOutputGuardForTests();
+}
+
+/** Spy process.exit so a guard abort cannot kill the test process. */
+function spyProcessExit(): ReturnType<typeof vi.spyOn> {
+	return vi.spyOn(process, "exit").mockImplementation((() => {
+		throw new Error("process.exit");
+	}) as never);
 }
 
 describe("output-guard", () => {
@@ -35,6 +45,7 @@ describe("output-guard", () => {
 		originalStdoutWrite = process.stdout.write;
 		originalStderrWrite = process.stderr.write;
 		restoreStdout();
+		resetOutputGuardForTests();
 	});
 
 	afterEach(() => {
@@ -188,79 +199,162 @@ describe("output-guard", () => {
 		expect(exitSpy).not.toHaveBeenCalled();
 	});
 
-	it("rejects a write queued behind one allowed oversized frame", () => {
-		const stderrChunks: string[] = [];
-		let stderrCallback: ((error?: Error | null) => void) | undefined;
+	/** Fake stderr.write that captures chunks and the flush callback (never flushes). */
+	function fakeStderrWrite(): { chunks: string[]; callback: () => ((e?: Error | null) => void) | undefined } {
+		const chunks: string[] = [];
+		let callback: ((e?: Error | null) => void) | undefined;
 		process.stderr.write = ((
 			chunk: string | Uint8Array,
 			encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
-			callback?: (error?: Error | null) => void,
+			cb?: (error?: Error | null) => void,
 		) => {
-			stderrChunks.push(String(chunk));
-			stderrCallback = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
+			chunks.push(String(chunk));
+			callback = typeof encodingOrCallback === "function" ? encodingOrCallback : cb;
 			return false;
 		}) as typeof process.stderr.write;
-		const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
-			throw new Error("process.exit");
-		}) as never);
+		return { chunks, callback: () => callback };
+	}
 
-		let writable = false;
-		fakeStdoutWrite(() => writable);
-		writeRawStdout("trigger"); // accepted, signals backpressure
-		writeRawStdout("x".repeat(MAX_QUEUED_STDOUT_BYTES + 1)); // one oversized frame is allowed
-		writeRawStdout("next"); // accumulated backlog beyond that frame must fail loudly
+	it("fails loudly for an over-cap backlog that never drains (after the grace window)", () => {
+		vi.useFakeTimers();
+		try {
+			const stderr = fakeStderrWrite();
+			const exitSpy = spyProcessExit();
 
-		expect(exitSpy).not.toHaveBeenCalled();
-		expect(stderrChunks.join("")).toContain("stdout write queue exceeded");
-		expect(stderrCallback).toBeTypeOf("function");
-		expect(() => stderrCallback?.()).toThrow("process.exit");
-		expect(exitSpy).toHaveBeenCalledWith(1);
+			const writable = false;
+			fakeStdoutWrite(() => writable);
+			writeRawStdout("trigger"); // accepted, signals backpressure
+			writeRawStdout("x".repeat(MAX_QUEUED_STDOUT_BYTES + 1)); // one oversized frame is allowed
+			writeRawStdout("next"); // over the cap: the no-drain window starts
 
-		writable = true;
-		process.stdout.emit("drain");
+			// No immediate kill: a slow-but-alive consumer still has the grace window.
+			expect(exitSpy).not.toHaveBeenCalled();
+			expect(stderr.chunks).toHaveLength(0);
+
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS);
+			expect(stderr.chunks.join("")).toContain("stdout write queue exceeded");
+			expect(stderr.callback()).toBeTypeOf("function");
+			expect(() => stderr.callback()!()).toThrow("process.exit");
+			expect(exitSpy).toHaveBeenCalledWith(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
-	it("keeps takeover queueing bounded and flushes the fatal diagnostic before exit", () => {
-		const stderrChunks: string[] = [];
-		let stderrCallback: ((error?: Error | null) => void) | undefined;
-		process.stderr.write = ((
-			chunk: string | Uint8Array,
-			encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
-			callback?: (error?: Error | null) => void,
-		) => {
-			stderrChunks.push(String(chunk));
-			stderrCallback = typeof encodingOrCallback === "function" ? encodingOrCallback : callback;
-			return false;
-		}) as typeof process.stderr.write;
-		const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
-			throw new Error("process.exit");
-		}) as never);
+	it("does not kill a slow consumer that keeps making drain progress under the cap breach", () => {
+		vi.useFakeTimers();
+		try {
+			const stderr = fakeStderrWrite();
+			const exitSpy = spyProcessExit();
 
-		let writable = false;
-		fakeStdoutWrite(() => writable);
-		takeOverStdout();
-		writeRawStdout("trigger"); // accepted, signals backpressure
-		writeRawStdout("small"); // queued
+			let writable = false;
+			const chunks = fakeStdoutWrite(() => writable);
+			writeRawStdout("trigger"); // accepted, signals backpressure
+			writeRawStdout("x".repeat(MAX_QUEUED_STDOUT_BYTES + 1)); // one oversized frame is allowed
+			writeRawStdout("next"); // over the cap: window armed
 
-		const oversized = "x".repeat(MAX_QUEUED_STDOUT_BYTES);
-		writeRawStdout(oversized);
-		expect(exitSpy).not.toHaveBeenCalled();
-		expect(stderrChunks.join("")).toContain("stdout write queue exceeded");
-		expect(stderrCallback).toBeTypeOf("function");
-		expect(() => stderrCallback?.()).toThrow("process.exit");
-		expect(exitSpy).toHaveBeenCalledWith(1);
+			// The consumer drains progress (accepts the backlog) before the window
+			// expires: the session survives and everything flushes in order.
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS - 1_000);
+			expect(exitSpy).not.toHaveBeenCalled();
+			writable = true;
+			process.stdout.emit("drain");
+			expect(chunks).toEqual(["trigger", "x".repeat(MAX_QUEUED_STDOUT_BYTES + 1), "next"]);
 
-		writable = true;
-		process.stdout.emit("drain");
+			// The window disarmed on drain: a full further grace elapses without kill.
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS);
+			expect(exitSpy).not.toHaveBeenCalled();
+			expect(stderr.chunks).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("resets the no-drain window on a partial drain that leaves the backlog over the cap", () => {
+		vi.useFakeTimers();
+		try {
+			const stderr = fakeStderrWrite();
+			const exitSpy = spyProcessExit();
+
+			// The stream is already full (the first write reports backpressure)
+			// and then accepts at most 5 MiB of queued bytes before reporting
+			// full again — a slow-but-alive consumer making partial progress.
+			let first = true;
+			let accepted = 0;
+			const DRAIN_BUDGET = 5 * 1024 * 1024;
+			fakeStdoutWrite((chunk) => {
+				if (first) {
+					first = false;
+					return false;
+				}
+				accepted += Buffer.byteLength(chunk);
+				return accepted <= DRAIN_BUDGET;
+			});
+
+			writeRawStdout("trigger"); // finds the stream full: backpressured
+			for (let i = 0; i < 30; i++) {
+				writeRawStdout("x".repeat(1024 * 1024)); // 30 MiB queued — over the 16 MiB cap
+			}
+
+			// Window armed but not yet expired.
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS / 2);
+			expect(exitSpy).not.toHaveBeenCalled();
+
+			// Partial drain: a few 1 MiB chunks leave the queue, then the
+			// stream reports full again — the backlog stays over the cap.
+			process.stdout.emit("drain");
+
+			// The window was reset by the drain progress: a full further grace
+			// elapses with the backlog still over the cap — no kill. (A missing
+			// reset would reintroduce the issue 495 death here.)
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS);
+			expect(exitSpy).not.toHaveBeenCalled();
+			expect(stderr.chunks).toHaveLength(0);
+
+			// A fresh over-cap write re-arms the window, and a consumer that
+			// now never drains is still aborted loudly.
+			writeRawStdout("x".repeat(1024 * 1024));
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS);
+			expect(stderr.chunks.join("")).toContain("stdout write queue exceeded");
+			expect(() => stderr.callback()!()).toThrow("process.exit");
+			expect(exitSpy).toHaveBeenCalledWith(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps takeover queueing bounded and only exits when the consumer never drains", () => {
+		vi.useFakeTimers();
+		try {
+			const stderr = fakeStderrWrite();
+			const exitSpy = spyProcessExit();
+
+			const writable = false;
+			fakeStdoutWrite(() => writable);
+			takeOverStdout();
+			writeRawStdout("trigger"); // accepted, signals backpressure
+			writeRawStdout("small"); // queued
+
+			const oversized = "x".repeat(MAX_QUEUED_STDOUT_BYTES);
+			writeRawStdout(oversized);
+			expect(exitSpy).not.toHaveBeenCalled();
+			expect(stderr.chunks).toHaveLength(0);
+
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS);
+			expect(stderr.chunks.join("")).toContain("stdout write queue exceeded");
+			expect(stderr.callback()).toBeTypeOf("function");
+			expect(() => stderr.callback()!()).toThrow("process.exit");
+			expect(exitSpy).toHaveBeenCalledWith(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("forces a bounded exit when the fatal stderr diagnostic never flushes", () => {
 		vi.useFakeTimers();
 		try {
 			process.stderr.write = (() => false) as typeof process.stderr.write;
-			const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
-				throw new Error("process.exit");
-			}) as never);
+			const exitSpy = spyProcessExit();
 
 			fakeStdoutWrite(() => false);
 			writeRawStdout("trigger");
@@ -268,7 +362,8 @@ describe("output-guard", () => {
 			writeRawStdout("x".repeat(MAX_QUEUED_STDOUT_BYTES));
 
 			expect(exitSpy).not.toHaveBeenCalled();
-			expect(() => vi.advanceTimersByTime(1_000)).toThrow("process.exit");
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS); // no-drain window expires
+			expect(() => vi.advanceTimersByTime(1_000)).toThrow("process.exit"); // forced exit after flush timeout
 			expect(exitSpy).toHaveBeenCalledWith(1);
 		} finally {
 			vi.useRealTimers();

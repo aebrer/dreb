@@ -45,6 +45,8 @@ import type {
  * it as alive. An 'error'/'exit' event during this window rejects start() early.
  */
 const INIT_GRACE_MS = 100;
+/** Maximum child-stderr characters attached to exit notifications for diagnostics. */
+const STDERR_TAIL_CHARS = 2000;
 
 /** Distributive Omit that works with union types */
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -96,7 +98,7 @@ export interface ModelInfo {
 export type RpcEventListener = (event: RpcEvent) => void;
 
 export type RpcExitInfo =
-	| { code: number | null; signal: NodeJS.Signals | null; error?: undefined }
+	| { code: number | null; signal: NodeJS.Signals | null; stderrTail?: string; error?: undefined }
 	| { code?: undefined; signal?: undefined; error: Error };
 
 export type RpcExitListener = (info: RpcExitInfo) => void;
@@ -201,8 +203,28 @@ export class RpcClient {
 			// Guard: skip if this handler belongs to an old, already-stopped process
 			if (this.process !== procRef) return;
 			this.failPendingRequests(`RPC process exited with code ${code}, signal ${signal}`);
-			this.notifyExitListeners({ code, signal });
+			// Surface the child's own fatal diagnostic (e.g. the stdout
+			// backpressure abort) in the exit notification so dashboard
+			// diagnostics can show the real cause instead of a bare exit code.
+			this.notifyExitListeners({ code, signal, stderrTail: this.stderr.slice(-STDERR_TAIL_CHARS) });
 		});
+
+		// Child stdio pipes fail asynchronously as 'error' events (e.g. EPIPE
+		// when writing a large prompt to the stdin of a dying child). An
+		// unhandled pipe 'error' would crash this process — for the dashboard
+		// that means every session dies at once — so record the cause and fail
+		// in-flight requests the same way the 'exit' handler does. The 'exit'
+		// handler still owns the exit notification; this only stops the crash.
+		const onPipeError = (stream: string) => (error: Error) => {
+			if (this.process !== procRef) return;
+			this.stderr += `\n[child ${stream} error: ${error.message}]`;
+			this.failPendingRequests(
+				`RPC process ${stream} error: ${error.message}. Stderr: ${this.stderr.slice(-STDERR_TAIL_CHARS)}`,
+			);
+		};
+		this.process.stdin?.on("error", onPipeError("stdin"));
+		this.process.stdout?.on("error", onPipeError("stdout"));
+		this.process.stderr?.on("error", onPipeError("stderr"));
 
 		// Spawn failures surface asynchronously as an 'error' event rather than a
 		// thrown exception (e.g. EPERM when dropping to a uid/gid the parent lacks

@@ -173,7 +173,24 @@ describe("RpcClient spawn failure handling", () => {
 		child.exitCode = 7;
 		child.emit("exit", 7, "SIGTERM");
 
-		expect(seen).toEqual([{ code: 7, signal: "SIGTERM" }]);
+		expect(seen).toEqual([{ code: 7, signal: "SIGTERM", stderrTail: "" }]);
+	});
+
+	test("the exit notification carries the accumulated stderr tail", async () => {
+		const child = makeFakeChild();
+		vi.mocked(spawn).mockReturnValue(child);
+
+		const client = new RpcClient({ cliPath: "dist/cli.js" });
+		const seen: unknown[] = [];
+		client.onExit((info) => seen.push(info));
+		await client.start();
+
+		const diagnostic = "Fatal: stdout write queue exceeded 16777216 bytes with no drain progress.\n";
+		child.stderr.write(diagnostic);
+		child.exitCode = 1;
+		child.emit("exit", 1, null);
+
+		expect(seen).toEqual([{ code: 1, signal: null, stderrTail: diagnostic }]);
 	});
 
 	test("onExit notifies subscribers when the child emits an 'error'", async () => {
@@ -189,5 +206,53 @@ describe("RpcClient spawn failure handling", () => {
 		child.emit("error", error);
 
 		expect(seen).toEqual([{ error }]);
+	});
+});
+
+describe("RpcClient child stdio pipe errors (issue 495)", () => {
+	// Child stdio pipes fail asynchronously as 'error' events (e.g. EPIPE when
+	// writing a large prompt to the stdin of a dying child). An unhandled pipe
+	// 'error' crashes the host process — for the dashboard that means every
+	// session dies at once. Each pipe must have a listener that fails in-flight
+	// requests instead of crashing.
+
+	async function clientWithPendingRequest(): Promise<{
+		child: FakeChild;
+		client: RpcClient;
+		pending: Promise<unknown>;
+	}> {
+		const child = makeFakeChild();
+		vi.mocked(spawn).mockReturnValue(child);
+		const client = new RpcClient({ cliPath: "dist/cli.js" });
+		await client.start();
+		const pending = client.prompt("hi");
+		return { child, client, pending };
+	}
+
+	test("a stdin pipe 'error' (e.g. EPIPE) rejects the pending request without crashing", async () => {
+		const { child, client, pending } = await clientWithPendingRequest();
+
+		child.stdin.emit("error", new Error("write EPIPE"));
+
+		await expect(pending).rejects.toThrow(/stdin error: write EPIPE/i);
+		await client.stop();
+	});
+
+	test("a stdout pipe 'error' rejects the pending request without crashing", async () => {
+		const { child, client, pending } = await clientWithPendingRequest();
+
+		child.stdout.emit("error", new Error("read ECONNRESET"));
+
+		await expect(pending).rejects.toThrow(/stdout error: read ECONNRESET/i);
+		await client.stop();
+	});
+
+	test("a stderr pipe 'error' rejects the pending request without crashing", async () => {
+		const { child, client, pending } = await clientWithPendingRequest();
+
+		child.stderr.emit("error", new Error("write EIO"));
+
+		await expect(pending).rejects.toThrow(/stderr error: write EIO/i);
+		await client.stop();
 	});
 });
