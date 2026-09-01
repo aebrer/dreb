@@ -287,7 +287,12 @@ import {
 	reloadAppearance,
 	THEME_STORAGE_KEY,
 } from "../../src/client/state/appearance.js";
-import { setExpandThinking, setImageDisplayMode } from "../../src/client/state/preferences.js";
+import {
+	SESSION_SIDEBAR_COLLAPSED_KEY,
+	setExpandThinking,
+	setImageDisplayMode,
+	setSessionSidebarCollapsed,
+} from "../../src/client/state/preferences.js";
 import {
 	applySessionEvent,
 	createSessionViewState,
@@ -384,6 +389,7 @@ afterEach(() => {
 	window.location.hash = "#/";
 	setExpandThinking(false);
 	setImageDisplayMode("previews");
+	setSessionSidebarCollapsed(false);
 	window.localStorage.clear();
 	vi.mocked(connectEvents).mockImplementation(() => () => {});
 	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
@@ -1226,6 +1232,245 @@ describe("app store integration", () => {
 		} finally {
 			(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = priorRO;
 		}
+	});
+});
+
+describe("session fleet sidebar", () => {
+	function sidebarStore(runtimes: RuntimeInfoDto[], sessions: Record<string, SessionViewState> = {}) {
+		const base = makeStore() as any;
+		return {
+			...base,
+			sessions,
+			fleet: () => ({ runtimes, diskSessions: [] }),
+			hydrateSession: vi.fn(async () => {}),
+			refreshDiskSessions: vi.fn(async () => {}),
+			removeRuntime: vi.fn(async () => {}),
+			stopRuntime: vi.fn(async () => {}),
+		};
+	}
+
+	function sidebarEntries(element: HTMLElement): HTMLElement[] {
+		return [...element.querySelectorAll<HTMLElement>(".fleet-sidebar-entry")];
+	}
+
+	function sidebar(element: HTMLElement): HTMLElement | null {
+		return element.querySelector(".fleet-sidebar");
+	}
+
+	it("lists the other live sessions with live chips and excludes the viewed session", () => {
+		const current = runtimeInfo("current", "/home/test/a");
+		current.state.sessionName = "current session";
+		const other = runtimeInfo("other", "/home/test/b");
+		other.state.sessionName = "other session";
+		other.state.isStreaming = true;
+		other.backgroundAgents = [
+			{
+				agentId: "bg1",
+				agentType: "Explore",
+				taskSummary: "scan things",
+				startedAt: new Date().toISOString(),
+				status: "running",
+			},
+		];
+		const el = mount(() => <SessionScreen store={sidebarStore([current, other])} sessionKey="current" />);
+
+		const elSidebar = sidebar(el);
+		expect(elSidebar).not.toBeNull();
+		expect(elSidebar?.classList.contains("collapsed")).toBe(false);
+		const entryList = sidebarEntries(el);
+		expect(entryList).toHaveLength(1);
+		expect(entryList[0]?.querySelector(".chip-running")?.textContent).toContain("running");
+		expect(entryList[0]?.textContent).toContain("other session");
+		expect(entryList[0]?.textContent).toContain("⚡ 1 agent");
+		// The viewed session is excluded even though its name shows in the header.
+		expect(el.querySelector("header.session-bar .title")?.textContent).toContain("current session");
+		expect(elSidebar?.textContent).not.toContain("current session");
+		// The toggle renders beside the chrome toggle.
+		expect(el.querySelector("button.fleet-sidebar-toggle")).not.toBeNull();
+	});
+
+	it("maps each runtime state to its chip and emphasis class", () => {
+		const mk = (key: string, cwd: string): RuntimeInfoDto => {
+			const runtime = runtimeInfo(key, cwd);
+			runtime.state.sessionName = `${key} session`;
+			return runtime;
+		};
+		const idle = mk("idle", "/home/test/1");
+		const running = mk("running", "/home/test/2");
+		running.state.isStreaming = true;
+		const attention = mk("attention", "/home/test/3");
+		attention.needsAttention = true;
+		const error = mk("error", "/home/test/4");
+		error.error = "provider failed";
+
+		const el = mount(() => (
+			<SessionScreen
+				store={sidebarStore([idle, running, attention, error, runtimeInfo("current", "/home/test/0")])}
+				sessionKey="current"
+			/>
+		));
+		const byName = (name: string) =>
+			sidebarEntries(el).find((entry) => entry.querySelector(".name")?.textContent === `${name} session`);
+
+		expect(byName("idle")?.querySelector(".chip-idle")?.textContent).toContain("idle");
+		expect(byName("idle")?.className).not.toContain("attention");
+		expect(byName("running")?.querySelector(".chip-running")?.textContent).toContain("running");
+		expect(byName("attention")?.querySelector(".chip-attention")?.textContent).toContain("needs attention");
+		expect(byName("attention")?.classList.contains("attention")).toBe(true);
+		expect(byName("error")?.querySelector(".chip-error")?.textContent).toContain("error");
+		expect(byName("error")?.classList.contains("error")).toBe(true);
+	});
+
+	it("orders entries by cwd then createdAt and never re-sorts when attention or activity changes", () => {
+		const base = Date.parse("2026-01-01T00:00:00Z");
+		const mk = (key: string, cwd: string, createdAt: number): RuntimeInfoDto => {
+			const runtime = runtimeInfo(key, cwd);
+			runtime.state.sessionName = key;
+			runtime.createdAt = new Date(createdAt).toISOString();
+			runtime.lastActivity = new Date(createdAt + 60_000).toISOString();
+			return runtime;
+		};
+		const aSession = mk("a-session", "/home/test/a", base + 2000);
+		aSession.lastActivity = new Date(base + 9000).toISOString(); // newest activity overall
+		const bEarly = mk("b-early", "/home/test/b", base + 1000);
+		const bLate = mk("b-late", "/home/test/b", base + 3000);
+		bLate.needsAttention = true; // attention must not move it up
+
+		const el = mount(() => <SessionScreen store={sidebarStore([bLate, aSession, bEarly])} sessionKey="current" />);
+		const names = sidebarEntries(el).map((entry) => entry.querySelector(".name")?.textContent);
+		expect(names).toEqual(["a-session", "b-early", "b-late"]);
+	});
+
+	it("navigates to the clicked session", async () => {
+		const other = runtimeInfo("target", "/home/test/target");
+		other.state.sessionName = "target session";
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a"), other]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		sidebarEntries(el)[0]?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(window.location.hash).toBe("#/session/target");
+	});
+
+	it("collapses and re-expands from the toggle, persisting the preference", () => {
+		setSessionSidebarCollapsed(false);
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a"), runtimeInfo("other", "/home/test/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		const toggle = el.querySelector("button.fleet-sidebar-toggle");
+		if (!toggle) throw new Error("sidebar toggle missing");
+
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(false);
+		expect(toggle.textContent).toContain("fleet ◂");
+		toggle.click();
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(true);
+		expect(window.localStorage.getItem(SESSION_SIDEBAR_COLLAPSED_KEY)).toBe("true");
+		expect(toggle.textContent).toContain("fleet ▸");
+		toggle.click();
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(false);
+		expect(window.localStorage.getItem(SESSION_SIDEBAR_COLLAPSED_KEY)).toBe("false");
+	});
+
+	it("restores the persisted collapsed state on a fresh mount", () => {
+		setSessionSidebarCollapsed(true);
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a"), runtimeInfo("other", "/home/test/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(true);
+	});
+
+	it("renders no sidebar and no toggle when there are no other live sessions", () => {
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		expect(sidebar(el)).toBeNull();
+		expect(el.querySelector("button.fleet-sidebar-toggle")).toBeNull();
+		// The transcript chrome still renders inside the new body wrapper.
+		expect(el.querySelector(".session-body .session-main main.chat")).not.toBeNull();
+		expect(el.querySelector(".session-body .session-main footer.dock")).not.toBeNull();
+	});
+
+	it("shows the sidebar on the subagent drill-in with the parent excluded", () => {
+		const parent = runtimeInfo("parent", "/home/test/a");
+		parent.state.sessionName = "parent session";
+		const other = runtimeInfo("other", "/home/test/b");
+		other.state.sessionName = "other session";
+		const store = sidebarStore([parent, other], { parent: populatedSession("parent") });
+		const el = mount(() => <SubagentScreen store={store} sessionKey="parent" agentId="bg1" />);
+
+		const elSidebar = sidebar(el);
+		expect(elSidebar).not.toBeNull();
+		expect(sidebarEntries(el)).toHaveLength(1);
+		expect(elSidebar?.textContent).toContain("other session");
+		expect(elSidebar?.textContent).not.toContain("parent session");
+		expect(el.querySelector("button.fleet-sidebar-toggle")).not.toBeNull();
+	});
+
+	it("reflects newly spawned runtimes from fleet_snapshot without a manual refresh", async () => {
+		const current = runtimeInfo("current", "/home/test/a");
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [current], diskSessions: [] });
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(sidebarEntries(el)).toHaveLength(0);
+
+		const arrived = runtimeInfo("arrived", "/home/test/b");
+		arrived.state.sessionName = "arrived session";
+		if (!captured?.onEnvelope) throw new Error("envelope handler missing");
+		const snapshot = (runtime: RuntimeInfoDto) => ({
+			key: runtime.key,
+			cwd: runtime.cwd,
+			state: runtime.state,
+			backgroundAgents: runtime.backgroundAgents,
+			needsAttention: runtime.needsAttention,
+			...(runtime.error === undefined ? {} : { error: runtime.error }),
+			createdAt: runtime.createdAt,
+			lastActivity: runtime.lastActivity,
+		});
+		captured.onEnvelope({
+			seq: 1,
+			key: "",
+			event: { type: "fleet_snapshot", runtimes: [snapshot(current), snapshot(arrived)] },
+		});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(sidebarEntries(el)).toHaveLength(1);
+		expect(sidebarEntries(el)[0]?.textContent).toContain("arrived session");
+		store.stop();
+	});
+
+	it("on mobile starts hidden, opens as an overlay with a scrim, and entry taps navigate and close", () => {
+		stubMobile(true);
+		setSessionSidebarCollapsed(true); // the desktop preference must not apply on mobile
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a"), runtimeInfo("other", "/home/test/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		const toggle = el.querySelector("button.fleet-sidebar-toggle");
+		if (!toggle) throw new Error("sidebar toggle missing");
+
+		// Hidden by default regardless of the desktop collapse preference.
+		expect(sidebar(el)).not.toBeNull();
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(false);
+		expect(sidebar(el)?.classList.contains("open")).toBe(false);
+		expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+
+		// The toggle opens the overlay with a scrim.
+		toggle.click();
+		expect(sidebar(el)?.classList.contains("open")).toBe(true);
+		expect(el.querySelector(".fleet-sidebar-scrim")).not.toBeNull();
+
+		// A scrim tap closes the overlay.
+		el.querySelector(".fleet-sidebar-scrim")?.click();
+		expect(sidebar(el)?.classList.contains("open")).toBe(false);
+		expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+
+		// An entry tap navigates and closes the overlay.
+		toggle.click();
+		sidebarEntries(el)[0]?.click();
+		expect(window.location.hash).toBe("#/session/other");
+		expect(sidebar(el)?.classList.contains("open")).toBe(false);
+		expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
 	});
 });
 
