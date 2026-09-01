@@ -82,20 +82,84 @@ const DASHBOARD_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gi
 
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
+const JPEG_EOI = Buffer.from([0xff, 0xd9]);
+
 type ImageReference = { type: "image_reference"; id: string; mimeType: string; size: number };
 
 /**
+ * Raster-signature check mirroring the dashboard server's hasRasterSignature
+ * (packages/dashboard/src/server/dashboard-images.ts). Keep in sync: the child
+ * may only turn a block into a reference when the dashboard's strict decode
+ * (decodeDashboardImage) will accept it, or the reference dangles (the cache
+ * holds nothing and the authoritative recovery decodes the same bytes and
+ * rejects them again).
+ */
+function hasRasterSignature(mimeType: string, bytes: Uint8Array): boolean {
+	const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	switch (mimeType) {
+		case "image/png": {
+			const signature =
+				bytes.length >= 24 &&
+				[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, i) => bytes[i] === byte);
+			return (
+				signature &&
+				buffer.subarray(12, 16).toString("ascii") === "IHDR" &&
+				buffer.readUInt32BE(16) > 0 &&
+				buffer.readUInt32BE(20) > 0 &&
+				buffer.indexOf(Buffer.from("IEND"), 24) >= 0
+			);
+		}
+		case "image/jpeg": {
+			if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) return false;
+			// EOI does not have to be the final byte. Phone JPEGs commonly append
+			// auxiliary gain-map, motion-photo, or vendor metadata after the
+			// primary image. Browsers and Photon decode the JPEG through EOI and
+			// preserve the trailing bytes when the exact original is requested.
+			return buffer.lastIndexOf(JPEG_EOI) >= 2;
+		}
+		case "image/gif": {
+			const header = buffer.subarray(0, 6).toString("ascii");
+			return (
+				bytes.length >= 14 &&
+				(header === "GIF87a" || header === "GIF89a") &&
+				buffer.readUInt16LE(6) > 0 &&
+				buffer.readUInt16LE(8) > 0 &&
+				bytes[bytes.length - 1] === 0x3b
+			);
+		}
+		case "image/webp": {
+			if (
+				bytes.length < 20 ||
+				buffer.subarray(0, 4).toString("ascii") !== "RIFF" ||
+				buffer.subarray(8, 12).toString("ascii") !== "WEBP"
+			) {
+				return false;
+			}
+			const chunk = buffer.subarray(12, 16).toString("ascii");
+			return (
+				buffer.readUInt32LE(4) + 8 <= bytes.length && (chunk === "VP8 " || chunk === "VP8L" || chunk === "VP8X")
+			);
+		}
+	}
+	return false;
+}
+
+/**
  * Content identity of an inline image block, mirroring the dashboard server's
- * dashboardImageId (sha256 of mimeType + 0x00 + decoded bytes). Returns
- * undefined when the block cannot become a dashboard image (non-allowlisted
- * mimeType or non-canonical base64) — those stay inline and are dropped by
- * the dashboard's strict decode, exactly as before this projection existed.
+ * dashboardImageId (sha256 of mimeType + 0x00 + decoded bytes). The gate is as
+ * strict as the dashboard's decodeDashboardImage — allowlisted mimeType,
+ * canonical base64 (round trip), and a matching raster signature — so a block
+ * the dashboard would reject never becomes a reference: it stays inline at
+ * every occurrence and is dropped by the dashboard's strict decode, exactly as
+ * before this projection existed (no dangling image_references).
  */
 function imageBlockIdentity(mimeType: string, data: string): { id: string; size: number } | undefined {
 	if (!DASHBOARD_IMAGE_MIME_TYPES.has(mimeType)) return undefined;
 	if (data.length === 0 || data.length % 4 !== 0 || !BASE64_PATTERN.test(data)) return undefined;
 	const bytes = Buffer.from(data, "base64");
 	if (bytes.byteLength === 0) return undefined;
+	if (bytes.toString("base64") !== data) return undefined; // non-canonical encoding the dashboard rejects
+	if (!hasRasterSignature(mimeType, bytes)) return undefined; // signature mismatch the dashboard rejects
 	const id = createHash("sha256").update(mimeType).update(Uint8Array.of(0)).update(bytes).digest("hex");
 	return { id, size: bytes.byteLength };
 }

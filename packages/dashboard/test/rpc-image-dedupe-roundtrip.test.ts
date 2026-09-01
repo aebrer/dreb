@@ -138,6 +138,29 @@ describe("issue 495 cross-boundary image dedupe round trip", () => {
 		expect(dedupedSecondIds).toEqual([inlineIds[0]]);
 	});
 
+	it("never dangles: blocks the dashboard strict-decode rejects stay inline at every occurrence", () => {
+		const service = new DashboardImageService(new NoopPreviewGenerator());
+		const projector = createDashboardRpcEventProjector();
+		// JPEG bytes labeled as PNG: the dashboard's strict decode rejects the
+		// block (no PNG signature), so the child must not claim it either —
+		// every occurrence stays inline and the dashboard drops each, exactly
+		// as before the dedupe existed (no unresolvable reference, no 404).
+		const jpegAsPng = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 5, 6, 7, 0xff, 0xd9]);
+		const block = imageBlock(jpegAsPng, "image/png");
+		const first = projector({ type: "message_end", message: { content: [block] } }) as {
+			message: { content: unknown[] };
+		};
+		expect(first.message.content[0]).toEqual(block); // inline, not a reference
+		service.projectEvent(first, scope);
+		expect(service.byteSize).toBe(0); // dashboard rejected it — nothing cached
+		const second = projector({ type: "agent_end", messages: [{ content: [block] }] }) as {
+			messages: Array<{ content: unknown[] }>;
+		};
+		expect(second.messages[0]!.content).toEqual([block]); // still inline — no dangling reference
+		const projectedSecond = service.projectEvent(second, scope) as { messages: Array<{ content: unknown[] }> };
+		expect(projectedSecond.messages[0]!.content).toEqual([]); // dropped, as pre-PR
+	});
+
 	it("child ids match the dashboard id formula (cross-process parity)", () => {
 		// The child emits image_reference ids computed from the image bytes, and
 		// the dashboard caches by dashboardImageId. For references to resolve

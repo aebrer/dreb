@@ -270,6 +270,59 @@ describe("output-guard", () => {
 		}
 	});
 
+	it("resets the no-drain window on a partial drain that leaves the backlog over the cap", () => {
+		vi.useFakeTimers();
+		try {
+			const stderr = fakeStderrWrite();
+			const exitSpy = spyProcessExit();
+
+			// The stream is already full (the first write reports backpressure)
+			// and then accepts at most 5 MiB of queued bytes before reporting
+			// full again — a slow-but-alive consumer making partial progress.
+			let first = true;
+			let accepted = 0;
+			const DRAIN_BUDGET = 5 * 1024 * 1024;
+			fakeStdoutWrite((chunk) => {
+				if (first) {
+					first = false;
+					return false;
+				}
+				accepted += Buffer.byteLength(chunk);
+				return accepted <= DRAIN_BUDGET;
+			});
+
+			writeRawStdout("trigger"); // finds the stream full: backpressured
+			for (let i = 0; i < 30; i++) {
+				writeRawStdout("x".repeat(1024 * 1024)); // 30 MiB queued — over the 16 MiB cap
+			}
+
+			// Window armed but not yet expired.
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS / 2);
+			expect(exitSpy).not.toHaveBeenCalled();
+
+			// Partial drain: a few 1 MiB chunks leave the queue, then the
+			// stream reports full again — the backlog stays over the cap.
+			process.stdout.emit("drain");
+
+			// The window was reset by the drain progress: a full further grace
+			// elapses with the backlog still over the cap — no kill. (A missing
+			// reset would reintroduce the issue 495 death here.)
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS);
+			expect(exitSpy).not.toHaveBeenCalled();
+			expect(stderr.chunks).toHaveLength(0);
+
+			// A fresh over-cap write re-arms the window, and a consumer that
+			// now never drains is still aborted loudly.
+			writeRawStdout("x".repeat(1024 * 1024));
+			vi.advanceTimersByTime(MAX_NO_DRAIN_GRACE_MS);
+			expect(stderr.chunks.join("")).toContain("stdout write queue exceeded");
+			expect(() => stderr.callback()!()).toThrow("process.exit");
+			expect(exitSpy).toHaveBeenCalledWith(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps takeover queueing bounded and only exits when the consumer never drains", () => {
 		vi.useFakeTimers();
 		try {

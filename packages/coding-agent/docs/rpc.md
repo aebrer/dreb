@@ -1883,7 +1883,7 @@ The same dashboard-mode projection also dedupes images across the wire. Inline `
 {"type": "image_reference", "id": "<64 hex chars>", "mimeType": "image/png", "size": 12345}
 ```
 
-The child process emits each unique image's bytes at most once per process lifetime, which keeps multi-image turns from filling the stdout pipe while the dashboard is busy decoding. Blocks with non-allowlisted MIME types or non-canonical base64 are left inline (the dashboard's strict decode rejects them, as before). Command responses are untouched — `get_messages` and `get_dashboard_snapshot` always carry full base64 payloads — and the dedupe state is per-process: a restarted child re-sends. See [Transcript images](dashboard.md#transcript-images) for how the dashboard resolves these references.
+The child process emits each unique image's bytes at most once per process lifetime, which keeps multi-image turns from filling the stdout pipe while the dashboard is busy decoding. The child only dedupes blocks the dashboard's strict decode accepts — allowlisted MIME type, canonical base64, matching byte signature; everything else is left inline at every occurrence (the dashboard rejects it, as before, so it never becomes an unresolvable reference). Command responses are untouched — `get_messages` and `get_dashboard_snapshot` always carry full base64 payloads — and the dedupe state is per-process: a restarted child re-sends. See [Transcript images](dashboard.md#transcript-images) for how the dashboard resolves these references.
 
 ### tool_execution_start / tool_execution_update / tool_execution_end
 

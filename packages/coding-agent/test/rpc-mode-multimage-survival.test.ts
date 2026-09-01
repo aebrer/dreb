@@ -27,9 +27,19 @@ import { createHarness, type Harness } from "./test-harness.js";
 
 const MB = 1024 * 1024;
 
-/** A faux 4 MiB PNG-shaped payload (content is irrelevant to the guard/dedupe). */
+/**
+ * A faux 4 MiB image that passes the dashboard's strict PNG signature check
+ * (signature, IHDR with nonzero dimensions, IEND) so the child-side dedupe
+ * claims it. The filler bytes are arbitrary; only the boundaries matter.
+ */
 function fauxImage(seed: number): { block: ImageContent; b64: string; bytes: Buffer } {
-	const bytes = Buffer.alloc(4 * MB, seed);
+	const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+	const ihdr = Buffer.from([
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+	]); // IHDR 1x1
+	const head = Buffer.concat([pngSignature, ihdr]);
+	const tail = Buffer.from("IEND");
+	const bytes = Buffer.concat([head, Buffer.alloc(4 * MB - head.length - tail.length, seed), tail]);
 	const b64 = bytes.toString("base64");
 	return { block: { type: "image", data: b64, mimeType: "image/png" }, b64, bytes };
 }

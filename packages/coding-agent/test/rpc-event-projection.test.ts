@@ -153,9 +153,21 @@ describe("projectDashboardRpcEvent", () => {
 });
 
 describe("createDashboardRpcEventProjector (issue 495 image dedupe)", () => {
-	const imgA = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]); // arbitrary bytes, not a real PNG
+	/** Minimal PNG that passes the dashboard's strict signature check: signature, IHDR (1x1), IEND. */
+	function makePng(fill: number[]): Buffer {
+		return Buffer.concat([
+			Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+			Buffer.from([0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01]),
+			Buffer.from(fill),
+			Buffer.from("IEND"),
+		]);
+	}
+	const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 1, 2, 3, 0xff, 0xd9]);
+	const imgA = makePng([1, 2, 3]);
 	const b64A = imgA.toString("base64");
-	const b64B = Buffer.from([9, 8, 7, 6, 5]).toString("base64");
+	const imgB = makePng([4, 5]);
+	const b64B = imgB.toString("base64");
+	const b64Jpeg = jpegBytes.toString("base64");
 	const imageBlock = (data: string, mimeType = "image/png") => ({ type: "image", data, mimeType });
 
 	it("keeps the first occurrence of a unique image inline", () => {
@@ -184,28 +196,49 @@ describe("createDashboardRpcEventProjector (issue 495 image dedupe)", () => {
 		});
 	});
 
-	it("treats images with the same bytes but different MIME types as distinct", () => {
+	it("treats the same bytes under a different MIME type as a distinct image", () => {
 		const projector = createDashboardRpcEventProjector();
-		projector({ type: "message_end", message: { content: [imageBlock(b64A)] } });
+		projector({ type: "message_end", message: { content: [imageBlock(b64Jpeg, "image/jpeg")] } });
 		const projected = projector({
 			type: "message_end",
-			message: { content: [imageBlock(b64A, "image/jpeg")] },
+			message: { content: [imageBlock(b64Jpeg, "image/png")] },
 		}) as { message: { content: Array<Record<string, unknown>> } };
-		// Different mimeType → different identity → still inline.
-		expect(projected.message.content[0]).toEqual(imageBlock(b64A, "image/jpeg"));
+		// Same bytes, different mimeType → different identity (and the JPEG
+		// bytes are not a valid PNG) → still inline, no reference.
+		expect(projected.message.content[0]).toEqual(imageBlock(b64Jpeg, "image/png"));
 	});
 
-	it("keeps non-allowlisted or non-canonical image blocks inline (no dedupe identity)", () => {
+	it("keeps non-allowlisted, non-canonical, or signature-mismatched blocks inline (no dedupe identity)", () => {
 		const projector = createDashboardRpcEventProjector();
 		for (const block of [
 			imageBlock(b64A, "image/svg+xml"), // not allowlisted
 			{ type: "image", data: b64A.slice(0, b64A.length - 1), mimeType: "image/png" }, // length % 4 != 0
 			imageBlock(""), // empty
 			{ type: "image", data: "not::base64!!", mimeType: "image/png" }, // invalid alphabet
+			imageBlock(Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]).toString("base64")), // PNG magic, no IHDR/IEND
+			imageBlock(Buffer.from([1, 2, 3, 4, 5]).toString("base64")), // no raster signature at all
+			imageBlock(b64Jpeg, "image/png"), // JPEG bytes labeled as PNG
 		]) {
 			const event = { type: "message_end", message: { content: [block] } };
 			expect(projector(event)).toBe(event);
 		}
+	});
+
+	it("never turns a dashboard-rejected block into a reference (no dangling references)", () => {
+		const projector = createDashboardRpcEventProjector();
+		const jpegAsPng = jpegBytes.toString("base64");
+		const block = imageBlock(jpegAsPng, "image/png");
+		// The child's gate mirrors the dashboard's strict decode: a block the
+		// dashboard would reject is never content-identified, so every
+		// occurrence stays inline (the dashboard drops each, as pre-PR) instead
+		// of later occurrences dangling as unresolvable references.
+		const first = { type: "message_end", message: { content: [block] } };
+		expect(projector(first)).toBe(first);
+		const second = projector({
+			type: "agent_end",
+			messages: [{ role: "user", content: [block] }],
+		}) as { messages: Array<{ content: unknown[] }> };
+		expect(second.messages[0]!.content).toEqual([block]);
 	});
 
 	it("does not mutate input events", () => {
