@@ -18,6 +18,8 @@
  * images) remains the EventHub's browser-facing concern.
  */
 
+import { createHash } from "node:crypto";
+
 function omit(event: Record<string, unknown>, ...keys: string[]): Record<string, unknown> {
 	const copy = { ...event };
 	for (const key of keys) delete copy[key];
@@ -52,4 +54,110 @@ export function projectDashboardRpcEvent(event: Record<string, unknown>): Record
 		default:
 			return event;
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Image dedupe (dashboard mode)
+//
+// Inline image blocks cross the JSONL pipe multiple times per turn: prompt
+// re-emission (message_start + message_end), each tool result
+// (tool_execution_end + message_start + message_end), and the agent_end
+// transcript. A turn with several multi-MiB images easily fills the child
+// stdout queue while the dashboard is busy decoding, and the stdout guard
+// kills the session (issue 495).
+//
+// The dashboard already treats images content-globally: its server projection
+// replaces every inline image with an image_reference whose id is
+// sha256(mimeType + 0x00 + decodedBytes), caches the binary on first sight,
+// and serves later fetches from that cache (recovering from the authoritative
+// transcript when evicted). This projector applies the same reduction one
+// boundary earlier: each unique image crosses stdout at most once per process
+// lifetime; every later occurrence becomes an image_reference the dashboard
+// resolves from its cache. Live events only — command responses
+// (get_messages, get_dashboard_snapshot) always keep full payloads, because
+// they are the authoritative source the dashboard's image recovery reads.
+// ---------------------------------------------------------------------------
+
+const DASHBOARD_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+type ImageReference = { type: "image_reference"; id: string; mimeType: string; size: number };
+
+/**
+ * Content identity of an inline image block, mirroring the dashboard server's
+ * dashboardImageId (sha256 of mimeType + 0x00 + decoded bytes). Returns
+ * undefined when the block cannot become a dashboard image (non-allowlisted
+ * mimeType or non-canonical base64) — those stay inline and are dropped by
+ * the dashboard's strict decode, exactly as before this projection existed.
+ */
+function imageBlockIdentity(mimeType: string, data: string): { id: string; size: number } | undefined {
+	if (!DASHBOARD_IMAGE_MIME_TYPES.has(mimeType)) return undefined;
+	if (data.length === 0 || data.length % 4 !== 0 || !BASE64_PATTERN.test(data)) return undefined;
+	const bytes = Buffer.from(data, "base64");
+	if (bytes.byteLength === 0) return undefined;
+	const id = createHash("sha256").update(mimeType).update(Uint8Array.of(0)).update(bytes).digest("hex");
+	return { id, size: bytes.byteLength };
+}
+
+/**
+ * Replace occurrences of already-seen image blocks with their stable
+ * reference, keeping the first occurrence of each unique image inline.
+ * Returns the input by reference when nothing changed, so events without
+ * images keep sharing objects with other session subscribers.
+ */
+function dedupeImages(node: unknown, seen: Map<string, ImageReference>): unknown {
+	if (Array.isArray(node)) {
+		let changed = false;
+		const result: unknown[] = new Array(node.length);
+		for (let i = 0; i < node.length; i++) {
+			const original = node[i];
+			const next = dedupeImages(original, seen);
+			if (next !== original) changed = true;
+			result[i] = next;
+		}
+		return changed ? result : node;
+	}
+	if (isPlainObject(node)) {
+		if (node.type === "image" && typeof node.mimeType === "string" && typeof node.data === "string") {
+			const identity = imageBlockIdentity(node.mimeType, node.data);
+			if (identity) {
+				const reference = seen.get(identity.id);
+				if (reference) return reference;
+				const created: ImageReference = {
+					type: "image_reference",
+					id: identity.id,
+					mimeType: node.mimeType,
+					size: identity.size,
+				};
+				seen.set(identity.id, created);
+				return node;
+			}
+			return node;
+		}
+		let changed = false;
+		const result: Record<string, unknown> = {};
+		for (const key of Object.keys(node)) {
+			const original = node[key];
+			const next = dedupeImages(original, seen);
+			if (next !== original) changed = true;
+			result[key] = next;
+		}
+		return changed ? result : node;
+	}
+	return node;
+}
+
+/**
+ * Create the dashboard-mode RPC event projector for one runRpcMode process.
+ *
+ * Composes the per-event field projection with process-lifetime image dedupe.
+ * Dashboard-mode sessions only — generic RPC consumers keep the full protocol.
+ */
+export function createDashboardRpcEventProjector(): (event: Record<string, unknown>) => Record<string, unknown> {
+	const seenImageIds = new Map<string, ImageReference>();
+	return (event: Record<string, unknown>): Record<string, unknown> => {
+		const projected = projectDashboardRpcEvent(event);
+		return dedupeImages(projected, seenImageIds) as Record<string, unknown>;
+	};
 }

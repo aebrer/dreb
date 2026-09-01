@@ -7,6 +7,10 @@
 
 export type { ModelInfo, RpcClientOptions, RpcEventListener, RpcExitInfo, RpcExitListener } from "./rpc-client.js";
 export { RpcClient } from "./rpc-client.js";
+export {
+	createDashboardRpcEventProjector,
+	projectDashboardRpcEvent,
+} from "./rpc-event-projection.js";
 export type {
 	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,

@@ -60,7 +60,7 @@ import {
 } from "../../core/tools/subagent.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
-import { projectDashboardRpcEvent } from "./rpc-event-projection.js";
+import { createDashboardRpcEventProjector } from "./rpc-event-projection.js";
 import type {
 	RpcAgentTypeInfo,
 	RpcBackgroundAgentInfo,
@@ -1884,14 +1884,17 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				})
 			: undefined;
 
-	// Dashboard-launched runtimes (--ui dashboard) get message_update events
-	// projected before serialization: the cumulative `message` and
+	// Dashboard-launched runtimes (--ui dashboard) get events projected before
+	// serialization: message_update's cumulative `message` and
 	// `assistantMessageEvent.partial` fields are quadratic in response length on
 	// the JSONL pipe, and no dashboard consumer reads them (deltas, message_end,
-	// and get_dashboard_snapshot responses carry the authoritative data). Generic
-	// RPC consumers keep the full protocol unchanged. Only the event stream is
+	// and get_dashboard_snapshot responses carry the authoritative data). Inline
+	// image blocks are deduped over the process lifetime so each unique image
+	// crosses stdout at most once — later occurrences become image_references
+	// the dashboard resolves from its image cache (issue 495). Generic RPC
+	// consumers keep the full protocol unchanged. Only the event stream is
 	// projected — command responses (output() calls below) always stay complete.
-	const projectEvents = session.uiType === "dashboard";
+	const dashboardEventProjector = session.uiType === "dashboard" ? createDashboardRpcEventProjector() : undefined;
 
 	// Output all agent events as JSON
 	session.subscribe((event) => {
@@ -1906,7 +1909,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				tabTitleGenerator.onMessageEnd(event.message);
 			}
 		}
-		output(projectEvents ? projectDashboardRpcEvent(event as unknown as Record<string, unknown>) : event);
+		output(dashboardEventProjector ? dashboardEventProjector(event as unknown as Record<string, unknown>) : event);
 	});
 
 	// Handle a single command

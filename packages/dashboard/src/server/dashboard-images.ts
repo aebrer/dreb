@@ -142,6 +142,7 @@ export class DashboardImagePreviewError extends Error {}
 /** Synchronous projection + bounded original/preview repository. */
 export class DashboardImageService {
 	private readonly images = new Map<string, CachedImage>();
+	private readonly originalFlights = new Map<string, Promise<DashboardImageBinary>>();
 	private readonly previewFlights = new Map<string, Promise<DashboardImageBinary>>();
 	private readonly maxBytes: number;
 	private readonly maxRecords: number;
@@ -183,7 +184,22 @@ export class DashboardImageService {
 	): Promise<DashboardImageBinary> {
 		const cached = this.cachedVariant(scope, id, "original");
 		if (cached) return cached;
-		return this.recoverOriginal(scope, id, loadAuthoritative);
+		// Single-flight authoritative recovery per scope+id. In originals display
+		// mode the browser auto-fetches every tool-result image, so N concurrent
+		// cache misses for distinct ids would each trigger a full authoritative
+		// (getMessages) re-fetch over the same RPC pipe. Coalescing the concurrent
+		// misses for one id collapses them into a single load. The key is
+		// scope-bound so requesters from another runtime/agent never piggyback.
+		const key = `${scopeKey(scope)}\0${id}`;
+		const flight = this.originalFlights.get(key);
+		if (flight) return flight;
+		const promise = this.recoverOriginal(scope, id, loadAuthoritative);
+		this.originalFlights.set(key, promise);
+		try {
+			return await promise;
+		} finally {
+			this.originalFlights.delete(key);
+		}
 	}
 
 	async preview(

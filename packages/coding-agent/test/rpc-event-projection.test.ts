@@ -1,5 +1,11 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { projectDashboardRpcEvent } from "../src/modes/rpc/rpc-event-projection.js";
+import { createDashboardRpcEventProjector, projectDashboardRpcEvent } from "../src/modes/rpc/rpc-event-projection.js";
+
+/** Mirror of the dashboard server's dashboardImageId for cross-checking. */
+function expectedImageId(mimeType: string, bytes: Uint8Array): string {
+	return createHash("sha256").update(mimeType).update(Uint8Array.of(0)).update(bytes).digest("hex");
+}
 
 function growingAssistantMessage(textLength: number) {
 	return {
@@ -143,5 +149,107 @@ describe("projectDashboardRpcEvent", () => {
 			const projected = projectDashboardRpcEvent(makeMessageUpdate(size));
 			expect(JSON.stringify(projected).length).toBeLessThan(300);
 		}
+	});
+});
+
+describe("createDashboardRpcEventProjector (issue 495 image dedupe)", () => {
+	const imgA = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]); // arbitrary bytes, not a real PNG
+	const b64A = imgA.toString("base64");
+	const b64B = Buffer.from([9, 8, 7, 6, 5]).toString("base64");
+	const imageBlock = (data: string, mimeType = "image/png") => ({ type: "image", data, mimeType });
+
+	it("keeps the first occurrence of a unique image inline", () => {
+		const projector = createDashboardRpcEventProjector();
+		const event = { type: "message_end", message: { role: "user", content: [imageBlock(b64A)] } };
+		const projected = projector(event);
+		// No other projection needed: the whole event passes through by reference.
+		expect(projected).toBe(event);
+	});
+
+	it("replaces later occurrences of the same image with a dashboard-compatible reference", () => {
+		const projector = createDashboardRpcEventProjector();
+		projector({ type: "message_end", message: { content: [imageBlock(b64A)] } });
+
+		const second = projector({
+			type: "tool_execution_end",
+			result: { content: [{ type: "text", text: "hi" }, imageBlock(b64A)] },
+		}) as { result: { content: Array<Record<string, unknown>> } };
+
+		expect(second.result.content[0]).toEqual({ type: "text", text: "hi" });
+		expect(second.result.content[1]).toEqual({
+			type: "image_reference",
+			id: expectedImageId("image/png", imgA),
+			mimeType: "image/png",
+			size: imgA.byteLength,
+		});
+	});
+
+	it("treats images with the same bytes but different MIME types as distinct", () => {
+		const projector = createDashboardRpcEventProjector();
+		projector({ type: "message_end", message: { content: [imageBlock(b64A)] } });
+		const projected = projector({
+			type: "message_end",
+			message: { content: [imageBlock(b64A, "image/jpeg")] },
+		}) as { message: { content: Array<Record<string, unknown>> } };
+		// Different mimeType → different identity → still inline.
+		expect(projected.message.content[0]).toEqual(imageBlock(b64A, "image/jpeg"));
+	});
+
+	it("keeps non-allowlisted or non-canonical image blocks inline (no dedupe identity)", () => {
+		const projector = createDashboardRpcEventProjector();
+		for (const block of [
+			imageBlock(b64A, "image/svg+xml"), // not allowlisted
+			{ type: "image", data: b64A.slice(0, b64A.length - 1), mimeType: "image/png" }, // length % 4 != 0
+			imageBlock(""), // empty
+			{ type: "image", data: "not::base64!!", mimeType: "image/png" }, // invalid alphabet
+		]) {
+			const event = { type: "message_end", message: { content: [block] } };
+			expect(projector(event)).toBe(event);
+		}
+	});
+
+	it("does not mutate input events", () => {
+		const projector = createDashboardRpcEventProjector();
+		const block = imageBlock(b64B);
+		const first = { type: "message_end", message: { content: [block] } };
+		projector(first);
+		const second = projector({
+			type: "agent_end",
+			messages: [{ role: "user", content: [block] }],
+		}) as { messages: Array<{ content: Array<Record<string, unknown>> }> };
+		// Input untouched, output carries the reference.
+		expect(block).toEqual(imageBlock(b64B));
+		expect(second.messages[0].content[0].type).toBe("image_reference");
+	});
+
+	it("returns non-image events by reference so they stay shared with other subscribers", () => {
+		const projector = createDashboardRpcEventProjector();
+		const event = { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } };
+		expect(projector(event)).toBe(event);
+	});
+
+	it("composes with message_update field stripping", () => {
+		const projector = createDashboardRpcEventProjector();
+		const event = {
+			type: "message_update",
+			message: { role: "assistant", content: [imageBlock(b64A)] },
+			assistantMessageEvent: { type: "text_delta", delta: "x", partial: { big: true } },
+		};
+		const projected = projector(event) as Record<string, Record<string, unknown>>;
+		expect(projected.message).toBeUndefined();
+		expect(projected.assistantMessageEvent.partial).toBeUndefined();
+		expect(projected.assistantMessageEvent.delta).toBe("x");
+	});
+
+	it("tracks each unique image once per projector lifetime across many events", () => {
+		const projector = createDashboardRpcEventProjector();
+		const seen = new Set<string>();
+		for (let i = 0; i < 5; i++) {
+			const event = projector({ type: "message_end", message: { content: [imageBlock(b64A)] } }) as {
+				message: { content: Array<Record<string, unknown>> };
+			};
+			seen.add(event.message.content[0].type === "image" ? "inline" : String(event.message.content[0].id));
+		}
+		expect(seen).toEqual(new Set(["inline", expectedImageId("image/png", imgA)]));
 	});
 });
