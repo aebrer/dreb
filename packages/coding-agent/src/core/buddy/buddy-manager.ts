@@ -218,6 +218,7 @@ async function generateSoul(
 	bones: CompanionBones,
 	parentModel: Model<"openai-completions">,
 	apiKey: string,
+	sessionId?: string,
 ): Promise<{ name: string; personality: string; backstory: string }> {
 	const statsStr = STAT_NAMES.map((s) => `${s}: ${bones.stats[s]}`).join(", ");
 	const prompt = SOUL_GENERATION_PROMPT.replace("{species}", bones.species)
@@ -231,7 +232,7 @@ async function generateSoul(
 	};
 
 	try {
-		const response = await completeSimple(parentModel, context, { apiKey });
+		const response = await completeSimple(parentModel, context, { apiKey, ...(sessionId ? { sessionId } : {}) });
 		const text = response.content
 			.filter((c): c is { type: "text"; text: string } => c.type === "text")
 			.map((c) => c.text)
@@ -296,12 +297,17 @@ export class BuddyManager {
 	 * Hatch a new buddy. Generates bones, then uses parent LLM for soul.
 	 * Returns the new state.
 	 */
-	async hatch(parentModel: Model<"openai-completions">, apiKey: string): Promise<BuddyState> {
+	async hatch(
+		parentModel: Model<"openai-completions">,
+		apiKey: string,
+		/** Stable conversation UUID forwarded to the soul-generation request (issue 500). */
+		sessionId?: string,
+	): Promise<BuddyState> {
 		const stored = loadStored();
 		const rerollCount = stored?.rerollCount ?? 0;
 
 		const bones = rollBones(rerollCount);
-		const { name, personality, backstory } = await generateSoul(bones, parentModel, apiKey);
+		const { name, personality, backstory } = await generateSoul(bones, parentModel, apiKey, sessionId);
 
 		const newStored: StoredCompanion = {
 			rerollCount,
@@ -320,12 +326,17 @@ export class BuddyManager {
 	/**
 	 * Reroll the buddy — new bones + new soul.
 	 */
-	async reroll(parentModel: Model<"openai-completions">, apiKey: string): Promise<BuddyState> {
+	async reroll(
+		parentModel: Model<"openai-completions">,
+		apiKey: string,
+		/** Stable conversation UUID forwarded to the soul-generation request (issue 500). */
+		sessionId?: string,
+	): Promise<BuddyState> {
 		const stored = loadStored();
 		const newRerollCount = (stored?.rerollCount ?? 0) + 1;
 
 		const bones = rollBones(newRerollCount);
-		const { name, personality, backstory } = await generateSoul(bones, parentModel, apiKey);
+		const { name, personality, backstory } = await generateSoul(bones, parentModel, apiKey, sessionId);
 
 		const newStored: StoredCompanion = {
 			rerollCount: newRerollCount,

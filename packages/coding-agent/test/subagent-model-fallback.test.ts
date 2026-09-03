@@ -990,6 +990,20 @@ describe("spawn-time model availability probing", () => {
 		expect(callOptions).toHaveProperty("reasoning", "high");
 	});
 
+	test("probeModelAvailability forwards the stable session ID", async () => {
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await probeModelAvailability(probeModels[0], {
+			registry: probeRegistry(),
+			timeoutMs: 100,
+			sessionId: "subagent-probe-uuid",
+		});
+
+		expect(result).toEqual({ ok: true });
+		const callOptions = vi.mocked(completeSimple).mock.calls[0][2];
+		expect(callOptions).toHaveProperty("sessionId", "subagent-probe-uuid");
+	});
+
 	test("probeModelAvailability reports thrown errors", async () => {
 		vi.mocked(completeSimple).mockRejectedValueOnce(new Error("rate limit exceeded"));
 
@@ -1076,6 +1090,24 @@ describe("spawn-time model availability probing", () => {
 		expect(isRuntimeUnavailableError(new Error("timeout"))).toBe(true);
 		expect(isRuntimeUnavailableError("HTTP 500")).toBe(true);
 		expect(isRuntimeUnavailableError(assistantResult("stop"))).toBe(false);
+	});
+
+	test("fallback loop forwards the session ID to the probe", async () => {
+		vi.mocked(completeSimple).mockResolvedValueOnce(assistantResult("stop"));
+
+		const result = await resolveModelForSubagentSpawn(
+			["primary-model", "fallback-model"],
+			"anthropic",
+			probeRegistry(),
+			"parent-model",
+			undefined,
+			"[subagent]",
+			"spawn-session-uuid",
+		);
+
+		expect(result.ok).toBe(true);
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(completeSimple).mock.calls[0][2]).toHaveProperty("sessionId", "spawn-session-uuid");
 	});
 
 	test("fallback loop uses the first model when its probe succeeds", async () => {

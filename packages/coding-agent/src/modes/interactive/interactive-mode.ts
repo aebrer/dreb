@@ -321,14 +321,14 @@ export class InteractiveMode {
 				if (!model) throw new Error("No model available. Set a model first.");
 				const apiKey = await this.session.modelRegistry.getApiKey(model);
 				if (!apiKey) throw new Error("No API key available for the current model.");
-				return manager.hatch(model, apiKey);
+				return manager.hatch(model, apiKey, this.session.sessionId);
 			},
 			onReroll: async (manager) => {
 				const model = this.session.model;
 				if (!model) throw new Error("No model available. Set a model first.");
 				const apiKey = await this.session.modelRegistry.getApiKey(model);
 				if (!apiKey) throw new Error("No API key available for the current model.");
-				return manager.reroll(model, apiKey);
+				return manager.reroll(model, apiKey, this.session.sessionId);
 			},
 			onVisibilityChange: (visible) => this.syncBuddyWidget(visible),
 		});
@@ -696,6 +696,7 @@ export class InteractiveMode {
 			getModel: () => this.session.model,
 			getModelRegistry: () => this.session.modelRegistry,
 			getProvider: () => this.session.model?.provider,
+			getSessionId: () => this.session.sessionId,
 			getAgentModelsOverride: (name) => this.settingsManager.getAgentModelsForAgent(name),
 			getBranch: () => this.footerDataProvider.getGitBranch(),
 			getRepo: () => path.basename(process.cwd()),

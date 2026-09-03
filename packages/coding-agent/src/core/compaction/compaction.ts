@@ -528,6 +528,7 @@ export async function generateSummary(
 	signal?: AbortSignal,
 	customInstructions?: string,
 	previousSummary?: string,
+	sessionId?: string,
 ): Promise<string> {
 	const maxTokens = Math.floor(0.8 * reserveTokens);
 
@@ -557,9 +558,13 @@ export async function generateSummary(
 		},
 	];
 
-	const completionOptions = model.reasoning
-		? { maxTokens, signal, apiKey, reasoning: "high" as const }
-		: { maxTokens, signal, apiKey };
+	const completionOptions = {
+		maxTokens,
+		signal,
+		apiKey,
+		...(model.reasoning ? { reasoning: "high" as const } : {}),
+		...(sessionId ? { sessionId } : {}),
+	};
 
 	const response = await completeSimple(
 		model,
@@ -715,6 +720,7 @@ export async function compact(
 	apiKey: string,
 	customInstructions?: string,
 	signal?: AbortSignal,
+	sessionId?: string,
 ): Promise<CompactionResult> {
 	const {
 		firstKeptEntryId,
@@ -742,9 +748,10 @@ export async function compact(
 						signal,
 						customInstructions,
 						previousSummary,
+						sessionId,
 					)
 				: Promise.resolve("No prior history."),
-			generateTurnPrefixSummary(turnPrefixMessages, model, settings.reserveTokens, apiKey, signal),
+			generateTurnPrefixSummary(turnPrefixMessages, model, settings.reserveTokens, apiKey, signal, sessionId),
 		]);
 		// Merge into single summary
 		summary = `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`;
@@ -758,6 +765,7 @@ export async function compact(
 			signal,
 			customInstructions,
 			previousSummary,
+			sessionId,
 		);
 	}
 
@@ -786,6 +794,7 @@ async function generateTurnPrefixSummary(
 	reserveTokens: number,
 	apiKey: string,
 	signal?: AbortSignal,
+	sessionId?: string,
 ): Promise<string> {
 	const maxTokens = Math.floor(0.5 * reserveTokens); // Smaller budget for turn prefix
 	const llmMessages = convertToLlm(messages);
@@ -802,7 +811,7 @@ async function generateTurnPrefixSummary(
 	const response = await completeSimple(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ maxTokens, signal, apiKey },
+		{ maxTokens, signal, apiKey, ...(sessionId ? { sessionId } : {}) },
 	);
 
 	if (response.stopReason === "error") {
