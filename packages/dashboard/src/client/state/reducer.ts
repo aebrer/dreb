@@ -436,6 +436,17 @@ export function messagesToEntries(messages: MessageLike[]): TranscriptEntry[] {
 				tag: m.customType ?? "extension",
 				text: m.displayText ?? contentToText(message.content),
 			});
+		} else if (message.role === "compactionSummary") {
+			// Persisted compaction summaries ride snapshot messages as their own
+			// role; render them the same way the live auto_compaction_end handler
+			// does so the card survives leaving and re-entering the session view.
+			const m = message as { summary?: string; tokensBefore?: number };
+			entries.push({
+				kind: "summary",
+				label: "compaction",
+				text: m.summary ?? "context compacted",
+				tokensBefore: m.tokensBefore,
+			});
 		}
 	}
 	return entries;
@@ -451,6 +462,23 @@ let statusEntryCounter = 0;
 export function createStatusLineEntry(entry: Omit<StatusLineEntry, "id" | "dismissed">): StatusLineEntry {
 	statusEntryCounter += 1;
 	return { id: statusEntryCounter, ...entry };
+}
+
+/**
+ * Keep the "compacting context…" status entry in sync with the authoritative
+ * `compacting` flag. Live start/end events and every snapshot-apply path
+ * (drill-in hydrate, full resync) converge on this so the banner — and the
+ * "stop compaction" control driven by it — exists whenever compaction is in
+ * flight, even when the start event was consumed before the snapshot barrier
+ * and is no longer replayed. The entry is re-created rather than revived,
+ * including after dismissal, so re-entering a compacting session restores
+ * the indication.
+ */
+export function syncCompactionStatusEntry(state: SessionViewState): void {
+	state.statusEntries = state.statusEntries.filter((entry) => entry.key !== "compaction");
+	if (state.compacting) {
+		state.statusEntries.push(createStatusLineEntry({ key: "compaction", text: "compacting context…", tone: "info" }));
+	}
 }
 
 // The UI renders only the newest few global toasts; keep a bounded per-session
@@ -768,22 +796,34 @@ export function applySessionEvent(state: SessionViewState, event: any): void {
 			// Context-overflow errors are provisional while automatic compaction
 			// recovers the turn, just like provider errors entering auto-retry.
 			if (event.reason === "overflow") clearProviderErrorState(state);
-			state.statusEntries.push(
-				createStatusLineEntry({ key: "compaction", text: "compacting context…", tone: "info" }),
-			);
+			syncCompactionStatusEntry(state);
 			break;
 		}
 		case "auto_compaction_end": {
 			state.compacting = false;
-			state.statusEntries = state.statusEntries.filter((s) => s.key !== "compaction");
+			syncCompactionStatusEntry(state);
 			const result = event.result as { tokensBefore?: number; summary?: string } | undefined;
 			if (result && !event.aborted) {
-				state.entries.push({
-					kind: "summary",
-					label: "compaction",
-					text: result.summary ?? "context compacted",
-					tokensBefore: result.tokensBefore,
-				});
+				const text = result.summary ?? "context compacted";
+				// The same compaction can surface twice when it completes between
+				// the snapshot barrier and the snapshot read: the snapshot
+				// messages already carry the summary, and this (replayed) event
+				// would otherwise add a second identical card.
+				const alreadyPresent = state.entries.some(
+					(entry) =>
+						entry.kind === "summary" &&
+						entry.label === "compaction" &&
+						entry.text === text &&
+						entry.tokensBefore === result.tokensBefore,
+				);
+				if (!alreadyPresent) {
+					state.entries.push({
+						kind: "summary",
+						label: "compaction",
+						text,
+						tokensBefore: result.tokensBefore,
+					});
+				}
 			}
 			if (event.errorMessage) {
 				state.statusEntries.push(
