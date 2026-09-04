@@ -231,19 +231,19 @@ describe("Token Statistics on Abort", () => {
 
 	describe("GitHub Copilot Provider", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"gpt-4.1 - should include token stats when aborted mid-stream",
+			"gpt-5.4 - should include token stats when aborted mid-stream",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-4.1"), githubCopilotToken);
+				const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
 				await testTokensOnAbort(llm, { apiKey: githubCopilotToken });
 			},
 		);
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"claude-sonnet-4 - should include token stats when aborted mid-stream",
+			"claude-opus-4.8 - should include token stats when aborted mid-stream",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.5"), githubCopilotToken);
+				const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.8"), githubCopilotToken);
 				await testTokensOnAbort(llm, { apiKey: githubCopilotToken });
 			},
 		);

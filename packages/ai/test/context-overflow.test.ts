@@ -122,9 +122,9 @@ describe("Context overflow error handling", () => {
 	describe("GitHub Copilot (OAuth)", () => {
 		// OpenAI model via Copilot
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"gpt-4.1 - should detect overflow via isContextOverflow",
+			"gpt-5.4 - should detect overflow via isContextOverflow",
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-4.1"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 
@@ -137,9 +137,9 @@ describe("Context overflow error handling", () => {
 
 		// Anthropic model via Copilot
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"claude-sonnet-4 - should detect overflow via isContextOverflow",
+			"claude-opus-4.8 - should detect overflow via isContextOverflow",
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.5"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.8"), githubCopilotToken);
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 

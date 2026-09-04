@@ -279,19 +279,19 @@ describe("Tool Call Without Result Tests", () => {
 
 	describe("GitHub Copilot Provider", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"gpt-4.1 - should filter out tool calls without corresponding tool results",
+			"gpt-5.4 - should filter out tool calls without corresponding tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-4.1"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
 				await testToolCallWithoutResult(model, { apiKey: githubCopilotToken });
 			},
 		);
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"claude-sonnet-4 - should filter out tool calls without corresponding tool results",
+			"claude-opus-4.8 - should filter out tool calls without corresponding tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.5"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.8"), githubCopilotToken);
 				await testToolCallWithoutResult(model, { apiKey: githubCopilotToken });
 			},
 		);
