@@ -461,6 +461,31 @@ describe("app store SSE sync", () => {
 		expect(store.sessions.a?.needsAttention).toBe(true);
 	});
 
+	it("restores the compaction status entry from a compacting resync snapshot", async () => {
+		const snapshot = runtimeSnapshot("a", false);
+		snapshot.state.isCompacting = true;
+		vi.mocked(api.resync).mockResolvedValueOnce({
+			fleet: { runtimes: [snapshot], diskSessions: [] },
+			active: {
+				key: "a",
+				state: snapshot.state,
+				messages: [],
+				backgroundAgents: [],
+				barrierSeq: 0,
+			},
+			barrierSeq: 0,
+		});
+		const store = await makeStartedStore();
+
+		emit("", { type: "dashboard_resync", reason: "buffer_gap" });
+		await vi.waitFor(() => expect(store.resyncing()).toBe(false));
+
+		expect(store.sessions.a?.compacting).toBe(true);
+		expect(store.sessions.a?.statusEntries).toContainEqual(
+			expect.objectContaining({ key: "compaction", text: "compacting context…", tone: "info" }),
+		);
+	});
+
 	it("restores retry backoff without turning the failed attempt terminal during resync", async () => {
 		const snapshot = runtimeSnapshot("a", false);
 		snapshot.state.isRetrying = true;
@@ -1508,6 +1533,96 @@ describe("app store hydration", () => {
 		});
 		expect(store.sessions.s1?.streaming).toBe(true);
 		expect(store.sessions.s1?.workingSince).toEqual(expect.any(Number));
+	});
+
+	it("restores the compaction status entry when the snapshot is compacting", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.state.isCompacting = true;
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		expect(store.sessions.s1?.compacting).toBe(true);
+		expect(store.sessions.s1?.statusEntries).toContainEqual(
+			expect.objectContaining({ key: "compaction", text: "compacting context…", tone: "info" }),
+		);
+	});
+
+	it("does not duplicate the compaction status entry when the start event is replayed after hydration", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.state.isCompacting = true;
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = await makeStartedStore();
+
+		// Envelope seq 1 > barrierSeq 0, so it is replayed after the snapshot.
+		emit("s1", { type: "auto_compaction_start", reason: "threshold" });
+		await store.hydrateSession("s1");
+
+		expect(store.sessions.s1?.statusEntries.filter((s) => s.key === "compaction")).toHaveLength(1);
+	});
+
+	it("clears the compaction status entry when live compaction ends after hydration", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.state.isCompacting = true;
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = await makeStartedStore();
+
+		await store.hydrateSession("s1");
+		expect(store.sessions.s1?.statusEntries.some((s) => s.key === "compaction")).toBe(true);
+
+		emit("s1", {
+			type: "auto_compaction_end",
+			result: { tokensBefore: 52410, summary: "earlier work summarized" },
+			aborted: false,
+			willRetry: false,
+		});
+
+		expect(store.sessions.s1?.compacting).toBe(false);
+		expect(store.sessions.s1?.statusEntries.some((s) => s.key === "compaction")).toBe(false);
+		expect(store.sessions.s1?.entries).toContainEqual(
+			expect.objectContaining({ kind: "summary", label: "compaction", tokensBefore: 52410 }),
+		);
+	});
+
+	it("hydrates compactionSummary messages as transcript summary entries", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.messages = [
+			{ role: "compactionSummary", summary: "earlier work summarized", tokensBefore: 52410 },
+			{ role: "user", content: "after compaction" },
+		];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = createAppStore();
+
+		await store.hydrateSession("s1");
+
+		expect(store.sessions.s1?.entries).toMatchObject([
+			{ kind: "summary", label: "compaction", text: "earlier work summarized", tokensBefore: 52410 },
+			{ kind: "user", text: "after compaction" },
+		]);
+	});
+
+	it("does not duplicate the summary card when a replayed end event matches the snapshot summary", async () => {
+		const snapshot = hydrationSnapshot("s1", false);
+		snapshot.messages = [{ role: "compactionSummary", summary: "earlier work summarized", tokensBefore: 52410 }];
+		vi.mocked(api.hydrate).mockResolvedValueOnce(snapshot);
+		const store = await makeStartedStore();
+
+		// Envelope seq 1 > barrierSeq 0, so it is replayed after the snapshot —
+		// the barrier race where the same compaction surfaces twice.
+		emit("s1", {
+			type: "auto_compaction_end",
+			result: { tokensBefore: 52410, summary: "earlier work summarized" },
+			aborted: false,
+			willRetry: false,
+		});
+		await store.hydrateSession("s1");
+
+		const summaries = (store.sessions.s1?.entries ?? []).filter(
+			(e) => e.kind === "summary" && e.label === "compaction",
+		);
+		expect(summaries).toHaveLength(1);
+		expect(summaries[0]).toMatchObject({ text: "earlier work summarized", tokensBefore: 52410 });
 	});
 
 	it("restores a pending ask and attention when drilling into a session", async () => {

@@ -29,6 +29,7 @@ import {
 	messagesToEntries,
 	resolveUiRequest as resolveReducerUiRequest,
 	type SessionViewState,
+	syncCompactionStatusEntry,
 	type Toast,
 	updateAttention,
 } from "./reducer.js";
@@ -151,6 +152,11 @@ function restoreSnapshotOutcomeState(session: SessionViewState, messages: any[],
 			}),
 		);
 	}
+	// The snapshot's `compacting` flag is authoritative: sync the matching
+	// status entry so re-entering a compacting session restores the banner
+	// and its stop control even when the start event was not replayed.
+	// session.compacting was set from the same snapshot state by both callers.
+	syncCompactionStatusEntry(session);
 	deriveProviderErrorState(
 		session,
 		messages,
