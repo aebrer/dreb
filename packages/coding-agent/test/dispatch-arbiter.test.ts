@@ -116,6 +116,7 @@ function createArbiter(
 	candidateModels = [{ model: workerModel }, { model: cheapModel }],
 	timeoutMs?: number,
 	getSettings: () => SubagentArbiterSettings | undefined = () => settings,
+	getSessionId: () => string | undefined = () => undefined,
 ) {
 	return new DispatchArbiter({
 		getSettings,
@@ -127,6 +128,7 @@ function createArbiter(
 		],
 		getParentModel: () => workerModel,
 		getSessionTitle: () => "Implement routing",
+		getSessionId,
 		getRepoMetadata: () => ({ repo: "project", cwd: "/tmp/project", branch: "feature/test", dirtyCount: 2 }),
 		getExtraSecretPatterns: () => [{ name: "auth_secret", pattern: /AUTH_SECRET_[0-9]+/g }],
 		complete: complete as never,
@@ -194,6 +196,18 @@ describe("DispatchArbiter", () => {
 		const retryContext = complete.mock.calls[1][1];
 		expect(retryContext.messages[1].content).toContain("previous response did not match");
 		expect(retryContext.messages[1].content).not.toContain("```json");
+	});
+
+	test("forwards the stable session ID on every arbiter attempt", async () => {
+		complete
+			.mockResolvedValueOnce(response("```json\n{}\n```"))
+			.mockResolvedValueOnce(response({ agent: "Explore", model: "provider/worker", thinking: "high" }));
+		const arbiter = createArbiter(undefined, undefined, undefined, () => "arbiter-session-uuid");
+		const result = await arbiter.arbitrate(request);
+		expect(result).toMatchObject({ enabled: true, ok: true });
+		expect(complete).toHaveBeenCalledTimes(2);
+		expect(complete.mock.calls[0][2]).toMatchObject({ sessionId: "arbiter-session-uuid" });
+		expect(complete.mock.calls[1][2]).toMatchObject({ sessionId: "arbiter-session-uuid" });
 	});
 
 	test("rejects otherwise valid decisions containing model-authored extra keys", async () => {

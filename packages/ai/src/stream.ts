@@ -1,6 +1,7 @@
 import "./providers/register-builtins.js";
 
 import { getApiProvider } from "./api-registry.js";
+import { withOpenCodeSessionHeader } from "./providers/opencode-headers.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -28,7 +29,7 @@ export function stream<TApi extends Api>(
 	options?: ProviderStreamOptions,
 ): AssistantMessageEventStream {
 	const provider = resolveApiProvider(model.api);
-	return provider.stream(model, context, options as StreamOptions);
+	return provider.stream(model, context, withOpenCodeSessionHeader(model, options) as StreamOptions);
 }
 
 export async function complete<TApi extends Api>(
@@ -46,7 +47,7 @@ export function streamSimple<TApi extends Api>(
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
 	const provider = resolveApiProvider(model.api);
-	return provider.streamSimple(model, context, options);
+	return provider.streamSimple(model, context, withOpenCodeSessionHeader(model, options));
 }
 
 export async function completeSimple<TApi extends Api>(

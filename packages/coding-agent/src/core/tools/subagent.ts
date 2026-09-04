@@ -876,6 +876,8 @@ export interface ProbeModelAvailabilityOptions {
 	registry?: ModelRegistry;
 	/** Override the default model availability probe timeout; primarily useful for tests. */
 	timeoutMs?: number;
+	/** Stable conversation ID forwarded to providers that use session-based routing. */
+	sessionId?: string;
 }
 
 export type ProbeModelAvailabilityResult = { ok: true } | { ok: false; reason: string; aborted?: boolean };
@@ -936,7 +938,7 @@ export async function probeModelAvailability(
 	model: Model<Api>,
 	options: ProbeModelAvailabilityOptions = {},
 ): Promise<ProbeModelAvailabilityResult> {
-	const { signal, registry, timeoutMs = DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS } = options;
+	const { signal, registry, timeoutMs = DEFAULT_MODEL_AVAILABILITY_PROBE_TIMEOUT_MS, sessionId } = options;
 	if (signal?.aborted) return { ok: false, reason: "Aborted before spawn", aborted: true };
 
 	const probeSignal = makeProbeSignal(signal, timeoutMs);
@@ -963,6 +965,7 @@ export async function probeModelAvailability(
 				maxRetryDelayMs: 0,
 				reasoning,
 				signal: probeSignal.signal,
+				...(sessionId ? { sessionId } : {}),
 			}),
 			probeSignal.timeoutPromise,
 		]);
@@ -1002,6 +1005,8 @@ export async function resolveModelForSubagentSpawn(
 	signal?: AbortSignal,
 	/** Optional log prefix for warning messages (defaults to "[subagent]") */
 	logPrefix = "[subagent]",
+	/** Stable conversation ID forwarded to availability probes (issue 500). */
+	sessionId?: string,
 ): Promise<SubagentModelResolution> {
 	if (signal?.aborted) return { ok: false, error: "Aborted before spawn", skippedModels: [] };
 
@@ -1030,7 +1035,7 @@ export async function resolveModelForSubagentSpawn(
 
 		const modelObj = resolved.provider ? registry.find(resolved.provider, resolved.modelId) : undefined;
 		if (modelObj) {
-			const probe = await probeModelAvailability(modelObj, { signal, registry });
+			const probe = await probeModelAvailability(modelObj, { signal, registry, sessionId });
 			if (!probe.ok && probe.aborted) {
 				return { ok: false, error: "Aborted before spawn", skippedModels };
 			}
@@ -1197,6 +1202,8 @@ export async function executeSingle(
 	thinkingOverride?: ThinkingLevel,
 	arbitration?: SubagentArbitrationHooks,
 	onControlAvailable?: (client: RpcClient | undefined) => void,
+	/** Parent session UUID for spawn-time availability probes (issue 500). */
+	parentSessionId?: string,
 ): Promise<SubagentResult> {
 	let name = agentName || DEFAULT_AGENT;
 	let config = agents.get(name);
@@ -1234,7 +1241,15 @@ export async function executeSingle(
 
 	if (modelSpec) {
 		const parentFallback = configuredModelSpec ? parentModel : undefined;
-		const resolved = await resolveModelForSubagentSpawn(modelSpec, parentProvider, registry, parentFallback, signal);
+		const resolved = await resolveModelForSubagentSpawn(
+			modelSpec,
+			parentProvider,
+			registry,
+			parentFallback,
+			signal,
+			"[subagent]",
+			parentSessionId,
+		);
 		skippedModels = resolved.skippedModels;
 		if (!resolved.ok) {
 			const skippedDetails = formatSkippedModelFailureDetails(skippedModels);
@@ -1481,6 +1496,8 @@ async function executeChain(
 	onChildEvent?: (event: Record<string, unknown>) => void,
 	arbitration?: Omit<SubagentArbitrationHooks, "step">,
 	onControlAvailable?: (client: RpcClient | undefined) => void,
+	/** Parent session UUID for spawn-time availability probes (issue 500). */
+	parentSessionId?: string,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -1539,6 +1556,7 @@ async function executeChain(
 			resolveSubagentThinkingOverride(step.thinking, defaultThinking),
 			arbitration ? { ...arbitration, step: i + 1 } : undefined,
 			onControlAvailable,
+			parentSessionId,
 		);
 		results.push(result);
 
@@ -1934,6 +1952,12 @@ export interface SubagentToolOptions {
 	parentModel?: () => string | undefined;
 	/** Parent session's current session file path. Used to link subagent child sessions back to their parent session. */
 	parentSessionFile?: () => string | undefined;
+	/**
+	 * Parent session's stable conversation UUID. Forwarded to spawn-time model availability
+	 * probes so providers with session-based routing (e.g. OpenCode) can group the probe
+	 * with the parent conversation (issue 500).
+	 */
+	parentSessionId?: () => string | undefined;
 	/** Model registry for validating model names before spawning child processes. */
 	modelRegistry?: ModelRegistry;
 	/** Settings-based model override getter for mach6.models. */
@@ -2161,6 +2185,7 @@ export function createSubagentToolDefinition(
 	const getParentProvider = options?.parentProvider ?? (() => undefined);
 	const getParentModel = options?.parentModel ?? (() => undefined);
 	const getParentSessionFile = options?.parentSessionFile ?? (() => undefined);
+	const getParentSessionId = options?.parentSessionId ?? (() => undefined);
 	const modelRegistry = options?.modelRegistry;
 	const getAgentModelsForAgent = options?.getAgentModelsForAgent;
 	const arbitrate = options?.arbitrate;
@@ -2437,6 +2462,7 @@ export function createSubagentToolDefinition(
 										}
 									: undefined,
 								onControlAvailable,
+								getParentSessionId(),
 							),
 					);
 				};
@@ -2547,6 +2573,7 @@ export function createSubagentToolDefinition(
 										}
 									: undefined,
 								onControlAvailable,
+								getParentSessionId(),
 							);
 							const resultText = results
 								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)

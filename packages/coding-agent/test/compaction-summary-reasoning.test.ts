@@ -75,4 +75,51 @@ describe("generateSummary reasoning options", () => {
 		});
 		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("reasoning");
 	});
+
+	it("forwards the stable session ID to the summary completion on the reasoning path", async () => {
+		await generateSummary(
+			messages,
+			createModel(true),
+			2000,
+			"test-key",
+			undefined,
+			undefined,
+			undefined,
+			"compaction-session-uuid",
+		);
+
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({
+			apiKey: "test-key",
+			reasoning: "high",
+			sessionId: "compaction-session-uuid",
+		});
+	});
+
+	it("forwards the stable session ID to the summary completion on the non-reasoning path", async () => {
+		await generateSummary(
+			messages,
+			createModel(false),
+			2000,
+			"test-key",
+			undefined,
+			undefined,
+			undefined,
+			"compaction-session-uuid",
+		);
+
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({
+			apiKey: "test-key",
+			sessionId: "compaction-session-uuid",
+		});
+		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("reasoning");
+	});
+
+	it("omits sessionId when no session ID is provided", async () => {
+		await generateSummary(messages, createModel(false), 2000, "test-key");
+
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("sessionId");
+	});
 });

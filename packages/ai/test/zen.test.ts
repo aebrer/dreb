@@ -15,9 +15,15 @@ describe.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !process.env.OPENCODE_
 			const providerModels = Object.values(MODELS[key]);
 			providerModels.forEach((model) => {
 				it(`${label}: ${model.id}`, async () => {
-					const response = await complete(model as Model<any>, {
-						messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
-					});
+					// A stable ID for the whole live smoke conversation, mirroring how
+					// AgentSession passes one persisted UUID per conversation (issue 500).
+					const response = await complete(
+						model as Model<any>,
+						{
+							messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
+						},
+						{ sessionId: "dreb-zen-live-smoke-test" },
+					);
 
 					expect(response.content).toBeTruthy();
 					expect(response.stopReason).toBe("stop");

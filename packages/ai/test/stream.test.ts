@@ -977,8 +977,8 @@ describe("Generate E2E Tests", () => {
 		);
 	});
 
-	describe("GitHub Copilot Provider (claude-sonnet-4 via Anthropic Messages)", () => {
-		const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.5"), githubCopilotToken);
+	describe("GitHub Copilot Provider (claude-opus-4.8 via Anthropic Messages)", () => {
+		const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.8"), githubCopilotToken);
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
 			"should complete basic text generation",

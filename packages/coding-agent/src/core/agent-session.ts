@@ -466,6 +466,7 @@ export class AgentSession {
 			getMessages: () => this.agent.state.messages,
 			getParentModel: () => this.model,
 			getSessionTitle: () => this.sessionName,
+			getSessionId: () => this.sessionId,
 			getRepoMetadata: (cwd) => {
 				const gitRoot = findGitRoot(cwd);
 				const isSessionCwd = resolve(cwd) === resolve(this._cwd);
@@ -2508,6 +2509,7 @@ export class AgentSession {
 					apiKey,
 					customInstructions,
 					this._compactionAbortController.signal,
+					this.sessionId,
 				);
 				summary = result.summary;
 				firstKeptEntryId = result.firstKeptEntryId;
@@ -2806,6 +2808,7 @@ export class AgentSession {
 					apiKey,
 					undefined,
 					this._autoCompactionAbortController.signal,
+					this.sessionId,
 				);
 				summary = compactResult.summary;
 				firstKeptEntryId = compactResult.firstKeptEntryId;
@@ -3248,6 +3251,7 @@ export class AgentSession {
 						parentProvider: () => this.model?.provider,
 						parentModel: () => this.model?.id,
 						parentSessionFile: () => this.sessionFile,
+						parentSessionId: () => this.sessionId,
 						modelRegistry: this._modelRegistry,
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
 						defaultThinkingLevel: () => this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
@@ -3967,6 +3971,7 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
+					sessionId: this.sessionId,
 				});
 				if (result.aborted) {
 					return { cancelled: true, aborted: true };

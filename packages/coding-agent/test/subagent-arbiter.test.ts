@@ -560,6 +560,7 @@ describe("pre-spawn subagent arbitration", () => {
 			secretOutputPatterns: [{ name: "custom_arbiter_secret", pattern: "CUSTOM_SECRET_[0-9]+" }],
 		});
 		const providerContexts: unknown[] = [];
+		const arbiterOptions: unknown[] = [];
 		const session = new AgentSession({
 			agent: parentAgent,
 			sessionManager,
@@ -569,8 +570,9 @@ describe("pre-spawn subagent arbitration", () => {
 			resourceLoader: createTestResourceLoader(),
 			scopedModels: [{ model: workerModel }],
 			initialActiveToolNames: ["subagent"],
-			dispatchArbiterComplete: async (_model, context) => {
+			dispatchArbiterComplete: async (_model, context, options) => {
 				providerContexts.push(context);
+				arbiterOptions.push(options);
 				return {
 					content: [
 						{
@@ -605,6 +607,14 @@ describe("pre-spawn subagent arbitration", () => {
 			() => {},
 		);
 		await eventsPromise;
+
+		// The session ID is wired into every arbiter LLM call (issue 500):
+		// AgentSession → DispatchArbiter.getSessionId → injected complete options.
+		expect(arbiterOptions).toHaveLength(2);
+		for (const options of arbiterOptions) {
+			expect(options).toMatchObject({ sessionId: session.sessionId });
+		}
+
 		const arbiterInputs = providerContexts.map((providerContext) => {
 			const providerMessage = (providerContext as { messages: Array<{ content: string }> }).messages[0].content;
 			return JSON.parse(providerMessage.slice(providerMessage.indexOf("\n") + 1)) as {
