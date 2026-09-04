@@ -4,7 +4,7 @@ import {
 	OPENCODE_SESSION_HEADER,
 	withOpenCodeSessionHeader,
 } from "../src/providers/opencode-headers.js";
-import { complete } from "../src/stream.js";
+import { complete, completeSimple } from "../src/stream.js";
 import type { Api, Context, Model, ProviderStreamOptions, StreamOptions } from "../src/types.js";
 
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
@@ -349,5 +349,69 @@ describe("OpenCode session header on the wire", () => {
 		}
 		// The shared options object was never rewritten with the generated header
 		expect(shared.headers).toBeUndefined();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Protocol tests via completeSimple — the non-streaming path production agent
+// loops import from @dreb/ai. completeSimple strips sessionId from the options
+// object and merges the header before delegating to streamSimple, where the
+// injection happens — so it must be proven independently of complete().
+// ---------------------------------------------------------------------------
+
+describe("OpenCode session header on the wire (completeSimple path)", () => {
+	afterEach(() => {
+		global.fetch = originalFetch;
+		vi.restoreAllMocks();
+	});
+
+	it("sends x-opencode-session on openai-completions", async () => {
+		const captured = installFetchCapture(chatCompletionsSse);
+		const model = makeModel({});
+
+		const result = await completeSimple(model, context, { apiKey: "k", sessionId: SESSION_ID });
+
+		expect(result.stopReason).toBe("stop");
+		expect(lastHeaders(captured).get(OPENCODE_SESSION_HEADER)).toBe(SESSION_ID);
+	});
+
+	it("sends x-opencode-session on openai-responses", async () => {
+		const captured = installFetchCapture(responsesSse);
+		const model = makeModel<"openai-responses">({
+			api: "openai-responses",
+			baseUrl: "https://opencode.ai/zen/v1",
+		});
+
+		const result = await completeSimple(model, context, { apiKey: "k", sessionId: SESSION_ID });
+
+		expect(result.stopReason).toBe("stop");
+		expect(lastHeaders(captured).get(OPENCODE_SESSION_HEADER)).toBe(SESSION_ID);
+	});
+
+	it("sends x-opencode-session on anthropic-messages", async () => {
+		const captured = installFetchCapture(anthropicSse);
+		const model = makeModel<"anthropic-messages">({
+			api: "anthropic-messages",
+			provider: "opencode-go",
+			baseUrl: "https://opencode.ai/zen/go/v1",
+		});
+
+		const result = await completeSimple(model, context, { apiKey: "k", sessionId: SESSION_ID });
+
+		expect(result.stopReason).toBe("stop");
+		expect(lastHeaders(captured).get(OPENCODE_SESSION_HEADER)).toBe(SESSION_ID);
+	});
+
+	it("sends x-opencode-session on google-generative-ai", async () => {
+		const captured = installFetchCapture(googleSse);
+		const model = makeModel<"google-generative-ai">({
+			api: "google-generative-ai",
+			baseUrl: "https://opencode.ai/zen/v1",
+		});
+
+		const result = await completeSimple(model, context, { apiKey: "k", sessionId: SESSION_ID });
+
+		expect(result.stopReason).toBe("stop");
+		expect(lastHeaders(captured).get(OPENCODE_SESSION_HEADER)).toBe(SESSION_ID);
 	});
 });

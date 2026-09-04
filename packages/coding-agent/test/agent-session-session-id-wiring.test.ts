@@ -1,6 +1,9 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { Agent } from "@dreb/agent-core";
 import type { AssistantMessage } from "@dreb/ai";
 import { findModel } from "@dreb/ai";
@@ -10,6 +13,7 @@ import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+import { abortBackgroundAgents } from "../src/core/tools/subagent.js";
 import { assistantMsg, createTestResourceLoader, userMsg } from "./utilities.js";
 
 /**
@@ -37,6 +41,13 @@ vi.mock("@dreb/ai", async (importOriginal) => {
 		...actual,
 		completeSimple: completeSimpleMock,
 	};
+});
+
+// The subagent tool spawns a child CLI process; replace it with a fake that
+// emits one assistant turn and exits 0 so spawn paths run without a real CLI.
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	return { ...actual, spawn: vi.fn() };
 });
 
 const mockSummaryResponse: AssistantMessage = {
@@ -88,7 +99,48 @@ function sessionIdOf(session: AgentSession): string {
 	return id;
 }
 
+/** Fake subagent child: emits one assistant turn and exits 0, no real CLI process. */
+function mockSubagentSpawn(model: { provider: string; id: string }): void {
+	vi.mocked(spawn).mockImplementation(((_command: string, _args: readonly string[]) => {
+		const stdout = new PassThrough();
+		const stderr = new PassThrough();
+		const proc = new EventEmitter() as ReturnType<typeof spawn> & {
+			stdout: PassThrough;
+			stderr: PassThrough;
+			killed: boolean;
+		};
+		proc.stdout = stdout;
+		proc.stderr = stderr;
+		proc.killed = false;
+		proc.kill = vi.fn(() => true) as ReturnType<typeof spawn>["kill"];
+		process.nextTick(() => {
+			stdout.write(
+				`${JSON.stringify({
+					type: "agent_start",
+					model: { provider: model.provider, id: model.id },
+					thinkingLevel: "low",
+				})}\n`,
+			);
+			stdout.write(
+				`${JSON.stringify({
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "done" }],
+						stopReason: "stop",
+					},
+				})}\n`,
+			);
+			stdout.end();
+			stderr.end();
+			proc.emit("close", 0);
+		});
+		return proc;
+	}) as unknown as typeof spawn);
+}
+
 describe("AgentSession session ID wiring (non-live, LLM boundary mocked)", () => {
+	let agent: Agent;
 	let session: AgentSession;
 	let sessionManager: SessionManager;
 	let settingsManager: SettingsManager;
@@ -102,13 +154,16 @@ describe("AgentSession session ID wiring (non-live, LLM boundary mocked)", () =>
 		completeSimpleMock.mockResolvedValue(mockSummaryResponse);
 
 		const model = findModel("anthropic", "sonnet")!;
-		const agent = new Agent({
+		agent = new Agent({
 			initialState: {
 				model,
 				systemPrompt: "Test",
 				tools: [],
 			},
 		});
+
+		vi.mocked(spawn).mockReset();
+		mockSubagentSpawn(model);
 
 		sessionManager = SessionManager.inMemory();
 		settingsManager = SettingsManager.create(tempDir, tempDir);
@@ -126,10 +181,13 @@ describe("AgentSession session ID wiring (non-live, LLM boundary mocked)", () =>
 			cwd: tempDir,
 			modelRegistry,
 			resourceLoader: createTestResourceLoader(),
+			// The subagent probe wiring test drives the session's own subagent tool.
+			initialActiveToolNames: ["subagent"],
 		});
 	});
 
 	afterEach(() => {
+		abortBackgroundAgents();
 		session.dispose();
 		vi.restoreAllMocks();
 		if (tempDir && existsSync(tempDir)) {
@@ -212,5 +270,49 @@ describe("AgentSession session ID wiring (non-live, LLM boundary mocked)", () =>
 			sessionId: sessionIdOf(session),
 		});
 		expect(promptText(call)).toContain("summary of this conversation branch");
+	});
+
+	it("forwards the session ID to the subagent spawn availability probe", async () => {
+		// A model fallback LIST forces the runtime-probing branch of spawn-time
+		// model resolution (a single model skips probing entirely), so this
+		// drives the AgentSession → subagent tool → probe sessionId wiring.
+		const sonnet = findModel("anthropic", "sonnet")!;
+		const opus = findModel("anthropic", "opus")!;
+		const agentDir = join(tempDir, ".dreb", "agents");
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			join(agentDir, "probe-agent.md"),
+			[
+				"---",
+				"name: probe-agent",
+				"description: probe wiring",
+				`model: ${sonnet.provider}/${sonnet.id}, ${opus.provider}/${opus.id}`,
+				"---",
+				"Probe prompt",
+				"",
+			].join("\n"),
+		);
+
+		// Background delivery calls agent.prompt() after probe + spawn + child exit,
+		// so waiting on it proves the whole chain ran.
+		const promptSpy = vi.spyOn(agent, "prompt").mockResolvedValue(undefined as never);
+
+		const tool = agent.state.tools.find((candidate) => candidate.name === "subagent");
+		expect(tool).toBeDefined();
+		await tool!.execute(
+			"call",
+			{ agent: "probe-agent", task: "run the availability probe" },
+			new AbortController().signal,
+			() => {},
+		);
+		await vi.waitFor(() => expect(promptSpy).toHaveBeenCalledTimes(1));
+
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		const [probeModel, probeContext, probeOptions] = completeSimpleMock.mock.calls[0];
+		expect(probeModel).toEqual(sonnet);
+		// This LLM call is the spawn-time availability probe, not a summary call.
+		expect(probeContext.systemPrompt).toBe("Reply with the single word OK.");
+		expect(probeOptions).toMatchObject({ apiKey: "test-key", sessionId: sessionIdOf(session) });
+		expect(spawn).toHaveBeenCalledTimes(1);
 	});
 });
