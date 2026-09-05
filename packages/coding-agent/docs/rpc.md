@@ -1407,7 +1407,7 @@ Response:
 
 `tabTitle` is the effective merged object and is absent when unconfigured. Its optional `model` is one exact `provider/model`; when absent, title generation preserves the Explore-agent resolution route documented in [settings.md](settings.md#tab-title).
 
-`continueAfterAutoCompaction` defaults to `false`. When true, every successful automatic threshold or overflow compaction starts another model turn even without queued messages. It does not make failed, cancelled, or manual compaction continue.
+`continueAfterAutoCompaction` defaults to `false`. When true, successful automatic compaction keeps pending or interrupted work moving, but it does not start a fresh model turn after a completed assistant answer with no queued input. It does not make failed, cancelled, or manual compaction continue.
 
 #### set_settings
 
@@ -1560,7 +1560,7 @@ Valid keys and values:
 | `steeringMode` | `"all"`, `"one-at-a-time"` |
 | `followUpMode` | `"all"`, `"one-at-a-time"` |
 | `compactionEnabled` | boolean |
-| `continueAfterAutoCompaction` | boolean; default `false`. Starts another model turn after every successful automatic compaction and never affects manual compaction. |
+| `continueAfterAutoCompaction` | boolean; default `false`. Continues pending work after successful automatic compaction; completed answers and manual compaction stay finished. |
 | `retryEnabled` | boolean |
 | `maxConcurrentSubagents` | Non-negative safe integer; default `4`. Captured by new parent sessions; `0` removes the subagent tool and adds explicit self-execution guidance. |
 | `imageAutoResize` | boolean |
@@ -1954,7 +1954,7 @@ The `reason` field is `"threshold"` (context getting large) or `"overflow"` (con
 }
 ```
 
-If `reason` was `"overflow"` and compaction succeeds, `willRetry` is `true` and the agent will automatically retry the prompt. Independently, persistent `continueAfterAutoCompaction: true` starts another model turn after any successful automatic compaction, including a threshold compaction with `willRetry: false` and no queued message. Manual `compact` is outside this event path and does not continue because of that setting.
+`willRetry` is `true` when another model request is imminent after successful compaction. That includes overflow recovery, resuming an interrupted assistant error, and threshold compaction inside an active tool loop; the latter continues in the same loop rather than calling `continue()`. Persistent `continueAfterAutoCompaction: true` can keep other pending work moving, but it does not restart a completed assistant answer with no queued input. Manual `compact` is outside this event path and does not continue because of that setting.
 
 If compaction was aborted, `result` is `null` and `aborted` is `true`.
 

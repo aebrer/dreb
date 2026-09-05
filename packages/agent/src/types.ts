@@ -93,8 +93,27 @@ export interface AfterToolCallContext {
 	context: AgentContext;
 }
 
+/** Atomic context/model replacement returned by `beforeLlmCall`. */
+export interface BeforeLlmCallResult {
+	/** Replacement messages for the upcoming request and subsequent loop iterations. */
+	messages?: AgentMessage[];
+	/** Replacement model for the upcoming request and subsequent loop iterations. */
+	model?: Model<any>;
+}
+
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
+
+	/**
+	 * Called after loop guardrails pass and immediately before each LLM call.
+	 *
+	 * The callback sees a settled context. It may atomically replace the messages
+	 * and/or model used by the upcoming request and subsequent loop iterations.
+	 * Contract: low-level callers must not throw or reject; surface failures and
+	 * return `undefined` to keep the existing context. `Agent` converts a thrown
+	 * hook error into its normal visible assistant-error termination.
+	 */
+	beforeLlmCall?: (context: AgentContext, signal?: AbortSignal) => Promise<BeforeLlmCallResult | undefined>;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.

@@ -470,7 +470,7 @@ export class SettingsSelectorComponent extends Container {
 				id: "continue-after-auto-compaction",
 				label: "Continue after auto-compaction",
 				description:
-					"Start another model turn after every successful auto-compaction; can run and incur cost indefinitely",
+					"Continue pending work after successful auto-compaction; completed answers stay finished; can incur cost indefinitely",
 				currentValue: config.continueAfterAutoCompaction ? "true" : "false",
 				values: ["true", "false"],
 			},
