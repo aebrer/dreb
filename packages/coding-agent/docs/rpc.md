@@ -1954,11 +1954,11 @@ The `reason` field is `"threshold"` (context getting large) or `"overflow"` (con
 }
 ```
 
-`willRetry` is `true` when another model request is imminent after successful compaction. That includes overflow recovery, resuming an interrupted assistant error, and threshold compaction inside an active tool loop; the latter continues in the same loop rather than calling `continue()`. Persistent `continueAfterAutoCompaction: true` can keep other pending work moving, but it does not restart a completed assistant answer with no queued input. Manual `compact` is outside this event path and does not continue because of that setting.
+`willRetry` is `true` whenever another model request is imminent after this event. That includes overflow recovery, resuming an interrupted assistant error, threshold compaction inside an active tool loop, and an active loop proceeding with intact context after mid-turn compaction is cancelled or fails. In-loop requests continue without calling `continue()`. Persistent `continueAfterAutoCompaction: true` can keep other pending work moving, but it does not restart a completed assistant answer with no queued input. Manual `compact` is outside this event path and does not continue because of that setting.
 
-If compaction was aborted, `result` is `null` and `aborted` is `true`.
+If compaction was aborted, `result` is `null` and `aborted` is `true`. `willRetry` can still be `true` when the active agent loop will proceed without the compaction.
 
-If compaction failed (e.g., API quota exceeded), `result` is `null`, `aborted` is `false`, and `errorMessage` contains the error description.
+If compaction failed (e.g., API quota exceeded), `result` is `null`, `aborted` is `false`, and `errorMessage` contains the error description. As with cancellation, `willRetry` reflects whether the active loop will make another request.
 
 ### auto_retry_start / auto_retry_end
 

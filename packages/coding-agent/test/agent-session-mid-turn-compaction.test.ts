@@ -105,7 +105,9 @@ describe("AgentSession mid-turn compaction", () => {
 		if (existsSync(tempDir)) rmSync(tempDir, { recursive: true });
 	});
 
-	async function runToolLoop(options: { compactionEnabled?: boolean; cancelCompaction?: boolean } = {}) {
+	async function runToolLoop(
+		options: { compactionEnabled?: boolean; cancelCompaction?: boolean; queueDuringCompaction?: boolean } = {},
+	) {
 		const baseModel = findModel("anthropic", "sonnet")!;
 		const model = { ...baseModel, contextWindow: 20_000 };
 		const requestContexts: Message[][] = [];
@@ -171,16 +173,25 @@ describe("AgentSession mid-turn compaction", () => {
 		agent.setTools([tool]);
 		const continueSpy = vi.spyOn(agent, "continue").mockResolvedValue();
 		const events: Array<{ type: string; willRetry?: boolean }> = [];
+		let queuedDeliveryError: unknown;
 		session.subscribe((event) => {
 			if (event.type === "auto_compaction_start") events.push({ type: event.type });
 			if (event.type === "auto_compaction_end") {
 				events.push({ type: event.type, willRetry: event.willRetry });
+				if (options.queueDuringCompaction) {
+					const delivery = event.willRetry
+						? session!.steer("queued during compaction")
+						: session!.prompt("queued during compaction");
+					void delivery.catch((error) => {
+						queuedDeliveryError = error;
+					});
+				}
 			}
 		});
 
 		await session.prompt("start");
 		await new Promise((resolve) => setTimeout(resolve, 120));
-		return { agent, continueSpy, events, requestContexts, requestModels, sessionManager };
+		return { agent, continueSpy, events, requestContexts, requestModels, sessionManager, queuedDeliveryError };
 	}
 
 	it("compacts after all tool results and continues in the same loop", async () => {
@@ -226,10 +237,44 @@ describe("AgentSession mid-turn compaction", () => {
 		expect(result.continueSpy).not.toHaveBeenCalled();
 		expect(result.events).toEqual([
 			{ type: "auto_compaction_start" },
-			{ type: "auto_compaction_end", willRetry: false },
+			{ type: "auto_compaction_end", willRetry: true },
 		]);
 		const secondRequest = result.requestContexts[1];
 		expect(secondRequest.filter((message) => message.role === "toolResult")).toHaveLength(2);
 		expect(secondRequest.some((message) => textOf(message).includes("compacted mid-turn"))).toBe(false);
+	});
+
+	it("delivers queued input when cancelled mid-turn compaction keeps the loop running", async () => {
+		const result = await runToolLoop({ cancelCompaction: true, queueDuringCompaction: true });
+
+		expect(result.queuedDeliveryError).toBeUndefined();
+		expect(result.events).toEqual([
+			{ type: "auto_compaction_start" },
+			{ type: "auto_compaction_end", willRetry: true },
+		]);
+		expect(result.requestContexts).toHaveLength(3);
+		expect(
+			result.requestContexts.some((messages) =>
+				messages.some((message) => textOf(message).includes("queued during compaction")),
+			),
+		).toBe(true);
+	});
+
+	it("delivers queued input when failed mid-turn compaction keeps the loop running", async () => {
+		vi.mocked(compact).mockRejectedValueOnce(new Error("summary unavailable"));
+
+		const result = await runToolLoop({ queueDuringCompaction: true });
+
+		expect(result.queuedDeliveryError).toBeUndefined();
+		expect(result.events).toEqual([
+			{ type: "auto_compaction_start" },
+			{ type: "auto_compaction_end", willRetry: true },
+		]);
+		expect(result.requestContexts).toHaveLength(3);
+		expect(
+			result.requestContexts.some((messages) =>
+				messages.some((message) => textOf(message).includes("queued during compaction")),
+			),
+		).toBe(true);
 	});
 });

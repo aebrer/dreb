@@ -196,6 +196,27 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(warningSpy).not.toHaveBeenCalledWith(expect.stringContaining("Cannot continue from message role"));
 	});
 
+	it("should let an incoming prompt follow pre-prompt compaction without a competing continuation", async () => {
+		seedConversation(createAssistant("error", "prompt is too long"));
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue();
+		const warningSpy = vi.spyOn(session, "warnInSession");
+		const events: Array<{ type: string; willRetry?: boolean }> = [];
+		session.subscribe((event) => {
+			if (event.type === "auto_compaction_end") {
+				events.push({ type: event.type, willRetry: event.willRetry });
+			}
+		});
+
+		await session.prompt("new work");
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		expect(continueSpy).not.toHaveBeenCalled();
+		expect(warningSpy).not.toHaveBeenCalledWith(expect.stringContaining("failed to continue"));
+		expect(events).toEqual([{ type: "auto_compaction_end", willRetry: true }]);
+	});
+
 	it("should preserve overflow cleanup and continuation when unconditional continuation is disabled", async () => {
 		seedConversation(createAssistant("error", "prompt is too long"));
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
@@ -210,6 +231,38 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		expect(continueSpy).toHaveBeenCalledTimes(1);
 		expect(session.agent.state.messages.at(-1)?.role).toBe("user");
+	});
+
+	it("should continue overflow recovery from a retained custom-message tail", async () => {
+		const user = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "hello" }],
+			timestamp: Date.now() - 2,
+		};
+		const custom = {
+			role: "custom" as const,
+			customType: "test",
+			content: [{ type: "text" as const, text: "custom context" }],
+			display: false,
+			timestamp: Date.now() - 1,
+		};
+		const error = createAssistant("error", "prompt is too long");
+		sessionManager.appendMessage(user);
+		sessionManager.appendCustomMessageEntry("test", "custom context", false);
+		sessionManager.appendMessage(error);
+		session.agent.replaceMessages([user, custom, error]);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("overflow", true);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(session.agent.state.messages.at(-1)?.role).toBe("custom");
+		expect(continueSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("should continue exactly once after overflow auto-compaction when enabled", async () => {
@@ -312,7 +365,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		await checkCompaction(message);
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("overflow", true);
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith("overflow", true, false);
 		expect(session.agent.state.messages.at(-1)?.role).toBe("user");
 	});
 
@@ -495,7 +548,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		await checkCompaction(errorAssistant);
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false, false);
 	});
 
 	it("should not trigger threshold compaction for error messages when no prior usage exists", async () => {
