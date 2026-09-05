@@ -16,7 +16,16 @@
 import { copyFileSync, existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@dreb/agent-core";
+import type {
+	Agent,
+	AgentContext,
+	AgentEvent,
+	AgentMessage,
+	AgentState,
+	AgentTool,
+	BeforeLlmCallResult,
+	ThinkingLevel,
+} from "@dreb/agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@dreb/ai";
 import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsMax, supportsXhigh } from "@dreb/ai";
 import { getDocsPath } from "../config.js";
@@ -489,6 +498,7 @@ export class AgentSession {
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
 		this._installBackgroundAgentGuardrails();
+		this._installMidTurnCompactionHook();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -822,6 +832,78 @@ export class AgentSession {
 			}
 			return true;
 		});
+	}
+
+	/** Install the settled pre-request hook used for mid-turn compaction. */
+	private _installMidTurnCompactionHook(): void {
+		this.agent.setBeforeLlmCall((context, signal) => this._prepareForLlmCall(context, signal));
+	}
+
+	/**
+	 * Compact between tool-loop requests without starting a second Agent loop.
+	 * Session persistence is asynchronous, so wait for prior message events before
+	 * preparing a summary from the current branch.
+	 */
+	private async _prepareForLlmCall(
+		context: AgentContext,
+		signal?: AbortSignal,
+	): Promise<BeforeLlmCallResult | undefined> {
+		await this._agentEventQueue.catch(() => undefined);
+		if (signal?.aborted) return undefined;
+
+		const loopTail = context.messages[context.messages.length - 1];
+		if (loopTail?.role !== "user" && loopTail?.role !== "toolResult") {
+			return undefined;
+		}
+
+		const messages = this.agent.state.messages;
+		const lastMessage = messages[messages.length - 1];
+		if (lastMessage?.role !== "user" && lastMessage?.role !== "toolResult") {
+			return undefined;
+		}
+
+		const settings = this.settingsManager.getCompactionSettings();
+		let contextWindow = this.model?.contextWindow ?? 0;
+		const estimate = estimateContextTokens(messages);
+		let contextTokens = estimate.tokens;
+
+		// A retained assistant message can still carry pre-compaction usage. For the
+		// first request after compaction, estimate the rebuilt context from message
+		// content instead of reusing that stale high-water mark.
+		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+		if (compactionEntry && estimate.lastUsageIndex !== null) {
+			const usageMessage = messages[estimate.lastUsageIndex];
+			if (
+				usageMessage.role === "assistant" &&
+				usageMessage.timestamp <= new Date(compactionEntry.timestamp).getTime()
+			) {
+				contextTokens = messages.reduce((total, message) => total + estimateTokens(message), 0);
+			}
+		}
+
+		// Preserve K3's tier behavior at the new mid-turn check. If the tier changes,
+		// the hook result refreshes the active loop model before its next request.
+		if (shouldUpgradeK3Tier(this.model, contextTokens)) {
+			const userCompactPoint = K3_256K_CONTEXT_WINDOW - settings.reserveTokens;
+			const userThresholdPreempts =
+				settings.enabled && userCompactPoint < K3_UPGRADE_CUTOFF_TOKENS && contextTokens > userCompactPoint;
+			if (!userThresholdPreempts) {
+				this._tryUpgradeK3ContextTier();
+				contextWindow = this.model?.contextWindow ?? contextWindow;
+			}
+		}
+
+		if (!shouldCompact(contextTokens, contextWindow, settings)) {
+			return this.model ? { model: this.model } : undefined;
+		}
+
+		// `willRetry: true` tells event consumers that another request is imminent;
+		// `requestWillFollow` prevents a re-entrant agent.continue() call.
+		await this._runAutoCompaction("threshold", true, true);
+		return {
+			messages: this.agent.state.messages,
+			...(this.model ? { model: this.model } : {}),
+		};
 	}
 
 	/**
@@ -1350,8 +1432,9 @@ export class AgentSession {
 		this._unsubscribeGuardrailSentinel = undefined;
 		this._unsubscribeGuardrailCounter?.();
 		this._unsubscribeGuardrailCounter = undefined;
-		// Clear the shouldContinue callback so the agent doesn't hold a reference to a disposed session
+		// Clear callbacks so the agent doesn't hold a reference to a disconnected session.
 		this.agent.setShouldContinue(undefined);
+		this.agent.setBeforeLlmCall(undefined);
 	}
 
 	/**
@@ -1362,6 +1445,7 @@ export class AgentSession {
 		if (this._unsubscribeAgent) return; // Already connected
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installBackgroundAgentGuardrails();
+		this._installMidTurnCompactionHook();
 	}
 
 	/**
@@ -1716,10 +1800,12 @@ export class AgentSession {
 			);
 		}
 
-		// Check if we need to compact before sending (catches aborted responses)
+		// Check if we need to compact before sending (catches aborted responses).
+		// The prompt below is already the next request, so compaction must not
+		// schedule a competing agent.continue().
 		const lastAssistant = this._findLastAssistantMessage();
 		if (lastAssistant) {
-			await this._checkCompaction(lastAssistant, false);
+			await this._checkCompaction(lastAssistant, false, true);
 		}
 
 		// Build messages array (custom message if any, then user message)
@@ -2581,8 +2667,13 @@ export class AgentSession {
 	 *
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
+	 * @param requestWillFollow Whether the caller will issue the next request without agent.continue().
 	 */
-	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
+	private async _checkCompaction(
+		assistantMessage: AssistantMessage,
+		skipAbortedCheck = true,
+		requestWillFollow = false,
+	): Promise<void> {
 		const settings = this.settingsManager.getCompactionSettings();
 
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
@@ -2617,13 +2708,15 @@ export class AgentSession {
 				// Remove the error message from agent state (it IS saved to session
 				// for history, but we don't want it in context for the retry)
 				this._removeLastAssistantMessage();
-				setTimeout(() => {
-					this.agent.continue().catch((err) => {
-						this.warnInSession(
-							`Agent failed to continue after context window upgrade: ${err instanceof Error ? err.message : String(err)}`,
-						);
-					});
-				}, 100);
+				if (!requestWillFollow) {
+					setTimeout(() => {
+						this.agent.continue().catch((err) => {
+							this.warnInSession(
+								`Agent failed to continue after context window upgrade: ${err instanceof Error ? err.message : String(err)}`,
+							);
+						});
+					}, 100);
+				}
 				return;
 			}
 
@@ -2634,7 +2727,7 @@ export class AgentSession {
 					type: "auto_compaction_end",
 					result: undefined,
 					aborted: false,
-					willRetry: false,
+					willRetry: requestWillFollow,
 					errorMessage:
 						"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
 				});
@@ -2645,7 +2738,7 @@ export class AgentSession {
 			// Remove the error message from agent state (it IS saved to session for history,
 			// but we don't want it in context for the retry)
 			this._removeLastAssistantMessage();
-			await this._runAutoCompaction("overflow", true);
+			await this._runAutoCompaction("overflow", true, requestWillFollow);
 			return;
 		}
 
@@ -2695,7 +2788,7 @@ export class AgentSession {
 		if (!settings.enabled) return;
 
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
-			await this._runAutoCompaction("threshold", false);
+			await this._runAutoCompaction("threshold", false, requestWillFollow);
 		}
 	}
 
@@ -2740,7 +2833,11 @@ export class AgentSession {
 	/**
 	 * Internal: Run auto-compaction with events.
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<void> {
+	private async _runAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		requestWillFollow = false,
+	): Promise<void> {
 		const settings = this.settingsManager.getCompactionSettings();
 
 		this._emit({ type: "auto_compaction_start", reason });
@@ -2748,13 +2845,23 @@ export class AgentSession {
 
 		try {
 			if (!this.model) {
-				this._emit({ type: "auto_compaction_end", result: undefined, aborted: false, willRetry: false });
+				this._emit({
+					type: "auto_compaction_end",
+					result: undefined,
+					aborted: false,
+					willRetry: requestWillFollow,
+				});
 				return;
 			}
 
 			const apiKey = await this._modelRegistry.getApiKey(this.model);
 			if (!apiKey) {
-				this._emit({ type: "auto_compaction_end", result: undefined, aborted: false, willRetry: false });
+				this._emit({
+					type: "auto_compaction_end",
+					result: undefined,
+					aborted: false,
+					willRetry: requestWillFollow,
+				});
 				return;
 			}
 
@@ -2762,7 +2869,12 @@ export class AgentSession {
 
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
-				this._emit({ type: "auto_compaction_end", result: undefined, aborted: false, willRetry: false });
+				this._emit({
+					type: "auto_compaction_end",
+					result: undefined,
+					aborted: false,
+					willRetry: requestWillFollow,
+				});
 				return;
 			}
 
@@ -2779,7 +2891,12 @@ export class AgentSession {
 				})) as SessionBeforeCompactResult | undefined;
 
 				if (extensionResult?.cancel) {
-					this._emit({ type: "auto_compaction_end", result: undefined, aborted: true, willRetry: false });
+					this._emit({
+						type: "auto_compaction_end",
+						result: undefined,
+						aborted: true,
+						willRetry: requestWillFollow,
+					});
 					return;
 				}
 
@@ -2817,7 +2934,12 @@ export class AgentSession {
 			}
 
 			if (this._autoCompactionAbortController.signal.aborted) {
-				this._emit({ type: "auto_compaction_end", result: undefined, aborted: true, willRetry: false });
+				this._emit({
+					type: "auto_compaction_end",
+					result: undefined,
+					aborted: true,
+					willRetry: requestWillFollow,
+				});
 				return;
 			}
 
@@ -2850,19 +2972,33 @@ export class AgentSession {
 				tokensBefore,
 				details,
 			};
-			this._emit({ type: "auto_compaction_end", result, aborted: false, willRetry });
 
-			if (willRetry) {
-				const messages = this.agent.state.messages;
-				const lastMsg = messages[messages.length - 1];
-				if (lastMsg?.role === "assistant" && (lastMsg as AssistantMessage).stopReason === "error") {
-					this.agent.replaceMessages(messages.slice(0, -1));
-				}
+			// Rebuilding from persisted entries can reintroduce the assistant error
+			// that triggered compaction. It is historical evidence, not valid retry
+			// context, regardless of how the compaction was classified.
+			let removedTrailingError = false;
+			const rebuiltMessages = this.agent.state.messages;
+			const rebuiltTail = rebuiltMessages[rebuiltMessages.length - 1];
+			if (rebuiltTail?.role === "assistant" && (rebuiltTail as AssistantMessage).stopReason === "error") {
+				this.agent.replaceMessages(rebuiltMessages.slice(0, -1));
+				removedTrailingError = true;
 			}
 
-			// Check the explicit setting first so the continuation decision does not
-			// consult overflow-retry or queued-message state when it is enabled.
-			const shouldContinue = settings.continueAfterAutoCompaction || willRetry || this.agent.hasQueuedMessages();
+			const messages = this.agent.state.messages;
+			const tail = messages[messages.length - 1];
+			const hasQueuedMessages = this.agent.hasQueuedMessages();
+			const hasResumableTail = tail !== undefined && tail.role !== "assistant";
+			const shouldContinue =
+				!requestWillFollow &&
+				messages.length > 0 &&
+				(hasQueuedMessages ||
+					(hasResumableTail && (removedTrailingError || willRetry || settings.continueAfterAutoCompaction)));
+			const nextRequestWillFollow = requestWillFollow || shouldContinue;
+
+			// Emit after deciding continuation so frontends can attach input queued
+			// during compaction to the imminent request instead of starting a rival run.
+			this._emit({ type: "auto_compaction_end", result, aborted: false, willRetry: nextRequestWillFollow });
+
 			if (shouldContinue) {
 				setTimeout(() => {
 					this.agent.continue().catch((err) => {
@@ -2879,7 +3015,7 @@ export class AgentSession {
 				type: "auto_compaction_end",
 				result: undefined,
 				aborted: false,
-				willRetry: false,
+				willRetry: requestWillFollow,
 				errorMessage:
 					reason === "overflow"
 						? `Context overflow recovery failed: ${errorMessage}`

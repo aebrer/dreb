@@ -24,6 +24,9 @@ import type { AssistantMessage } from "../types.js";
  * - z.ai: Does NOT error, accepts overflow silently - handled via usage.input > contextWindow
  * - Ollama: Silently truncates input - not detectable via error message
  */
+const LENGTH_RETRY_EXHAUSTED_PATTERN =
+	/^Response truncated at token limit after \d+ attempts? — output exceeded the model's maximum token budget$/i;
+
 const OVERFLOW_PATTERNS = [
 	/prompt is too long/i, // Anthropic
 	/input is too long for requested model/i, // Amazon Bedrock
@@ -47,10 +50,12 @@ const OVERFLOW_PATTERNS = [
 /**
  * Check if an assistant message represents a context overflow error.
  *
- * This handles two cases:
+ * This handles three cases:
  * 1. Error-based overflow: Most providers return stopReason "error" with a
  *    specific error message pattern.
- * 2. Silent overflow: Some providers accept overflow requests and return
+ * 2. Context-filled truncation: dreb exhausted its length retries because the
+ *    recorded request filled the model's context window, not just its output budget.
+ * 3. Silent overflow: Some providers accept overflow requests and return
  *    successfully. For these, we check if usage.input exceeds the context window.
  *
  * ## Reliability by Provider
@@ -102,9 +107,22 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 		if (/^4(00|13)\s*(status code)?\s*\(no body\)/i.test(message.errorMessage)) {
 			return true;
 		}
+
+		// A provider can report finish_reason "length" when the prompt itself filled
+		// the KV cache. dreb turns an exhausted length-retry sequence into this error.
+		// Only classify that known error as overflow when usage reaches the configured
+		// context ceiling; below it, this is a genuine output-budget exhaustion.
+		if (contextWindow && LENGTH_RETRY_EXHAUSTED_PATTERN.test(message.errorMessage)) {
+			const usageTokens =
+				message.usage.totalTokens ||
+				message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite;
+			if (usageTokens >= contextWindow) {
+				return true;
+			}
+		}
 	}
 
-	// Case 2: Silent overflow (z.ai style) - successful but usage exceeds context
+	// Case 3: Silent overflow (z.ai style) - successful but usage exceeds context
 	if (contextWindow && message.stopReason === "stop") {
 		const inputTokens = message.usage.input + message.usage.cacheRead;
 		if (inputTokens > contextWindow) {

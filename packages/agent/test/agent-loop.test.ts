@@ -465,6 +465,127 @@ describe("agentLoop with AgentMessage", () => {
 		expect(convertedMessages.length).toBe(2);
 	});
 
+	it("should prepare settled context and model before each LLM call", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+		const replacementModel = { ...createModel(), id: "replacement-model", name: "replacement model" };
+		const hookTails: string[] = [];
+		const requestModels: string[] = [];
+		const requestMessages: Message[][] = [];
+		let hookCalls = 0;
+		let streamCalls = 0;
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			beforeLlmCall: async (context) => {
+				hookTails.push(context.messages.at(-1)?.role ?? "none");
+				hookCalls++;
+				if (hookCalls === 1) {
+					return {
+						messages: [createUserMessage("prepared prompt")],
+						model: replacementModel,
+					};
+				}
+				return undefined;
+			},
+		};
+		const streamFn = (model: Model<any>, context: { messages: Message[] }) => {
+			requestModels.push(model.id);
+			requestMessages.push(context.messages);
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message =
+					streamCalls++ === 0
+						? createAssistantMessage(
+								[{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hello" } }],
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+				const reason =
+					message.stopReason === "toolUse" || message.stopReason === "length" ? message.stopReason : "stop";
+				stream.push({ type: "done", reason, message });
+			});
+			return stream;
+		};
+
+		const stream = agentLoop(
+			[createUserMessage("original prompt")],
+			{ systemPrompt: "", messages: [], tools: [tool] },
+			config,
+			undefined,
+			streamFn,
+		);
+		for await (const _event of stream) {
+			// consume
+		}
+
+		expect(hookTails).toEqual(["user", "toolResult"]);
+		expect(requestModels).toEqual(["replacement-model", "replacement-model"]);
+		expect(requestMessages[0]).toHaveLength(1);
+		expect(requestMessages[0][0]).toMatchObject({ role: "user", content: "prepared prompt" });
+		expect(requestMessages[1].at(-1)?.role).toBe("toolResult");
+	});
+
+	it("does not run the pre-request hook after shouldContinue stops the loop", async () => {
+		let hookCalls = 0;
+		let shouldContinueCalls = 0;
+		let streamCalls = 0;
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			shouldContinue: () => {
+				shouldContinueCalls++;
+				return false;
+			},
+			beforeLlmCall: async () => {
+				hookCalls++;
+				return undefined;
+			},
+		};
+		const streamFn = () => {
+			streamCalls++;
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				stream.push({
+					type: "done",
+					reason: "toolUse",
+					message: createAssistantMessage(
+						[{ type: "toolCall", id: "missing", name: "missing", arguments: {} }],
+						"toolUse",
+					),
+				});
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop(
+			[createUserMessage("hello")],
+			{ systemPrompt: "", messages: [], tools: [] },
+			config,
+			undefined,
+			streamFn,
+		);
+		for await (const event of stream) events.push(event);
+
+		expect(streamCalls).toBe(1);
+		expect(hookCalls).toBe(1);
+		expect(shouldContinueCalls).toBe(1);
+		expect(events.filter((event) => event.type === "turn_start")).toHaveLength(1);
+	});
+
 	it("should handle tool calls and results", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: string[] = [];

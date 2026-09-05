@@ -24,6 +24,7 @@ import type {
 	AgentMessage,
 	AgentState,
 	AgentTool,
+	BeforeLlmCallResult,
 	BeforeToolCallContext,
 	BeforeToolCallResult,
 	StreamFn,
@@ -40,6 +41,12 @@ function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 
 export interface AgentOptions {
 	initialState?: Partial<AgentState>;
+
+	/**
+	 * Called immediately before each LLM request after loop guardrails pass.
+	 * May atomically replace the messages and/or model used by the active loop.
+	 */
+	beforeLlmCall?: (context: AgentContext, signal?: AbortSignal) => Promise<BeforeLlmCallResult | undefined>;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -168,6 +175,7 @@ export class Agent {
 
 	private listeners = new Set<(e: AgentEvent) => void>();
 	private abortController?: AbortController;
+	private _beforeLlmCall?: (context: AgentContext, signal?: AbortSignal) => Promise<BeforeLlmCallResult | undefined>;
 	private convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	private transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
 	private steeringQueue: AgentMessage[] = [];
@@ -202,6 +210,7 @@ export class Agent {
 
 	constructor(opts: AgentOptions = {}) {
 		this._state = { ...this._state, ...opts.initialState };
+		this._beforeLlmCall = opts.beforeLlmCall;
 		this.convertToLlm = opts.convertToLlm || defaultConvertToLlm;
 		this.transformContext = opts.transformContext;
 		this.steeringMode = opts.steeringMode || "one-at-a-time";
@@ -319,6 +328,12 @@ export class Agent {
 			| undefined,
 	) {
 		this._afterToolCall = value;
+	}
+
+	setBeforeLlmCall(
+		value: ((context: AgentContext, signal?: AbortSignal) => Promise<BeforeLlmCallResult | undefined>) | undefined,
+	) {
+		this._beforeLlmCall = value;
 	}
 
 	setShouldContinue(value: (() => boolean) | undefined) {
@@ -602,6 +617,16 @@ export class Agent {
 
 		const config: AgentLoopConfig = {
 			model,
+			beforeLlmCall: async (currentContext, signal) => {
+				const result = await this._beforeLlmCall?.(currentContext, signal);
+				if (result?.messages) {
+					this.replaceMessages(result.messages);
+				}
+				if (result?.model) {
+					this.setModel(result.model);
+				}
+				return result;
+			},
 			reasoning,
 			sessionId: this._sessionId,
 			onPayload: this._onPayload,
