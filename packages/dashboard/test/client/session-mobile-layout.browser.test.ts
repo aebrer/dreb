@@ -83,6 +83,8 @@ function sessionFixture(state: SessionLayoutState): string {
 			${headerDetails}
 		</header>
 		${state.bannerCount > 0 ? `<div class="container banner-region" aria-live="polite">${banners}</div>` : ""}
+		<div class="session-body">
+			<div class="session-main">
 		<main class="chat"><div class="chat-inner"><p>${longText}</p><p>${longText}</p><p>${longText}</p></div></main>
 		<footer class="dock">
 			<div class="dock-collapse-row"><button type="button" class="chrome-toggle">compose ▾</button></div>
@@ -102,6 +104,66 @@ function sessionFixture(state: SessionLayoutState): string {
 				</div>
 			</div>
 		</footer>
+			</div>
+		</div>
+	</div>
+</div>
+</body>
+</html>`;
+}
+
+function sidebarEntry(name: string, chipClass: string, chipLabel: string): string {
+	return `<button type="button" class="fleet-sidebar-entry"><div class="fleet-sidebar-entry-head"><span class="name">${name}</span><span class="chip ${chipClass}"><span class="dot">●</span> ${chipLabel}</span></div><div class="fleet-sidebar-entry-meta"><span>2m ago</span></div></button>`;
+}
+
+/** A mobile session with the fleet sidebar drawer open (overlay + scrim). */
+function sessionSidebarFixture(): string {
+	const entries = [
+		sidebarEntry("alpha", "chip-running", "running"),
+		sidebarEntry("beta", "chip-attention", "needs attention"),
+		sidebarEntry("gamma", "chip-idle", "idle"),
+	].join("");
+
+	return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>${tokensCss}</style>
+<style>${appCss}</style>
+<style>${themesCss}</style>
+</head>
+<body>
+<div id="root">
+	<div class="session-screen">
+		<header class="session-bar">
+			<div class="session-bar-inner session-bar-main">
+				<a class="back" href="#/">← fleet</a>
+				<span class="title">Session title</span>
+				<button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button>
+				<button type="button" class="chrome-toggle">details ▴</button>
+			</div>
+		</header>
+		<div class="session-body">
+			<aside class="fleet-sidebar open">${entries}</aside>
+			<div class="fleet-sidebar-scrim"></div>
+			<div class="session-main">
+		<main class="chat"><div class="chat-inner"><p>${longText}</p><p>${longText}</p></div></main>
+		<footer class="dock">
+			<div class="dock-collapse-row"><button type="button" class="chrome-toggle">compose ▾</button></div>
+			<div class="dock-inner">
+				<div class="composer">
+					<textarea></textarea>
+					<div class="composer-row">
+						<button type="button" class="btn btn-small" data-composer-action>📎 file</button>
+						<button type="button" class="btn btn-small" data-composer-action>🖼 photo</button>
+						<button type="button" class="btn btn-primary btn-small send" data-composer-action>send ↵</button>
+					</div>
+				</div>
+			</div>
+		</footer>
+			</div>
+		</div>
 	</div>
 </div>
 </body>
@@ -178,6 +240,62 @@ describe("session layout in a real browser", () => {
 		expect(measured.sendVisible).toBe(true);
 		expect(measured.composerActionsVisible).toBe(true);
 		expect(measured.headerAtViewportTop).toBe(true);
+	});
+
+	it("opens the fleet sidebar as a full-height overlay above the session at 700px", async () => {
+		await page.setViewportSize({ width: 700, height: 900 });
+		await page.setContent(sessionSidebarFixture());
+		const measured = await page.evaluate(() => {
+			const tolerance = 1;
+			const visibleInViewport = (element: Element | null) => {
+				if (!element) return false;
+				const rect = element.getBoundingClientRect();
+				return (
+					rect.width > 0 && rect.height > 0 && rect.top >= -tolerance && rect.bottom <= innerHeight + tolerance
+				);
+			};
+			const sidebar = document.querySelector<HTMLElement>(".fleet-sidebar");
+			const scrim = document.querySelector<HTMLElement>(".fleet-sidebar-scrim");
+			const chat = document.querySelector<HTMLElement>(".session-main main.chat");
+			const dock = document.querySelector<HTMLElement>(".session-main footer.dock");
+			const sidebarRect = sidebar?.getBoundingClientRect();
+			const scrimRect = scrim?.getBoundingClientRect();
+			return {
+				// The drawer spans the viewport via top/bottom offsets (no vh/dvh).
+				sidebarSpansViewport:
+					sidebarRect !== undefined &&
+					Math.abs(sidebarRect.top) <= tolerance &&
+					Math.abs(sidebarRect.bottom - innerHeight) <= tolerance,
+				// The session line still fills the screen beneath the header:
+				// the transcript has height and the dock ends at the viewport bottom.
+				sessionLineFillsScreen:
+					chat !== null &&
+					dock !== null &&
+					chat.getBoundingClientRect().height > 0 &&
+					Math.abs(dock.getBoundingClientRect().bottom - innerHeight) <= tolerance,
+				// The drawer must stack above the scrim it belongs to.
+				sidebarAboveScrim:
+					sidebar !== null &&
+					scrim !== null &&
+					Number.parseInt(getComputedStyle(sidebar).zIndex, 10) >=
+						Number.parseInt(getComputedStyle(scrim).zIndex, 10),
+				scrimCoversViewport:
+					scrimRect !== undefined &&
+					Math.abs(scrimRect.width - innerWidth) <= tolerance &&
+					Math.abs(scrimRect.height - innerHeight) <= tolerance,
+				// The overlay is fixed: the composer underneath keeps its in-flow
+				// geometry (nothing is pushed off-screen by the drawer).
+				composerStillInFlow: visibleInViewport(document.querySelector(".composer-row .send")),
+				documentFits: document.documentElement.scrollHeight <= innerHeight + tolerance,
+			};
+		});
+
+		expect(measured.sidebarSpansViewport).toBe(true);
+		expect(measured.sessionLineFillsScreen).toBe(true);
+		expect(measured.sidebarAboveScrim).toBe(true);
+		expect(measured.scrimCoversViewport).toBe(true);
+		expect(measured.composerStillInFlow).toBe(true);
+		expect(measured.documentFits).toBe(true);
 	});
 
 	it("keeps the slash-command popover visible on mobile", async () => {

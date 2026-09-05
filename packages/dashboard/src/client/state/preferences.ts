@@ -3,6 +3,7 @@ import type { DashboardImageDisplayMode } from "../../shared/protocol.js";
 
 export const EXPAND_THINKING_KEY = "dreb.dashboard.expandThinking";
 export const IMAGE_DISPLAY_MODE_KEY = "dreb.dashboard.imageDisplayMode";
+export const SESSION_SIDEBAR_COLLAPSED_KEY = "dreb.dashboard.sessionSidebarCollapsed";
 export const TOOL_AUTO_EXPAND_KEY = "dreb.dashboard.toolAutoExpand";
 export const TOOL_AUTO_EXPAND_TOOLS = ["read", "edit", "write", "suggest_next", "bash"] as const;
 
@@ -11,6 +12,9 @@ export type ToolAutoExpandPreferences = Record<ToolAutoExpandTool, boolean>;
 
 /** Expanded thinking is opt-OUT: new users see thinking blocks open. */
 const EXPAND_THINKING_DEFAULT = true;
+/** The session fleet sidebar is expanded by default on desktop. Mobile always
+    starts closed regardless of this preference. */
+const SESSION_SIDEBAR_COLLAPSED_DEFAULT = false;
 const TOOL_AUTO_EXPAND_DEFAULT_OPEN_TOOLS = new Set<string>(TOOL_AUTO_EXPAND_TOOLS);
 const TOOL_AUTO_EXPAND_DEFAULT = Object.fromEntries(
 	TOOL_AUTO_EXPAND_TOOLS.map((toolName) => [toolName, true]),
@@ -89,10 +93,14 @@ const [imageDisplayModeSignal, setImageDisplayModeSignal] = createSignal<Dashboa
 	readImageDisplayMode(),
 );
 const [toolAutoExpandSignal, setToolAutoExpandSignal] = createSignal(readToolAutoExpandPreference());
+const [sessionSidebarCollapsedSignal, setSessionSidebarCollapsedSignal] = createSignal(
+	readBooleanPreference(SESSION_SIDEBAR_COLLAPSED_KEY, SESSION_SIDEBAR_COLLAPSED_DEFAULT),
+);
 
 export const expandThinking = expandThinkingSignal;
 export const imageDisplayMode = imageDisplayModeSignal;
 export const toolAutoExpand = toolAutoExpandSignal;
+export const sessionSidebarCollapsed = sessionSidebarCollapsedSignal;
 
 export function setExpandThinking(value: boolean): void {
 	setExpandThinkingSignal(value);
@@ -110,6 +118,11 @@ export function setToolAutoExpand(toolName: ToolAutoExpandTool, value: boolean):
 	writeToolAutoExpandPreference(next);
 }
 
+export function setSessionSidebarCollapsed(value: boolean): void {
+	setSessionSidebarCollapsedSignal(value);
+	writeBooleanPreference(SESSION_SIDEBAR_COLLAPSED_KEY, value);
+}
+
 export function isToolAutoOpen(toolName: string): boolean {
 	const value = (toolAutoExpandSignal() as Record<string, boolean>)[toolName];
 	return value ?? TOOL_AUTO_EXPAND_DEFAULT_OPEN_TOOLS.has(toolName);
@@ -125,4 +138,10 @@ export function reloadImageDisplayModePreference(): void {
 
 export function reloadToolAutoExpandPreference(): void {
 	setToolAutoExpandSignal(readToolAutoExpandPreference());
+}
+
+export function reloadSessionSidebarCollapsedPreference(): void {
+	setSessionSidebarCollapsedSignal(
+		readBooleanPreference(SESSION_SIDEBAR_COLLAPSED_KEY, SESSION_SIDEBAR_COLLAPSED_DEFAULT),
+	);
 }
