@@ -44,12 +44,15 @@ LLMs only understand `user`, `assistant`, and `toolResult`. The `convertToLlm` f
 ### Message Flow
 
 ```
-AgentMessage[] → transformContext() → AgentMessage[] → convertToLlm() → Message[] → LLM
-                    (optional)                           (required)
+settled AgentContext → beforeLlmCall() → transformContext() → convertToLlm() → LLM
+                         (optional)          (optional)         (required)
 ```
 
-1. **transformContext**: Prune old messages, inject external context
-2. **convertToLlm**: Filter out UI-only messages, convert custom types to LLM format
+1. **beforeLlmCall**: Inspect settled user/tool-result context and atomically replace messages and/or the active model before the request
+2. **transformContext**: Prune old messages or inject external context for the request
+3. **convertToLlm**: Filter out UI-only messages and convert custom types to LLM format
+
+`beforeLlmCall` runs after `shouldContinue` permits a request and before `turn_start`. Returning `{ messages, model }` updates both the active loop and `Agent.state`; returning `undefined` preserves them. The hook receives a snapshot, so mutations without a returned replacement are ignored. With `Agent`, a thrown error terminates the run with a visible assistant error instead of applying a partial replacement; low-level loop callers must surface failures themselves and return `undefined` rather than reject.
 
 ## Event Flow
 
@@ -154,6 +157,13 @@ const agent = new Agent({
     tools: AgentTool<any>[],
     messages: AgentMessage[],
   },
+
+  // Prepare settled context immediately before each LLM request. Both fields
+  // are optional; replacements apply to the active loop and Agent.state.
+  beforeLlmCall: async (context, signal) => ({
+    messages: compactedMessages,
+    model: resizedContextModel,
+  }),
 
   // Convert AgentMessage[] to LLM Message[] (required for custom message types)
   convertToLlm: (messages) => messages.filter(...),
@@ -274,6 +284,7 @@ agent.setModel(getModel("openai", "gpt-4o"));
 agent.setThinkingLevel("medium");
 agent.setTools([myTool]);
 agent.setToolExecution("sequential");
+agent.setBeforeLlmCall(async (context, signal) => ({ messages: context.messages }));
 agent.setBeforeToolCall(async ({ toolCall }) => undefined);
 agent.setAfterToolCall(async ({ toolCall, result }) => undefined);
 agent.replaceMessages(newMessages);
@@ -454,6 +465,7 @@ const context: AgentContext = {
 
 const config: AgentLoopConfig = {
   model: getModel("openai", "gpt-4o"),
+  beforeLlmCall: async (settledContext, signal) => ({ messages: settledContext.messages }),
   convertToLlm: (msgs) => msgs.filter(m => ["user", "assistant", "toolResult"].includes(m.role)),
   toolExecution: "parallel",
   beforeToolCall: async ({ toolCall, args, context }) => undefined,
@@ -472,7 +484,7 @@ for await (const event of agentLoopContinue(context, config)) {
 }
 ```
 
-These low-level streams are observational. They preserve event order, but they do not wait for your async event handling to settle before later producer phases continue. If you need message processing to act as a barrier before tool preflight, use the `Agent` class instead of raw `agentLoop()` or `agentLoopContinue()`.
+These low-level streams are observational. They preserve event order, but they do not wait for your async event handling to settle before later producer phases continue. `beforeLlmCall` itself is awaited and its returned replacement is applied atomically before the request. If you need ordinary message-event processing to act as a barrier before tool preflight, use the `Agent` class instead of raw `agentLoop()` or `agentLoopContinue()`.
 
 ## License
 

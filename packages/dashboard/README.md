@@ -69,10 +69,10 @@ Open `http://127.0.0.1:5343`.
   matching safe index links.
 - **Settings** — persistent defaults (provider-grouped model dropdown,
   thinking, queue modes, image handling, skill commands, transport,
-  hide-thinking, compaction/retry, opt-in continuation after every successful automatic compaction, and maximum concurrent subagents), automatic tab-title enable/model controls, a scoped-models editor, per-agent model
+  hide-thinking, compaction/retry, opt-in continuation of pending work after successful automatic compaction, and maximum concurrent subagents), automatic tab-title enable/model controls, a scoped-models editor, per-agent model
   fallback editor, and the global-only nested-context policy: an auditable trusted-roots list with
   revoke and simple add-by-path controls, plus a prominent expert trust-all
-  warning. The Files view remains the primary trust-grant flow. The auto-compaction continuation toggle is off by default, may keep unattended model turns and costs running indefinitely, and never affects manual `/compact`. Most defaults
+  warning. The Files view remains the primary trust-grant flow. The auto-compaction continuation toggle is off by default, may keep unattended model turns and costs running indefinitely, does not restart completed answers, and never affects manual `/compact`. Most defaults
   seed new sessions; opening Settings flushes pending writes and reloads durable
   global + project settings so external edits appear, while read/parse/write
   failures are shown instead of stale values. Maximum concurrent subagents defaults to 4; `0` starts new parents without the subagent tool and adds explicit self-execution guidance. Trust changes are observed by

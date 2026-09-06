@@ -599,7 +599,7 @@ export interface RpcSettingsSnapshot {
 	followUpMode: "all" | "one-at-a-time";
 	/** Whether automatic context compaction is enabled */
 	compactionEnabled: boolean;
-	/** Whether every successful automatic compaction starts another model turn */
+	/** Whether successful automatic compaction continues pending work (never restarts a completed answer) */
 	continueAfterAutoCompaction: boolean;
 	/** Whether automatic retry on transient errors is enabled */
 	retryEnabled: boolean;

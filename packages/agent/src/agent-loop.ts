@@ -211,6 +211,23 @@ async function runLoop(
 				break;
 			}
 
+			if (config.beforeLlmCall) {
+				const prepared = await config.beforeLlmCall(
+					{
+						...currentContext,
+						messages: currentContext.messages.slice(),
+						tools: currentContext.tools?.slice(),
+					},
+					signal,
+				);
+				if (prepared?.messages) {
+					currentContext.messages = prepared.messages.slice();
+				}
+				if (prepared?.model) {
+					config.model = prepared.model;
+				}
+			}
+
 			if (!firstTurn) {
 				await emit({ type: "turn_start" });
 			} else {
