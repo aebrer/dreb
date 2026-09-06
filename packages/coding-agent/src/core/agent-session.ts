@@ -339,6 +339,10 @@ export class AgentSession {
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
+	/** The in-flight auto-compaction run (any start path), if any. */
+	private _autoCompactionInFlight: Promise<void> | undefined = undefined;
+	/** Serializes auto-compaction checks so two never run concurrently. */
+	private _autoCompactionChain: Promise<void> = Promise.resolve();
 	private _overflowRecoveryAttempted = false;
 
 	// Branch summarization state
@@ -899,7 +903,7 @@ export class AgentSession {
 
 		// `willRetry: true` tells event consumers that another request is imminent;
 		// `requestWillFollow` prevents a re-entrant agent.continue() call.
-		await this._runAutoCompaction("threshold", true, true);
+		await this._trackAutoCompaction("threshold", true, true);
 		return {
 			messages: this.agent.state.messages,
 			...(this.model ? { model: this.model } : {}),
@@ -2665,11 +2669,48 @@ export class AgentSession {
 	 * 1. Overflow: LLM returned context overflow error, remove error message from agent state, compact, auto-retry
 	 * 2. Threshold: Context over threshold, compact, NO auto-retry (user continues manually)
 	 *
+	 * Checks run on a serialization chain: a check that arrives while another
+	 * check's compaction is still in flight (e.g. a prompt submitted during an
+	 * agent_end compaction) waits for it, then evaluates instead of starting a
+	 * competing compaction. If an earlier queued check compacted or rebuilt
+	 * context first, the captured message is pre-compaction and the
+	 * pre-compaction staleness guard inside _doCheckCompaction skips it.
+	 *
 	 * @param assistantMessage The assistant message to check
 	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
 	 * @param requestWillFollow Whether the caller will issue the next request without agent.continue().
 	 */
-	private async _checkCompaction(
+	private _checkCompaction(
+		assistantMessage: AssistantMessage,
+		skipAbortedCheck = true,
+		requestWillFollow = false,
+	): Promise<void> {
+		const work = async (): Promise<void> => {
+			// A run started outside this chain (the mid-turn hook) may still
+			// be in flight; wait for it before evaluating.
+			if (this._autoCompactionInFlight) {
+				await this._autoCompactionInFlight.catch(() => undefined);
+			}
+			await this._doCheckCompaction(assistantMessage, skipAbortedCheck, requestWillFollow);
+		};
+		const run = this._autoCompactionChain.then(work);
+		this._autoCompactionChain = run.catch(() => undefined);
+		return run;
+	}
+
+	/**
+	 * Evaluate compaction needs and run a tracked compaction if warranted.
+	 * Runs inside the _checkCompaction serialization chain.
+	 *
+	 * Two cases:
+	 * 1. Overflow: LLM returned context overflow error, remove error message from agent state, compact, auto-retry
+	 * 2. Threshold: Context over threshold, compact, NO auto-retry (user continues manually)
+	 *
+	 * @param assistantMessage The assistant message to check
+	 * @param skipAbortedCheck If false, include aborted messages (for pre-prompt check). Default: true
+	 * @param requestWillFollow Whether the caller will issue the next request without agent.continue().
+	 */
+	private async _doCheckCompaction(
 		assistantMessage: AssistantMessage,
 		skipAbortedCheck = true,
 		requestWillFollow = false,
@@ -2738,7 +2779,7 @@ export class AgentSession {
 			// Remove the error message from agent state (it IS saved to session for history,
 			// but we don't want it in context for the retry)
 			this._removeLastAssistantMessage();
-			await this._runAutoCompaction("overflow", true, requestWillFollow);
+			await this._trackAutoCompaction("overflow", true, requestWillFollow);
 			return;
 		}
 
@@ -2788,7 +2829,7 @@ export class AgentSession {
 		if (!settings.enabled) return;
 
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
-			await this._runAutoCompaction("threshold", false, requestWillFollow);
+			await this._trackAutoCompaction("threshold", false, requestWillFollow);
 		}
 	}
 
@@ -2828,6 +2869,29 @@ export class AgentSession {
 			toContextWindow: K3_1M_CONTEXT_WINDOW,
 		});
 		return true;
+	}
+
+	/**
+	 * Start an auto-compaction while tracking it, so a concurrent check that
+	 * arrives during the run can await it instead of starting a competing one.
+	 * The tracking flag clears when this specific run settles (even on error,
+	 * since _runAutoCompaction swallows its own failures).
+	 */
+	private _trackAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		requestWillFollow = false,
+	): Promise<void> {
+		const run = this._runAutoCompaction(reason, willRetry, requestWillFollow);
+		this._autoCompactionInFlight = run;
+		void run
+			.catch(() => undefined)
+			.finally(() => {
+				if (this._autoCompactionInFlight === run) {
+					this._autoCompactionInFlight = undefined;
+				}
+			});
+		return run;
 	}
 
 	/**
