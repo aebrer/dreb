@@ -1127,6 +1127,8 @@ describe("openai-codex streaming", () => {
 		["gpt-6-astra", "minimal", "low"],
 		["gpt-5.6-sol", "xhigh", "xhigh"],
 		["gpt-5.6-sol", "max", "max"],
+		["gpt-6-astra", "xhigh", "xhigh"],
+		["gpt-6-astra", "max", "max"],
 	] as const)("maps %s reasoning effort %s to %s", async (modelId, effort, expectedEffort) => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;

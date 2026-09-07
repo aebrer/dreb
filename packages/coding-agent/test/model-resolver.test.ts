@@ -418,6 +418,89 @@ describe("resolveCliModel", () => {
 	});
 });
 
+describe("fuzzy substitution guard (provider-qualified references)", () => {
+	const fuzzyModels: Model<"anthropic-messages">[] = [
+		{
+			id: "gpt-4o-mini",
+			name: "GPT-4o Mini",
+			api: "anthropic-messages",
+			provider: "openai",
+			baseUrl: "https://api.openai.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		},
+		{
+			id: "gpt-4o",
+			name: "GPT-4o",
+			api: "anthropic-messages",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 2, output: 4, cacheRead: 0.2, cacheWrite: 2 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		},
+	];
+	const fuzzyRegistry = {
+		getAll: () => fuzzyModels,
+	} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+
+	test("refuses to fuzzy-match a requested id that exists on another provider", () => {
+		// "openai/gpt-4o" fuzzy-matches openai/gpt-4o-mini, but the user asked
+		// for gpt-4o on openai specifically — surface it as a custom model id
+		// instead of silently swapping to gpt-4o-mini.
+		const result = resolveCliModel({ cliModel: "openai/gpt-4o", modelRegistry: fuzzyRegistry });
+
+		expect(result.error).toBeUndefined();
+		expect(result.model?.provider).toBe("openai");
+		expect(result.model?.id).toBe("gpt-4o");
+		expect(result.isSyntheticFallback).toBe(true);
+		expect(result.thinkingLevel).toBeUndefined();
+		expect(result.warning).toContain('Model "gpt-4o" not found for provider "openai"');
+		expect(result.warning).toContain("another provider");
+		expect(result.warning).toContain("gpt-4o-mini");
+	});
+
+	test("still fuzzy-matches when the requested id exists nowhere else", () => {
+		const singleRegistry = {
+			getAll: () => fuzzyModels.slice(0, 1),
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+
+		const result = resolveCliModel({ cliProvider: "openai", cliModel: "gpt-4o", modelRegistry: singleRegistry });
+
+		expect(result.error).toBeUndefined();
+		expect(result.model?.provider).toBe("openai");
+		expect(result.model?.id).toBe("gpt-4o-mini");
+		expect(result.isSyntheticFallback).toBeUndefined();
+		expect(result.warning).toBeUndefined();
+	});
+
+	test("exact match on the requested provider is never treated as a substitution", () => {
+		const result = resolveCliModel({ cliModel: "openai/gpt-4o-mini", modelRegistry: fuzzyRegistry });
+
+		expect(result.error).toBeUndefined();
+		expect(result.model?.provider).toBe("openai");
+		expect(result.model?.id).toBe("gpt-4o-mini");
+		expect(result.isSyntheticFallback).toBeUndefined();
+		expect(result.warning).toBeUndefined();
+	});
+
+	test("substitution check strips a trailing thinking-level suffix from the requested id", () => {
+		const result = resolveCliModel({ cliModel: "openai/gpt-4o:high", modelRegistry: fuzzyRegistry });
+
+		expect(result.error).toBeUndefined();
+		expect(result.model?.provider).toBe("openai");
+		expect(result.model?.id).toBe("gpt-4o");
+		expect(result.isSyntheticFallback).toBe(true);
+		expect(result.thinkingLevel).toBeUndefined();
+		expect(result.warning).toContain('Model "gpt-4o" not found for provider "openai"');
+	});
+});
+
 describe("synthetic fallback detection", () => {
 	test("isSyntheticFallback is set for unknown model with known provider", () => {
 		const registry = {
@@ -520,5 +603,151 @@ describe("default model selection", () => {
 
 		expect(result.model?.provider).toBe("vercel-ai-gateway");
 		expect(result.model?.id).toBe("anthropic/claude-opus-4-6");
+	});
+
+	describe("saved default fallback", () => {
+		const savedCodexModel: Model<"anthropic-messages"> = {
+			id: "gpt-5.4",
+			name: "GPT-5.4 (pruned)",
+			api: "anthropic-messages",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 2.1875 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const codexDefaultModel: Model<"anthropic-messages"> = {
+			id: "gpt-5.6-luna",
+			name: "GPT-5.6 Luna",
+			api: "anthropic-messages",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const openaiDefaultModel: Model<"anthropic-messages"> = {
+			id: "gpt-5.4",
+			name: "GPT-5.4",
+			api: "anthropic-messages",
+			provider: "openai",
+			baseUrl: "https://api.openai.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 2.1875 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+
+		test("prefers the saved provider's own default over a cross-provider switch", async () => {
+			// Regression: with both ChatGPT OAuth and OPENAI_API_KEY available, a
+			// pruned saved default openai-codex/gpt-5.4 used to silently fall to
+			// openai/gpt-5.4 (dictionary order of defaultModelPerProvider) — a
+			// silent billing-surface switch. It must stay on openai-codex.
+			const registry = {
+				find: vi.fn().mockReturnValue(undefined),
+				getAvailable: async () => [openaiDefaultModel, codexDefaultModel],
+			} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+			const result = await findInitialModel({
+				scopedModels: [],
+				isContinuing: false,
+				defaultProvider: "openai-codex",
+				defaultModelId: "gpt-5.4",
+				modelRegistry: registry,
+			});
+
+			expect(result.model?.provider).toBe("openai-codex");
+			expect(result.model?.id).toBe("gpt-5.6-luna");
+			expect(result.fallbackMessage).toBe(
+				"Saved default openai-codex/gpt-5.4 no longer exists. Using openai-codex/gpt-5.6-luna.",
+			);
+		});
+
+		test("falls back cross-provider with a message when the saved provider has no available default", async () => {
+			const registry = {
+				find: vi.fn().mockReturnValue(undefined),
+				getAvailable: async () => [openaiDefaultModel],
+			} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+			const result = await findInitialModel({
+				scopedModels: [],
+				isContinuing: false,
+				defaultProvider: "openai-codex",
+				defaultModelId: "gpt-5.4",
+				modelRegistry: registry,
+			});
+
+			expect(result.model?.provider).toBe("openai");
+			expect(result.model?.id).toBe("gpt-5.4");
+			expect(result.fallbackMessage).toBe(
+				"Saved default openai-codex/gpt-5.4 no longer exists. Using openai/gpt-5.4.",
+			);
+		});
+
+		test("uses the first available model with a message when no known default matches", async () => {
+			const customModel: Model<"anthropic-messages"> = {
+				...openaiDefaultModel,
+				id: "my-custom-model",
+				provider: "my-custom-provider",
+			};
+			const registry = {
+				find: vi.fn().mockReturnValue(undefined),
+				getAvailable: async () => [customModel],
+			} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+			const result = await findInitialModel({
+				scopedModels: [],
+				isContinuing: false,
+				defaultProvider: "openai-codex",
+				defaultModelId: "gpt-5.4",
+				modelRegistry: registry,
+			});
+
+			expect(result.model?.provider).toBe("my-custom-provider");
+			expect(result.fallbackMessage).toBe(
+				"Saved default openai-codex/gpt-5.4 no longer exists. Using my-custom-provider/my-custom-model.",
+			);
+		});
+
+		test("returns the saved default unchanged when it still exists", async () => {
+			const registry = {
+				find: vi.fn().mockReturnValue(savedCodexModel),
+				getAvailable: async () => [savedCodexModel, codexDefaultModel],
+			} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+			const result = await findInitialModel({
+				scopedModels: [],
+				isContinuing: false,
+				defaultProvider: "openai-codex",
+				defaultModelId: "gpt-5.4",
+				modelRegistry: registry,
+			});
+
+			expect(result.model?.provider).toBe("openai-codex");
+			expect(result.model?.id).toBe("gpt-5.4");
+			expect(result.fallbackMessage).toBeUndefined();
+		});
+
+		test("omits the fallback message when there is no saved default", async () => {
+			const registry = {
+				find: vi.fn().mockReturnValue(undefined),
+				getAvailable: async () => [openaiDefaultModel],
+			} as unknown as Parameters<typeof findInitialModel>[0]["modelRegistry"];
+
+			const result = await findInitialModel({
+				scopedModels: [],
+				isContinuing: false,
+				modelRegistry: registry,
+			});
+
+			expect(result.model?.provider).toBe("openai");
+			expect(result.model?.id).toBe("gpt-5.4");
+			expect(result.fallbackMessage).toBeUndefined();
+		});
 	});
 });

@@ -123,6 +123,21 @@ describe("supportsXhigh", () => {
 		expect(supportsXhigh(model!)).toBe(true);
 	});
 
+	it.each(["gpt-6", "gpt-6-astra", "openai/gpt-6-astra", "openai/gpt-6-astra-pro"] as const)(
+		"returns true for GPT-6 model %s",
+		(id) => {
+			const model = getModel("openai-codex", "gpt-6-astra");
+			expect(model).toBeDefined();
+			expect(supportsXhigh({ ...model!, id })).toBe(true);
+		},
+	);
+
+	it("returns false for GPT-5.1 (never xhigh-capable)", () => {
+		const model = getModel("openai-codex", "gpt-5.5");
+		expect(model).toBeDefined();
+		expect(supportsXhigh({ ...model!, id: "gpt-5.1" })).toBe(false);
+	});
+
 	it.each([
 		["gpt-5.6-sol", { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 }],
 		["gpt-5.6-terra", { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 }],

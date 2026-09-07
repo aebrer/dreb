@@ -646,7 +646,7 @@ cat README.md | dreb -p "Summarize this text"
 | `--models <patterns>` | Comma-separated patterns for model cycling |
 | `--list-models [search]` | List available models |
 
-`max` is a separate native effort currently supported by GPT-5.6 (including Sol, Terra, and Luna); `xhigh` remains available independently. Codex `ultra` is not a provider effort: it combines `max` with client-side multi-agent orchestration, so dreb does not send `ultra` as a raw value.
+`max` is a separate native effort currently supported by the GPT-5.6 family (Sol, Terra, and Luna) and the GPT-6 family (Astra and future variants); `xhigh` remains available independently. Codex `ultra` is not a provider effort: it combines `max` with client-side multi-agent orchestration, so dreb does not send `ultra` as a raw value.
 
 ### Session Options
 
