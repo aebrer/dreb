@@ -111,7 +111,7 @@ Options:
 
 Notes:
   - Uses createAgentSession() from the coding-agent SDK
-  - Provider/model fixed to openai-codex/gpt-5.4
+  - Provider/model fixed to openai-codex/gpt-5.6-luna
   - Thinking level fixed to medium
   - Activates exactly one deterministic custom tool
   - Prompts are intentionally > 1024 tokens and explicitly describe the test
@@ -215,9 +215,9 @@ async function main(): Promise<void> {
 	const authStorage = AuthStorage.create();
 	const modelRegistry = new ModelRegistry(authStorage);
 
-	const model = getModel("openai-codex", "gpt-5.4");
+	const model = getModel("openai-codex", "gpt-5.6-luna");
 	if (!model) {
-		throw new Error("Model openai-codex/gpt-5.4 not found");
+		throw new Error("Model openai-codex/gpt-5.6-luna not found");
 	}
 	const baseModel = { ...model, maxTokens: args.maxTokens };
 
@@ -250,7 +250,7 @@ async function main(): Promise<void> {
 	const records: SubrequestRecord[] = [];
 	let previousCacheRead: number | null = null;
 
-	console.log(`provider openai-codex, model gpt-5.4`);
+	console.log(`provider openai-codex, model gpt-5.6-luna`);
 	console.log(`session ${session.sessionFile}`);
 	console.log(`turns ${args.turns}, transport ${args.transport}, reasoning medium, maxTokens ${args.maxTokens}`);
 	console.log("");

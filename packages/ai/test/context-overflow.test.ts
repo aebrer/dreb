@@ -279,9 +279,9 @@ describe("Context overflow error handling", () => {
 
 	describe("OpenAI Codex (OAuth)", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"gpt-5.4 - should detect overflow via isContextOverflow",
+			"gpt-5.6-luna - should detect overflow via isContextOverflow",
 			async () => {
-				const model = getModel("openai-codex", "gpt-5.4");
+				const model = getModel("openai-codex", "gpt-5.6-luna");
 				const result = await testContextOverflow(model, openaiCodexToken!);
 				logResult(result);
 

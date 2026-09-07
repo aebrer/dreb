@@ -454,9 +454,9 @@ describe("synthetic fallback detection", () => {
 });
 
 describe("default model selection", () => {
-	test("openai defaults are gpt-5.4", () => {
+	test("defaults are gpt-5.4 (openai) and gpt-5.6-luna (openai-codex)", () => {
 		expect(defaultModelPerProvider.openai).toBe("gpt-5.4");
-		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.4");
+		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.6-luna");
 	});
 
 	test("kimi-coding-oauth default stays kimi-for-coding", () => {

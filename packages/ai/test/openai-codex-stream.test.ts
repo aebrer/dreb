@@ -638,7 +638,7 @@ describe("openai-codex streaming", () => {
 		await streamResult.result();
 	});
 
-	it.each(["gpt-5.4"])("clamps %s minimal reasoning effort to low", async (modelId) => {
+	it.each(["gpt-5.4", "gpt-6-astra"])("clamps %s minimal reasoning effort to low", async (modelId) => {
 		const tempDir = mkdtempSync(join(tmpdir(), "dreb-codex-stream-"));
 		process.env.DREB_CODING_AGENT_DIR = tempDir;
 
@@ -1124,6 +1124,7 @@ describe("openai-codex streaming", () => {
 		["gpt-5.6-sol", "minimal", "low"],
 		["gpt-5.6-terra", "minimal", "low"],
 		["gpt-5.6-luna", "minimal", "low"],
+		["gpt-6-astra", "minimal", "low"],
 		["gpt-5.6-sol", "xhigh", "xhigh"],
 		["gpt-5.6-sol", "max", "max"],
 	] as const)("maps %s reasoning effort %s to %s", async (modelId, effort, expectedEffort) => {

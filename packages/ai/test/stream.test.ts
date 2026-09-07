@@ -1234,8 +1234,8 @@ describe("Generate E2E Tests", () => {
 		);
 	});
 
-	describe("OpenAI Codex Provider (gpt-5.4)", () => {
-		const llm = getModel("openai-codex", "gpt-5.4");
+	describe("OpenAI Codex Provider (gpt-5.6-luna)", () => {
+		const llm = getModel("openai-codex", "gpt-5.6-luna");
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
 			"should complete basic text generation",
@@ -1286,8 +1286,8 @@ describe("Generate E2E Tests", () => {
 		);
 	});
 
-	describe("OpenAI Codex Provider (gpt-5.4)", () => {
-		const llm = getModel("openai-codex", "gpt-5.4");
+	describe("OpenAI Codex Provider (gpt-5.6-luna)", () => {
+		const llm = getModel("openai-codex", "gpt-5.6-luna");
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
 			"should complete basic text generation",
@@ -1338,8 +1338,8 @@ describe("Generate E2E Tests", () => {
 		);
 	});
 
-	describe("OpenAI Codex Provider (gpt-5.4 via WebSocket)", () => {
-		const llm = getModel("openai-codex", "gpt-5.4");
+	describe("OpenAI Codex Provider (gpt-5.6-luna via WebSocket)", () => {
+		const llm = getModel("openai-codex", "gpt-5.6-luna");
 		const wsOptions = { apiKey: openaiCodexToken, transport: "websocket" as const };
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
