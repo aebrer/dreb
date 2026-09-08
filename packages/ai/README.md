@@ -571,6 +571,10 @@ if (message.stopReason === 'error' || message.stopReason === 'aborted') {
 }
 ```
 
+### Context Overflow
+
+Use `isContextOverflow(message, model.contextWindow)` to detect recognized provider context-limit errors or successful responses whose full input usage exceeds the configured window. The latter compares `usage.input + usage.cacheRead + usage.cacheWrite`; output tokens do not count toward that input-only check. A conservative registry window can be lower than the server's hard limit (for example, Copilot Opus 4.8 can accept requests above its configured 200K window). Detection does not raise the registry limit or modify the response.
+
 ### Aborting Requests
 
 The abort signal allows you to cancel in-progress requests. Aborted requests have `stopReason === 'aborted'`:

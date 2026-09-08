@@ -55,10 +55,13 @@ A pre-commit hook runs biome checks, tests, and `tsgo --noEmit` (matching CI) au
 ```bash
 npm test                                           # All workspace tests
 npx vitest --run packages/coding-agent/test/some.test.ts  # Single file
-bash test.sh                                       # Match CI exactly (unsets API keys first)
+bash test.sh                                       # Full suite, including configured live providers
+bash test.sh --no-live-api                         # Offline suite (skips live provider calls)
 ```
 
-Tests that require API keys are skipped when keys aren't available. CI runs `bash test.sh`, which unsets all API keys before running the suite for clean isolation. Use this locally when you want to match CI exactly.
+CI runs `bash test.sh`. The script does not unset API keys: provider tests run when their credentials are available, including OAuth credentials from `~/.dreb/agent/auth.json`, and can consume tokens or subscription quota. CI normally has no provider credentials, so its live tests skip. Use `--no-live-api` for explicit offline isolation; it sets `DREB_SKIP_LIVE_API=1`. Both script modes disable local LLM tests.
+
+When updating live model fixtures, check protocol behavior as well as catalog membership. Adaptive Claude tests that assert visible thinking must request `thinkingDisplay: "summarized"`. A conservative registry window is not necessarily the endpoint's hard limit: overflow tests may need to check full input usage (`input + cacheRead + cacheWrite`) when the server accepts a request beyond the configured window.
 
 ## Type checking
 

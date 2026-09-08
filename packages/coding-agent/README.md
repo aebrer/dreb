@@ -97,6 +97,8 @@ Then just talk to dreb. All 13 standard built-in tools are enabled by default (u
 
 For each built-in provider, dreb maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model`.
 
+GPT-6 Astra is available as `openai-codex/gpt-6-astra` and `github-copilot/gpt-6-astra`, with `xhigh` and native `max` thinking support. Codex defaults to `gpt-5.6-luna`. Missing saved defaults now warn and prefer the same provider's available default; explicit removed model IDs are not automatically migrated. See [model selection and removed models](docs/providers.md#model-selection-and-removed-models).
+
 **Subscriptions:**
 - OpenAI ChatGPT Plus/Pro (Codex)
 - GitHub Copilot

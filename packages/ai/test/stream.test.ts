@@ -1008,7 +1008,12 @@ describe("Generate E2E Tests", () => {
 			"should handle thinking",
 			{ retry: 2, timeout: 60000 },
 			async () => {
-				await handleThinking(llm, { apiKey: githubCopilotToken, thinkingEnabled: true });
+				// Opus 4.7+ defaults to omitted thinking text. This test asserts visible deltas.
+				await handleThinking(llm, {
+					apiKey: githubCopilotToken,
+					thinkingEnabled: true,
+					thinkingDisplay: "summarized",
+				});
 			},
 		);
 

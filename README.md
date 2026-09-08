@@ -80,6 +80,8 @@ Interactive mode adds slash commands such as `/model`, `/settings`, `/resume`, `
 
 ### Provider and model routing
 
+GPT-6 Astra is available through ChatGPT/Codex and GitHub Copilot, with `xhigh` and native `max` thinking support. Codex defaults to GPT-5.6 Luna; removed saved defaults produce a visible warning and prefer the same provider's available default before considering other providers. See [provider setup and model-selection behavior](packages/coding-agent/docs/providers.md#model-selection-and-removed-models).
+
 dreb supports both subscription and API-key providers, with model metadata updated in releases. Current provider docs cover subscriptions such as Codex, GitHub Copilot, Gemini CLI, Antigravity, and Kimi; API-key providers such as Anthropic, OpenAI, Azure OpenAI, Google Gemini/Vertex, Amazon Bedrock, Mistral, Groq, Cerebras, xAI, OpenRouter, Vercel AI Gateway, ZAI, OpenCode, Hugging Face, Kimi, and MiniMax; plus custom local/proxy providers.
 
 Custom model configuration can override built-in provider base URLs, merge custom models into built-in providers, set compatibility flags for OpenAI-compatible servers, resolve API keys from shell commands or environment variables, select Bearer-only auth for Anthropic-compatible endpoints, and register providers dynamically from extensions. A custom `models[]` entry or built-in `modelOverrides` entry in `models.json` can also set `systemPrompt` or `appendSystemPrompt` alongside its model metadata. The same behavior remains available through exact `provider/model` entries in [`settings.json` `modelSettings`](packages/coding-agent/docs/settings.md#modelsettings); configuring prompt behavior for one canonical model in both files fails loudly rather than applying implicit precedence.

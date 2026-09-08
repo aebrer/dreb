@@ -21,7 +21,7 @@ import type { AssistantMessage } from "../types.js";
  * - Kimi For Coding: "Your request exceeded model token limit: X (requested: Y)"
  * - Cerebras: Returns "400/413 status code (no body)" - handled separately below
  * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
- * - z.ai: Does NOT error, accepts overflow silently - handled via usage.input > contextWindow
+ * - z.ai: May accept overflow silently - handled via full input usage > contextWindow
  * - Ollama: Silently truncates input - not detectable via error message
  */
 const LENGTH_RETRY_EXHAUSTED_PATTERN =
@@ -55,8 +55,10 @@ const OVERFLOW_PATTERNS = [
  *    specific error message pattern.
  * 2. Context-filled truncation: dreb exhausted its length retries because the
  *    recorded request filled the model's context window, not just its output budget.
- * 3. Silent overflow: Some providers accept overflow requests and return
- *    successfully. For these, we check if usage.input exceeds the context window.
+ * 3. Silent overflow: Some providers accept requests beyond the configured window
+ *    and return successfully (the server's hard limit may be higher). For these,
+ *    we compare input + cacheRead + cacheWrite against the configured window;
+ *    output tokens are not part of the input size.
  *
  * ## Reliability by Provider
  *
@@ -74,8 +76,9 @@ const OVERFLOW_PATTERNS = [
  * - Kimi For Coding: "exceeded model token limit: X (requested: Y)"
  *
  * **Unreliable detection:**
- * - z.ai: Sometimes accepts overflow silently (detectable via usage.input > contextWindow),
- *   sometimes returns rate limit errors. Pass contextWindow param to detect silent overflow.
+ * - z.ai: Sometimes accepts overflow silently, sometimes returns rate limit errors.
+ * - GitHub Copilot: May accept input beyond a conservative configured window.
+ *   Pass contextWindow to detect these cases using input + cacheRead + cacheWrite.
  * - Ollama: Silently truncates input without error. Cannot be detected via this function.
  *   The response will have usage.input < expected, but we don't know the expected value.
  *
@@ -91,7 +94,7 @@ const OVERFLOW_PATTERNS = [
  *    check the errorMessage yourself before calling this function
  *
  * @param message - The assistant message to check
- * @param contextWindow - Optional context window size for detecting silent overflow (z.ai)
+ * @param contextWindow - Optional configured window for usage-based overflow detection
  * @returns true if the message indicates a context overflow
  */
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
@@ -122,9 +125,10 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 		}
 	}
 
-	// Case 3: Silent overflow (z.ai style) - successful but usage exceeds context
+	// Case 3: Successful response whose full input usage exceeds the configured window.
+	// Anthropic-style usage reports cache creation separately from uncached input.
 	if (contextWindow && message.stopReason === "stop") {
-		const inputTokens = message.usage.input + message.usage.cacheRead;
+		const inputTokens = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
 		if (inputTokens > contextWindow) {
 			return true;
 		}
