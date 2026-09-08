@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findModel } from "../src/models.js";
+import { findModel, getModel } from "../src/models.js";
 import { streamSimple } from "../src/stream.js";
 import type { Context, Model } from "../src/types.js";
 
@@ -50,6 +50,14 @@ async function capturePayload(
 describe("Anthropic thinking display payload", () => {
 	it("sends thinking.display=summarized for adaptive models when requested", async () => {
 		const payload = await capturePayload(findModel("anthropic", "opus")! as Model<"anthropic-messages">, {
+			thinkingDisplay: "summarized",
+		});
+
+		expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+	});
+
+	it("sends summarized adaptive thinking for Copilot Opus 4.8", async () => {
+		const payload = await capturePayload(getModel("github-copilot", "claude-opus-4.8"), {
 			thinkingDisplay: "summarized",
 		});
 

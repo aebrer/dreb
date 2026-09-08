@@ -269,7 +269,7 @@ describe("AI Providers Abort Tests", () => {
 			"should abort mid-stream",
 			{ retry: 3 },
 			async () => {
-				const llm = getModel("openai-codex", "gpt-5.4");
+				const llm = getModel("openai-codex", "gpt-5.6-luna");
 				await testAbortSignal(llm, { apiKey: openaiCodexToken });
 			},
 		);
@@ -278,7 +278,7 @@ describe("AI Providers Abort Tests", () => {
 			"should handle immediate abort",
 			{ retry: 3 },
 			async () => {
-				const llm = getModel("openai-codex", "gpt-5.4");
+				const llm = getModel("openai-codex", "gpt-5.6-luna");
 				await testImmediateAbort(llm, { apiKey: openaiCodexToken });
 			},
 		);

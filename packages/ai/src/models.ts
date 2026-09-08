@@ -192,10 +192,13 @@ export function isQwen38OrLater(modelId: string): boolean {
  *
  * Supported today:
  * - GPT-5.6 model families (Sol, Terra, Luna, and the alias)
+ * - GPT-6 model families (Astra and future variants)
  */
 export function supportsMax<TApi extends Api>(model: Model<TApi>): boolean {
-	if (/(?:^|\/)gpt-5\.6(?:$|[-.])/.test(model.id.toLowerCase())) return true;
-	return false;
+	const id = model.id.toLowerCase();
+	// Anchored to the id start or a gateway "/" prefix so unrelated ids
+	// (e.g. "gpt-60") do not match.
+	return /(?:^|\/)gpt-5\.6(?:$|[-.])/.test(id) || /(?:^|\/)gpt-6(?:$|[-.])/.test(id);
 }
 
 /**
@@ -203,6 +206,7 @@ export function supportsMax<TApi extends Api>(model: Model<TApi>): boolean {
  *
  * Supported today:
  * - GPT-5.2 through GPT-5.6 model families
+ * - GPT-6 model families (Astra and future variants)
  * - Claude Opus 4.6–4.x and Claude 5 model families
  * - Kimi Code K3 (xhigh maps to its advertised "max" effort)
  * - Qwen 3.8+ model families (xhigh is their top native effort tier)
@@ -215,7 +219,8 @@ export function supportsXhigh<TApi extends Api>(model: Model<TApi>): boolean {
 		model.id.includes("gpt-5.3") ||
 		model.id.includes("gpt-5.4") ||
 		model.id.includes("gpt-5.5") ||
-		model.id.includes("gpt-5.6")
+		model.id.includes("gpt-5.6") ||
+		model.id.includes("gpt-6")
 	) {
 		return true;
 	}

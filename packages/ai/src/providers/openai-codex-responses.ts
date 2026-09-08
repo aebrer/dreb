@@ -542,7 +542,8 @@ function clampReasoningEffort(modelId: string, effort: string): string {
 			id.startsWith("gpt-5.3") ||
 			id.startsWith("gpt-5.4") ||
 			id.startsWith("gpt-5.5") ||
-			id.startsWith("gpt-5.6")) &&
+			id.startsWith("gpt-5.6") ||
+			id.startsWith("gpt-6")) &&
 		effort === "minimal"
 	)
 		return "low";

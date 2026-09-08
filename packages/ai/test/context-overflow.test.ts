@@ -6,7 +6,8 @@
  *
  * Expected behavior: All providers should return stopReason: "error"
  * with an errorMessage that indicates the context was too large,
- * OR (for z.ai) return successfully with usage.input > contextWindow.
+ * OR (e.g. z.ai or Copilot with a conservative registry limit) return successfully
+ * with total input usage (input + cacheRead + cacheWrite) > contextWindow.
  *
  * The isContextOverflow() function must return true for all providers.
  */
@@ -70,7 +71,7 @@ async function testContextOverflow(model: Model<any>, apiKey: string): Promise<O
 
 	const response = await complete(model, context, { apiKey });
 
-	const hasUsageData = response.usage.input > 0 || response.usage.cacheRead > 0;
+	const hasUsageData = response.usage.input + response.usage.cacheRead + response.usage.cacheWrite > 0;
 
 	return {
 		provider: model.provider,
@@ -143,8 +144,19 @@ describe("Context overflow error handling", () => {
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 
-				expect(result.stopReason).toBe("error");
-				expect(result.errorMessage).toMatch(/exceeds the limit of \d+|input is too long|prompt is too long/i);
+				// The registry's 200K window is not necessarily the server's hard limit:
+				// Copilot Opus 4.8 accepted ~568K input tokens in a live probe (2026-09-08).
+				// Detect exceeding the configured window whether rejected or accepted;
+				// successful requests must account for cache creation as input too.
+				if (result.stopReason === "error") {
+					expect(result.errorMessage).toMatch(/exceeds the limit of \d+|input is too long|prompt is too long/i);
+				} else {
+					expect(result.stopReason).toBe("stop");
+					expect(result.errorMessage).toBeUndefined();
+					expect(result.usage.input + result.usage.cacheRead + result.usage.cacheWrite).toBeGreaterThan(
+						model.contextWindow,
+					);
+				}
 				expect(isContextOverflow(result.response, model.contextWindow)).toBe(true);
 			},
 			120000,
@@ -279,9 +291,9 @@ describe("Context overflow error handling", () => {
 
 	describe("OpenAI Codex (OAuth)", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"gpt-5.4 - should detect overflow via isContextOverflow",
+			"gpt-5.6-luna - should detect overflow via isContextOverflow",
 			async () => {
-				const model = getModel("openai-codex", "gpt-5.4");
+				const model = getModel("openai-codex", "gpt-5.6-luna");
 				const result = await testContextOverflow(model, openaiCodexToken!);
 				logResult(result);
 

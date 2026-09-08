@@ -17,7 +17,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	anthropic: "claude-opus-4-6",
 	openai: "gpt-5.4",
 	"azure-openai-responses": "gpt-5.2",
-	"openai-codex": "gpt-5.4",
+	"openai-codex": "gpt-5.6-luna",
 	google: "gemini-2.5-pro",
 	"google-gemini-cli": "gemini-2.5-pro",
 	"google-antigravity": "gemini-3.1-pro-high",
@@ -302,6 +302,19 @@ export async function resolveModelScope(patterns: string[], modelRegistry: Model
 	return resolution.models;
 }
 
+/**
+ * Strip a trailing valid thinking-level suffix from a pattern
+ * (e.g. "gpt-4o:high" → "gpt-4o"), leaving the requested model id portion.
+ * Invalid suffixes (e.g. OpenRouter-style ":exacto") stay part of the id.
+ */
+export function requestedModelId(pattern: string): string {
+	const colonIndex = pattern.lastIndexOf(":");
+	if (colonIndex !== -1 && isValidThinkingLevel(pattern.substring(colonIndex + 1))) {
+		return pattern.substring(0, colonIndex);
+	}
+	return pattern;
+}
+
 export interface ResolveCliModelResult {
 	model: Model<Api> | undefined;
 	thinkingLevel?: ThinkingLevel;
@@ -326,6 +339,12 @@ export interface ResolveCliModelResult {
  * - --provider <provider> --model <pattern>
  * - --model <provider>/<pattern>
  * - Fuzzy matching (same rules as model scoping: exact id, then partial id/name)
+ *
+ * Fuzzy matching never silently substitutes a different model for a
+ * provider-qualified reference whose requested id exactly exists on another
+ * provider: that reference is routed to the synthetic-fallback path (warning +
+ * `isSyntheticFallback`) so callers can reject or surface it instead of
+ * silently swapping models.
  *
  * Note: This does not apply the thinking level by itself, but it may *parse* and
  * return a thinking level from "<pattern>:<thinking>" so the caller can apply it.
@@ -414,6 +433,30 @@ export function resolveCliModel(options: {
 	});
 
 	if (model) {
+		// A provider-qualified reference that fuzzy-matches to a *different* id
+		// is silently substituting a different model (e.g. pruned "gpt-5.4"
+		// landing on "gpt-5.4-mini"). When the requested id exactly names a model
+		// that exists on another provider, the user clearly meant that specific
+		// model — route it to the loud synthetic-fallback path the pruned sibling
+		// ids take (CLI callers warn; subagent spawning rejects it in favor of the
+		// next fallback model) instead of silently swapping models.
+		const requestedId = requestedModelId(pattern);
+		if (
+			provider &&
+			requestedId.toLowerCase() !== model.id.toLowerCase() &&
+			availableModels.some((m) => m.id.toLowerCase() === requestedId.toLowerCase())
+		) {
+			const fallbackModel = buildFallbackModel(provider, requestedId, availableModels);
+			if (fallbackModel) {
+				return {
+					model: fallbackModel,
+					thinkingLevel: undefined,
+					warning: `Model "${requestedId}" not found for provider "${provider}" (an exact match exists on another provider). Not fuzzy-matching to "${model.id}"; using custom model id.`,
+					error: undefined,
+					isSyntheticFallback: true,
+				};
+			}
+		}
 		return { model, thinkingLevel, warning, error: undefined };
 	}
 
@@ -532,6 +575,7 @@ export async function findInitialModel(options: {
 	}
 
 	// 3. Try saved default from settings
+	let fallbackMessage: string | undefined;
 	if (defaultProvider && defaultModelId) {
 		const found = modelRegistry.find(defaultProvider, defaultModelId);
 		if (found) {
@@ -541,23 +585,54 @@ export async function findInitialModel(options: {
 			}
 			return { model, thinkingLevel, fallbackMessage: undefined };
 		}
+		fallbackMessage = `Saved default ${defaultProvider}/${defaultModelId} no longer exists.`;
 	}
 
 	// 4. Try first available model with valid API key
 	const availableModels = await modelRegistry.getAvailable();
 
 	if (availableModels.length > 0) {
+		// If the saved default no longer exists, prefer that provider's own
+		// default model before crossing providers. Crossing providers silently
+		// changes the billing surface (e.g. ChatGPT subscription → pay-per-token
+		// OpenAI API) for users who configured a specific provider.
+		if (fallbackMessage) {
+			const savedProviderDefaultId = defaultModelPerProvider[defaultProvider as KnownProvider];
+			if (savedProviderDefaultId) {
+				const savedProviderDefault = availableModels.find(
+					(m) => m.provider === defaultProvider && m.id === savedProviderDefaultId,
+				);
+				if (savedProviderDefault) {
+					return {
+						model: savedProviderDefault,
+						thinkingLevel: DEFAULT_THINKING_LEVEL,
+						fallbackMessage: `${fallbackMessage} Using ${savedProviderDefault.provider}/${savedProviderDefault.id}.`,
+					};
+				}
+			}
+		}
+
 		// Try to find a default model from known providers
 		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
 			const defaultId = defaultModelPerProvider[provider];
 			const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
 			if (match) {
-				return { model: match, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+				return {
+					model: match,
+					thinkingLevel: DEFAULT_THINKING_LEVEL,
+					fallbackMessage: fallbackMessage ? `${fallbackMessage} Using ${match.provider}/${match.id}.` : undefined,
+				};
 			}
 		}
 
 		// If no default found, use first available
-		return { model: availableModels[0], thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+		return {
+			model: availableModels[0],
+			thinkingLevel: DEFAULT_THINKING_LEVEL,
+			fallbackMessage: fallbackMessage
+				? `${fallbackMessage} Using ${availableModels[0].provider}/${availableModels[0].id}.`
+				: undefined,
+		};
 	}
 
 	// 5. No model found

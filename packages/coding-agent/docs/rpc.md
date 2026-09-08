@@ -495,7 +495,7 @@ Set the reasoning/thinking level for models that support it.
 
 Levels: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`
 
-Note: `"xhigh"` is supported by GPT-5.2 through GPT-5.6 model families, Claude Opus 4.6–4.x and Claude 5 families (where it maps to adaptive effort `"max"`), and Kimi Code K3. The separate normalized `"max"` tier is model-aware and currently supported by GPT-5.6 aliases and Sol/Terra/Luna variants.
+Note: `"xhigh"` is supported by GPT-5.2 through GPT-5.6 model families, the GPT-6 family (Astra and future variants), Claude Opus 4.6–4.x and Claude 5 families (where it maps to adaptive effort `"max"`), and Kimi Code K3. The separate normalized `"max"` tier is model-aware and currently supported by GPT-5.6 aliases and Sol/Terra/Luna variants, plus the GPT-6 family.
 
 Response:
 ```json

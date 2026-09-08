@@ -27,6 +27,48 @@ function createErrorMessage(overrides: Partial<AssistantMessage> = {}): Assistan
 	};
 }
 
+describe("successful responses exceeding the configured input window", () => {
+	function successfulMessage(input: number, cacheRead: number, cacheWrite: number): AssistantMessage {
+		return createErrorMessage({
+			stopReason: "stop",
+			errorMessage: undefined,
+			usage: {
+				...createErrorMessage().usage,
+				input,
+				cacheRead,
+				cacheWrite,
+				output: 158,
+				totalTokens: input + cacheRead + cacheWrite + 158,
+			},
+		});
+	}
+
+	it.each([
+		[568044, 0, 0],
+		[2, 568042, 0],
+		[2, 0, 568042], // Copilot Opus 4.8 live response, 2026-09-08
+		[2, 100000, 100000],
+	])("counts input=%i, cacheRead=%i, cacheWrite=%i", (input, cacheRead, cacheWrite) => {
+		expect(isContextOverflow(successfulMessage(input, cacheRead, cacheWrite), 200000)).toBe(true);
+	});
+
+	it.each([199999, 200000])("does not count output toward input overflow at %i input tokens", (inputTokens) => {
+		expect(isContextOverflow(successfulMessage(2, 100000, inputTokens - 100002), 200000)).toBe(false);
+	});
+
+	it("requires a configured window", () => {
+		expect(isContextOverflow(successfulMessage(2, 0, 568042))).toBe(false);
+	});
+
+	it.each(["error", "aborted", "length", "toolUse"] as const)(
+		"does not classify %s as a successful input overflow",
+		(stopReason) => {
+			const message = successfulMessage(2, 0, 568042);
+			expect(isContextOverflow({ ...message, stopReason, errorMessage: "unrelated error" }, 200000)).toBe(false);
+		},
+	);
+});
+
 describe("context-filled length exhaustion detection", () => {
 	it("classifies exhausted length retries at the context boundary as overflow", () => {
 		expect(isContextOverflow(createErrorMessage(), 100)).toBe(true);

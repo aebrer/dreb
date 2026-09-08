@@ -65,7 +65,7 @@ describe("supportsXhigh", () => {
 	it.each(["qwen3.8-27b", "qwen-3.8", "qwen3.8-max", "qwen3.9", "qwen4.1"] as const)(
 		"returns true for Qwen 3.8+ model %s (xhigh is a native effort tier)",
 		(id) => {
-			const base = getModel("openai-codex", "gpt-5.4")!;
+			const base = getModel("openai-codex", "gpt-5.6-luna")!;
 			expect(supportsXhigh({ ...base, id })).toBe(true);
 		},
 	);
@@ -73,7 +73,7 @@ describe("supportsXhigh", () => {
 	it.each(["qwen3.6-27b", "qwen3-32b", "qwen2.5-72b-instruct", "qwen-plus", "qwen3-235b-a22b"] as const)(
 		"returns false for pre-3.8 Qwen model %s",
 		(id) => {
-			const base = getModel("openai-codex", "gpt-5.4")!;
+			const base = getModel("openai-codex", "gpt-5.6-luna")!;
 			expect(supportsXhigh({ ...base, id })).toBe(false);
 		},
 	);
@@ -88,13 +88,13 @@ describe("supportsXhigh", () => {
 	] as const)(
 		"returns false for model %s whose digits are a parameter count or embedded substring, not a Qwen version",
 		(id) => {
-			const base = getModel("openai-codex", "gpt-5.4")!;
+			const base = getModel("openai-codex", "gpt-5.6-luna")!;
 			expect(supportsXhigh({ ...base, id })).toBe(false);
 		},
 	);
 
 	it("returns true for GPT-5.4 models", () => {
-		const model = getModel("openai-codex", "gpt-5.4");
+		const model = getModel("openai", "gpt-5.4");
 		expect(model).toBeDefined();
 		expect(supportsXhigh(model!)).toBe(true);
 	});
@@ -121,6 +121,21 @@ describe("supportsXhigh", () => {
 		const model = getModel("openai-codex", id);
 		expect(model).toBeDefined();
 		expect(supportsXhigh(model!)).toBe(true);
+	});
+
+	it.each(["gpt-6", "gpt-6-astra", "openai/gpt-6-astra", "openai/gpt-6-astra-pro"] as const)(
+		"returns true for GPT-6 model %s",
+		(id) => {
+			const model = getModel("openai-codex", "gpt-6-astra");
+			expect(model).toBeDefined();
+			expect(supportsXhigh({ ...model!, id })).toBe(true);
+		},
+	);
+
+	it("returns false for GPT-5.1 (never xhigh-capable)", () => {
+		const model = getModel("openai-codex", "gpt-5.5");
+		expect(model).toBeDefined();
+		expect(supportsXhigh({ ...model!, id: "gpt-5.1" })).toBe(false);
 	});
 
 	it.each([

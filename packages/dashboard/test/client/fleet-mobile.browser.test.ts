@@ -7,7 +7,10 @@
  */
 
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm } from "node:fs/promises";
 import type { Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RpcClient } from "@dreb/coding-agent/rpc";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
@@ -102,6 +105,7 @@ function makeFakeRuntimeClient(): FakeRuntimeClient {
 }
 
 let vite: ViteDevServer | undefined;
+let viteCacheDir: string | undefined;
 let httpServer: Server | undefined;
 let pool: RuntimePool | undefined;
 let sessionClient: FakeRuntimeClient;
@@ -128,8 +132,16 @@ beforeAll(async () => {
 	const handle = await pool.create("/tmp/dashboard-mobile-acceptance");
 	runtimeKey = handle.key;
 
+	viteCacheDir = await mkdtemp(join(tmpdir(), "dreb-fleet-vite-"));
 	vite = await createViteServer({
 		configFile: fileURLToPath(new URL("../../vite.config.ts", import.meta.url)),
+		// Parallel browser fixtures use different Vite configs. Never share their
+		// optimized-dependency cache or invalidate an in-flight throttled import.
+		cacheDir: viteCacheDir,
+		// Keep the Solid plugin's includes and prebundle the transcript dependencies
+		// (highlight.js is CommonJS). Discovery can invalidate imports after navigation,
+		// but HMR is disabled, so the browser cannot recover via an automatic reload.
+		optimizeDeps: { noDiscovery: true, include: ["dompurify", "highlight.js/lib/common", "marked"] },
 		appType: "spa",
 		logLevel: "error",
 		server: { hmr: false, middlewareMode: true },
@@ -157,6 +169,7 @@ afterAll(async () => {
 	await pool?.stopAll();
 	if (httpServer?.listening) await new Promise<void>((resolve) => httpServer?.close(() => resolve()));
 	await vite?.close();
+	if (viteCacheDir) await rm(viteCacheDir, { recursive: true, force: true });
 }, 60_000);
 
 describe("mobile fleet SSE snapshots in a throttled real browser", () => {
@@ -171,6 +184,12 @@ describe("mobile fleet SSE snapshots in a throttled real browser", () => {
 				hasTouch: true,
 			});
 			const page: Page = await context.newPage();
+			const startupErrors: string[] = [];
+			page.on("pageerror", (error) => startupErrors.push(error.message));
+			page.on("response", (response) => {
+				if (response.status() >= 400)
+					startupErrors.push(`${response.status()} ${new URL(response.url()).pathname}`);
+			});
 			const cdp = await context.newCDPSession(page);
 			await cdp.send("Network.enable");
 			// CDP's optional packetLoss setting applies to WebRTC, not HTTP/SSE, so
@@ -194,7 +213,11 @@ describe("mobile fleet SSE snapshots in a throttled real browser", () => {
 
 			await page.goto(baseUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
 			const card = page.locator("article.session-card");
-			await card.waitFor({ state: "visible", timeout: 60_000 });
+			try {
+				await card.waitFor({ state: "visible", timeout: 60_000 });
+			} catch (cause) {
+				throw new Error(`Fleet card did not load. Browser errors: ${JSON.stringify(startupErrors)}`, { cause });
+			}
 			expect(await card.textContent()).toContain("mobile acceptance session");
 			await page.locator(".connection-indicator .chip-idle").waitFor({ state: "visible", timeout: 30_000 });
 			expect(requests.filter((request) => request.url === "/api/fleet")).toHaveLength(1);
