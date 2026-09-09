@@ -19,6 +19,7 @@ import type { AssistantMessage, Context, Model, Usage } from "../src/types.js";
 import { isContextOverflow } from "../src/utils/overflow.js";
 import { hasAzureOpenAICredentials } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { getCopilotTestModel } from "./fixtures/copilot-models.js";
 import { ZAI_GLM_47_FLASH } from "./fixtures/zai-models.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
@@ -122,9 +123,9 @@ describe("Context overflow error handling", () => {
 	describe("GitHub Copilot (OAuth)", () => {
 		// OpenAI model via Copilot
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"gpt-4.1 - should detect overflow via isContextOverflow",
+			"OpenAI completions - should detect overflow via isContextOverflow",
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-4.1"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getCopilotTestModel("openai-completions"), githubCopilotToken);
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 
@@ -137,9 +138,9 @@ describe("Context overflow error handling", () => {
 
 		// Anthropic model via Copilot
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"claude-sonnet-4 - should detect overflow via isContextOverflow",
+			"Anthropic Messages - should detect overflow via isContextOverflow",
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.5"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getCopilotTestModel("anthropic-messages"), githubCopilotToken);
 				const result = await testContextOverflow(model, githubCopilotToken!);
 				logResult(result);
 

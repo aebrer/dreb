@@ -2951,6 +2951,13 @@ details.thinking .thinking-body {
 		left: 0;
 		bottom: 0;
 		z-index: 30;
+		/* Keep controls out of notches/status bars and the home-indicator area,
+		   including landscape side insets, without shortening the backdrop. */
+		padding: calc(var(--space-3) + env(safe-area-inset-top, 0px))
+			calc(var(--space-3) + env(safe-area-inset-right, 0px))
+			calc(var(--space-3) + env(safe-area-inset-bottom, 0px))
+			calc(var(--space-3) + env(safe-area-inset-left, 0px));
+		visibility: hidden;
 		width: min(280px, 80vw);
 		flex: none;
 		background: var(--bg);
@@ -2960,6 +2967,7 @@ details.thinking .thinking-body {
 	}
 
 	.fleet-sidebar.open {
+		visibility: visible;
 		transform: translateX(0);
 	}
 

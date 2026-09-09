@@ -49,7 +49,12 @@ Open `http://127.0.0.1:5343`.
   queued-message restore, persistent session-header live indicator, footer-parity info bar (branch, tokens, cost, ctx%,
   latest-100 median tok/s with sample count and long-term delta), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
-  and live auto-naming.
+  and live auto-naming. A fleet sidebar lists other live sessions in stable order
+  with live status chips and attention/error highlighting. Desktop collapse
+  persists; at <=700px it becomes a safe-area-aware drawer, initially closed,
+  with managed keyboard focus and a close button, scrim, and Escape dismissal
+  that does not abort a pending agent question. Resizing preserves the desktop
+  preference. The sidebar also appears in subagent drill-in, excluding its parent.
 - **Subagent drill-in** — transcript of a background agent: live events via
   the relay, hydrated from the agent's on-disk session log so the view survives
   browser reloads. While the child is running, its composer queues user-written

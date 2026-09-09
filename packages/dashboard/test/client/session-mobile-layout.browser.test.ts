@@ -145,7 +145,7 @@ function sessionSidebarFixture(): string {
 			</div>
 		</header>
 		<div class="session-body">
-			<aside class="fleet-sidebar open">${entries}</aside>
+			<aside class="fleet-sidebar open" role="dialog" aria-label="Other live sessions" aria-modal="true" aria-hidden="false"><button type="button" class="chrome-toggle fleet-sidebar-close">close fleet sidebar</button>${entries}</aside>
 			<div class="fleet-sidebar-scrim"></div>
 			<div class="session-main">
 		<main class="chat"><div class="chat-inner"><p>${longText}</p><p>${longText}</p></div></main>
@@ -296,6 +296,66 @@ describe("session layout in a real browser", () => {
 		expect(measured.scrimCoversViewport).toBe(true);
 		expect(measured.composerStillInFlow).toBe(true);
 		expect(measured.documentFits).toBe(true);
+	});
+
+	it.each([
+		{ top: 0, bottom: 0, left: 0, right: 0 },
+		{ top: 59, bottom: 34, left: 0, right: 0 },
+		{ top: 0, bottom: 21, left: 44, right: 44 },
+	])("keeps drawer controls inside safe areas %j, including the last scrolled entry", async (insets) => {
+		const cdp = await page.context().newCDPSession(page);
+		try {
+			await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets });
+			await page.setViewportSize({ width: 390, height: 844 });
+			await page.setContent(sessionSidebarFixture());
+			const measured = await page.evaluate(() => {
+				const sidebar = document.querySelector<HTMLElement>(".fleet-sidebar")!;
+				const first = sidebar.querySelector<HTMLElement>(".fleet-sidebar-close")!;
+				const entry = sidebar.querySelector(".fleet-sidebar-entry")!;
+				for (let i = 0; i < 30; i++) sidebar.append(entry.cloneNode(true));
+				const style = getComputedStyle(sidebar);
+				const spacing = Number.parseFloat(style.getPropertyValue("--space-3"));
+				const firstRect = first.getBoundingClientRect();
+				sidebar.scrollTop = sidebar.scrollHeight;
+				const last = sidebar.lastElementChild!.getBoundingClientRect();
+				return {
+					spacing,
+					padding: [style.paddingTop, style.paddingBottom, style.paddingLeft, style.paddingRight].map(parseFloat),
+					firstTop: firstRect.top,
+					firstLeft: firstRect.left,
+					lastBottomGap: innerHeight - last.bottom,
+					scrolled: sidebar.scrollTop > 0,
+				};
+			});
+			expect(measured.padding).toEqual(
+				[insets.top, insets.bottom, insets.left, insets.right].map((inset) => inset + measured.spacing),
+			);
+			expect(measured.firstTop).toBeGreaterThanOrEqual(insets.top + measured.spacing - 1);
+			expect(measured.firstLeft).toBeGreaterThanOrEqual(insets.left + measured.spacing - 1);
+			expect(measured.lastBottomGap).toBeGreaterThanOrEqual(insets.bottom + measured.spacing - 1);
+			expect(measured.scrolled).toBe(true);
+		} finally {
+			await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: {} });
+			await cdp.detach();
+		}
+	});
+
+	it("cannot focus the off-screen mobile drawer, but restores desktop visibility", async () => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.setContent(sessionSidebarFixture());
+		await page.evaluate(() => {
+			document.querySelector(".fleet-sidebar")!.classList.remove("open");
+			document.querySelector(".fleet-sidebar-scrim")!.remove();
+		});
+		const closed = await page.evaluate(() => {
+			const sidebar = document.querySelector<HTMLElement>(".fleet-sidebar")!;
+			const entry = sidebar.querySelector<HTMLButtonElement>(".fleet-sidebar-entry")!;
+			entry.focus();
+			return { visibility: getComputedStyle(sidebar).visibility, focused: document.activeElement === entry };
+		});
+		expect(closed).toEqual({ visibility: "hidden", focused: false });
+		await page.setViewportSize({ width: 1000, height: 844 });
+		expect(await page.locator(".fleet-sidebar").evaluate((el) => getComputedStyle(el).visibility)).toBe("visible");
 	});
 
 	it("keeps the slash-command popover visible on mobile", async () => {

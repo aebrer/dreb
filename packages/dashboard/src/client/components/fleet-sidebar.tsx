@@ -3,9 +3,9 @@
  * sessions, so a focused transcript never loses fleet visibility.
  *
  * Entries are deterministically ordered (cwd, then createdAt — the fleet
- * page's comparator); needs-attention/error entries get the filled chip +
- * border emphasis without moving position (AGENTS.md: highlight, never
- * re-sort).
+ * page's comparator); attention uses a filled chip and errors an outlined chip,
+ * both with entry-border emphasis without moving position (AGENTS.md:
+ * highlight, never re-sort).
  *
  * Desktop: a static column beside the transcript, collapsed through the
  * persisted `dreb.dashboard.sessionSidebarCollapsed` preference. Mobile
@@ -14,8 +14,8 @@
  * toggle, closed by scrim tap or entry tap (which also navigates).
  */
 
-import { createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
-import type { RuntimeInfoDto } from "../shared/protocol.js";
+import { createEffect, createMemo, createSignal, createUniqueId, For, type JSX, onCleanup, Show } from "solid-js";
+import type { RuntimeInfoDto } from "../../shared/protocol.js";
 import { sessionSidebarCollapsed, setSessionSidebarCollapsed } from "../state/preferences.js";
 import type { AppStore } from "../state/store.js";
 import { relativeTime, runtimeStatus, StatusChip } from "./common.js";
@@ -42,14 +42,26 @@ export function fleetSidebarOrder(runtimes: readonly RuntimeInfoDto[]): RuntimeI
  */
 export function createFleetSidebarUi() {
 	const [overlayOpen, setOverlayOpen] = createSignal(false);
+	const media = typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 700px)") : undefined;
+	const [mobile, setMobile] = createSignal(media?.matches ?? false);
+	const onMediaChange = (event: MediaQueryListEvent) => {
+		// A breakpoint crossing never resurrects a previously open drawer and
+		// never overwrites the independently persisted desktop preference.
+		setOverlayOpen(false);
+		setMobile(event.matches);
+	};
+	media?.addEventListener("change", onMediaChange);
+	onCleanup(() => media?.removeEventListener("change", onMediaChange));
 	return {
+		id: `fleet-sidebar-${createUniqueId()}`,
+		mobile,
 		/** Mobile overlay visibility. */
 		open: overlayOpen,
 		/** Desktop collapsed state (persisted browser-locally; mobile ignores it). */
 		collapsed: sessionSidebarCollapsed,
 		/** Toggle: collapse/expand on desktop, open/close the drawer on mobile. */
-		toggle: (mobile: boolean) => {
-			if (mobile) setOverlayOpen((current) => !current);
+		toggle: () => {
+			if (mobile()) setOverlayOpen((current) => !current);
 			else setSessionSidebarCollapsed(!sessionSidebarCollapsed());
 		},
 		/** Close the mobile overlay (scrim tap or entry tap). */
@@ -58,6 +70,7 @@ export function createFleetSidebarUi() {
 }
 
 export function FleetSidebar(props: {
+	id: string;
 	store: AppStore;
 	/** The session to exclude: the viewed session (its parent, on drill-in). */
 	sessionKey: string;
@@ -74,26 +87,80 @@ export function FleetSidebar(props: {
 		fleetSidebarOrder(props.store.fleet().runtimes.filter((runtime) => runtime.key !== props.sessionKey)),
 	);
 
-	// Escape closes the open mobile drawer from anywhere on the page (the scrim
-	// itself is not focusable), mirroring the session stats-popover pattern.
+	let drawer: HTMLElement | undefined;
+	const overlayActive = createMemo(() => props.mobile && props.open && entries().length > 0);
+	const hidden = () => (props.mobile ? !props.open : props.collapsed);
+
 	createEffect(() => {
-		if (!props.mobile || !props.open) return;
-		const closeOnEscape = (event: KeyboardEvent) => {
-			if (event.key === "Escape") props.onClose();
+		if (!overlayActive()) return;
+		const previousFocus = document.activeElement;
+		// Focus the stable close button, not an entry replaced by fleet snapshots.
+		drawer?.querySelector<HTMLButtonElement>(".fleet-sidebar-close")?.focus({ preventScroll: true });
+		const onKeyDown = (event: KeyboardEvent) => {
+			const target = event.target instanceof Element ? event.target : undefined;
+			// A higher modal (for example an extension UI request) owns its keys.
+			if (target?.closest('[role="dialog"]') && !drawer?.contains(target)) return;
+			if (event.defaultPrevented) return;
+			if (event.key === "Escape") {
+				event.preventDefault();
+				event.stopPropagation(); // Do not reach AskWizard's window-level abort.
+				props.onClose();
+			} else if (event.key === "Tab") {
+				event.stopPropagation(); // Nor its question-tab navigation shortcut.
+				const buttons = drawer?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)");
+				const first = buttons?.[0];
+				const last = buttons?.[buttons.length - 1];
+				if (event.shiftKey && (document.activeElement === first || !drawer?.contains(document.activeElement))) {
+					event.preventDefault();
+					last?.focus();
+				} else if (
+					!event.shiftKey &&
+					(document.activeElement === last || !drawer?.contains(document.activeElement))
+				) {
+					event.preventDefault();
+					first?.focus();
+				}
+			} else if (target && drawer?.contains(target)) {
+				// Entry activation stays native; background wizard number/arrow/Enter
+				// shortcuts must not respond while focus belongs to the drawer.
+				event.stopPropagation();
+			}
 		};
-		document.addEventListener("keydown", closeOnEscape);
-		return () => document.removeEventListener("keydown", closeOnEscape);
+		document.addEventListener("keydown", onKeyDown);
+		onCleanup(() => {
+			document.removeEventListener("keydown", onKeyDown);
+			if (
+				drawer?.contains(document.activeElement) &&
+				previousFocus instanceof HTMLElement &&
+				previousFocus.isConnected
+			) {
+				previousFocus.focus({ preventScroll: true });
+			}
+		});
 	});
 
 	return (
 		<Show when={entries().length > 0}>
+			{/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: mobile sets role="dialog" together with aria-modal; desktop uses the aside landmark without aria-modal */}
 			<aside
+				ref={drawer}
+				id={props.id}
+				role={props.mobile ? "dialog" : "complementary"}
+				aria-label="Other live sessions"
+				aria-modal={overlayActive() ? true : undefined}
+				aria-hidden={hidden()}
+				inert={hidden()}
 				class="fleet-sidebar"
 				classList={{
 					open: props.mobile && props.open,
 					collapsed: !props.mobile && props.collapsed,
 				}}
 			>
+				<Show when={props.mobile}>
+					<button type="button" class="chrome-toggle fleet-sidebar-close" onClick={() => props.onClose()}>
+						close fleet sidebar
+					</button>
+				</Show>
 				<For each={entries()}>
 					{(runtime) => {
 						const status = () => runtimeStatus(runtime);
@@ -125,16 +192,8 @@ export function FleetSidebar(props: {
 				</For>
 			</aside>
 			<Show when={props.mobile && props.open}>
-				{
-					// biome-ignore lint/a11y/noStaticElementInteractions: scrim tap-to-close mirrors the modal backdrop pattern — the drawer entries remain keyboard-reachable
-					<div
-						class="fleet-sidebar-scrim"
-						onClick={() => props.onClose()}
-						onKeyDown={(event) => {
-							if (event.key === "Escape") props.onClose();
-						}}
-					/>
-				}
+				{/* Pointer-only scrim: keyboard dismissal belongs to the drawer. */}
+				<div class="fleet-sidebar-scrim" aria-hidden="true" onClick={() => props.onClose()} />
 			</Show>
 		</Show>
 	);

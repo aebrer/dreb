@@ -606,19 +606,32 @@ function runtimeInfo(key: string, cwd = "/home/test/project"): RuntimeInfoDto {
 }
 
 function stubMobile(matches = true) {
+	const events = new EventTarget();
+	const addEventListener = vi.fn(events.addEventListener.bind(events));
+	const removeEventListener = vi.fn(events.removeEventListener.bind(events));
 	Object.defineProperty(window, "matchMedia", {
 		configurable: true,
 		value: vi.fn((query: string) => ({
-			matches,
+			get matches() {
+				return matches;
+			},
 			media: query,
 			onchange: null,
 			addListener: vi.fn(),
 			removeListener: vi.fn(),
-			addEventListener: vi.fn(),
-			removeEventListener: vi.fn(),
-			dispatchEvent: vi.fn(),
+			addEventListener,
+			removeEventListener,
+			dispatchEvent: events.dispatchEvent.bind(events),
 		})),
 	});
+	return {
+		addEventListener,
+		removeEventListener,
+		resize(next: boolean) {
+			matches = next;
+			events.dispatchEvent(Object.assign(new Event("change"), { matches }));
+		},
+	};
 }
 
 function stubObjectUrls() {
@@ -1289,6 +1302,154 @@ describe("session fleet sidebar", () => {
 		expect(el.querySelector("button.fleet-sidebar-toggle")).not.toBeNull();
 	});
 
+	it("keeps the closed mobile drawer inaccessible and manages focus while open", () => {
+		stubMobile(true);
+		const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		const toggle = el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+		const drawer = sidebar(el)!;
+		expect(drawer.getAttribute("aria-hidden")).toBe("true");
+		expect(drawer.inert).toBe(true);
+		expect(toggle.getAttribute("aria-expanded")).toBe("false");
+		expect(toggle.getAttribute("aria-controls")).toBe(drawer.id);
+		toggle.focus();
+		toggle.click();
+		const close = el.querySelector<HTMLButtonElement>(".fleet-sidebar-close")!;
+		const last = sidebarEntries(el).at(-1)!;
+		expect(drawer.inert).toBe(false);
+		expect(drawer.getAttribute("aria-hidden")).toBe("false");
+		expect(drawer.getAttribute("role")).toBe("dialog");
+		expect(drawer.getAttribute("aria-modal")).toBe("true");
+		expect(toggle.getAttribute("aria-expanded")).toBe("true");
+		expect(document.activeElement).toBe(close);
+		close.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true }),
+		);
+		expect(document.activeElement).toBe(last);
+		last.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+		expect(document.activeElement).toBe(close);
+		close.click();
+		expect(drawer.inert).toBe(true);
+		expect(document.activeElement).toBe(toggle);
+	});
+
+	it.each([false, true])(
+		"keeps desktop collapse %s independent of reactive breakpoints on both screens",
+		(collapsed) => {
+			const media = stubMobile(false);
+			setSessionSidebarCollapsed(collapsed);
+			const store = sidebarStore([runtimeInfo("parent", "/a"), runtimeInfo("other", "/b")], {
+				parent: populatedSession("parent"),
+			});
+			for (const screen of ["session", "subagent"]) {
+				const { container: el, dispose } = mountDisposable(() =>
+					screen === "session" ? (
+						<SessionScreen store={store} sessionKey="parent" />
+					) : (
+						<SubagentScreen store={store} sessionKey="parent" agentId="bg1" />
+					),
+				);
+				try {
+					const toggle = el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+					expect(sidebar(el)?.classList.contains("collapsed")).toBe(collapsed);
+					media.resize(true);
+					expect(sidebar(el)?.classList.contains("collapsed")).toBe(false);
+					expect(sidebar(el)?.classList.contains("open")).toBe(false);
+					toggle.click();
+					expect(sidebar(el)?.classList.contains("open")).toBe(true);
+					expect(el.querySelector(".fleet-sidebar-scrim")).not.toBeNull();
+					media.resize(false);
+					expect(sidebar(el)?.classList.contains("collapsed")).toBe(collapsed);
+					expect(sidebar(el)?.classList.contains("open")).toBe(false);
+					expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+					media.resize(true);
+					expect(sidebar(el)?.classList.contains("open")).toBe(false);
+					expect(toggle.getAttribute("aria-expanded")).toBe("false");
+					media.resize(false);
+				} finally {
+					dispose();
+					el.remove();
+				}
+			}
+			const changeListeners = media.addEventListener.mock.calls.filter(([type]) => type === "change");
+			expect(changeListeners).toHaveLength(2);
+			for (const [, listener] of changeListeners)
+				expect(media.removeEventListener).toHaveBeenCalledWith("change", listener);
+		},
+	);
+
+	it("Escape closes only the drawer while a question is pending, then resumes normal wizard shortcuts", async () => {
+		stubMobile(true);
+		const session = createSessionViewState("current");
+		session.uiRequests = [
+			{
+				id: "ask-sidebar",
+				method: "ask",
+				questions: [
+					{ question: "First?", options: ["A", "B"] },
+					{ question: "Second?", options: ["C", "D"] },
+				],
+			},
+		];
+		const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")], { current: session });
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		vi.mocked(api.abort).mockClear();
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const toggle = el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+		toggle.focus();
+		toggle.click();
+		const close = el.querySelector<HTMLButtonElement>(".fleet-sidebar-close")!;
+		close.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+		expect(el.querySelector<HTMLInputElement>(".ask-option input")?.checked).toBe(false);
+		close.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(sidebar(el)?.classList.contains("open")).toBe(false);
+		expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+		expect(api.abort).not.toHaveBeenCalled();
+		expect(api.extensionUiResponse).not.toHaveBeenCalled();
+		expect(document.activeElement).toBe(toggle);
+		// The removed listener must not swallow the next, intentional Escape.
+		toggle.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(api.abort).toHaveBeenCalledWith("current");
+	});
+
+	it("removes Escape listeners on close and unmount, including after repeated opens", () => {
+		stubMobile(true);
+		const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")]);
+		const add = vi.spyOn(document, "addEventListener");
+		const remove = vi.spyOn(document, "removeEventListener");
+		const { container: el, dispose } = mountDisposable(() => <SessionScreen store={store} sessionKey="current" />);
+		try {
+			const toggle = el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+			for (let i = 0; i < 2; i++) {
+				toggle.click();
+				const listener = add.mock.calls.filter(([type]) => type === "keydown").at(-1)?.[1];
+				expect(listener).toBeTypeOf("function");
+				const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+				document.dispatchEvent(escapeEvent);
+				expect(escapeEvent.defaultPrevented).toBe(true);
+				expect(sidebar(el)?.classList.contains("open")).toBe(false);
+				expect(remove).toHaveBeenCalledWith("keydown", listener);
+				const closedEscape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+				document.dispatchEvent(closedEscape);
+				expect(closedEscape.defaultPrevented).toBe(false);
+			}
+			toggle.click();
+			const listener = add.mock.calls.filter(([type]) => type === "keydown").at(-1)?.[1];
+			dispose();
+			expect(remove).toHaveBeenCalledWith("keydown", listener);
+			const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+			document.dispatchEvent(escapeEvent);
+			expect(escapeEvent.defaultPrevented).toBe(false);
+		} finally {
+			dispose();
+			el.remove();
+			add.mockRestore();
+			remove.mockRestore();
+		}
+	});
+
 	it("maps each runtime state to its chip and emphasis class", () => {
 		const mk = (key: string, cwd: string): RuntimeInfoDto => {
 			const runtime = runtimeInfo(key, cwd);
@@ -1321,7 +1482,7 @@ describe("session fleet sidebar", () => {
 		expect(byName("error")?.classList.contains("error")).toBe(true);
 	});
 
-	it("orders entries by cwd then createdAt and never re-sorts when attention or activity changes", () => {
+	it("orders entries by cwd then createdAt regardless of initial attention or activity", () => {
 		const base = Date.parse("2026-01-01T00:00:00Z");
 		const mk = (key: string, cwd: string, createdAt: number): RuntimeInfoDto => {
 			const runtime = runtimeInfo(key, cwd);
@@ -1439,6 +1600,74 @@ describe("session fleet sidebar", () => {
 		expect(sidebarEntries(el)).toHaveLength(1);
 		expect(sidebarEntries(el)[0]?.textContent).toContain("arrived session");
 		store.stop();
+	});
+
+	it("updates existing chips without reordering, and tears down an open drawer when the last other runtime disappears", async () => {
+		stubMobile(true);
+		const current = runtimeInfo("current", "/current");
+		const alpha = runtimeInfo("alpha", "/a");
+		alpha.state.sessionName = "alpha";
+		alpha.state.isStreaming = true;
+		const beta = runtimeInfo("beta", "/b");
+		beta.state.sessionName = "beta";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [current, beta, alpha], diskSessions: [] });
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		let seq = 0;
+		const snapshot = (runtimes: RuntimeInfoDto[]) => {
+			if (!captured?.onEnvelope) throw new Error("envelope handler missing");
+			captured.onEnvelope({ seq: ++seq, key: "", event: { type: "fleet_snapshot", runtimes } });
+		};
+		const names = () => sidebarEntries(el).map((entry) => entry.querySelector(".name")?.textContent);
+		try {
+			expect(names()).toEqual(["alpha", "beta"]);
+			expect(sidebarEntries(el)[0]?.querySelector(".chip-running")).not.toBeNull();
+			expect(sidebarEntries(el)[1]?.querySelector(".chip-idle")).not.toBeNull();
+			el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!.click();
+			const close = el.querySelector<HTMLButtonElement>(".fleet-sidebar-close")!;
+			expect(document.activeElement).toBe(close);
+			snapshot([
+				current,
+				{ ...beta, needsAttention: true, lastActivity: new Date().toISOString() },
+				{ ...alpha, state: { ...alpha.state, isStreaming: false } },
+			]);
+			expect(names()).toEqual(["alpha", "beta"]);
+			expect(sidebarEntries(el)[0]?.querySelector(".chip-idle")).not.toBeNull();
+			expect(sidebarEntries(el)[1]?.querySelector(".chip-attention")).not.toBeNull();
+			expect(sidebarEntries(el)[1]?.classList.contains("attention")).toBe(true);
+			expect(document.activeElement).toBe(close); // Fleet churn cannot steal initial focus.
+			snapshot([current, beta, { ...alpha, error: "provider failed" }]);
+			expect(names()).toEqual(["alpha", "beta"]);
+			expect(sidebarEntries(el)[0]?.querySelector(".chip-error")).not.toBeNull();
+			expect(sidebarEntries(el)[0]?.classList.contains("error")).toBe(true);
+			expect(sidebarEntries(el)[1]?.querySelector(".chip-idle")).not.toBeNull();
+			expect(sidebarEntries(el)[1]?.classList.contains("attention")).toBe(false);
+			snapshot([current, beta]);
+			expect(names()).toEqual(["beta"]);
+			expect(sidebar(el)?.classList.contains("open")).toBe(true);
+			snapshot([current]);
+			expect(sidebar(el)).toBeNull();
+			expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+			expect(el.querySelector(".fleet-sidebar-toggle")).toBeNull();
+			expect(el.querySelector(".chat")).not.toBeNull();
+			expect(el.querySelector(".composer textarea")).not.toBeNull();
+			const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+			document.dispatchEvent(escapeEvent);
+			expect(escapeEvent.defaultPrevented).toBe(false);
+			// A new runtime must not resurrect the previous runtime's open overlay.
+			snapshot([current, beta]);
+			expect(sidebar(el)?.classList.contains("open")).toBe(false);
+			expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+		} finally {
+			store.stop();
+		}
 	});
 
 	it("on mobile starts hidden, opens as an overlay with a scrim, and entry taps navigate and close", () => {

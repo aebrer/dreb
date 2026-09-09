@@ -5,7 +5,7 @@
  */
 
 import { For, type JSX, Show } from "solid-js";
-import type { RuntimeInfoDto } from "../shared/protocol.js";
+import type { RuntimeInfoDto } from "../../shared/protocol.js";
 import type { Toast } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
 

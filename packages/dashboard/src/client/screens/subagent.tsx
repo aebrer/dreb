@@ -38,7 +38,6 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	const [pending, setPending] = createSignal<PendingMessagesDto>({ steering: [], followUp: [] });
 	const closed = () => parent()?.closed;
 	const isRunning = () => !closed() && agent()?.status === "running";
-	const isMobile = () => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches;
 
 	// Fleet sidebar: the other live sessions (the parent session excluded),
 	// shared with the session view. Desktop collapse is the persisted
@@ -48,6 +47,10 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 		fleetSidebarOrder(props.store.fleet().runtimes.filter((runtime) => runtime.key !== props.sessionKey)),
 	);
 	const hasSidebar = () => sidebarEntries().length > 0;
+	const isMobile = sidebar.mobile;
+	createEffect(() => {
+		if (!hasSidebar()) sidebar.close();
+	});
 	const sidebarHidden = () => (isMobile() ? !sidebar.open() : sidebar.collapsed());
 
 	let chatRef: HTMLDivElement | undefined;
@@ -186,7 +189,9 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 								type="button"
 								class="chrome-toggle fleet-sidebar-toggle"
 								title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
-								onClick={() => sidebar.toggle(isMobile())}
+								aria-controls={sidebar.id}
+								aria-expanded={!sidebarHidden()}
+								onClick={() => sidebar.toggle()}
 							>
 								{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
 							</button>
@@ -211,6 +216,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 			<div class="session-body">
 				<Show when={hasSidebar()}>
 					<FleetSidebar
+						id={sidebar.id}
 						store={props.store}
 						sessionKey={props.sessionKey}
 						mobile={isMobile()}

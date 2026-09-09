@@ -929,6 +929,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		fleetSidebarOrder(props.store.fleet().runtimes.filter((runtime) => runtime.key !== props.sessionKey)),
 	);
 	const hasSidebar = () => sidebarEntries().length > 0;
+	createEffect(() => {
+		if (!hasSidebar()) sidebar.close();
+	});
 
 	let chatRef: HTMLDivElement | undefined;
 	let chatInnerRef: HTMLDivElement | undefined;
@@ -1685,7 +1688,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const tasks = () => session()?.tasks ?? [];
 	const tasksDone = () => tasks().filter((t) => t.status === "completed").length;
 	const ctx = () => stats()?.contextUsage ?? runtime()?.state.contextUsage;
-	const isMobile = () => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches;
+	const isMobile = sidebar.mobile;
 	// Fleet sidebar hidden state in either mode: desktop uses the persisted
 	// collapse preference, mobile uses the transient overlay signal.
 	const sidebarHidden = () => (isMobile() ? !sidebar.open() : sidebar.collapsed());
@@ -1894,7 +1897,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							type="button"
 							class="chrome-toggle fleet-sidebar-toggle"
 							title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
-							onClick={() => sidebar.toggle(isMobile())}
+							aria-controls={sidebar.id}
+							aria-expanded={!sidebarHidden()}
+							onClick={() => sidebar.toggle()}
 						>
 							{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
 						</button>
@@ -2016,6 +2021,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			<div class="session-body">
 				<Show when={hasSidebar()}>
 					<FleetSidebar
+						id={sidebar.id}
 						store={props.store}
 						sessionKey={props.sessionKey}
 						mobile={isMobile()}
