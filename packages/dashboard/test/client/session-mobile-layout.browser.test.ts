@@ -73,18 +73,16 @@ function sessionFixture(state: SessionLayoutState): string {
 	<div class="session-screen">
 		<header class="session-bar${state.headerCollapsed ? " collapsed" : ""}">
 			<div class="session-bar-inner session-bar-main">
-				<a class="back" href="#/">← fleet</a>
+				<div class="session-navigation"><button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button><a class="back" href="#/">← fleet</a></div>
 				<span class="title">Long running session title</span>
-				<span class="project">/home/test/project</span>
-				<output class="session-connection-indicator switcher">● live</output>
-				<span class="right"><button type="button" class="switcher model-switcher"><span class="label">model</span> provider/long-model</button><button type="button" class="switcher"><span class="label">think</span> high</button><button type="button" class="switcher">⋯</button></span>
-				<button type="button" class="chrome-toggle">details ▴</button>
+				<div class="session-header-actions"><span class="connection-indicator session-connection-indicator"><output class="chip chip-idle"><span class="dot">●</span> live</output></span><button type="button" class="chrome-toggle">details ▴</button></div>
 			</div>
+			${state.headerCollapsed ? "" : `<div class="session-bar-inner session-controls"><button type="button" class="switcher model-switcher"><span class="label">model</span> provider/long-model</button><button type="button" class="switcher"><span class="label">think</span> high</button><button type="button" class="switcher">⋯</button></div>`}
 			${headerDetails}
 		</header>
-		${state.bannerCount > 0 ? `<div class="container banner-region" aria-live="polite">${banners}</div>` : ""}
 		<div class="session-body">
 			<div class="session-main">
+		${state.bannerCount > 0 ? `<div class="container banner-region" aria-live="polite">${banners}</div>` : ""}
 		<main class="chat"><div class="chat-inner"><p>${longText}</p><p>${longText}</p><p>${longText}</p></div></main>
 		<footer class="dock">
 			<div class="dock-collapse-row"><button type="button" class="chrome-toggle">compose ▾</button></div>
@@ -138,10 +136,9 @@ function sessionSidebarFixture(): string {
 	<div class="session-screen">
 		<header class="session-bar">
 			<div class="session-bar-inner session-bar-main">
-				<a class="back" href="#/">← fleet</a>
+				<div class="session-navigation"><button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button><a class="back" href="#/">← fleet</a></div>
 				<span class="title">Session title</span>
-				<button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button>
-				<button type="button" class="chrome-toggle">details ▴</button>
+				<div class="session-header-actions"><span class="connection-indicator session-connection-indicator"><output class="chip chip-idle"><span class="dot">●</span> live</output></span><button type="button" class="chrome-toggle">details ▴</button></div>
 			</div>
 		</header>
 		<div class="session-body">
@@ -231,6 +228,136 @@ for (const composerMaxed of [false, true]) {
 }
 
 describe("session layout in a real browser", () => {
+	it.each([701, 1024, 1505])(
+		"keeps the desktop sidebar fixed as notices appear and disappear at %ipx",
+		async (width) => {
+			await page.setViewportSize({ width, height: 900 });
+			await page.setContent(sessionSidebarFixture());
+			await page.locator(".fleet-sidebar-scrim").evaluate((element) => element.remove());
+			const before = await page.locator(".fleet-sidebar").boundingBox();
+			for (const collapsed of [false, true]) {
+				await page
+					.locator(".fleet-sidebar")
+					.evaluate((element, collapsed) => element.classList.toggle("collapsed", collapsed), collapsed);
+				for (const content of ["Short notice", longText.repeat(3), banners]) {
+					await page.locator(".session-main").evaluate((element, content) => {
+						const region = document.createElement("div");
+						region.className = "container banner-region";
+						region.innerHTML = content.startsWith("<div")
+							? content
+							: `<div class="banner warning"><span class="banner-text">${content}</span><button class="btn btn-small banner-dismiss">dismiss</button></div>`;
+						element.prepend(region);
+					}, content);
+					const layout = await page.evaluate(() => {
+						const bounds = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+						const banner = bounds(".banner");
+						const chat = bounds(".chat-inner");
+						const chatPadding = Number.parseFloat(
+							getComputedStyle(document.querySelector(".chat-inner")!).paddingLeft,
+						);
+						return {
+							bannerAligned: Math.abs(banner.left - chat.left - chatPadding) < 1,
+							bannerInColumn:
+								banner.left >= bounds(".session-main").left && banner.right <= bounds(".session-main").right,
+							sendVisible: bounds(".send").bottom <= innerHeight,
+							documentFits: document.documentElement.scrollHeight <= innerHeight,
+						};
+					});
+					expect(layout).toEqual({
+						bannerAligned: true,
+						bannerInColumn: true,
+						sendVisible: true,
+						documentFits: true,
+					});
+					if (!collapsed) expect(await page.locator(".fleet-sidebar").boundingBox()).toEqual(before);
+					await page.locator(".banner-region").evaluate((element) => element.remove());
+					if (!collapsed) expect(await page.locator(".fleet-sidebar").boundingBox()).toEqual(before);
+				}
+			}
+		},
+	);
+
+	it.each([320, 390, 700, 701, 1024, 1505])(
+		"groups navigation and header controls without overlap at %ipx",
+		async (width) => {
+			await page.setViewportSize({ width, height: 900 });
+			await page.setContent(
+				sessionFixture({
+					composerMaxed: false,
+					bannerCount: 0,
+					tasksOpen: false,
+					subagentsOpen: false,
+					headerCollapsed: false,
+					overflowOpen: false,
+				}),
+			);
+			await page.locator(".session-bar-main > .title").evaluate((element) => {
+				element.textContent = "Reconcile develop conflicts on entitlement settings PR ".repeat(4);
+			});
+			const layout = await page.evaluate(() => {
+				const bounds = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+				const nav = bounds(".session-navigation");
+				const toggle = bounds(".fleet-sidebar-toggle");
+				const actions = bounds(".session-header-actions");
+				const title = bounds(".session-bar-main > .title");
+				const main = bounds(".session-bar-main");
+				const controls = bounds(".session-controls");
+				return {
+					toggleOnLeft: Math.abs(toggle.left - nav.left) < 1 && toggle.right <= actions.left,
+					groupsSeparate:
+						nav.right <= actions.left &&
+						(innerWidth <= 700
+							? title.top >= nav.bottom
+							: title.left >= nav.right && title.right <= actions.left),
+					controlsBelow: controls.top >= main.bottom - 1,
+					buttonsFit: [...document.querySelectorAll(".session-bar button, .session-bar a")].every((element) => {
+						const r = element.getBoundingClientRect();
+						return r.left >= 0 && r.right <= innerWidth;
+					}),
+				};
+			});
+			expect(layout).toEqual({ toggleOnLeft: true, groupsSeparate: true, controlsBelow: true, buttonsFit: true });
+		},
+	);
+
+	it.each([320, 390, 701])("contains long connection labels and subagent navigation at %ipx", async (width) => {
+		await page.setViewportSize({ width, height: 900 });
+		await page.setContent(sessionSidebarFixture());
+		await page.locator(".session-connection-indicator output").evaluate((element) => {
+			element.textContent = "✕ live connection unauthorized";
+		});
+		const contained = () =>
+			page.evaluate(() =>
+				[...document.querySelectorAll(".session-bar button, .session-bar a, .session-bar output")].every(
+					(element) => {
+						const rect = element.getBoundingClientRect();
+						return rect.left >= 0 && rect.right <= innerWidth;
+					},
+				),
+			);
+		expect(await contained()).toBe(true);
+		await page.locator(".session-navigation .back").evaluate((element) => {
+			element.textContent = "← A very long parent session name ".repeat(8);
+		});
+		await page.locator(".session-bar-main > .title").evaluate((element) => {
+			element.outerHTML = `<div class="session-heading"><span class="agent-type">subagent · custom-agent-with-a-very-long-name</span><span class="title">A long subagent task summary repeated many times to exercise truncation</span></div>`;
+		});
+		await page.locator(".session-header-actions").evaluate((element) => {
+			element.innerHTML = '<span class="chip chip-running"><span class="dot">●</span> running</span>';
+		});
+		expect(await contained()).toBe(true);
+		const noOverlap = await page.evaluate(() => {
+			const nav = document.querySelector(".session-navigation")!.getBoundingClientRect();
+			const title = document.querySelector(".session-heading")!.getBoundingClientRect();
+			const actions = document.querySelector(".session-header-actions")!.getBoundingClientRect();
+			return (
+				nav.right <= actions.left &&
+				(innerWidth <= 700 ? title.top >= nav.bottom : title.left >= nav.right && title.right <= actions.left)
+			);
+		});
+		expect(noOverlap).toBe(true);
+	});
+
 	it.each(acceptanceStates)("keeps the composer visible for state %#", async (state) => {
 		await page.setViewportSize({ width: 390, height: 844 });
 		await page.setContent(sessionFixture(state));

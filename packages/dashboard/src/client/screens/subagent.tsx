@@ -177,13 +177,8 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	return (
 		<div class="session-screen">
 			<header class="session-bar">
-				<div class="session-bar-inner">
-					<a class="back" href={`#/session/${props.sessionKey}`}>
-						← {parentName()}
-					</a>
-					<span class="agent-type">subagent · {agent()?.agentType ?? "unknown"}</span>
-					<span class="title">{agent()?.taskSummary ?? props.agentId}</span>
-					<span class="right">
+				<div class="session-bar-inner session-bar-main">
+					<div class="session-navigation">
 						<Show when={hasSidebar()}>
 							<button
 								type="button"
@@ -196,6 +191,15 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 								{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
 							</button>
 						</Show>
+						<a class="back" href={`#/session/${props.sessionKey}`}>
+							← {parentName()}
+						</a>
+					</div>
+					<div class="session-heading">
+						<span class="agent-type">subagent · {agent()?.agentType ?? "unknown"}</span>
+						<span class="title">{agent()?.taskSummary ?? props.agentId}</span>
+					</div>
+					<span class="session-header-actions">
 						<Show
 							when={isRunning()}
 							fallback={
@@ -210,8 +214,6 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 					</span>
 				</div>
 			</header>
-
-			<BannerRegion banners={banners()} />
 
 			<div class="session-body">
 				<Show when={hasSidebar()}>
@@ -230,6 +232,7 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 					/>
 				</Show>
 				<div class="session-main">
+					<BannerRegion banners={banners()} />
 					<main class="chat" ref={chatRef}>
 						<div class="chat-inner" ref={chatInnerRef}>
 							<Show when={(agent()?.arbitrations?.length ?? 0) > 0}>

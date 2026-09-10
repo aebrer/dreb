@@ -1846,73 +1846,76 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		<div class="session-screen">
 			<header class="session-bar" classList={{ collapsed: topChromeCollapsed() }}>
 				<div class="session-bar-inner session-bar-main">
-					<a class="back" href="#/">
-						← fleet
-					</a>
+					<div class="session-navigation">
+						<Show when={hasSidebar()}>
+							<button
+								type="button"
+								class="chrome-toggle fleet-sidebar-toggle"
+								title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
+								aria-controls={sidebar.id}
+								aria-expanded={!sidebarHidden()}
+								onClick={() => sidebar.toggle()}
+							>
+								{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
+							</button>
+						</Show>
+						<a class="back" href="#/">
+							← fleet
+						</a>
+					</div>
 					<span class="title">{headerTitle()}</span>
-					<Show when={!topChromeCollapsed()}>
-						<span class="project">{sessionCwd() ? shortenPath(sessionCwd()!) : undefined}</span>
-					</Show>
-					<ConnectionIndicator store={props.store} class="session-connection-indicator" />
-					<Show when={!topChromeCollapsed() && !closed()}>
-						<span class="right">
-							<button
-								type="button"
-								class="switcher optional model-switcher"
-								title={modelTitle(runtime()?.state.model)}
-								onClick={() => setShowModelSelector(true)}
-							>
-								<span class="label">model</span> <span class="value">{modelLabel(runtime()?.state.model)}</span>
-							</button>
-							<button
-								type="button"
-								class="switcher optional"
-								onClick={async () => {
-									const current = runtime()?.state.thinkingLevel ?? "off";
-									const levels = availableThinkingLevels();
-									const next = levels[(levels.indexOf(current) + 1) % levels.length];
-									try {
-										const result = await api.setThinking(props.sessionKey, next);
-										props.store.setRuntimeThinkingLevel(props.sessionKey, next, result.settingsRevision);
-									} catch (err) {
-										setActionError(err instanceof Error ? err.message : String(err));
-									}
-								}}
-							>
-								<span class="label">think</span> {runtime()?.state.thinkingLevel ?? "—"}
-							</button>
-							<Show when={ctx()}>
-								<output class="switcher">
-									<span class="label">ctx</span>{" "}
-									{ctx()!.percent === null ? "?" : `${ctx()!.percent!.toFixed(0)}%`}
-								</output>
-							</Show>
-							<button type="button" class="switcher" onClick={() => setShowOverflow(!showOverflow())}>
-								⋯
-							</button>
-						</span>
-					</Show>
-					<Show when={hasSidebar()}>
+					<div class="session-header-actions">
+						<ConnectionIndicator store={props.store} class="session-connection-indicator" />
+
 						<button
 							type="button"
-							class="chrome-toggle fleet-sidebar-toggle"
-							title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
-							aria-controls={sidebar.id}
-							aria-expanded={!sidebarHidden()}
-							onClick={() => sidebar.toggle()}
+							class="chrome-toggle"
+							title={topChromeCollapsed() ? "show session details" : "hide session details"}
+							onClick={() => setTopChromeCollapsed(!topChromeCollapsed())}
 						>
-							{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
+							{topChromeCollapsed() ? "details ▾" : "details ▴"}
 						</button>
-					</Show>
-					<button
-						type="button"
-						class="chrome-toggle"
-						title={topChromeCollapsed() ? "show session details" : "hide session details"}
-						onClick={() => setTopChromeCollapsed(!topChromeCollapsed())}
-					>
-						{topChromeCollapsed() ? "details ▾" : "details ▴"}
-					</button>
+					</div>
 				</div>
+				<Show when={!topChromeCollapsed() && !closed()}>
+					<div class="session-bar-inner session-controls">
+						<button
+							type="button"
+							class="switcher optional model-switcher"
+							title={modelTitle(runtime()?.state.model)}
+							onClick={() => setShowModelSelector(true)}
+						>
+							<span class="label">model</span> <span class="value">{modelLabel(runtime()?.state.model)}</span>
+						</button>
+						<button
+							type="button"
+							class="switcher optional"
+							onClick={async () => {
+								const current = runtime()?.state.thinkingLevel ?? "off";
+								const levels = availableThinkingLevels();
+								const next = levels[(levels.indexOf(current) + 1) % levels.length];
+								try {
+									const result = await api.setThinking(props.sessionKey, next);
+									props.store.setRuntimeThinkingLevel(props.sessionKey, next, result.settingsRevision);
+								} catch (err) {
+									setActionError(err instanceof Error ? err.message : String(err));
+								}
+							}}
+						>
+							<span class="label">think</span> {runtime()?.state.thinkingLevel ?? "—"}
+						</button>
+						<Show when={ctx()}>
+							<output class="switcher">
+								<span class="label">ctx</span>{" "}
+								{ctx()!.percent === null ? "?" : `${ctx()!.percent!.toFixed(0)}%`}
+							</output>
+						</Show>
+						<button type="button" class="switcher" onClick={() => setShowOverflow(!showOverflow())}>
+							⋯
+						</button>
+					</div>
+				</Show>
+
 				<Show when={!topChromeCollapsed()}>
 					<div class="session-bar-inner session-info-bar">
 						<span class="session-info-left">{infoLeft()}</span>
@@ -2016,8 +2019,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</Show>
 			</header>
 
-			<BannerRegion banners={banners()} />
-
 			<div class="session-body">
 				<Show when={hasSidebar()}>
 					<FleetSidebar
@@ -2035,6 +2036,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					/>
 				</Show>
 				<div class="session-main">
+					<BannerRegion banners={banners()} />
 					<main class="chat" ref={chatRef}>
 						<div class="chat-inner" ref={chatInnerRef}>
 							<Show when={session()} fallback={<p class="muted">loading transcript…</p>}>

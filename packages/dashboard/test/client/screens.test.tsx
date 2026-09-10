@@ -1298,9 +1298,38 @@ describe("session fleet sidebar", () => {
 		// The viewed session is excluded even though its name shows in the header.
 		expect(el.querySelector("header.session-bar .title")?.textContent).toContain("current session");
 		expect(elSidebar?.textContent).not.toContain("current session");
-		// The toggle renders beside the chrome toggle.
-		expect(el.querySelector("button.fleet-sidebar-toggle")).not.toBeNull();
+		// Fleet navigation stays together on the left, separate from session controls.
+		expect(el.querySelector(".session-navigation > button.fleet-sidebar-toggle")).not.toBeNull();
+		expect(el.querySelector(".session-navigation > a.back")?.getAttribute("href")).toBe("#/");
+		expect(el.querySelector(".session-header-actions .session-connection-indicator")).not.toBeNull();
+		expect(el.querySelector(".session-header-actions .chrome-toggle")?.textContent).toContain("details");
+		expect(el.querySelector(".session-controls .model-switcher")).not.toBeNull();
 	});
+
+	it.each(["session", "subagent"] as const)(
+		"keeps %s notices in the transcript column and fleet navigation on the left",
+		(screen) => {
+			const session = createSessionViewState("current");
+			session.toasts = [{ id: 1, text: "Session-local warning", tone: "warning" }];
+			const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")], { current: session });
+			const el = mount(() =>
+				screen === "session" ? (
+					<SessionScreen store={store} sessionKey="current" />
+				) : (
+					<SubagentScreen store={store} sessionKey="current" agentId="child" />
+				),
+			);
+			const main = el.querySelector(".session-main")!;
+			expect(main.firstElementChild?.classList.contains("banner-region")).toBe(true);
+			expect(main.querySelector(".banner-text")?.textContent).toBe("Session-local warning");
+			expect(el.querySelector(".session-screen > .banner-region")).toBeNull();
+			expect(el.querySelector(".session-navigation > .fleet-sidebar-toggle")).not.toBeNull();
+			expect(el.querySelector(".session-navigation > .back")?.getAttribute("href")).toBe(
+				screen === "session" ? "#/" : "#/session/current",
+			);
+			expect(el.querySelector(".session-header-actions .fleet-sidebar-toggle")).toBeNull();
+		},
+	);
 
 	it("keeps the closed mobile drawer inaccessible and manages focus while open", () => {
 		stubMobile(true);
@@ -6169,7 +6198,7 @@ describe("dashboard client regressions", () => {
 			hydrateSession: async () => {},
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("loaded context"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -6335,7 +6364,7 @@ describe("dashboard client regressions", () => {
 		vi.mocked(api.sessions).mockClear();
 		vi.mocked(api.fleet).mockClear();
 
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		const stop = [...el.querySelectorAll("button")].find((button) => button.textContent === "stop runtime");
 		(stop as HTMLButtonElement).click();
@@ -6357,7 +6386,7 @@ describe("dashboard client regressions", () => {
 		expect(el.textContent).toContain("transcript is read-only");
 		expect(el.querySelector(".composer")).toBeNull();
 		expect(el.querySelector("textarea")).toBeNull();
-		expect(el.querySelector(".session-bar .right")).toBeNull();
+		expect(el.querySelector(".session-bar .session-controls")).toBeNull();
 		expect(el.querySelector(".status-line")).toBeNull();
 	});
 
@@ -6950,7 +6979,7 @@ describe("dashboard client regressions", () => {
 			refreshDiskSessions,
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="fork" />);
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -6987,7 +7016,7 @@ describe("dashboard client regressions", () => {
 		const composer = el.querySelector("textarea") as HTMLTextAreaElement;
 		composer.value = "draft in progress";
 		composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -7020,7 +7049,7 @@ describe("dashboard client regressions", () => {
 			refreshDiskSessions,
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkmsgcancel" />);
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));

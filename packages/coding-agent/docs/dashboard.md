@@ -143,9 +143,16 @@ networking window above.
 ### Notifications and explicit navigation
 
 The session banner region is the single surface for notices belonging to the
-session being viewed. Each banner has its own dismiss control, persists until
-dismissed or cleared by its source lifecycle, and caps long text with internal
-scrolling so its controls remain reachable on mobile. Dismissing a status banner
+session being viewed. It lives inside the transcript column in both session and
+subagent views, aligned with transcript content; showing or dismissing banners
+does not move or shorten the fleet sidebar. Each banner has its own dismiss
+control, persists until dismissed or cleared by its source lifecycle, and caps
+long text with internal scrolling. The stack also has a bounded scroll area so
+multiple notices do not consume the composer. The header keeps the Fleet toggle
+and back navigation together on the left, session identity in the middle, and
+live/details controls on the right. Model/thinking controls occupy a separate
+row; on mobile the title moves below navigation rather than scattering controls
+around a long title. Dismissing a status banner
 is presentation-only: provider/error state, Fleet needs-attention state, tab
 badges, and hidden-page notifications remain accurate until the underlying
 runtime reports recovery. Genuinely app-global notices and extension notices

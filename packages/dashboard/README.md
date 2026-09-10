@@ -96,9 +96,13 @@ Open `http://127.0.0.1:5343`.
 ### Notifications and navigation
 
 Notices, warnings, and errors for the viewed main session or subagent share a
-manually dismissible banner region at the top of the transcript. Long mobile
-messages scroll within a capped text area while banner actions and dismissal
-remain reachable. App-global notices and notifications from other sessions use
+manually dismissible banner region inside the transcript column. Banners align
+with transcript content and never move or shorten the adjacent fleet sidebar.
+Long or stacked messages scroll within bounded space while banner actions and
+dismissal remain reachable. The session header groups Fleet navigation on the
+left, session identity in the middle, and live/details controls on the right;
+model/thinking controls occupy a separate row. Subagent headers use the same
+left-hand navigation grouping. App-global notices and notifications from other sessions use
 a separate fixed top-center stack; neither surface expires automatically.
 
 Creating a runtime from Fleet or Files leaves the current screen in place.
