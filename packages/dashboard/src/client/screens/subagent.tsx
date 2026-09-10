@@ -179,18 +179,6 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 			<header class="session-bar">
 				<div class="session-bar-inner session-bar-main">
 					<div class="session-navigation">
-						<Show when={hasSidebar()}>
-							<button
-								type="button"
-								class="chrome-toggle fleet-sidebar-toggle"
-								title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
-								aria-controls={sidebar.id}
-								aria-expanded={!sidebarHidden()}
-								onClick={() => sidebar.toggle()}
-							>
-								{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
-							</button>
-						</Show>
 						<a class="back" href={`#/session/${props.sessionKey}`}>
 							← {parentName()}
 						</a>
@@ -213,6 +201,20 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 						</Show>
 					</span>
 				</div>
+				<Show when={hasSidebar()}>
+					<div class="session-bar-inner session-summary-row">
+						<button
+							type="button"
+							class="chrome-toggle fleet-sidebar-toggle"
+							title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
+							aria-controls={sidebar.id}
+							aria-expanded={!sidebarHidden()}
+							onClick={() => sidebar.toggle()}
+						>
+							{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
+						</button>
+					</div>
+				</Show>
 			</header>
 
 			<div class="session-body">

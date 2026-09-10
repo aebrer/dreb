@@ -415,6 +415,25 @@ body {
 	white-space: nowrap;
 }
 
+/* Separate sidebar visibility from the back link: the toggle anchors the
+   bottom header row, with usage/context stats grouped on its right. */
+.session-summary-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	width: 100%;
+	min-width: 0;
+}
+
+.session-summary-row > .fleet-sidebar-toggle {
+	flex: 0 0 auto;
+}
+
+.session-summary-row > .session-info-right {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
 .session-info-right {
 	display: flex;
 	gap: var(--space-2);
@@ -3180,7 +3199,11 @@ details.thinking .thinking-body {
 	.session-bar {
 		flex-shrink: 1;
 		min-height: 0;
-		overflow: hidden;
+		/* If the composer needs the space, keep lower header controls reachable
+		   by scrolling the header rather than clipping its stats/toggle row. */
+		overflow-x: hidden;
+		overflow-y: auto;
+		overscroll-behavior: contain;
 	}
 
 	.dock {

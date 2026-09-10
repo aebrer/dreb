@@ -49,9 +49,7 @@ function sessionFixture(state: SessionLayoutState): string {
 	const headerOverflow = state.overflowOpen
 		? `<div class="session-bar-inner" style="justify-content:flex-end;gap:8px"><button type="button" class="btn btn-small">export HTML</button><button type="button" class="btn btn-small">compact now</button><button type="button" class="btn btn-small">expand tools</button><button type="button" class="btn btn-small">rename</button><button type="button" class="btn btn-small">stop runtime</button></div>`
 		: "";
-	const headerDetails = state.headerCollapsed
-		? ""
-		: `<div class="session-bar-inner session-info-bar"><span class="session-info-left">/home/test/project</span><button type="button" class="session-info-right stats-trigger"><span>messages 99</span><span>tokens 999k</span></button></div>${headerOverflow}`;
+	const headerDetails = `${state.headerCollapsed ? "" : headerOverflow}<div class="session-bar-inner session-info-bar">${state.headerCollapsed ? "" : '<span class="session-info-left">/home/test/project</span>'}<div class="session-summary-row"><button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button>${state.headerCollapsed ? "" : '<button type="button" class="session-info-right stats-trigger"><span>messages 99</span><span>tokens 999k</span><span>ctx 16%/1.1M</span></button>'}</div></div>`;
 	const tasks = `<details class="tasks"${state.tasksOpen ? " open" : ""}><summary>tasks — 3 of 15 done</summary><ul>${taskItems}</ul></details>`;
 	const subagents = `<details class="tasks subagents"${state.subagentsOpen ? " open" : ""}><summary>subagents — 10 running · 0 done</summary><ul class="subagent-list">${agentItems}</ul></details>`;
 	const status = `<div class="status-line"><span class="working">● working — ${longText}</span><button type="button" class="btn btn-small btn-danger">stop compaction</button><button type="button" class="btn btn-small btn-danger">■ stop</button></div>`;
@@ -73,7 +71,7 @@ function sessionFixture(state: SessionLayoutState): string {
 	<div class="session-screen">
 		<header class="session-bar${state.headerCollapsed ? " collapsed" : ""}">
 			<div class="session-bar-inner session-bar-main">
-				<div class="session-navigation"><button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button><a class="back" href="#/">← fleet</a></div>
+				<div class="session-navigation"><a class="back" href="#/">← fleet</a></div>
 				<span class="title">Long running session title</span>
 				<div class="session-header-actions"><span class="connection-indicator session-connection-indicator"><output class="chip chip-idle"><span class="dot">●</span> live</output></span><button type="button" class="chrome-toggle">details ▴</button></div>
 			</div>
@@ -136,10 +134,11 @@ function sessionSidebarFixture(): string {
 	<div class="session-screen">
 		<header class="session-bar">
 			<div class="session-bar-inner session-bar-main">
-				<div class="session-navigation"><button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button><a class="back" href="#/">← fleet</a></div>
+				<div class="session-navigation"><a class="back" href="#/">← fleet</a></div>
 				<span class="title">Session title</span>
 				<div class="session-header-actions"><span class="connection-indicator session-connection-indicator"><output class="chip chip-idle"><span class="dot">●</span> live</output></span><button type="button" class="chrome-toggle">details ▴</button></div>
 			</div>
+		<div class="session-bar-inner session-info-bar"><div class="session-summary-row"><button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button><button class="session-info-right stats-trigger"><span>ctx 16%/1.1M</span></button></div></div>
 		</header>
 		<div class="session-body">
 			<aside class="fleet-sidebar open" role="dialog" aria-label="Other live sessions" aria-modal="true" aria-hidden="false"><button type="button" class="chrome-toggle fleet-sidebar-close">close fleet sidebar</button>${entries}</aside>
@@ -302,8 +301,15 @@ describe("session layout in a real browser", () => {
 				const title = bounds(".session-bar-main > .title");
 				const main = bounds(".session-bar-main");
 				const controls = bounds(".session-controls");
+				const summary = bounds(".session-summary-row");
+				const stats = bounds(".stats-trigger");
 				return {
-					toggleOnLeft: Math.abs(toggle.left - nav.left) < 1 && toggle.right <= actions.left,
+					toggleInBottomRow:
+						Math.abs(toggle.left - summary.left) < 1 &&
+						toggle.right <= stats.left &&
+						summary.top >= controls.bottom &&
+						toggle.top >= main.bottom &&
+						toggle.bottom <= bounds(".session-bar").bottom,
 					groupsSeparate:
 						nav.right <= actions.left &&
 						(innerWidth <= 700
@@ -316,7 +322,12 @@ describe("session layout in a real browser", () => {
 					}),
 				};
 			});
-			expect(layout).toEqual({ toggleOnLeft: true, groupsSeparate: true, controlsBelow: true, buttonsFit: true });
+			expect(layout).toEqual({
+				toggleInBottomRow: true,
+				groupsSeparate: true,
+				controlsBelow: true,
+				buttonsFit: true,
+			});
 		},
 	);
 
@@ -357,6 +368,33 @@ describe("session layout in a real browser", () => {
 		});
 		expect(noOverlap).toBe(true);
 	});
+
+	it.each([false, true])(
+		"keeps the bottom fleet toggle reachable in a short mobile viewport (details collapsed=%s)",
+		async (headerCollapsed) => {
+			await page.setViewportSize({ width: 390, height: 400 });
+			await page.setContent(
+				sessionFixture({
+					composerMaxed: true,
+					bannerCount: 4,
+					tasksOpen: true,
+					subagentsOpen: true,
+					headerCollapsed,
+					overflowOpen: !headerCollapsed,
+				}),
+			);
+			await page.locator(".session-bar").evaluate((element) => {
+				element.scrollTop = element.scrollHeight;
+			});
+			const reachable = await page.evaluate(() => {
+				const header = document.querySelector(".session-bar")!.getBoundingClientRect();
+				const toggle = document.querySelector(".fleet-sidebar-toggle")!.getBoundingClientRect();
+				return toggle.top >= header.top - 1 && toggle.bottom <= header.bottom + 1 && header.bottom <= innerHeight;
+			});
+			expect(reachable).toBe(true);
+			expect((await measureSession()).sendVisible).toBe(true);
+		},
+	);
 
 	it.each(acceptanceStates)("keeps the composer visible for state %#", async (state) => {
 		await page.setViewportSize({ width: 390, height: 844 });

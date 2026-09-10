@@ -99,10 +99,12 @@ Notices, warnings, and errors for the viewed main session or subagent share a
 manually dismissible banner region inside the transcript column. Banners align
 with transcript content and never move or shorten the adjacent fleet sidebar.
 Long or stacked messages scroll within bounded space while banner actions and
-dismissal remain reachable. The session header groups Fleet navigation on the
+dismissal remain reachable. The session header groups back navigation on the
 left, session identity in the middle, and live/details controls on the right;
-model/thinking controls occupy a separate row. Subagent headers use the same
-left-hand navigation grouping. App-global notices and notifications from other sessions use
+model/thinking controls occupy a separate row. The fleet sidebar toggle sits on
+the left of the bottom usage/context-stats row, separate from the back link,
+and remains available with details collapsed. Subagent headers likewise put
+the sidebar toggle in their own bottom row. App-global notices and notifications from other sessions use
 a separate fixed top-center stack; neither surface expires automatically.
 
 Creating a runtime from Fleet or Files leaves the current screen in place.

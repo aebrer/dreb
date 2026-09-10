@@ -148,11 +148,15 @@ subagent views, aligned with transcript content; showing or dismissing banners
 does not move or shorten the fleet sidebar. Each banner has its own dismiss
 control, persists until dismissed or cleared by its source lifecycle, and caps
 long text with internal scrolling. The stack also has a bounded scroll area so
-multiple notices do not consume the composer. The header keeps the Fleet toggle
-and back navigation together on the left, session identity in the middle, and
-live/details controls on the right. Model/thinking controls occupy a separate
-row; on mobile the title moves below navigation rather than scattering controls
-around a long title. Dismissing a status banner
+multiple notices do not consume the composer. The header keeps back navigation
+on the left, session identity in the middle, and live/details controls on the
+right. Model/thinking controls occupy a separate row. The fleet sidebar toggle
+is on the left of the bottom usage/context-stats row, separate from the back
+link; collapsing details hides the stats but leaves this toggle available.
+Subagent views likewise put the toggle in a bottom header row. On mobile the
+title moves below navigation rather than scattering controls around a long title.
+If a short viewport forces the header to shrink for the composer, the header
+scrolls internally so its bottom controls remain reachable. Dismissing a status banner
 is presentation-only: provider/error state, Fleet needs-attention state, tab
 badges, and hidden-page notifications remain accurate until the underlying
 runtime reports recovery. Genuinely app-global notices and extension notices

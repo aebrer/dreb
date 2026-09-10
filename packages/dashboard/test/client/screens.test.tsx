@@ -1298,8 +1298,8 @@ describe("session fleet sidebar", () => {
 		// The viewed session is excluded even though its name shows in the header.
 		expect(el.querySelector("header.session-bar .title")?.textContent).toContain("current session");
 		expect(elSidebar?.textContent).not.toContain("current session");
-		// Fleet navigation stays together on the left, separate from session controls.
-		expect(el.querySelector(".session-navigation > button.fleet-sidebar-toggle")).not.toBeNull();
+		// Sidebar visibility stays in the bottom stats row, separate from back navigation.
+		expect(el.querySelector(".session-summary-row > button.fleet-sidebar-toggle")).not.toBeNull();
 		expect(el.querySelector(".session-navigation > a.back")?.getAttribute("href")).toBe("#/");
 		expect(el.querySelector(".session-header-actions .session-connection-indicator")).not.toBeNull();
 		expect(el.querySelector(".session-header-actions .chrome-toggle")?.textContent).toContain("details");
@@ -1307,7 +1307,7 @@ describe("session fleet sidebar", () => {
 	});
 
 	it.each(["session", "subagent"] as const)(
-		"keeps %s notices in the transcript column and fleet navigation on the left",
+		"keeps %s notices in the transcript column and the fleet toggle in the bottom row",
 		(screen) => {
 			const session = createSessionViewState("current");
 			session.toasts = [{ id: 1, text: "Session-local warning", tone: "warning" }];
@@ -1323,13 +1323,31 @@ describe("session fleet sidebar", () => {
 			expect(main.firstElementChild?.classList.contains("banner-region")).toBe(true);
 			expect(main.querySelector(".banner-text")?.textContent).toBe("Session-local warning");
 			expect(el.querySelector(".session-screen > .banner-region")).toBeNull();
-			expect(el.querySelector(".session-navigation > .fleet-sidebar-toggle")).not.toBeNull();
+			expect(el.querySelector(".session-summary-row > .fleet-sidebar-toggle")).not.toBeNull();
 			expect(el.querySelector(".session-navigation > .back")?.getAttribute("href")).toBe(
 				screen === "session" ? "#/" : "#/session/current",
 			);
 			expect(el.querySelector(".session-header-actions .fleet-sidebar-toggle")).toBeNull();
 		},
 	);
+
+	it.each([false, true])("keeps the bottom-row toggle usable with collapsed details (mobile=%s)", (mobile) => {
+		stubMobile(mobile);
+		const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		expect(el.querySelector(".session-summary-row .stats-trigger")).not.toBeNull();
+		expect(el.querySelector(".session-navigation .fleet-sidebar-toggle")).toBeNull();
+		el.querySelector<HTMLButtonElement>('.session-header-actions button[title="hide session details"]')!.click();
+		expect(el.querySelector(".stats-trigger")).toBeNull();
+		expect(el.querySelector(".session-controls")).toBeNull();
+		const toggle = el.querySelector<HTMLButtonElement>(".session-summary-row > .fleet-sidebar-toggle")!;
+		expect(toggle).not.toBeNull();
+		const wasExpanded = toggle.getAttribute("aria-expanded");
+		toggle.click();
+		expect(toggle.getAttribute("aria-expanded")).not.toBe(wasExpanded);
+		if (mobile) expect(el.querySelector(".fleet-sidebar.open")).not.toBeNull();
+		else expect(el.querySelector(".fleet-sidebar.collapsed")).not.toBeNull();
+	});
 
 	it("keeps the closed mobile drawer inaccessible and manages focus while open", () => {
 		stubMobile(true);

@@ -1847,18 +1847,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			<header class="session-bar" classList={{ collapsed: topChromeCollapsed() }}>
 				<div class="session-bar-inner session-bar-main">
 					<div class="session-navigation">
-						<Show when={hasSidebar()}>
-							<button
-								type="button"
-								class="chrome-toggle fleet-sidebar-toggle"
-								title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
-								aria-controls={sidebar.id}
-								aria-expanded={!sidebarHidden()}
-								onClick={() => sidebar.toggle()}
-							>
-								{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
-							</button>
-						</Show>
 						<a class="back" href="#/">
 							← fleet
 						</a>
@@ -1917,50 +1905,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				</Show>
 
 				<Show when={!topChromeCollapsed()}>
-					<div class="session-bar-inner session-info-bar">
-						<span class="session-info-left">{infoLeft()}</span>
-						<button
-							type="button"
-							class="session-info-right stats-trigger"
-							disabled={!!closed()}
-							onClick={openStatsPopover}
-						>
-							<For each={infoStats()}>{(item) => <span>{item}</span>}</For>
-						</button>
-						<Show when={showStatsPopover()}>
-							<div class="stats-popover" ref={statsPopoverRef}>
-								<Show when={statsPopoverError()}>
-									<p class="pair-error">{statsPopoverError()}</p>
-								</Show>
-								<Show when={stats()} fallback={<p class="muted small">loading stats…</p>}>
-									{(s) => (
-										<div class="stats-grid">
-											<span>user messages</span>
-											<strong>{s().userMessages}</strong>
-											<span>assistant messages</span>
-											<strong>{s().assistantMessages}</strong>
-											<span>tool calls/results</span>
-											<strong>
-												{s().toolCalls}/{s().toolResults}
-											</strong>
-											<span>input/output</span>
-											<strong>
-												{formatTokens(s().tokens.input)} / {formatTokens(s().tokens.output)}
-											</strong>
-											<span>cache read/write</span>
-											<strong>
-												{formatTokens(s().tokens.cacheRead)} / {formatTokens(s().tokens.cacheWrite)}
-											</strong>
-											<span>total tokens</span>
-											<strong>{formatTokens(s().tokens.total)}</strong>
-											<span>cost</span>
-											<strong>${s().cost.toFixed(4)}</strong>
-										</div>
-									)}
-								</Show>
-							</div>
-						</Show>
-					</div>
 					<Show when={showOverflow()}>
 						<div class="session-bar-inner" style={{ "justify-content": "flex-end", gap: "8px" }}>
 							<a class="btn btn-small" href={api.exportHtmlUrl(props.sessionKey)}>
@@ -2016,6 +1960,70 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							</button>
 						</div>
 					</Show>
+				</Show>
+				<Show when={!topChromeCollapsed() || hasSidebar()}>
+					<div class="session-bar-inner session-info-bar">
+						<Show when={!topChromeCollapsed()}>
+							<span class="session-info-left">{infoLeft()}</span>
+						</Show>
+						<div class="session-summary-row">
+							<Show when={hasSidebar()}>
+								<button
+									type="button"
+									class="chrome-toggle fleet-sidebar-toggle"
+									title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
+									aria-controls={sidebar.id}
+									aria-expanded={!sidebarHidden()}
+									onClick={() => sidebar.toggle()}
+								>
+									{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
+								</button>
+							</Show>
+							<Show when={!topChromeCollapsed()}>
+								<button
+									type="button"
+									class="session-info-right stats-trigger"
+									disabled={!!closed()}
+									onClick={openStatsPopover}
+								>
+									<For each={infoStats()}>{(item) => <span>{item}</span>}</For>
+								</button>
+							</Show>
+						</div>
+						<Show when={!topChromeCollapsed() && showStatsPopover()}>
+							<div class="stats-popover" ref={statsPopoverRef}>
+								<Show when={statsPopoverError()}>
+									<p class="pair-error">{statsPopoverError()}</p>
+								</Show>
+								<Show when={stats()} fallback={<p class="muted small">loading stats…</p>}>
+									{(s) => (
+										<div class="stats-grid">
+											<span>user messages</span>
+											<strong>{s().userMessages}</strong>
+											<span>assistant messages</span>
+											<strong>{s().assistantMessages}</strong>
+											<span>tool calls/results</span>
+											<strong>
+												{s().toolCalls}/{s().toolResults}
+											</strong>
+											<span>input/output</span>
+											<strong>
+												{formatTokens(s().tokens.input)} / {formatTokens(s().tokens.output)}
+											</strong>
+											<span>cache read/write</span>
+											<strong>
+												{formatTokens(s().tokens.cacheRead)} / {formatTokens(s().tokens.cacheWrite)}
+											</strong>
+											<span>total tokens</span>
+											<strong>{formatTokens(s().tokens.total)}</strong>
+											<span>cost</span>
+											<strong>${s().cost.toFixed(4)}</strong>
+										</div>
+									)}
+								</Show>
+							</div>
+						</Show>
+					</div>
 				</Show>
 			</header>
 
