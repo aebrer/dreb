@@ -342,13 +342,47 @@ body {
 	white-space: nowrap;
 }
 
-.session-bar .right {
-	min-width: 0;
-	margin-left: auto;
+/* Keep navigation, identity, and actions in stable slots instead of letting
+   several auto margins distribute controls unpredictably across wrapped rows. */
+.session-bar-main {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.session-navigation,
+.session-header-actions {
 	display: flex;
 	align-items: center;
-	gap: var(--space-2);
 	flex-wrap: wrap;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+.session-navigation .back {
+	max-width: min(200px, 25vw);
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.session-heading {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.session-heading .agent-type {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.session-header-actions {
+	justify-content: flex-end;
+}
+
+.session-controls {
+	justify-content: flex-end;
+	gap: var(--space-2);
+	padding-top: 0;
 }
 
 .session-connection-indicator {
@@ -361,6 +395,10 @@ body {
 .session-connection-indicator .btn {
 	font-size: var(--fs-small);
 	padding: 1px var(--space-2);
+	min-width: 0;
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
 }
 
 .session-info-bar {
@@ -375,6 +413,25 @@ body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+/* Separate sidebar visibility from the back link: the toggle anchors the
+   bottom header row, with usage/context stats grouped on its right. */
+.session-summary-row {
+	display: flex;
+	align-items: center;
+	gap: var(--space-3);
+	width: 100%;
+	min-width: 0;
+}
+
+.session-summary-row > .fleet-sidebar-toggle {
+	flex: 0 0 auto;
+}
+
+.session-summary-row > .session-info-right {
+	flex: 1 1 0;
+	min-width: 0;
 }
 
 .session-info-right {
@@ -464,10 +521,6 @@ body {
 	background: var(--bg);
 }
 
-.session-bar-main .chrome-toggle {
-	margin-left: auto;
-}
-
 .chrome-toggle {
 	border: var(--hairline);
 	border-radius: var(--radius);
@@ -483,6 +536,102 @@ body {
 .chrome-toggle:hover {
 	border-color: var(--text);
 	color: var(--text);
+}
+
+/* ------------------------------------------------------------ fleet sidebar
+   The other live sessions beside the transcript. Desktop: a static column
+   (display: none when collapsed through the persisted preference). Mobile
+   (≤700px): a fixed overlay drawer with a scrim — see the mobile block. No
+   vh/dvh anywhere: the drawer spans the viewport through top/bottom offsets
+   only (see the .session-screen height note). */
+
+.session-body {
+	flex: 1;
+	display: flex;
+	min-height: 0;
+	min-width: 0;
+}
+
+.session-main {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	min-width: 0;
+}
+
+.fleet-sidebar {
+	flex: 0 0 260px;
+	width: 260px;
+	border-right: var(--hairline);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-2);
+	padding: var(--space-3);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	min-height: 0;
+}
+
+.fleet-sidebar.collapsed {
+	display: none;
+}
+
+.fleet-sidebar-entry {
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	padding: var(--space-2);
+	display: flex;
+	flex-direction: column;
+	gap: var(--space-1);
+	min-width: 0;
+	transition: border-color 0.2s;
+}
+
+.fleet-sidebar-entry:hover {
+	border-color: var(--text);
+}
+
+/* Same emphasis as .session-card: highlight, never re-sort. */
+.fleet-sidebar-entry.attention {
+	border-color: var(--status-attention);
+}
+
+.fleet-sidebar-entry.error {
+	border-color: var(--status-error);
+}
+
+.fleet-sidebar-entry-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--space-2);
+	min-width: 0;
+}
+
+.fleet-sidebar-entry-head .name {
+	font-weight: 500;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.fleet-sidebar-entry-head .chip {
+	flex: 0 0 auto;
+}
+
+.fleet-sidebar-entry-meta {
+	display: flex;
+	gap: var(--space-2);
+	color: var(--muted);
+	font-size: var(--fs-small);
+	min-width: 0;
 }
 
 .chat {
@@ -1457,6 +1606,19 @@ details.thinking .thinking-body {
 	flex-direction: column;
 	gap: var(--space-2);
 	overscroll-behavior: contain;
+}
+
+/* Session-local notices belong to the transcript column, never the fleet
+   sidebar. Match chat/dock content alignment rather than the page container. */
+.session-main > .banner-region {
+	flex: 0 1 auto;
+	max-height: 30%;
+	min-height: 0;
+	overflow-y: auto;
+	max-width: 960px;
+	min-width: 0;
+	padding-left: var(--space-4);
+	padding-right: var(--space-4);
 }
 
 .banner {
@@ -2843,6 +3005,54 @@ details.thinking .thinking-body {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
+	/* Fleet sidebar becomes a fixed overlay drawer above the session: hidden
+	   by default (translated off-screen) regardless of the desktop collapse
+	   preference; .open slides it in with a scrim for tap-outside close.
+	   top/bottom offsets (no vh/dvh) so installed-PWA stale viewport units
+	   cannot break the drawer height. z-index sits above the session chrome
+	   and the stats popover, below toasts (50) and the modal backdrop (40). */
+	.fleet-sidebar {
+		position: fixed;
+		top: 0;
+		left: 0;
+		bottom: 0;
+		z-index: 30;
+		/* Keep controls out of notches/status bars and the home-indicator area,
+		   including landscape side insets, without shortening the backdrop. */
+		padding: calc(var(--space-3) + env(safe-area-inset-top, 0px))
+			calc(var(--space-3) + env(safe-area-inset-right, 0px))
+			calc(var(--space-3) + env(safe-area-inset-bottom, 0px))
+			calc(var(--space-3) + env(safe-area-inset-left, 0px));
+		visibility: hidden;
+		width: min(280px, 80vw);
+		flex: none;
+		background: var(--bg);
+		border-right: var(--hairline);
+		transform: translateX(-100%);
+		transition: transform 0.15s ease-out;
+	}
+
+	.fleet-sidebar.open {
+		visibility: visible;
+		transform: translateX(0);
+	}
+
+	.fleet-sidebar-scrim {
+		position: fixed;
+		inset: 0;
+		z-index: 29;
+		background: rgb(0 0 0 / 40%);
+	}
+
+	/* The sidebar is a fixed overlay on mobile, so flatten the session body:
+	   chat + dock participate directly in the .session-screen flex line exactly
+	   as before the sidebar, preserving the worst-case shrink behavior (header
+	   and banners yield to the dock so the composer always stays visible). */
+	.session-body,
+	.session-main {
+		display: contents;
+	}
+
 	/* Session cards are column flex containers: constrain them without adding
 	   flex-wrap, which would turn their vertical content into columns. */
 	.session-card,
@@ -2954,25 +3164,46 @@ details.thinking .thinking-body {
 		display: none;
 	}
 
-	.session-bar .right {
-		width: 100%;
-		margin-left: 0;
-		align-items: stretch;
+	.session-bar-main {
+		grid-template-columns: minmax(0, 1fr) auto;
 	}
 
-	.session-bar .right .switcher {
+	.session-bar-main > .title,
+	.session-bar-main > .session-heading {
+		grid-column: 1 / -1;
+		grid-row: 2;
+	}
+
+	.session-header-actions {
+		grid-column: 2;
+		grid-row: 1;
+		max-width: 55vw;
+	}
+
+	.session-controls .switcher {
 		justify-content: center;
 	}
 
-	.session-bar .right .model-switcher {
+	.session-controls .model-switcher {
 		flex: 1 1 100%;
 		max-width: 100%;
+	}
+
+	.session-main > .banner-region {
+		max-height: 20vh;
+		max-width: 100%;
+		padding-left: var(--space-3);
+		padding-right: var(--space-3);
 	}
 
 	.session-bar {
 		flex-shrink: 1;
 		min-height: 0;
-		overflow: hidden;
+		/* If the composer needs the space, keep lower header controls reachable
+		   by scrolling the header rather than clipping its stats/toggle row. */
+		overflow-x: hidden;
+		overflow-y: auto;
+		overscroll-behavior: contain;
 	}
 
 	.dock {

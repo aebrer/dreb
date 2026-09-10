@@ -1,22 +1,16 @@
 /**
  * Fleet overview — home screen. Live-first: one grid of all live session
- * cards (attention-first, project path on each card), then compact past
+ * cards (deterministic order — project path, then session start time;
+ * attention/error emphasis never re-orders them), then compact past
  * sessions grouped by project (3 rows + expand). "+ new session" modal.
  */
 
 import { createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
 import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
-import { Modal, relativeTime, StatusChip, Topbar } from "../components/common.js";
+import { Modal, relativeTime, runtimeStatus, StatusChip, Topbar } from "../components/common.js";
 import { pendingQuestionsReason } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
-
-function runtimeStatus(runtime: RuntimeInfoDto): "running" | "attention" | "idle" | "error" {
-	if (runtime.error) return "error";
-	if (runtime.needsAttention) return "attention";
-	if (runtime.state.isStreaming || runtime.state.isRetrying || runtime.state.isCompacting) return "running";
-	return "idle";
-}
 
 // Display-only normalization: /tmp children are grouped together in the fleet UI.
 // Resume still uses each session's own real cwd and session log path unchanged.

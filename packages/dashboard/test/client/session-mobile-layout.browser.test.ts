@@ -49,9 +49,7 @@ function sessionFixture(state: SessionLayoutState): string {
 	const headerOverflow = state.overflowOpen
 		? `<div class="session-bar-inner" style="justify-content:flex-end;gap:8px"><button type="button" class="btn btn-small">export HTML</button><button type="button" class="btn btn-small">compact now</button><button type="button" class="btn btn-small">expand tools</button><button type="button" class="btn btn-small">rename</button><button type="button" class="btn btn-small">stop runtime</button></div>`
 		: "";
-	const headerDetails = state.headerCollapsed
-		? ""
-		: `<div class="session-bar-inner session-info-bar"><span class="session-info-left">/home/test/project</span><button type="button" class="session-info-right stats-trigger"><span>messages 99</span><span>tokens 999k</span></button></div>${headerOverflow}`;
+	const headerDetails = `${state.headerCollapsed ? "" : headerOverflow}<div class="session-bar-inner session-info-bar">${state.headerCollapsed ? "" : '<span class="session-info-left">/home/test/project</span>'}<div class="session-summary-row"><button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button>${state.headerCollapsed ? "" : '<button type="button" class="session-info-right stats-trigger"><span>messages 99</span><span>tokens 999k</span><span>ctx 16%/1.1M</span></button>'}</div></div>`;
 	const tasks = `<details class="tasks"${state.tasksOpen ? " open" : ""}><summary>tasks — 3 of 15 done</summary><ul>${taskItems}</ul></details>`;
 	const subagents = `<details class="tasks subagents"${state.subagentsOpen ? " open" : ""}><summary>subagents — 10 running · 0 done</summary><ul class="subagent-list">${agentItems}</ul></details>`;
 	const status = `<div class="status-line"><span class="working">● working — ${longText}</span><button type="button" class="btn btn-small btn-danger">stop compaction</button><button type="button" class="btn btn-small btn-danger">■ stop</button></div>`;
@@ -73,15 +71,15 @@ function sessionFixture(state: SessionLayoutState): string {
 	<div class="session-screen">
 		<header class="session-bar${state.headerCollapsed ? " collapsed" : ""}">
 			<div class="session-bar-inner session-bar-main">
-				<a class="back" href="#/">← fleet</a>
+				<div class="session-navigation"><a class="back" href="#/">← fleet</a></div>
 				<span class="title">Long running session title</span>
-				<span class="project">/home/test/project</span>
-				<output class="session-connection-indicator switcher">● live</output>
-				<span class="right"><button type="button" class="switcher model-switcher"><span class="label">model</span> provider/long-model</button><button type="button" class="switcher"><span class="label">think</span> high</button><button type="button" class="switcher">⋯</button></span>
-				<button type="button" class="chrome-toggle">details ▴</button>
+				<div class="session-header-actions"><span class="connection-indicator session-connection-indicator"><output class="chip chip-idle"><span class="dot">●</span> live</output></span><button type="button" class="chrome-toggle">details ▴</button></div>
 			</div>
+			${state.headerCollapsed ? "" : `<div class="session-bar-inner session-controls"><button type="button" class="switcher model-switcher"><span class="label">model</span> provider/long-model</button><button type="button" class="switcher"><span class="label">think</span> high</button><button type="button" class="switcher">⋯</button></div>`}
 			${headerDetails}
 		</header>
+		<div class="session-body">
+			<div class="session-main">
 		${state.bannerCount > 0 ? `<div class="container banner-region" aria-live="polite">${banners}</div>` : ""}
 		<main class="chat"><div class="chat-inner"><p>${longText}</p><p>${longText}</p><p>${longText}</p></div></main>
 		<footer class="dock">
@@ -102,6 +100,66 @@ function sessionFixture(state: SessionLayoutState): string {
 				</div>
 			</div>
 		</footer>
+			</div>
+		</div>
+	</div>
+</div>
+</body>
+</html>`;
+}
+
+function sidebarEntry(name: string, chipClass: string, chipLabel: string): string {
+	return `<button type="button" class="fleet-sidebar-entry"><div class="fleet-sidebar-entry-head"><span class="name">${name}</span><span class="chip ${chipClass}"><span class="dot">●</span> ${chipLabel}</span></div><div class="fleet-sidebar-entry-meta"><span>2m ago</span></div></button>`;
+}
+
+/** A mobile session with the fleet sidebar drawer open (overlay + scrim). */
+function sessionSidebarFixture(): string {
+	const entries = [
+		sidebarEntry("alpha", "chip-running", "running"),
+		sidebarEntry("beta", "chip-attention", "needs attention"),
+		sidebarEntry("gamma", "chip-idle", "idle"),
+	].join("");
+
+	return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>${tokensCss}</style>
+<style>${appCss}</style>
+<style>${themesCss}</style>
+</head>
+<body>
+<div id="root">
+	<div class="session-screen">
+		<header class="session-bar">
+			<div class="session-bar-inner session-bar-main">
+				<div class="session-navigation"><a class="back" href="#/">← fleet</a></div>
+				<span class="title">Session title</span>
+				<div class="session-header-actions"><span class="connection-indicator session-connection-indicator"><output class="chip chip-idle"><span class="dot">●</span> live</output></span><button type="button" class="chrome-toggle">details ▴</button></div>
+			</div>
+		<div class="session-bar-inner session-info-bar"><div class="session-summary-row"><button type="button" class="chrome-toggle fleet-sidebar-toggle">fleet ◂</button><button class="session-info-right stats-trigger"><span>ctx 16%/1.1M</span></button></div></div>
+		</header>
+		<div class="session-body">
+			<aside class="fleet-sidebar open" role="dialog" aria-label="Other live sessions" aria-modal="true" aria-hidden="false"><button type="button" class="chrome-toggle fleet-sidebar-close">close fleet sidebar</button>${entries}</aside>
+			<div class="fleet-sidebar-scrim"></div>
+			<div class="session-main">
+		<main class="chat"><div class="chat-inner"><p>${longText}</p><p>${longText}</p></div></main>
+		<footer class="dock">
+			<div class="dock-collapse-row"><button type="button" class="chrome-toggle">compose ▾</button></div>
+			<div class="dock-inner">
+				<div class="composer">
+					<textarea></textarea>
+					<div class="composer-row">
+						<button type="button" class="btn btn-small" data-composer-action>📎 file</button>
+						<button type="button" class="btn btn-small" data-composer-action>🖼 photo</button>
+						<button type="button" class="btn btn-primary btn-small send" data-composer-action>send ↵</button>
+					</div>
+				</div>
+			</div>
+		</footer>
+			</div>
+		</div>
 	</div>
 </div>
 </body>
@@ -169,6 +227,175 @@ for (const composerMaxed of [false, true]) {
 }
 
 describe("session layout in a real browser", () => {
+	it.each([701, 1024, 1505])(
+		"keeps the desktop sidebar fixed as notices appear and disappear at %ipx",
+		async (width) => {
+			await page.setViewportSize({ width, height: 900 });
+			await page.setContent(sessionSidebarFixture());
+			await page.locator(".fleet-sidebar-scrim").evaluate((element) => element.remove());
+			const before = await page.locator(".fleet-sidebar").boundingBox();
+			for (const collapsed of [false, true]) {
+				await page
+					.locator(".fleet-sidebar")
+					.evaluate((element, collapsed) => element.classList.toggle("collapsed", collapsed), collapsed);
+				for (const content of ["Short notice", longText.repeat(3), banners]) {
+					await page.locator(".session-main").evaluate((element, content) => {
+						const region = document.createElement("div");
+						region.className = "container banner-region";
+						region.innerHTML = content.startsWith("<div")
+							? content
+							: `<div class="banner warning"><span class="banner-text">${content}</span><button class="btn btn-small banner-dismiss">dismiss</button></div>`;
+						element.prepend(region);
+					}, content);
+					const layout = await page.evaluate(() => {
+						const bounds = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+						const banner = bounds(".banner");
+						const chat = bounds(".chat-inner");
+						const chatPadding = Number.parseFloat(
+							getComputedStyle(document.querySelector(".chat-inner")!).paddingLeft,
+						);
+						return {
+							bannerAligned: Math.abs(banner.left - chat.left - chatPadding) < 1,
+							bannerInColumn:
+								banner.left >= bounds(".session-main").left && banner.right <= bounds(".session-main").right,
+							sendVisible: bounds(".send").bottom <= innerHeight,
+							documentFits: document.documentElement.scrollHeight <= innerHeight,
+						};
+					});
+					expect(layout).toEqual({
+						bannerAligned: true,
+						bannerInColumn: true,
+						sendVisible: true,
+						documentFits: true,
+					});
+					if (!collapsed) expect(await page.locator(".fleet-sidebar").boundingBox()).toEqual(before);
+					await page.locator(".banner-region").evaluate((element) => element.remove());
+					if (!collapsed) expect(await page.locator(".fleet-sidebar").boundingBox()).toEqual(before);
+				}
+			}
+		},
+	);
+
+	it.each([320, 390, 700, 701, 1024, 1505])(
+		"groups navigation and header controls without overlap at %ipx",
+		async (width) => {
+			await page.setViewportSize({ width, height: 900 });
+			await page.setContent(
+				sessionFixture({
+					composerMaxed: false,
+					bannerCount: 0,
+					tasksOpen: false,
+					subagentsOpen: false,
+					headerCollapsed: false,
+					overflowOpen: false,
+				}),
+			);
+			await page.locator(".session-bar-main > .title").evaluate((element) => {
+				element.textContent = "Reconcile develop conflicts on entitlement settings PR ".repeat(4);
+			});
+			const layout = await page.evaluate(() => {
+				const bounds = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+				const nav = bounds(".session-navigation");
+				const toggle = bounds(".fleet-sidebar-toggle");
+				const actions = bounds(".session-header-actions");
+				const title = bounds(".session-bar-main > .title");
+				const main = bounds(".session-bar-main");
+				const controls = bounds(".session-controls");
+				const summary = bounds(".session-summary-row");
+				const stats = bounds(".stats-trigger");
+				return {
+					toggleInBottomRow:
+						Math.abs(toggle.left - summary.left) < 1 &&
+						toggle.right <= stats.left &&
+						summary.top >= controls.bottom &&
+						toggle.top >= main.bottom &&
+						toggle.bottom <= bounds(".session-bar").bottom,
+					groupsSeparate:
+						nav.right <= actions.left &&
+						(innerWidth <= 700
+							? title.top >= nav.bottom
+							: title.left >= nav.right && title.right <= actions.left),
+					controlsBelow: controls.top >= main.bottom - 1,
+					buttonsFit: [...document.querySelectorAll(".session-bar button, .session-bar a")].every((element) => {
+						const r = element.getBoundingClientRect();
+						return r.left >= 0 && r.right <= innerWidth;
+					}),
+				};
+			});
+			expect(layout).toEqual({
+				toggleInBottomRow: true,
+				groupsSeparate: true,
+				controlsBelow: true,
+				buttonsFit: true,
+			});
+		},
+	);
+
+	it.each([320, 390, 701])("contains long connection labels and subagent navigation at %ipx", async (width) => {
+		await page.setViewportSize({ width, height: 900 });
+		await page.setContent(sessionSidebarFixture());
+		await page.locator(".session-connection-indicator output").evaluate((element) => {
+			element.textContent = "✕ live connection unauthorized";
+		});
+		const contained = () =>
+			page.evaluate(() =>
+				[...document.querySelectorAll(".session-bar button, .session-bar a, .session-bar output")].every(
+					(element) => {
+						const rect = element.getBoundingClientRect();
+						return rect.left >= 0 && rect.right <= innerWidth;
+					},
+				),
+			);
+		expect(await contained()).toBe(true);
+		await page.locator(".session-navigation .back").evaluate((element) => {
+			element.textContent = "← A very long parent session name ".repeat(8);
+		});
+		await page.locator(".session-bar-main > .title").evaluate((element) => {
+			element.outerHTML = `<div class="session-heading"><span class="agent-type">subagent · custom-agent-with-a-very-long-name</span><span class="title">A long subagent task summary repeated many times to exercise truncation</span></div>`;
+		});
+		await page.locator(".session-header-actions").evaluate((element) => {
+			element.innerHTML = '<span class="chip chip-running"><span class="dot">●</span> running</span>';
+		});
+		expect(await contained()).toBe(true);
+		const noOverlap = await page.evaluate(() => {
+			const nav = document.querySelector(".session-navigation")!.getBoundingClientRect();
+			const title = document.querySelector(".session-heading")!.getBoundingClientRect();
+			const actions = document.querySelector(".session-header-actions")!.getBoundingClientRect();
+			return (
+				nav.right <= actions.left &&
+				(innerWidth <= 700 ? title.top >= nav.bottom : title.left >= nav.right && title.right <= actions.left)
+			);
+		});
+		expect(noOverlap).toBe(true);
+	});
+
+	it.each([false, true])(
+		"keeps the bottom fleet toggle reachable in a short mobile viewport (details collapsed=%s)",
+		async (headerCollapsed) => {
+			await page.setViewportSize({ width: 390, height: 400 });
+			await page.setContent(
+				sessionFixture({
+					composerMaxed: true,
+					bannerCount: 4,
+					tasksOpen: true,
+					subagentsOpen: true,
+					headerCollapsed,
+					overflowOpen: !headerCollapsed,
+				}),
+			);
+			await page.locator(".session-bar").evaluate((element) => {
+				element.scrollTop = element.scrollHeight;
+			});
+			const reachable = await page.evaluate(() => {
+				const header = document.querySelector(".session-bar")!.getBoundingClientRect();
+				const toggle = document.querySelector(".fleet-sidebar-toggle")!.getBoundingClientRect();
+				return toggle.top >= header.top - 1 && toggle.bottom <= header.bottom + 1 && header.bottom <= innerHeight;
+			});
+			expect(reachable).toBe(true);
+			expect((await measureSession()).sendVisible).toBe(true);
+		},
+	);
+
 	it.each(acceptanceStates)("keeps the composer visible for state %#", async (state) => {
 		await page.setViewportSize({ width: 390, height: 844 });
 		await page.setContent(sessionFixture(state));
@@ -178,6 +405,122 @@ describe("session layout in a real browser", () => {
 		expect(measured.sendVisible).toBe(true);
 		expect(measured.composerActionsVisible).toBe(true);
 		expect(measured.headerAtViewportTop).toBe(true);
+	});
+
+	it("opens the fleet sidebar as a full-height overlay above the session at 700px", async () => {
+		await page.setViewportSize({ width: 700, height: 900 });
+		await page.setContent(sessionSidebarFixture());
+		const measured = await page.evaluate(() => {
+			const tolerance = 1;
+			const visibleInViewport = (element: Element | null) => {
+				if (!element) return false;
+				const rect = element.getBoundingClientRect();
+				return (
+					rect.width > 0 && rect.height > 0 && rect.top >= -tolerance && rect.bottom <= innerHeight + tolerance
+				);
+			};
+			const sidebar = document.querySelector<HTMLElement>(".fleet-sidebar");
+			const scrim = document.querySelector<HTMLElement>(".fleet-sidebar-scrim");
+			const chat = document.querySelector<HTMLElement>(".session-main main.chat");
+			const dock = document.querySelector<HTMLElement>(".session-main footer.dock");
+			const sidebarRect = sidebar?.getBoundingClientRect();
+			const scrimRect = scrim?.getBoundingClientRect();
+			return {
+				// The drawer spans the viewport via top/bottom offsets (no vh/dvh).
+				sidebarSpansViewport:
+					sidebarRect !== undefined &&
+					Math.abs(sidebarRect.top) <= tolerance &&
+					Math.abs(sidebarRect.bottom - innerHeight) <= tolerance,
+				// The session line still fills the screen beneath the header:
+				// the transcript has height and the dock ends at the viewport bottom.
+				sessionLineFillsScreen:
+					chat !== null &&
+					dock !== null &&
+					chat.getBoundingClientRect().height > 0 &&
+					Math.abs(dock.getBoundingClientRect().bottom - innerHeight) <= tolerance,
+				// The drawer must stack above the scrim it belongs to.
+				sidebarAboveScrim:
+					sidebar !== null &&
+					scrim !== null &&
+					Number.parseInt(getComputedStyle(sidebar).zIndex, 10) >=
+						Number.parseInt(getComputedStyle(scrim).zIndex, 10),
+				scrimCoversViewport:
+					scrimRect !== undefined &&
+					Math.abs(scrimRect.width - innerWidth) <= tolerance &&
+					Math.abs(scrimRect.height - innerHeight) <= tolerance,
+				// The overlay is fixed: the composer underneath keeps its in-flow
+				// geometry (nothing is pushed off-screen by the drawer).
+				composerStillInFlow: visibleInViewport(document.querySelector(".composer-row .send")),
+				documentFits: document.documentElement.scrollHeight <= innerHeight + tolerance,
+			};
+		});
+
+		expect(measured.sidebarSpansViewport).toBe(true);
+		expect(measured.sessionLineFillsScreen).toBe(true);
+		expect(measured.sidebarAboveScrim).toBe(true);
+		expect(measured.scrimCoversViewport).toBe(true);
+		expect(measured.composerStillInFlow).toBe(true);
+		expect(measured.documentFits).toBe(true);
+	});
+
+	it.each([
+		{ top: 0, bottom: 0, left: 0, right: 0 },
+		{ top: 59, bottom: 34, left: 0, right: 0 },
+		{ top: 0, bottom: 21, left: 44, right: 44 },
+	])("keeps drawer controls inside safe areas %j, including the last scrolled entry", async (insets) => {
+		const cdp = await page.context().newCDPSession(page);
+		try {
+			await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets });
+			await page.setViewportSize({ width: 390, height: 844 });
+			await page.setContent(sessionSidebarFixture());
+			const measured = await page.evaluate(() => {
+				const sidebar = document.querySelector<HTMLElement>(".fleet-sidebar")!;
+				const first = sidebar.querySelector<HTMLElement>(".fleet-sidebar-close")!;
+				const entry = sidebar.querySelector(".fleet-sidebar-entry")!;
+				for (let i = 0; i < 30; i++) sidebar.append(entry.cloneNode(true));
+				const style = getComputedStyle(sidebar);
+				const spacing = Number.parseFloat(style.getPropertyValue("--space-3"));
+				const firstRect = first.getBoundingClientRect();
+				sidebar.scrollTop = sidebar.scrollHeight;
+				const last = sidebar.lastElementChild!.getBoundingClientRect();
+				return {
+					spacing,
+					padding: [style.paddingTop, style.paddingBottom, style.paddingLeft, style.paddingRight].map(parseFloat),
+					firstTop: firstRect.top,
+					firstLeft: firstRect.left,
+					lastBottomGap: innerHeight - last.bottom,
+					scrolled: sidebar.scrollTop > 0,
+				};
+			});
+			expect(measured.padding).toEqual(
+				[insets.top, insets.bottom, insets.left, insets.right].map((inset) => inset + measured.spacing),
+			);
+			expect(measured.firstTop).toBeGreaterThanOrEqual(insets.top + measured.spacing - 1);
+			expect(measured.firstLeft).toBeGreaterThanOrEqual(insets.left + measured.spacing - 1);
+			expect(measured.lastBottomGap).toBeGreaterThanOrEqual(insets.bottom + measured.spacing - 1);
+			expect(measured.scrolled).toBe(true);
+		} finally {
+			await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: {} });
+			await cdp.detach();
+		}
+	});
+
+	it("cannot focus the off-screen mobile drawer, but restores desktop visibility", async () => {
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.setContent(sessionSidebarFixture());
+		await page.evaluate(() => {
+			document.querySelector(".fleet-sidebar")!.classList.remove("open");
+			document.querySelector(".fleet-sidebar-scrim")!.remove();
+		});
+		const closed = await page.evaluate(() => {
+			const sidebar = document.querySelector<HTMLElement>(".fleet-sidebar")!;
+			const entry = sidebar.querySelector<HTMLButtonElement>(".fleet-sidebar-entry")!;
+			entry.focus();
+			return { visibility: getComputedStyle(sidebar).visibility, focused: document.activeElement === entry };
+		});
+		expect(closed).toEqual({ visibility: "hidden", focused: false });
+		await page.setViewportSize({ width: 1000, height: 844 });
+		expect(await page.locator(".fleet-sidebar").evaluate((el) => getComputedStyle(el).visibility)).toBe("visible");
 	});
 
 	it("keeps the slash-command popover visible on mobile", async () => {
