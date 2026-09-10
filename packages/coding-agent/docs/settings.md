@@ -215,7 +215,7 @@ For either permitted lazy-load path, each context file is realpath-deduplicated 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `compaction.enabled` | boolean | `true` | Enable auto-compaction |
-| `compaction.continueAfterAutoCompaction` | boolean | `false` | Start another model turn after every successful automatic compaction; manual `/compact` never continues because of this setting |
+| `compaction.continueAfterAutoCompaction` | boolean | `false` | Continue pending work after successful automatic compaction; completed answers and manual `/compact` stay finished |
 | `compaction.reserveTokens` | number | `16384` | Tokens reserved for LLM response |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens to keep (not summarized) |
 

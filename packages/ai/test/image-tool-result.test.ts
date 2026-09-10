@@ -457,19 +457,19 @@ describe("Tool Results with Images", () => {
 
 	describe("OpenAI Codex Provider", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"gpt-5.4 - should handle tool result with only image",
+			"gpt-5.6-luna - should handle tool result with only image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("openai-codex", "gpt-5.4");
+				const llm = getModel("openai-codex", "gpt-5.6-luna");
 				await handleToolWithImageResult(llm, { apiKey: openaiCodexToken });
 			},
 		);
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"gpt-5.4 - should handle tool result with text and image",
+			"gpt-5.6-luna - should handle tool result with text and image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("openai-codex", "gpt-5.4");
+				const llm = getModel("openai-codex", "gpt-5.6-luna");
 				await handleToolWithTextAndImageResult(llm, { apiKey: openaiCodexToken });
 			},
 		);

@@ -340,10 +340,10 @@ describe("Tool Call Without Result Tests", () => {
 
 	describe("OpenAI Codex Provider", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"gpt-5.4 - should filter out tool calls without corresponding tool results",
+			"gpt-5.6-luna - should filter out tool calls without corresponding tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const model = getModel("openai-codex", "gpt-5.4");
+				const model = getModel("openai-codex", "gpt-5.6-luna");
 				await testToolCallWithoutResult(model, { apiKey: openaiCodexToken });
 			},
 		);

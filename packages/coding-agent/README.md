@@ -97,6 +97,8 @@ Then just talk to dreb. All 13 standard built-in tools are enabled by default (u
 
 For each built-in provider, dreb maintains a list of tool-capable models, updated with every release. Authenticate via subscription (`/login`) or API key, then select any model from that provider via `/model`.
 
+GPT-6 Astra is available as `openai-codex/gpt-6-astra` and `github-copilot/gpt-6-astra`, with `xhigh` and native `max` thinking support. Codex defaults to `gpt-5.6-luna`. Missing saved defaults now warn and prefer the same provider's available default; explicit removed model IDs are not automatically migrated. See [model selection and removed models](docs/providers.md#model-selection-and-removed-models).
+
 **Subscriptions:**
 - OpenAI ChatGPT Plus/Pro (Codex)
 - GitHub Copilot
@@ -253,7 +255,7 @@ Long sessions can exhaust context windows. Compaction summarizes older messages 
 
 **Manual:** `/compact` or `/compact <custom instructions>`
 
-**Automatic:** Enabled by default. Triggers on context overflow (recovers and retries) or when approaching the limit (proactive). Configure via `/settings` or `settings.json`. For unattended long-running work, enable **Continue after auto-compaction** (persisted as `compaction.continueAfterAutoCompaction`) to start another model turn after every successful automatic compaction, even with no queued message. It is off by default and never makes manual `/compact` continue.
+**Automatic:** Enabled by default. Triggers on context overflow (recovers and retries) or proactively when approaching the limit, including between LLM requests in a long tool loop. Mid-turn checks wait until every tool call has a matching result, compact the settled context, and continue in the same loop before the next provider request. Configure via `/settings` or `settings.json`. For unattended long-running work, enable **Continue after auto-compaction** (persisted as `compaction.continueAfterAutoCompaction`) to keep pending or interrupted work moving after successful automatic compaction. It is off by default, does not start a fresh turn after a completed assistant answer, and never makes manual `/compact` continue.
 
 Compaction is lossy. The full history remains in the JSONL file; use `/tree` to revisit. Customize compaction behavior via [extensions](#extensions). See [docs/compaction.md](docs/compaction.md) for internals.
 
@@ -646,7 +648,7 @@ cat README.md | dreb -p "Summarize this text"
 | `--models <patterns>` | Comma-separated patterns for model cycling |
 | `--list-models [search]` | List available models |
 
-`max` is a separate native effort currently supported by GPT-5.6 (including Sol, Terra, and Luna); `xhigh` remains available independently. Codex `ultra` is not a provider effort: it combines `max` with client-side multi-agent orchestration, so dreb does not send `ultra` as a raw value.
+`max` is a separate native effort currently supported by the GPT-5.6 family (Sol, Terra, and Luna) and the GPT-6 family (Astra and future variants); `xhigh` remains available independently. Codex `ultra` is not a provider effort: it combines `max` with client-side multi-agent orchestration, so dreb does not send `ultra` as a raw value.
 
 ### Session Options
 

@@ -147,6 +147,95 @@ describe("Agent", () => {
 		expect(agent.state.messages).not.toContainEqual(message);
 	});
 
+	it("should apply beforeLlmCall replacements to the active request and agent state", async () => {
+		const replacementModel = getModel("openai", "gpt-4o-mini");
+		let requestedModel = "";
+		let requestedPrompt = "";
+		const agent = new Agent({
+			beforeLlmCall: async () => ({
+				messages: [{ role: "user", content: "prepared", timestamp: Date.now() }],
+				model: replacementModel,
+			}),
+			streamFn: (model, context) => {
+				requestedModel = model.id;
+				const first = context.messages[0];
+				requestedPrompt = first?.role === "user" && typeof first.content === "string" ? first.content : "";
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("original");
+
+		expect(requestedModel).toBe(replacementModel.id);
+		expect(requestedPrompt).toBe("prepared");
+		expect(agent.state.model).toBe(replacementModel);
+		expect(agent.state.messages[0]).toMatchObject({ role: "user", content: "prepared" });
+		expect(agent.state.messages.at(-1)?.role).toBe("assistant");
+	});
+
+	it("should support installing and removing beforeLlmCall at runtime", async () => {
+		const observedPrompts: string[] = [];
+		const agent = new Agent({
+			streamFn: (_model, context) => {
+				const last = context.messages.at(-1);
+				if (last?.role !== "user") {
+					observedPrompts.push("");
+				} else if (typeof last.content === "string") {
+					observedPrompts.push(last.content);
+				} else {
+					observedPrompts.push(last.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(""));
+				}
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("done") });
+				});
+				return stream;
+			},
+		});
+		agent.setBeforeLlmCall(async () => ({
+			messages: [{ role: "user", content: "from hook", timestamp: Date.now() }],
+		}));
+		await agent.prompt("first");
+
+		agent.clearMessages();
+		agent.setBeforeLlmCall(undefined);
+		await agent.prompt("second");
+
+		expect(observedPrompts).toEqual(["from hook", "second"]);
+	});
+
+	it("should surface beforeLlmCall failures without applying mutations to its context snapshot", async () => {
+		let streamCalled = false;
+		const agent = new Agent({
+			beforeLlmCall: async (context) => {
+				context.messages.splice(0, context.messages.length, {
+					role: "user",
+					content: "mutated snapshot",
+					timestamp: Date.now(),
+				});
+				throw new Error("preparation failed");
+			},
+			streamFn: () => {
+				streamCalled = true;
+				return new MockAssistantStream();
+			},
+		});
+
+		await agent.prompt("original");
+
+		expect(streamCalled).toBe(false);
+		expect(agent.state.messages[0]).toMatchObject({ role: "user", content: [{ type: "text", text: "original" }] });
+		expect(agent.state.messages.at(-1)).toMatchObject({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "preparation failed",
+		});
+	});
+
 	it("should handle abort controller", () => {
 		const agent = new Agent();
 

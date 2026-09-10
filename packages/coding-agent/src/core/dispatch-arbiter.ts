@@ -92,6 +92,8 @@ export interface DispatchArbiterDeps {
 	getMessages: () => Array<{ role: string; content?: unknown }>;
 	getParentModel: () => Model<Api> | undefined;
 	getSessionTitle: () => string | undefined;
+	/** Get the parent session's stable conversation UUID, forwarded to arbiter requests (issue 500). */
+	getSessionId?: () => string | undefined;
 	getRepoMetadata: (cwd: string) => { repo?: string; cwd: string; branch?: string; dirtyCount?: number };
 	getExtraSecretPatterns?: () => SecretPattern[] | undefined;
 	complete?: typeof completeSimple;
@@ -339,6 +341,7 @@ export class DispatchArbiter {
 		}
 
 		const complete = this.deps.complete ?? completeSimple;
+		const sessionId = this.deps.getSessionId?.();
 		for (let attempt = 0; attempt < 2; attempt++) {
 			let response: AssistantMessage;
 			try {
@@ -348,6 +351,7 @@ export class DispatchArbiter {
 						maxRetryDelayMs: 0,
 						reasoning: thinkingLevelToReasoning(settings.thinking ?? "off"),
 						signal: combinedSignal,
+						...(sessionId ? { sessionId } : {}),
 					}),
 					combinedSignal,
 				);

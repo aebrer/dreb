@@ -444,7 +444,7 @@ const response = await completeSimple(model, {
   messages: [{ role: 'user', content: 'Solve: 2x + 5 = 13' }]
 }, {
   reasoning: 'medium'  // 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
-  // Native normalized 'max' is model-aware (currently GPT-5.6). Claude's established xhigh mapping still emits provider-native 'max'.
+  // Native normalized 'max' is model-aware (currently GPT-5.6 and GPT-6 families). Claude's established xhigh mapping still emits provider-native 'max'.
 });
 
 // Access thinking and text blocks
@@ -570,6 +570,10 @@ if (message.stopReason === 'error' || message.stopReason === 'aborted') {
   // message.usage contains partial token counts and costs
 }
 ```
+
+### Context Overflow
+
+Use `isContextOverflow(message, model.contextWindow)` to detect recognized provider context-limit errors or successful responses whose full input usage exceeds the configured window. The latter compares `usage.input + usage.cacheRead + usage.cacheWrite`; output tokens do not count toward that input-only check. A conservative registry window can be lower than the server's hard limit (for example, Copilot Opus 4.8 can accept requests above its configured 200K window). Detection does not raise the registry limit or modify the response.
 
 ### Aborting Requests
 
@@ -1014,7 +1018,7 @@ const key = getEnvApiKey('openai');  // checks OPENAI_API_KEY
 
 Several providers require OAuth authentication instead of static API keys:
 
-- **OpenAI Codex** (ChatGPT Plus/Pro subscription, access to GPT-5.x Codex models)
+- **OpenAI Codex** (ChatGPT Plus/Pro subscription, access to GPT-5.x and GPT-6 Codex models)
 - **GitHub Copilot** (Copilot subscription)
 - **Google Gemini CLI** (Gemini 2.0/2.5 via Google Cloud Code Assist; free tier or paid subscription)
 - **Antigravity** (Free Gemini 3, Claude, GPT-OSS via Google Cloud)
@@ -1146,7 +1150,7 @@ const response = await complete(model, {
 
 ### Provider Notes
 
-**OpenAI Codex**: Requires a ChatGPT Plus or Pro subscription. Provides access to GPT-5.x Codex models with extended context windows and reasoning capabilities. The library automatically handles session-based prompt caching when `sessionId` is provided in stream options. You can set `transport` in stream options to `"sse"`, `"websocket"`, or `"auto"` for Codex Responses transport selection. When using WebSocket with a `sessionId`, connections are reused per session and expire after 5 minutes of inactivity.
+**OpenAI Codex**: Requires a ChatGPT Plus or Pro subscription. Provides access to GPT-5.x and GPT-6 Codex models with extended context windows and reasoning capabilities. The library automatically handles session-based prompt caching when `sessionId` is provided in stream options. You can set `transport` in stream options to `"sse"`, `"websocket"`, or `"auto"` for Codex Responses transport selection. When using WebSocket with a `sessionId`, connections are reused per session and expire after 5 minutes of inactivity.
 
 **Azure OpenAI (Responses)**: Uses the Responses API only. Set `AZURE_OPENAI_API_KEY` and either `AZURE_OPENAI_BASE_URL` or `AZURE_OPENAI_RESOURCE_NAME`. Use `AZURE_OPENAI_API_VERSION` (defaults to `v1`) to override the API version if needed. Deployment names are treated as model IDs by default, override with `azureDeploymentName` or `AZURE_OPENAI_DEPLOYMENT_NAME_MAP` using comma-separated `model-id=deployment` pairs (for example `gpt-4o-mini=my-deployment,gpt-4o=prod`). Legacy deployment-based URLs are intentionally unsupported.
 

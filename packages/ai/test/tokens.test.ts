@@ -292,10 +292,10 @@ describe("Token Statistics on Abort", () => {
 
 	describe("OpenAI Codex Provider", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"gpt-5.4 - should include token stats when aborted mid-stream",
+			"gpt-5.6-luna - should include token stats when aborted mid-stream",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("openai-codex", "gpt-5.4");
+				const llm = getModel("openai-codex", "gpt-5.6-luna");
 				await testTokensOnAbort(llm, { apiKey: openaiCodexToken });
 			},
 		);

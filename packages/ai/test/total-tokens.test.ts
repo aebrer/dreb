@@ -661,10 +661,10 @@ describe("totalTokens field", () => {
 
 	describe("OpenAI Codex (OAuth)", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
-			"gpt-5.4 - should return totalTokens equal to sum of components",
+			"gpt-5.6-luna - should return totalTokens equal to sum of components",
 			{ retry: 3, timeout: 60000 },
 			async () => {
-				const llm = getModel("openai-codex", "gpt-5.4");
+				const llm = getModel("openai-codex", "gpt-5.6-luna");
 
 				console.log(`\nOpenAI Codex / ${llm.id}:`);
 				const { first, second } = await testTotalTokensWithCache(llm, { apiKey: openaiCodexToken });

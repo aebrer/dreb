@@ -1872,6 +1872,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 					getModel: () => session.model,
 					getModelRegistry: () => session.modelRegistry,
 					getProvider: () => session.model?.provider,
+					getSessionId: () => session.sessionId,
 					getAgentModelsOverride: (name) => session.settingsManager.getAgentModelsForAgent(name),
 					getBranch: () => getGitBranch(cwd),
 					getRepo: () => basename(cwd),
@@ -2086,7 +2087,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				}
 				const { BuddyManager } = await import("../../core/buddy/buddy-manager.js");
 				const manager = new BuddyManager();
-				const state = await manager.hatch(model, apiKey);
+				const state = await manager.hatch(model, apiKey, session.sessionId);
 				return success(id, "buddy_hatch", { state });
 			}
 
@@ -2104,7 +2105,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 				if (!manager.hasStoredBuddy()) {
 					return error(id, "buddy_reroll", "No buddy to reroll. Use hatch first.");
 				}
-				const state = await manager.reroll(model, apiKey);
+				const state = await manager.reroll(model, apiKey, session.sessionId);
 				return success(id, "buddy_reroll", { state });
 			}
 

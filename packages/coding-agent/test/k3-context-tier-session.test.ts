@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@dreb/agent-core";
-import { type AssistantMessage, findModel } from "@dreb/ai";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, findModel } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession, type AgentSessionEvent } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -58,6 +58,24 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		settings: { enabled: boolean; reserveTokens: number },
 	) => settings.enabled && contextTokens > contextWindow - settings.reserveTokens,
 }));
+
+class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
+	constructor(message: AssistantMessage) {
+		super(
+			(event) => event.type === "done" || event.type === "error",
+			(event) => {
+				if (event.type === "done") return event.message;
+				if (event.type === "error") return event.error;
+				throw new Error("Unexpected event type");
+			},
+		);
+		queueMicrotask(() => {
+			const reason =
+				message.stopReason === "toolUse" || message.stopReason === "length" ? message.stopReason : "stop";
+			this.push({ type: "done", reason, message });
+		});
+	}
+}
 
 function assistantMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
 	return {
@@ -172,6 +190,34 @@ describe("AgentSession K3 auto context tier", () => {
 			toContextWindow: K3_1M_CONTEXT_WINDOW,
 		});
 		expect(events.some((e) => e.type === "auto_compaction_start")).toBe(false);
+	});
+
+	it("uses a mid-turn K3 tier upgrade for the next request in the active loop", async () => {
+		await selectK3();
+		const requestingAssistant = assistantMessage({
+			usage: { ...assistantMessage().usage, totalTokens: K3_UPGRADE_CUTOFF_TOKENS + 1 },
+		});
+		const toolResult = {
+			role: "toolResult" as const,
+			toolCallId: "tool-1",
+			toolName: "test",
+			content: [{ type: "text" as const, text: "result" }],
+			details: {},
+			isError: false,
+			timestamp: Date.now(),
+		};
+		session.agent.replaceMessages([requestingAssistant, toolResult]);
+		let requestContextWindow = 0;
+		session.agent.streamFn = (model) => {
+			requestContextWindow = model.contextWindow;
+			return new MockAssistantStream(assistantMessage({ usage: { ...assistantMessage().usage, totalTokens: 100 } }));
+		};
+
+		await session.agent.continue();
+
+		expect(requestContextWindow).toBe(K3_1M_CONTEXT_WINDOW);
+		expect(session.model?.contextWindow).toBe(K3_1M_CONTEXT_WINDOW);
+		expect(events.filter((event) => event.type === "context_window_upgrade")).toHaveLength(1);
 	});
 
 	it("upgrades on the threshold path even when compaction is disabled", async () => {

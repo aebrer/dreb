@@ -11,6 +11,28 @@ import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import { createTestResourceLoader } from "./utilities.js";
 
+// Test hook for serialization tests: hold compact() in flight (hold/release)
+// and fail the first N calls that pass the gate (failFirstN).
+const compactGate = vi.hoisted(() => {
+	let resolve: (() => void) | undefined;
+	return {
+		promise: null as Promise<void> | null,
+		failFirstN: 0,
+		calls: 0,
+		inFlight: 0,
+		maxConcurrent: 0,
+		hold: () => {
+			compactGate.promise = new Promise<void>((r) => {
+				resolve = r;
+			});
+		},
+		release: () => {
+			resolve?.();
+			resolve = undefined;
+		},
+	};
+});
+
 vi.mock("../src/core/compaction/index.js", () => ({
 	calculateContextTokens: (usage: {
 		input: number;
@@ -20,12 +42,26 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		totalTokens?: number;
 	}) => usage.totalTokens ?? usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
 	collectEntriesForBranchSummary: () => ({ entries: [], commonAncestorId: null }),
-	compact: async () => ({
-		summary: "compacted",
-		firstKeptEntryId: "entry-1",
-		tokensBefore: 100,
-		details: {},
-	}),
+	compact: async (preparation: { firstKeptEntryId: string }) => {
+		compactGate.calls += 1;
+		compactGate.inFlight += 1;
+		compactGate.maxConcurrent = Math.max(compactGate.maxConcurrent, compactGate.inFlight);
+		try {
+			if (compactGate.promise) await compactGate.promise;
+			if (compactGate.failFirstN > 0) {
+				compactGate.failFirstN -= 1;
+				throw new Error("summary failed");
+			}
+			return {
+				summary: "compacted",
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: 100,
+				details: {},
+			};
+		} finally {
+			compactGate.inFlight -= 1;
+		}
+	},
 	estimateContextTokens: (
 		messages: Array<{
 			role: string;
@@ -45,7 +81,7 @@ vi.mock("../src/core/compaction/index.js", () => ({
 		return { tokens: 0, usageTokens: 0, trailingTokens: 0, lastUsageIndex: null };
 	},
 	generateBranchSummary: async () => ({ summary: "", aborted: false, readFiles: [], modifiedFiles: [] }),
-	prepareCompaction: () => ({ dummy: true }),
+	prepareCompaction: (entries: Array<{ id: string }>) => ({ firstKeptEntryId: entries[0]?.id ?? "entry-1" }),
 	shouldCompact: (
 		contextTokens: number,
 		contextWindow: number,
@@ -60,10 +96,48 @@ describe("AgentSession auto-compaction queue resume", () => {
 	let modelRegistry: ModelRegistry;
 	let tempDir: string;
 
+	function createAssistant(stopReason: AssistantMessage["stopReason"], errorMessage?: string): AssistantMessage {
+		const model = session.model!;
+		return {
+			role: "assistant",
+			content: [{ type: "text", text: stopReason === "error" ? "" : "done" }],
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: {
+				input: 100,
+				output: 10,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 110,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason,
+			errorMessage,
+			timestamp: Date.now(),
+		};
+	}
+
+	function seedConversation(assistant: AssistantMessage): void {
+		const user = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "hello" }],
+			timestamp: Date.now() - 1,
+		};
+		sessionManager.appendMessage(user);
+		sessionManager.appendMessage(assistant);
+		session.agent.replaceMessages([user, assistant]);
+	}
+
 	beforeEach(() => {
 		tempDir = join(tmpdir(), `dreb-auto-compaction-queue-${Date.now()}`);
 		mkdirSync(tempDir, { recursive: true });
 		vi.useFakeTimers();
+		compactGate.promise = null;
+		compactGate.failFirstN = 0;
+		compactGate.calls = 0;
+		compactGate.inFlight = 0;
+		compactGate.maxConcurrent = 0;
 
 		const model = findModel("anthropic", "sonnet")!;
 		const agent = new Agent({
@@ -100,6 +174,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 	});
 
 	it("should resume after threshold compaction when only agent-level queued messages exist", async () => {
+		seedConversation(createAssistant("stop"));
 		session.agent.followUp({
 			role: "custom",
 			customType: "test",
@@ -125,10 +200,11 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(continueSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it("should always continue after successful auto-compaction when enabled", async () => {
+	it("should not continue after a completed assistant answer when enabled", async () => {
 		settingsManager.setContinueAfterAutoCompaction(true);
-		const hasQueuedMessagesSpy = vi.spyOn(session.agent, "hasQueuedMessages");
+		seedConversation(createAssistant("stop"));
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const warningSpy = vi.spyOn(session, "warnInSession");
 
 		const runAutoCompaction = (
 			session as unknown as {
@@ -139,11 +215,51 @@ describe("AgentSession auto-compaction queue resume", () => {
 		await runAutoCompaction("threshold", false);
 		await vi.advanceTimersByTimeAsync(100);
 
-		expect(continueSpy).toHaveBeenCalledTimes(1);
-		expect(hasQueuedMessagesSpy).not.toHaveBeenCalled();
+		expect(continueSpy).not.toHaveBeenCalled();
+		expect(warningSpy).not.toHaveBeenCalledWith(expect.stringContaining("failed to continue"));
 	});
 
-	it("should preserve overflow continuation when unconditional continuation is disabled", async () => {
+	it("should remove a threshold-path error and resume the interrupted turn", async () => {
+		seedConversation(createAssistant("error", "Response truncated at token limit"));
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const warningSpy = vi.spyOn(session, "warnInSession");
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("threshold", false);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(session.agent.state.messages.at(-1)?.role).toBe("user");
+		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(warningSpy).not.toHaveBeenCalledWith(expect.stringContaining("Cannot continue from message role"));
+	});
+
+	it("should let an incoming prompt follow pre-prompt compaction without a competing continuation", async () => {
+		seedConversation(createAssistant("error", "prompt is too long"));
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue();
+		const warningSpy = vi.spyOn(session, "warnInSession");
+		const events: Array<{ type: string; willRetry?: boolean }> = [];
+		session.subscribe((event) => {
+			if (event.type === "auto_compaction_end") {
+				events.push({ type: event.type, willRetry: event.willRetry });
+			}
+		});
+
+		await session.prompt("new work");
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(promptSpy).toHaveBeenCalledTimes(1);
+		expect(continueSpy).not.toHaveBeenCalled();
+		expect(warningSpy).not.toHaveBeenCalledWith(expect.stringContaining("failed to continue"));
+		expect(events).toEqual([{ type: "auto_compaction_end", willRetry: true }]);
+	});
+
+	it("should preserve overflow cleanup and continuation when unconditional continuation is disabled", async () => {
+		seedConversation(createAssistant("error", "prompt is too long"));
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 		const runAutoCompaction = (
 			session as unknown as {
@@ -155,10 +271,44 @@ describe("AgentSession auto-compaction queue resume", () => {
 		await vi.advanceTimersByTimeAsync(100);
 
 		expect(continueSpy).toHaveBeenCalledTimes(1);
+		expect(session.agent.state.messages.at(-1)?.role).toBe("user");
+	});
+
+	it("should continue overflow recovery from a retained custom-message tail", async () => {
+		const user = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "hello" }],
+			timestamp: Date.now() - 2,
+		};
+		const custom = {
+			role: "custom" as const,
+			customType: "test",
+			content: [{ type: "text" as const, text: "custom context" }],
+			display: false,
+			timestamp: Date.now() - 1,
+		};
+		const error = createAssistant("error", "prompt is too long");
+		sessionManager.appendMessage(user);
+		sessionManager.appendCustomMessageEntry("test", "custom context", false);
+		sessionManager.appendMessage(error);
+		session.agent.replaceMessages([user, custom, error]);
+		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const runAutoCompaction = (
+			session as unknown as {
+				_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+			}
+		)._runAutoCompaction.bind(session);
+
+		await runAutoCompaction("overflow", true);
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(session.agent.state.messages.at(-1)?.role).toBe("custom");
+		expect(continueSpy).toHaveBeenCalledTimes(1);
 	});
 
 	it("should continue exactly once after overflow auto-compaction when enabled", async () => {
 		settingsManager.setContinueAfterAutoCompaction(true);
+		seedConversation(createAssistant("error", "prompt is too long"));
 		const continueSpy = vi.spyOn(session.agent, "continue").mockResolvedValue();
 		const runAutoCompaction = (
 			session as unknown as {
@@ -230,6 +380,34 @@ describe("AgentSession auto-compaction queue resume", () => {
 		await vi.advanceTimersByTimeAsync(100);
 
 		expect(continueSpy).not.toHaveBeenCalled();
+	});
+
+	it("should route context-filled length exhaustion through overflow recovery", async () => {
+		const model = session.model!;
+		const message = createAssistant(
+			"error",
+			"Response truncated at token limit after 3 attempts — output exceeded the model's maximum token budget",
+		);
+		message.usage.totalTokens = model.contextWindow;
+		seedConversation(message);
+		const runAutoCompactionSpy = vi
+			.spyOn(
+				session as unknown as {
+					_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<void>;
+				},
+				"_runAutoCompaction",
+			)
+			.mockResolvedValue();
+		const checkCompaction = (
+			session as unknown as {
+				_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<void>;
+			}
+		)._checkCompaction.bind(session);
+
+		await checkCompaction(message);
+
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith("overflow", true, false);
+		expect(session.agent.state.messages.at(-1)?.role).toBe("user");
 	});
 
 	it("should not compact repeatedly after overflow recovery already attempted", async () => {
@@ -411,7 +589,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		await checkCompaction(errorAssistant);
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false, false);
 	});
 
 	it("should not trigger threshold compaction for error messages when no prior usage exists", async () => {
@@ -542,5 +720,108 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		// Should NOT compact because the only usage data is from a kept pre-compaction message
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
+	});
+
+	describe("Auto-compaction check serialization", () => {
+		function createCompactionCheck() {
+			return (
+				session as unknown as {
+					_checkCompaction: (
+						message: AssistantMessage,
+						skipAbortedCheck?: boolean,
+						requestWillFollow?: boolean,
+					) => Promise<void>;
+				}
+			)._checkCompaction.bind(session);
+		}
+
+		it("should serialize a pre-prompt check behind an in-flight agent_end compaction", async () => {
+			const model = session.model!;
+			const assistant = createAssistant("stop");
+			assistant.usage.totalTokens = model.contextWindow - 5_000;
+			seedConversation(assistant);
+
+			const events: Array<{ type: string; willRetry?: boolean; errorMessage?: string }> = [];
+			session.subscribe((event) => {
+				if (event.type === "auto_compaction_start") {
+					events.push({ type: event.type });
+				} else if (event.type === "auto_compaction_end") {
+					events.push({ type: event.type, willRetry: event.willRetry, errorMessage: event.errorMessage });
+				}
+			});
+
+			const checkCompaction = createCompactionCheck();
+
+			// Hold the in-flight compaction open so the race window stays open.
+			compactGate.hold();
+
+			// The agent_end check starts compacting while the user's next prompt arrives.
+			const first = checkCompaction(assistant);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(compactGate.calls).toBe(1);
+			expect(events).toEqual([{ type: "auto_compaction_start" }]);
+			expect(session.isCompacting).toBe(true);
+
+			// The pre-prompt check must queue behind the in-flight compaction
+			// instead of starting a second one in parallel.
+			const second = checkCompaction(assistant, false, true);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(compactGate.calls).toBe(1);
+
+			compactGate.release();
+			await first;
+			expect(compactGate.maxConcurrent).toBe(1);
+			expect(events).toEqual([{ type: "auto_compaction_start" }, { type: "auto_compaction_end", willRetry: false }]);
+
+			// The queued check re-evaluates against the rebuilt context: the last
+			// assistant's usage predates the compaction boundary, so it skips.
+			await second;
+			expect(compactGate.calls).toBe(1);
+			expect(sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+			expect(session.isCompacting).toBe(false);
+		});
+
+		it("should let a queued check retry after a failed in-flight compaction", async () => {
+			const model = session.model!;
+			const assistant = createAssistant("stop");
+			assistant.usage.totalTokens = model.contextWindow - 5_000;
+			seedConversation(assistant);
+
+			const events: Array<{ type: string; errorMessage?: string }> = [];
+			session.subscribe((event) => {
+				if (event.type === "auto_compaction_end") {
+					events.push({ type: event.type, errorMessage: event.errorMessage });
+				}
+			});
+
+			const checkCompaction = createCompactionCheck();
+
+			compactGate.hold();
+			compactGate.failFirstN = 1; // the in-flight compaction will fail
+
+			const first = checkCompaction(assistant);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(compactGate.calls).toBe(1);
+			expect(events).toEqual([]);
+
+			// A simple in-flight guard would drop this check; the serialization
+			// chain must let it re-evaluate once the failed run settles.
+			const second = checkCompaction(assistant, false, true);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(compactGate.calls).toBe(1);
+
+			compactGate.release();
+			await first;
+			await second;
+
+			expect(compactGate.calls).toBe(2);
+			expect(compactGate.maxConcurrent).toBe(1);
+			expect(events).toEqual([
+				{ type: "auto_compaction_end", errorMessage: "Auto-compaction failed: summary failed" },
+				{ type: "auto_compaction_end" },
+			]);
+			expect(sessionManager.getEntries().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+			expect(session.isCompacting).toBe(false);
+		});
 	});
 });

@@ -8,6 +8,7 @@ import {
 	messagesToEntries,
 	pendingQuestionsReason,
 	resolveUiRequest,
+	syncCompactionStatusEntry,
 } from "../src/client/state/reducer.js";
 import type { BackgroundAgentDto } from "../src/shared/protocol.js";
 
@@ -69,6 +70,28 @@ describe("messagesToEntries — hydration", () => {
 			],
 			model: "m1",
 		});
+	});
+
+	it("hydrates compactionSummary messages as compaction summary entries", () => {
+		const entries = messagesToEntries([
+			{ role: "compactionSummary", summary: "earlier work summarized", tokensBefore: 52410 },
+			{ role: "user", content: "after compaction", timestamp: 3 },
+		]);
+
+		expect(entries.map((e) => e.kind)).toEqual(["summary", "user"]);
+		expect(entries[0]).toMatchObject({
+			kind: "summary",
+			label: "compaction",
+			text: "earlier work summarized",
+			tokensBefore: 52410,
+		});
+	});
+
+	it("falls back to a generic compaction summary when the message has no text", () => {
+		const entries = messagesToEntries([{ role: "compactionSummary", tokensBefore: 1000 }]);
+		expect(entries).toEqual([
+			{ kind: "summary", label: "compaction", text: "context compacted", tokensBefore: 1000 },
+		]);
 	});
 
 	it("retains uploaded-image references on hydrated user transcript entries", () => {
@@ -798,6 +821,41 @@ describe("applySessionEvent — session-level events", () => {
 		expect(state.entries[0]).toMatchObject({ kind: "summary", label: "compaction", tokensBefore: 52410 });
 	});
 
+	it("does not duplicate a summary entry already present from snapshot hydration", () => {
+		const state = makeState();
+		state.entries = messagesToEntries([
+			{ role: "compactionSummary", summary: "earlier work summarized", tokensBefore: 52410 },
+		]);
+		applySessionEvent(state, { type: "auto_compaction_start", reason: "threshold" });
+		applySessionEvent(state, {
+			type: "auto_compaction_end",
+			result: { tokensBefore: 52410, summary: "earlier work summarized" },
+			aborted: false,
+			willRetry: false,
+		});
+
+		const summaries = state.entries.filter((e) => e.kind === "summary" && e.label === "compaction");
+		expect(summaries).toHaveLength(1);
+	});
+
+	it("still appends a summary entry when an earlier compaction differs", () => {
+		const state = makeState();
+		state.entries = messagesToEntries([
+			{ role: "compactionSummary", summary: "first compaction", tokensBefore: 1000 },
+		]);
+		applySessionEvent(state, { type: "auto_compaction_start", reason: "threshold" });
+		applySessionEvent(state, {
+			type: "auto_compaction_end",
+			result: { tokensBefore: 2000, summary: "second compaction" },
+			aborted: false,
+			willRetry: false,
+		});
+
+		const summaries = state.entries.filter((e) => e.kind === "summary" && e.label === "compaction");
+		expect(summaries).toHaveLength(2);
+		expect(summaries[1]).toMatchObject({ text: "second compaction", tokensBefore: 2000 });
+	});
+
 	it("clears provisional provider state while overflow compaction recovers", () => {
 		const state = makeState();
 		applySessionEvent(state, {
@@ -958,6 +1016,54 @@ describe("applySessionEvent — session-level events", () => {
 		expect(secondRetry).toMatchObject({ id: expect.any(Number), key: "retry" });
 		expect(paused).toMatchObject({ id: expect.any(Number), key: "paused" });
 		expect(new Set([firstRetry?.id, secondRetry?.id, paused?.id]).size).toBe(3);
+	});
+});
+
+describe("syncCompactionStatusEntry", () => {
+	it("creates the compaction status entry when compacting is true", () => {
+		const state = makeState();
+		state.compacting = true;
+		syncCompactionStatusEntry(state);
+		expect(state.statusEntries).toEqual([
+			expect.objectContaining({ key: "compaction", text: "compacting context…", tone: "info" }),
+		]);
+	});
+
+	it("keeps exactly one compaction status entry when called repeatedly", () => {
+		const state = makeState();
+		state.compacting = true;
+		syncCompactionStatusEntry(state);
+		syncCompactionStatusEntry(state);
+		expect(state.statusEntries.filter((s) => s.key === "compaction")).toHaveLength(1);
+	});
+
+	it("re-exposes the entry after dismissal while still compacting", () => {
+		const state = makeState();
+		state.compacting = true;
+		syncCompactionStatusEntry(state);
+		const previous = state.statusEntries.find((s) => s.key === "compaction");
+		previous!.dismissed = true;
+		syncCompactionStatusEntry(state);
+		const current = state.statusEntries.find((s) => s.key === "compaction");
+		expect(current?.dismissed).toBeUndefined();
+		expect(current?.id).not.toBe(previous!.id);
+	});
+
+	it("removes the compaction status entry when compacting is false", () => {
+		const state = makeState();
+		state.compacting = true;
+		syncCompactionStatusEntry(state);
+		state.compacting = false;
+		syncCompactionStatusEntry(state);
+		expect(state.statusEntries.some((s) => s.key === "compaction")).toBe(false);
+	});
+
+	it("leaves other status entries untouched", () => {
+		const state = makeState();
+		applySessionEvent(state, { type: "parent_paused_for_background_agents", runningAgentCount: 1 });
+		state.compacting = true;
+		syncCompactionStatusEntry(state);
+		expect(state.statusEntries.map((s) => s.key).sort()).toEqual(["compaction", "paused"]);
 	});
 });
 

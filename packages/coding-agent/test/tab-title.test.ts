@@ -364,6 +364,22 @@ describe("TabTitleGenerator", () => {
 			expect(content).toContain("Repo: dreb");
 			expect(content).toContain("Cwd: /home/user/dreb");
 		});
+
+		it("forwards the stable session ID to the title completion", async () => {
+			mockCompleteSimple.mockResolvedValue(makeAssistantResponse("Fix auth bug") as any);
+
+			const deps = createMockDeps({ getSessionId: () => "stable-tab-title-uuid" });
+			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
+
+			gen.onToolEnd();
+
+			await vi.waitFor(() => {
+				expect(mockCompleteSimple).toHaveBeenCalled();
+			});
+
+			const options = mockCompleteSimple.mock.calls[0][2] as Record<string, unknown>;
+			expect(options.sessionId).toBe("stable-tab-title-uuid");
+		});
 	});
 
 	describe("title sanitization", () => {
@@ -710,7 +726,7 @@ describe("TabTitleGenerator", () => {
 				skippedModels: [],
 			});
 
-			const deps = createMockDeps();
+			const deps = createMockDeps({ getSessionId: () => "tab-title-session-uuid" });
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
 
 			gen.onToolEnd();
@@ -723,6 +739,7 @@ describe("TabTitleGenerator", () => {
 					"test-model",
 					expect.any(AbortSignal),
 					"[tab-title]",
+					"tab-title-session-uuid",
 				);
 			});
 		});
@@ -747,7 +764,10 @@ describe("TabTitleGenerator", () => {
 			const getAgentModelsOverride = vi.fn((name: string) =>
 				name === "Explore" ? ["override/model-a", "override/model-b"] : undefined,
 			);
-			const deps = createMockDeps({ getAgentModelsOverride });
+			const deps = createMockDeps({
+				getAgentModelsOverride,
+				getSessionId: () => "tab-title-session-uuid",
+			});
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
 
 			gen.onToolEnd();
@@ -760,6 +780,7 @@ describe("TabTitleGenerator", () => {
 					"test-model",
 					expect.any(AbortSignal),
 					"[tab-title]",
+					"tab-title-session-uuid",
 				);
 			});
 			expect(getAgentModelsOverride).toHaveBeenCalledWith("Explore");
@@ -781,7 +802,10 @@ describe("TabTitleGenerator", () => {
 				skippedModels: [],
 			});
 
-			const deps = createMockDeps({ getAgentModelsOverride: () => [] });
+			const deps = createMockDeps({
+				getAgentModelsOverride: () => [],
+				getSessionId: () => "tab-title-session-uuid",
+			});
 			const gen = new TabTitleGenerator({ triggerAfter: 1 }, deps);
 
 			gen.onToolEnd();
@@ -794,6 +818,7 @@ describe("TabTitleGenerator", () => {
 					"test-model",
 					expect.any(AbortSignal),
 					"[tab-title]",
+					"tab-title-session-uuid",
 				);
 			});
 		});

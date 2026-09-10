@@ -240,7 +240,8 @@ describe("SettingsSelectorComponent — auto-compaction continuation", () => {
 
 		const output = list.render(120).join("\n");
 		expect(output).toContain("Continue after auto-compaction");
-		expect(output).toContain("can run and incur cost indefinitely");
+		expect(output).toContain("completed answers stay finished");
+		expect(output).toContain("can incur cost indefinitely");
 		expect(output).toContain("true");
 	});
 

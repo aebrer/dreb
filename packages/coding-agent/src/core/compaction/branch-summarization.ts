@@ -75,6 +75,8 @@ export interface GenerateBranchSummaryOptions {
 	replaceInstructions?: boolean;
 	/** Tokens reserved for prompt + LLM response (default 16384) */
 	reserveTokens?: number;
+	/** Stable conversation ID forwarded to providers that use session-based routing */
+	sessionId?: string;
 }
 
 // ============================================================================
@@ -282,7 +284,7 @@ export async function generateBranchSummary(
 	entries: SessionEntry[],
 	options: GenerateBranchSummaryOptions,
 ): Promise<BranchSummaryResult> {
-	const { model, apiKey, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
+	const { model, apiKey, signal, customInstructions, replaceInstructions, reserveTokens = 16384, sessionId } = options;
 
 	// Token budget = context window minus reserved space for prompt + response
 	const contextWindow = model.contextWindow || 128000;
@@ -322,7 +324,7 @@ export async function generateBranchSummary(
 	const response = await completeSimple(
 		model,
 		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ apiKey, signal, maxTokens: 2048 },
+		{ apiKey, signal, maxTokens: 2048, ...(sessionId ? { sessionId } : {}) },
 	);
 
 	// Check if aborted or errored

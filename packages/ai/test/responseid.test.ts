@@ -178,7 +178,7 @@ describe("responseId E2E Tests", () => {
 			"should expose responseId",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = getModel("openai-codex", "gpt-5.4");
+				const llm = getModel("openai-codex", "gpt-5.6-luna");
 				await expectResponseId(llm, { apiKey: openaiCodexToken });
 			},
 		);

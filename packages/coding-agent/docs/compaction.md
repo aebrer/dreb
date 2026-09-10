@@ -34,11 +34,17 @@ contextTokens > contextWindow - reserveTokens
 
 By default, `reserveTokens` is 16384 tokens (configurable in `~/.dreb/agent/settings.json` or `<project-dir>/.dreb/settings.json`). This leaves room for the LLM's response.
 
+The threshold is checked after a run ends, before a new prompt, and inside a running agent loop before each LLM request. Mid-turn checks run only when context is settled on a user or tool-result message, after all tool calls from the preceding assistant message have matching results. If the threshold is crossed, dreb compacts and replaces the running loop's context before that loop makes its next request; it does not start a second agent run.
+
+If response-length retries are exhausted, dreb distinguishes a genuine output-budget failure from a full-context truncation using recorded usage. Usage at or beyond `contextWindow` enters overflow compact-and-retry recovery; usage below it remains a loud output-budget error.
+
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
 ### Continuing After Auto-Compaction
 
-By default, successful overflow recovery starts another model turn, and successful threshold compaction continues only when a steering, follow-up, or custom message is already queued. Enable **Continue after auto-compaction** in terminal `/settings` or dashboard Settings to keep unattended work running after every successful automatic compaction:
+Successful overflow recovery and automatic compaction of an interrupted assistant error resume that request. Mid-turn threshold compaction continues naturally inside the already running tool loop. A successful post-run threshold compaction otherwise continues when steering or follow-up work is queued.
+
+Enable **Continue after auto-compaction** in terminal `/settings` or dashboard Settings to keep other pending tool-loop work moving after successful automatic compaction:
 
 ```json
 {
@@ -48,7 +54,7 @@ By default, successful overflow recovery starts another model turn, and successf
 }
 ```
 
-When enabled, dreb starts exactly one new model turn after any successful automatic threshold or overflow compaction without depending on overflow-retry or queued-message state. This can run and incur model cost indefinitely, so it is off by default. Failed or cancelled automatic compactions do not continue, and manual `/compact` never continues because of this setting.
+The setting never invents work: when the last message is a normally completed assistant answer and no input is queued, dreb leaves the run finished instead of calling `continue()`. It can still keep pending work running and incurring model cost indefinitely, so it is off by default. Failed or cancelled automatic compactions do not continue, and manual `/compact` never continues because of this setting.
 
 ### How It Works
 
@@ -401,7 +407,7 @@ Configure compaction in `~/.dreb/agent/settings.json` or `<project-dir>/.dreb/se
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `continueAfterAutoCompaction` | `false` | Start another model turn after every successful automatic compaction; does not affect manual `/compact` |
+| `continueAfterAutoCompaction` | `false` | Continue pending work after successful automatic compaction; completed answers and manual `/compact` stay finished |
 | `reserveTokens` | `16384` | Tokens to reserve for LLM response |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
 

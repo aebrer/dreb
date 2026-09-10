@@ -499,8 +499,8 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 
 				// Claude 4.x models route to Anthropic Messages API
 				const isCopilotClaude4 = /^claude-(haiku|sonnet|opus)-4([.\-]|$)/.test(modelId);
-				// gpt-5 models require responses API, others use completions
-				const needsResponsesApi = modelId.startsWith("gpt-5") || modelId.startsWith("oswe");
+				// gpt-5 and gpt-6 models require responses API, others use completions
+				const needsResponsesApi = modelId.startsWith("gpt-5") || modelId.startsWith("gpt-6") || modelId.startsWith("oswe");
 
 				const api: Api = isCopilotClaude4
 					? "anthropic-messages"
@@ -928,6 +928,12 @@ async function generateModels() {
 
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
+	// The Codex surface is a distinct API surface (chatgpt.com backend-api + ChatGPT OAuth):
+	// models.dev does not track it (no openai-codex/codex top-level key), and per-model
+	// semantics differ (context caps, effort clamping, service-tier pricing, Responses Lite
+	// protocol), so the manual list is the correct pattern. The codex CLI's model list is a
+	// candidate future live source. The list is live-probe-verified (2026-09-07): only the
+	// entries below resolve with a ChatGPT account.
 	// Most Codex models use the observed 272k ChatGPT-auth server limit. GPT-5.5
 	// has a 400k context window; GPT-5.6 Responses Lite models support 372k.
 	// GPT-5.6+ cache writes are billed at 1.25x the input rate (OpenAI pricing docs),
@@ -938,66 +944,6 @@ async function generateModels() {
 	const CODEX_RESPONSES_LITE_CONTEXT = 372000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
-		{
-			id: "gpt-5.1",
-			name: "GPT-5.1",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.1-codex-max",
-			name: "GPT-5.1 Codex Max",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.1-codex-mini",
-			name: "GPT-5.1 Codex Mini",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.3-codex",
-			name: "GPT-5.3 Codex",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			id: "gpt-5.4",
-			name: "GPT-5.4",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
 		{
 			id: "gpt-5.4-mini",
 			name: "GPT-5.4 Mini",
@@ -1059,15 +1005,15 @@ async function generateModels() {
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
-			id: "gpt-5.3-codex-spark",
-			name: "GPT-5.3 Codex Spark",
+			id: "gpt-6-astra",
+			name: "GPT-6 Astra",
 			api: "openai-codex-responses",
 			provider: "openai-codex",
 			baseUrl: CODEX_BASE_URL,
 			reasoning: true,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 128000,
+			input: ["text", "image"],
+			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+			contextWindow: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 	];

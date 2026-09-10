@@ -264,6 +264,22 @@ describe("BuddyManager.hatch()", () => {
 		expect(vi.mocked(completeSimple)).toHaveBeenCalledOnce();
 	});
 
+	it("forwards the stable session ID to soul generation on hatch", async () => {
+		const restore = withTestEnv();
+		mockSoulResponse("Sparky", "A feisty little companion.");
+
+		const mgr = new BuddyManager();
+		await mgr.hatch(createTestModel(), "test-key", "buddy-hatch-uuid");
+
+		restore();
+
+		expect(vi.mocked(completeSimple)).toHaveBeenCalledOnce();
+		expect(vi.mocked(completeSimple).mock.calls[0][2]).toMatchObject({
+			apiKey: "test-key",
+			sessionId: "buddy-hatch-uuid",
+		});
+	});
+
 	it("persists buddy to disk", async () => {
 		const restore = withTestEnv();
 		mockSoulResponse("Rex", "Bold and brave.");
@@ -376,6 +392,23 @@ describe("BuddyManager.reroll()", () => {
 		expect(state.rerollCount).toBe(1);
 		expect(state.name).toBe("Phoenix");
 		expect(state.personality).toBe("Reborn from ashes.");
+	});
+
+	it("forwards the stable session ID to soul generation on reroll", async () => {
+		const restore = withTestEnv();
+		writeStoredBuddy({ rerollCount: 0, name: "OldBuddy" });
+		mockSoulResponse("Phoenix", "Reborn from ashes.");
+
+		const mgr = new BuddyManager();
+		await mgr.reroll(createTestModel(), "test-key", "buddy-reroll-uuid");
+
+		restore();
+
+		expect(vi.mocked(completeSimple)).toHaveBeenCalledOnce();
+		expect(vi.mocked(completeSimple).mock.calls[0][2]).toMatchObject({
+			apiKey: "test-key",
+			sessionId: "buddy-reroll-uuid",
+		});
 	});
 
 	it("increments from existing rerollCount", async () => {

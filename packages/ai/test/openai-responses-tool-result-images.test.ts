@@ -189,8 +189,8 @@ describe("Responses API tool result images", () => {
 		);
 	});
 
-	describe("OpenAI Codex Responses Provider (gpt-5.4)", () => {
-		const model = getModel("openai-codex", "gpt-5.4");
+	describe("OpenAI Codex Responses Provider (gpt-5.6-luna)", () => {
+		const model = getModel("openai-codex", "gpt-5.6-luna");
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !openaiCodexToken)(
 			"should send tool result images in function_call_output",

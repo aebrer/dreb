@@ -69,6 +69,8 @@ export interface TabTitleDeps {
 	getModelRegistry: () => ModelRegistry;
 	/** Get the parent provider name. */
 	getProvider: () => string | undefined;
+	/** Get the parent session's stable conversation UUID, forwarded to LLM requests (issue 500). */
+	getSessionId?: () => string | undefined;
 	/**
 	 * Get the user's agentModels settings override for a given agent name, if any.
 	 * Returns a non-empty fallback list when the user has configured an override.
@@ -202,10 +204,12 @@ export class TabTitleGenerator {
 	private async completeWithModel(model: Model<Api>, context: Context, signal: AbortSignal): Promise<unknown> {
 		const registry = this.deps.getModelRegistry();
 		const apiKey = await registry.getApiKey(model);
+		const sessionId = this.deps.getSessionId?.();
 		return completeSimple(model, context, {
 			apiKey,
 			maxRetryDelayMs: 0,
 			signal,
+			...(sessionId ? { sessionId } : {}),
 		});
 	}
 
@@ -236,6 +240,7 @@ export class TabTitleGenerator {
 				parentModel?.id,
 				signal,
 				"[tab-title]",
+				this.deps.getSessionId?.(),
 			);
 			if (resolution.ok) {
 				const found = resolution.provider

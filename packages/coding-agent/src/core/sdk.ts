@@ -239,6 +239,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		model = result.model;
 		if (!model) {
 			modelFallbackMessage = `No models available. Use /login or set an API key environment variable. See ${join(getDocsPath(), "providers.md")}. Then use /model to select a model.`;
+		} else if (result.fallbackMessage) {
+			modelFallbackMessage = modelFallbackMessage
+				? `${modelFallbackMessage}. ${result.fallbackMessage}`
+				: result.fallbackMessage;
+			console.warn(`[model-fallback] ${modelFallbackMessage}`);
 		} else if (modelFallbackMessage) {
 			modelFallbackMessage += `. Using ${model.provider}/${model.id}`;
 		}

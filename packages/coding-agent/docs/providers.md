@@ -11,6 +11,7 @@ dreb supports subscription-based providers via OAuth and API key providers via e
 - [Cloud Providers](#cloud-providers)
 - [Custom Providers](#custom-providers)
 - [Resolution Order](#resolution-order)
+- [Model Selection and Removed Models](#model-selection-and-removed-models)
 
 ## Node Version and Streaming
 
@@ -34,6 +35,9 @@ Use `/logout` to clear credentials. Tokens are stored in `~/.dreb/agent/auth.jso
 
 - Press Enter for github.com, or enter your GitHub Enterprise Server domain
 - If you get "model not supported", enable it in VS Code: Copilot Chat → model selector → select model → "Enable"
+- GPT-6 models, including `github-copilot/gpt-6-astra`, use the Responses API. Astra supports `xhigh` and native `max` thinking; access depends on the subscription and enabled models.
+- For adaptive Claude models such as Opus 4.8, readable thinking requires `thinkingDisplay: "summarized"` in SDK calls; enabling thinking alone can return only opaque signatures. See [thinking display](../../ai/README.md#controlling-thinking-display-anthropic-adaptive-models).
+- A registry context window can be lower than the endpoint's hard limit. Accepting a larger request does not change dreb's configured window. Usage-based overflow detection includes uncached input, cache reads, and cache writes.
 
 ### Google Providers
 
@@ -46,6 +50,8 @@ Use `/logout` to clear credentials. Tokens are stored in `~/.dreb/agent/auth.jso
 
 - Requires ChatGPT Plus or Pro subscription
 - Personal use only; for production, use the OpenAI Platform API
+- Built-in models are `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` (default), and `gpt-6-astra`. The Codex catalog is maintained separately from the OpenAI Platform API catalog.
+- Astra supports text/image input, a conservative 272K configured context window, and up to 128K output tokens. Codex `minimal` effort is clamped to `low`; `xhigh` and `max` are sent unchanged.
 
 ### Kimi For Coding
 
@@ -210,3 +216,15 @@ When resolving credentials for a provider:
 2. `auth.json` entry (API key or OAuth token)
 3. Environment variable
 4. Custom provider keys from `models.json`
+
+## Model Selection and Removed Models
+
+The Codex catalog no longer lists the probe-verified unsupported routes `gpt-5.1`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `gpt-5.3-codex`, `gpt-5.4`, and `gpt-5.3-codex-spark`. This does not remove similarly named models from other providers.
+
+If a saved default no longer exists, startup warns and prefers that provider's known default when available. For example, a missing saved `openai-codex/gpt-5.4` selects `openai-codex/gpt-5.6-luna` even when OpenAI API credentials are also present. If the saved provider's default is unavailable, dreb can select another available model, with the warning naming the replacement. Use `/model` to save a new default.
+
+For explicit CLI selection (`--model provider/id` or `--provider provider --model id`), if an ID exists exactly on another provider but only fuzzy-matches a different ID on the requested provider, dreb warns and uses the requested ID as a custom model rather than silently substituting the fuzzy match. Thus `--model openai-codex/gpt-5.4` does **not** select `gpt-5.4-mini`; the unsupported ID is sent to Codex and can fail at the server. This is not an automatic migration or a general ban on fuzzy model patterns. Choose a supported model explicitly, for example:
+
+```bash
+dreb --model openai-codex/gpt-6-astra --thinking xhigh
+```
