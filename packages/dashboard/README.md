@@ -35,7 +35,9 @@ Open `http://127.0.0.1:5343`.
   project path, status chip, current activity, live subagents, task progress,
   ctx%, model, cost, last-assistant preview, and terminal provider-error reason). Below, past sessions grouped by project — three
   compact rows each with an "all N on disk" expander — with resume/delete.
-  At <=700px, cards stack; long session names, status chips, project paths,
+  Sessions remain listed when their historical project path is missing; resume
+  then asks for an existing runtime directory and shows both paths without
+  changing the persisted session header. At <=700px, cards stack; long session names, status chips, project paths,
   activity/subagent text, and past-session labels wrap within cards or rows
   rather than spilling off-screen. `+ new session` anywhere.
 - **Session view** — full chat parity: markdown streaming transcript, tool
@@ -99,8 +101,9 @@ a separate fixed top-center stack; neither surface expires automatically.
 Creating a runtime from Fleet or Files leaves the current screen in place.
 Closing the runtime currently being viewed likewise keeps the main-session or
 subagent route and its rendered history as a read-only browser snapshot, with
-explicit **Resume session** and **Return to fleet** actions. Closing another
-runtime produces no redundant toast.
+explicit **Resume session**, **Choose directory…**, and **Return to fleet**
+actions. The directory chooser recovers a closed session if its captured runtime
+path has since disappeared. Closing another runtime produces no redundant toast.
 
 ### Scoped models
 
@@ -173,9 +176,11 @@ runtime state, so they do not trigger child RPC calls or a disk inventory scan.
 
 Disk inventory is separate from live-runtime state. Before fleet, inventory, or
 resync serialization, the server projects each on-disk session to the declared
-browser DTO and bounds its first-message preview to 256 Unicode characters;
-internal parent paths and complete searchable transcript text never cross this
-boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
+browser DTO, reports whether its historical CWD resolves to a directory (plus
+the canonical candidate when it does), and bounds its first-message preview to
+256 Unicode characters. Missing historical paths remain display metadata but are
+not used as memory/project roots or recent runtime choices. Internal parent paths
+and complete searchable transcript text never cross this boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
 create, resume, stop, or delete, rather than reloading the whole fleet. While the
 Fleet screen is visible, it refreshes
 per-runtime stats no more often than every 30 seconds; the refresh is

@@ -70,17 +70,27 @@ export async function canonicalizePath(raw: string, opts: { mustExist: boolean }
 	return join(realParent, leaf);
 }
 
+/** Resolve and canonicalize an existing directory supplied by a Dashboard client. */
+export async function resolveExistingDirectory(rawPath: string): Promise<string> {
+	const path = await canonicalizePath(rawPath, { mustExist: true });
+	let info: Awaited<ReturnType<typeof stat>>;
+	try {
+		info = await stat(path);
+	} catch (err) {
+		throw Object.assign(new Error(`Path does not exist or is unreadable: ${path}`), { status: 404, cause: err });
+	}
+	if (!info.isDirectory()) {
+		throw Object.assign(new Error(`Not a directory: ${path}`), { status: 400 });
+	}
+	return path;
+}
+
 export class FileApi {
 	constructor(private readonly log: FileOpLogger) {}
 
 	/** Resolve an existing directory for listing and context-trust RPC operations. */
 	async resolveDirectory(rawPath: string): Promise<string> {
-		const path = await canonicalizePath(rawPath, { mustExist: true });
-		const info = await stat(path);
-		if (!info.isDirectory()) {
-			throw Object.assign(new Error(`Not a directory: ${path}`), { status: 400 });
-		}
-		return path;
+		return resolveExistingDirectory(rawPath);
 	}
 
 	async list(rawPath: string): Promise<Omit<DirListingDto, "contextTrust">> {

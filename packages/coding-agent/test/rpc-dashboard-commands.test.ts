@@ -350,6 +350,47 @@ describe("git branch helper used by RPC", () => {
 });
 
 describe("runRpcMode dashboard dispatcher", () => {
+	it("uses the effective runtime cwd for git discovery when session provenance differs", async () => {
+		const { session, sessionManager, tempDir, cleanup } = createTestSession({ inMemory: true });
+		mkdirSync(join(tempDir, ".git"));
+		writeFileSync(join(tempDir, ".git", "HEAD"), "ref: refs/heads/runtime-project\n");
+		(sessionManager as unknown as { cwd: string }).cwd = "/missing/historical/project";
+
+		try {
+			const outputs = await dispatchRpcCommand(session, { id: "runtime-cwd", type: "get_git_branch" });
+			expect(outputs[0]).toMatchObject({
+				id: "runtime-cwd",
+				success: true,
+				data: { branch: "runtime-project" },
+			});
+			expect(session.cwd).toBe(tempDir);
+			expect(session.sessionManager.getCwd()).toBe("/missing/historical/project");
+		} finally {
+			cleanup();
+		}
+	});
+
+	it("uses the effective runtime cwd for project agent discovery", async () => {
+		const { session, sessionManager, tempDir, cleanup } = createTestSession({ inMemory: true });
+		const agentsDir = join(tempDir, ".dreb", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "runtime-agent.md"),
+			"---\nname: Runtime Agent\ndescription: Found from effective cwd\n---\n\nRuntime prompt.\n",
+		);
+		(sessionManager as unknown as { cwd: string }).cwd = "/missing/historical/project";
+
+		try {
+			const outputs = await dispatchRpcCommand(session, { id: "runtime-agents", type: "list_agent_types" });
+			expect(outputs[0]).toMatchObject({ id: "runtime-agents", success: true });
+			expect((outputs[0].data as { agentTypes: Array<{ name: string }> }).agentTypes).toContainEqual(
+				expect.objectContaining({ name: "Runtime Agent" }),
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
 	it.each([
 		{ command: "prompt", method: "prompt" },
 		{ command: "steer", method: "steer" },

@@ -173,6 +173,14 @@ body {
 	white-space: nowrap;
 }
 
+.historical-cwd {
+	font-size: var(--fs-small);
+	color: var(--status-attention);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .attention-reason {
 	font-weight: 600;
 	font-size: var(--fs-secondary);
@@ -375,6 +383,11 @@ body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.session-info-bar .historical-cwd {
+	min-width: 0;
+	margin-left: var(--space-2);
 }
 
 .session-info-right {
@@ -2340,13 +2353,28 @@ details.thinking .thinking-body {
 
 /* -------------------------------------------------------------- new session */
 
+.resume-cwd-warning {
+	color: var(--status-attention);
+	margin-bottom: var(--space-3);
+}
+
+.resume-historical-cwd {
+	display: block;
+	padding: var(--space-2);
+	border: var(--hairline);
+	border-radius: var(--radius);
+	background: var(--bg);
+	overflow-wrap: anywhere;
+}
+
 .field {
 	display: flex;
 	flex-direction: column;
 	gap: var(--space-1);
 }
 
-.field label {
+.field label,
+.field-label {
 	font-size: var(--fs-small);
 	color: var(--muted);
 }
@@ -2887,6 +2915,7 @@ details.thinking .thinking-body {
 	}
 
 	.session-project,
+	.historical-cwd,
 	.attention-reason,
 	.error-reason,
 	.activity,
@@ -2899,7 +2928,8 @@ details.thinking .thinking-body {
 		overflow-wrap: anywhere;
 	}
 
-	.session-project {
+	.session-project,
+	.historical-cwd {
 		overflow: visible;
 		text-overflow: clip;
 	}

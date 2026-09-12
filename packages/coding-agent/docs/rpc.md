@@ -18,6 +18,19 @@ await client.start();
 
 This enables per-user filesystem isolation by plain Unix DAC: give each authenticated user a dedicated UID and a working directory owned by that UID at mode `0700`. If the parent lacks the required capability (or the platform doesn't support `uid`/`gid`, e.g. Windows), the spawn fails and `start()` rejects rather than silently running as the parent user.
 
+### Runtime CWD and historical session CWD
+
+`RpcClientOptions.cwd` is the effective runtime directory supplied to the child
+process. Tools, resource and project-agent discovery, git/tab-title metadata,
+and relative runtime commands use it. Opening or switching to a persisted JSONL
+session does not replace that process directory.
+
+A session listing's `cwd` is different: it is historical metadata copied from
+the session header. It can name a moved or missing directory and is not rewritten
+merely because a host launches the transcript in another runtime directory.
+Embedders should display both values when they differ rather than treating the
+historical field as a safe process-spawn path.
+
 ### Process exit and pipe errors
 
 `RpcClient.onExit(listener)` receives an `RpcExitInfo` when the child dies: `{ code, signal }` from a process `exit`, or `{ error }` from a spawn/runtime `error`. Process exits also carry `stderrTail` — the last **2000 characters** of the child's captured stderr — so a host that only watches for exit codes can still surface the child's own diagnostic (for example the stdout backpressure guard's abort message) instead of an opaque exit code. In-flight requests are rejected with the exit reason.
@@ -203,7 +216,7 @@ Response:
 {"type": "response", "command": "dream", "success": true, "data": {"message": "Dream backup path: /home/user/.dreb/memory-archive"}}
 ```
 
-A consolidation run performs and verifies the backup before prompting the agent. Backup, lock, path-validation, settings-write, or consolidation failures are explicit RPC errors.
+A relative backup path is resolved from the effective runtime CWD, not the historical CWD in a resumed session header. A consolidation run performs and verifies the backup before prompting the agent. Backup, lock, path-validation, settings-write, or consolidation failures are explicit RPC errors.
 
 ### State
 
@@ -302,7 +315,7 @@ Response:
 
 #### get_git_branch
 
-Get the current git branch for the session cwd. Returns `null` outside a git repository and `"detached"` for detached HEAD.
+Get the current git branch for the effective runtime CWD. Returns `null` outside a git repository and `"detached"` for detached HEAD.
 
 ```json
 {"type": "get_git_branch"}
@@ -1054,7 +1067,7 @@ The extension SDK's `dreb.getCommands()` contract is unchanged: it continues to 
 
 #### list_sessions
 
-List sessions for the current working directory. Returns sessions sorted by most recently modified first.
+List sessions associated with the current persisted session store and its historical working-directory provenance. Returns sessions sorted by most recently modified first. This is a transcript listing operation; switching one of these sessions does not change the RPC process's effective runtime CWD.
 
 ```json
 {"type": "list_sessions"}
@@ -1178,7 +1191,7 @@ The response data is `{ "steeringMode": "one-at-a-time" | "all", "pending": RpcP
 
 #### list_agent_types
 
-List discoverable subagent types for the current session working directory. This includes package-bundled agents, user-level agents, and project-level agents in `.dreb/agents/*.md`. Results are sorted by `name`.
+List discoverable subagent types for the effective runtime working directory. This includes package-bundled agents, user-level agents, and project-level agents in `.dreb/agents/*.md`. Results are sorted by `name`.
 
 ```json
 {"type": "list_agent_types"}

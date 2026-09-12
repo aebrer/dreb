@@ -107,7 +107,10 @@ export interface StatusLineEntry {
 }
 
 export interface ClosedSessionViewState {
+	/** Effective runtime directory captured before the runtime closed. */
 	cwd?: string;
+	/** Historical directory recorded by the active session, when known. */
+	historicalCwd?: string;
 	sessionFile?: string;
 	bannerDismissed?: boolean;
 	resuming?: boolean;

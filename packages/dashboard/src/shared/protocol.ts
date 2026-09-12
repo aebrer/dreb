@@ -14,7 +14,12 @@ export const MAX_SESSION_PREVIEW_CHARACTERS = 256;
 export interface SessionInfoDto {
 	path: string;
 	id: string;
+	/** Historical working directory recorded in the session header. */
 	cwd: string;
+	/** Whether the historical cwd currently resolves to an existing directory. */
+	cwdAvailable?: boolean;
+	/** Canonical runtime candidate when the historical cwd is available. */
+	resolvedCwd?: string;
 	name?: string;
 	created: string;
 	modified: string;

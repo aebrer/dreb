@@ -24,6 +24,7 @@ import { MAX_TOTAL_IMAGE_BYTES } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { commandMatches, dispatchBuiltinCommand, parseDashboardBuiltin } from "../builtin-commands.js";
 import { type BannerItem, BannerRegion, ConnectionIndicator, Modal } from "../components/common.js";
+import { ResumeSessionModal, runtimeProjectChoices } from "../components/resume-session-modal.js";
 import { MarkdownBody, Transcript } from "../components/transcript.js";
 import { composerTextareaMaxHeight } from "../composer-sizing.js";
 import { isAbortError } from "../errors.js";
@@ -910,6 +911,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const [treeLoading, setTreeLoading] = createSignal(false);
 	const [treeError, setTreeError] = createSignal<string>();
 	const [showResumeModal, setShowResumeModal] = createSignal(false);
+	const [showClosedResumeModal, setShowClosedResumeModal] = createSignal(false);
 	const [resumeSessions, setResumeSessions] = createSignal<SessionInfoDto[]>([]);
 	const [resumeLoading, setResumeLoading] = createSignal(false);
 	const [resumeError, setResumeError] = createSignal<string>();
@@ -1678,6 +1680,20 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const displaySessionName = () => session()?.sessionName ?? runtime()?.state.sessionName;
 	const headerTitle = () => displaySessionName() ?? session()?.title ?? props.sessionKey;
 	const sessionCwd = () => runtime()?.cwd ?? closed()?.cwd;
+	const historicalSession = () => {
+		const sessionFile = runtime()?.state.sessionFile ?? closed()?.sessionFile;
+		return sessionFile
+			? props.store.fleet().diskSessions.find((candidate) => candidate.path === sessionFile)
+			: undefined;
+	};
+	const historicalCwd = () => historicalSession()?.cwd ?? closed()?.historicalCwd;
+	const differingHistoricalCwd = () => {
+		const effective = sessionCwd();
+		const historical = historicalCwd();
+		if (!effective || !historical) return undefined;
+		const comparableHistorical = historicalSession()?.resolvedCwd ?? historical;
+		return comparableHistorical === effective ? undefined : historical;
+	};
 	const cwdWithBranch = () => {
 		const cwd = sessionCwd();
 		if (!cwd) return undefined;
@@ -1764,6 +1780,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				actions.push({
 					label: closedState.resuming ? "resuming…" : "Resume session",
 					run: () => props.store.resumeClosedSession(props.sessionKey),
+					disabled: closedState.resuming,
+				});
+			}
+			if (closedState.sessionFile) {
+				actions.push({
+					label: "Choose directory…",
+					run: () => setShowClosedResumeModal(true),
 					disabled: closedState.resuming,
 				});
 			}
@@ -1887,6 +1910,11 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				<Show when={!topChromeCollapsed()}>
 					<div class="session-bar-inner session-info-bar">
 						<span class="session-info-left">{infoLeft()}</span>
+						<Show when={differingHistoricalCwd()}>
+							<span class="historical-cwd" title={differingHistoricalCwd()}>
+								original session: {shortenPath(differingHistoricalCwd()!)}
+							</span>
+						</Show>
 						<button
 							type="button"
 							class="session-info-right stats-trigger"
@@ -2501,6 +2529,21 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					error={treeError()}
 					onClose={() => setShowTreeModal(false)}
 					onNavigate={navigateTree}
+				/>
+			</Show>
+
+			<Show when={showClosedResumeModal() && closed()?.sessionFile}>
+				<ResumeSessionModal
+					historicalCwd={historicalCwd() ?? closed()?.cwd ?? ""}
+					initialCwd={closed()?.cwd}
+					recentProjects={runtimeProjectChoices(props.store.fleet())}
+					onClose={() => setShowClosedResumeModal(false)}
+					onResume={async (cwd) => {
+						await props.store.resumeClosedSession(props.sessionKey, cwd);
+						const error = props.store.sessions[props.sessionKey]?.closed?.resumeError;
+						if (error) throw new Error(error);
+						setShowClosedResumeModal(false);
+					}}
 				/>
 			</Show>
 

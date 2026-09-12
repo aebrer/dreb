@@ -1364,12 +1364,27 @@ describe("app store SSE sync", () => {
 		runtime.cwd = "/tmp/resume-project";
 		runtime.state.sessionFile = "/tmp/resume-project/closed.jsonl";
 		const resumed = runtimeSnapshot("resumed", false);
-		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		vi.mocked(api.fleet).mockResolvedValueOnce({
+			runtimes: [runtime],
+			diskSessions: [
+				{
+					path: runtime.state.sessionFile,
+					id: "closed",
+					cwd: "/historical/project",
+					cwdAvailable: false,
+					created: new Date().toISOString(),
+					modified: new Date().toISOString(),
+					messageCount: 1,
+					firstMessage: "hello",
+				},
+			],
+		});
 		vi.mocked(api.createRuntime).mockResolvedValueOnce(resumed);
 		window.location.hash = "#/session/closed";
 		const store = await makeStartedStore();
 		emit("closed", { type: "runtime_removed" });
 		await flushAsyncWork();
+		expect(store.sessions.closed?.closed?.historicalCwd).toBe("/historical/project");
 		vi.mocked(api.sessions).mockClear();
 
 		await store.resumeClosedSession("closed");
@@ -1381,6 +1396,27 @@ describe("app store SSE sync", () => {
 		expect(window.location.hash).toBe("#/session/resumed");
 		expect(store.sessions.closed).toBeUndefined();
 		expect(api.sessions).toHaveBeenCalledOnce();
+	});
+
+	it("resumes a closed session in an explicitly selected replacement directory", async () => {
+		const runtime = runtimeSnapshot("closed", false);
+		runtime.cwd = "/missing/runtime-project";
+		runtime.state.sessionFile = "/sessions/closed.jsonl";
+		const resumed = runtimeSnapshot("resumed", false);
+		resumed.cwd = "/replacement/project";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [runtime], diskSessions: [] });
+		vi.mocked(api.createRuntime).mockResolvedValueOnce(resumed);
+		window.location.hash = "#/session/closed";
+		const store = await makeStartedStore();
+		emit("closed", { type: "runtime_removed" });
+		await flushAsyncWork();
+
+		await store.resumeClosedSession("closed", "/replacement/project");
+
+		expect(api.createRuntime).toHaveBeenCalledWith("/replacement/project", {
+			sessionPath: "/sessions/closed.jsonl",
+		});
+		expect(store.fleet().runtimes).toEqual([resumed]);
 	});
 
 	it("re-exposes resume failures after the close banner is dismissed while pending", async () => {

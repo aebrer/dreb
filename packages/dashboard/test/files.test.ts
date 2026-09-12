@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { canonicalizePath, FileApi } from "../src/server/files.js";
+import { canonicalizePath, FileApi, resolveExistingDirectory } from "../src/server/files.js";
 
 const tempDirs: string[] = [];
 
@@ -71,6 +71,19 @@ describe("canonicalizePath", () => {
 		await expect(canonicalizePath(join(dir, "nonexistent-sub", "x.txt"), { mustExist: false })).rejects.toMatchObject(
 			{ status: 404 },
 		);
+	});
+});
+
+describe("resolveExistingDirectory", () => {
+	it("canonicalizes directories and rejects files", async () => {
+		const dir = await makeTempDir();
+		const file = join(dir, "file.txt");
+		const link = join(dir, "directory-link");
+		await writeFile(file, "file");
+		await symlink(dir, link);
+
+		await expect(resolveExistingDirectory(link)).resolves.toBe(dir);
+		await expect(resolveExistingDirectory(file)).rejects.toMatchObject({ status: 400 });
 	});
 });
 
