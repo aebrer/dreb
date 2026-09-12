@@ -2539,6 +2539,7 @@ describe("screen smoke tests", () => {
 		expect(el.textContent).toContain("closed child transcript remains");
 		expect(el.textContent).toContain("subagent transcript is read-only");
 		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Resume session");
+		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Choose directory");
 		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Return to fleet");
 		expect(el.querySelector("textarea")).toBeNull();
 		expect(el.querySelector(".composer")).toBeNull();
@@ -5839,6 +5840,41 @@ describe("dashboard client regressions", () => {
 		expect(api.fleet).not.toHaveBeenCalled();
 	});
 
+	it("session chrome distinguishes effective and historical cwd after fallback resume", async () => {
+		const runtime = runtimeInfo("moved-session");
+		runtime.cwd = "/new/project";
+		runtime.state.sessionFile = "/sessions/moved.jsonl";
+		vi.mocked(api.fleet).mockResolvedValueOnce({
+			runtimes: [runtime],
+			diskSessions: [
+				{
+					path: "/sessions/moved.jsonl",
+					id: "moved",
+					cwd: "/old/project",
+					cwdAvailable: false,
+					created: new Date().toISOString(),
+					modified: new Date().toISOString(),
+					messageCount: 2,
+					firstMessage: "hello",
+				},
+			],
+		});
+		vi.mocked(api.hydrate).mockResolvedValueOnce({
+			key: runtime.key,
+			state: runtime.state,
+			messages: [],
+			backgroundAgents: [],
+			barrierSeq: 0,
+		});
+		const store = makeStore();
+		await store.start();
+		const el = mount(() => <SessionScreen store={store} sessionKey={runtime.key} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector(".session-bar .project")?.textContent).toBe("/new/project");
+		expect(el.querySelector(".session-info-bar .historical-cwd")?.textContent).toContain("/old/project");
+	});
+
 	it("session stop keeps a closed read-only transcript snapshot on the current route", async () => {
 		const runtime = runtimeInfo("stop-from-session");
 		runtime.state.sessionFile = "/sessions/stop-from-session.jsonl";
@@ -5879,6 +5915,7 @@ describe("dashboard client regressions", () => {
 		expect(window.location.hash).toBe(routeBeforeStop);
 		expect(el.textContent).toContain("retained after stop");
 		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Resume session");
+		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Choose directory");
 		expect(el.querySelector('[data-banner-key="closed"]')?.textContent).toContain("Return to fleet");
 		expect(el.textContent).toContain("transcript is read-only");
 		expect(el.querySelector(".composer")).toBeNull();
@@ -5903,7 +5940,9 @@ describe("dashboard client regressions", () => {
 					{
 						path: "/sessions/resume.jsonl",
 						id: "resume",
-						cwd: "/repo",
+						cwd: "/historical/repo",
+						cwdAvailable: true,
+						resolvedCwd: "/repo",
 						name: "resume me",
 						created: new Date().toISOString(),
 						modified: new Date().toISOString(),
@@ -5923,6 +5962,124 @@ describe("dashboard client regressions", () => {
 		expect(refreshDiskSessions).toHaveBeenCalled();
 		expect(vi.mocked(api.fleet)).not.toHaveBeenCalled();
 		expect(navigate).toHaveBeenCalledWith({ screen: "session", key: "new-key" });
+	});
+
+	it("fleet opens the directory chooser if a previously valid cwd disappears before resume", async () => {
+		const store = makeStore() as any;
+		const session = {
+			path: "/sessions/raced.jsonl",
+			id: "raced",
+			cwd: "/removed/project",
+			cwdAvailable: true,
+			resolvedCwd: "/removed/project",
+			created: new Date().toISOString(),
+			modified: new Date().toISOString(),
+			messageCount: 3,
+			firstMessage: "hello",
+		};
+		const fakeStore = {
+			...store,
+			fleet: () => ({ runtimes: [], diskSessions: [session] }),
+		};
+		vi.mocked(api.createRuntime).mockRejectedValueOnce(
+			Object.assign(new Error("Path does not exist"), { status: 404 }),
+		);
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+
+		(el.querySelector(".disk-row .actions .btn") as HTMLButtonElement).click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(el.querySelector(".resume-session-modal")).not.toBeNull();
+		expect(el.textContent).toContain("The original working directory is unavailable");
+	});
+
+	it("fleet asks for an explicit runtime directory when the historical cwd is unavailable", async () => {
+		const store = makeStore() as any;
+		const refreshDiskSessions = vi.fn(async () => {});
+		const upsertRuntime = vi.fn();
+		const navigate = vi.fn();
+		const live = runtimeInfo("available-project");
+		live.cwd = "/available/project";
+		const unavailableSession = {
+			path: "/sessions/moved.jsonl",
+			id: "moved",
+			cwd: "/old/host/project",
+			cwdAvailable: false,
+			name: "moved session",
+			created: new Date().toISOString(),
+			modified: new Date().toISOString(),
+			messageCount: 3,
+			firstMessage: "hello",
+		};
+		const fakeStore = {
+			...store,
+			refreshDiskSessions,
+			upsertRuntime,
+			navigate,
+			fleet: () => ({ runtimes: [live], diskSessions: [unavailableSession] }),
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+		vi.mocked(api.createRuntime).mockClear();
+
+		(el.querySelector(".disk-row .actions .btn") as HTMLButtonElement).click();
+		expect(api.createRuntime).not.toHaveBeenCalled();
+		expect(el.textContent).toContain("The original working directory is unavailable");
+		expect(el.textContent).toContain("/old/host/project");
+		expect(el.querySelector(".project-group .group-head .btn")).toBeNull();
+
+		const availableChoice = [...el.querySelectorAll(".recent-projects button")].find(
+			(button) => button.textContent === "/available/project",
+		) as HTMLButtonElement;
+		availableChoice.click();
+		const submit = [...el.querySelectorAll(".modal-actions button")].find(
+			(button) => button.textContent === "resume session",
+		) as HTMLButtonElement;
+		vi.mocked(api.createRuntime).mockRejectedValueOnce(new Error("Not a directory: /available/project"));
+		submit.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(el.querySelector(".resume-session-modal")).not.toBeNull();
+		expect(el.querySelector('[role="alert"]')?.textContent).toContain("Not a directory");
+		expect((el.querySelector("#resume-runtime-cwd") as HTMLInputElement).value).toBe("/available/project");
+		expect(navigate).not.toHaveBeenCalled();
+
+		submit.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(api.createRuntime).toHaveBeenLastCalledWith("/available/project", {
+			sessionPath: "/sessions/moved.jsonl",
+		});
+		expect(upsertRuntime).toHaveBeenCalledWith(expect.objectContaining({ key: "new-key" }));
+		expect(refreshDiskSessions).toHaveBeenCalled();
+		expect(navigate).toHaveBeenCalledWith({ screen: "session", key: "new-key" });
+	});
+
+	it("fleet shows historical cwd when a live runtime uses a fallback directory", () => {
+		const store = makeStore() as any;
+		const live = runtimeInfo("fallback-runtime");
+		live.cwd = "/new/project";
+		live.state.sessionFile = "/sessions/moved.jsonl";
+		const fakeStore = {
+			...store,
+			fleet: () => ({
+				runtimes: [live],
+				diskSessions: [
+					{
+						path: "/sessions/moved.jsonl",
+						id: "moved",
+						cwd: "/old/project",
+						cwdAvailable: false,
+						created: new Date().toISOString(),
+						modified: new Date().toISOString(),
+						messageCount: 3,
+						firstMessage: "hello",
+					},
+				],
+			}),
+		};
+		const el = mount(() => <FleetScreen store={fakeStore} />);
+
+		expect(el.querySelector(".session-project")?.textContent).toBe("/new/project");
+		expect(el.querySelector(".session-card .historical-cwd")?.textContent).toContain("/old/project");
 	});
 
 	it("fleet deletes disk sessions and refreshes inventory", async () => {

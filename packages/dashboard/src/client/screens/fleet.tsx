@@ -8,6 +8,7 @@ import { createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } fro
 import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { Modal, relativeTime, StatusChip, Topbar } from "../components/common.js";
+import { ResumeSessionModal, runtimeProjectChoices } from "../components/resume-session-modal.js";
 import { pendingQuestionsReason } from "../state/reducer.js";
 import type { AppStore } from "../state/store.js";
 
@@ -62,6 +63,14 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 	const tasks = () => session()?.tasks ?? props.runtime.state.tasks ?? [];
 	const tasksDone = () => tasks().filter((t) => t.status === "completed").length;
 	const ctx = () => props.runtime.state.contextUsage;
+	const historicalSession = () =>
+		props.store.fleet().diskSessions.find((candidate) => candidate.path === props.runtime.state.sessionFile);
+	const historicalCwd = () => {
+		const historical = historicalSession();
+		if (!historical) return undefined;
+		const comparableHistorical = historical.resolvedCwd ?? historical.cwd;
+		return comparableHistorical === props.runtime.cwd ? undefined : historical.cwd;
+	};
 	const activity = () => {
 		const s = session();
 		if (s?.workingText) return `▸ ${s.workingText}`;
@@ -85,6 +94,11 @@ function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.E
 			<p class="session-project" title={props.runtime.cwd}>
 				{shortenPath(props.runtime.cwd)}
 			</p>
+			<Show when={historicalCwd()}>
+				<p class="historical-cwd" title={historicalCwd()}>
+					originally {shortenPath(historicalCwd()!)}
+				</p>
+			</Show>
 			<Show when={status() === "attention"}>
 				<p class="attention-reason">{pendingQuestionsReason(session()?.uiRequests ?? []) ?? "needs attention"}</p>
 			</Show>
@@ -241,6 +255,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	const [newSessionCwd, setNewSessionCwd] = createSignal<string | undefined>();
 	const [showNewSession, setShowNewSession] = createSignal(false);
 	const [confirmDelete, setConfirmDelete] = createSignal<SessionInfoDto>();
+	const [resumeSession, setResumeSession] = createSignal<SessionInfoDto>();
 	const [expandedGroups, setExpandedGroups] = createSignal<Record<string, boolean>>({});
 	const [resumeError, setResumeError] = createSignal<string>();
 
@@ -283,26 +298,34 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 		};
 	});
 
-	const recentProjects = createMemo(() => {
-		const paths = new Set<string>();
-		for (const runtime of props.store.fleet().runtimes) paths.add(runtime.cwd);
-		for (const session of props.store.fleet().diskSessions) paths.add(session.cwd);
-		return [...paths].slice(0, 8);
-	});
+	const recentProjects = createMemo(() => runtimeProjectChoices(props.store.fleet()));
 
 	onMount(() => {
 		const timer = setInterval(() => void props.store.refreshFleetStats(), 30_000);
 		onCleanup(() => clearInterval(timer));
 	});
 
-	async function resume(session: SessionInfoDto) {
+	async function resumeIn(session: SessionInfoDto, cwd: string): Promise<void> {
 		setResumeError(undefined);
+		const runtime = await api.createRuntime(cwd, { sessionPath: session.path });
+		props.store.upsertRuntime(runtime);
+		await props.store.refreshDiskSessions();
+		props.store.navigate({ screen: "session", key: runtime.key });
+	}
+
+	async function resume(session: SessionInfoDto): Promise<void> {
+		if (session.cwdAvailable === false) {
+			setResumeSession(session);
+			return;
+		}
 		try {
-			const runtime = await api.createRuntime(session.cwd, { sessionPath: session.path });
-			props.store.upsertRuntime(runtime);
-			await props.store.refreshDiskSessions();
-			props.store.navigate({ screen: "session", key: runtime.key });
+			await resumeIn(session, session.resolvedCwd ?? session.cwd);
 		} catch (err) {
+			const status = (err as { status?: unknown })?.status;
+			if (status === 400 || status === 404) {
+				setResumeSession({ ...session, cwdAvailable: false, resolvedCwd: undefined });
+				return;
+			}
 			setResumeError(`Failed to resume session: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
@@ -374,21 +397,35 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 								{([project, sessions]) => {
 									const expanded = () => expandedGroups()[project] ?? false;
 									const visible = () => (expanded() ? sessions : sessions.slice(0, 3));
+									const newSessionCwd = () => {
+										const candidate = sessions.find(
+											(session) => session.resolvedCwd || session.cwdAvailable !== false,
+										);
+										if (!candidate) return undefined;
+										return project === "/tmp" ? project : (candidate.resolvedCwd ?? candidate.cwd);
+									};
+									const unavailable = () => sessions.every((session) => session.cwdAvailable === false);
 									return (
 										<section class="project-group">
 											<div class="group-head">
-												<h3>{shortenPath(project)}</h3>
-												<span class="muted small">{sessions.length} on disk</span>
-												<button
-													type="button"
-													class="btn btn-small"
-													onClick={() => {
-														setNewSessionCwd(project);
-														setShowNewSession(true);
-													}}
-												>
-													+ new
-												</button>
+												<h3>{project ? shortenPath(project) : "(not recorded)"}</h3>
+												<span class="muted small">
+													{sessions.length} on disk{unavailable() ? " · original path unavailable" : ""}
+												</span>
+												<Show when={newSessionCwd()}>
+													{(cwd) => (
+														<button
+															type="button"
+															class="btn btn-small"
+															onClick={() => {
+																setNewSessionCwd(cwd());
+																setShowNewSession(true);
+															}}
+														>
+															+ new
+														</button>
+													)}
+												</Show>
 											</div>
 											<For each={visible()}>
 												{(session) => (
@@ -397,6 +434,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 															{session.name ?? `“${session.firstMessage.slice(0, 60)}…”`}
 														</span>
 														<span class="meta">
+															{session.cwdAvailable === false ? "original path unavailable · " : ""}
 															{session.messageCount} msgs · {relativeTime(session.modified)}
 														</span>
 														<span class="actions">
@@ -437,6 +475,21 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 					</Show>
 				</Show>
 			</main>
+
+			<Show when={resumeSession()}>
+				{(session) => (
+					<ResumeSessionModal
+						historicalCwd={session().cwd}
+						historicalUnavailable
+						recentProjects={recentProjects()}
+						onClose={() => setResumeSession(undefined)}
+						onResume={async (cwd) => {
+							await resumeIn(session(), cwd);
+							setResumeSession(undefined);
+						}}
+					/>
+				)}
+			</Show>
 
 			<Show when={showNewSession()}>
 				<NewSessionModal

@@ -7,6 +7,7 @@ import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMou
 import type { PendingMessagesDto, SubagentArbitrationDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { type BannerItem, BannerRegion, StatusChip } from "../components/common.js";
+import { ResumeSessionModal, runtimeProjectChoices } from "../components/resume-session-modal.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
@@ -35,7 +36,16 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	const [steerError, setSteerError] = createSignal<string>();
 	const [steeringMode, setSteeringMode] = createSignal<"all" | "one-at-a-time">();
 	const [pending, setPending] = createSignal<PendingMessagesDto>({ steering: [], followUp: [] });
+	const [showClosedResumeModal, setShowClosedResumeModal] = createSignal(false);
 	const closed = () => parent()?.closed;
+	const historicalCwd = () => {
+		const closedState = closed();
+		if (!closedState) return undefined;
+		return (
+			closedState.historicalCwd ??
+			props.store.fleet().diskSessions.find((session) => session.path === closedState.sessionFile)?.cwd
+		);
+	};
 	const isRunning = () => !closed() && agent()?.status === "running";
 	const isMobile = () => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 700px)").matches;
 
@@ -122,6 +132,13 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 				actions.push({
 					label: closedState.resuming ? "resuming…" : "Resume session",
 					run: () => props.store.resumeClosedSession(props.sessionKey),
+					disabled: closedState.resuming,
+				});
+			}
+			if (closedState.sessionFile) {
+				actions.push({
+					label: "Choose directory…",
+					run: () => setShowClosedResumeModal(true),
 					disabled: closedState.resuming,
 				});
 			}
@@ -283,6 +300,21 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 					</Show>
 				</div>
 			</footer>
+
+			<Show when={showClosedResumeModal() && closed()?.sessionFile}>
+				<ResumeSessionModal
+					historicalCwd={historicalCwd() ?? closed()?.cwd ?? ""}
+					initialCwd={closed()?.cwd}
+					recentProjects={runtimeProjectChoices(props.store.fleet())}
+					onClose={() => setShowClosedResumeModal(false)}
+					onResume={async (cwd) => {
+						await props.store.resumeClosedSession(props.sessionKey, cwd);
+						const error = props.store.sessions[props.sessionKey]?.closed?.resumeError;
+						if (error) throw new Error(error);
+						setShowClosedResumeModal(false);
+					}}
+				/>
+			</Show>
 		</div>
 	);
 }

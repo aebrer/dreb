@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { type IncomingMessage, request, type Server, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -501,6 +501,7 @@ describe("dashboard server — fleet and runtimes", () => {
 	it("GET /api/fleet returns runtimes and disk sessions", async () => {
 		const dir = await createTempProject();
 		const disk = [diskSession(dir, { path: "/s/one.jsonl" })];
+		const canonicalDir = await realpath(dir);
 		const { base } = await startServer({ listAllSessions: async () => disk });
 		const res = await fetch(`${base}/api/fleet`);
 		const body = (await res.json()) as { runtimes: unknown[]; diskSessions: unknown[] };
@@ -510,6 +511,8 @@ describe("dashboard server — fleet and runtimes", () => {
 				path: "/s/one.jsonl",
 				id: "one",
 				cwd: dir,
+				cwdAvailable: true,
+				resolvedCwd: canonicalDir,
 				name: "Session one",
 				created: "2026-01-02T03:04:05.000Z",
 				modified: "2026-02-03T04:05:06.000Z",
@@ -521,6 +524,7 @@ describe("dashboard server — fleet and runtimes", () => {
 
 	it("projects bounded disk-session DTOs for fleet, inventory, and resync responses", async () => {
 		const dir = await createTempProject();
+		const canonicalDir = await realpath(dir);
 		const preview = `${"a".repeat(MAX_SESSION_PREVIEW_CHARACTERS - 1)}😀trailing text`;
 		const internalSession = {
 			...diskSession(dir, { firstMessage: preview }),
@@ -544,17 +548,21 @@ describe("dashboard server — fleet and runtimes", () => {
 			expect(Object.keys(session ?? {}).sort()).toEqual([
 				"created",
 				"cwd",
+				"cwdAvailable",
 				"firstMessage",
 				"id",
 				"messageCount",
 				"modified",
 				"name",
 				"path",
+				"resolvedCwd",
 			]);
 			expect(session).toEqual({
 				path: internalSession.path,
 				id: internalSession.id,
 				cwd: internalSession.cwd,
+				cwdAvailable: true,
+				resolvedCwd: canonicalDir,
 				name: internalSession.name,
 				created: internalSession.created.toISOString(),
 				modified: internalSession.modified.toISOString(),
@@ -726,7 +734,7 @@ describe("dashboard server — fleet and runtimes", () => {
 		expect(body.fleet).toBeDefined();
 	});
 
-	it("GET /api/fleet hides disk sessions whose cwd no longer exists", async () => {
+	it("GET /api/fleet includes sessions whose historical cwd is missing", async () => {
 		const liveCwd = await createTempProject();
 		const missingCwd = join(tmpdir(), `dreb-dash-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const liveSession = diskSession(liveCwd, { path: "/s/live.jsonl", id: "live" });
@@ -734,16 +742,21 @@ describe("dashboard server — fleet and runtimes", () => {
 		const { base } = await startServer({ listAllSessions: async () => [liveSession, missingSession] });
 
 		const res = await fetch(`${base}/api/fleet`);
-		const body = (await res.json()) as { runtimes: unknown[]; diskSessions: Array<{ id: string; cwd: string }> };
+		const body = (await res.json()) as {
+			runtimes: unknown[];
+			diskSessions: Array<{ id: string; cwd: string; cwdAvailable: boolean; resolvedCwd?: string }>;
+		};
 
 		expect(res.status).toBe(200);
 		expect(body.diskSessions).toEqual([
-			expect.objectContaining({ path: liveSession.path, id: liveSession.id, cwd: liveSession.cwd }),
+			expect.objectContaining({ id: liveSession.id, cwdAvailable: true }),
+			expect.objectContaining({ id: missingSession.id, cwd: missingCwd, cwdAvailable: false }),
 		]);
-		expect(body.diskSessions).not.toContainEqual(expect.objectContaining({ id: missingSession.id }));
+		expect(body.diskSessions[0].resolvedCwd).toBe(await realpath(liveCwd));
+		expect(body.diskSessions[1].resolvedCwd).toBeUndefined();
 	});
 
-	it("GET /api/sessions returns only existing disk sessions without describing runtimes", async () => {
+	it("GET /api/sessions includes unavailable historical cwd metadata without describing runtimes", async () => {
 		const liveCwd = await createTempProject();
 		const missingCwd = join(tmpdir(), `dreb-dash-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const liveSession = diskSession(liveCwd, { path: "/s/live.jsonl", id: "live" });
@@ -754,44 +767,103 @@ describe("dashboard server — fleet and runtimes", () => {
 		const describe = vi.spyOn(pool, "describe");
 
 		const res = await fetch(`${base}/api/sessions`);
-		const body = (await res.json()) as { sessions: Array<{ id: string; cwd: string }> };
+		const body = (await res.json()) as {
+			sessions: Array<{ id: string; cwd: string; cwdAvailable: boolean; resolvedCwd?: string }>;
+		};
 
 		expect(res.status).toBe(200);
 		expect(body.sessions).toEqual([
-			expect.objectContaining({
-				path: liveSession.path,
-				id: liveSession.id,
-				cwd: liveSession.cwd,
-				created: liveSession.created.toISOString(),
-				modified: liveSession.modified.toISOString(),
-			}),
+			expect.objectContaining({ id: liveSession.id, cwdAvailable: true }),
+			expect.objectContaining({ id: missingSession.id, cwd: missingCwd, cwdAvailable: false }),
 		]);
 		expect(listAllSessions).toHaveBeenCalledTimes(1);
 		expect(describe).not.toHaveBeenCalled();
 		expect(clients[0].getState).not.toHaveBeenCalled();
 	});
 
-	it("POST /api/runtimes validates cwd and creates a runtime", async () => {
+	it("projects cwd availability for runtime-local session listings", async () => {
+		const runtimeCwd = await createTempProject();
+		const missingCwd = join(tmpdir(), `dreb-dash-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const { base, clients, pool } = await startServer();
+		const handle = await pool.create(runtimeCwd);
+		vi.mocked(clients[0].listSessions).mockResolvedValueOnce([
+			{
+				path: "/sessions/missing.jsonl",
+				id: "missing",
+				cwd: missingCwd,
+				created: "2026-01-02T03:04:05.000Z",
+				modified: "2026-02-03T04:05:06.000Z",
+				messageCount: 2,
+				firstMessage: "hello",
+			},
+		]);
+
+		const response = await fetch(`${base}/api/runtimes/${handle.key}/sessions`);
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toEqual({
+			sessions: [
+				expect.objectContaining({
+					path: "/sessions/missing.jsonl",
+					cwd: missingCwd,
+					cwdAvailable: false,
+				}),
+			],
+		});
+	});
+
+	it("POST /api/runtimes requires and canonicalizes an existing directory", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "dreb-dash-server-"));
-		tempDirs.push(dir);
+		const file = join(dir, "not-a-directory.txt");
+		const link = `${dir}-link`;
+		await writeFile(file, "file");
+		await symlink(dir, link);
+		tempDirs.push(dir, link);
 		const { base, pool } = await startServer();
+		const create = vi.spyOn(pool, "create");
+		const post = (cwd: string, sessionPath?: string) =>
+			fetch(`${base}/api/runtimes`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ cwd, sessionPath }),
+			});
 
-		const bad = await fetch(`${base}/api/runtimes`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ cwd: "/does/not/exist" }),
-		});
-		expect(bad.status).toBe(400);
+		expect((await post("")).status).toBe(400);
+		expect((await post("relative/path")).status).toBe(400);
+		expect((await post("/does/not/exist")).status).toBe(404);
+		expect((await post(file)).status).toBe(400);
+		expect(create).not.toHaveBeenCalled();
 
-		const good = await fetch(`${base}/api/runtimes`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ cwd: dir }),
-		});
+		const good = await post(link, "/sessions/resume.jsonl");
 		expect(good.status).toBe(201);
 		const body = (await good.json()) as { key: string; cwd: string };
-		expect(body.cwd).toBe(dir);
+		const canonicalDir = await realpath(dir);
+		expect(body.cwd).toBe(canonicalDir);
+		expect(create).toHaveBeenCalledWith(canonicalDir, "/sessions/resume.jsonl");
 		expect(pool.get(body.key)).toBeDefined();
+	});
+
+	it("fallback runtime creation does not rewrite the session header cwd", async () => {
+		const runtimeCwd = await createTempProject();
+		const sessionFile = join(runtimeCwd, "copied-session.jsonl");
+		const header = {
+			type: "session",
+			version: 3,
+			id: "copied",
+			timestamp: "2026-01-02T03:04:05.000Z",
+			cwd: "/missing/original/project",
+		};
+		await writeFile(sessionFile, `${JSON.stringify(header)}\n`);
+		const { base } = await startServer();
+
+		const response = await fetch(`${base}/api/runtimes`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ cwd: runtimeCwd, sessionPath: sessionFile }),
+		});
+
+		expect(response.status).toBe(201);
+		const persistedHeader = JSON.parse((await readFile(sessionFile, "utf8")).split("\n")[0]);
+		expect(persistedHeader.cwd).toBe("/missing/original/project");
 	});
 
 	it("POST /api/runtimes with firstPrompt sends the prompt", async () => {

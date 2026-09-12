@@ -1473,6 +1473,11 @@ export class AgentSession {
 		return this.agent.state;
 	}
 
+	/** Effective runtime working directory used by tools, resources, and project discovery. */
+	get cwd(): string {
+		return this._cwd;
+	}
+
 	/** Current session task list (read-only) */
 	get tasks(): readonly SessionTask[] {
 		return this._tasks;

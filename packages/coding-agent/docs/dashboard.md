@@ -132,7 +132,7 @@ networking window above.
 
 | Screen | What it does |
 |---|---|
-| **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Live cards keep a deterministic order by project path, then session start time; needs-attention cards badge the browser tab without jumping around. Below the grid: past sessions grouped by project, three compact rows per group with an "all N on disk" expander, resume and delete. |
+| **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Live cards keep a deterministic order by project path, then session start time; needs-attention cards badge the browser tab without jumping around. Below the grid: past sessions grouped by their historical project, three compact rows per group with an "all N on disk" expander, resume and delete. Sessions remain visible when that historical directory is missing; resume opens an explicit runtime-directory chooser instead of mutating or hiding the session. |
 | **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, a bounded scrollable subagent panel that lists every retained agent newest-first with full running/done counts, a shared dismissible banner region for model fallback, extension notices, retry/compaction/paused/provider status, and local action results, a controls-only dock line with elapsed time plus ■ stop and explicitly labelled retry/compaction aborts, a persistent session-header live indicator, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, a TUI-parity latest-100 median TPS indicator (`~31 tok/s [100] · 10% ↑ median [10000]`), and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. Registered built-in slash commands are discovered generically, deduplicated ahead of colliding resource commands, and intercepted before prompting: dashboard actions cover settings, model, scoped-models, export/import, name/session stats, fork/tree, new/compact/dream, resume/reload, and quit. `/scoped-models` deep-links to the Settings editor with the session's current cwd as project context; login/logout show an explicit not-yet-implemented notice, while copy/hotkeys/buddy give terminal-only guidance. Future built-ins are intercepted automatically. The RPC prompt boundary rejects any built-in that reaches it during command-loading races or failures, so slash text cannot leak to the model. Attachments are retained and the command is visibly rejected rather than silently discarded. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests for select/confirm/input/editor render as modals; a rich `ask`/`ask_user` request renders inline as a single wizard that presents all its questions together — each with Markdown-formatted question text, choices, optional free text — plus an in-card Stop agent action, Escape-to-stop, and the authoritative auto-stop countdown, and is answered as one batch submit. Pending questions set needs-attention state and use the existing hidden-page notification path. Extension notifications for the viewed session render in its banner region; other sessions' and app-global notices use the fixed top-center toast stack. |
 | **Subagent view** | Transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the transcript survives browser reloads. Shows the task, streaming output, tool activity, and any safe Dispatch Arbiter changed/unchanged/failure records with the final agent/model/thinking. No raw arbiter output is displayed or transported. While the child is running, a composer sends the user's text unchanged to that specific child as steering input, displays its pending steering queue, and reports its effective `one-at-a-time` or `all` delivery mode. Completed, failed, rehydrated, and unavailable children remain read-only. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. It also shows the **effective global nested-context trust** for the displayed canonical directory: untrusted, trusted by that root, inherited from a granting root, or global expert trust-all. You can trust the displayed folder and descendants, or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all descendants. |
@@ -161,7 +161,30 @@ captured) and **Return to fleet** actions. It is not a live runtime: composers,
 steering, model/thinking controls, stop controls, polling, and other runtime
 actions are disabled. Leaving that session's main/subagent route family releases
 the retained snapshot; Fleet shows no live card, and the authoritative on-disk
-session remains in its project group for normal resume.
+session remains in its project group for normal resume. Closed views also offer
+**Choose directory…** if their captured runtime path has disappeared.
+
+### Historical and runtime working directories
+
+A persisted session's `cwd` is historical metadata: it records where the session
+started and remains unchanged when the JSONL file is copied to another host or
+its project moves. Dashboard inventory reports that session even when the path no
+longer exists. Missing paths are labelled unavailable and are excluded from
+memory scopes, recent-project choices, and new-session shortcuts.
+
+A live runtime has a separate effective CWD. Valid historical paths are
+canonicalized and continue to resume directly. If the historical path is
+unavailable, Dashboard requires the user to choose an existing absolute
+directory; missing paths and regular files are rejected before the RPC child is
+created. Tools, initial project context, settings, extensions, skills, git state,
+and project agent discovery use the effective runtime directory. Fleet cards and
+session chrome show that effective directory and retain the historical path as a
+separate note whenever they differ. Switching to another transcript inside an
+existing runtime does not change the process CWD.
+
+Choosing a fallback never rewrites the original session header. Normal resumed
+work can still append conversation entries, and existing session-format migration
+behavior is unchanged.
 
 ### Dispatch Arbiter observability
 
@@ -267,9 +290,12 @@ nor a disk inventory scan.
 
 Live runtime state and on-disk session inventory have separate refresh paths.
 Before fleet, inventory, or resync serialization, the server explicitly projects
-each on-disk session to the declared browser DTO and bounds its first-message
-preview to 256 Unicode characters. Internal parent paths and complete searchable
-transcript text never cross this browser boundary. After creating, resuming,
+each on-disk session to the declared browser DTO, includes server-validated
+historical-CWD availability and its canonical candidate, and bounds its
+first-message preview to 256 Unicode characters. Unavailable historical paths
+remain visible but do not enter operational project-root inventories. Internal
+parent paths and complete searchable transcript text never cross this browser
+boundary. After creating, resuming,
 stopping, or deleting a session, the client narrowly refreshes the disk list
 through `GET /api/sessions` rather than reloading the whole fleet. While the
 Fleet screen is visible, it polls each live runtime's
