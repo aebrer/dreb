@@ -389,6 +389,7 @@ type SettingsReader = Pick<
 	| "getConfiguredTrustedContextFolders"
 	| "getTransport"
 	| "getHideThinkingBlock"
+	| "getSingleModelMode"
 	| "getAgentModels"
 	| "getGlobalSubagentArbiterSettings"
 	| "getTabTitleSettings"
@@ -422,6 +423,7 @@ type SettingsWriter = SettingsRefresher &
 		| "setContextTrust"
 		| "setTransport"
 		| "setHideThinkingBlock"
+		| "setSingleModelMode"
 		| "setAgentModelsForAgent"
 		| "removeAgentModelsForAgent"
 		| "hasProjectAgentModelOverride"
@@ -465,6 +467,7 @@ export function getSettingsForRpc(
 		effectiveTrustedContextRoots: canonicalizeTrustedRoots(contextTrust.trustedFolders),
 		transport: settingsManager.getTransport(),
 		hideThinkingBlock: settingsManager.getHideThinkingBlock(),
+		singleModelMode: settingsManager.getSingleModelMode(),
 		agentModels: settingsManager.getAgentModels(),
 		subagentArbiter: settingsManager.getGlobalSubagentArbiterSettings(),
 		tabTitle: settingsManager.getTabTitleSettings(),
@@ -572,6 +575,7 @@ const SETTINGS_UPDATE_KEYS = [
 	"trustedContextFolders",
 	"transport",
 	"hideThinkingBlock",
+	"singleModelMode",
 	"agentModels",
 	"enabledModels",
 	"subagentArbiter",
@@ -899,6 +903,7 @@ export async function setSettingsForRpc(
 		"enableSkillCommands",
 		"autoLoadNestedContext",
 		"hideThinkingBlock",
+		"singleModelMode",
 	] as const) {
 		const value = update[key];
 		if (value !== undefined && typeof value !== "boolean") {
@@ -1181,6 +1186,9 @@ export async function setSettingsForRpc(
 			}
 			if (update.hideThinkingBlock !== undefined) {
 				settingsManager.setHideThinkingBlock(update.hideThinkingBlock);
+			}
+			if (update.singleModelMode !== undefined) {
+				settingsManager.setSingleModelMode(update.singleModelMode);
 			}
 
 			const warnings: string[] = [];

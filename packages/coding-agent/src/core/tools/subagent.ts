@@ -1204,6 +1204,8 @@ export async function executeSingle(
 	onControlAvailable?: (client: RpcClient | undefined) => void,
 	/** Parent session UUID for spawn-time availability probes (issue 500). */
 	parentSessionId?: string,
+	/** Single-model mode (issue 517): the child runs on the parent session's model, ignoring model specs and the dispatch arbiter. */
+	singleModelMode?: boolean,
 ): Promise<SubagentResult> {
 	let name = agentName || DEFAULT_AGENT;
 	let config = agents.get(name);
@@ -1239,7 +1241,43 @@ export async function executeSingle(
 	let warning: string | undefined;
 	let skippedModels: SkippedFallbackModel[] = [];
 
-	if (modelSpec) {
+	if (singleModelMode) {
+		// Single-model mode (issue 517): every child runs on the parent session's model.
+		// The per-call model override, per-agent model fallback list, agent-definition model
+		// spec, and dispatch arbiter are all bypassed; a requested spec is reported through
+		// the `warning` that is prepended to the child's output below.
+		if (!parentModel) {
+			return {
+				agent: name,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				errorMessage:
+					"Single model mode is enabled, but the parent session's model is unavailable, so subagent " +
+					`"${name}" cannot be spawned. Disable singleModelMode or run the parent session with a model.`,
+			};
+		}
+		const parentResolution = resolveModelStringSingle(parentModel, parentProvider, registry);
+		if (!parentResolution.ok) {
+			return {
+				agent: name,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "",
+				errorMessage: `Single model mode: ${parentResolution.error}`,
+			};
+		}
+		effectiveConfig = { ...effectiveConfig, model: parentResolution.modelId };
+		if (parentResolution.provider) resolvedProvider = parentResolution.provider;
+		if (registry && resolvedProvider) resolvedModel = registry.find(resolvedProvider, parentResolution.modelId);
+		if (configuredModelSpec) {
+			warning =
+				`The user has enabled "single model mode" in the settings, so the model selection for this subagent ` +
+				`was ignored. Using parent model "${canonicalModelRef(resolvedProvider, parentResolution.modelId)}".`;
+		}
+	} else if (modelSpec) {
 		const parentFallback = configuredModelSpec ? parentModel : undefined;
 		const resolved = await resolveModelForSubagentSpawn(
 			modelSpec,
@@ -1283,7 +1321,9 @@ export async function executeSingle(
 	const proposalSelectedModel = proposalModelId ? canonicalModelRef(resolvedProvider, proposalModelId) : undefined;
 	let finalThinking = thinkingOverride;
 	let arbitrationEnabled = false;
-	if (arbitration) {
+	// Single-model mode (issue 517) bypasses the dispatch arbiter: the parent model is the
+	// final route, and the requested thinking is validated against it below like any other.
+	if (arbitration && !singleModelMode) {
 		const proposed: DispatchRoute = {
 			agent: name,
 			model: proposalSelectedModel ?? "",
@@ -1498,6 +1538,8 @@ async function executeChain(
 	onControlAvailable?: (client: RpcClient | undefined) => void,
 	/** Parent session UUID for spawn-time availability probes (issue 500). */
 	parentSessionId?: string,
+	/** Single-model mode (issue 517): every chain step runs on the parent session's model. */
+	singleModelMode?: boolean,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -1557,6 +1599,7 @@ async function executeChain(
 			arbitration ? { ...arbitration, step: i + 1 } : undefined,
 			onControlAvailable,
 			parentSessionId,
+			singleModelMode,
 		);
 		results.push(result);
 
@@ -1958,6 +2001,13 @@ export interface SubagentToolOptions {
 	 * with the parent conversation (issue 500).
 	 */
 	parentSessionId?: () => string | undefined;
+	/**
+	 * Live single-model mode setting, evaluated at each spawn. When true, every child runs
+	 * on the parent session's model: the per-call `model` override, per-agent model fallback
+	 * lists, the agent definition's `model` spec, and the dispatch arbiter are all bypassed,
+	 * and a warning is prepended to child output whenever an ignored model spec was requested.
+	 */
+	singleModelMode?: () => boolean;
 	/** Model registry for validating model names before spawning child processes. */
 	modelRegistry?: ModelRegistry;
 	/** Settings-based model override getter for mach6.models. */
@@ -2186,6 +2236,7 @@ export function createSubagentToolDefinition(
 	const getParentModel = options?.parentModel ?? (() => undefined);
 	const getParentSessionFile = options?.parentSessionFile ?? (() => undefined);
 	const getParentSessionId = options?.parentSessionId ?? (() => undefined);
+	const getSingleModelMode = options?.singleModelMode ?? (() => false);
 	const modelRegistry = options?.modelRegistry;
 	const getAgentModelsForAgent = options?.getAgentModelsForAgent;
 	const arbitrate = options?.arbitrate;
@@ -2463,6 +2514,7 @@ export function createSubagentToolDefinition(
 									: undefined,
 								onControlAvailable,
 								getParentSessionId(),
+								getSingleModelMode(),
 							),
 					);
 				};
@@ -2574,6 +2626,7 @@ export function createSubagentToolDefinition(
 									: undefined,
 								onControlAvailable,
 								getParentSessionId(),
+								getSingleModelMode(),
 							);
 							const resultText = results
 								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)

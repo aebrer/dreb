@@ -1560,6 +1560,300 @@ describe("executeSingle agentModels precedence (issue 219)", () => {
 	});
 });
 
+describe("executeSingle single-model mode (issue 517)", () => {
+	const noModelAgents = new Map<string, AgentTypeConfig>([
+		["test-agent", { name: "test-agent", description: "Test agent", systemPrompt: "Test system prompt" }],
+	]);
+	const parentProvider = "anthropic";
+	const parentModel = "primary-model";
+	const warningText =
+		'The user has enabled "single model mode" in the settings, so the model selection for this subagent ' +
+		`was ignored. Using parent model "${parentProvider}/${parentModel}".`;
+
+	test("modelOverride is ignored — parent model runs and the output carries the warning", async () => {
+		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
+
+		const result = await executeSingle(
+			makeAgents("agent-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"override-model", // modelOverride — ignored in single-model mode
+			parentProvider,
+			probeRegistry(),
+			undefined,
+			parentModel,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			true, // singleModelMode
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain(parentModel);
+		expect(spawnArgs).not.toContain("override-model");
+		expect(spawnArgs).not.toContain("agent-model");
+		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		// No spawn-time availability probing.
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
+
+	test("agentModels fallback list is ignored — parent model runs and the output carries the warning", async () => {
+		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
+
+		const result = await executeSingle(
+			makeAgents("agent-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined, // no modelOverride
+			parentProvider,
+			probeRegistry(),
+			undefined,
+			parentModel,
+			["override-model", "fallback-model"], // agentModels — ignored in single-model mode
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			true,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain(parentModel);
+		expect(spawnArgs).not.toContain("override-model");
+		expect(spawnArgs).not.toContain("fallback-model");
+		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
+
+	test("agent-definition model is ignored — parent model runs and the output carries the warning", async () => {
+		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
+
+		const result = await executeSingle(
+			makeAgents("agent-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined, // no modelOverride
+			parentProvider,
+			probeRegistry(),
+			undefined,
+			parentModel,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			true,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain(parentModel);
+		expect(spawnArgs).not.toContain("agent-model");
+		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+	});
+
+	test("no model spec anywhere — parent model runs without a warning", async () => {
+		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
+
+		const result = await executeSingle(
+			noModelAgents,
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined, // no modelOverride
+			parentProvider,
+			probeRegistry(),
+			undefined,
+			parentModel,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			true,
+		);
+
+		expect(result.exitCode).toBe(0);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain(parentModel);
+		expect(result.output).not.toContain("[WARNING:");
+	});
+
+	test("warning is emitted even when the requested spec equals the parent model", async () => {
+		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
+
+		const result = await executeSingle(
+			noModelAgents,
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			parentModel, // modelOverride — same model as the parent
+			parentProvider,
+			probeRegistry(),
+			undefined,
+			parentModel,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			true,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe(`[WARNING: ${warningText}]\n\nchild output`);
+	});
+
+	test("fails loudly when the parent session's model is unavailable", async () => {
+		const result = await executeSingle(
+			makeAgents("agent-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"override-model",
+			parentProvider,
+			probeRegistry(),
+			undefined,
+			undefined, // no parent model
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			true,
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.errorMessage).toContain(
+			"Single model mode is enabled, but the parent session's model is unavailable",
+		);
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	test("fails loudly when the parent model cannot be resolved", async () => {
+		const result = await executeSingle(
+			noModelAgents,
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			parentProvider,
+			probeRegistry(),
+			undefined,
+			"missing-model", // not in the registry
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			true,
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.errorMessage).toContain("Single model mode:");
+		expect(result.errorMessage).toContain("missing-model");
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
+	test("the dispatch arbiter is never consulted", async () => {
+		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
+		const arbitrate = vi.fn().mockResolvedValue({ enabled: false });
+		const onRecord = vi.fn();
+
+		const result = await executeSingle(
+			makeAgents("agent-model"),
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			"override-model",
+			parentProvider,
+			probeRegistry(),
+			undefined,
+			parentModel,
+			undefined,
+			undefined,
+			undefined,
+			"high",
+			{ arbitrate, onRecord },
+			undefined,
+			undefined,
+			true,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(arbitrate).not.toHaveBeenCalled();
+		expect(onRecord).not.toHaveBeenCalled();
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain(parentModel);
+	});
+
+	test("thinking override is validated against the parent model", async () => {
+		const result = await executeSingle(
+			noModelAgents,
+			"test-agent",
+			"do work",
+			process.cwd(),
+			undefined,
+			undefined,
+			undefined,
+			parentProvider,
+			probeRegistry(),
+			undefined,
+			"fallback-model", // non-reasoning parent model
+			undefined,
+			undefined,
+			undefined,
+			"low",
+			undefined,
+			undefined,
+			undefined,
+			true,
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.errorMessage).toContain('not supported by non-reasoning model "anthropic/fallback-model"');
+		expect(spawn).not.toHaveBeenCalled();
+	});
+});
+
 describe("probe uses streamSimple path (issue 215 regression)", () => {
 	test("probe does NOT use low-level complete() — uses completeSimple (streamSimple path)", async () => {
 		// The old implementation used complete() which calls provider.stream() directly.

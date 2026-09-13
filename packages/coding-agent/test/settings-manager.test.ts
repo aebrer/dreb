@@ -1056,6 +1056,47 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("single model mode", () => {
+		it("defaults to off when the setting is absent", () => {
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSingleModelMode()).toBe(false);
+		});
+
+		it("reads the merged global + project value with the project override winning", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ singleModelMode: true }));
+			writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ singleModelMode: false }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSingleModelMode()).toBe(false);
+
+			writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ singleModelMode: true }));
+			manager.reload();
+			expect(manager.getSingleModelMode()).toBe(true);
+		});
+
+		it("persists to the global settings file without replacing sibling settings", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark", hideThinkingBlock: true }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setSingleModelMode(true);
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved).toEqual({ theme: "dark", hideThinkingBlock: true, singleModelMode: true });
+		});
+
+		it("writes the global value even when a project override shadows it", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ singleModelMode: true }));
+			writeFileSync(join(projectDir, ".dreb", "settings.json"), JSON.stringify({ singleModelMode: false }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getSingleModelMode()).toBe(false);
+
+			manager.setSingleModelMode(true);
+			await manager.flush();
+
+			const saved = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+			expect(saved.singleModelMode).toBe(true);
+		});
+	});
+
 	describe("global-only subagent arbiter settings", () => {
 		it("refreshes enable, disable, and policy changes written by another runtime", async () => {
 			writeFileSync(

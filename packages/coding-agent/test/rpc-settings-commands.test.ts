@@ -69,6 +69,7 @@ describe("getSettingsForRpc", () => {
 			effectiveTrustedContextRoots: [],
 			transport: "sse",
 			hideThinkingBlock: false,
+			singleModelMode: false,
 			agentModels: {},
 			subagentArbiter: undefined,
 			tabTitle: undefined,
@@ -95,6 +96,7 @@ describe("getSettingsForRpc", () => {
 			context: { autoLoadNested: false },
 			transport: "websocket",
 			hideThinkingBlock: true,
+			singleModelMode: true,
 			agentModels: { models: { Explore: ["anthropic/sonnet", "openai/gpt-5"] } },
 			subagentArbiter: { enabled: true, model: "anthropic/claude-sonnet-4-5", thinking: "high" },
 			tabTitle: {
@@ -123,6 +125,7 @@ describe("getSettingsForRpc", () => {
 			effectiveTrustedContextRoots: [],
 			transport: "websocket",
 			hideThinkingBlock: true,
+			singleModelMode: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
 			subagentArbiter: { enabled: true, model: "anthropic/claude-sonnet-4-5", thinking: "high" },
 			tabTitle: {
@@ -471,6 +474,7 @@ describe("setSettingsForRpc validation", () => {
 		"enableSkillCommands",
 		"autoLoadNestedContext",
 		"hideThinkingBlock",
+		"singleModelMode",
 	] as const)("rejects a non-boolean %s", async (key) => {
 		const manager = SettingsManager.inMemory();
 		const result = await setSettingsForRpc(manager, stubRegistry([]), { [key]: "yes" } as never);
@@ -989,6 +993,7 @@ describe("setSettingsForRpc writes", () => {
 			trustedContextFolders: ["~"],
 			transport: "auto",
 			hideThinkingBlock: true,
+			singleModelMode: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
 		});
 
@@ -1012,6 +1017,7 @@ describe("setSettingsForRpc writes", () => {
 			effectiveTrustedContextRoots: [realpathSync.native(homedir())],
 			transport: "auto",
 			hideThinkingBlock: true,
+			singleModelMode: true,
 			agentModels: { Explore: ["anthropic/sonnet", "openai/gpt-5"] },
 			subagentArbiter: undefined,
 			tabTitle: undefined,
@@ -1100,6 +1106,7 @@ describe("setSettingsForRpc writes", () => {
 			trustedContextFolders: [trusted],
 			transport: "websocket",
 			hideThinkingBlock: true,
+			singleModelMode: true,
 			agentModels: { Explore: ["anthropic/sonnet"] },
 			tabTitle: {
 				enabled: true,
@@ -1124,6 +1131,7 @@ describe("setSettingsForRpc writes", () => {
 		expect(raw.context.trustedFolders).toEqual([trusted]);
 		expect(raw.transport).toBe("websocket");
 		expect(raw.hideThinkingBlock).toBe(true);
+		expect(raw.singleModelMode).toBe(true);
 		expect(raw.agentModels.models.Explore).toEqual(["anthropic/sonnet"]);
 		expect(raw.tabTitle).toEqual({
 			enabled: true,
@@ -1823,6 +1831,7 @@ describe("RpcClient settings methods", () => {
 		effectiveTrustedContextRoots: [],
 		transport: "sse",
 		hideThinkingBlock: false,
+		singleModelMode: false,
 		agentModels: {},
 		resolvedScopedModels: [{ provider: "anthropic", id: "claude-sonnet-4-5" }],
 		scopeWarnings: [],

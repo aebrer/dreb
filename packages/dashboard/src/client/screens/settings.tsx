@@ -1037,6 +1037,21 @@ export function SettingsScreen(props: {
 										/>
 									</span>
 								</div>
+								<div class="setting-row">
+									<span class="setting-label">
+										<span class="name">single model mode</span>
+										<span class="hint">
+											all subagents run on this session's model; model overrides, per-agent model lists, and
+											the dispatch arbiter are bypassed
+										</span>
+									</span>
+									<span class="setting-control">
+										<OnOffSelect
+											value={current().singleModelMode === true}
+											onChange={(value) => save({ singleModelMode: value })}
+										/>
+									</span>
+								</div>
 								<div class="context-trust-subsection">
 									<h3>trusted context folders</h3>
 									<p class="muted small">

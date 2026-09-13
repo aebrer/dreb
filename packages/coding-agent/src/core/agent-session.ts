@@ -3452,6 +3452,7 @@ export class AgentSession {
 						parentModel: () => this.model?.id,
 						parentSessionFile: () => this.sessionFile,
 						parentSessionId: () => this.sessionId,
+						singleModelMode: () => this.settingsManager.getSingleModelMode(),
 						modelRegistry: this._modelRegistry,
 						getAgentModelsForAgent: (name: string) => this.settingsManager?.getAgentModelsForAgent(name),
 						defaultThinkingLevel: () => this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,

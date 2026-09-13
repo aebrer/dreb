@@ -547,6 +547,8 @@ export interface SettingsDto {
 	effectiveTrustedContextRoots?: string[];
 	transport?: "sse" | "websocket" | "auto";
 	hideThinkingBlock?: boolean;
+	/** Single-model mode (issue 517): every subagent spawn runs on the parent session's model. */
+	singleModelMode?: boolean;
 	agentModels?: Record<string, string[]>;
 	/** Global-only Dispatch Arbiter configuration. */
 	subagentArbiter?: SubagentArbiterSettingsDto | null;
@@ -582,6 +584,7 @@ export type SettingsUpdateDto = Partial<
 		| "trustedContextFolders"
 		| "transport"
 		| "hideThinkingBlock"
+		| "singleModelMode"
 		| "agentModels"
 		| "subagentArbiter"
 	>

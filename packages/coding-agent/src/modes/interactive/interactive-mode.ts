@@ -3940,6 +3940,7 @@ export class InteractiveMode {
 					currentTheme: this.settingsManager.getTheme() || "dark",
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
+					singleModelMode: this.settingsManager.getSingleModelMode(),
 					thinkingDisplaySupported,
 					thinkingDisplay,
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
@@ -4028,6 +4029,10 @@ export class InteractiveMode {
 						this.rebuildChatFromMessages();
 						this.tryCommitPrefix();
 						this.ui.recommitAll();
+					},
+					onSingleModelModeChange: (enabled) => {
+						// Takes effect from the next subagent spawn (read live at spawn time).
+						this.settingsManager.setSingleModelMode(enabled);
 					},
 					onThinkingDisplayChange: (display) => {
 						const model = this.session.model;

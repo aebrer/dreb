@@ -129,6 +129,13 @@ export interface Settings {
 	retry?: RetrySettings;
 	backgroundAgents?: BackgroundAgentsSettings;
 	hideThinkingBlock?: boolean;
+	/**
+	 * Single-model mode (issue 517): every subagent invocation runs on the parent session's
+	 * model. Model overrides, per-agent model fallback lists, and agent-definition model
+	 * specs are ignored (with a [WARNING] note prepended to child output), and the dispatch
+	 * arbiter is bypassed. Off by default.
+	 */
+	singleModelMode?: boolean;
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows)
 	quietStartup?: boolean;
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
@@ -1051,6 +1058,16 @@ export class SettingsManager {
 	setHideThinkingBlock(hide: boolean): void {
 		this.globalSettings.hideThinkingBlock = hide;
 		this.markModified("hideThinkingBlock");
+		this.save();
+	}
+
+	getSingleModelMode(): boolean {
+		return this.settings.singleModelMode ?? false;
+	}
+
+	setSingleModelMode(enabled: boolean): void {
+		this.globalSettings.singleModelMode = enabled;
+		this.markModified("singleModelMode");
 		this.save();
 	}
 

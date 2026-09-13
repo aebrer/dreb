@@ -52,6 +52,8 @@ export interface SettingsConfig {
 	currentTheme: string;
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
+	/** Single-model mode: all subagents run on the parent session's model (issue 517). */
+	singleModelMode: boolean;
 	/** Whether the current model supports adaptive thinking (gates the thinking-display toggle). */
 	thinkingDisplaySupported: boolean;
 	/** Effective thinking-display value for the current model ("summarized" shown as on). */
@@ -90,6 +92,7 @@ export interface SettingsCallbacks {
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
+	onSingleModelModeChange: (enabled: boolean) => void;
 	onThinkingDisplayChange: (display: "summarized" | "omitted") => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
@@ -513,6 +516,14 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "single-model-mode",
+				label: "Single model mode",
+				description:
+					"ON: all subagents run on this session's model — model overrides, per-agent model lists, and agent-definition models are ignored and the dispatch arbiter is bypassed.",
+				currentValue: config.singleModelMode ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "quiet-startup",
 				label: "Quiet startup",
 				description: "Disable verbose printing at startup",
@@ -834,6 +845,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");
+						break;
+					case "single-model-mode":
+						callbacks.onSingleModelModeChange(newValue === "true");
 						break;
 					case "thinking-display":
 						callbacks.onThinkingDisplayChange(newValue === "true" ? "summarized" : "omitted");

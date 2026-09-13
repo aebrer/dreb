@@ -3140,6 +3140,38 @@ describe("screen smoke tests", () => {
 		expect(api.saveSettings).not.toHaveBeenCalled();
 	});
 
+	it("settings exposes and saves single model mode off by default", async () => {
+		vi.mocked(api.settings).mockResolvedValue({});
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const row = [...el.querySelectorAll(".setting-row")].find((candidate) =>
+			candidate.textContent?.includes("single model mode"),
+		) as HTMLElement;
+		expect(row).not.toBeNull();
+		expect(row.textContent).toContain("dispatch arbiter are bypassed");
+		const select = row.querySelector("select") as HTMLSelectElement;
+		expect(select.value).toBe("off");
+
+		select.value = "on";
+		select.dispatchEvent(new Event("change", { bubbles: true }));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.saveSettings).toHaveBeenCalledWith({ singleModelMode: true });
+	});
+
+	it("settings reflects an enabled single model mode value", async () => {
+		vi.mocked(api.settings).mockResolvedValue({ singleModelMode: true });
+		const store = makeStore();
+		const el = mount(() => <SettingsScreen store={store} />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		const row = [...el.querySelectorAll(".setting-row")].find((candidate) =>
+			candidate.textContent?.includes("single model mode"),
+		) as HTMLElement;
+		expect((row.querySelector("select") as HTMLSelectElement).value).toBe("on");
+	});
+
 	it("settings exposes default-enabled tab title controls and the automatic route", async () => {
 		vi.mocked(api.settings).mockResolvedValue({});
 		const store = makeStore();

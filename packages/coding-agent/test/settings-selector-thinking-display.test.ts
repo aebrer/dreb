@@ -35,6 +35,7 @@ function makeConfig(overrides: Partial<SettingsConfig> = {}): SettingsConfig {
 		currentTheme: "dark",
 		availableThemes: ["dark", "light"],
 		hideThinkingBlock: false,
+		singleModelMode: false,
 		thinkingDisplaySupported: true,
 		thinkingDisplay: "summarized",
 		doubleEscapeAction: "tree",
@@ -69,6 +70,7 @@ function makeCallbacks(): SettingsCallbacks {
 		onThemeChange: vi.fn(),
 		onThemePreview: vi.fn(),
 		onHideThinkingBlockChange: vi.fn(),
+		onSingleModelModeChange: vi.fn(),
 		onThinkingDisplayChange: vi.fn(),
 		onDoubleEscapeActionChange: vi.fn(),
 		onTreeFilterModeChange: vi.fn(),
@@ -253,6 +255,29 @@ describe("SettingsSelectorComponent — auto-compaction continuation", () => {
 		list.handleInput(ENTER);
 
 		expect(callbacks.onContinueAfterAutoCompactionChange).toHaveBeenCalledWith(true);
+	});
+});
+
+describe("SettingsSelectorComponent — single-model mode", () => {
+	test("shows the persisted value and explains what is bypassed when enabled", () => {
+		const component = new SettingsSelectorComponent(makeConfig({ singleModelMode: true }), makeCallbacks());
+		const list = component.getSettingsList();
+		for (const ch of "singlemodel") list.handleInput(ch);
+
+		const output = list.render(200).join("\n");
+		expect(output).toContain("Single model mode");
+		expect(output).toContain("dispatch arbiter");
+		expect(output).toContain("true");
+	});
+
+	test("toggling the setting invokes its dedicated callback", () => {
+		const callbacks = makeCallbacks();
+		const component = new SettingsSelectorComponent(makeConfig({ singleModelMode: false }), callbacks);
+		const list = component.getSettingsList();
+		for (const ch of "singlemodel") list.handleInput(ch);
+		list.handleInput(ENTER);
+
+		expect(callbacks.onSingleModelModeChange).toHaveBeenCalledWith(true);
 	});
 });
 

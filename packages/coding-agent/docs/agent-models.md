@@ -36,6 +36,20 @@ When a subagent is launched, its model is resolved in this priority:
 
 If the `agentModels.models` list is empty or undefined for a given agent, resolution falls through to the agent definition's model, then to the parent session model.
 
+## Single Model Mode
+
+The `singleModelMode` setting (top-level, default `false`) is a global kill-switch for model selection: when enabled, every subagent runs on the **parent session's model** and the resolution order above is skipped entirely. Per-invocation `model` overrides, `agentModels.models` fallback lists, agent-definition `model` fields, spawn-time availability probes, and the optional [Dispatch Arbiter](#dispatch-arbiter) are all bypassed; the child process is spawned directly on the parent's resolved model.
+
+Any requested model selection — including one identical to the parent's model — is reported to the parent model by prepending this notice to the child's output:
+
+```
+[WARNING: The user has enabled "single model mode" in the settings, so the model selection for this subagent was ignored. Using parent model "<provider>/<model>".]
+```
+
+If nothing requested a model (no override, no `agentModels` entry, no agent-definition model), the child simply runs on the parent model without a warning. If the parent session has no model to inherit, or the parent's model cannot be resolved, the spawn fails loudly instead of silently falling back.
+
+Configure it in `settings.json` (global file, with the standard project-level override in `.dreb/settings.json`), in the TUI via `/settings` → **Single model mode**, in the dashboard Settings page (behavior section), or through the [RPC settings API](rpc.md#set_settings). Per-task `thinking` values still apply and are validated against the parent model.
+
 ## Per-request Thinking Overrides
 
 The `subagent` tool accepts an optional `thinking` value in single mode, at the top level for parallel/chain inheritance, or on an individual task/step. Per-task values win over the top-level value.
