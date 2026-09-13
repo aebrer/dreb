@@ -298,7 +298,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	} else if (hasBash && (hasGrep || hasFind || hasLs)) {
 		if (hasSearch) {
 			addGuideline(
-				"Start with `search` to explore and understand the codebase. Use grep/find/ls for exact text matches and specific file lookups. Prefer all of these over bash.",
+				"Use grep/find/ls for exact text matches and specific file lookups, and `search` for open-ended exploration of a large corpus where you don't know the keywords. Prefer all of these over bash.",
 			);
 		} else {
 			addGuideline("Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)");
