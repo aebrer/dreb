@@ -561,8 +561,8 @@ body {
 }
 
 .fleet-sidebar {
-	flex: 0 0 260px;
-	width: 260px;
+	flex: 0 0 var(--fleet-sidebar-width, 260px);
+	width: var(--fleet-sidebar-width, 260px);
 	border-right: var(--hairline);
 	display: flex;
 	flex-direction: column;
@@ -575,6 +575,33 @@ body {
 
 .fleet-sidebar.collapsed {
 	display: none;
+}
+
+.fleet-sidebar-resize {
+	flex: 0 0 6px;
+	width: 6px;
+	position: relative;
+	cursor: col-resize;
+	touch-action: none;
+	user-select: none;
+}
+
+.fleet-sidebar-resize::after {
+	content: "";
+	position: absolute;
+	inset: 0 2px;
+	background: var(--border);
+}
+
+.fleet-sidebar-resize:hover::after,
+.fleet-sidebar-resize:focus-visible::after,
+.fleet-sidebar-resize.dragging::after {
+	background: var(--text);
+}
+
+.fleet-sidebar-resize:focus-visible {
+	outline: 1px solid var(--text);
+	outline-offset: -1px;
 }
 
 .fleet-sidebar-entry {
@@ -606,32 +633,50 @@ body {
 	border-color: var(--status-error);
 }
 
-.fleet-sidebar-entry-head {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: var(--space-2);
-	min-width: 0;
-}
-
-.fleet-sidebar-entry-head .name {
-	font-weight: 500;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.fleet-sidebar-entry-head .chip {
+/* Rich summaries must wrap even on desktop: the sidebar can be narrower than
+   a fleet-grid card. Never shrink stacked cards to fit the scroll viewport. */
+.fleet-sidebar-entry {
 	flex: 0 0 auto;
 }
 
-.fleet-sidebar-entry-meta {
-	display: flex;
-	gap: var(--space-2);
-	color: var(--muted);
-	font-size: var(--fs-small);
+.fleet-sidebar-entry .session-title {
+	flex-wrap: wrap;
+}
+
+.fleet-sidebar-entry .session-title .chip {
+	flex: 0 0 auto;
+}
+
+.fleet-sidebar-entry .name,
+.fleet-sidebar-entry .session-project,
+.fleet-sidebar-entry .agent-line,
+.fleet-sidebar-entry .session-meta > span {
+	white-space: normal;
+}
+
+.fleet-sidebar-entry > *,
+.fleet-sidebar-entry .name,
+.fleet-sidebar-entry .agent-line,
+.fleet-sidebar-entry .session-meta > span {
 	min-width: 0;
+	max-width: 100%;
+	overflow-wrap: anywhere;
+}
+
+.fleet-sidebar-toggle[data-status="idle"] {
+	border-color: var(--status-idle);
+}
+
+.fleet-sidebar-toggle[data-status="running"] {
+	border-color: var(--status-running);
+}
+
+.fleet-sidebar-toggle[data-status="attention"] {
+	border-color: var(--status-attention);
+}
+
+.fleet-sidebar-toggle[data-status="error"] {
+	border-color: var(--status-error);
 }
 
 .chat {

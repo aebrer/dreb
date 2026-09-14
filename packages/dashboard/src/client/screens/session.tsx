@@ -24,7 +24,12 @@ import { MAX_TOTAL_IMAGE_BYTES } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { commandMatches, dispatchBuiltinCommand, parseDashboardBuiltin } from "../builtin-commands.js";
 import { type BannerItem, BannerRegion, ConnectionIndicator, Modal } from "../components/common.js";
-import { createFleetSidebarUi, FleetSidebar, fleetSidebarOrder } from "../components/fleet-sidebar.js";
+import {
+	createFleetSidebarUi,
+	FleetSidebar,
+	FleetSidebarToggle,
+	fleetSidebarOrder,
+} from "../components/fleet-sidebar.js";
 import { MarkdownBody, Transcript } from "../components/transcript.js";
 import { composerTextareaMaxHeight } from "../composer-sizing.js";
 import { isAbortError } from "../errors.js";
@@ -940,6 +945,11 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	let imageFileInputRef: HTMLInputElement | undefined;
 	let statsPopoverRef: HTMLDivElement | undefined;
 	let disposed = false;
+	const hydration = new AbortController();
+	onCleanup(() => {
+		disposed = true;
+		hydration.abort();
+	});
 	let runtimeDetailsRequestGeneration = 0;
 
 	const closed = () => session()?.closed;
@@ -959,7 +969,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	const stickToBottom = createStickToBottom({ scroller: () => chatRef });
 
 	async function refreshRuntimeDetails(includeDailyCost = false) {
-		if (closed()) return;
+		if (disposed || closed()) return;
 		const requestGeneration = ++runtimeDetailsRequestGeneration;
 		const [statsResult, performanceResult, branchResult] = await Promise.allSettled([
 			props.store.refreshRuntimeStats(props.sessionKey),
@@ -1001,7 +1011,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	}
 
 	async function refreshPendingMessages() {
-		if (closed()) return;
+		if (disposed || closed()) return;
 		// Always ask the runtime — never gate on the fleet's pendingMessageCount.
 		// The fleet snapshot only refreshes on agent start/end, so a steer/follow-up
 		// submitted mid-turn would be invisible if we trusted the stale count.
@@ -1022,7 +1032,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		if (id) uiResponsesInFlight.add(id);
 		try {
 			await api.extensionUiResponse(props.sessionKey, response);
-			if (id) props.store.resolveUiRequest(props.sessionKey, id);
+			if (id && props.store.sessions[props.sessionKey] && !closed())
+				props.store.resolveUiRequest(props.sessionKey, id);
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -1125,6 +1136,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		const preflightImages: PendingImageAttachment[] = [];
 		try {
 			const snapshot = await api.pending(props.sessionKey);
+			if (disposed || closed()) return;
 			preflightImages.push(...imageAttachmentsFromQueuedMessages(queuedMessagesFromPending(snapshot)));
 			assertTotalImageBytes(preflightImages.reduce((sum, image) => sum + image.size, 0));
 		} catch (err) {
@@ -1138,6 +1150,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		let imagesCommitted = false;
 		try {
 			const cleared = await api.dequeue(props.sessionKey);
+			if (disposed || closed()) return;
 			const queuedMessages = queuedMessagesFromPending(cleared);
 			setPendingMessages({ steering: [], followUp: [], steeringMessages: [], followUpMessages: [] });
 			restoreQueuedText(queuedMessages);
@@ -1208,6 +1221,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			const uploadDir = await ensureUploadDir(cwd);
 			const uploaded: UploadedFileAttachment[] = [];
 			for (const [index, file] of selected.entries()) {
+				if (disposed || closed()) return;
 				const uploadName = uniqueUploadName(file, index);
 				const result = await api.upload(uploadDir, new File([file], uploadName, { type: file.type }), false);
 				uploaded.push({
@@ -1217,7 +1231,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 					path: result.path,
 				});
 			}
-			setFileAttachments((current) => [...current, ...uploaded]);
+			if (!disposed && !closed()) setFileAttachments((current) => [...current, ...uploaded]);
 		} catch (err) {
 			setActionError(err instanceof Error ? err.message : String(err));
 		}
@@ -1243,9 +1257,9 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setTreeError(undefined);
 		try {
 			const result = await api.navigateTree(props.sessionKey, targetId);
-			if (result.cancelled) return;
+			if (result.cancelled || disposed || closed()) return;
 			if (result.editorText) setComposerText(result.editorText);
-			await props.store.hydrateSession(props.sessionKey);
+			await props.store.hydrateSession(props.sessionKey, hydration.signal);
 			setShowTreeModal(false);
 		} catch (err) {
 			setTreeError(err instanceof Error ? err.message : String(err));
@@ -1270,8 +1284,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setResumeError(undefined);
 		try {
 			const result = await api.resume(props.sessionKey, path);
-			if (result.cancelled) return;
-			await props.store.hydrateSession(props.sessionKey);
+			if (result.cancelled || disposed || closed()) return;
+			await props.store.hydrateSession(props.sessionKey, hydration.signal);
 			await props.store.refreshDiskSessions();
 			setShowResumeModal(false);
 		} catch (err) {
@@ -1283,8 +1297,8 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setImportError(undefined);
 		try {
 			const result = await api.importJsonl(props.sessionKey, path);
-			if (result.cancelled) return;
-			await props.store.hydrateSession(props.sessionKey);
+			if (result.cancelled || disposed || closed()) return;
+			await props.store.hydrateSession(props.sessionKey, hydration.signal);
 			await props.store.refreshDiskSessions();
 			setShowImportModal(false);
 		} catch (err) {
@@ -1311,6 +1325,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setForkError(undefined);
 		try {
 			const result = await action();
+			if (disposed || closed()) return;
 			if (result.cancelled) {
 				setForkError(cancelMessage);
 				return;
@@ -1318,7 +1333,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			// Only user (re-ask) forks return text; assistant forks return "" and must
 			// not clobber whatever the user has already typed into the composer.
 			if (result.text) setComposerText(result.text);
-			await props.store.hydrateSession(props.sessionKey);
+			await props.store.hydrateSession(props.sessionKey, hydration.signal);
 			await props.store.refreshDiskSessions();
 			setShowForkModal(false);
 		} catch (err) {
@@ -1341,7 +1356,6 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 	}
 
 	onMount(() => {
-		const hydration = new AbortController();
 		if (!closed()) {
 			props.store.hydrateSession(props.sessionKey, hydration.signal).catch((err) => {
 				if ((hydration.signal.aborted && isAbortError(err)) || closed()) return;
@@ -1352,11 +1366,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		void fetchCommands();
 		void refreshPendingMessages();
 		const detailTimer = setInterval(() => void refreshRuntimeDetails(false), 5000);
-		onCleanup(() => {
-			disposed = true;
-			hydration.abort();
-			clearInterval(detailTimer);
-		});
+		onCleanup(() => clearInterval(detailTimer));
 	});
 
 	const closeStatsPopover = (event: MouseEvent) => {
@@ -1546,9 +1556,10 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				return;
 			}
 			const result = await api.newSession(props.sessionKey);
+			if (disposed || closed()) return;
 			if (result.cancelled) setActionNotice("New session cancelled.");
 			else {
-				await props.store.hydrateSession(props.sessionKey);
+				await props.store.hydrateSession(props.sessionKey, hydration.signal);
 				await props.store.refreshDiskSessions();
 			}
 		},
@@ -1574,9 +1585,10 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 				return;
 			}
 			await api.reload(props.sessionKey);
+			if (disposed || closed()) return;
 			const [{ commands: reloadedCommands }] = await Promise.all([
 				api.commands(props.sessionKey),
-				props.store.hydrateSession(props.sessionKey),
+				props.store.hydrateSession(props.sessionKey, hydration.signal),
 			]);
 			setCommands(reloadedCommands);
 			setActionNotice("Reloaded extensions, skills, prompts, themes, and settings.");
@@ -1615,6 +1627,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 							pendingImages.map(async ({ blob, mimeType }) => ({ data: await blobToBase64(blob), mimeType })),
 						)
 					: undefined;
+			if (disposed || closed()) return;
 			if (streaming()) {
 				await api.prompt(props.sessionKey, promptText, sendMode(), images);
 			} else if (images) {
@@ -1622,6 +1635,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 			} else {
 				await api.prompt(props.sessionKey, promptText);
 			}
+			if (disposed || closed()) return;
 			addComposerHistoryEntry(props.sessionKey, promptText);
 			setHistoryIndex(undefined);
 			setComposerText("");
@@ -1637,6 +1651,7 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 		setStopping(true);
 		try {
 			await api.abort(props.sessionKey);
+			if (disposed || closed()) return;
 			// TUI ESC parity: clear the queue and return queued messages to the
 			// composer so they don't silently restart the agent after the abort.
 			await restorePendingToComposer();
@@ -1968,16 +1983,13 @@ export function SessionScreen(props: { store: AppStore; sessionKey: string }): J
 						</Show>
 						<div class="session-summary-row">
 							<Show when={hasSidebar()}>
-								<button
-									type="button"
-									class="chrome-toggle fleet-sidebar-toggle"
-									title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
-									aria-controls={sidebar.id}
-									aria-expanded={!sidebarHidden()}
-									onClick={() => sidebar.toggle()}
-								>
-									{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
-								</button>
+								<FleetSidebarToggle
+									store={props.store}
+									runtimes={sidebarEntries()}
+									id={sidebar.id}
+									hidden={sidebarHidden()}
+									onToggle={sidebar.toggle}
+								/>
 							</Show>
 							<Show when={!topChromeCollapsed()}>
 								<button

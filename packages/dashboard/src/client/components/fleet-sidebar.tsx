@@ -7,7 +7,7 @@
  * both with entry-border emphasis without moving position (AGENTS.md:
  * highlight, never re-sort).
  *
- * Desktop: a static column beside the transcript, collapsed through the
+ * Desktop: a resizable column beside the transcript, collapsed through the
  * persisted `dreb.dashboard.sessionSidebarCollapsed` preference. Mobile
  * (≤700px): a fixed overlay drawer above the session with a scrim — hidden by
  * default regardless of the desktop preference, opened from the session-bar
@@ -16,9 +16,11 @@
 
 import { createEffect, createMemo, createSignal, createUniqueId, For, type JSX, onCleanup, Show } from "solid-js";
 import type { RuntimeInfoDto } from "../../shared/protocol.js";
+import { createFleetStatsRefresh } from "../state/fleet-stats-refresh.js";
 import { sessionSidebarCollapsed, setSessionSidebarCollapsed } from "../state/preferences.js";
 import type { AppStore } from "../state/store.js";
-import { relativeTime, runtimeStatus, StatusChip } from "./common.js";
+import { createFleetSidebarResize, FleetSidebarResizeHandle } from "./fleet-sidebar-resize.js";
+import { SessionCardSummary, sessionCardStatus } from "./session-card-summary.js";
 
 /**
  * Deterministic fleet order: alphabetical by project path, then session start
@@ -69,6 +71,40 @@ export function createFleetSidebarUi() {
 	};
 }
 
+export function FleetSidebarToggle(props: {
+	store: AppStore;
+	runtimes: readonly RuntimeInfoDto[];
+	id: string;
+	hidden: boolean;
+	onToggle: () => void;
+}): JSX.Element {
+	const status = createMemo(() => {
+		const priority = { idle: 0, running: 1, attention: 2, error: 3 };
+		return props.runtimes.reduce<ReturnType<typeof sessionCardStatus>>((highest, runtime) => {
+			const current = sessionCardStatus(props.store, runtime);
+			return priority[current] > priority[highest] ? current : highest;
+		}, "idle");
+	});
+	const label = () =>
+		props.hidden
+			? `show other sessions; highest priority: ${status() === "attention" ? "needs attention" : status()}`
+			: "hide other sessions";
+	return (
+		<button
+			type="button"
+			class="chrome-toggle fleet-sidebar-toggle"
+			data-status={props.hidden ? status() : undefined}
+			title={label()}
+			aria-label={label()}
+			aria-controls={props.id}
+			aria-expanded={!props.hidden}
+			onClick={() => props.onToggle()}
+		>
+			{props.hidden ? "fleet ▸" : "fleet ◂"}
+		</button>
+	);
+}
+
 export function FleetSidebar(props: {
 	id: string;
 	store: AppStore;
@@ -88,8 +124,11 @@ export function FleetSidebar(props: {
 	);
 
 	let drawer: HTMLElement | undefined;
+	const resizable = createMemo(() => !props.mobile && !props.collapsed && entries().length > 0);
+	const resize = createFleetSidebarResize(resizable, () => drawer?.parentElement ?? undefined);
 	const overlayActive = createMemo(() => props.mobile && props.open && entries().length > 0);
 	const hidden = () => (props.mobile ? !props.open : props.collapsed);
+	createFleetStatsRefresh(props.store, () => !hidden() && entries().length > 0);
 
 	createEffect(() => {
 		if (!overlayActive()) return;
@@ -151,6 +190,7 @@ export function FleetSidebar(props: {
 				aria-hidden={hidden()}
 				inert={hidden()}
 				class="fleet-sidebar"
+				style={{ "--fleet-sidebar-width": `${resize.width()}px` }}
 				classList={{
 					open: props.mobile && props.open,
 					collapsed: !props.mobile && props.collapsed,
@@ -161,11 +201,12 @@ export function FleetSidebar(props: {
 						close fleet sidebar
 					</button>
 				</Show>
+				<Show when={props.store.fleetStatsError()}>
+					<output class="error-reason">Stats refresh failed: {props.store.fleetStatsError()}</output>
+				</Show>
 				<For each={entries()}>
 					{(runtime) => {
-						const status = () => runtimeStatus(runtime);
-						const runningAgents = () =>
-							runtime.backgroundAgents.filter((agent) => agent.status === "running").length;
+						const status = () => sessionCardStatus(props.store, runtime);
 						return (
 							<button
 								type="button"
@@ -174,23 +215,15 @@ export function FleetSidebar(props: {
 								title={runtime.cwd}
 								onClick={() => props.onNavigate(runtime.key)}
 							>
-								<div class="fleet-sidebar-entry-head">
-									<span class="name">{runtime.state.sessionName ?? runtime.state.sessionId.slice(0, 8)}</span>
-									<StatusChip status={status()} />
-								</div>
-								<div class="fleet-sidebar-entry-meta">
-									<span>{relativeTime(runtime.lastActivity)}</span>
-									<Show when={runningAgents() > 0}>
-										<span>
-											· ⚡ {runningAgents()} agent{runningAgents() === 1 ? "" : "s"}
-										</span>
-									</Show>
-								</div>
+								<SessionCardSummary store={props.store} runtime={runtime} />
 							</button>
 						);
 					}}
 				</For>
 			</aside>
+			<Show when={resizable()}>
+				<FleetSidebarResizeHandle resize={resize} id={props.id} />
+			</Show>
 			<Show when={props.mobile && props.open}>
 				{/* Pointer-only scrim: keyboard dismissal belongs to the drawer. */}
 				<div class="fleet-sidebar-scrim" aria-hidden="true" onClick={() => props.onClose()} />

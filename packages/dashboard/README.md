@@ -50,11 +50,14 @@ Open `http://127.0.0.1:5343`.
   latest-100 median tok/s with sample count and long-term delta), stats/loaded-context/fork modals, steer/follow-up composer
   modes, ■ abort, model/thinking switchers, extension-UI modals, export HTML,
   and live auto-naming. A fleet sidebar lists other live sessions in stable order
-  with live status chips and attention/error highlighting. Desktop collapse
-  persists; at <=700px it becomes a safe-area-aware drawer, initially closed,
+  with the fleet cards' display information and attention/error highlighting.
+  Desktop collapse and pointer/keyboard-resizable width persist; a hidden
+  sidebar's toggle border shows the highest-priority other-session status.
+  At <=700px it becomes a safe-area-aware drawer, initially closed,
   with managed keyboard focus and a close button, scrim, and Escape dismissal
-  that does not abort a pending agent question. Resizing preserves the desktop
-  preference. The sidebar also appears in subagent drill-in, excluding its parent.
+  that does not abort a pending agent question. Window breakpoint changes preserve
+  desktop preferences independently of mobile drawer sizing. The sidebar also
+  appears in subagent drill-in, excluding its parent.
 - **Subagent drill-in** — transcript of a background agent: live events via
   the relay, hydrated from the agent's on-disk session log so the view survives
   browser reloads. While the child is running, its composer queues user-written
@@ -92,6 +95,32 @@ Open `http://127.0.0.1:5343`.
   the 1–3650 day lifetime used by future pairings (180 days by default), and
   paired-device expiry/unpair management.
 - **Pairing** — remote first-login rotating-code flow.
+
+### Fleet sidebar
+
+Sidebar cards share the fleet page's project, name/status, attention/error reason,
+activity/latest-assistant preview, running/done subagent counts (up to three live
+summaries), task progress, model, ctx%, cost, message count, and last activity.
+Current working text or a suggested-next command takes precedence over the
+bounded assistant preview; unvisited sessions use the server-provided preview.
+Cards navigate on click, without adding the fleet page's stop-runtime action.
+
+On desktop, drag the right-edge separator or focus it and use Left/Right (10px),
+Home, or End. The default is 260px; preferred widths range from 240–560px, further
+constrained to leave 360px for the transcript. Collapse and width are saved in
+localStorage (`dreb.dashboard.sessionSidebarCollapsed` and
+`dreb.dashboard.sessionSidebarWidth`) across navigation and reload. Narrowing a
+window temporarily clamps the rendered width without replacing the saved choice;
+mobile ignores that width. Cancelling a drag discards its uncommitted change.
+While the sidebar/drawer is hidden, the toggle uses the highest-priority status
+among its cards: error → needs attention → running → idle, with theme colors
+and a textual accessible description. The viewed session/parent is excluded.
+
+Switching directly between sessions or subagents loads the destination transcript
+with fresh screen-local state, including after leaving a closed session. Live
+sessions retain their own unsent text drafts for the tab's lifetime; attachments,
+modals, and local errors never transfer to a different session. Abandoned
+hydration is cancelled so late responses cannot replace the destination view.
 
 ### Notifications and navigation
 
@@ -188,10 +217,12 @@ browser DTO and bounds its first-message preview to 256 Unicode characters;
 internal parent paths and complete searchable transcript text never cross this
 boundary. The client narrowly refreshes inventory with `GET /api/sessions` after
 create, resume, stop, or delete, rather than reloading the whole fleet. While the
-Fleet screen is visible, it refreshes
-per-runtime stats no more often than every 30 seconds; the refresh is
+Fleet screen or a session/subagent fleet sidebar is visible, it refreshes
+per-runtime stats on a shared 30-second cadence; the refresh is
 single-flight, preserves each card's last good values, and exposes refresh
-failures in the UI.
+failures in the visible fleet surface. Hiding or unmounting that surface stops
+its timer; direct session switching preserves the cadence without hydrating
+other cards' transcripts or refetching the full fleet.
 
 Cards use the latest assistant text in hydrated client transcript entries for
 their activity preview. The authoritative initial-load or resync fleet value is

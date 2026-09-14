@@ -7,7 +7,12 @@ import { createEffect, createMemo, createSignal, For, type JSX, onCleanup, onMou
 import type { PendingMessagesDto, SubagentArbitrationDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
 import { type BannerItem, BannerRegion, StatusChip } from "../components/common.js";
-import { createFleetSidebarUi, FleetSidebar, fleetSidebarOrder } from "../components/fleet-sidebar.js";
+import {
+	createFleetSidebarUi,
+	FleetSidebar,
+	FleetSidebarToggle,
+	fleetSidebarOrder,
+} from "../components/fleet-sidebar.js";
 import { Transcript } from "../components/transcript.js";
 import { isAbortError } from "../errors.js";
 import { bindStickToBottom, createStickToBottom } from "../scrolling.js";
@@ -36,6 +41,10 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	const [steerError, setSteerError] = createSignal<string>();
 	const [steeringMode, setSteeringMode] = createSignal<"all" | "one-at-a-time">();
 	const [pending, setPending] = createSignal<PendingMessagesDto>({ steering: [], followUp: [] });
+	let disposed = false;
+	onCleanup(() => {
+		disposed = true;
+	});
 	const closed = () => parent()?.closed;
 	const isRunning = () => !closed() && agent()?.status === "running";
 
@@ -87,9 +96,10 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 	onCleanup(() => stickToBottom.dispose());
 
 	async function refreshPending(): Promise<void> {
-		if (!isRunning()) return;
+		if (disposed || !isRunning()) return;
 		try {
 			const result = await api.subagentPending(props.sessionKey, props.agentId);
+			if (disposed || !isRunning()) return;
 			setSteeringMode(result.steeringMode);
 			setPending(result.pending);
 			setSteerError(undefined);
@@ -203,16 +213,13 @@ export function SubagentScreen(props: { store: AppStore; sessionKey: string; age
 				</div>
 				<Show when={hasSidebar()}>
 					<div class="session-bar-inner session-summary-row">
-						<button
-							type="button"
-							class="chrome-toggle fleet-sidebar-toggle"
-							title={sidebarHidden() ? "show other sessions" : "hide other sessions"}
-							aria-controls={sidebar.id}
-							aria-expanded={!sidebarHidden()}
-							onClick={() => sidebar.toggle()}
-						>
-							{sidebarHidden() ? "fleet ▸" : "fleet ◂"}
-						</button>
+						<FleetSidebarToggle
+							store={props.store}
+							runtimes={sidebarEntries()}
+							id={sidebar.id}
+							hidden={sidebarHidden()}
+							onToggle={sidebar.toggle}
+						/>
 					</div>
 				</Show>
 			</header>

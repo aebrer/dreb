@@ -109,7 +109,7 @@ function sessionFixture(state: SessionLayoutState): string {
 }
 
 function sidebarEntry(name: string, chipClass: string, chipLabel: string): string {
-	return `<button type="button" class="fleet-sidebar-entry"><div class="fleet-sidebar-entry-head"><span class="name">${name}</span><span class="chip ${chipClass}"><span class="dot">●</span> ${chipLabel}</span></div><div class="fleet-sidebar-entry-meta"><span>2m ago</span></div></button>`;
+	return `<button type="button" class="fleet-sidebar-entry"><span class="session-title"><span class="name">${name}</span><span class="chip ${chipClass}"><span class="dot">●</span> ${chipLabel}</span></span><span class="session-meta"><span>2m ago</span></span></button>`;
 }
 
 /** A mobile session with the fleet sidebar drawer open (overlay + scrim). */

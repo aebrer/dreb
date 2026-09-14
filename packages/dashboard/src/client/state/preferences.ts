@@ -4,6 +4,10 @@ import type { DashboardImageDisplayMode } from "../../shared/protocol.js";
 export const EXPAND_THINKING_KEY = "dreb.dashboard.expandThinking";
 export const IMAGE_DISPLAY_MODE_KEY = "dreb.dashboard.imageDisplayMode";
 export const SESSION_SIDEBAR_COLLAPSED_KEY = "dreb.dashboard.sessionSidebarCollapsed";
+export const SESSION_SIDEBAR_WIDTH_KEY = "dreb.dashboard.sessionSidebarWidth";
+export const SESSION_SIDEBAR_WIDTH_DEFAULT = 260;
+export const SESSION_SIDEBAR_WIDTH_MIN = 240;
+export const SESSION_SIDEBAR_WIDTH_MAX = 560;
 export const TOOL_AUTO_EXPAND_KEY = "dreb.dashboard.toolAutoExpand";
 export const TOOL_AUTO_EXPAND_TOOLS = ["read", "edit", "write", "suggest_next", "bash"] as const;
 
@@ -38,6 +42,23 @@ function writeBooleanPreference(key: string, value: boolean): void {
 	} catch {
 		// Browser storage can be unavailable in private modes; the in-memory signal
 		// still updates so the control remains honest for this page load.
+	}
+}
+
+function normalizeSidebarWidth(value: number): number {
+	return Number.isFinite(value)
+		? Math.min(SESSION_SIDEBAR_WIDTH_MAX, Math.max(SESSION_SIDEBAR_WIDTH_MIN, Math.round(value)))
+		: SESSION_SIDEBAR_WIDTH_DEFAULT;
+}
+
+function readSidebarWidth(): number {
+	if (typeof window === "undefined") return SESSION_SIDEBAR_WIDTH_DEFAULT;
+	try {
+		const raw = window.localStorage.getItem(SESSION_SIDEBAR_WIDTH_KEY);
+		if (!raw?.trim()) return SESSION_SIDEBAR_WIDTH_DEFAULT;
+		return normalizeSidebarWidth(Number(raw));
+	} catch {
+		return SESSION_SIDEBAR_WIDTH_DEFAULT;
 	}
 }
 
@@ -96,6 +117,24 @@ const [toolAutoExpandSignal, setToolAutoExpandSignal] = createSignal(readToolAut
 const [sessionSidebarCollapsedSignal, setSessionSidebarCollapsedSignal] = createSignal(
 	readBooleanPreference(SESSION_SIDEBAR_COLLAPSED_KEY, SESSION_SIDEBAR_COLLAPSED_DEFAULT),
 );
+
+const [sessionSidebarWidthSignal, setSessionSidebarWidthSignal] = createSignal(readSidebarWidth());
+export const sessionSidebarWidth = sessionSidebarWidthSignal;
+
+export function setSessionSidebarWidth(value: number): void {
+	const width = normalizeSidebarWidth(value);
+	setSessionSidebarWidthSignal(width);
+	if (typeof window === "undefined") return;
+	try {
+		window.localStorage.setItem(SESSION_SIDEBAR_WIDTH_KEY, String(width));
+	} catch {
+		// Keep resizing usable in-memory when browser storage is unavailable.
+	}
+}
+
+export function reloadSessionSidebarWidthPreference(): void {
+	setSessionSidebarWidthSignal(readSidebarWidth());
+}
 
 export const expandThinking = expandThinkingSignal;
 export const imageDisplayMode = imageDisplayModeSignal;
