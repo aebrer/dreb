@@ -2487,6 +2487,187 @@ describe("subagent tool agentModels wiring (issue 219, finding 4)", () => {
 	});
 });
 
+/**
+ * Tool-layer wiring tests for singleModelMode (issue 517, review findings 1 + 4).
+ *
+ * The behavior tests above call `executeSingle` directly with a static positional
+ * `singleModelMode: true`. These tests instead drive the REAL tool created by
+ * `createSubagentToolDefinition`, exercising the wiring that forwards the live
+ * `singleModelMode` option getter into the spawn paths for single, chain, and
+ * parallel modes. No modelRegistry is passed, so the parent model resolves
+ * registry-less through `resolveModelStringSingle` (no probe), and the resolved
+ * model surfaces directly in the spawned child's `--model` CLI argument.
+ */
+describe("subagent tool singleModelMode wiring (issue 517)", () => {
+	let tmpRoot: string;
+	const parentProvider = "anthropic";
+	const parentModel = "primary-model";
+	const warningText =
+		`[WARNING: The user has enabled "single model mode" in the settings, so the model selection ` +
+		`for this subagent was ignored. Using parent model "${parentProvider}/${parentModel}".]`;
+
+	beforeEach(() => {
+		// Build a temp cwd with project-level agent definitions. Project agents are
+		// loaded LAST in discoverAgentTypes, so they override package/user agents,
+		// giving deterministic config.model values for the fall-through assertions.
+		tmpRoot = mkdtempSync(join(tmpdir(), "subagent-single-mode-"));
+		const agentsDir = join(tmpRoot, ".dreb", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "feature-dev.md"),
+			"---\nname: feature-dev\ndescription: impl agent\nmodel: config/feature-model\n---\nfeature prompt",
+		);
+		writeFileSync(
+			join(agentsDir, "explore.md"),
+			"---\nname: Explore\ndescription: explore agent\nmodel: config/explore-model\n---\nexplore prompt",
+		);
+	});
+
+	afterEach(() => {
+		rmSync(tmpRoot, { recursive: true, force: true });
+	});
+
+	/**
+	 * Build the real tool plus a recording spy for the live singleModelMode getter.
+	 * Returns a `done` promise that resolves with the background SubagentResult so
+	 * tests can await the async background lifecycle before asserting on the
+	 * mocked spawn args.
+	 */
+	function makeTool(getSingleModelMode?: () => boolean) {
+		const modeSpy = vi.fn(getSingleModelMode ?? (() => false));
+		let resolveDone: (r: SubagentResult) => void;
+		const done = new Promise<SubagentResult>((res) => {
+			resolveDone = res;
+		});
+		const tool = createSubagentToolDefinition(tmpRoot, {
+			parentProvider: () => parentProvider,
+			parentModel: () => parentModel,
+			singleModelMode: modeSpy,
+			onBackgroundComplete: (_id, result) => resolveDone(result),
+		});
+		return { tool, modeSpy, done };
+	}
+
+	test("enabled: the getter is consulted and the parent model replaces the agent definition model", async () => {
+		mockSpawnSubagentResult({ model: parentModel, output: "child output" });
+		const { tool, modeSpy, done } = makeTool(() => true);
+
+		await tool.execute(
+			"call-1",
+			{ agent: "feature-dev", task: "do work" },
+			undefined,
+			undefined,
+			{} as ExtensionContext,
+		);
+		const result = await done;
+
+		expect(modeSpy).toHaveBeenCalledTimes(1);
+		expect(result.exitCode).toBe(0);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain(parentModel);
+		expect(spawnArgs).not.toContain("config/feature-model");
+		expect(result.output).toContain(warningText);
+		expect(result.output).not.toContain("[MODEL FALLBACK");
+		// Registry-less parent resolution skips probing entirely.
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
+
+	test("disabled: the agent definition model is used and no warning appears", async () => {
+		mockSpawnSubagentResult({ model: "config/feature-model", output: "child output" });
+		const { tool, modeSpy, done } = makeTool(() => false);
+
+		await tool.execute(
+			"call-2",
+			{ agent: "feature-dev", task: "do work" },
+			undefined,
+			undefined,
+			{} as ExtensionContext,
+		);
+		const result = await done;
+
+		expect(modeSpy).toHaveBeenCalledTimes(1);
+		expect(result.exitCode).toBe(0);
+		const spawnArgs = vi.mocked(spawn).mock.calls[0][1];
+		expect(spawnArgs).toContain("config/feature-model");
+		expect(spawnArgs).not.toContain(parentModel);
+		expect(result.output).not.toContain("[WARNING:");
+	});
+
+	test("chain: the setting is re-read per step, so a flipped value applies from the next step", async () => {
+		// Two-step chain with distinct agents. Step 1 (feature-dev) runs with the
+		// setting off; step 2 (Explore) runs with it on. The getter returns the
+		// queued values in call order, which only works if executeChain evaluates
+		// the getter once per step — not once per chain (the pre-fix regression
+		// would consume the "off" value for the whole chain).
+		mockSpawnSubagentResult({ model: "config/feature-model", output: "step 1 output" });
+		mockSpawnSubagentResult({ model: parentModel, output: "step 2 output" });
+		const queued = [false, true];
+		let next = 0;
+		const { tool, modeSpy, done } = makeTool(() => queued[next++]);
+
+		await tool.execute(
+			"call-3",
+			{
+				chain: [
+					{ agent: "feature-dev", task: "implement" },
+					{ agent: "Explore", task: "review {previous}" },
+				],
+			},
+			undefined,
+			undefined,
+			{} as ExtensionContext,
+		);
+		const result = await done;
+
+		// The getter must be consulted once per step — not once per chain.
+		expect(modeSpy).toHaveBeenCalledTimes(2);
+		expect(result.exitCode).toBe(0);
+		expect(spawn).toHaveBeenCalledTimes(2);
+		const step1Args = vi.mocked(spawn).mock.calls[0][1];
+		const step2Args = vi.mocked(spawn).mock.calls[1][1];
+		// Step 1 ran with the setting off: the agent definition model is honored.
+		expect(step1Args).toContain("config/feature-model");
+		expect(step1Args).not.toContain(parentModel);
+		// Step 2 ran with the setting on: the parent model is used and the agent
+		// definition model is ignored.
+		expect(step2Args).toContain(parentModel);
+		expect(step2Args).not.toContain("config/explore-model");
+		const [step1Section, step2Section] = result.output.split("### Step 2");
+		expect(step1Section).not.toContain("[WARNING:");
+		expect(step2Section).toContain(warningText);
+	});
+
+	test("parallel tasks: each task re-reads the setting and runs on the parent model", async () => {
+		mockSpawnSubagentResult({ model: parentModel, output: "task 1 output" });
+		mockSpawnSubagentResult({ model: parentModel, output: "task 2 output" });
+		const { tool, modeSpy, done } = makeTool(() => true);
+
+		const res = await tool.execute(
+			"call-4",
+			{
+				tasks: [
+					{ agent: "feature-dev", task: "implement" },
+					{ agent: "Explore", task: "review" },
+				],
+			},
+			undefined,
+			undefined,
+			{} as ExtensionContext,
+		);
+		expect(res.content[0]).toMatchObject({ type: "text" });
+		await done;
+
+		expect(modeSpy).toHaveBeenCalledTimes(2);
+		expect(spawn).toHaveBeenCalledTimes(2);
+		const spawnArgs0 = vi.mocked(spawn).mock.calls[0][1];
+		const spawnArgs1 = vi.mocked(spawn).mock.calls[1][1];
+		expect(spawnArgs0).toContain(parentModel);
+		expect(spawnArgs1).toContain(parentModel);
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
+});
+
 // ---------------------------------------------------------------------------
 // parentSessionFile threading tests
 // ---------------------------------------------------------------------------

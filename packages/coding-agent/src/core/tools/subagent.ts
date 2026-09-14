@@ -1538,8 +1538,12 @@ async function executeChain(
 	onControlAvailable?: (client: RpcClient | undefined) => void,
 	/** Parent session UUID for spawn-time availability probes (issue 500). */
 	parentSessionId?: string,
-	/** Single-model mode (issue 517): every chain step runs on the parent session's model. */
-	singleModelMode?: boolean,
+	/**
+	 * Live single-model mode getter (issue 517): evaluated per step so each chain step
+	 * runs on the parent session's model when enabled, matching the per-spawn semantics
+	 * of single and parallel modes.
+	 */
+	getSingleModelMode?: () => boolean,
 ): Promise<SubagentResult[]> {
 	const results: SubagentResult[] = [];
 	let previousOutput = "";
@@ -1580,6 +1584,9 @@ async function executeChain(
 		const stepSessionDir = sessionBaseDir ? join(sessionBaseDir, `step-${i + 1}`) : undefined;
 		const stepAgentName = step.agent || defaultAgent || DEFAULT_AGENT;
 		const stepMach6Models = getAgentModelsForAgentFn?.(stepAgentName);
+		// Single-model mode (issue 517) is re-read per step so a mid-chain settings
+		// change applies from the next step onward.
+		const singleModelMode = getSingleModelMode?.() ?? false;
 		const result = await executeSingle(
 			agents,
 			step.agent || defaultAgent,
@@ -2626,7 +2633,7 @@ export function createSubagentToolDefinition(
 									: undefined,
 								onControlAvailable,
 								getParentSessionId(),
-								getSingleModelMode(),
+								getSingleModelMode,
 							);
 							const resultText = results
 								.map((r, i) => `### Step ${i + 1}\n${formatSingleResult(r)}`)
