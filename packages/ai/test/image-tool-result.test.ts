@@ -10,6 +10,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { getCopilotTestModel } from "./fixtures/copilot-models.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
 // Resolve OAuth tokens at module level (async, runs before tests)
@@ -357,37 +358,37 @@ describe("Tool Results with Images", () => {
 
 	describe("GitHub Copilot Provider", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"gpt-5.4 - should handle tool result with only image",
+			"OpenAI completions - should handle tool result with only image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
+				const llm = applyCopilotBaseUrl(getCopilotTestModel("openai-completions"), githubCopilotToken);
 				await handleToolWithImageResult(llm, { apiKey: githubCopilotToken });
 			},
 		);
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"gpt-5.4 - should handle tool result with text and image",
+			"OpenAI completions - should handle tool result with text and image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
+				const llm = applyCopilotBaseUrl(getCopilotTestModel("openai-completions"), githubCopilotToken);
 				await handleToolWithTextAndImageResult(llm, { apiKey: githubCopilotToken });
 			},
 		);
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"claude-opus-4.8 - should handle tool result with only image",
+			"Anthropic Messages - should handle tool result with only image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.8"), githubCopilotToken);
+				const llm = applyCopilotBaseUrl(getCopilotTestModel("anthropic-messages"), githubCopilotToken);
 				await handleToolWithImageResult(llm, { apiKey: githubCopilotToken });
 			},
 		);
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"claude-opus-4.8 - should handle tool result with text and image",
+			"Anthropic Messages - should handle tool result with text and image",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const llm = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.8"), githubCopilotToken);
+				const llm = applyCopilotBaseUrl(getCopilotTestModel("anthropic-messages"), githubCopilotToken);
 				await handleToolWithTextAndImageResult(llm, { apiKey: githubCopilotToken });
 			},
 		);

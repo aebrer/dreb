@@ -8,6 +8,7 @@ type StreamOptionsWithExtras = StreamOptions & Record<string, unknown>;
 
 import { hasAzureOpenAICredentials, resolveAzureDeploymentName } from "./azure-utils.js";
 import { hasBedrockCredentials } from "./bedrock-utils.js";
+import { getCopilotTestModel } from "./fixtures/copilot-models.js";
 import { ZAI_GLM_47_FLASH } from "./fixtures/zai-models.js";
 import { applyCopilotBaseUrl, resolveApiKey } from "./oauth.js";
 
@@ -279,19 +280,19 @@ describe("Tool Call Without Result Tests", () => {
 
 	describe("GitHub Copilot Provider", () => {
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"gpt-5.4 - should filter out tool calls without corresponding tool results",
+			"OpenAI completions - should filter out tool calls without corresponding tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "gpt-5.4"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getCopilotTestModel("openai-completions"), githubCopilotToken);
 				await testToolCallWithoutResult(model, { apiKey: githubCopilotToken });
 			},
 		);
 
 		it.skipIf(process.env.DREB_SKIP_LIVE_API === "1" || !githubCopilotToken)(
-			"claude-opus-4.8 - should filter out tool calls without corresponding tool results",
+			"Anthropic Messages - should filter out tool calls without corresponding tool results",
 			{ retry: 3, timeout: 30000 },
 			async () => {
-				const model = applyCopilotBaseUrl(getModel("github-copilot", "claude-opus-4.8"), githubCopilotToken);
+				const model = applyCopilotBaseUrl(getCopilotTestModel("anthropic-messages"), githubCopilotToken);
 				await testToolCallWithoutResult(model, { apiKey: githubCopilotToken });
 			},
 		);

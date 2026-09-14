@@ -1,22 +1,18 @@
 /**
  * Fleet overview — home screen. Live-first: one grid of all live session
- * cards (attention-first, project path on each card), then compact past
+ * cards (deterministic order — project path, then session start time;
+ * attention/error emphasis never re-orders them), then compact past
  * sessions grouped by project (3 rows + expand). "+ new session" modal.
  */
 
-import { createMemo, createSignal, For, type JSX, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import type { RuntimeInfoDto, SessionInfoDto } from "../../shared/protocol.js";
 import { api } from "../api.js";
-import { Modal, relativeTime, StatusChip, Topbar } from "../components/common.js";
-import { pendingQuestionsReason } from "../state/reducer.js";
+import { Modal, relativeTime, Topbar } from "../components/common.js";
+import { fleetSidebarOrder } from "../components/fleet-sidebar.js";
+import { SessionCardSummary, sessionCardStatus } from "../components/session-card-summary.js";
+import { createFleetStatsRefresh } from "../state/fleet-stats-refresh.js";
 import type { AppStore } from "../state/store.js";
-
-function runtimeStatus(runtime: RuntimeInfoDto): "running" | "attention" | "idle" | "error" {
-	if (runtime.error) return "error";
-	if (runtime.needsAttention) return "attention";
-	if (runtime.state.isStreaming || runtime.state.isRetrying || runtime.state.isCompacting) return "running";
-	return "idle";
-}
 
 // Display-only normalization: /tmp children are grouped together in the fleet UI.
 // Resume still uses each session's own real cwd and session log path unchanged.
@@ -28,109 +24,11 @@ function shortenPath(path: string): string {
 	return path.replace(/^\/home\/[^/]+/, "~");
 }
 
-function runtimeModelLabel(runtime: RuntimeInfoDto): string | undefined {
-	const model = runtime.state.model;
-	return model ? `${model.provider}/${model.id}` : undefined;
-}
-
-function runtimeCostLabel(runtime: RuntimeInfoDto): string | undefined {
-	return runtime.stats ? `$${runtime.stats.cost.toFixed(2)}` : undefined;
-}
-
-const ACTIVITY_PREVIEW_LIMIT = 200;
-
-function latestAssistantPreview(store: AppStore, runtime: RuntimeInfoDto): string | undefined {
-	const entries = store.sessions[runtime.key]?.entries ?? [];
-	for (let index = entries.length - 1; index >= 0; index -= 1) {
-		const entry = entries[index];
-		if (entry.kind !== "assistant") continue;
-		const text = entry.blocks
-			.filter((block) => block.kind === "text")
-			.map((block) => block.text)
-			.join("")
-			.trim();
-		if (text) return text.slice(0, ACTIVITY_PREVIEW_LIMIT);
-	}
-	return runtime.lastAssistantText;
-}
-
 function SessionCard(props: { store: AppStore; runtime: RuntimeInfoDto }): JSX.Element {
-	const status = () => runtimeStatus(props.runtime);
-	const session = () => props.store.sessions[props.runtime.key];
-	const liveAgents = () => props.runtime.backgroundAgents.filter((a) => a.status === "running");
-	const doneAgents = () => props.runtime.backgroundAgents.filter((a) => a.status !== "running");
-	const tasks = () => session()?.tasks ?? props.runtime.state.tasks ?? [];
-	const tasksDone = () => tasks().filter((t) => t.status === "completed").length;
-	const ctx = () => props.runtime.state.contextUsage;
-	const activity = () => {
-		const s = session();
-		if (s?.workingText) return `▸ ${s.workingText}`;
-		if (s?.suggestedCommand) return `suggested next: ${s.suggestedCommand}`;
-		return latestAssistantPreview(props.store, props.runtime);
-	};
-
+	const status = () => sessionCardStatus(props.store, props.runtime);
 	return (
-		<article
-			class="session-card"
-			classList={{ attention: status() === "attention", error: status() === "error" || !!session()?.lastError }}
-		>
-			<div class="session-title">
-				<span class="name">
-					{session()?.sessionName ?? props.runtime.state.sessionName ?? props.runtime.state.sessionId.slice(0, 8)}
-				</span>
-				<Show when={session()?.lastError} fallback={<StatusChip status={status()} />}>
-					<StatusChip status="error" />
-				</Show>
-			</div>
-			<p class="session-project" title={props.runtime.cwd}>
-				{shortenPath(props.runtime.cwd)}
-			</p>
-			<Show when={status() === "attention"}>
-				<p class="attention-reason">{pendingQuestionsReason(session()?.uiRequests ?? []) ?? "needs attention"}</p>
-			</Show>
-			<Show when={props.runtime.error ?? session()?.lastError}>
-				<p class="error-reason">{props.runtime.error ?? session()!.lastError}</p>
-			</Show>
-			<Show when={activity()}>
-				<p class="activity">{activity()}</p>
-			</Show>
-			<Show when={props.runtime.backgroundAgents.length > 0}>
-				<div class="subagents">
-					<span>
-						⚡ {liveAgents().length} running · {doneAgents().length} done
-					</span>
-					<For each={liveAgents().slice(0, 3)}>
-						{(agent) => (
-							<span class="agent-line">
-								<span class="live">●</span> {agent.agentType} — {agent.taskSummary}
-							</span>
-						)}
-					</For>
-				</div>
-			</Show>
-			<div class="session-meta">
-				<Show when={tasks().length > 0}>
-					<span>
-						tasks {tasksDone()}/{tasks().length}
-					</span>
-					<span>·</span>
-				</Show>
-				<Show when={runtimeModelLabel(props.runtime)}>
-					<span>{runtimeModelLabel(props.runtime)}</span>
-					<span>·</span>
-				</Show>
-				<Show when={ctx() && ctx()!.percent !== null}>
-					<span>ctx {ctx()!.percent!.toFixed(0)}%</span>
-					<span>·</span>
-				</Show>
-				<Show when={runtimeCostLabel(props.runtime)}>
-					<span>{runtimeCostLabel(props.runtime)}</span>
-					<span>·</span>
-				</Show>
-				<span>{props.runtime.state.messageCount} msgs</span>
-				<span>·</span>
-				<span>{relativeTime(props.runtime.lastActivity)}</span>
-			</div>
+		<article class="session-card" classList={{ attention: status() === "attention", error: status() === "error" }}>
+			<SessionCardSummary store={props.store} runtime={props.runtime} />
 			<div class="session-actions">
 				<button
 					type="button"
@@ -247,15 +145,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 	// Live sessions: one flat grid, deterministically ordered — alphabetical by
 	// project path, then session start time as tiebreak. Stable ordering beats
 	// dynamic reordering for UX: cards never jump around as activity ticks.
-	const liveRuntimes = createMemo(() => {
-		const runtimes = [...props.store.fleet().runtimes];
-		runtimes.sort((a, b) => {
-			const byPath = a.cwd.localeCompare(b.cwd);
-			if (byPath !== 0) return byPath;
-			return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-		});
-		return runtimes;
-	});
+	const liveRuntimes = createMemo(() => fleetSidebarOrder(props.store.fleet().runtimes));
 
 	// Past sessions: grouped by project, compact rows, newest group first.
 	const diskGroups = createMemo(() => {
@@ -290,10 +180,7 @@ export function FleetScreen(props: { store: AppStore }): JSX.Element {
 		return [...paths].slice(0, 8);
 	});
 
-	onMount(() => {
-		const timer = setInterval(() => void props.store.refreshFleetStats(), 30_000);
-		onCleanup(() => clearInterval(timer));
-	});
+	createFleetStatsRefresh(props.store, () => true);
 
 	async function resume(session: SessionInfoDto) {
 		setResumeError(undefined);

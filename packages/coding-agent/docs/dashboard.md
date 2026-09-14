@@ -133,19 +133,63 @@ networking window above.
 | Screen | What it does |
 |---|---|
 | **Fleet** | Home. Live-first: one grid of every live session at the top — status chip (● running / ◆ needs-attention / ○ idle / ✕ error), project path, activity line, live subagent lines, tasks progress, ctx%, model, terminal provider-error reason, last activity. Live cards keep a deterministic order by project path, then session start time; needs-attention cards badge the browser tab without jumping around. Below the grid: past sessions grouped by project, three compact rows per group with an "all N on disk" expander, resume and delete. |
-| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, a bounded scrollable subagent panel that lists every retained agent newest-first with full running/done counts, a shared dismissible banner region for model fallback, extension notices, retry/compaction/paused/provider status, and local action results, a controls-only dock line with elapsed time plus ■ stop and explicitly labelled retry/compaction aborts, a persistent session-header live indicator, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, a TUI-parity latest-100 median TPS indicator (`~31 tok/s [100] · 10% ↑ median [10000]`), and a stats popover. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. Registered built-in slash commands are discovered generically, deduplicated ahead of colliding resource commands, and intercepted before prompting: dashboard actions cover settings, model, scoped-models, export/import, name/session stats, fork/tree, new/compact/dream, resume/reload, and quit. `/scoped-models` deep-links to the Settings editor with the session's current cwd as project context; login/logout show an explicit not-yet-implemented notice, while copy/hotkeys/buddy give terminal-only guidance. Future built-ins are intercepted automatically. The RPC prompt boundary rejects any built-in that reaches it during command-loading races or failures, so slash text cannot leak to the model. Attachments are retained and the command is visibly rejected rather than silently discarded. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests for select/confirm/input/editor render as modals; a rich `ask`/`ask_user` request renders inline as a single wizard that presents all its questions together — each with Markdown-formatted question text, choices, optional free text — plus an in-card Stop agent action, Escape-to-stop, and the authoritative auto-stop countdown, and is answered as one batch submit. Pending questions set needs-attention state and use the existing hidden-page notification path. Extension notifications for the viewed session render in its banner region; other sessions' and app-global notices use the fixed top-center toast stack. |
+| **Session view** | Full chat drill-in. Markdown streaming transcript (text, thinking blocks with expand preference, inline provider/API failures with partial output preserved, agent-result cards, tool cards with bespoke read/write/edit/bash bodies plus full expandable inputs, markdown-rendered results for markdown-contract tools like subagent/skill/web_fetch/suggest_next, and inline tool-result images, compaction/branch summaries, custom messages), per-message copy, tasks panel, a bounded scrollable subagent panel that lists every retained agent newest-first with full running/done counts, a shared dismissible banner region for model fallback, extension notices, retry/compaction/paused/provider status, and local action results, a controls-only dock line with elapsed time plus ■ stop and explicitly labelled retry/compaction aborts, a persistent session-header live indicator, and an info bar with cwd, branch, session name, token breakdown, cost/(sub)/daily rollup, ctx%, a TUI-parity latest-100 median TPS indicator (`~31 tok/s [100] · 10% ↑ median [10000]`), and a stats popover. A fleet sidebar lists every other live session beside the transcript with the fleet cards' project, status/reasons, activity/latest-assistant preview, running/done subagent summaries, task progress, model, context, cost, message count, and last activity, deterministically ordered by project path then session start time (the fleet page's comparator), so needs-attention/error entries are emphasized — a filled attention chip or outlined error chip plus an entry border — without moving position; clicking an entry navigates to that session, desktop collapse and pointer/keyboard-resizable width persist browser-locally (default expanded, 260px), the hidden toggle border reflects the highest-priority other-session status, and neither sidebar nor toggle renders when no other live sessions exist. The subagent drill-in shows the same sidebar with its parent session excluded. Composer supports auto-grow, history, `/` autocomplete from `get_commands`, image attach/paste with sent images retained as user-message previews, queued-message chips with restore-all, steer/follow-up modes, and suggest-next. Registered built-in slash commands are discovered generically, deduplicated ahead of colliding resource commands, and intercepted before prompting: dashboard actions cover settings, model, scoped-models, export/import, name/session stats, fork/tree, new/compact/dream, resume/reload, and quit. `/scoped-models` deep-links to the Settings editor with the session's current cwd as project context; login/logout show an explicit not-yet-implemented notice, while copy/hotkeys/buddy give terminal-only guidance. Future built-ins are intercepted automatically. The RPC prompt boundary rejects any built-in that reaches it during command-loading races or failures, so slash text cannot leak to the model. Attachments are retained and the command is visibly rejected rather than silently discarded. The ⋯ menu covers export HTML, compact, rename, fork-from-message, loaded context, and tool expand/collapse. Session names update live from manual rename or auto-naming. Extension UI requests for select/confirm/input/editor render as modals; a rich `ask`/`ask_user` request renders inline as a single wizard that presents all its questions together — each with Markdown-formatted question text, choices, optional free text — plus an in-card Stop agent action, Escape-to-stop, and the authoritative auto-stop countdown, and is answered as one batch submit. Pending questions set needs-attention state and use the existing hidden-page notification path. Extension notifications for the viewed session render in its banner region; other sessions' and app-global notices use the fixed top-center toast stack. |
 | **Subagent view** | Transcript of a background agent: live events via the RPC relay, hydrated from the agent's on-disk session log (`/subagents/:agentId/messages`) so the transcript survives browser reloads. Shows the task, streaming output, tool activity, and any safe Dispatch Arbiter changed/unchanged/failure records with the final agent/model/thinking. No raw arbiter output is displayed or transported. While the child is running, a composer sends the user's text unchanged to that specific child as steering input, displays its pending steering queue, and reports its effective `one-at-a-time` or `all` delivery mode. Completed, failed, rehydrated, and unavailable children remain read-only. |
 | **Files** | Host-wide browser with places shortcuts (home, /tmp, project roots), breadcrumbs to `/`, new-folder, download, drop-zone/picker upload with explicit collision prompts, and "new session here" on any directory. It also shows the **effective global nested-context trust** for the displayed canonical directory: untrusted, trusted by that root, inherited from a granting root, or global expert trust-all. You can trust the displayed folder and descendants, or untrust the actual granting root; untrusting an inherited folder removes that root's trust for all descendants. |
 | **Memories** | Dreb-only memory management for `~/.dreb/memory` and `.dreb/memory` under active/disk project roots. It lists existing `MEMORY.md` indexes and direct child `.md` entries only (no Claude paths, create, or rename), shows entry frontmatter or metadata errors so malformed files can be repaired, renders sanitized Markdown preview beside a raw editor, and uses exact SHA-256 revisions so stale saves/deletes return conflicts while preserving drafts. The index view is complete, not truncated, and warns when it exceeds the 200-line memory-index convention. Entry deletion requires both entry and index revisions, removes only matching safe Markdown-link index lines (`file.md` / `./file.md`), writes the cleaned index atomically before unlinking the entry, and rolls back loudly if the unlink fails. |
 | **Settings** | Persistent defaults (default model, thinking level, steering/follow-up queue modes, auto-compaction, opt-in continuation of pending work after successful automatic compaction, auto-retry) via `get_settings`/`set_settings` — validation errors are shown verbatim. The continuation option is off by default, can keep unattended model turns and costs running indefinitely, does not restart completed answers, and never affects manual `/compact`. The tab-title card exposes the default-enabled generator toggle and an exact authenticated `provider/model` picker; an unset model clearly retains Explore-agent routing, a pinned model can be cleared back to that route, and edits apply to new unnamed sessions. The scoped-models editor controls model cycling for new sessions only: grouped search, model/provider/all toggles, responsive controls, accessible up/down partial-scope ordering, and save/reset. An absent `enabledModels` is future-inclusive all models in registry order and cannot be reordered; a partial scope is a non-empty ordered list of canonical `provider/model` references. Editing legacy glob, fuzzy, or thinking-suffix values saves normalized exact references. The selected context reads effective global + project settings but writes global; a project-level `enabledModels` shadow is warned. The global-only Dispatch Arbiter card exposes enable/disable, exact authenticated model selection, thinking, guide path, and readiness guidance; model-less enablement is blocked and RPC/runtime validation remains fail-closed. Entering Settings flushes pending writes and reloads durable global + project settings, so external edits appear; read, parse, or write failures fail loudly instead of showing stale settings. The global-only nested-context policy lists every explicit trusted root for audit and revoke, offers a simple add-by-path control, and includes a prominently warned expert trust-all toggle; the Files view remains the primary place to grant trust while browsing. Most defaults seed new sessions, including **Max concurrent subagents** (default 4). Setting it to 0 starts new parents without the subagent tool and tells the parent model to perform normally delegated work itself; positive values cap running children per parent session. Context-trust changes are observed by active main/subagent processes for future lazy loads, but cannot remove already injected content. Dashboard-local preferences (always expand thinking, transcript image display mode, needs-attention notification permission) live in the browser, alongside an appearance section: a theme gallery of eight curated themes (entropist.ca, Dim, Solarized, Gruvbox, Caves of Qud, Van Gogh, and the colorblind-safe Okabe-Ito and Paul Tol) with live preview cards plus system/light/dark mode and Theme default/IBM Plex Mono/JetBrains Mono/Fira Code/Iosevka/OpenDyslexic/Atkinson Hyperlegible font selectors, saved per browser. Shows the current rotating pairing code on the host/local dashboard, the 1–3650 day lifetime used only for future pairings (180-day default), and paired-device expiry dates with unpair. |
 | **Pairing** | Remote first-login: identity echo, rotating-code entry, and the security copy explaining what pairing grants. |
 
+### Fleet sidebar controls and session switching
+
+The sidebar uses the same display summary as fleet-page cards, but its entire
+card navigates rather than adding a destructive stop-runtime button. Activity
+prefers working text, then a suggested-next command, then the latest nonblank
+assistant text (bounded to 200 characters), with the server's preview as fallback
+for an unvisited transcript. It shows running/done counts and up to three live
+subagent summaries; unavailable optional metadata is omitted.
+
+When the desktop sidebar is collapsed or the mobile drawer is closed, the Fleet
+toggle border reflects **error > needs attention > running > idle** across its
+other-session cards, including session-local terminal errors. The viewed session
+(or parent of a viewed subagent) is excluded. Existing theme status colors and
+an accessible textual description communicate the result; card order never changes.
+
+On desktop, drag the right-edge separator or focus it and use Left/Right arrows
+(10px steps), Home (minimum), or End (maximum). The initial width is **260px**;
+the preferred range is **240–560px**, constrained by available space to reserve
+**360px** for the transcript plus the separator. The browser saves the preferred
+width under `dreb.dashboard.sessionSidebarWidth`, independently of
+`dreb.dashboard.sessionSidebarCollapsed`. Narrowing the window clamps only the
+rendered width; widening restores the saved choice. Invalid values fall back to
+the default or clamp to the allowed range. Unavailable localStorage leaves the
+controls usable in memory. A cancelled drag does not replace the saved width.
+These preferences are shared by session and subagent screens, not by the server.
+
+Direct sidebar navigation, browser back/forward, and subagent identity changes
+load the destination's transcript with fresh screen-local state. Unsent text
+drafts remain associated with each live session for the tab's lifetime;
+attachments, modals, and local errors do not transfer. Leaving a closed session
+releases its retained snapshot as before. Navigation aborts abandoned hydration,
+and late screen actions cannot hydrate or operate on the newly viewed session.
+
 ### Notifications and explicit navigation
 
 The session banner region is the single surface for notices belonging to the
-session being viewed. Each banner has its own dismiss control, persists until
-dismissed or cleared by its source lifecycle, and caps long text with internal
-scrolling so its controls remain reachable on mobile. Dismissing a status banner
+session being viewed. It lives inside the transcript column in both session and
+subagent views, aligned with transcript content; showing or dismissing banners
+does not move or shorten the fleet sidebar. Each banner has its own dismiss
+control, persists until dismissed or cleared by its source lifecycle, and caps
+long text with internal scrolling. The stack also has a bounded scroll area so
+multiple notices do not consume the composer. The header keeps back navigation
+on the left, session identity in the middle, and live/details controls on the
+right. Model/thinking controls occupy a separate row. The fleet sidebar toggle
+is on the left of the bottom usage/context-stats row, separate from the back
+link; collapsing details hides the stats but leaves this toggle available.
+Subagent views likewise put the toggle in a bottom header row. On mobile the
+title moves below navigation rather than scattering controls around a long title.
+If a short viewport forces the header to shrink for the composer, the header
+scrolls internally so its bottom controls remain reachable. Dismissing a status banner
 is presentation-only: provider/error state, Fleet needs-attention state, tab
 badges, and hidden-page notifications remain accurate until the underlying
 runtime reports recovery. Genuinely app-global notices and extension notices
@@ -272,9 +316,12 @@ preview to 256 Unicode characters. Internal parent paths and complete searchable
 transcript text never cross this browser boundary. After creating, resuming,
 stopping, or deleting a session, the client narrowly refreshes the disk list
 through `GET /api/sessions` rather than reloading the whole fleet. While the
-Fleet screen is visible, it polls each live runtime's
-stats no more often than every 30 seconds. That poll is single-flight, retains a
-card's last good stats if an update fails, and surfaces failures in the Fleet UI.
+Fleet screen or a session/subagent fleet sidebar is visible, it polls live-runtime
+stats on a shared 30-second cadence. That poll is single-flight, retains a
+card's last good stats if an update fails, and surfaces failures in the visible
+fleet surface. Hiding/unmounting stops that surface's timer. Session switching
+neither accelerates nor restarts the cadence, and showing sidebar summaries
+never hydrates every card's transcript or refetches the entire fleet.
 
 For the activity preview, a card prefers the newest assistant text derived from
 its hydrated client transcript entries. Until those entries exist, the
@@ -452,7 +499,19 @@ status chips, project paths, activity and subagent text, and past-session
 labels wrap within their cards or rows rather than spilling off-screen. The
 session view prioritizes read-and-steer (model/thinking switchers collapse into
 ⋯, and task/subagent panels default collapsed), and the file table shows name +
-download only.
+download only. The session fleet sidebar becomes a fixed overlay drawer —
+hidden by default regardless of the desktop collapse preference, opened from
+the session bar, closed by tapping the scrim or pressing Escape, and an entry
+tap navigates and closes — keeping the transcript and composer at full width
+by default. The drawer respects device safe-area insets. Its closed contents are
+hidden from keyboard navigation and assistive technology; opening moves focus
+to its close button, Tab stays within the drawer, and closing returns focus to
+the previous control when it is still available. Escape closes the drawer without
+also stopping an agent waiting for a question response. Breakpoint changes update
+both layout and toggle behavior immediately, close any open mobile drawer, and
+preserve the separate desktop collapse and preferred-width settings. The desktop
+resize handle is absent on mobile; saved desktop widths never change mobile
+drawer geometry.
 Composer modes, abort, and needs-attention affordances are never reduced away
 — steering a running agent from a phone is the primary remote use case.
 

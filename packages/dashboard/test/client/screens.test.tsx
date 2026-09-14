@@ -287,7 +287,13 @@ import {
 	reloadAppearance,
 	THEME_STORAGE_KEY,
 } from "../../src/client/state/appearance.js";
-import { setExpandThinking, setImageDisplayMode } from "../../src/client/state/preferences.js";
+import { evictComposerMemory, getComposerDraft } from "../../src/client/state/composer-memory.js";
+import {
+	SESSION_SIDEBAR_COLLAPSED_KEY,
+	setExpandThinking,
+	setImageDisplayMode,
+	setSessionSidebarCollapsed,
+} from "../../src/client/state/preferences.js";
 import {
 	applySessionEvent,
 	createSessionViewState,
@@ -384,6 +390,7 @@ afterEach(() => {
 	window.location.hash = "#/";
 	setExpandThinking(false);
 	setImageDisplayMode("previews");
+	setSessionSidebarCollapsed(false);
 	window.localStorage.clear();
 	vi.mocked(connectEvents).mockImplementation(() => () => {});
 	vi.mocked(api.auth).mockResolvedValue({ mode: "local", needsPairing: false });
@@ -600,19 +607,32 @@ function runtimeInfo(key: string, cwd = "/home/test/project"): RuntimeInfoDto {
 }
 
 function stubMobile(matches = true) {
+	const events = new EventTarget();
+	const addEventListener = vi.fn(events.addEventListener.bind(events));
+	const removeEventListener = vi.fn(events.removeEventListener.bind(events));
 	Object.defineProperty(window, "matchMedia", {
 		configurable: true,
 		value: vi.fn((query: string) => ({
-			matches,
+			get matches() {
+				return matches;
+			},
 			media: query,
 			onchange: null,
 			addListener: vi.fn(),
 			removeListener: vi.fn(),
-			addEventListener: vi.fn(),
-			removeEventListener: vi.fn(),
-			dispatchEvent: vi.fn(),
+			addEventListener,
+			removeEventListener,
+			dispatchEvent: events.dispatchEvent.bind(events),
 		})),
 	});
+	return {
+		addEventListener,
+		removeEventListener,
+		resize(next: boolean) {
+			matches = next;
+			events.dispatchEvent(Object.assign(new Event("change"), { matches }));
+		},
+	};
 }
 
 function stubObjectUrls() {
@@ -1226,6 +1246,850 @@ describe("app store integration", () => {
 		} finally {
 			(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = priorRO;
 		}
+	});
+});
+
+describe("session route identity", () => {
+	function snapshot(key: string) {
+		return {
+			key,
+			state: runtimeInfo(key).state,
+			messages: [{ role: "assistant", content: [{ type: "text", text: `transcript for ${key}` }] }],
+			backgroundAgents: [],
+			barrierSeq: 0,
+		};
+	}
+
+	async function startApp(mobile = false) {
+		for (const key of ["route-a", "route-b", "route-c"]) evictComposerMemory(key);
+		stubMobile(mobile);
+		vi.mocked(api.hydrate)
+			.mockClear()
+			.mockImplementation(async (key) => snapshot(key));
+		vi.mocked(api.fleet).mockResolvedValue({
+			runtimes: [runtimeInfo("route-a"), runtimeInfo("route-b"), runtimeInfo("route-c")],
+			diskSessions: [],
+		});
+		window.location.hash = "#/session/route-a";
+		const element = mount(() => <App />);
+		await vi.waitFor(() => expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-a"));
+		return element;
+	}
+
+	function navigate(element: HTMLElement, key: string) {
+		const toggle = element.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+		if (toggle.getAttribute("aria-expanded") === "false") toggle.click();
+		const entry = [...element.querySelectorAll<HTMLButtonElement>(".fleet-sidebar-entry")].find(
+			(button) => button.querySelector(".name")?.textContent === key.slice(0, 8),
+		);
+		if (!entry) throw new Error(`No sidebar entry for ${key}`);
+		entry.click();
+	}
+
+	it.each([false, true])(
+		"hydrates first-time sidebar destinations and isolates drafts (mobile=%s)",
+		async (mobile) => {
+			const element = await startApp(mobile);
+			const composer = element.querySelector<HTMLTextAreaElement>(".composer textarea")!;
+			composer.value = "draft for A";
+			composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
+			const signalA = vi.mocked(api.hydrate).mock.calls.find(([key]) => key === "route-a")![1]!;
+			navigate(element, "route-b");
+			await vi.waitFor(() =>
+				expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-b"),
+			);
+			expect(signalA.aborted).toBe(true);
+			expect(element.querySelector(".chat")?.textContent).not.toContain("transcript for route-a");
+			expect(element.querySelector<HTMLTextAreaElement>(".composer textarea")?.value).toBe("");
+			expect(element.querySelector(".fleet-sidebar.open")).toBeNull();
+			navigate(element, "route-a");
+			await vi.waitFor(() =>
+				expect(element.querySelector<HTMLTextAreaElement>(".composer textarea")?.value).toBe("draft for A"),
+			);
+		},
+	);
+
+	it("disposes attachments and modals and does not continue an abandoned reload into another session", async () => {
+		const urls = stubObjectUrls();
+		const element = await startApp();
+		const imageInput = element.querySelector<HTMLInputElement>('input[accept="image/*"]')!;
+		Object.defineProperty(imageInput, "files", { value: [new File(["image"], "a.png", { type: "image/png" })] });
+		imageInput.dispatchEvent(new Event("change", { bubbles: true }));
+		expect(urls.createObjectURL).toHaveBeenCalledTimes(1);
+		[...element.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "⋯")!.click();
+		[...element.querySelectorAll<HTMLButtonElement>("button")]
+			.find((button) => button.textContent === "rename")!
+			.click();
+		expect(element.querySelector('[role="dialog"]')).not.toBeNull();
+		navigate(element, "route-b");
+		await vi.waitFor(() => expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-b"));
+		expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:mock-1");
+		expect(element.querySelector('img[src="blob:mock-1"]')).toBeNull();
+		expect(element.querySelector('[role="dialog"]')).toBeNull();
+
+		vi.mocked(api.commands).mockResolvedValue({
+			commands: [{ name: "reload", source: "builtin", dashboard: true, description: "reload" }],
+		});
+		navigate(element, "route-a");
+		await vi.waitFor(() => expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-a"));
+		let finishReload!: (value: { ok: true }) => void;
+		vi.mocked(api.reload).mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finishReload = resolve;
+				}),
+		);
+		await submitComposer(element.querySelector<HTMLTextAreaElement>(".composer textarea")!, "/reload");
+		expect(finishReload).toBeTypeOf("function");
+		navigate(element, "route-c");
+		await vi.waitFor(() => expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-c"));
+		const hydrateCount = vi.mocked(api.hydrate).mock.calls.length;
+		finishReload({ ok: true });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(api.hydrate).toHaveBeenCalledTimes(hydrateCount);
+		expect(element.textContent).not.toContain("Reloaded extensions");
+	});
+
+	it("surfaces a destination hydration failure instead of showing the previous transcript", async () => {
+		const element = await startApp();
+		vi.mocked(api.hydrate).mockRejectedValueOnce(new Error("destination is unavailable"));
+		navigate(element, "route-b");
+		await vi.waitFor(() =>
+			expect(element.querySelector(".banner-region")?.textContent).toContain("destination is unavailable"),
+		);
+		expect(element.querySelector(".chat")?.textContent).not.toContain("transcript for route-a");
+	});
+
+	it("does not remount the same identity on duplicate hash events", async () => {
+		const element = await startApp();
+		const composer = element.querySelector(".composer textarea");
+		const count = vi.mocked(api.hydrate).mock.calls.length;
+		window.dispatchEvent(new HashChangeEvent("hashchange"));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(element.querySelector(".composer textarea")).toBe(composer);
+		expect(api.hydrate).toHaveBeenCalledTimes(count);
+	});
+
+	it("aborts abandoned hydration and ignores late details during rapid switching", async () => {
+		const element = await startApp();
+		let resolveB!: (value: ReturnType<typeof snapshot>) => void;
+		let resolveBranch!: (value: { branch: string }) => void;
+		vi.mocked(api.hydrate).mockImplementation(async (key) =>
+			key === "route-b"
+				? new Promise((resolve) => {
+						resolveB = resolve;
+					})
+				: snapshot(key),
+		);
+		vi.mocked(api.branch).mockImplementation(async (key) =>
+			key === "route-b"
+				? new Promise((resolve) => {
+						resolveBranch = resolve;
+					})
+				: { branch: "C-branch" },
+		);
+		navigate(element, "route-b");
+		await vi.waitFor(() => expect(resolveB).toBeTypeOf("function"));
+		const signalB = vi.mocked(api.hydrate).mock.calls.find(([key]) => key === "route-b")![1]!;
+		navigate(element, "route-c");
+		await vi.waitFor(() => expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-c"));
+		expect(signalB.aborted).toBe(true);
+		resolveB(snapshot("route-b"));
+		resolveBranch({ branch: "stale-B-branch" });
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-c");
+		expect(element.textContent).not.toContain("stale-B-branch");
+	});
+
+	it("leaves a closed session directly for a fresh live view", async () => {
+		let events!: EventStreamHandlers;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			events = handlers;
+			return () => {};
+		});
+		const element = await startApp();
+		events.onEnvelope({ seq: 1, key: "route-a", event: { type: "runtime_removed" } });
+		await vi.waitFor(() => expect(element.textContent).toContain("session route-a was closed"));
+		expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-a");
+		navigate(element, "route-b");
+		await vi.waitFor(() => expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-b"));
+		expect(element.textContent).not.toContain("was closed");
+		expect(getComposerDraft("route-a")).toBeUndefined();
+		expect(element.querySelector<HTMLTextAreaElement>(".composer textarea")?.disabled).toBe(false);
+	});
+
+	it("keys subagent views by both parent and child and returns through the sidebar", async () => {
+		const element = await startApp();
+		vi.mocked(api.subagentMessages)
+			.mockClear()
+			.mockImplementation(async (_key, agentId) => ({
+				agent: {
+					agentId,
+					agentType: "Explore",
+					taskSummary: agentId,
+					status: "running",
+					startedAt: new Date(0).toISOString(),
+				},
+				messages: [{ role: "assistant", content: [{ type: "text", text: `child ${_key} ${agentId}` }] }],
+			}));
+		for (const [parent, child] of [
+			["route-a", "child-a"],
+			["route-a", "child-b"],
+			["route-b", "child-b"],
+		]) {
+			window.location.hash = `#/session/${parent}/subagent/${child}`;
+			window.dispatchEvent(new HashChangeEvent("hashchange"));
+			await vi.waitFor(() =>
+				expect(element.querySelector(".chat")?.textContent).toContain(`child ${parent} ${child}`),
+			);
+		}
+		expect(api.subagentMessages).toHaveBeenCalledTimes(3);
+		navigate(element, "route-c");
+		await vi.waitFor(() => expect(element.querySelector(".chat")?.textContent).toContain("transcript for route-c"));
+	});
+});
+
+describe("session fleet sidebar", () => {
+	function sidebarStore(runtimes: RuntimeInfoDto[], sessions: Record<string, SessionViewState> = {}) {
+		const base = makeStore() as any;
+		return {
+			...base,
+			sessions,
+			fleet: () => ({ runtimes, diskSessions: [] }),
+			hydrateSession: vi.fn(async () => {}),
+			refreshDiskSessions: vi.fn(async () => {}),
+			removeRuntime: vi.fn(async () => {}),
+			stopRuntime: vi.fn(async () => {}),
+		};
+	}
+
+	function sidebarEntries(element: HTMLElement): HTMLElement[] {
+		return [...element.querySelectorAll<HTMLElement>(".fleet-sidebar-entry")];
+	}
+
+	function sidebar(element: HTMLElement): HTMLElement | null {
+		return element.querySelector(".fleet-sidebar");
+	}
+
+	it("shares all fleet card information and terminal-error overrides without nested actions", () => {
+		const other = runtimeInfo("rich", "/home/test/project");
+		other.state.model = { provider: "test", id: "summary-model" };
+		other.state.contextUsage = { tokens: 200, contextWindow: 1000, percent: 20 };
+		other.state.messageCount = 12;
+		other.stats = { tokensTotal: 200, cost: 1.23 };
+		other.needsAttention = true;
+		other.lastAssistantText = "runtime fallback";
+		other.backgroundAgents = ["running", "completed"].map((status, index) => ({
+			agentId: `agent-${index}`,
+			agentType: "Explore",
+			taskSummary: "bounded summary",
+			startedAt: new Date(0).toISOString(),
+			status: status as "running" | "completed",
+		}));
+		const state = createSessionViewState("rich");
+		applySessionEvent(state, {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "fresh assistant preview" }],
+			},
+		});
+		state.tasks = [
+			{ title: "one", status: "completed" },
+			{ title: "two", status: "pending" },
+		];
+		state.sessionName = "live name";
+		state.lastError = "terminal failure";
+		const fleet = mount(() => <FleetScreen store={sidebarStore([other], { rich: state })} />);
+		const screen = mount(() => <SessionScreen store={sidebarStore([other], { rich: state })} sessionKey="current" />);
+		const entry = sidebarEntries(screen)[0]!;
+		for (const selector of [
+			".session-title",
+			".session-project",
+			".attention-reason",
+			".error-reason",
+			".activity",
+			".subagents",
+			".session-meta",
+		]) {
+			expect(entry.querySelector(selector)?.textContent).toBe(
+				fleet.querySelector(`.session-card ${selector}`)?.textContent,
+			);
+		}
+		for (const value of [
+			"live name",
+			"~/project",
+			"fresh assistant preview",
+			"terminal failure",
+			"1 running · 1 done",
+			"bounded summary",
+			"tasks 1/2",
+			"test/summary-model",
+			"ctx 20%",
+			"$1.23",
+			"12 msgs",
+		]) {
+			expect(entry.textContent).toContain(value);
+		}
+		expect(entry.querySelector(".chip-error")).not.toBeNull();
+		expect(entry.classList.contains("error")).toBe(true);
+		expect(entry.querySelector("button, a, input")).toBeNull();
+		expect(entry.textContent).not.toContain("stop runtime");
+	});
+
+	it("uses bounded previews for unvisited sessions and preserves activity precedence", () => {
+		const other = runtimeInfo("preview");
+		other.lastAssistantText = "r".repeat(240);
+		const [sessions, setSessions] = createStore<Record<string, SessionViewState>>({});
+		const screen = mount(() => <SessionScreen store={sidebarStore([other], sessions)} sessionKey="current" />);
+		const preview = () => sidebarEntries(screen)[0]?.querySelector(".activity")?.textContent;
+		expect(preview()).toBe("r".repeat(200));
+		const state = createSessionViewState("preview");
+		applySessionEvent(state, {
+			type: "message_end",
+			message: { role: "assistant", content: [{ type: "text", text: "live text" }] },
+		});
+		setSessions("preview", state);
+		expect(preview()).toBe("live text");
+		setSessions("preview", "suggestedCommand", "npm test");
+		expect(preview()).toBe("suggested next: npm test");
+		setSessions("preview", "workingText", "reading files");
+		expect(preview()).toBe("▸ reading files");
+		const meta = sidebarEntries(screen)[0]?.querySelector(".session-meta")?.textContent;
+		expect(meta).not.toContain("ctx");
+		expect(meta).not.toContain("$");
+		expect(meta).not.toContain("tasks");
+	});
+
+	it.each([false, true])("aggregates only other-session severity on main/subagent views (subagent=%s)", (subagent) => {
+		const current = runtimeInfo("current");
+		current.error = "excluded error";
+		const [runtimes, setRuntimes] = createSignal([current, runtimeInfo("other")]);
+		const [sessions, setSessions] = createStore<Record<string, SessionViewState>>({
+			current: createSessionViewState("current"),
+			other: createSessionViewState("other"),
+		});
+		const store = { ...sidebarStore([], sessions), fleet: () => ({ runtimes: runtimes(), diskSessions: [] }) };
+		const element = mount(() =>
+			subagent ? (
+				<SubagentScreen store={store} sessionKey="current" agentId="child" />
+			) : (
+				<SessionScreen store={store} sessionKey="current" />
+			),
+		);
+		const toggle = element.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+		expect(toggle.getAttribute("data-status")).toBeNull();
+		toggle.click();
+		expect(toggle.getAttribute("data-status")).toBe("idle");
+		for (const status of ["running", "attention", "error", "idle"] as const) {
+			const other = runtimeInfo("other");
+			other.state.isStreaming = status === "running";
+			other.needsAttention = status === "attention";
+			other.error = status === "error" ? "failure" : undefined;
+			setRuntimes([current, other]);
+			expect(toggle.getAttribute("data-status")).toBe(status);
+			expect(toggle.getAttribute("aria-label")).toContain(status === "attention" ? "needs attention" : status);
+		}
+		setSessions("other", "lastError", "local failure");
+		expect(toggle.getAttribute("data-status")).toBe("error");
+		setSessions("other", "lastError", undefined);
+		expect(toggle.getAttribute("data-status")).toBe("idle");
+		toggle.click();
+		expect(toggle.getAttribute("data-status")).toBeNull();
+		setRuntimes([current]);
+		expect(element.querySelector(".fleet-sidebar-toggle")).toBeNull();
+	});
+
+	it("shows stats refresh failures alongside the last-good card values", () => {
+		const other = runtimeInfo("other");
+		other.stats = { tokensTotal: 10, cost: 2.5 };
+		const [error, setError] = createSignal<string>();
+		const store = { ...sidebarStore([other]), fleetStatsError: error };
+		const element = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		setError("offline");
+		expect(sidebar(element)?.querySelector("output")?.textContent).toContain("Stats refresh failed: offline");
+		expect(sidebarEntries(element)[0]?.textContent).toContain("$2.50");
+		setError(undefined);
+		expect(sidebar(element)?.querySelector("output")).toBeNull();
+	});
+
+	it("lists the other live sessions with live chips and excludes the viewed session", () => {
+		const current = runtimeInfo("current", "/home/test/a");
+		current.state.sessionName = "current session";
+		const other = runtimeInfo("other", "/home/test/b");
+		other.state.sessionName = "other session";
+		other.state.isStreaming = true;
+		other.backgroundAgents = [
+			{
+				agentId: "bg1",
+				agentType: "Explore",
+				taskSummary: "scan things",
+				startedAt: new Date().toISOString(),
+				status: "running",
+			},
+		];
+		const el = mount(() => <SessionScreen store={sidebarStore([current, other])} sessionKey="current" />);
+
+		const elSidebar = sidebar(el);
+		expect(elSidebar).not.toBeNull();
+		expect(elSidebar?.classList.contains("collapsed")).toBe(false);
+		const entryList = sidebarEntries(el);
+		expect(entryList).toHaveLength(1);
+		expect(entryList[0]?.querySelector(".chip-running")?.textContent).toContain("running");
+		expect(entryList[0]?.textContent).toContain("other session");
+		expect(entryList[0]?.textContent).toContain("⚡ 1 running · 0 done");
+		// The viewed session is excluded even though its name shows in the header.
+		expect(el.querySelector("header.session-bar .title")?.textContent).toContain("current session");
+		expect(elSidebar?.textContent).not.toContain("current session");
+		// Sidebar visibility stays in the bottom stats row, separate from back navigation.
+		expect(el.querySelector(".session-summary-row > button.fleet-sidebar-toggle")).not.toBeNull();
+		expect(el.querySelector(".session-navigation > a.back")?.getAttribute("href")).toBe("#/");
+		expect(el.querySelector(".session-header-actions .session-connection-indicator")).not.toBeNull();
+		expect(el.querySelector(".session-header-actions .chrome-toggle")?.textContent).toContain("details");
+		expect(el.querySelector(".session-controls .model-switcher")).not.toBeNull();
+	});
+
+	it.each(["session", "subagent"] as const)(
+		"keeps %s notices in the transcript column and the fleet toggle in the bottom row",
+		(screen) => {
+			const session = createSessionViewState("current");
+			session.toasts = [{ id: 1, text: "Session-local warning", tone: "warning" }];
+			const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")], { current: session });
+			const el = mount(() =>
+				screen === "session" ? (
+					<SessionScreen store={store} sessionKey="current" />
+				) : (
+					<SubagentScreen store={store} sessionKey="current" agentId="child" />
+				),
+			);
+			const main = el.querySelector(".session-main")!;
+			expect(main.firstElementChild?.classList.contains("banner-region")).toBe(true);
+			expect(main.querySelector(".banner-text")?.textContent).toBe("Session-local warning");
+			expect(el.querySelector(".session-screen > .banner-region")).toBeNull();
+			expect(el.querySelector(".session-summary-row > .fleet-sidebar-toggle")).not.toBeNull();
+			expect(el.querySelector(".session-navigation > .back")?.getAttribute("href")).toBe(
+				screen === "session" ? "#/" : "#/session/current",
+			);
+			expect(el.querySelector(".session-header-actions .fleet-sidebar-toggle")).toBeNull();
+		},
+	);
+
+	it.each([false, true])("keeps the bottom-row toggle usable with collapsed details (mobile=%s)", (mobile) => {
+		stubMobile(mobile);
+		const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		expect(el.querySelector(".session-summary-row .stats-trigger")).not.toBeNull();
+		expect(el.querySelector(".session-navigation .fleet-sidebar-toggle")).toBeNull();
+		el.querySelector<HTMLButtonElement>('.session-header-actions button[title="hide session details"]')!.click();
+		expect(el.querySelector(".stats-trigger")).toBeNull();
+		expect(el.querySelector(".session-controls")).toBeNull();
+		const toggle = el.querySelector<HTMLButtonElement>(".session-summary-row > .fleet-sidebar-toggle")!;
+		expect(toggle).not.toBeNull();
+		const wasExpanded = toggle.getAttribute("aria-expanded");
+		toggle.click();
+		expect(toggle.getAttribute("aria-expanded")).not.toBe(wasExpanded);
+		if (mobile) expect(el.querySelector(".fleet-sidebar.open")).not.toBeNull();
+		else expect(el.querySelector(".fleet-sidebar.collapsed")).not.toBeNull();
+	});
+
+	it("keeps the closed mobile drawer inaccessible and manages focus while open", () => {
+		stubMobile(true);
+		const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		const toggle = el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+		const drawer = sidebar(el)!;
+		expect(drawer.getAttribute("aria-hidden")).toBe("true");
+		expect(drawer.inert).toBe(true);
+		expect(toggle.getAttribute("aria-expanded")).toBe("false");
+		expect(toggle.getAttribute("aria-controls")).toBe(drawer.id);
+		toggle.focus();
+		toggle.click();
+		const close = el.querySelector<HTMLButtonElement>(".fleet-sidebar-close")!;
+		const last = sidebarEntries(el).at(-1)!;
+		expect(drawer.inert).toBe(false);
+		expect(drawer.getAttribute("aria-hidden")).toBe("false");
+		expect(drawer.getAttribute("role")).toBe("dialog");
+		expect(drawer.getAttribute("aria-modal")).toBe("true");
+		expect(toggle.getAttribute("aria-expanded")).toBe("true");
+		expect(document.activeElement).toBe(close);
+		close.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true }),
+		);
+		expect(document.activeElement).toBe(last);
+		last.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+		expect(document.activeElement).toBe(close);
+		close.click();
+		expect(drawer.inert).toBe(true);
+		expect(document.activeElement).toBe(toggle);
+	});
+
+	it.each([false, true])(
+		"keeps desktop collapse %s independent of reactive breakpoints on both screens",
+		(collapsed) => {
+			const media = stubMobile(false);
+			setSessionSidebarCollapsed(collapsed);
+			const store = sidebarStore([runtimeInfo("parent", "/a"), runtimeInfo("other", "/b")], {
+				parent: populatedSession("parent"),
+			});
+			for (const screen of ["session", "subagent"]) {
+				const { container: el, dispose } = mountDisposable(() =>
+					screen === "session" ? (
+						<SessionScreen store={store} sessionKey="parent" />
+					) : (
+						<SubagentScreen store={store} sessionKey="parent" agentId="bg1" />
+					),
+				);
+				try {
+					const toggle = el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+					expect(sidebar(el)?.classList.contains("collapsed")).toBe(collapsed);
+					media.resize(true);
+					expect(sidebar(el)?.classList.contains("collapsed")).toBe(false);
+					expect(sidebar(el)?.classList.contains("open")).toBe(false);
+					toggle.click();
+					expect(sidebar(el)?.classList.contains("open")).toBe(true);
+					expect(el.querySelector(".fleet-sidebar-scrim")).not.toBeNull();
+					media.resize(false);
+					expect(sidebar(el)?.classList.contains("collapsed")).toBe(collapsed);
+					expect(sidebar(el)?.classList.contains("open")).toBe(false);
+					expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+					media.resize(true);
+					expect(sidebar(el)?.classList.contains("open")).toBe(false);
+					expect(toggle.getAttribute("aria-expanded")).toBe("false");
+					media.resize(false);
+				} finally {
+					dispose();
+					el.remove();
+				}
+			}
+			const changeListeners = media.addEventListener.mock.calls.filter(([type]) => type === "change");
+			expect(changeListeners).toHaveLength(2);
+			for (const [, listener] of changeListeners)
+				expect(media.removeEventListener).toHaveBeenCalledWith("change", listener);
+		},
+	);
+
+	it("Escape closes only the drawer while a question is pending, then resumes normal wizard shortcuts", async () => {
+		stubMobile(true);
+		const session = createSessionViewState("current");
+		session.uiRequests = [
+			{
+				id: "ask-sidebar",
+				method: "ask",
+				questions: [
+					{ question: "First?", options: ["A", "B"] },
+					{ question: "Second?", options: ["C", "D"] },
+				],
+			},
+		];
+		const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")], { current: session });
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		vi.mocked(api.abort).mockClear();
+		vi.mocked(api.extensionUiResponse).mockClear();
+		const toggle = el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+		toggle.focus();
+		toggle.click();
+		const close = el.querySelector<HTMLButtonElement>(".fleet-sidebar-close")!;
+		close.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+		expect(el.querySelector<HTMLInputElement>(".ask-option input")?.checked).toBe(false);
+		close.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(sidebar(el)?.classList.contains("open")).toBe(false);
+		expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+		expect(api.abort).not.toHaveBeenCalled();
+		expect(api.extensionUiResponse).not.toHaveBeenCalled();
+		expect(document.activeElement).toBe(toggle);
+		// The removed listener must not swallow the next, intentional Escape.
+		toggle.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(api.abort).toHaveBeenCalledWith("current");
+	});
+
+	it("removes Escape listeners on close and unmount, including after repeated opens", () => {
+		stubMobile(true);
+		const store = sidebarStore([runtimeInfo("current", "/a"), runtimeInfo("other", "/b")]);
+		const add = vi.spyOn(document, "addEventListener");
+		const remove = vi.spyOn(document, "removeEventListener");
+		const { container: el, dispose } = mountDisposable(() => <SessionScreen store={store} sessionKey="current" />);
+		try {
+			const toggle = el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!;
+			for (let i = 0; i < 2; i++) {
+				toggle.click();
+				const listener = add.mock.calls.filter(([type]) => type === "keydown").at(-1)?.[1];
+				expect(listener).toBeTypeOf("function");
+				const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+				document.dispatchEvent(escapeEvent);
+				expect(escapeEvent.defaultPrevented).toBe(true);
+				expect(sidebar(el)?.classList.contains("open")).toBe(false);
+				expect(remove).toHaveBeenCalledWith("keydown", listener);
+				const closedEscape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+				document.dispatchEvent(closedEscape);
+				expect(closedEscape.defaultPrevented).toBe(false);
+			}
+			toggle.click();
+			const listener = add.mock.calls.filter(([type]) => type === "keydown").at(-1)?.[1];
+			dispose();
+			expect(remove).toHaveBeenCalledWith("keydown", listener);
+			const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+			document.dispatchEvent(escapeEvent);
+			expect(escapeEvent.defaultPrevented).toBe(false);
+		} finally {
+			dispose();
+			el.remove();
+			add.mockRestore();
+			remove.mockRestore();
+		}
+	});
+
+	it("maps each runtime state to its chip and emphasis class", () => {
+		const mk = (key: string, cwd: string): RuntimeInfoDto => {
+			const runtime = runtimeInfo(key, cwd);
+			runtime.state.sessionName = `${key} session`;
+			return runtime;
+		};
+		const idle = mk("idle", "/home/test/1");
+		const running = mk("running", "/home/test/2");
+		running.state.isStreaming = true;
+		const attention = mk("attention", "/home/test/3");
+		attention.needsAttention = true;
+		const error = mk("error", "/home/test/4");
+		error.error = "provider failed";
+
+		const el = mount(() => (
+			<SessionScreen
+				store={sidebarStore([idle, running, attention, error, runtimeInfo("current", "/home/test/0")])}
+				sessionKey="current"
+			/>
+		));
+		const byName = (name: string) =>
+			sidebarEntries(el).find((entry) => entry.querySelector(".name")?.textContent === `${name} session`);
+
+		expect(byName("idle")?.querySelector(".chip-idle")?.textContent).toContain("idle");
+		expect(byName("idle")?.className).not.toContain("attention");
+		expect(byName("running")?.querySelector(".chip-running")?.textContent).toContain("running");
+		expect(byName("attention")?.querySelector(".chip-attention")?.textContent).toContain("needs attention");
+		expect(byName("attention")?.classList.contains("attention")).toBe(true);
+		expect(byName("error")?.querySelector(".chip-error")?.textContent).toContain("error");
+		expect(byName("error")?.classList.contains("error")).toBe(true);
+	});
+
+	it("orders entries by cwd then createdAt regardless of initial attention or activity", () => {
+		const base = Date.parse("2026-01-01T00:00:00Z");
+		const mk = (key: string, cwd: string, createdAt: number): RuntimeInfoDto => {
+			const runtime = runtimeInfo(key, cwd);
+			runtime.state.sessionName = key;
+			runtime.createdAt = new Date(createdAt).toISOString();
+			runtime.lastActivity = new Date(createdAt + 60_000).toISOString();
+			return runtime;
+		};
+		const aSession = mk("a-session", "/home/test/a", base + 2000);
+		aSession.lastActivity = new Date(base + 9000).toISOString(); // newest activity overall
+		const bEarly = mk("b-early", "/home/test/b", base + 1000);
+		const bLate = mk("b-late", "/home/test/b", base + 3000);
+		bLate.needsAttention = true; // attention must not move it up
+
+		const el = mount(() => <SessionScreen store={sidebarStore([bLate, aSession, bEarly])} sessionKey="current" />);
+		const names = sidebarEntries(el).map((entry) => entry.querySelector(".name")?.textContent);
+		expect(names).toEqual(["a-session", "b-early", "b-late"]);
+	});
+
+	it("navigates to the clicked session", async () => {
+		const other = runtimeInfo("target", "/home/test/target");
+		other.state.sessionName = "target session";
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a"), other]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		sidebarEntries(el)[0]?.click();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(window.location.hash).toBe("#/session/target");
+	});
+
+	it("collapses and re-expands from the toggle, persisting the preference", () => {
+		setSessionSidebarCollapsed(false);
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a"), runtimeInfo("other", "/home/test/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		const toggle = el.querySelector("button.fleet-sidebar-toggle");
+		if (!toggle) throw new Error("sidebar toggle missing");
+
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(false);
+		expect(toggle.textContent).toContain("fleet ◂");
+		toggle.click();
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(true);
+		expect(window.localStorage.getItem(SESSION_SIDEBAR_COLLAPSED_KEY)).toBe("true");
+		expect(toggle.textContent).toContain("fleet ▸");
+		toggle.click();
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(false);
+		expect(window.localStorage.getItem(SESSION_SIDEBAR_COLLAPSED_KEY)).toBe("false");
+	});
+
+	it("restores the persisted collapsed state on a fresh mount", () => {
+		setSessionSidebarCollapsed(true);
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a"), runtimeInfo("other", "/home/test/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(true);
+	});
+
+	it("renders no sidebar and no toggle when there are no other live sessions", () => {
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		expect(sidebar(el)).toBeNull();
+		expect(el.querySelector("button.fleet-sidebar-toggle")).toBeNull();
+		// The transcript chrome still renders inside the new body wrapper.
+		expect(el.querySelector(".session-body .session-main main.chat")).not.toBeNull();
+		expect(el.querySelector(".session-body .session-main footer.dock")).not.toBeNull();
+	});
+
+	it("shows the sidebar on the subagent drill-in with the parent excluded", () => {
+		const parent = runtimeInfo("parent", "/home/test/a");
+		parent.state.sessionName = "parent session";
+		const other = runtimeInfo("other", "/home/test/b");
+		other.state.sessionName = "other session";
+		const store = sidebarStore([parent, other], { parent: populatedSession("parent") });
+		const el = mount(() => <SubagentScreen store={store} sessionKey="parent" agentId="bg1" />);
+
+		const elSidebar = sidebar(el);
+		expect(elSidebar).not.toBeNull();
+		expect(sidebarEntries(el)).toHaveLength(1);
+		expect(elSidebar?.textContent).toContain("other session");
+		expect(elSidebar?.textContent).not.toContain("parent session");
+		expect(el.querySelector("button.fleet-sidebar-toggle")).not.toBeNull();
+	});
+
+	it("reflects newly spawned runtimes from fleet_snapshot without a manual refresh", async () => {
+		const current = runtimeInfo("current", "/home/test/a");
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [current], diskSessions: [] });
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(sidebarEntries(el)).toHaveLength(0);
+
+		const arrived = runtimeInfo("arrived", "/home/test/b");
+		arrived.state.sessionName = "arrived session";
+		if (!captured?.onEnvelope) throw new Error("envelope handler missing");
+		const snapshot = (runtime: RuntimeInfoDto) => ({
+			key: runtime.key,
+			cwd: runtime.cwd,
+			state: runtime.state,
+			backgroundAgents: runtime.backgroundAgents,
+			needsAttention: runtime.needsAttention,
+			...(runtime.error === undefined ? {} : { error: runtime.error }),
+			createdAt: runtime.createdAt,
+			lastActivity: runtime.lastActivity,
+		});
+		captured.onEnvelope({
+			seq: 1,
+			key: "",
+			event: { type: "fleet_snapshot", runtimes: [snapshot(current), snapshot(arrived)] },
+		});
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		expect(sidebarEntries(el)).toHaveLength(1);
+		expect(sidebarEntries(el)[0]?.textContent).toContain("arrived session");
+		store.stop();
+	});
+
+	it("updates existing chips without reordering, and tears down an open drawer when the last other runtime disappears", async () => {
+		stubMobile(true);
+		const current = runtimeInfo("current", "/current");
+		const alpha = runtimeInfo("alpha", "/a");
+		alpha.state.sessionName = "alpha";
+		alpha.state.isStreaming = true;
+		const beta = runtimeInfo("beta", "/b");
+		beta.state.sessionName = "beta";
+		vi.mocked(api.fleet).mockResolvedValueOnce({ runtimes: [current, beta, alpha], diskSessions: [] });
+		let captured: EventStreamHandlers | undefined;
+		vi.mocked(connectEvents).mockImplementation((handlers) => {
+			captured = handlers;
+			return () => {};
+		});
+		const store = makeStore();
+		await store.start();
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		let seq = 0;
+		const snapshot = (runtimes: RuntimeInfoDto[]) => {
+			if (!captured?.onEnvelope) throw new Error("envelope handler missing");
+			captured.onEnvelope({ seq: ++seq, key: "", event: { type: "fleet_snapshot", runtimes } });
+		};
+		const names = () => sidebarEntries(el).map((entry) => entry.querySelector(".name")?.textContent);
+		try {
+			expect(names()).toEqual(["alpha", "beta"]);
+			expect(sidebarEntries(el)[0]?.querySelector(".chip-running")).not.toBeNull();
+			expect(sidebarEntries(el)[1]?.querySelector(".chip-idle")).not.toBeNull();
+			el.querySelector<HTMLButtonElement>(".fleet-sidebar-toggle")!.click();
+			const close = el.querySelector<HTMLButtonElement>(".fleet-sidebar-close")!;
+			expect(document.activeElement).toBe(close);
+			snapshot([
+				current,
+				{ ...beta, needsAttention: true, lastActivity: new Date().toISOString() },
+				{ ...alpha, state: { ...alpha.state, isStreaming: false } },
+			]);
+			expect(names()).toEqual(["alpha", "beta"]);
+			expect(sidebarEntries(el)[0]?.querySelector(".chip-idle")).not.toBeNull();
+			expect(sidebarEntries(el)[1]?.querySelector(".chip-attention")).not.toBeNull();
+			expect(sidebarEntries(el)[1]?.classList.contains("attention")).toBe(true);
+			expect(document.activeElement).toBe(close); // Fleet churn cannot steal initial focus.
+			snapshot([current, beta, { ...alpha, error: "provider failed" }]);
+			expect(names()).toEqual(["alpha", "beta"]);
+			expect(sidebarEntries(el)[0]?.querySelector(".chip-error")).not.toBeNull();
+			expect(sidebarEntries(el)[0]?.classList.contains("error")).toBe(true);
+			expect(sidebarEntries(el)[1]?.querySelector(".chip-idle")).not.toBeNull();
+			expect(sidebarEntries(el)[1]?.classList.contains("attention")).toBe(false);
+			snapshot([current, beta]);
+			expect(names()).toEqual(["beta"]);
+			expect(sidebar(el)?.classList.contains("open")).toBe(true);
+			snapshot([current]);
+			expect(sidebar(el)).toBeNull();
+			expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+			expect(el.querySelector(".fleet-sidebar-toggle")).toBeNull();
+			expect(el.querySelector(".chat")).not.toBeNull();
+			expect(el.querySelector(".composer textarea")).not.toBeNull();
+			const escapeEvent = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+			document.dispatchEvent(escapeEvent);
+			expect(escapeEvent.defaultPrevented).toBe(false);
+			// A new runtime must not resurrect the previous runtime's open overlay.
+			snapshot([current, beta]);
+			expect(sidebar(el)?.classList.contains("open")).toBe(false);
+			expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+		} finally {
+			store.stop();
+		}
+	});
+
+	it("on mobile starts hidden, opens as an overlay with a scrim, and entry taps navigate and close", () => {
+		stubMobile(true);
+		setSessionSidebarCollapsed(true); // the desktop preference must not apply on mobile
+		const store = sidebarStore([runtimeInfo("current", "/home/test/a"), runtimeInfo("other", "/home/test/b")]);
+		const el = mount(() => <SessionScreen store={store} sessionKey="current" />);
+		const toggle = el.querySelector("button.fleet-sidebar-toggle");
+		if (!toggle) throw new Error("sidebar toggle missing");
+
+		// Hidden by default regardless of the desktop collapse preference.
+		expect(sidebar(el)).not.toBeNull();
+		expect(sidebar(el)?.classList.contains("collapsed")).toBe(false);
+		expect(sidebar(el)?.classList.contains("open")).toBe(false);
+		expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+
+		// The toggle opens the overlay with a scrim.
+		toggle.click();
+		expect(sidebar(el)?.classList.contains("open")).toBe(true);
+		expect(el.querySelector(".fleet-sidebar-scrim")).not.toBeNull();
+
+		// A scrim tap closes the overlay.
+		el.querySelector(".fleet-sidebar-scrim")?.click();
+		expect(sidebar(el)?.classList.contains("open")).toBe(false);
+		expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
+
+		// An entry tap navigates and closes the overlay.
+		toggle.click();
+		sidebarEntries(el)[0]?.click();
+		expect(window.location.hash).toBe("#/session/other");
+		expect(sidebar(el)?.classList.contains("open")).toBe(false);
+		expect(el.querySelector(".fleet-sidebar-scrim")).toBeNull();
 	});
 });
 
@@ -5727,7 +6591,7 @@ describe("dashboard client regressions", () => {
 			hydrateSession: async () => {},
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="k1" />);
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("loaded context"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -5893,7 +6757,7 @@ describe("dashboard client regressions", () => {
 		vi.mocked(api.sessions).mockClear();
 		vi.mocked(api.fleet).mockClear();
 
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		const stop = [...el.querySelectorAll("button")].find((button) => button.textContent === "stop runtime");
 		(stop as HTMLButtonElement).click();
@@ -5915,7 +6779,7 @@ describe("dashboard client regressions", () => {
 		expect(el.textContent).toContain("transcript is read-only");
 		expect(el.querySelector(".composer")).toBeNull();
 		expect(el.querySelector("textarea")).toBeNull();
-		expect(el.querySelector(".session-bar .right")).toBeNull();
+		expect(el.querySelector(".session-bar .session-controls")).toBeNull();
 		expect(el.querySelector(".status-line")).toBeNull();
 	});
 
@@ -6508,7 +7372,7 @@ describe("dashboard client regressions", () => {
 			refreshDiskSessions,
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="fork" />);
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -6517,7 +7381,7 @@ describe("dashboard client regressions", () => {
 		(el.querySelector(".fork-message") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(api.fork).toHaveBeenCalledWith("fork", "u1");
-		expect(hydrateSession).toHaveBeenCalledWith("fork");
+		expect(hydrateSession).toHaveBeenCalledWith("fork", expect.any(AbortSignal));
 		expect(refreshDiskSessions).toHaveBeenCalledOnce();
 		expect(api.fleet).not.toHaveBeenCalled();
 		expect((el.querySelector("textarea") as HTMLTextAreaElement).value).toBe("original prompt");
@@ -6545,7 +7409,7 @@ describe("dashboard client regressions", () => {
 		const composer = el.querySelector("textarea") as HTMLTextAreaElement;
 		composer.value = "draft in progress";
 		composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -6554,7 +7418,7 @@ describe("dashboard client regressions", () => {
 		(el.querySelector(".fork-message") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(api.fork).toHaveBeenCalledWith("forkasst", "a1");
-		expect(hydrateSession).toHaveBeenCalledWith("forkasst");
+		expect(hydrateSession).toHaveBeenCalledWith("forkasst", expect.any(AbortSignal));
 		expect(refreshDiskSessions).toHaveBeenCalledOnce();
 		// No composer pre-fill AND no clobber: the user's in-progress draft survives
 		// (assistant forks return "" and must not overwrite the composer).
@@ -6578,7 +7442,7 @@ describe("dashboard client regressions", () => {
 			refreshDiskSessions,
 		};
 		const el = mount(() => <SessionScreen store={fakeStore} sessionKey="forkmsgcancel" />);
-		(el.querySelector(".session-bar .right .switcher:last-child") as HTMLButtonElement).click();
+		(el.querySelector(".session-bar .session-controls .switcher:last-child") as HTMLButtonElement).click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		[...el.querySelectorAll("button")].find((button) => button.textContent?.includes("fork"))?.click();
 		await new Promise((resolve) => setTimeout(resolve, 10));

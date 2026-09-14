@@ -91,17 +91,21 @@ function harnessHtml(wizard: string): string {
 	<div id="root">
 		<div class="session-screen">
 			<header class="session-bar"><div class="session-bar-inner">long transcript session</div></header>
-			<main class="chat">
-				<div class="chat-inner">
-					<div class="transcript-fixture">${transcript}</div>
-					${wizard}
+			<div class="session-body">
+				<div class="session-main">
+					<main class="chat">
+						<div class="chat-inner">
+							<div class="transcript-fixture">${transcript}</div>
+							${wizard}
+						</div>
+					</main>
+					<footer class="dock">
+						<div class="dock-inner">
+							<div class="composer"><textarea aria-label="composer">compose</textarea></div>
+						</div>
+					</footer>
 				</div>
-			</main>
-			<footer class="dock">
-				<div class="dock-inner">
-					<div class="composer"><textarea aria-label="composer">compose</textarea></div>
-				</div>
-			</footer>
+			</div>
 		</div>
 	</div>
 </body>
