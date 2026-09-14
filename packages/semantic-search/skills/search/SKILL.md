@@ -1,11 +1,11 @@
 ---
 name: search
-description: "Semantic codebase search — use for exploring code, finding implementations, and answering questions about any project. Searches using natural language queries, identifier names, or file paths. Returns ranked results using embedding-based similarity, BM25 keyword matching, symbol matching, import graph analysis, and git recency. Use this as the default exploration tool instead of grep when you don't know the exact text to search for."
+description: "Semantic codebase search — use for exploring code, finding implementations, and answering questions about any project. Searches using natural language queries, identifier names, or file paths. Returns ranked results using embedding-based similarity, BM25 keyword matching, symbol matching, import graph analysis, and git recency. Best for exploring a large code or text corpus when you don't know the exact keywords; use grep when you know the exact text."
 ---
 
 # Semantic Codebase Search
 
-Use `search` as your **default exploration tool** for understanding code, finding implementations, and answering questions about the codebase. Use `grep` when you already know the exact text or pattern you're looking for.
+`search` is one optional tool in your exploration toolkit — best for open-ended exploration of a large code or text corpus (especially code repos) when you don't know the exact keywords. Use `grep` when you already know the exact text or pattern you're looking for.
 
 ## Indexing
 

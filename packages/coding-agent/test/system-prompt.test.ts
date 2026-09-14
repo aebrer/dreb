@@ -137,14 +137,16 @@ describe("buildSystemPrompt", () => {
 	});
 
 	describe("exploration guidelines", () => {
-		test("includes search-first guidance when search tool is available", () => {
+		test("includes softened search guidance when search tool is available", () => {
 			const prompt = buildSystemPrompt({
 				selectedTools: ["bash", "grep", "find", "ls", "search"],
 				contextFiles: [],
 				skills: [],
 			});
 
-			expect(prompt).toContain("Start with `search`");
+			expect(prompt).toContain("open-ended exploration of a large corpus");
+			expect(prompt).not.toContain("Start with `search`");
+			expect(prompt).not.toContain("default exploration tool");
 			expect(prompt).not.toContain("Prefer grep/find/ls tools over bash");
 		});
 
@@ -157,6 +159,7 @@ describe("buildSystemPrompt", () => {
 
 			expect(prompt).toContain("Prefer grep/find/ls tools over bash");
 			expect(prompt).not.toContain("Start with `search`");
+			expect(prompt).not.toContain("open-ended exploration of a large corpus");
 		});
 	});
 
