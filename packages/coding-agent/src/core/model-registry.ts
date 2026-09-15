@@ -176,6 +176,19 @@ function modelRef(provider: string, modelId: string): string {
 	return `${provider}/${modelId}`;
 }
 
+function validateCodexMaxTokens(
+	providerName: string,
+	modelId: string,
+	api: Api | undefined,
+	maxTokens: number | undefined,
+): void {
+	if (api === "openai-codex-responses" && maxTokens !== undefined) {
+		throw new Error(
+			`Provider ${providerName}, model ${modelId}: maxTokens cannot be overridden because the Codex backend rejects max_output_tokens`,
+		);
+	}
+}
+
 /** Provider override config without custom models. */
 interface ProviderOverride {
 	baseUrl?: string;
@@ -545,6 +558,9 @@ export class ModelRegistry {
 		for (const [providerName, providerConfig] of Object.entries(config.providers)) {
 			const hasProviderApi = !!providerConfig.api;
 			const models = providerConfig.models ?? [];
+			const builtInModels = getProviders().includes(providerName as KnownProvider)
+				? (getModels(providerName as KnownProvider) as Model<Api>[])
+				: [];
 			const hasModelOverrides =
 				providerConfig.modelOverrides && Object.keys(providerConfig.modelOverrides).length > 0;
 
@@ -567,16 +583,15 @@ export class ModelRegistry {
 
 			for (const [modelId, modelOverride] of Object.entries(providerConfig.modelOverrides ?? {})) {
 				validateModelPromptSettings(modelOverride, `${providerName}/${modelId}`);
-				if (providerName === "openai-codex" && modelOverride.maxTokens !== undefined) {
-					throw new Error(
-						`Provider ${providerName}, model ${modelId}: maxTokens cannot be overridden because the Codex backend rejects max_output_tokens`,
-					);
-				}
+				const api = providerConfig.api ?? builtInModels.find((model) => model.id === modelId)?.api;
+				validateCodexMaxTokens(providerName, modelId, api, modelOverride.maxTokens);
 			}
 
 			for (const modelDef of models) {
 				validateModelPromptSettings(modelDef, `${providerName}/${modelDef.id}`);
 				const hasModelApi = !!modelDef.api;
+				const api = modelDef.api ?? providerConfig.api;
+				validateCodexMaxTokens(providerName, modelDef.id, api, modelDef.maxTokens);
 
 				if (!hasProviderApi && !hasModelApi) {
 					throw new Error(

@@ -63,6 +63,7 @@ describe("generateSummary reasoning options", () => {
 		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({
 			reasoning: "high",
 			apiKey: "test-key",
+			maxTokens: 1600,
 		});
 	});
 

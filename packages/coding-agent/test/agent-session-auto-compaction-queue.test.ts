@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@dreb/agent-core";
-import { type AssistantMessage, findModel } from "@dreb/ai";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, findModel } from "@dreb/ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -32,6 +32,19 @@ const compactGate = vi.hoisted(() => {
 		},
 	};
 });
+
+class MockAssistantStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
+	constructor() {
+		super(
+			(event) => event.type === "done" || event.type === "error",
+			(event) => {
+				if (event.type === "done") return event.message;
+				if (event.type === "error") return event.error;
+				throw new Error("Unexpected event type");
+			},
+		);
+	}
+}
 
 vi.mock("../src/core/compaction/index.js", () => ({
 	calculateContextTokens: (usage: {
@@ -437,6 +450,40 @@ describe("AgentSession auto-compaction queue resume", () => {
 		await checkCompaction(message);
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledWith("overflow", true, false);
+	});
+
+	it("should run one full fixed-budget compact-and-retry recovery without looping", async () => {
+		const model = session.model!;
+		const requestedMaxTokens: Array<number | undefined> = [];
+		let callCount = 0;
+		session.agent.streamFn = (_requestModel, _context, options) => {
+			callCount += 1;
+			requestedMaxTokens.push(options?.maxTokens);
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistant("length");
+				message.content = [{ type: "text", text: `truncated attempt ${callCount}` }];
+				message.usage.input = model.contextWindow - model.maxTokens + 1;
+				message.usage.output = model.maxTokens;
+				message.usage.totalTokens = message.usage.input + message.usage.output;
+				stream.push({ type: "start", partial: message });
+				stream.push({ type: "done", reason: "length", message });
+			});
+			return stream;
+		};
+
+		await session.prompt("write a response that fills the output budget");
+		await vi.advanceTimersByTimeAsync(100);
+
+		expect(callCount).toBe(6);
+		expect(requestedMaxTokens).toEqual(Array(6).fill(model.maxTokens));
+		expect(compactGate.calls).toBe(1);
+		const finalMessage = session.agent.state.messages.at(-1);
+		expect(finalMessage).toMatchObject({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "Response truncated at the configured output token limit after 3 attempts",
+		});
 	});
 
 	it("should not compact genuine output-limit exhaustion that could fit in context", async () => {

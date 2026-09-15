@@ -76,6 +76,7 @@ describe("generateBranchSummary session ID forwarding", () => {
 		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
 		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({
 			apiKey: "test-key",
+			maxTokens: 2048,
 			sessionId: "branch-summary-uuid",
 		});
 	});

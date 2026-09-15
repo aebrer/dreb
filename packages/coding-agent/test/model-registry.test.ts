@@ -907,6 +907,38 @@ describe("ModelRegistry", () => {
 			);
 		});
 
+		test("rejects maxTokens on custom Codex model definitions", () => {
+			writeRawModelsJson({
+				customCodex: {
+					baseUrl: "https://chatgpt.example.com/backend-api",
+					apiKey: "TEST_API_KEY",
+					api: "openai-codex-responses",
+					models: [{ id: "custom-codex", maxTokens: 64000 }],
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getError()).toContain(
+				"maxTokens cannot be overridden because the Codex backend rejects max_output_tokens",
+			);
+		});
+
+		test("rejects maxTokens overrides for custom providers using the Codex API", () => {
+			writeRawModelsJson({
+				customCodex: {
+					api: "openai-codex-responses",
+					modelOverrides: {
+						"custom-codex": { maxTokens: 64000 },
+					},
+				},
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			expect(registry.getError()).toContain(
+				"maxTokens cannot be overridden because the Codex backend rejects max_output_tokens",
+			);
+		});
+
 		test("model override for non-existent model ID is ignored", () => {
 			writeRawModelsJson({
 				[testProvider]: {
