@@ -1,8 +1,8 @@
-import { mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { canonicalizePath, FileApi } from "../src/server/files.js";
+import { canonicalizePath, FileApi, resolveExistingDirectory } from "../src/server/files.js";
 
 const tempDirs: string[] = [];
 
@@ -72,6 +72,31 @@ describe("canonicalizePath", () => {
 			{ status: 404 },
 		);
 	});
+});
+
+describe("resolveExistingDirectory", () => {
+	it("canonicalizes directories and rejects files", async () => {
+		const dir = await makeTempDir();
+		const file = join(dir, "file.txt");
+		const link = join(dir, "directory-link");
+		await writeFile(file, "file");
+		await symlink(dir, link);
+
+		await expect(resolveExistingDirectory(link)).resolves.toBe(dir);
+		await expect(resolveExistingDirectory(file)).rejects.toMatchObject({ status: 400 });
+	});
+
+	it.skipIf(process.platform === "win32" || (typeof process.getuid === "function" && process.getuid() === 0))(
+		"rejects directories without read and search access",
+		async () => {
+			const dir = await makeTempDir();
+			const unreadable = join(dir, "unreadable");
+			await mkdir(unreadable);
+			await chmod(unreadable, 0o000);
+
+			await expect(resolveExistingDirectory(unreadable)).rejects.toMatchObject({ status: 403 });
+		},
+	);
 });
 
 describe("FileApi", () => {

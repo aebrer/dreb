@@ -204,7 +204,7 @@ async function runDreamForRpc(session: AgentSession, args = ""): Promise<{ messa
 		return { message: `Dream backup path: ${session.settingsManager.getDreamArchivePath()}` };
 	}
 	if (command.type === "setBackup") {
-		const absolutePath = resolveToCwd(command.path, session.sessionManager.getCwd());
+		const absolutePath = resolveToCwd(command.path, session.cwd);
 		const context = await resolveDreamContext(session.settingsManager);
 		validateArchivePath(absolutePath, [
 			context.globalMemoryDir,
@@ -1864,7 +1864,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 		return dailyCostTracker.getDailyCost();
 	};
 
-	const cwd = session.sessionManager.getCwd();
+	const cwd = session.cwd;
 	const tabTitleSettings = session.settingsManager.getTabTitleSettings();
 	const tabTitleGenerator =
 		!session.sessionName && tabTitleSettings?.enabled !== false
@@ -2036,7 +2036,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			}
 
 			case "get_git_branch": {
-				return success(id, "get_git_branch", { branch: getGitBranch(session.sessionManager.getCwd()) });
+				return success(id, "get_git_branch", { branch: getGitBranch(session.cwd) });
 			}
 
 			case "get_daily_cost": {
@@ -2298,6 +2298,8 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 			// =================================================================
 
 			case "list_sessions": {
+				// Session listing follows the persisted session store/provenance. It does
+				// not imply that switching a transcript changes this process's runtime cwd.
 				const cwd = session.sessionManager.getCwd();
 				const sessionDir = session.sessionManager.getSessionDir();
 				const sessions = await SessionManager.list(cwd, sessionDir);
@@ -2335,7 +2337,7 @@ export async function runRpcMode(session: AgentSession, modelFallbackMessage?: s
 
 			case "list_agent_types": {
 				return success(id, "list_agent_types", {
-					agentTypes: listAgentTypesForRpc(session.sessionManager.getCwd()),
+					agentTypes: listAgentTypesForRpc(session.cwd),
 				});
 			}
 

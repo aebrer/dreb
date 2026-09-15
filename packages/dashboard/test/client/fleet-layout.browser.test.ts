@@ -40,6 +40,7 @@ function sessionCard(status: "running" | "attention" | "idle" | "error"): string
 			<span class="chip chip-${status}" data-chip="${status}" data-critical><span class="dot">${statusDisplay.glyph}</span> ${statusDisplay.label}</span>
 		</div>
 		<p class="session-project" data-critical data-wrap>${prose}${unbroken}</p>
+		<p class="historical-cwd" data-critical data-wrap>originally ${prose}${unbroken}</p>
 		${conditional}
 		<p class="activity" data-critical data-wrap>${prose}${unbroken}</p>
 		<div class="subagents" data-critical data-no-overflow>

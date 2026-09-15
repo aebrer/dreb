@@ -33,6 +33,13 @@ export function SessionCardSummary(props: { store: AppStore; runtime: RuntimeInf
 	const tasksDone = () => tasks().filter((t) => t.status === "completed").length;
 	const ctx = () => props.runtime.state.contextUsage;
 	const model = () => props.runtime.state.model;
+	const historicalSession = () =>
+		props.store.fleet().diskSessions.find((candidate) => candidate.path === props.runtime.state.sessionFile);
+	const historicalCwd = () => {
+		const historical = historicalSession();
+		if (!historical || historical.cwd === props.runtime.cwd) return undefined;
+		return historical.cwd;
+	};
 	const activity = () => {
 		const s = session();
 		if (s?.workingText) return `▸ ${s.workingText}`;
@@ -52,6 +59,11 @@ export function SessionCardSummary(props: { store: AppStore; runtime: RuntimeInf
 			<span class="session-project" title={props.runtime.cwd}>
 				{props.runtime.cwd.replace(/^\/home\/[^/]+/, "~")}
 			</span>
+			<Show when={historicalCwd()}>
+				<span class="historical-cwd" title={historicalCwd()}>
+					originally {historicalCwd()!.replace(/^\/home\/[^/]+/, "~")}
+				</span>
+			</Show>
 			<Show when={runtimeStatus(props.runtime) === "attention"}>
 				<span class="attention-reason">
 					{pendingQuestionsReason(session()?.uiRequests ?? []) ?? "needs attention"}

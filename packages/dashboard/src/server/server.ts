@@ -39,7 +39,7 @@ import {
 	DashboardImageService,
 } from "./dashboard-images.js";
 import { EventHub, formatHeartbeatFrame, type SseWriteMetadata } from "./event-hub.js";
-import { defaultPlaces, FileApi } from "./files.js";
+import { defaultPlaces, FileApi, resolveExistingDirectory } from "./files.js";
 import { ImagePreviewWorker } from "./image-preview.js";
 import { MemoryApi } from "./memories.js";
 import type { DashboardRuntimeSnapshot, RuntimePool } from "./runtime-pool.js";
@@ -100,14 +100,31 @@ function boundedSessionPreview(text: string): string {
 	return preview;
 }
 
-function toSessionInfoDto(session: DashboardSessionInfoSource): SessionInfoDto {
+interface SessionInfoProjectionSource extends Omit<DashboardSessionInfoSource, "created" | "modified"> {
+	created: Date | string;
+	modified: Date | string;
+}
+
+function toIsoString(value: Date | string): string {
+	return value instanceof Date ? value.toISOString() : value;
+}
+
+async function toSessionInfoDto(session: SessionInfoProjectionSource): Promise<SessionInfoDto> {
+	let resolvedCwd: string | undefined;
+	try {
+		resolvedCwd = await resolveExistingDirectory(session.cwd);
+	} catch {
+		// Historical metadata remains useful even when its directory disappeared.
+	}
 	return {
 		path: session.path,
 		id: session.id,
 		cwd: session.cwd,
+		cwdAvailable: resolvedCwd !== undefined,
+		...(resolvedCwd ? { resolvedCwd } : {}),
 		name: session.name,
-		created: session.created.toISOString(),
-		modified: session.modified.toISOString(),
+		created: toIsoString(session.created),
+		modified: toIsoString(session.modified),
 		messageCount: session.messageCount,
 		firstMessage: boundedSessionPreview(session.firstMessage),
 	};
@@ -526,11 +543,11 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 
 	// -- fleet -----------------------------------------------------------------
 	const listDiskSessions = async (): Promise<SessionInfoDto[]> =>
-		(await options.listAllSessions()).filter((session) => existsSync(session.cwd)).map(toSessionInfoDto);
+		Promise.all((await options.listAllSessions()).map(toSessionInfoDto));
 
 	const currentCwdInventory = async (): Promise<string[]> => [
 		...pool.list().map((handle) => handle.cwd),
-		...(await listDiskSessions()).map((session) => session.cwd),
+		...(await listDiskSessions()).flatMap((session) => (session.resolvedCwd ? [session.resolvedCwd] : [])),
 	];
 
 	const handleMemoryError = (res: Response, err: unknown): void => {
@@ -669,18 +686,15 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	// -- runtimes ---------------------------------------------------------------
 	app.post("/api/runtimes", (req, res) => {
 		(async () => {
-			const cwd = typeof req.body?.cwd === "string" ? req.body.cwd : "";
-			if (!cwd || !existsSync(cwd)) {
-				res.status(400).json({ error: `Working directory does not exist: ${cwd || "(empty)"}` });
-				return;
-			}
+			const requestedCwd = typeof req.body?.cwd === "string" ? req.body.cwd : "";
+			const cwd = await resolveExistingDirectory(requestedCwd);
 			const sessionPath = typeof req.body?.sessionPath === "string" ? req.body.sessionPath : undefined;
 			const handle = await pool.create(cwd, sessionPath);
 			log(`runtime ${handle.key} started in ${cwd}${sessionPath ? ` (resume ${basename(sessionPath)})` : ""}`);
 			const firstPrompt = typeof req.body?.firstPrompt === "string" ? req.body.firstPrompt : undefined;
 			if (firstPrompt) await handle.client.prompt(firstPrompt);
 			res.status(201).json(await pool.describe(handle));
-		})().catch((err) => res.status(500).json({ error: String(err?.message ?? err) }));
+		})().catch((err) => handleMemoryError(res, err));
 	});
 
 	app.delete("/api/runtimes/:key", (req, res) => {
@@ -991,7 +1005,9 @@ export function createDashboardServer(options: DashboardServerOptions): Dashboar
 	});
 
 	app.get("/api/runtimes/:key/sessions", (req, res) => {
-		withRuntime(req, res, async (h) => ({ sessions: await h.client.listSessions() }));
+		withRuntime(req, res, async (h) => ({
+			sessions: await Promise.all((await h.client.listSessions()).map(toSessionInfoDto)),
+		}));
 	});
 
 	app.post("/api/runtimes/:key/resume", (req, res) => {

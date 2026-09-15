@@ -533,10 +533,17 @@ export function createAppStore() {
 	function retainClosedSession(key: string, runtime?: RuntimeInfoDto): void {
 		clearHydrationTransaction(key);
 		bumpHydrationGeneration(key);
+		const runtimeSessionFile = runtime?.state.sessionFile;
+		const historicalCwd = runtimeSessionFile
+			? fleet().diskSessions.find((candidate) => candidate.path === runtimeSessionFile)?.cwd
+			: undefined;
 		mutateSession(key, (session) => {
 			const previous = session.closed;
 			session.closed = {
 				...(runtime?.cwd || previous?.cwd ? { cwd: previous?.cwd ?? runtime?.cwd } : {}),
+				...(historicalCwd || previous?.historicalCwd
+					? { historicalCwd: previous?.historicalCwd ?? historicalCwd }
+					: {}),
 				...(runtime?.state.sessionFile || previous?.sessionFile
 					? { sessionFile: previous?.sessionFile ?? runtime?.state.sessionFile }
 					: {}),
@@ -610,16 +617,16 @@ export function createAppStore() {
 		});
 	}
 
-	async function resumeClosedSession(key: string): Promise<void> {
+	async function resumeClosedSession(key: string, cwdOverride?: string): Promise<void> {
 		const closed = sessions[key]?.closed;
 		if (!closed || closed.resuming) return;
-		if (!closed.cwd || !closed.sessionFile) {
+		const cwd = cwdOverride ?? closed.cwd;
+		if (!cwd || !closed.sessionFile) {
 			mutateSession(key, (session) => {
 				if (session.closed) session.closed.resumeError = "This closed session has no captured resume path.";
 			});
 			return;
 		}
-		const cwd = closed.cwd;
 		const sessionFile = closed.sessionFile;
 		mutateSession(key, (session) => {
 			if (!session.closed) return;

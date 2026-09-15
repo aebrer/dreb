@@ -41,6 +41,8 @@ export interface SessionHeader {
 export interface NewSessionOptions {
 	id?: string;
 	parentSession?: string;
+	/** Working directory to record for a genuinely new session. */
+	cwd?: string;
 }
 
 export interface SessionEntryBase {
@@ -750,6 +752,7 @@ export class SessionManager {
 
 	newSession(options?: NewSessionOptions): string | undefined {
 		this.sessionId = options?.id ?? randomUUID();
+		this.cwd = options?.cwd ?? this.cwd;
 		const timestamp = new Date().toISOString();
 		const header: SessionHeader = {
 			type: "session",

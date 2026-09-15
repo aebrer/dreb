@@ -27,7 +27,7 @@ import { createDashboardServer } from "./server/server.js";
 export { DashboardAuth, TailscaleStatusResolver, TailscaleWhoisResolver } from "./server/auth.js";
 export { DashboardImageService } from "./server/dashboard-images.js";
 export { EventHub } from "./server/event-hub.js";
-export { canonicalizePath, FileApi } from "./server/files.js";
+export { canonicalizePath, FileApi, resolveExistingDirectory } from "./server/files.js";
 export { ImagePreviewWorker } from "./server/image-preview.js";
 export { FilePairingStorage, loadOrCreateDashboardSecret } from "./server/pairing-storage.js";
 export { RuntimePool, resolveDrebCliPath } from "./server/runtime-pool.js";
